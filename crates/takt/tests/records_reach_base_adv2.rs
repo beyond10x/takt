@@ -15,7 +15,7 @@ use takt::evidence::Record;
 use takt::forge::{Checks, Forge, Memory, PullRequest, PullRequestView};
 use takt::frontier::{Aep, Take, Written, approve};
 use takt::harness::{Harness, StepContext, StepReport};
-use takt::validator::{CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
+use takt::validator::{ChangeRead, CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Frontier, Run, RunOptions, Stop, Story};
 
 const DELIVERY: &str = concat!(
@@ -134,6 +134,14 @@ impl Harness for Requester {
             return Ok(StepReport {
                 action: "repository.merge".to_owned(),
                 summary: "merge it".to_owned(),
+                tokens: None,
+            });
+        }
+        // The work committed is complete: hand it over, changing nothing.
+        if context.offered.contains(&"change.handover".to_owned()) {
+            return Ok(StepReport {
+                action: "change.handover".to_owned(),
+                summary: "hand it over".to_owned(),
                 tokens: None,
             });
         }
@@ -273,6 +281,7 @@ impl Frontier for RefusesTestResultOnce {
 fn delivery(forge: Rc<dyn Forge>) -> Vec<Box<dyn Validator>> {
     vec![
         Box::new(TestsRun::new("true").expect("a command")),
+        Box::new(ChangeRead),
         Box::new(GatePass),
         Box::new(PrOpen::new(forge.clone())),
         Box::new(CiRead::new(forge.clone())),

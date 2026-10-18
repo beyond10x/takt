@@ -447,6 +447,26 @@ fn a_run_with_no_harness_on_a_case_that_needs_only_the_grant_stops_approval_requ
         ))
         .expect("the record is written");
     }
+    // The change handed over at the revision, as takt records a `change.handover` step.
+    case.add_evidence(&takt::evidence::Record::new(
+        "handover",
+        "handover",
+        None,
+        "implementation",
+        &revision,
+        takt::run::CHOICE_PRODUCER,
+    ))
+    .expect("the record is written");
+    // A change to publish at the revision, as `change.read` records it.
+    case.add_evidence(&takt::evidence::Record::new(
+        "change-record",
+        "change_record",
+        Some("ahead".to_owned()),
+        "implementation",
+        &revision,
+        "takt.change-read",
+    ))
+    .expect("the record is written");
     let (code, out, err) = takt(&[
         "run",
         "--repo",
