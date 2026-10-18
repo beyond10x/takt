@@ -90,8 +90,11 @@ fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
     // A replace ref (`refs/replace/<object>`) would make every read of an object return
     // another's content: no git takt runs honours one.
     command.env("GIT_NO_REPLACE_OBJECTS", "1");
+    // Nor a commit-graph, a cache of the history a step can forge (a parent re-pointed, its
+    // checksum fixed): every ancestry and history takt reads comes from the commits themselves.
     let mut child = command
         .args(NO_CONFIGURED_CODE)
+        .args(["-c", "core.commitGraph=false"])
         .args(args)
         .current_dir(tree)
         .stdin(if input.is_some() {
@@ -690,16 +693,20 @@ fn make_link(target: &Path, at: &Path) -> Result<()> {
 /// The entries of a git directory whose files git runs, reads as configuration, or reads to
 /// find the repository's objects and history: the hooks, `info/` (attributes, exclude,
 /// sparse-checkout), a linked worktree's `commondir` and `gitdir` (where its common git
-/// directory is), `shallow` (which commits have no parents) and `objects/info/alternates` (other
-/// object directories read as this one's). Every other file there (git's own state, other
-/// tools' files and locks, an editor's entries) is not the step's concern.
-const GUARDED_ENTRIES: [&str; 6] = [
+/// directory is), `shallow` (which commits have no parents), `objects/info/alternates` (other
+/// object directories read as this one's) and the commit-graph, single or split
+/// (`objects/info/commit-graph`, `objects/info/commit-graphs/`), a cache of the history. Every
+/// other file there (git's own state, other tools' files and locks, an editor's entries) is not
+/// the step's concern.
+const GUARDED_ENTRIES: [&str; 8] = [
     "hooks",
     "info",
     "commondir",
     "gitdir",
     "shallow",
     "objects/info/alternates",
+    "objects/info/commit-graph",
+    "objects/info/commit-graphs",
 ];
 
 /// The configuration files of a git directory, guarded by the keys in them that run code or
@@ -958,7 +965,7 @@ pub struct GitDirPutBack {
 /// at it (a validator's run may leave one); the ignored paths with what is at each a file git
 /// names; and what git runs, reads as configuration, or reads to find the objects and the
 /// history in the git directories: the hooks, `info/`, the configuration's keys, `commondir`,
-/// `gitdir`, `shallow` and `objects/info/alternates`.
+/// `gitdir`, `shallow`, `objects/info/alternates` and the commit-graph.
 #[derive(Debug, Clone)]
 pub struct Checkpoint {
     head: String,

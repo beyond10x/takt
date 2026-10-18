@@ -466,6 +466,7 @@ fn fewer_than_three_turns_record_no_measurement() {
         "declined",
         None,
     );
+    let _case = loop_case(&tree, "loop-two-turns", &head, &head);
     let observation = LoopMeasure.observe(&tree, &head, 1).expect("observes");
     assert!(observation.records.is_empty(), "{}", observation.summary);
     assert!(
@@ -1373,6 +1374,171 @@ fn the_definition_check_reads_the_baseline_only_from_the_snapshot_taken_at_open(
     assert_eq!(
         observation.records[0].result.as_deref(),
         Some("redefined"),
+        "{}",
+        observation.summary
+    );
+}
+
+/// The reviewer's forging program: rewrites one commit's first parent in a commit-graph file
+/// and fixes its checksum.
+const FORGE_GRAPH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/forge_commit_graph.py"
+);
+
+/// Whether plain git, which reads the commit-graph, takes `ancestor` for an ancestor of
+/// `revision` in `tree`.
+fn plain_ancestor(tree: &Path, ancestor: &str, revision: &str) -> bool {
+    Command::new("git")
+        .args(["merge-base", "--is-ancestor", ancestor, revision])
+        .current_dir(tree)
+        .status()
+        .expect("git runs")
+        .success()
+}
+
+/// The reviewer's probe C. A step forges `objects/info/commit-graph`, re-pointing a commit's
+/// parent at a commit off its history, its checksum fixed: plain git then takes the side commit
+/// for an ancestor. The ancestry takt reads (a turn's baseline descending from the loop
+/// candidate, the history a filing is read in) never reads the commit-graph, even while the
+/// forged file is there, and the checkpoint puts the file back.
+#[test]
+fn probe_c_forged_commit_graph_survives_the_restore() {
+    let (tree, _) = scratch("commit-graph", DEFINED);
+    git(&tree, &["checkout", "-q", "-b", "side"]);
+    let side = commit(&tree, DEFINED, "a commit off the history");
+    git(&tree, &["checkout", "-q", "main"]);
+    let target = commit(&tree, DEFINED, "the commit whose parent is forged");
+    git(&tree, &["commit-graph", "write", "--reachable"]);
+    let graph = tree.join(".git/objects/info/commit-graph");
+    let before = fs::read(&graph).expect("the commit-graph is written");
+    assert!(
+        !plain_ancestor(&tree, &side, &target),
+        "side is off the history"
+    );
+
+    let checkpoint = takt::git::Checkpoint::take(&tree).expect("a checkpoint");
+    let forged = Command::new("python3")
+        .arg("-I")
+        .arg(FORGE_GRAPH)
+        .arg(&graph)
+        .arg(&target)
+        .arg(&side)
+        .status()
+        .expect("python3 runs");
+    assert!(forged.success(), "the commit-graph is forged");
+    assert!(
+        plain_ancestor(&tree, &side, &target),
+        "the forged commit-graph makes plain git take side for an ancestor"
+    );
+    assert!(
+        takt::git::run(&tree, &["merge-base", "--is-ancestor", &side, &target]).is_err(),
+        "the ancestry takt reads ignores the forged commit-graph"
+    );
+
+    let put_back = checkpoint.put_back_git_dir(&tree);
+    assert!(put_back.failed.is_empty(), "{put_back:?}");
+    assert!(
+        put_back
+            .touched
+            .iter()
+            .any(|path| path.ends_with("commit-graph")),
+        "the put-back names the commit-graph: {put_back:?}"
+    );
+    checkpoint.restore(&tree).expect("restored");
+    assert_eq!(
+        fs::read(&graph).ok(),
+        Some(before),
+        "the commit-graph is put back"
+    );
+    assert!(
+        !plain_ancestor(&tree, &side, &target),
+        "side is off the history again"
+    );
+}
+
+/// A split commit-graph a step writes (`objects/info/commit-graphs/`) is removed.
+#[test]
+fn the_checkpoint_removes_a_split_commit_graph_a_step_writes() {
+    let (tree, _) = scratch("commit-graphs", DEFINED);
+    commit(&tree, DEFINED, "a second commit");
+    let dir = tree.join(".git/objects/info/commit-graphs");
+    let checkpoint = takt::git::Checkpoint::take(&tree).expect("a checkpoint");
+    git(
+        &tree,
+        &["commit-graph", "write", "--reachable", "--split=replace"],
+    );
+    assert!(dir.is_dir(), "the split commit-graph is written");
+    let put_back = checkpoint.put_back_git_dir(&tree);
+    assert!(put_back.failed.is_empty(), "{put_back:?}");
+    checkpoint.restore(&tree).expect("restored");
+    assert!(!dir.exists(), "the split commit-graph is removed");
+}
+
+/// A target that is not a finite number is refused: `.nan` would never be missed.
+#[test]
+fn a_target_that_is_not_a_finite_number_is_refused() {
+    for bound in ["at_least: .nan", "at_most: .inf", "at_least: -.inf"] {
+        let text = format!(
+            "format: takt-loop-metrics/1\nmetrics:\n  accepted_share:\n    version: 1\n    definition: accepted rows over all rows\n    target:\n      {bound}\n"
+        );
+        assert!(Definitions::parse(&text).is_err(), "{bound} is refused");
+    }
+}
+
+/// `loop.measure` and `loop.compare` take the baseline's definitions from the snapshot the case
+/// took when it opened, never from the object store: a snapshot whose target differs from the
+/// base's file decides the measurement, and with no snapshot neither records anything.
+#[test]
+fn measure_and_compare_read_the_baseline_only_from_the_snapshot() {
+    let (tree, _) = scratch("measure-snapshot", DEFINED);
+    for (id, verdict) in [
+        ("turn-a", "accepted"),
+        ("turn-b", "accepted"),
+        ("turn-c", "declined"),
+    ] {
+        closed(
+            &tree,
+            id,
+            "2026-10-18T09:00:00Z",
+            "2026-10-18T10:00:00Z",
+            verdict,
+            None,
+        );
+    }
+    let base = git(&tree, &["rev-parse", "HEAD"]);
+    let case = loop_case(&tree, "loop-measure-snapshot", &base, &base);
+    let path = case.dir.join(takt::loop_scorecard::BASELINE_SNAPSHOT);
+    // At the base, accepted share 2/3 misses its 0.75: below target.
+    let observation = LoopMeasure.observe(&tree, &base, 1).expect("measures");
+    assert_eq!(
+        observation.records[0].result.as_deref(),
+        Some("below_target"),
+        "{}",
+        observation.summary
+    );
+    // The snapshot, not the object store, holds the base: one whose target is 0.5 is at target.
+    let mut snapshot: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("the snapshot")).expect("json");
+    snapshot["definitions"] = DEFINED.replace("at_least: 0.75", "at_least: 0.5").into();
+    fs::write(&path, serde_json::to_vec(&snapshot).expect("json")).expect("written");
+    let observation = LoopMeasure.observe(&tree, &base, 2).expect("measures");
+    assert_eq!(
+        observation.records[0].result.as_deref(),
+        Some("at_target"),
+        "{}",
+        observation.summary
+    );
+
+    fs::remove_file(&path).expect("removed");
+    let observation = LoopMeasure.observe(&tree, &base, 3).expect("measures");
+    assert!(observation.records.is_empty(), "{}", observation.summary);
+    let mut case = case;
+    merged(&mut case, "2026-10-18T11:00:00Z");
+    let observation = LoopCompare.observe(&tree, &base, 4).expect("compares");
+    assert!(observation.records.is_empty(), "{}", observation.summary);
+    assert!(
+        observation.summary.contains("no snapshot"),
         "{}",
         observation.summary
     );

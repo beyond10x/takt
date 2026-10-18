@@ -195,13 +195,22 @@ impl Definitions {
         for (id, metric) in &definitions.metrics {
             let mut versions = vec![metric.version];
             for definition in std::iter::once(metric.current()).chain(metric.previous.clone()) {
-                if let Some(target) = definition.target
-                    && target.at_least.is_some() == target.at_most.is_some()
-                {
-                    bail!(
-                        "{id} v{}: a target is at_least or at_most",
-                        definition.version
-                    );
+                if let Some(target) = definition.target {
+                    if target.at_least.is_some() == target.at_most.is_some() {
+                        bail!(
+                            "{id} v{}: a target is at_least or at_most",
+                            definition.version
+                        );
+                    }
+                    // A bound that is no finite number (`.nan`, `.inf`) is never missed or
+                    // never met: no target at all.
+                    if target
+                        .at_least
+                        .or(target.at_most)
+                        .is_some_and(|bound| !bound.is_finite())
+                    {
+                        bail!("{id} v{}: a target is a finite number", definition.version);
+                    }
                 }
             }
             for previous in &metric.previous {
@@ -663,16 +672,6 @@ fn nothing(summary: String) -> Observation {
     }
 }
 
-/// The definitions at `revision`, or what to say when there are none to read.
-fn definitions_at(tree: &Path, revision: &str) -> Result<Result<Definitions, String>> {
-    Ok(match Definitions::at(tree, revision)? {
-        Found::Definitions(definitions) => Ok(definitions),
-        Found::Absent => Err(format!("{} holds no {DEFINITIONS}", short(revision))),
-        Found::Malformed(why) => Err(format!("{DEFINITIONS} at {}: {why}", short(revision))),
-        Found::NoCommit => Err(format!("{revision} is no commit")),
-    })
-}
-
 /// The revision of `artifact` in the case whose branch `tree` is on.
 fn case_revision(tree: &Path, artifact: &str) -> Result<String> {
     let dir = crate::case::current(tree)?;
@@ -761,9 +760,11 @@ fn snapshotted(tree: &Path, base: &str) -> Result<Result<Definitions, String>> {
 }
 
 /// `loop.measure`: the loop scorecard over the recorded turns (at least [`MIN_TURNS`]), its
-/// figures under the definitions at the baseline revision, writes one `loop_measurement`
-/// record about `loop_baseline`: `below_target` when a current figure misses its target, else
-/// `at_target`. The figures, each naming the turns it was computed from, are retained as
+/// figures under the baseline's definitions as the case snapshotted them when it opened
+/// ([`snapshot_baseline`]), never read from the object store after a step ran; writes one
+/// `loop_measurement` record about `loop_baseline`: `below_target` when a current figure misses
+/// its target, or has a target and no value, else `at_target`. No snapshot of `loop_baseline`
+/// records nothing. The figures, each naming the turns it was computed from, are retained as
 /// `loop-measurement-<seq>.json`: an observation; the rows stay the source.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoopMeasure;
@@ -786,9 +787,9 @@ impl Validator for LoopMeasure {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
-        let definitions = match definitions_at(tree, revision)? {
+        let definitions = match snapshotted(tree, revision)? {
             Ok(definitions) => definitions,
-            Err(why) => return Ok(nothing(format!("{why}; nothing recorded"))),
+            Err(why) => return Ok(nothing(format!("the baseline: {why}; nothing recorded"))),
         };
         let card = LoopScorecard::read_at(tree, Some(revision))?;
         if card.rows.len() < MIN_TURNS {
@@ -1105,8 +1106,9 @@ fn descends(tree: &Path, ancestor: &str, revision: &str) -> bool {
 /// `loop.compare`: due once the case holds a `merge_observation` of the loop candidate (the
 /// protocol's precondition; nothing is recorded without one). The turns whose baseline revision
 /// descends from the merged candidate, at least [`MIN_TURNS`] of them with a verdict, against
-/// the turns the case's `loop_measurement` of the baseline read, under the definitions at the
-/// case's `loop_baseline` revision. The metrics compared are those whose current figure missed
+/// the turns the case's `loop_measurement` of the baseline read, under the baseline's definitions
+/// as the case snapshotted them when it opened ([`snapshot_baseline`]); no snapshot records
+/// nothing. The metrics compared are those whose current figure missed
 /// its target before; `improved` when each of them is better after, in its target's direction,
 /// else `not_improved`. Writes one `loop_comparison` record about `loop_candidate` and retains
 /// both sides' figures as `loop-comparison-<seq>.json`.
@@ -1132,7 +1134,7 @@ impl Validator for LoopCompare {
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
         let base = case_revision(tree, "loop_baseline")?;
-        let definitions = match definitions_at(tree, &base)? {
+        let definitions = match snapshotted(tree, &base)? {
             Ok(definitions) => definitions,
             Err(why) => return Ok(nothing(format!("the baseline: {why}; nothing recorded"))),
         };

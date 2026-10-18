@@ -388,6 +388,7 @@ fn dual_reported_is_written_for_a_version_whose_figure_cannot_print() {
         closed(&tree, id, at, verdict);
     }
     let result = check_result(&tree, "loop-dual-v2", &base, &head);
+    let _next = loop_case(&tree, "loop-dual-v2-next", &head, &head);
     let measured = LoopMeasure.observe(&tree, &head, 1).expect("observes");
     assert!(
         result != "dual_reported" || measured.records.len() == 1,
