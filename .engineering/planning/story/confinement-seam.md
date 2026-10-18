@@ -31,7 +31,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/confinement.rs
-revision: 14
+revision: 15
 ---
 # Story: confinement-seam
 
@@ -121,3 +121,4 @@ step-cannot-forge-its-validators keeps an ignored test for each, naming this sto
 - M16, from the reviewer's verdict on step-cannot-forge-its-validators at 65795ea: `../.cargo` is a link before the run and a step writes `config.toml` through it; run 1 refuses and names what it could not put back, but run 2 takes the outside baseline afresh and is accepted with 1 pass. A cheap interim fix outside this story: record what a run could not put back, so the next run refuses until it is cleared.
 - M17, from the loop-scorecard adversary pass 2 (2026-10-18): a judgement step overwrites a loose object of the base under its own id; git does not re-hash on read and `.git/objects/` is not guarded, so `judge_list_at` (the step guard's list read at the base) and any other read "at the base" return the step's bytes after the checkpoint restore. story:loop-scorecard closes the neighbouring routes in its own unit (the checkpoint guards `commondir`, `gitdir`, `shallow` and `objects/info/alternates`; `loop.definition.check` compares against a snapshot taken at case open). Closed by confining the harness child so it cannot write the repository's object store, or by reading base content only from a snapshot taken before the step.
 - M18, from the reviewer's verdict on story:loop-scorecard at 20ab1c5 (inferred, not probed): `guarded_roots` adds only a sibling worktree's `info/`, not its `commondir` or `gitdir`; a step's write there redirects another session's tree, not this case's. Closed by confining the harness child to its own tree.
+- M19, from the reviewer's verdict on story:promotion at 2c6d2bf (observed): the test command runs files the harness wrote into the tree, unconfined, with `HOME` and `XDG_STATE_HOME` passed through (`crates/takt/src/validator.rs:275-279`); `takt run --harness none --test-cmd "sh probe_test.sh"` wrote a record into `$XDG_STATE_HOME/takt/promotions/`. A step can therefore plant a promotion baseline. Closed by running the test command (and a candidate takt in scenario runs) with a scratch HOME and XDG directories and no write access outside the tree.
