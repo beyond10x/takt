@@ -612,8 +612,8 @@
 <text x="579.1" y="640" font-size="8.5" fill="currentColor">2nd CI</text>
 <rect x="585.2" y="641.5" width="25.5" height="12" rx="1.5" class="k-model_call call"><title>T-12 op 18: model_call (repository.merge), approval, 132.5-142.9 s</title></rect>
 <rect x="607.0" y="641.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-12 op 19: approval_wait, approval, 142.0-142.0 s</title></rect>
-<text x="30" y="668" font-size="10.5" font-style="italic" fill="currentColor" fill-opacity=".8">834205f</text>
-<text x="40" y="687.5" fill="currentColor">T-24</text>
+<text x="30" y="668" font-size="10.5" font-style="italic" fill="currentColor" fill-opacity=".8">a0b8576</text>
+<text x="40" y="687.5" fill="currentColor">T-14</text>
 <line x1="260.0" x2="260.0" y1="675" y2="692" class="grid"/>
 <line x1="333.6" x2="333.6" y1="675" y2="692" class="grid"/>
 <line x1="407.3" x2="407.3" y1="675" y2="692" class="grid"/>
@@ -626,28 +626,28 @@
 <line x1="922.7" x2="922.7" y1="675" y2="692" class="grid"/>
 <line x1="996.4" x2="996.4" y1="675" y2="692" class="grid"/>
 <line x1="1070.0" x2="1070.0" y1="675" y2="692" class="grid"/>
-<rect x="267.3" y="677.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-24 op 1: test (tests.run), pass, 3.6-3.8 s</title></rect>
-<rect x="269.3" y="677.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-24 op 2: gate (gate.run), pass, 3.8-6.1 s</title></rect>
-<rect x="273.5" y="677.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-24 op 3: pr_open (pr.open), nothing, 6.1-6.2 s</title></rect>
-<text x="273.5" y="676" font-size="8.5" fill="currentColor">seed pr.open</text>
-<rect x="273.7" y="677.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-24 op 4: other (ci.read), nothing, 6.2-6.2 s</title></rect>
-<rect x="275.2" y="677.5" width="41.7" height="12" rx="1.5" class="k-edit call"><title>T-24 op 5: edit (implementation.edit), changed, 6.2-23.2 s</title></rect>
-<rect x="315.7" y="677.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-24 op 6: test (tests.run), pass, 23.3-23.4 s</title></rect>
-<rect x="317.4" y="677.5" width="5.9" height="12" rx="1.5" class="k-gate"><title>T-24 op 7: gate (gate.run), pass, 23.4-25.8 s</title></rect>
-<rect x="323.3" y="677.5" width="10.3" height="12" rx="1.5" class="k-pr_open"><title>T-24 op 8: pr_open (pr.open), opened, 25.8-30.0 s</title></rect>
-<rect x="333.6" y="677.5" width="4.2" height="12" rx="1.5" class="k-ci_wait"><title>T-24 op 9: ci_wait (ci.read), pending, 30.0-31.7 s</title></rect>
-<rect x="337.8" y="677.5" width="77.6" height="12" rx="1.5" class="k-ci_pass"><title>T-24 op 10: ci_pass (ci.read), pass, 31.7-63.3 s</title></rect>
-<rect x="415.4" y="677.5" width="36.6" height="12" rx="1.5" class="k-edit call"><title>T-24 op 11: edit (tests.write), changed, 63.3-78.2 s</title></rect>
-<rect x="450.7" y="677.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-24 op 12: test (tests.run), pass, 78.3-78.5 s</title></rect>
-<rect x="452.7" y="677.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-24 op 13: gate (gate.run), pass, 78.5-80.8 s</title></rect>
-<rect x="458.3" y="677.5" width="6.6" height="12" rx="1.5" class="k-push"><title>T-24 op 14: push (pr.open), pushed, 80.8-83.5 s</title></rect>
-<rect x="463.5" y="677.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-24 op 15: other (ci.read), nothing, 83.5-84.0 s</title></rect>
-<rect x="466.2" y="677.5" width="77.8" height="12" rx="1.5" class="k-push"><title>T-24 op 16: push (pr.open), pushed, 84.0-115.7 s</title></rect>
-<rect x="544.0" y="677.5" width="3.7" height="12" rx="1.5" class="k-ci_pass"><title>T-24 op 17: ci_pass (ci.read), pass, 115.7-117.2 s</title></rect>
-<text x="544.0" y="676" font-size="8.5" fill="currentColor">2nd CI</text>
-<rect x="547.9" y="677.5" width="23.3" height="12" rx="1.5" class="k-model_call call"><title>T-24 op 18: model_call (repository.merge), approval, 117.3-126.8 s</title></rect>
-<rect x="570.2" y="677.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-24 op 19: approval_wait, approval, 127.0-127.0 s</title></rect>
-<text x="40" y="708.5" fill="currentColor">T-25</text>
+<rect x="265.9" y="677.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-14 op 1: test (tests.run), pass, 3.0-3.0 s</title></rect>
+<rect x="265.9" y="677.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-14 op 2: gate (gate.run), pass, 3.0-3.0 s</title></rect>
+<rect x="265.9" y="677.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-14 op 3: pr_open (pr.open), nothing, 3.0-3.0 s</title></rect>
+<text x="265.9" y="676" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="265.9" y="677.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-14 op 4: other (ci.read), nothing, 3.0-3.0 s</title></rect>
+<rect x="269.6" y="677.5" width="42.7" height="12" rx="1.5" class="k-edit call"><title>T-14 op 5: edit (implementation.edit), changed, 3.9-21.3 s</title></rect>
+<rect x="310.0" y="677.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-14 op 6: test (tests.run), pass, 21.0-21.0 s</title></rect>
+<rect x="310.0" y="677.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-14 op 7: gate (gate.run), pass, 21.0-21.0 s</title></rect>
+<rect x="311.5" y="677.5" width="9.8" height="12" rx="1.5" class="k-pr_open"><title>T-14 op 8: pr_open (pr.open), opened, 21.0-25.0 s</title></rect>
+<rect x="321.4" y="677.5" width="4.9" height="12" rx="1.5" class="k-ci_wait"><title>T-14 op 9: ci_wait (ci.read), pending, 25.0-27.0 s</title></rect>
+<rect x="326.3" y="677.5" width="76.1" height="12" rx="1.5" class="k-ci_pass"><title>T-14 op 10: ci_pass (ci.read), pass, 27.0-58.0 s</title></rect>
+<rect x="404.6" y="677.5" width="46.1" height="12" rx="1.5" class="k-edit call"><title>T-14 op 11: edit (tests.write), changed, 58.9-77.7 s</title></rect>
+<rect x="447.5" y="677.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-14 op 12: test (tests.run), pass, 77.0-77.0 s</title></rect>
+<rect x="447.5" y="677.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-14 op 13: gate (gate.run), pass, 77.0-78.0 s</title></rect>
+<rect x="451.5" y="677.5" width="4.9" height="12" rx="1.5" class="k-push"><title>T-14 op 14: push (pr.open), pushed, 78.0-80.0 s</title></rect>
+<rect x="454.9" y="677.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-14 op 15: other (ci.read), nothing, 80.0-81.0 s</title></rect>
+<rect x="458.8" y="677.5" width="76.1" height="12" rx="1.5" class="k-push"><title>T-14 op 16: push (pr.open), pushed, 81.0-112.0 s</title></rect>
+<rect x="534.9" y="677.5" width="4.9" height="12" rx="1.5" class="k-ci_pass"><title>T-14 op 17: ci_pass (ci.read), pass, 112.0-114.0 s</title></rect>
+<text x="534.9" y="676" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="540.8" y="677.5" width="32.4" height="12" rx="1.5" class="k-model_call call"><title>T-14 op 18: model_call (repository.merge), approval, 114.4-127.6 s</title></rect>
+<rect x="570.2" y="677.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-14 op 19: approval_wait, approval, 127.0-127.0 s</title></rect>
+<text x="40" y="708.5" fill="currentColor">T-15</text>
 <line x1="260.0" x2="260.0" y1="696" y2="713" class="grid"/>
 <line x1="333.6" x2="333.6" y1="696" y2="713" class="grid"/>
 <line x1="407.3" x2="407.3" y1="696" y2="713" class="grid"/>
@@ -660,28 +660,28 @@
 <line x1="922.7" x2="922.7" y1="696" y2="713" class="grid"/>
 <line x1="996.4" x2="996.4" y1="696" y2="713" class="grid"/>
 <line x1="1070.0" x2="1070.0" y1="696" y2="713" class="grid"/>
-<rect x="267.6" y="698.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-25 op 1: test (tests.run), pass, 3.7-3.8 s</title></rect>
-<rect x="269.3" y="698.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-25 op 2: gate (gate.run), pass, 3.8-6.1 s</title></rect>
-<rect x="273.5" y="698.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-25 op 3: pr_open (pr.open), nothing, 6.1-6.2 s</title></rect>
-<text x="273.5" y="697" font-size="8.5" fill="currentColor">seed pr.open</text>
-<rect x="273.7" y="698.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-25 op 4: other (ci.read), nothing, 6.2-6.2 s</title></rect>
-<rect x="275.2" y="698.5" width="44.7" height="12" rx="1.5" class="k-edit call"><title>T-25 op 5: edit (implementation.edit), changed, 6.2-24.4 s</title></rect>
-<rect x="318.4" y="698.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-25 op 6: test (tests.run), pass, 24.4-24.5 s</title></rect>
-<rect x="320.1" y="698.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-25 op 7: gate (gate.run), pass, 24.5-26.8 s</title></rect>
-<rect x="325.8" y="698.5" width="10.6" height="12" rx="1.5" class="k-pr_open"><title>T-25 op 8: pr_open (pr.open), opened, 26.8-31.1 s</title></rect>
-<rect x="336.3" y="698.5" width="4.2" height="12" rx="1.5" class="k-ci_wait"><title>T-25 op 9: ci_wait (ci.read), pending, 31.1-32.8 s</title></rect>
-<rect x="340.5" y="698.5" width="78.1" height="12" rx="1.5" class="k-ci_pass"><title>T-25 op 10: ci_pass (ci.read), pass, 32.8-64.6 s</title></rect>
-<rect x="418.6" y="698.5" width="81.7" height="12" rx="1.5" class="k-edit call"><title>T-25 op 11: edit (tests.write), changed, 64.6-97.9 s</title></rect>
-<rect x="499.5" y="698.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-25 op 12: test (tests.run), pass, 98.2-98.8 s</title></rect>
-<rect x="502.5" y="698.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-25 op 13: gate (gate.run), pass, 98.8-101.1 s</title></rect>
-<rect x="508.2" y="698.5" width="6.6" height="12" rx="1.5" class="k-push"><title>T-25 op 14: push (pr.open), pushed, 101.1-103.8 s</title></rect>
-<rect x="514.8" y="698.5" width="3.9" height="12" rx="1.5" class="k-ci_wait"><title>T-25 op 15: ci_wait (ci.read), pending, 103.8-105.4 s</title></rect>
-<rect x="518.7" y="698.5" width="77.8" height="12" rx="1.5" class="k-push"><title>T-25 op 16: push (pr.open), pushed, 105.4-137.1 s</title></rect>
-<rect x="596.5" y="698.5" width="4.2" height="12" rx="1.5" class="k-ci_pass"><title>T-25 op 17: ci_pass (ci.read), pass, 137.1-138.8 s</title></rect>
-<text x="596.5" y="697" font-size="8.5" fill="currentColor">2nd CI</text>
-<rect x="600.7" y="698.5" width="35.8" height="12" rx="1.5" class="k-model_call call"><title>T-25 op 18: model_call (repository.merge), approval, 138.8-153.4 s</title></rect>
-<rect x="635.3" y="698.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-25 op 19: approval_wait, approval, 153.5-153.5 s</title></rect>
-<text x="40" y="729.5" fill="currentColor">T-26</text>
+<rect x="270.8" y="698.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-15 op 1: test (tests.run), pass, 5.0-5.0 s</title></rect>
+<rect x="270.8" y="698.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-15 op 2: gate (gate.run), pass, 5.0-5.0 s</title></rect>
+<rect x="270.8" y="698.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-15 op 3: pr_open (pr.open), nothing, 5.0-5.0 s</title></rect>
+<text x="270.8" y="697" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="270.8" y="698.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-15 op 4: other (ci.read), nothing, 5.0-5.0 s</title></rect>
+<rect x="274.0" y="698.5" width="48.4" height="12" rx="1.5" class="k-edit call"><title>T-15 op 5: edit (implementation.edit), changed, 5.7-25.4 s</title></rect>
+<rect x="319.9" y="698.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-15 op 6: test (tests.run), pass, 25.0-25.0 s</title></rect>
+<rect x="319.9" y="698.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-15 op 7: gate (gate.run), pass, 25.0-25.0 s</title></rect>
+<rect x="321.4" y="698.5" width="12.3" height="12" rx="1.5" class="k-pr_open"><title>T-15 op 8: pr_open (pr.open), opened, 25.0-30.0 s</title></rect>
+<rect x="332.1" y="698.5" width="3.0" height="12" rx="1.5" class="k-ci_wait"><title>T-15 op 9: ci_wait (ci.read), pending, 30.0-31.0 s</title></rect>
+<rect x="336.1" y="698.5" width="78.5" height="12" rx="1.5" class="k-ci_pass"><title>T-15 op 10: ci_pass (ci.read), pass, 31.0-63.0 s</title></rect>
+<rect x="415.6" y="698.5" width="46.4" height="12" rx="1.5" class="k-edit call"><title>T-15 op 11: edit (tests.write), changed, 63.4-82.3 s</title></rect>
+<rect x="459.8" y="698.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-15 op 12: test (tests.run), pass, 82.0-82.0 s</title></rect>
+<rect x="459.8" y="698.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-15 op 13: gate (gate.run), pass, 82.0-82.0 s</title></rect>
+<rect x="461.3" y="698.5" width="9.8" height="12" rx="1.5" class="k-push"><title>T-15 op 14: push (pr.open), pushed, 82.0-86.0 s</title></rect>
+<rect x="469.6" y="698.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-15 op 15: other (ci.read), nothing, 86.0-86.0 s</title></rect>
+<rect x="471.1" y="698.5" width="78.5" height="12" rx="1.5" class="k-push"><title>T-15 op 16: push (pr.open), pushed, 86.0-118.0 s</title></rect>
+<rect x="548.1" y="698.5" width="3.0" height="12" rx="1.5" class="k-ci_pass"><title>T-15 op 17: ci_pass (ci.read), pass, 118.0-119.0 s</title></rect>
+<text x="548.1" y="697" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="554.3" y="698.5" width="21.1" height="12" rx="1.5" class="k-model_call call"><title>T-15 op 18: model_call (repository.merge), approval, 119.9-128.5 s</title></rect>
+<rect x="572.7" y="698.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-15 op 19: approval_wait, approval, 128.0-128.0 s</title></rect>
+<text x="40" y="729.5" fill="currentColor">T-16</text>
 <line x1="260.0" x2="260.0" y1="717" y2="734" class="grid"/>
 <line x1="333.6" x2="333.6" y1="717" y2="734" class="grid"/>
 <line x1="407.3" x2="407.3" y1="717" y2="734" class="grid"/>
@@ -694,28 +694,28 @@
 <line x1="922.7" x2="922.7" y1="717" y2="734" class="grid"/>
 <line x1="996.4" x2="996.4" y1="717" y2="734" class="grid"/>
 <line x1="1070.0" x2="1070.0" y1="717" y2="734" class="grid"/>
-<rect x="268.3" y="719.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-26 op 1: test (tests.run), pass, 4.0-4.5 s</title></rect>
-<rect x="271.0" y="719.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-26 op 2: gate (gate.run), pass, 4.5-6.8 s</title></rect>
-<rect x="275.2" y="719.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-26 op 3: pr_open (pr.open), nothing, 6.8-6.9 s</title></rect>
-<text x="275.2" y="718" font-size="8.5" fill="currentColor">seed pr.open</text>
-<rect x="275.4" y="719.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-26 op 4: other (ci.read), nothing, 6.9-6.9 s</title></rect>
-<rect x="276.9" y="719.5" width="44.2" height="12" rx="1.5" class="k-edit call"><title>T-26 op 5: edit (implementation.edit), changed, 6.9-24.9 s</title></rect>
-<rect x="319.6" y="719.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-26 op 6: test (tests.run), pass, 24.9-25.1 s</title></rect>
-<rect x="321.6" y="719.5" width="8.1" height="12" rx="1.5" class="k-gate"><title>T-26 op 7: gate (gate.run), pass, 25.1-28.4 s</title></rect>
-<rect x="329.7" y="719.5" width="11.0" height="12" rx="1.5" class="k-pr_open"><title>T-26 op 8: pr_open (pr.open), opened, 28.4-32.9 s</title></rect>
-<rect x="340.8" y="719.5" width="4.4" height="12" rx="1.5" class="k-ci_wait"><title>T-26 op 9: ci_wait (ci.read), pending, 32.9-34.7 s</title></rect>
-<rect x="345.2" y="719.5" width="77.6" height="12" rx="1.5" class="k-ci_pass"><title>T-26 op 10: ci_pass (ci.read), pass, 34.7-66.3 s</title></rect>
-<rect x="422.7" y="719.5" width="39.0" height="12" rx="1.5" class="k-edit call"><title>T-26 op 11: edit (tests.write), changed, 66.3-82.2 s</title></rect>
-<rect x="460.5" y="719.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-26 op 12: test (tests.run), pass, 82.3-82.5 s</title></rect>
-<rect x="462.5" y="719.5" width="5.9" height="12" rx="1.5" class="k-gate"><title>T-26 op 13: gate (gate.run), pass, 82.5-84.9 s</title></rect>
-<rect x="468.4" y="719.5" width="6.6" height="12" rx="1.5" class="k-push"><title>T-26 op 14: push (pr.open), pushed, 84.9-87.6 s</title></rect>
-<rect x="475.0" y="719.5" width="3.7" height="12" rx="1.5" class="k-ci_wait"><title>T-26 op 15: ci_wait (ci.read), pending, 87.6-89.1 s</title></rect>
-<rect x="478.7" y="719.5" width="78.3" height="12" rx="1.5" class="k-push"><title>T-26 op 16: push (pr.open), pushed, 89.1-121.0 s</title></rect>
-<rect x="557.0" y="719.5" width="3.7" height="12" rx="1.5" class="k-ci_pass"><title>T-26 op 17: ci_pass (ci.read), pass, 121.0-122.5 s</title></rect>
-<text x="557.0" y="718" font-size="8.5" fill="currentColor">2nd CI</text>
-<rect x="560.9" y="719.5" width="30.9" height="12" rx="1.5" class="k-model_call call"><title>T-26 op 18: model_call (repository.merge), approval, 122.6-135.2 s</title></rect>
-<rect x="590.6" y="719.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-26 op 19: approval_wait, approval, 135.3-135.3 s</title></rect>
-<text x="40" y="750.5" fill="currentColor">T-27</text>
+<rect x="265.9" y="719.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-16 op 1: test (tests.run), pass, 3.0-4.0 s</title></rect>
+<rect x="268.3" y="719.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-16 op 2: gate (gate.run), pass, 4.0-4.0 s</title></rect>
+<rect x="268.3" y="719.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-16 op 3: pr_open (pr.open), nothing, 4.0-4.0 s</title></rect>
+<text x="268.3" y="718" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="268.3" y="719.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-16 op 4: other (ci.read), nothing, 4.0-4.0 s</title></rect>
+<rect x="270.3" y="719.5" width="43.0" height="12" rx="1.5" class="k-edit call"><title>T-16 op 5: edit (implementation.edit), changed, 4.2-21.7 s</title></rect>
+<rect x="310.0" y="719.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-16 op 6: test (tests.run), pass, 21.0-21.0 s</title></rect>
+<rect x="310.0" y="719.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-16 op 7: gate (gate.run), pass, 21.0-21.0 s</title></rect>
+<rect x="311.5" y="719.5" width="12.3" height="12" rx="1.5" class="k-pr_open"><title>T-16 op 8: pr_open (pr.open), opened, 21.0-26.0 s</title></rect>
+<rect x="322.3" y="719.5" width="3.0" height="12" rx="1.5" class="k-ci_wait"><title>T-16 op 9: ci_wait (ci.read), pending, 26.0-27.0 s</title></rect>
+<rect x="326.3" y="719.5" width="78.5" height="12" rx="1.5" class="k-ci_pass"><title>T-16 op 10: ci_pass (ci.read), pass, 27.0-59.0 s</title></rect>
+<rect x="407.0" y="719.5" width="49.6" height="12" rx="1.5" class="k-edit call"><title>T-16 op 11: edit (tests.write), changed, 59.9-80.1 s</title></rect>
+<rect x="454.9" y="719.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-16 op 12: test (tests.run), pass, 80.0-81.0 s</title></rect>
+<rect x="457.3" y="719.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-16 op 13: gate (gate.run), pass, 81.0-81.0 s</title></rect>
+<rect x="458.8" y="719.5" width="7.4" height="12" rx="1.5" class="k-push"><title>T-16 op 14: push (pr.open), pushed, 81.0-84.0 s</title></rect>
+<rect x="464.7" y="719.5" width="3.0" height="12" rx="1.5" class="k-ci_wait"><title>T-16 op 15: ci_wait (ci.read), pending, 84.0-85.0 s</title></rect>
+<rect x="468.6" y="719.5" width="78.5" height="12" rx="1.5" class="k-push"><title>T-16 op 16: push (pr.open), pushed, 85.0-117.0 s</title></rect>
+<rect x="545.7" y="719.5" width="3.0" height="12" rx="1.5" class="k-ci_pass"><title>T-16 op 17: ci_pass (ci.read), pass, 117.0-118.0 s</title></rect>
+<text x="545.7" y="718" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="551.8" y="719.5" width="20.6" height="12" rx="1.5" class="k-model_call call"><title>T-16 op 18: model_call (repository.merge), approval, 118.9-127.3 s</title></rect>
+<rect x="570.2" y="719.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-16 op 19: approval_wait, approval, 127.0-127.0 s</title></rect>
+<text x="40" y="750.5" fill="currentColor">T-17</text>
 <line x1="260.0" x2="260.0" y1="738" y2="755" class="grid"/>
 <line x1="333.6" x2="333.6" y1="738" y2="755" class="grid"/>
 <line x1="407.3" x2="407.3" y1="738" y2="755" class="grid"/>
@@ -728,33 +728,28 @@
 <line x1="922.7" x2="922.7" y1="738" y2="755" class="grid"/>
 <line x1="996.4" x2="996.4" y1="738" y2="755" class="grid"/>
 <line x1="1070.0" x2="1070.0" y1="738" y2="755" class="grid"/>
-<rect x="267.8" y="740.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-27 op 1: test (tests.run), pass, 3.8-3.9 s</title></rect>
-<rect x="269.6" y="740.5" width="5.9" height="12" rx="1.5" class="k-gate"><title>T-27 op 2: gate (gate.run), pass, 3.9-6.3 s</title></rect>
-<rect x="274.0" y="740.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-27 op 3: pr_open (pr.open), nothing, 6.3-6.3 s</title></rect>
-<text x="274.0" y="739" font-size="8.5" fill="currentColor">seed pr.open</text>
-<rect x="274.0" y="740.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-27 op 4: other (ci.read), nothing, 6.3-6.4 s</title></rect>
-<rect x="275.7" y="740.5" width="42.0" height="12" rx="1.5" class="k-edit call"><title>T-27 op 5: edit (implementation.edit), changed, 6.4-23.5 s</title></rect>
-<rect x="316.4" y="740.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-27 op 6: test (tests.run), pass, 23.6-23.7 s</title></rect>
-<rect x="318.2" y="740.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-27 op 7: gate (gate.run), pass, 23.7-26.0 s</title></rect>
-<rect x="323.8" y="740.5" width="10.3" height="12" rx="1.5" class="k-pr_open"><title>T-27 op 8: pr_open (pr.open), opened, 26.0-30.2 s</title></rect>
-<rect x="334.1" y="740.5" width="3.4" height="12" rx="1.5" class="k-ci_wait"><title>T-27 op 9: ci_wait (ci.read), pending, 30.2-31.6 s</title></rect>
-<rect x="337.6" y="740.5" width="77.3" height="12" rx="1.5" class="k-ci_pass"><title>T-27 op 10: ci_pass (ci.read), pass, 31.6-63.1 s</title></rect>
-<rect x="414.9" y="740.5" width="28.7" height="12" rx="1.5" class="k-read noop call"><title>T-27 op 11: read (repository.inspect), unchanged, 63.1-74.8 s</title></rect>
-<rect x="442.3" y="740.5" width="3.0" height="12" rx="1.5" class="k-no_progress"><title>T-27 op 12: no_progress, NoProgress, 74.9-74.9 s</title></rect>
-<text x="442.3" y="739" font-size="8.5" fill="currentColor">inspect, then NoProgress</text>
-<line x1="443.8" x2="443.8" y1="737" y2="756" class="k-resume" stroke-width="2"><title>T-27 op 13: resume, 74.9-95.8 s</title></line>
-<line x1="443.8" x2="495.1" y1="746.5" y2="746.5" class="k-resume" stroke-width="1" stroke-dasharray="2 2"/>
-<rect x="495.1" y="740.5" width="38.0" height="12" rx="1.5" class="k-edit call"><title>T-27 op 14: edit (tests.write), changed, 95.8-111.3 s</title></rect>
-<rect x="531.9" y="740.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-27 op 15: test (tests.run), pass, 111.4-111.5 s</title></rect>
-<rect x="533.7" y="740.5" width="5.9" height="12" rx="1.5" class="k-gate"><title>T-27 op 16: gate (gate.run), pass, 111.5-113.9 s</title></rect>
-<rect x="539.6" y="740.5" width="6.6" height="12" rx="1.5" class="k-push"><title>T-27 op 17: push (pr.open), pushed, 113.9-116.6 s</title></rect>
-<rect x="544.7" y="740.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-27 op 18: other (ci.read), nothing, 116.6-117.1 s</title></rect>
-<rect x="547.4" y="740.5" width="78.8" height="12" rx="1.5" class="k-push"><title>T-27 op 19: push (pr.open), pushed, 117.1-149.2 s</title></rect>
-<rect x="626.2" y="740.5" width="3.9" height="12" rx="1.5" class="k-ci_pass"><title>T-27 op 20: ci_pass (ci.read), pass, 149.2-150.8 s</title></rect>
-<text x="626.2" y="739" font-size="8.5" fill="currentColor">2nd CI</text>
-<rect x="630.1" y="740.5" width="18.7" height="12" rx="1.5" class="k-model_call call"><title>T-27 op 21: model_call (repository.merge), approval, 150.8-158.4 s</title></rect>
-<rect x="647.5" y="740.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-27 op 22: approval_wait, approval, 158.5-158.5 s</title></rect>
-<text x="40" y="771.5" fill="currentColor">T-28</text>
+<rect x="265.9" y="740.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-17 op 1: test (tests.run), pass, 3.0-3.0 s</title></rect>
+<rect x="265.9" y="740.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-17 op 2: gate (gate.run), pass, 3.0-3.0 s</title></rect>
+<rect x="265.9" y="740.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-17 op 3: pr_open (pr.open), nothing, 3.0-3.0 s</title></rect>
+<text x="265.9" y="739" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="265.9" y="740.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-17 op 4: other (ci.read), nothing, 3.0-3.0 s</title></rect>
+<rect x="269.8" y="740.5" width="45.7" height="12" rx="1.5" class="k-edit call"><title>T-17 op 5: edit (implementation.edit), changed, 4.0-22.6 s</title></rect>
+<rect x="312.5" y="740.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-17 op 6: test (tests.run), pass, 22.0-22.0 s</title></rect>
+<rect x="312.5" y="740.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-17 op 7: gate (gate.run), pass, 22.0-22.0 s</title></rect>
+<rect x="314.0" y="740.5" width="12.3" height="12" rx="1.5" class="k-pr_open"><title>T-17 op 8: pr_open (pr.open), opened, 22.0-27.0 s</title></rect>
+<rect x="326.3" y="740.5" width="4.9" height="12" rx="1.5" class="k-ci_wait"><title>T-17 op 9: ci_wait (ci.read), pending, 27.0-29.0 s</title></rect>
+<rect x="331.2" y="740.5" width="76.1" height="12" rx="1.5" class="k-ci_pass"><title>T-17 op 10: ci_pass (ci.read), pass, 29.0-60.0 s</title></rect>
+<rect x="408.5" y="740.5" width="46.9" height="12" rx="1.5" class="k-edit call"><title>T-17 op 11: edit (tests.write), changed, 60.5-79.6 s</title></rect>
+<rect x="452.4" y="740.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-17 op 12: test (tests.run), pass, 79.0-80.0 s</title></rect>
+<rect x="454.9" y="740.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-17 op 13: gate (gate.run), pass, 80.0-80.0 s</title></rect>
+<rect x="456.4" y="740.5" width="4.9" height="12" rx="1.5" class="k-push"><title>T-17 op 14: push (pr.open), pushed, 80.0-82.0 s</title></rect>
+<rect x="459.8" y="740.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-17 op 15: other (ci.read), nothing, 82.0-83.0 s</title></rect>
+<rect x="463.7" y="740.5" width="78.5" height="12" rx="1.5" class="k-push"><title>T-17 op 16: push (pr.open), pushed, 83.0-115.0 s</title></rect>
+<rect x="540.8" y="740.5" width="3.0" height="12" rx="1.5" class="k-ci_pass"><title>T-17 op 17: ci_pass (ci.read), pass, 115.0-116.0 s</title></rect>
+<text x="540.8" y="739" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="546.4" y="740.5" width="30.2" height="12" rx="1.5" class="k-model_call call"><title>T-17 op 18: model_call (repository.merge), approval, 116.7-129.0 s</title></rect>
+<rect x="575.1" y="740.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-17 op 19: approval_wait, approval, 129.0-129.0 s</title></rect>
+<text x="40" y="771.5" fill="currentColor">T-18</text>
 <line x1="260.0" x2="260.0" y1="759" y2="776" class="grid"/>
 <line x1="333.6" x2="333.6" y1="759" y2="776" class="grid"/>
 <line x1="407.3" x2="407.3" y1="759" y2="776" class="grid"/>
@@ -767,27 +762,27 @@
 <line x1="922.7" x2="922.7" y1="759" y2="776" class="grid"/>
 <line x1="996.4" x2="996.4" y1="759" y2="776" class="grid"/>
 <line x1="1070.0" x2="1070.0" y1="759" y2="776" class="grid"/>
-<rect x="268.8" y="761.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-28 op 1: test (tests.run), pass, 4.2-4.3 s</title></rect>
-<rect x="270.6" y="761.5" width="5.9" height="12" rx="1.5" class="k-gate"><title>T-28 op 2: gate (gate.run), pass, 4.3-6.7 s</title></rect>
-<rect x="274.9" y="761.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-28 op 3: pr_open (pr.open), nothing, 6.7-6.7 s</title></rect>
-<text x="274.9" y="760" font-size="8.5" fill="currentColor">seed pr.open</text>
-<rect x="274.9" y="761.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-28 op 4: other (ci.read), nothing, 6.7-6.8 s</title></rect>
-<rect x="276.7" y="761.5" width="43.7" height="12" rx="1.5" class="k-edit call"><title>T-28 op 5: edit (implementation.edit), changed, 6.8-24.6 s</title></rect>
-<rect x="319.1" y="761.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-28 op 6: test (tests.run), pass, 24.7-25.0 s</title></rect>
-<rect x="321.4" y="761.5" width="8.1" height="12" rx="1.5" class="k-gate"><title>T-28 op 7: gate (gate.run), pass, 25.0-28.3 s</title></rect>
-<rect x="329.5" y="761.5" width="10.3" height="12" rx="1.5" class="k-pr_open"><title>T-28 op 8: pr_open (pr.open), opened, 28.3-32.5 s</title></rect>
-<rect x="339.8" y="761.5" width="4.2" height="12" rx="1.5" class="k-ci_wait"><title>T-28 op 9: ci_wait (ci.read), pending, 32.5-34.2 s</title></rect>
-<rect x="343.9" y="761.5" width="77.3" height="12" rx="1.5" class="k-ci_pass"><title>T-28 op 10: ci_pass (ci.read), pass, 34.2-65.7 s</title></rect>
-<rect x="421.3" y="761.5" width="41.2" height="12" rx="1.5" class="k-edit call"><title>T-28 op 11: edit (tests.write), changed, 65.7-82.5 s</title></rect>
-<rect x="461.7" y="761.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-28 op 12: test (tests.run), pass, 82.8-83.0 s</title></rect>
-<rect x="463.7" y="761.5" width="6.6" height="12" rx="1.5" class="k-gate"><title>T-28 op 13: gate (gate.run), pass, 83.0-85.7 s</title></rect>
-<rect x="470.4" y="761.5" width="6.4" height="12" rx="1.5" class="k-push"><title>T-28 op 14: push (pr.open), pushed, 85.7-88.3 s</title></rect>
-<rect x="475.2" y="761.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-28 op 15: other (ci.read), nothing, 88.3-88.9 s</title></rect>
-<rect x="478.2" y="761.5" width="78.1" height="12" rx="1.5" class="k-push"><title>T-28 op 16: push (pr.open), pushed, 88.9-120.7 s</title></rect>
-<rect x="556.3" y="761.5" width="4.2" height="12" rx="1.5" class="k-ci_pass"><title>T-28 op 17: ci_pass (ci.read), pass, 120.7-122.4 s</title></rect>
-<text x="556.3" y="760" font-size="8.5" fill="currentColor">2nd CI</text>
-<rect x="560.4" y="761.5" width="23.8" height="12" rx="1.5" class="k-model_call call"><title>T-28 op 18: model_call (repository.merge), approval, 122.4-132.1 s</title></rect>
-<rect x="583.0" y="761.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-28 op 19: approval_wait, approval, 132.2-132.2 s</title></rect>
+<rect x="265.9" y="761.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-18 op 1: test (tests.run), pass, 3.0-3.0 s</title></rect>
+<rect x="265.9" y="761.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-18 op 2: gate (gate.run), pass, 3.0-3.0 s</title></rect>
+<rect x="265.9" y="761.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-18 op 3: pr_open (pr.open), nothing, 3.0-3.0 s</title></rect>
+<text x="265.9" y="760" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="265.9" y="761.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-18 op 4: other (ci.read), nothing, 3.0-3.0 s</title></rect>
+<rect x="269.8" y="761.5" width="42.7" height="12" rx="1.5" class="k-edit call"><title>T-18 op 5: edit (implementation.edit), changed, 4.0-21.4 s</title></rect>
+<rect x="310.0" y="761.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-18 op 6: test (tests.run), pass, 21.0-21.0 s</title></rect>
+<rect x="310.0" y="761.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-18 op 7: gate (gate.run), pass, 21.0-21.0 s</title></rect>
+<rect x="311.5" y="761.5" width="9.8" height="12" rx="1.5" class="k-pr_open"><title>T-18 op 8: pr_open (pr.open), opened, 21.0-25.0 s</title></rect>
+<rect x="321.4" y="761.5" width="4.9" height="12" rx="1.5" class="k-ci_wait"><title>T-18 op 9: ci_wait (ci.read), pending, 25.0-27.0 s</title></rect>
+<rect x="326.3" y="761.5" width="76.1" height="12" rx="1.5" class="k-ci_pass"><title>T-18 op 10: ci_pass (ci.read), pass, 27.0-58.0 s</title></rect>
+<rect x="404.3" y="761.5" width="42.5" height="12" rx="1.5" class="k-edit call"><title>T-18 op 11: edit (tests.write), changed, 58.8-76.1 s</title></rect>
+<rect x="445.0" y="761.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-18 op 12: test (tests.run), pass, 76.0-76.0 s</title></rect>
+<rect x="445.0" y="761.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-18 op 13: gate (gate.run), pass, 76.0-76.0 s</title></rect>
+<rect x="446.5" y="761.5" width="4.9" height="12" rx="1.5" class="k-push"><title>T-18 op 14: push (pr.open), pushed, 76.0-78.0 s</title></rect>
+<rect x="450.0" y="761.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-18 op 15: other (ci.read), nothing, 78.0-79.0 s</title></rect>
+<rect x="453.9" y="761.5" width="78.5" height="12" rx="1.5" class="k-push"><title>T-18 op 16: push (pr.open), pushed, 79.0-111.0 s</title></rect>
+<rect x="531.0" y="761.5" width="3.0" height="12" rx="1.5" class="k-ci_pass"><title>T-18 op 17: ci_pass (ci.read), pass, 111.0-112.0 s</title></rect>
+<text x="531.0" y="760" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="537.4" y="761.5" width="25.0" height="12" rx="1.5" class="k-model_call call"><title>T-18 op 18: model_call (repository.merge), approval, 113.0-123.2 s</title></rect>
+<rect x="560.4" y="761.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-18 op 19: approval_wait, approval, 123.0-123.0 s</title></rect>
 <text x="30" y="788" font-size="10.5" font-style="italic" fill="currentColor" fill-opacity=".8">8d49743</text>
 <text x="40" y="807.5" fill="currentColor">T-19</text>
 <line x1="260.0" x2="260.0" y1="795" y2="812" class="grid"/>
@@ -959,8 +954,8 @@
 <text x="549.4" y="880" font-size="8.5" fill="currentColor">2nd CI</text>
 <rect x="553.1" y="881.5" width="24.5" height="12" rx="1.5" class="k-model_call call"><title>T-23 op 18: model_call (repository.merge), approval, 119.4-129.4 s</title></rect>
 <rect x="576.4" y="881.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-23 op 19: approval_wait, approval, 129.5-129.5 s</title></rect>
-<text x="30" y="908" font-size="10.5" font-style="italic" fill="currentColor" fill-opacity=".8">a0b8576</text>
-<text x="40" y="927.5" fill="currentColor">T-14</text>
+<text x="30" y="908" font-size="10.5" font-style="italic" fill="currentColor" fill-opacity=".8">834205f</text>
+<text x="40" y="927.5" fill="currentColor">T-24</text>
 <line x1="260.0" x2="260.0" y1="915" y2="932" class="grid"/>
 <line x1="333.6" x2="333.6" y1="915" y2="932" class="grid"/>
 <line x1="407.3" x2="407.3" y1="915" y2="932" class="grid"/>
@@ -973,28 +968,28 @@
 <line x1="922.7" x2="922.7" y1="915" y2="932" class="grid"/>
 <line x1="996.4" x2="996.4" y1="915" y2="932" class="grid"/>
 <line x1="1070.0" x2="1070.0" y1="915" y2="932" class="grid"/>
-<rect x="265.9" y="917.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-14 op 1: test (tests.run), pass, 3.0-3.0 s</title></rect>
-<rect x="265.9" y="917.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-14 op 2: gate (gate.run), pass, 3.0-3.0 s</title></rect>
-<rect x="265.9" y="917.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-14 op 3: pr_open (pr.open), nothing, 3.0-3.0 s</title></rect>
-<text x="265.9" y="916" font-size="8.5" fill="currentColor">seed pr.open</text>
-<rect x="265.9" y="917.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-14 op 4: other (ci.read), nothing, 3.0-3.0 s</title></rect>
-<rect x="269.6" y="917.5" width="42.7" height="12" rx="1.5" class="k-edit call"><title>T-14 op 5: edit (implementation.edit), changed, 3.9-21.3 s</title></rect>
-<rect x="310.0" y="917.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-14 op 6: test (tests.run), pass, 21.0-21.0 s</title></rect>
-<rect x="310.0" y="917.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-14 op 7: gate (gate.run), pass, 21.0-21.0 s</title></rect>
-<rect x="311.5" y="917.5" width="9.8" height="12" rx="1.5" class="k-pr_open"><title>T-14 op 8: pr_open (pr.open), opened, 21.0-25.0 s</title></rect>
-<rect x="321.4" y="917.5" width="4.9" height="12" rx="1.5" class="k-ci_wait"><title>T-14 op 9: ci_wait (ci.read), pending, 25.0-27.0 s</title></rect>
-<rect x="326.3" y="917.5" width="76.1" height="12" rx="1.5" class="k-ci_pass"><title>T-14 op 10: ci_pass (ci.read), pass, 27.0-58.0 s</title></rect>
-<rect x="404.6" y="917.5" width="46.1" height="12" rx="1.5" class="k-edit call"><title>T-14 op 11: edit (tests.write), changed, 58.9-77.7 s</title></rect>
-<rect x="447.5" y="917.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-14 op 12: test (tests.run), pass, 77.0-77.0 s</title></rect>
-<rect x="447.5" y="917.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-14 op 13: gate (gate.run), pass, 77.0-78.0 s</title></rect>
-<rect x="451.5" y="917.5" width="4.9" height="12" rx="1.5" class="k-push"><title>T-14 op 14: push (pr.open), pushed, 78.0-80.0 s</title></rect>
-<rect x="454.9" y="917.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-14 op 15: other (ci.read), nothing, 80.0-81.0 s</title></rect>
-<rect x="458.8" y="917.5" width="76.1" height="12" rx="1.5" class="k-push"><title>T-14 op 16: push (pr.open), pushed, 81.0-112.0 s</title></rect>
-<rect x="534.9" y="917.5" width="4.9" height="12" rx="1.5" class="k-ci_pass"><title>T-14 op 17: ci_pass (ci.read), pass, 112.0-114.0 s</title></rect>
-<text x="534.9" y="916" font-size="8.5" fill="currentColor">2nd CI</text>
-<rect x="540.8" y="917.5" width="32.4" height="12" rx="1.5" class="k-model_call call"><title>T-14 op 18: model_call (repository.merge), approval, 114.4-127.6 s</title></rect>
-<rect x="570.2" y="917.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-14 op 19: approval_wait, approval, 127.0-127.0 s</title></rect>
-<text x="40" y="948.5" fill="currentColor">T-15</text>
+<rect x="267.3" y="917.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-24 op 1: test (tests.run), pass, 3.6-3.8 s</title></rect>
+<rect x="269.3" y="917.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-24 op 2: gate (gate.run), pass, 3.8-6.1 s</title></rect>
+<rect x="273.5" y="917.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-24 op 3: pr_open (pr.open), nothing, 6.1-6.2 s</title></rect>
+<text x="273.5" y="916" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="273.7" y="917.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-24 op 4: other (ci.read), nothing, 6.2-6.2 s</title></rect>
+<rect x="275.2" y="917.5" width="41.7" height="12" rx="1.5" class="k-edit call"><title>T-24 op 5: edit (implementation.edit), changed, 6.2-23.2 s</title></rect>
+<rect x="315.7" y="917.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-24 op 6: test (tests.run), pass, 23.3-23.4 s</title></rect>
+<rect x="317.4" y="917.5" width="5.9" height="12" rx="1.5" class="k-gate"><title>T-24 op 7: gate (gate.run), pass, 23.4-25.8 s</title></rect>
+<rect x="323.3" y="917.5" width="10.3" height="12" rx="1.5" class="k-pr_open"><title>T-24 op 8: pr_open (pr.open), opened, 25.8-30.0 s</title></rect>
+<rect x="333.6" y="917.5" width="4.2" height="12" rx="1.5" class="k-ci_wait"><title>T-24 op 9: ci_wait (ci.read), pending, 30.0-31.7 s</title></rect>
+<rect x="337.8" y="917.5" width="77.6" height="12" rx="1.5" class="k-ci_pass"><title>T-24 op 10: ci_pass (ci.read), pass, 31.7-63.3 s</title></rect>
+<rect x="415.4" y="917.5" width="36.6" height="12" rx="1.5" class="k-edit call"><title>T-24 op 11: edit (tests.write), changed, 63.3-78.2 s</title></rect>
+<rect x="450.7" y="917.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-24 op 12: test (tests.run), pass, 78.3-78.5 s</title></rect>
+<rect x="452.7" y="917.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-24 op 13: gate (gate.run), pass, 78.5-80.8 s</title></rect>
+<rect x="458.3" y="917.5" width="6.6" height="12" rx="1.5" class="k-push"><title>T-24 op 14: push (pr.open), pushed, 80.8-83.5 s</title></rect>
+<rect x="463.5" y="917.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-24 op 15: other (ci.read), nothing, 83.5-84.0 s</title></rect>
+<rect x="466.2" y="917.5" width="77.8" height="12" rx="1.5" class="k-push"><title>T-24 op 16: push (pr.open), pushed, 84.0-115.7 s</title></rect>
+<rect x="544.0" y="917.5" width="3.7" height="12" rx="1.5" class="k-ci_pass"><title>T-24 op 17: ci_pass (ci.read), pass, 115.7-117.2 s</title></rect>
+<text x="544.0" y="916" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="547.9" y="917.5" width="23.3" height="12" rx="1.5" class="k-model_call call"><title>T-24 op 18: model_call (repository.merge), approval, 117.3-126.8 s</title></rect>
+<rect x="570.2" y="917.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-24 op 19: approval_wait, approval, 127.0-127.0 s</title></rect>
+<text x="40" y="948.5" fill="currentColor">T-25</text>
 <line x1="260.0" x2="260.0" y1="936" y2="953" class="grid"/>
 <line x1="333.6" x2="333.6" y1="936" y2="953" class="grid"/>
 <line x1="407.3" x2="407.3" y1="936" y2="953" class="grid"/>
@@ -1007,28 +1002,28 @@
 <line x1="922.7" x2="922.7" y1="936" y2="953" class="grid"/>
 <line x1="996.4" x2="996.4" y1="936" y2="953" class="grid"/>
 <line x1="1070.0" x2="1070.0" y1="936" y2="953" class="grid"/>
-<rect x="270.8" y="938.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-15 op 1: test (tests.run), pass, 5.0-5.0 s</title></rect>
-<rect x="270.8" y="938.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-15 op 2: gate (gate.run), pass, 5.0-5.0 s</title></rect>
-<rect x="270.8" y="938.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-15 op 3: pr_open (pr.open), nothing, 5.0-5.0 s</title></rect>
-<text x="270.8" y="937" font-size="8.5" fill="currentColor">seed pr.open</text>
-<rect x="270.8" y="938.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-15 op 4: other (ci.read), nothing, 5.0-5.0 s</title></rect>
-<rect x="274.0" y="938.5" width="48.4" height="12" rx="1.5" class="k-edit call"><title>T-15 op 5: edit (implementation.edit), changed, 5.7-25.4 s</title></rect>
-<rect x="319.9" y="938.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-15 op 6: test (tests.run), pass, 25.0-25.0 s</title></rect>
-<rect x="319.9" y="938.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-15 op 7: gate (gate.run), pass, 25.0-25.0 s</title></rect>
-<rect x="321.4" y="938.5" width="12.3" height="12" rx="1.5" class="k-pr_open"><title>T-15 op 8: pr_open (pr.open), opened, 25.0-30.0 s</title></rect>
-<rect x="332.1" y="938.5" width="3.0" height="12" rx="1.5" class="k-ci_wait"><title>T-15 op 9: ci_wait (ci.read), pending, 30.0-31.0 s</title></rect>
-<rect x="336.1" y="938.5" width="78.5" height="12" rx="1.5" class="k-ci_pass"><title>T-15 op 10: ci_pass (ci.read), pass, 31.0-63.0 s</title></rect>
-<rect x="415.6" y="938.5" width="46.4" height="12" rx="1.5" class="k-edit call"><title>T-15 op 11: edit (tests.write), changed, 63.4-82.3 s</title></rect>
-<rect x="459.8" y="938.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-15 op 12: test (tests.run), pass, 82.0-82.0 s</title></rect>
-<rect x="459.8" y="938.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-15 op 13: gate (gate.run), pass, 82.0-82.0 s</title></rect>
-<rect x="461.3" y="938.5" width="9.8" height="12" rx="1.5" class="k-push"><title>T-15 op 14: push (pr.open), pushed, 82.0-86.0 s</title></rect>
-<rect x="469.6" y="938.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-15 op 15: other (ci.read), nothing, 86.0-86.0 s</title></rect>
-<rect x="471.1" y="938.5" width="78.5" height="12" rx="1.5" class="k-push"><title>T-15 op 16: push (pr.open), pushed, 86.0-118.0 s</title></rect>
-<rect x="548.1" y="938.5" width="3.0" height="12" rx="1.5" class="k-ci_pass"><title>T-15 op 17: ci_pass (ci.read), pass, 118.0-119.0 s</title></rect>
-<text x="548.1" y="937" font-size="8.5" fill="currentColor">2nd CI</text>
-<rect x="554.3" y="938.5" width="21.1" height="12" rx="1.5" class="k-model_call call"><title>T-15 op 18: model_call (repository.merge), approval, 119.9-128.5 s</title></rect>
-<rect x="572.7" y="938.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-15 op 19: approval_wait, approval, 128.0-128.0 s</title></rect>
-<text x="40" y="969.5" fill="currentColor">T-16</text>
+<rect x="267.6" y="938.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-25 op 1: test (tests.run), pass, 3.7-3.8 s</title></rect>
+<rect x="269.3" y="938.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-25 op 2: gate (gate.run), pass, 3.8-6.1 s</title></rect>
+<rect x="273.5" y="938.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-25 op 3: pr_open (pr.open), nothing, 6.1-6.2 s</title></rect>
+<text x="273.5" y="937" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="273.7" y="938.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-25 op 4: other (ci.read), nothing, 6.2-6.2 s</title></rect>
+<rect x="275.2" y="938.5" width="44.7" height="12" rx="1.5" class="k-edit call"><title>T-25 op 5: edit (implementation.edit), changed, 6.2-24.4 s</title></rect>
+<rect x="318.4" y="938.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-25 op 6: test (tests.run), pass, 24.4-24.5 s</title></rect>
+<rect x="320.1" y="938.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-25 op 7: gate (gate.run), pass, 24.5-26.8 s</title></rect>
+<rect x="325.8" y="938.5" width="10.6" height="12" rx="1.5" class="k-pr_open"><title>T-25 op 8: pr_open (pr.open), opened, 26.8-31.1 s</title></rect>
+<rect x="336.3" y="938.5" width="4.2" height="12" rx="1.5" class="k-ci_wait"><title>T-25 op 9: ci_wait (ci.read), pending, 31.1-32.8 s</title></rect>
+<rect x="340.5" y="938.5" width="78.1" height="12" rx="1.5" class="k-ci_pass"><title>T-25 op 10: ci_pass (ci.read), pass, 32.8-64.6 s</title></rect>
+<rect x="418.6" y="938.5" width="81.7" height="12" rx="1.5" class="k-edit call"><title>T-25 op 11: edit (tests.write), changed, 64.6-97.9 s</title></rect>
+<rect x="499.5" y="938.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-25 op 12: test (tests.run), pass, 98.2-98.8 s</title></rect>
+<rect x="502.5" y="938.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-25 op 13: gate (gate.run), pass, 98.8-101.1 s</title></rect>
+<rect x="508.2" y="938.5" width="6.6" height="12" rx="1.5" class="k-push"><title>T-25 op 14: push (pr.open), pushed, 101.1-103.8 s</title></rect>
+<rect x="514.8" y="938.5" width="3.9" height="12" rx="1.5" class="k-ci_wait"><title>T-25 op 15: ci_wait (ci.read), pending, 103.8-105.4 s</title></rect>
+<rect x="518.7" y="938.5" width="77.8" height="12" rx="1.5" class="k-push"><title>T-25 op 16: push (pr.open), pushed, 105.4-137.1 s</title></rect>
+<rect x="596.5" y="938.5" width="4.2" height="12" rx="1.5" class="k-ci_pass"><title>T-25 op 17: ci_pass (ci.read), pass, 137.1-138.8 s</title></rect>
+<text x="596.5" y="937" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="600.7" y="938.5" width="35.8" height="12" rx="1.5" class="k-model_call call"><title>T-25 op 18: model_call (repository.merge), approval, 138.8-153.4 s</title></rect>
+<rect x="635.3" y="938.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-25 op 19: approval_wait, approval, 153.5-153.5 s</title></rect>
+<text x="40" y="969.5" fill="currentColor">T-26</text>
 <line x1="260.0" x2="260.0" y1="957" y2="974" class="grid"/>
 <line x1="333.6" x2="333.6" y1="957" y2="974" class="grid"/>
 <line x1="407.3" x2="407.3" y1="957" y2="974" class="grid"/>
@@ -1041,28 +1036,28 @@
 <line x1="922.7" x2="922.7" y1="957" y2="974" class="grid"/>
 <line x1="996.4" x2="996.4" y1="957" y2="974" class="grid"/>
 <line x1="1070.0" x2="1070.0" y1="957" y2="974" class="grid"/>
-<rect x="265.9" y="959.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-16 op 1: test (tests.run), pass, 3.0-4.0 s</title></rect>
-<rect x="268.3" y="959.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-16 op 2: gate (gate.run), pass, 4.0-4.0 s</title></rect>
-<rect x="268.3" y="959.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-16 op 3: pr_open (pr.open), nothing, 4.0-4.0 s</title></rect>
-<text x="268.3" y="958" font-size="8.5" fill="currentColor">seed pr.open</text>
-<rect x="268.3" y="959.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-16 op 4: other (ci.read), nothing, 4.0-4.0 s</title></rect>
-<rect x="270.3" y="959.5" width="43.0" height="12" rx="1.5" class="k-edit call"><title>T-16 op 5: edit (implementation.edit), changed, 4.2-21.7 s</title></rect>
-<rect x="310.0" y="959.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-16 op 6: test (tests.run), pass, 21.0-21.0 s</title></rect>
-<rect x="310.0" y="959.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-16 op 7: gate (gate.run), pass, 21.0-21.0 s</title></rect>
-<rect x="311.5" y="959.5" width="12.3" height="12" rx="1.5" class="k-pr_open"><title>T-16 op 8: pr_open (pr.open), opened, 21.0-26.0 s</title></rect>
-<rect x="322.3" y="959.5" width="3.0" height="12" rx="1.5" class="k-ci_wait"><title>T-16 op 9: ci_wait (ci.read), pending, 26.0-27.0 s</title></rect>
-<rect x="326.3" y="959.5" width="78.5" height="12" rx="1.5" class="k-ci_pass"><title>T-16 op 10: ci_pass (ci.read), pass, 27.0-59.0 s</title></rect>
-<rect x="407.0" y="959.5" width="49.6" height="12" rx="1.5" class="k-edit call"><title>T-16 op 11: edit (tests.write), changed, 59.9-80.1 s</title></rect>
-<rect x="454.9" y="959.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-16 op 12: test (tests.run), pass, 80.0-81.0 s</title></rect>
-<rect x="457.3" y="959.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-16 op 13: gate (gate.run), pass, 81.0-81.0 s</title></rect>
-<rect x="458.8" y="959.5" width="7.4" height="12" rx="1.5" class="k-push"><title>T-16 op 14: push (pr.open), pushed, 81.0-84.0 s</title></rect>
-<rect x="464.7" y="959.5" width="3.0" height="12" rx="1.5" class="k-ci_wait"><title>T-16 op 15: ci_wait (ci.read), pending, 84.0-85.0 s</title></rect>
-<rect x="468.6" y="959.5" width="78.5" height="12" rx="1.5" class="k-push"><title>T-16 op 16: push (pr.open), pushed, 85.0-117.0 s</title></rect>
-<rect x="545.7" y="959.5" width="3.0" height="12" rx="1.5" class="k-ci_pass"><title>T-16 op 17: ci_pass (ci.read), pass, 117.0-118.0 s</title></rect>
-<text x="545.7" y="958" font-size="8.5" fill="currentColor">2nd CI</text>
-<rect x="551.8" y="959.5" width="20.6" height="12" rx="1.5" class="k-model_call call"><title>T-16 op 18: model_call (repository.merge), approval, 118.9-127.3 s</title></rect>
-<rect x="570.2" y="959.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-16 op 19: approval_wait, approval, 127.0-127.0 s</title></rect>
-<text x="40" y="990.5" fill="currentColor">T-17</text>
+<rect x="268.3" y="959.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-26 op 1: test (tests.run), pass, 4.0-4.5 s</title></rect>
+<rect x="271.0" y="959.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-26 op 2: gate (gate.run), pass, 4.5-6.8 s</title></rect>
+<rect x="275.2" y="959.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-26 op 3: pr_open (pr.open), nothing, 6.8-6.9 s</title></rect>
+<text x="275.2" y="958" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="275.4" y="959.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-26 op 4: other (ci.read), nothing, 6.9-6.9 s</title></rect>
+<rect x="276.9" y="959.5" width="44.2" height="12" rx="1.5" class="k-edit call"><title>T-26 op 5: edit (implementation.edit), changed, 6.9-24.9 s</title></rect>
+<rect x="319.6" y="959.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-26 op 6: test (tests.run), pass, 24.9-25.1 s</title></rect>
+<rect x="321.6" y="959.5" width="8.1" height="12" rx="1.5" class="k-gate"><title>T-26 op 7: gate (gate.run), pass, 25.1-28.4 s</title></rect>
+<rect x="329.7" y="959.5" width="11.0" height="12" rx="1.5" class="k-pr_open"><title>T-26 op 8: pr_open (pr.open), opened, 28.4-32.9 s</title></rect>
+<rect x="340.8" y="959.5" width="4.4" height="12" rx="1.5" class="k-ci_wait"><title>T-26 op 9: ci_wait (ci.read), pending, 32.9-34.7 s</title></rect>
+<rect x="345.2" y="959.5" width="77.6" height="12" rx="1.5" class="k-ci_pass"><title>T-26 op 10: ci_pass (ci.read), pass, 34.7-66.3 s</title></rect>
+<rect x="422.7" y="959.5" width="39.0" height="12" rx="1.5" class="k-edit call"><title>T-26 op 11: edit (tests.write), changed, 66.3-82.2 s</title></rect>
+<rect x="460.5" y="959.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-26 op 12: test (tests.run), pass, 82.3-82.5 s</title></rect>
+<rect x="462.5" y="959.5" width="5.9" height="12" rx="1.5" class="k-gate"><title>T-26 op 13: gate (gate.run), pass, 82.5-84.9 s</title></rect>
+<rect x="468.4" y="959.5" width="6.6" height="12" rx="1.5" class="k-push"><title>T-26 op 14: push (pr.open), pushed, 84.9-87.6 s</title></rect>
+<rect x="475.0" y="959.5" width="3.7" height="12" rx="1.5" class="k-ci_wait"><title>T-26 op 15: ci_wait (ci.read), pending, 87.6-89.1 s</title></rect>
+<rect x="478.7" y="959.5" width="78.3" height="12" rx="1.5" class="k-push"><title>T-26 op 16: push (pr.open), pushed, 89.1-121.0 s</title></rect>
+<rect x="557.0" y="959.5" width="3.7" height="12" rx="1.5" class="k-ci_pass"><title>T-26 op 17: ci_pass (ci.read), pass, 121.0-122.5 s</title></rect>
+<text x="557.0" y="958" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="560.9" y="959.5" width="30.9" height="12" rx="1.5" class="k-model_call call"><title>T-26 op 18: model_call (repository.merge), approval, 122.6-135.2 s</title></rect>
+<rect x="590.6" y="959.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-26 op 19: approval_wait, approval, 135.3-135.3 s</title></rect>
+<text x="40" y="990.5" fill="currentColor">T-27</text>
 <line x1="260.0" x2="260.0" y1="978" y2="995" class="grid"/>
 <line x1="333.6" x2="333.6" y1="978" y2="995" class="grid"/>
 <line x1="407.3" x2="407.3" y1="978" y2="995" class="grid"/>
@@ -1075,28 +1070,33 @@
 <line x1="922.7" x2="922.7" y1="978" y2="995" class="grid"/>
 <line x1="996.4" x2="996.4" y1="978" y2="995" class="grid"/>
 <line x1="1070.0" x2="1070.0" y1="978" y2="995" class="grid"/>
-<rect x="265.9" y="980.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-17 op 1: test (tests.run), pass, 3.0-3.0 s</title></rect>
-<rect x="265.9" y="980.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-17 op 2: gate (gate.run), pass, 3.0-3.0 s</title></rect>
-<rect x="265.9" y="980.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-17 op 3: pr_open (pr.open), nothing, 3.0-3.0 s</title></rect>
-<text x="265.9" y="979" font-size="8.5" fill="currentColor">seed pr.open</text>
-<rect x="265.9" y="980.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-17 op 4: other (ci.read), nothing, 3.0-3.0 s</title></rect>
-<rect x="269.8" y="980.5" width="45.7" height="12" rx="1.5" class="k-edit call"><title>T-17 op 5: edit (implementation.edit), changed, 4.0-22.6 s</title></rect>
-<rect x="312.5" y="980.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-17 op 6: test (tests.run), pass, 22.0-22.0 s</title></rect>
-<rect x="312.5" y="980.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-17 op 7: gate (gate.run), pass, 22.0-22.0 s</title></rect>
-<rect x="314.0" y="980.5" width="12.3" height="12" rx="1.5" class="k-pr_open"><title>T-17 op 8: pr_open (pr.open), opened, 22.0-27.0 s</title></rect>
-<rect x="326.3" y="980.5" width="4.9" height="12" rx="1.5" class="k-ci_wait"><title>T-17 op 9: ci_wait (ci.read), pending, 27.0-29.0 s</title></rect>
-<rect x="331.2" y="980.5" width="76.1" height="12" rx="1.5" class="k-ci_pass"><title>T-17 op 10: ci_pass (ci.read), pass, 29.0-60.0 s</title></rect>
-<rect x="408.5" y="980.5" width="46.9" height="12" rx="1.5" class="k-edit call"><title>T-17 op 11: edit (tests.write), changed, 60.5-79.6 s</title></rect>
-<rect x="452.4" y="980.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-17 op 12: test (tests.run), pass, 79.0-80.0 s</title></rect>
-<rect x="454.9" y="980.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-17 op 13: gate (gate.run), pass, 80.0-80.0 s</title></rect>
-<rect x="456.4" y="980.5" width="4.9" height="12" rx="1.5" class="k-push"><title>T-17 op 14: push (pr.open), pushed, 80.0-82.0 s</title></rect>
-<rect x="459.8" y="980.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-17 op 15: other (ci.read), nothing, 82.0-83.0 s</title></rect>
-<rect x="463.7" y="980.5" width="78.5" height="12" rx="1.5" class="k-push"><title>T-17 op 16: push (pr.open), pushed, 83.0-115.0 s</title></rect>
-<rect x="540.8" y="980.5" width="3.0" height="12" rx="1.5" class="k-ci_pass"><title>T-17 op 17: ci_pass (ci.read), pass, 115.0-116.0 s</title></rect>
-<text x="540.8" y="979" font-size="8.5" fill="currentColor">2nd CI</text>
-<rect x="546.4" y="980.5" width="30.2" height="12" rx="1.5" class="k-model_call call"><title>T-17 op 18: model_call (repository.merge), approval, 116.7-129.0 s</title></rect>
-<rect x="575.1" y="980.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-17 op 19: approval_wait, approval, 129.0-129.0 s</title></rect>
-<text x="40" y="1011.5" fill="currentColor">T-18</text>
+<rect x="267.8" y="980.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-27 op 1: test (tests.run), pass, 3.8-3.9 s</title></rect>
+<rect x="269.6" y="980.5" width="5.9" height="12" rx="1.5" class="k-gate"><title>T-27 op 2: gate (gate.run), pass, 3.9-6.3 s</title></rect>
+<rect x="274.0" y="980.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-27 op 3: pr_open (pr.open), nothing, 6.3-6.3 s</title></rect>
+<text x="274.0" y="979" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="274.0" y="980.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-27 op 4: other (ci.read), nothing, 6.3-6.4 s</title></rect>
+<rect x="275.7" y="980.5" width="42.0" height="12" rx="1.5" class="k-edit call"><title>T-27 op 5: edit (implementation.edit), changed, 6.4-23.5 s</title></rect>
+<rect x="316.4" y="980.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-27 op 6: test (tests.run), pass, 23.6-23.7 s</title></rect>
+<rect x="318.2" y="980.5" width="5.6" height="12" rx="1.5" class="k-gate"><title>T-27 op 7: gate (gate.run), pass, 23.7-26.0 s</title></rect>
+<rect x="323.8" y="980.5" width="10.3" height="12" rx="1.5" class="k-pr_open"><title>T-27 op 8: pr_open (pr.open), opened, 26.0-30.2 s</title></rect>
+<rect x="334.1" y="980.5" width="3.4" height="12" rx="1.5" class="k-ci_wait"><title>T-27 op 9: ci_wait (ci.read), pending, 30.2-31.6 s</title></rect>
+<rect x="337.6" y="980.5" width="77.3" height="12" rx="1.5" class="k-ci_pass"><title>T-27 op 10: ci_pass (ci.read), pass, 31.6-63.1 s</title></rect>
+<rect x="414.9" y="980.5" width="28.7" height="12" rx="1.5" class="k-read noop call"><title>T-27 op 11: read (repository.inspect), unchanged, 63.1-74.8 s</title></rect>
+<rect x="442.3" y="980.5" width="3.0" height="12" rx="1.5" class="k-no_progress"><title>T-27 op 12: no_progress, NoProgress, 74.9-74.9 s</title></rect>
+<text x="442.3" y="979" font-size="8.5" fill="currentColor">inspect, then NoProgress</text>
+<line x1="443.8" x2="443.8" y1="977" y2="996" class="k-resume" stroke-width="2"><title>T-27 op 13: resume, 74.9-95.8 s</title></line>
+<line x1="443.8" x2="495.1" y1="986.5" y2="986.5" class="k-resume" stroke-width="1" stroke-dasharray="2 2"/>
+<rect x="495.1" y="980.5" width="38.0" height="12" rx="1.5" class="k-edit call"><title>T-27 op 14: edit (tests.write), changed, 95.8-111.3 s</title></rect>
+<rect x="531.9" y="980.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-27 op 15: test (tests.run), pass, 111.4-111.5 s</title></rect>
+<rect x="533.7" y="980.5" width="5.9" height="12" rx="1.5" class="k-gate"><title>T-27 op 16: gate (gate.run), pass, 111.5-113.9 s</title></rect>
+<rect x="539.6" y="980.5" width="6.6" height="12" rx="1.5" class="k-push"><title>T-27 op 17: push (pr.open), pushed, 113.9-116.6 s</title></rect>
+<rect x="544.7" y="980.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-27 op 18: other (ci.read), nothing, 116.6-117.1 s</title></rect>
+<rect x="547.4" y="980.5" width="78.8" height="12" rx="1.5" class="k-push"><title>T-27 op 19: push (pr.open), pushed, 117.1-149.2 s</title></rect>
+<rect x="626.2" y="980.5" width="3.9" height="12" rx="1.5" class="k-ci_pass"><title>T-27 op 20: ci_pass (ci.read), pass, 149.2-150.8 s</title></rect>
+<text x="626.2" y="979" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="630.1" y="980.5" width="18.7" height="12" rx="1.5" class="k-model_call call"><title>T-27 op 21: model_call (repository.merge), approval, 150.8-158.4 s</title></rect>
+<rect x="647.5" y="980.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-27 op 22: approval_wait, approval, 158.5-158.5 s</title></rect>
+<text x="40" y="1011.5" fill="currentColor">T-28</text>
 <line x1="260.0" x2="260.0" y1="999" y2="1016" class="grid"/>
 <line x1="333.6" x2="333.6" y1="999" y2="1016" class="grid"/>
 <line x1="407.3" x2="407.3" y1="999" y2="1016" class="grid"/>
@@ -1109,27 +1109,27 @@
 <line x1="922.7" x2="922.7" y1="999" y2="1016" class="grid"/>
 <line x1="996.4" x2="996.4" y1="999" y2="1016" class="grid"/>
 <line x1="1070.0" x2="1070.0" y1="999" y2="1016" class="grid"/>
-<rect x="265.9" y="1001.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-18 op 1: test (tests.run), pass, 3.0-3.0 s</title></rect>
-<rect x="265.9" y="1001.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-18 op 2: gate (gate.run), pass, 3.0-3.0 s</title></rect>
-<rect x="265.9" y="1001.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-18 op 3: pr_open (pr.open), nothing, 3.0-3.0 s</title></rect>
-<text x="265.9" y="1000" font-size="8.5" fill="currentColor">seed pr.open</text>
-<rect x="265.9" y="1001.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-18 op 4: other (ci.read), nothing, 3.0-3.0 s</title></rect>
-<rect x="269.8" y="1001.5" width="42.7" height="12" rx="1.5" class="k-edit call"><title>T-18 op 5: edit (implementation.edit), changed, 4.0-21.4 s</title></rect>
-<rect x="310.0" y="1001.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-18 op 6: test (tests.run), pass, 21.0-21.0 s</title></rect>
-<rect x="310.0" y="1001.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-18 op 7: gate (gate.run), pass, 21.0-21.0 s</title></rect>
-<rect x="311.5" y="1001.5" width="9.8" height="12" rx="1.5" class="k-pr_open"><title>T-18 op 8: pr_open (pr.open), opened, 21.0-25.0 s</title></rect>
-<rect x="321.4" y="1001.5" width="4.9" height="12" rx="1.5" class="k-ci_wait"><title>T-18 op 9: ci_wait (ci.read), pending, 25.0-27.0 s</title></rect>
-<rect x="326.3" y="1001.5" width="76.1" height="12" rx="1.5" class="k-ci_pass"><title>T-18 op 10: ci_pass (ci.read), pass, 27.0-58.0 s</title></rect>
-<rect x="404.3" y="1001.5" width="42.5" height="12" rx="1.5" class="k-edit call"><title>T-18 op 11: edit (tests.write), changed, 58.8-76.1 s</title></rect>
-<rect x="445.0" y="1001.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-18 op 12: test (tests.run), pass, 76.0-76.0 s</title></rect>
-<rect x="445.0" y="1001.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-18 op 13: gate (gate.run), pass, 76.0-76.0 s</title></rect>
-<rect x="446.5" y="1001.5" width="4.9" height="12" rx="1.5" class="k-push"><title>T-18 op 14: push (pr.open), pushed, 76.0-78.0 s</title></rect>
-<rect x="450.0" y="1001.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-18 op 15: other (ci.read), nothing, 78.0-79.0 s</title></rect>
-<rect x="453.9" y="1001.5" width="78.5" height="12" rx="1.5" class="k-push"><title>T-18 op 16: push (pr.open), pushed, 79.0-111.0 s</title></rect>
-<rect x="531.0" y="1001.5" width="3.0" height="12" rx="1.5" class="k-ci_pass"><title>T-18 op 17: ci_pass (ci.read), pass, 111.0-112.0 s</title></rect>
-<text x="531.0" y="1000" font-size="8.5" fill="currentColor">2nd CI</text>
-<rect x="537.4" y="1001.5" width="25.0" height="12" rx="1.5" class="k-model_call call"><title>T-18 op 18: model_call (repository.merge), approval, 113.0-123.2 s</title></rect>
-<rect x="560.4" y="1001.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-18 op 19: approval_wait, approval, 123.0-123.0 s</title></rect>
+<rect x="268.8" y="1001.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-28 op 1: test (tests.run), pass, 4.2-4.3 s</title></rect>
+<rect x="270.6" y="1001.5" width="5.9" height="12" rx="1.5" class="k-gate"><title>T-28 op 2: gate (gate.run), pass, 4.3-6.7 s</title></rect>
+<rect x="274.9" y="1001.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-28 op 3: pr_open (pr.open), nothing, 6.7-6.7 s</title></rect>
+<text x="274.9" y="1000" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="274.9" y="1001.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-28 op 4: other (ci.read), nothing, 6.7-6.8 s</title></rect>
+<rect x="276.7" y="1001.5" width="43.7" height="12" rx="1.5" class="k-edit call"><title>T-28 op 5: edit (implementation.edit), changed, 6.8-24.6 s</title></rect>
+<rect x="319.1" y="1001.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-28 op 6: test (tests.run), pass, 24.7-25.0 s</title></rect>
+<rect x="321.4" y="1001.5" width="8.1" height="12" rx="1.5" class="k-gate"><title>T-28 op 7: gate (gate.run), pass, 25.0-28.3 s</title></rect>
+<rect x="329.5" y="1001.5" width="10.3" height="12" rx="1.5" class="k-pr_open"><title>T-28 op 8: pr_open (pr.open), opened, 28.3-32.5 s</title></rect>
+<rect x="339.8" y="1001.5" width="4.2" height="12" rx="1.5" class="k-ci_wait"><title>T-28 op 9: ci_wait (ci.read), pending, 32.5-34.2 s</title></rect>
+<rect x="343.9" y="1001.5" width="77.3" height="12" rx="1.5" class="k-ci_pass"><title>T-28 op 10: ci_pass (ci.read), pass, 34.2-65.7 s</title></rect>
+<rect x="421.3" y="1001.5" width="41.2" height="12" rx="1.5" class="k-edit call"><title>T-28 op 11: edit (tests.write), changed, 65.7-82.5 s</title></rect>
+<rect x="461.7" y="1001.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-28 op 12: test (tests.run), pass, 82.8-83.0 s</title></rect>
+<rect x="463.7" y="1001.5" width="6.6" height="12" rx="1.5" class="k-gate"><title>T-28 op 13: gate (gate.run), pass, 83.0-85.7 s</title></rect>
+<rect x="470.4" y="1001.5" width="6.4" height="12" rx="1.5" class="k-push"><title>T-28 op 14: push (pr.open), pushed, 85.7-88.3 s</title></rect>
+<rect x="475.2" y="1001.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-28 op 15: other (ci.read), nothing, 88.3-88.9 s</title></rect>
+<rect x="478.2" y="1001.5" width="78.1" height="12" rx="1.5" class="k-push"><title>T-28 op 16: push (pr.open), pushed, 88.9-120.7 s</title></rect>
+<rect x="556.3" y="1001.5" width="4.2" height="12" rx="1.5" class="k-ci_pass"><title>T-28 op 17: ci_pass (ci.read), pass, 120.7-122.4 s</title></rect>
+<text x="556.3" y="1000" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="560.4" y="1001.5" width="23.8" height="12" rx="1.5" class="k-model_call call"><title>T-28 op 18: model_call (repository.merge), approval, 122.4-132.1 s</title></rect>
+<rect x="583.0" y="1001.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-28 op 19: approval_wait, approval, 132.2-132.2 s</title></rect>
 <text x="20" y="1038" font-size="12" font-weight="600" fill="currentColor">Claude Code, isolated like takt&#x27;s harness</text>
 <line x1="20" x2="1070" y1="1042" y2="1042" class="grid"/>
 <text x="40" y="1058.5" fill="currentColor">I-modefail-1</text>

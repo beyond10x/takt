@@ -762,7 +762,7 @@ def main():
     waves = load(WAVES)
     turns = load(TURNS)
     cand = {t["after"]["takt_revision"]: t["id"] for t in turns}
-    order = revision_order(waves, turns, {r["takt_revision"] for r in runs if r["arm"] == "takt"})
+    order = revision_order(waves, turns, list(dict.fromkeys(r["takt_revision"] for r in runs if r["arm"] == "takt")))
     lanes = []
     lines = []
     for r in runs:

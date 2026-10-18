@@ -3,15 +3,15 @@
 **Agentic coding that counts nothing as done until a validator has recorded the evidence.**
 
 <!-- badges begin -->
-[![stories implemented: 36 of 83](https://img.shields.io/badge/stories%20implemented-36%20of%2083-yellowgreen)](.engineering/planning)
-[![composable agentic work: 23/44 stories](https://img.shields.io/badge/composable%20agentic%20work-23%2F44%20stories-yellowgreen)](.engineering/planning/epic/composable-agentic-work.md)
-[![recursive self improvement: 13/19 stories](https://img.shields.io/badge/recursive%20self%20improvement-13%2F19%20stories-green)](.engineering/planning/epic/recursive-self-improvement.md)
+[![stories implemented: 36 of 101](https://img.shields.io/badge/stories%20implemented-36%20of%20101-orange)](.engineering/planning)
+[![composable agentic work: 23/52 stories](https://img.shields.io/badge/composable%20agentic%20work-23%2F52%20stories-yellowgreen)](.engineering/planning/epic/composable-agentic-work.md)
+[![recursive self improvement: 13/21 stories](https://img.shields.io/badge/recursive%20self%20improvement-13%2F21%20stories-green)](.engineering/planning/epic/recursive-self-improvement.md)
 [![benchmark integration: 0/11 stories](https://img.shields.io/badge/benchmark%20integration-0%2F11%20stories-orange)](.engineering/planning/epic/benchmark-integration.md)
 [![terminal frontend: 0/5 stories](https://img.shields.io/badge/terminal%20frontend-0%2F5%20stories-orange)](.engineering/planning/epic/terminal-frontend.md)
 [![continuous orchestration: 0/1 stories](https://img.shields.io/badge/continuous%20orchestration-0%2F1%20stories-orange)](.engineering/planning/epic/continuous-orchestration.md)
 [![improvement turns: 1 accepted, 1 promoted](https://img.shields.io/badge/improvement%20turns-1%20accepted%2C%201%20promoted-blue)](docs/metrics/improvement-turns.jsonl)
-[![scenario runs recorded: 57](https://img.shields.io/badge/scenario%20runs%20recorded-57-blue)](docs/metrics/scenario-runs.jsonl)
-[![held-out check: 45 of 45 pass](https://img.shields.io/badge/held--out%20check-45%20of%2045%20pass-brightgreen)](docs/metrics/scenario-runs.jsonl)
+[![scenario runs recorded: 67](https://img.shields.io/badge/scenario%20runs%20recorded-67-blue)](docs/metrics/scenario-runs.jsonl)
+[![held-out check: 53 of 55 pass](https://img.shields.io/badge/held--out%20check-53%20of%2055%20pass-brightgreen)](docs/metrics/scenario-runs.jsonl)
 [![ESS citations resolved: 462 of 462](https://img.shields.io/badge/ESS%20citations%20resolved-462%20of%20462-brightgreen)](ess/domains)
 <!-- badges end -->
 
