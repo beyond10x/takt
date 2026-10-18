@@ -61,8 +61,9 @@ impl TokenUsage {
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     /// A run opened on the case, or resumed it: the protocol, the story when the case works
-    /// one, the inputs as `name=value`, and the commit the case's branch forked from when the
-    /// case recorded one.
+    /// one, the inputs as `name=value`, the commit the case's branch forked from when the
+    /// case recorded one, and the revision the running binary was built from when its caller
+    /// gave one, as `takt --version` prints it: `<sha>`, `<sha>-dirty` or `unknown revision`.
     Opened {
         case: String,
         protocol: String,
@@ -71,6 +72,8 @@ pub enum Event {
         inputs: Vec<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         base: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        binary: Option<String>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.

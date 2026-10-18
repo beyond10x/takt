@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:bench-nouns-in-ess
 kind: story
-status: draft
+status: active
 title: takt's ESS model names the benchmark nouns, aligned with the organization's benchmark instrument's entities
 summary: BenchTask, BenchRun, BenchArm and the export link to bench's run entity declared before code
 relations:
@@ -13,7 +13,10 @@ scope:
   path: ess/domains/takt.citations.tsv
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T20:13:47Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-18T20:13:47Z", actor: "human:timo", revision: 6}
 ---
 # Story: bench-nouns-in-ess
 

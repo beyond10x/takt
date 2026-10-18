@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:case-id-is-a-valid-branch-name
 kind: story
-status: draft
+status: active
 title: A case id takt accepts is a valid git branch name
 tags:
 - finding
@@ -12,7 +12,11 @@ refs:
 relations:
 - informed_by: story:cli-small-fixes
 - supersedes: story:cli-small-fixes
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T20:13:53Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-18T20:13:53Z", actor: "human:timo", revision: 3}
 ---
 # Story: case-id-is-a-valid-branch-name
 

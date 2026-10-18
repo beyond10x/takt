@@ -734,8 +734,14 @@ fn shape_merge_a_head_lagging_the_approval_push_is_waited_on_and_merged_once_it_
         Ok(Stop::ApprovalRequired(vec!["repository.merge".to_owned()])),
         "{text}"
     );
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
 
     // The read before the merge's push sees the granted revision (nothing was pushed over it
@@ -853,8 +859,14 @@ fn a_merge_refused_for_a_pending_required_check_is_waited_on_and_merged() {
         Ok(Stop::ApprovalRequired(vec!["repository.merge".to_owned()])),
         "{text}"
     );
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     let forge = Rc::new(RefusesFor {
         memory: memory.clone(),
         refusals: Cell::new(2),

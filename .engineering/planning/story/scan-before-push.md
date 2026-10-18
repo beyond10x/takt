@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scan-before-push
 kind: story
-status: draft
+status: active
 title: pr.open scans commit messages and the diff before it pushes
 summary: scan-text over base..head messages and diff before push_revision; a refused scan leaves no branch on the remote
 relations:
@@ -15,7 +15,10 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/scan_before_push.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T20:13:47Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-18T20:13:47Z", actor: "human:timo", revision: 6}
 ---
 # Story: scan-before-push
 

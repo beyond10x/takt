@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:no-model-step-for-approval
 kind: story
-status: draft
+status: active
 title: A run takes no model step when only a validator or a grant can advance the case
 summary: 'R19: stop ApprovalRequired with no harness call when only an ungranted capability stands between the case and its outcome'
 relations:
@@ -13,7 +13,10 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/tests/no_model_step.rs
-revision: 3
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T18:27:21Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-18T18:27:21Z", actor: "human:timo", revision: 5}
 ---
 # Story: no-model-step-for-approval
 
