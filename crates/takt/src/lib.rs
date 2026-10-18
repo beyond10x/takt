@@ -2,11 +2,13 @@
 //! evidence validators wrote, and runs the loop: evaluate, frontier, one step, effect,
 //! observation, validator, evidence, evaluate. A judgement step is performed by a [`Harness`];
 //! a deterministic step is a [`Validator`] or a command. The model never produces evidence.
+//! Each run appends its events to the case's `events.jsonl` ([`events`]).
 //!
 //! The design is `docs/design/takt.md`.
 
 pub mod case;
 pub mod decision;
+pub mod events;
 pub mod evidence;
 pub mod forge;
 pub mod frontier;

@@ -372,6 +372,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             let forge = forge_of(&repo, looping.forge.as_deref())?;
             forge.register(&mut validators);
             let forge_line = forge.line;
+            let store = Aep::default();
             // The unit: the case to resume, the intent given, or else the open case of an
             // active story or the next ready story of the planning store; a case is opened
             // before the store is told, so a run that cannot open its case takes nothing.
@@ -405,14 +406,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 // is resumed whatever the store says by now, so no case runs that was not
                 // checked.
                 (None, None, None) => {
-                    match Run::take_next(
-                        &repo,
-                        options,
-                        &Aep::default(),
-                        harness,
-                        &validators,
-                        out,
-                    )? {
+                    match Run::take_next(&repo, options, &store, harness, &validators, out)? {
                         Some(run) => run,
                         None => {
                             writeln!(out, "frontier: nothing ready")?;
@@ -421,6 +415,9 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     }
                 }
             };
+            // A story's case that terminates accepted records its test result and its move
+            // in the store; an intent's run has no story and writes nothing there.
+            run.record_on(&store);
             finish(&mut run, forge_line.as_deref(), out)
         }
     }
@@ -960,7 +957,11 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         }
     )?;
     let options = looping.options(STORY_DELIVERY.to_owned(), Vec::new(), Some(case_id));
+    let store = Aep::default();
     let mut run = take_story(&repo, options, story, harness, &validators, out)?;
+    // As `takt run`: a case that terminates accepted records its test result and its move in
+    // the store, on the case's branch.
+    run.record_on(&store);
     finish(&mut run, forge.line.as_deref(), out)
 }
 

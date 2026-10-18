@@ -3,6 +3,13 @@
 //! refused, or the stop criteria are met. A run opens a case, or resumes one a run before it
 //! opened: a case stopped at the gate is resumed once the operator has granted it, and the
 //! merge is then a deterministic step like any other.
+//!
+//! Beside each printed line the run appends an event to the case's `events.jsonl`
+//! ([`crate::events`]); a line about a judgement step is written once the step's change is
+//! kept or put back, so putting the case directory back never takes a line with it. A story's
+//! run given the planning store ([`Run::record_on`]) records its test result and its move to
+//! `implemented` there once its case terminates `accepted`, after the merge when the case has a
+//! pull request, so neither write rides on the revision a grant authorises.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -12,7 +19,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, bail};
 
 use crate::case::{CASES_DIR, CaseDir};
-use crate::frontier::{Frontier, Story, Take, Unit};
+use crate::events::{BY_STORE, BY_TAKT, Event, Events};
+use crate::frontier::{Frontier, IMPLEMENTED, Story, TEST_RESULT, Take, Unit};
 use crate::harness::{Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
 use crate::validator::Validator;
@@ -90,6 +98,14 @@ impl std::fmt::Display for Stop {
             },
         }
     }
+}
+
+/// The outcome of a case whose story is recorded and moved to `implemented` in the store.
+pub const ACCEPTED: &str = "accepted";
+
+/// The first eight characters of a revision, as the loop prints one.
+fn short(revision: &str) -> &str {
+    revision.get(..8).unwrap_or(revision)
 }
 
 /// Whether `validator` is due at a decision: its action is admissible, its evidence is missing
@@ -342,6 +358,9 @@ pub struct Run<'a> {
     pub tokens: u64,
     /// How long the run waits on the forge before it observes again: [`Run::POLL`] unless set.
     pub poll: Duration,
+    /// The planning store a story's run records its test result and its move in; none until
+    /// [`Run::record_on`] gives one, and only a story's run writes to it.
+    store: Option<&'a dyn Frontier>,
     started: Instant,
     options: RunOptions,
 }
@@ -418,9 +437,19 @@ impl<'a> Run<'a> {
             steps: 0,
             tokens: 0,
             poll: Self::POLL,
+            store: None,
             started: Instant::now(),
             options,
         })
+    }
+
+    /// Gives the run the planning store `store`: a story's run whose case terminates `accepted`
+    /// records there the `test_result` pass record a validator of the case wrote, at the
+    /// record's own `observed_at`, and moves the story to `implemented`, each a commit on the
+    /// case's branch ([`crate::frontier::write_on_case_branch`]); a refusal is relayed and the
+    /// stop is unchanged. A run on an intent has no story and writes nothing there.
+    pub fn record_on(&mut self, store: &'a dyn Frontier) {
+        self.store = Some(store);
     }
 
     /// Prepares a run on the case `id` a run before this one opened under `tree`: the case's
@@ -462,6 +491,7 @@ impl<'a> Run<'a> {
             steps: 0,
             tokens: 0,
             poll: Self::POLL,
+            store: None,
             started: Instant::now(),
             options,
         })
@@ -672,26 +702,259 @@ impl<'a> Run<'a> {
         })
     }
 
-    /// Runs until a stop; prints one line per frontier, step and evidence to `out`. The run
-    /// holds the case while it runs (`run.lock` under the case directory), so no grant lands
-    /// and no second run starts on it meanwhile; it lets go at every stop and on error.
+    /// Runs until a stop; prints one line per frontier, step and evidence to `out`, and appends
+    /// one event per such fact to the case's `events.jsonl`, the stop, or the error the run
+    /// ended on, last. At an `accepted` stop a story's run given the store records there first
+    /// ([`Run::record_on`]). The run holds the case while it runs (`run.lock` under the case
+    /// directory), so no grant lands and no second run starts on it meanwhile; it lets go at
+    /// every stop and on error.
     pub fn run(&mut self, out: &mut dyn Write) -> Result<Stop> {
         self.case.hold()?;
-        let outcome = self.run_held(out);
+        let events = Events::new(&self.case.dir);
+        let outcome = match self.run_held(&events, out) {
+            Ok(stop) => self.close(&events, &stop, out).map(|()| stop),
+            Err(error) => Err(
+                match events.emit(
+                    self.steps,
+                    &Event::Error {
+                        error: format!("{error:#}"),
+                    },
+                ) {
+                    Ok(()) => error,
+                    Err(unrecorded) => error.context(format!(
+                        "and the error could not be recorded: {unrecorded:#}"
+                    )),
+                },
+            ),
+        };
         let released = self.case.release();
         let stop = outcome?;
         released?;
         Ok(stop)
     }
 
+    /// After the loop stopped: the store's writes of a story's case that terminated
+    /// [`ACCEPTED`], then the stop recorded.
+    fn close(&self, events: &Events, stop: &Stop, out: &mut dyn Write) -> Result<()> {
+        if let Stop::Completed(outcome) = stop
+            && outcome == ACCEPTED
+            && let (Unit::Story(story), Some(store)) = (&self.unit, self.store)
+        {
+            self.record_accepted(events, store, &story.id, out)?;
+        }
+        events.emit(
+            self.steps,
+            &Event::Stop {
+                stop: stop.to_string(),
+                steps: self.steps,
+                tokens: self.tokens,
+            },
+        )
+    }
+
+    /// Records the accepted case's story in `store`: the `test_result` pass record a validator
+    /// of the case wrote ([`Run::observed_pass`]) as `test_result` evidence at its own
+    /// `observed_at`, then the move to `implemented`, which the store judges; each a commit on
+    /// the case's branch. A write the case's record shows made already, by an earlier run, is
+    /// not made again. A refusal, the store's verbatim or takt's own, is printed and recorded
+    /// and nothing is retried; the stop stays what the case reached.
+    fn record_accepted(
+        &self,
+        events: &Events,
+        store: &dyn Frontier,
+        story: &str,
+        out: &mut dyn Write,
+    ) -> Result<()> {
+        let recorded = events.read()?;
+        let done = |event: &str| {
+            recorded
+                .iter()
+                .any(|line| line["event"] == event && line["story"] == story)
+        };
+        let branch = &self.case.branch;
+        let committed = |commit: &Option<String>| match commit {
+            Some(commit) => format!(" (committed {} on {branch})", short(commit)),
+            None => String::new(),
+        };
+        if !done("store_evidence") {
+            let written = self.observed_pass(&recorded).and_then(|observed| {
+                let Some((reference, at)) = observed else {
+                    return Err(anyhow::anyhow!(
+                        "no {TEST_RESULT} pass record a validator of the case wrote is about the current revision; nothing was recorded"
+                    ));
+                };
+                crate::frontier::write_on_case_branch(
+                    &self.tree,
+                    branch,
+                    story,
+                    &crate::frontier::test_result_subject(story),
+                    || store.record_test_result(&self.tree, story, &reference, &at),
+                )
+                .map(|written| written.map(|commit| (reference, at, commit)))
+            });
+            match written {
+                Ok(Ok((reference, at, commit))) => {
+                    writeln!(
+                        out,
+                        "store: {TEST_RESULT} recorded on {story} at {at} from {reference}{}",
+                        committed(&commit)
+                    )?;
+                    events.emit(
+                        self.steps,
+                        &Event::StoreEvidence {
+                            story: story.to_owned(),
+                            kind: TEST_RESULT.to_owned(),
+                            reference,
+                            at,
+                            commit,
+                        },
+                    )?;
+                }
+                Ok(Err(refusal)) => {
+                    writeln!(
+                        out,
+                        "store: {TEST_RESULT} not recorded on {story}: {refusal}"
+                    )?;
+                    self.refused(events, BY_STORE, &refusal)?;
+                }
+                Err(error) => {
+                    let why = format!("{error:#}");
+                    writeln!(out, "store: {TEST_RESULT} not recorded on {story}: {why}")?;
+                    self.refused(events, BY_TAKT, &why)?;
+                }
+            }
+        }
+        if !done("store_move") {
+            match crate::frontier::write_on_case_branch(
+                &self.tree,
+                branch,
+                story,
+                &crate::frontier::implemented_subject(story),
+                || store.implemented(&self.tree, story),
+            ) {
+                Ok(Ok(commit)) => {
+                    writeln!(
+                        out,
+                        "store: {story} moved to {IMPLEMENTED}{}",
+                        committed(&commit)
+                    )?;
+                    events.emit(
+                        self.steps,
+                        &Event::StoreMove {
+                            story: story.to_owned(),
+                            to: IMPLEMENTED.to_owned(),
+                            commit,
+                        },
+                    )?;
+                }
+                Ok(Err(refusal)) => {
+                    writeln!(out, "store: {story} not moved to {IMPLEMENTED}: {refusal}")?;
+                    self.refused(events, BY_STORE, &refusal)?;
+                }
+                Err(error) => {
+                    let why = format!("{error:#}");
+                    writeln!(out, "store: {story} not moved to {IMPLEMENTED}: {why}")?;
+                    self.refused(events, BY_TAKT, &why)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The latest `test_result` pass record a validator of the case wrote that is about the
+    /// current revision of its subject: its path in the repository and its own `observed_at`.
+    /// A record counts only when an `evidence` line of the case's record, which the kernel
+    /// writes and a step may not, names it under the case's `evidence/`: a record put there by
+    /// any other hand is never one the run observed. `None` when there is none.
+    fn observed_pass(&self, recorded: &[serde_json::Value]) -> Result<Option<(String, String)>> {
+        let mine = Path::new(CASES_DIR).join(&self.case.id).join("evidence");
+        for line in recorded.iter().rev() {
+            if line["event"] != "evidence"
+                || line["kind"] != TEST_RESULT
+                || line["result"] != "pass"
+            {
+                continue;
+            }
+            let Some(path) = line["path"].as_str() else {
+                continue;
+            };
+            let relative = Path::new(path);
+            if relative.parent() != Some(mine.as_path()) {
+                continue;
+            }
+            let full = self.tree.join(relative);
+            let text = std::fs::read_to_string(&full)
+                .with_context(|| format!("read the record {}", full.display()))?;
+            let record: serde_json::Value = serde_json::from_str(&text)
+                .with_context(|| format!("read the record {}", full.display()))?;
+            let current = record["subject"]
+                .as_str()
+                .and_then(|subject| self.case.revision(subject));
+            if record["kind"] == TEST_RESULT
+                && record["result"] == "pass"
+                && current.is_some()
+                && record["subject_revision"].as_str() == current.as_deref()
+                && let Some(at) = record["observed_at"].as_str()
+            {
+                return Ok(Some((path.to_owned(), at.to_owned())));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Records a refusal by `by`, its reason verbatim.
+    fn refused(&self, events: &Events, by: &str, reason: &str) -> Result<()> {
+        events.emit(
+            self.steps,
+            &Event::Refusal {
+                by: by.to_owned(),
+                reason: reason.to_owned(),
+            },
+        )
+    }
+
+    /// Records a step: by a validator or the harness, which one, the action, what it reported.
+    fn stepped(
+        &self,
+        events: &Events,
+        by: &str,
+        name: &str,
+        action: &str,
+        summary: &str,
+        tokens: Option<u64>,
+    ) -> Result<()> {
+        events.emit(
+            self.steps,
+            &Event::Step {
+                by: by.to_owned(),
+                name: name.to_owned(),
+                action: action.to_owned(),
+                summary: summary.to_owned(),
+                tokens,
+            },
+        )
+    }
+
     /// The loop, the case held.
-    fn run_held(&mut self, out: &mut dyn Write) -> Result<Stop> {
+    fn run_held(&mut self, events: &Events, out: &mut dyn Write) -> Result<Stop> {
         let inputs: Vec<String> = self
             .options
             .inputs
             .iter()
             .map(|(k, v)| format!("{k}={v}"))
             .collect();
+        events.emit(
+            self.steps,
+            &Event::Opened {
+                case: self.case.id.clone(),
+                protocol: self.case.protocol.id.clone(),
+                story: match &self.unit {
+                    Unit::Story(story) => Some(story.id.clone()),
+                    Unit::Intent(_) => None,
+                },
+                inputs: inputs.clone(),
+            },
+        )?;
         writeln!(
             out,
             "case {} on {} in {}; inputs {}",
@@ -733,6 +996,14 @@ impl<'a> Run<'a> {
             seq += 1;
             let decision = self.case.evaluate(seq)?;
             writeln!(out, "{}", decision.frontier_line())?;
+            events.emit(
+                self.steps,
+                &Event::Decision {
+                    seq,
+                    file: format!("decisions/{seq:04}.json"),
+                    frontier: decision.frontier_line(),
+                },
+            )?;
             let state = format!(
                 "{:?}{:?}{:?}",
                 decision.claims, decision.obligations, decision.actions
@@ -790,6 +1061,15 @@ impl<'a> Run<'a> {
                     );
                     writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
                     writeln!(out, "  refused: {why}; nothing observed")?;
+                    self.stepped(
+                        events,
+                        "validator",
+                        validator.name(),
+                        validator.action(),
+                        "nothing observed",
+                        None,
+                    )?;
+                    self.refused(events, BY_TAKT, &why)?;
                     return Ok(Stop::StepRefused(why));
                 }
                 // What a validator runs may be code a model wrote (the test command, a gate's
@@ -857,11 +1137,30 @@ impl<'a> Run<'a> {
                         out,
                         "  refused: {why}; the cases directory was put back, the change discarded and nothing recorded"
                     )?;
+                    // Written after the cases directory was put back, which would take a
+                    // line written before it along.
+                    self.stepped(
+                        events,
+                        "validator",
+                        validator.name(),
+                        validator.action(),
+                        "nothing recorded",
+                        None,
+                    )?;
+                    self.refused(events, BY_TAKT, &why)?;
                     return Ok(Stop::StepRefused(why));
                 }
                 let (observation, waits) = observed?;
                 writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
                 writeln!(out, "  effect: {}", observation.summary)?;
+                self.stepped(
+                    events,
+                    "validator",
+                    validator.name(),
+                    validator.action(),
+                    &observation.summary,
+                    None,
+                )?;
                 // What the validator retains lands before the records that refer to it: a
                 // retention that fails ends the run with nothing written for the step.
                 if let Some(artifact) = &observation.artifact {
@@ -878,12 +1177,25 @@ impl<'a> Run<'a> {
                     )?;
                 }
                 for record in &observation.records {
-                    self.case.add_evidence(record)?;
+                    let written = self.case.add_evidence(record)?;
                     writeln!(
                         out,
                         "  evidence: {} {}",
                         record.kind,
                         record.result.as_deref().unwrap_or("-")
+                    )?;
+                    events.emit(
+                        self.steps,
+                        &Event::Evidence {
+                            id: record.id.clone(),
+                            kind: record.kind.clone(),
+                            result: record.result.clone(),
+                            path: written
+                                .strip_prefix(&self.tree)
+                                .unwrap_or(&written)
+                                .display()
+                                .to_string(),
+                        },
                     )?;
                 }
                 // A validator that wrote no record (the gate was unknown) is not due again at
@@ -941,6 +1253,13 @@ impl<'a> Run<'a> {
                     "  waiting: {:.1} s on the forge, then {} again",
                     pause.as_secs_f64(),
                     on.join(", ")
+                )?;
+                events.emit(
+                    self.steps,
+                    &Event::Waiting {
+                        on: on.iter().map(|action| (*action).to_owned()).collect(),
+                        seconds: pause.as_secs_f64(),
+                    },
                 )?;
                 std::thread::sleep(pause);
                 for (name, _, revision) in &awaited {
@@ -1027,10 +1346,24 @@ impl<'a> Run<'a> {
                 self.harness.name()
             )?;
             writeln!(out, "  said: {}", report.summary)?;
+            // The step's line is written once its change is kept or put back: putting the
+            // cases directory back to `kept` would take a line written before it along.
+            let harness = self.harness;
+            let record_step = |run: &Self| {
+                run.stepped(
+                    events,
+                    "harness",
+                    harness.name(),
+                    &report.action,
+                    &report.summary,
+                    report.tokens,
+                )
+            };
             let change = match checkpoint.change(&self.tree) {
                 Ok(change) => change,
                 Err(error) => {
                     undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    record_step(self)?;
                     return Err(error.context(format!(
                         "step {}: what {} changed could not be read; the change was discarded",
                         self.steps, report.action
@@ -1053,6 +1386,8 @@ impl<'a> Run<'a> {
                     out,
                     "  refused: {why}; the cases directory was put back and the change discarded"
                 )?;
+                record_step(self)?;
+                self.refused(events, BY_TAKT, &why)?;
                 return Ok(Stop::StepRefused(why));
             }
             // What only takt does, or what nobody may: `.git/`, `HEAD`, the index, ignored
@@ -1112,6 +1447,8 @@ impl<'a> Run<'a> {
             if let Some(why) = overreach {
                 undo_step(&self.tree, &checkpoint, &cases, &kept)?;
                 writeln!(out, "  refused: {why}; the change was discarded")?;
+                record_step(self)?;
+                self.refused(events, BY_TAKT, &why)?;
                 return Ok(Stop::StepRefused(why));
             }
             if approvals.contains(&report.action) {
@@ -1123,12 +1460,13 @@ impl<'a> Run<'a> {
                         report.action,
                         changed.len()
                     )?;
-                    return Ok(Stop::StepRefused(format!(
-                        "{} requested with changes",
-                        report.action
-                    )));
+                    let why = format!("{} requested with changes", report.action);
+                    record_step(self)?;
+                    self.refused(events, BY_TAKT, &why)?;
+                    return Ok(Stop::StepRefused(why));
                 }
                 writeln!(out, "  effect: none; {} needs an approval", report.action)?;
+                record_step(self)?;
                 return Ok(Stop::ApprovalRequired(vec![report.action]));
             }
             let refusal = if !offered.contains(&report.action) {
@@ -1148,10 +1486,20 @@ impl<'a> Run<'a> {
             if let Some(why) = refusal {
                 undo_step(&self.tree, &checkpoint, &cases, &kept)?;
                 writeln!(out, "  refused: {why}; the change was discarded")?;
+                record_step(self)?;
+                self.refused(events, BY_TAKT, &why)?;
                 return Ok(Stop::StepRefused(why));
             }
             if changed.is_empty() {
                 writeln!(out, "  effect: no file changed")?;
+                record_step(self)?;
+                events.emit(
+                    self.steps,
+                    &Event::Effect {
+                        paths: Vec::new(),
+                        revision: None,
+                    },
+                )?;
                 last_idle = Some(state);
                 continue;
             }
@@ -1166,18 +1514,27 @@ impl<'a> Run<'a> {
                 Ok(head) => head,
                 Err(error) => {
                     undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    record_step(self)?;
                     return Err(error.context(format!(
                         "step {}: the commit of {}'s change failed; the change was discarded",
                         self.steps, report.action
                     )));
                 }
             };
+            record_step(self)?;
             self.case.set_revision("implementation", &head)?;
             writeln!(
                 out,
                 "  effect: committed {} path(s); implementation is now {}",
                 changed.len(),
                 &head[..8.min(head.len())]
+            )?;
+            events.emit(
+                self.steps,
+                &Event::Effect {
+                    paths: changed.clone(),
+                    revision: Some(head),
+                },
             )?;
         }
     }

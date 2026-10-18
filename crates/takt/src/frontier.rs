@@ -12,7 +12,11 @@
 //! run, never given a second case: the case directory records the story, its take is committed
 //! on the case's branch, and the store on the base says which stories are being worked; which
 //! case a run resumes, and from which branch, is [`crate::Run::next_to_resume`]'s. The operator's grant of a capability to a case is
-//! recorded on the story as `approval` evidence through the same adapter ([`approve`]).
+//! recorded on the story as `approval` evidence through the same adapter ([`approve`]). A run on
+//! a story whose case terminates `accepted` records the `test_result` pass record a validator of
+//! the case wrote as [`TEST_RESULT`] evidence on the story, at the record's own instant, and
+//! moves the story to [`IMPLEMENTED`]; each write is a commit on the case's branch, store paths
+//! only ([`write_on_case_branch`]), and a refusal is relayed, never retried.
 
 use std::path::Path;
 use std::process::Command;
@@ -28,6 +32,12 @@ pub const READY: &str = "proposed";
 pub const TAKEN: &str = "active";
 /// The statuses an artifact a story depends on is done at.
 pub const DONE: [&str; 2] = ["implemented", "archived"];
+/// The status a story whose case terminated `accepted` is moved to.
+pub const IMPLEMENTED: &str = "implemented";
+/// The evidence kind a run records on the story it works.
+pub const TEST_RESULT: &str = "test_result";
+/// The source the store records for the `test_result` evidence a run writes.
+pub const SOURCE: &str = "takt";
 
 /// A story taken from the planning store: the unit of a run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +98,30 @@ pub trait Frontier {
     /// Records `approval` on the story `story` as one `approval` evidence record, appended and
     /// never edited: the trail of the grant written into the case.
     fn record_approval(&self, repo: &Path, story: &str, approval: &Approval) -> Result<()>;
+    /// Records on the story `story` one [`TEST_RESULT`] evidence record, source [`SOURCE`],
+    /// referring to `reference`, the record's path in the repository, at `at`, that record's
+    /// `observed_at`; the store's refusal, verbatim, when it would not. An adapter that records
+    /// none refuses.
+    fn record_test_result(
+        &self,
+        _repo: &Path,
+        story: &str,
+        _reference: &str,
+        _at: &str,
+    ) -> Result<Written> {
+        Ok(Written::Refused(format!(
+            "the frontier {} records no {TEST_RESULT} evidence on {story}",
+            self.name()
+        )))
+    }
+    /// Moves the story `story` to [`IMPLEMENTED`], the store judging the move; its refusal,
+    /// verbatim, when it would not. An adapter that moves none refuses.
+    fn implemented(&self, _repo: &Path, story: &str) -> Result<Written> {
+        Ok(Written::Refused(format!(
+            "the frontier {} moves no story to {IMPLEMENTED}: {story}",
+            self.name()
+        )))
+    }
 }
 
 /// An artifact as `aep plan artifact list --format json` lists it: the fields the rule reads.
@@ -158,6 +192,116 @@ pub enum Take {
     Taken,
     /// The store refused the move; what it said, verbatim.
     Refused(String),
+}
+
+/// What the store answered a run's write with: an evidence record or a move.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Written {
+    /// The store made the write.
+    Done,
+    /// The store refused it; what it said, verbatim.
+    Refused(String),
+}
+
+/// The subject of the commit that holds a story's [`TEST_RESULT`] record on the case's branch:
+/// `takt: test_result <story>`.
+#[must_use]
+pub fn test_result_subject(story: &str) -> String {
+    format!("takt: {TEST_RESULT} {story}")
+}
+
+/// The subject of the commit that holds a story's move to [`IMPLEMENTED`] on the case's branch:
+/// `takt: implemented <story>`.
+#[must_use]
+pub fn implemented_subject(story: &str) -> String {
+    format!("takt: {IMPLEMENTED} {story}")
+}
+
+/// Whether `path`, relative to the tree, is one a run's write for `story` may change: an
+/// artifact of the planning store, or a file in the story's own evidence directory
+/// (`.engineering/evidence/story/<name>/`).
+#[must_use]
+pub fn is_story_store_path(path: &str, story: &str) -> bool {
+    let evidence = format!(".engineering/evidence/{}/", story.replacen(':', "/", 1));
+    path.starts_with(STORE_DIRS[0])
+        || path
+            .strip_prefix(&evidence)
+            .is_some_and(|name| !name.is_empty())
+}
+
+/// Makes one store write for `story` on the case's branch `branch` and commits exactly what it
+/// changed as `subject`, through [`crate::git`]: the commit's sha, `None` when it changed
+/// nothing, or the store's refusal verbatim. The tree must be on `branch` and clean outside the
+/// cases directory first, or nothing is written; what the write changed must lie in the planning
+/// store or the story's evidence directory ([`is_story_store_path`]), or it is discarded. Every
+/// such failure is the error, with nothing left behind; the implementation revision is not
+/// the run's to move here and is not moved.
+pub fn write_on_case_branch(
+    tree: &Path,
+    branch: &str,
+    story: &str,
+    subject: &str,
+    write: impl FnOnce() -> Result<Written>,
+) -> Result<std::result::Result<Option<String>, String>> {
+    let on = crate::git::current_branch(tree)?;
+    if on.as_deref() != Some(branch) {
+        return Err(anyhow!(
+            "the tree {} is on {}, not the case's branch {branch}: the store's write is committed there; nothing was written",
+            tree.display(),
+            on.as_deref().unwrap_or("a detached HEAD")
+        ));
+    }
+    let uncommitted = crate::git::uncommitted(tree)?;
+    if !uncommitted.is_empty() {
+        return Err(anyhow!(
+            "the tree {} has uncommitted work: {}; the store's write is committed on {branch} with exactly what it changes; nothing was written",
+            tree.display(),
+            uncommitted.join(", ")
+        ));
+    }
+    let discard = |why: String| -> anyhow::Error {
+        match crate::git::discard_uncommitted(tree) {
+            Ok(()) => anyhow!("{why}; what it changed was discarded"),
+            Err(error) => anyhow!("{why}; what it changed could not be discarded: {error:#}"),
+        }
+    };
+    let written = match write() {
+        Ok(written) => written,
+        Err(error) => {
+            return Err(if crate::git::uncommitted(tree)?.is_empty() {
+                error
+            } else {
+                discard(format!("{error:#}"))
+            });
+        }
+    };
+    let changed = crate::git::uncommitted(tree)?;
+    if let Written::Refused(refusal) = written {
+        if !changed.is_empty() {
+            return Err(discard(format!(
+                "the store refused the write on {story} ({refusal}) and changed {}",
+                changed.join(", ")
+            )));
+        }
+        return Ok(Err(refusal));
+    }
+    if changed.is_empty() {
+        return Ok(Ok(None));
+    }
+    if let Some(outside) = changed
+        .iter()
+        .find(|path| !is_story_store_path(path, story))
+    {
+        return Err(discard(format!(
+            "the store's write on {story} changed {outside}, outside the planning store and the story's evidence"
+        )));
+    }
+    match crate::git::commit_paths(tree, &changed, subject) {
+        Ok(head) => Ok(Ok(Some(head))),
+        Err(error) => Err(discard(format!(
+            "the store's write on {story} could not be committed on {branch}: {error:#}"
+        ))),
+    }
 }
 
 /// The directories of the planning store a record in it may change, relative to the tree: the
@@ -273,7 +417,8 @@ fn commit_record(tree: &Path, branch: &str, story: &str, capability: &str) -> Re
 
 /// The adapter over the `aep` command line, run in the repository: `list` and `show` read the
 /// store, `move` and `evidence` are the two writes, and the lifecycle the store enforces is the
-/// store's own.
+/// store's own. Every call is a child held to [`Aep::limits`] with no credential in its
+/// environment.
 #[derive(Debug, Clone)]
 pub struct Aep {
     /// The command, `aep` on the path by default.
@@ -433,6 +578,61 @@ impl Frontier for Aep {
         )?
         .map(drop)
         .map_err(|refusal| anyhow!("aep plan artifact evidence {story}: {refusal}"))
+    }
+
+    /// `evidence <story> --kind test_result --source takt --ref <reference> --at <at>`: the
+    /// reference the record in the case, the instant the record's own, never one chosen here;
+    /// the repository's own store only, like `list`.
+    fn record_test_result(
+        &self,
+        repo: &Path,
+        story: &str,
+        reference: &str,
+        at: &str,
+    ) -> Result<Written> {
+        Self::store(repo)?;
+        Ok(
+            match self.plan(
+                repo,
+                &[
+                    "evidence",
+                    story,
+                    "--kind",
+                    TEST_RESULT,
+                    "--source",
+                    SOURCE,
+                    "--ref",
+                    reference,
+                    "--at",
+                    at,
+                ],
+            )? {
+                Ok(_) => Written::Done,
+                Err(refusal) => Written::Refused(refusal),
+            },
+        )
+    }
+
+    /// `move <story> --to implemented`, which the store's lifecycle allows once the story holds
+    /// a `test_result` record; the repository's own store only, like `list`.
+    fn implemented(&self, repo: &Path, story: &str) -> Result<Written> {
+        Self::store(repo)?;
+        Ok(
+            match self.plan(
+                repo,
+                &[
+                    "move",
+                    story,
+                    "--to",
+                    IMPLEMENTED,
+                    "--executor",
+                    "agent:takt",
+                ],
+            )? {
+                Ok(_) => Written::Done,
+                Err(refusal) => Written::Refused(refusal),
+            },
+        )
     }
 }
 

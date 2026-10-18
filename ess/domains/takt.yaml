@@ -361,6 +361,201 @@ types:
       - name: budget
         type: Optional<takt.work.Stop>
 
+  # One line of a case's run record, `events.jsonl` in the case directory: the instant it was
+  # written, as `now()` writes one; the step it belongs to, 0 before a run's first (a run's steps
+  # are numbered from 1); and the event. The file is appended, one line written whole per event,
+  # and never rewritten; every run of a case appends to the same file. It lies in the case
+  # directory, which no judgement step and no validator's command may write, so every line is the
+  # kernel's.
+  # read from: crates/takt/src/events.rs:1-9
+  # read from: crates/takt/src/events.rs:105-112
+  # read from: crates/takt/src/events.rs:135-151
+  - name: takt.work.RunEventLine
+    kind: struct
+    fields:
+      - name: at
+        type: Timestamp
+      - name: step
+        type: Integer
+      - name: event
+        type: takt.work.RunEvent
+
+  # What a run records, one kind per line, tagged `event`, beside each line it prints: the run
+  # opened or resumed; an evaluation; a step, by a validator or the harness; what a judgement
+  # step changed; an evidence record a validator wrote under the case; a `test_result` record and
+  # a move to `implemented` written on the story in the planning store, once the case terminated
+  # `accepted`; a refusal, the kernel's or the store's; a wait on the forge; the error a run ended
+  # on; and the stop. A line about a judgement step is written once its change is kept or put
+  # back, so putting the case directory back never takes a line with it.
+  # read from: crates/takt/src/events.rs:25-103
+  # read from: crates/takt/src/run.rs:6-12
+  # read from: crates/takt/src/run.rs:705-734
+  # read from: crates/takt/src/run.rs:1349-1361
+  - name: takt.work.RunEvent
+    kind: union
+    tag: event
+    variants:
+      opened: takt.work.RunOpened
+      decision: takt.work.RunDecision
+      step: takt.work.RunStep
+      effect: takt.work.RunEffect
+      evidence: takt.work.RunEvidence
+      store_evidence: takt.work.RunStoreEvidence
+      store_move: takt.work.RunStoreMove
+      refusal: takt.work.RunRefusal
+      waiting: takt.work.RunWait
+      error: String
+      stop: takt.work.RunStopped
+
+  # A run opened its case, or resumed it: the protocol, the story when the case works one, and
+  # the inputs as `name=value`.
+  # read from: crates/takt/src/events.rs:29-37
+  # read from: crates/takt/src/run.rs:946-957
+  - name: takt.work.RunOpened
+    kind: struct
+    fields:
+      - name: case
+        type: takt.work.CaseId
+      - name: protocol
+        type: takt.work.ProtocolId
+      - name: story
+        type: Optional<takt.work.StoryId>
+      - name: inputs
+        type: List<String>
+
+  # An evaluation: its number in the case's one sequence, the decision file it was written to,
+  # `decisions/<seq>.json` under the case, and the frontier as printed.
+  # read from: crates/takt/src/events.rs:38-44
+  # read from: crates/takt/src/run.rs:999-1006
+  - name: takt.work.RunDecision
+    kind: struct
+    fields:
+      - name: seq
+        type: Integer
+      - name: file
+        type: String
+      - name: frontier
+        type: String
+
+  # A step: `by` is `validator` or `harness`; the validator's or the harness's name, the action,
+  # what it reported, and the tokens the harness reported when it reported any.
+  # read from: crates/takt/src/events.rs:45-54
+  # read from: crates/takt/src/run.rs:916-936
+  - name: takt.work.RunStep
+    kind: struct
+    fields:
+      - name: by
+        type: String
+      - name: name
+        type: String
+      - name: action
+        type: takt.work.ActionId
+      - name: summary
+        type: String
+      - name: tokens
+        type: Optional<Integer>
+
+  # What a judgement step changed: the paths committed and the implementation revision they were
+  # committed as; no path and no revision when it changed no file.
+  # read from: crates/takt/src/events.rs:55-61
+  # read from: crates/takt/src/run.rs:1496-1502
+  # read from: crates/takt/src/run.rs:1532-1538
+  - name: takt.work.RunEffect
+    kind: struct
+    fields:
+      - name: paths
+        type: List<String>
+      - name: revision
+        type: Optional<takt.work.Revision>
+
+  # An evidence record a validator wrote under the case: its id, kind and result, and its path
+  # relative to the tree.
+  # read from: crates/takt/src/events.rs:62-70
+  # read from: crates/takt/src/run.rs:1187-1199
+  - name: takt.work.RunEvidence
+    kind: struct
+    fields:
+      - name: id
+        type: takt.work.EvidenceId
+      - name: kind
+        type: takt.work.EvidenceKindId
+      - name: result
+        type: Optional<String>
+      - name: path
+        type: String
+
+  # A `test_result` record written on the story in the planning store through `aep plan artifact
+  # evidence`, source takt: the reference is the case's record a validator of the case wrote, the
+  # instant that record's own `observed_at`, and the commit on the case's branch that holds it.
+  # read from: crates/takt/src/events.rs:71-81
+  # read from: crates/takt/src/run.rs:755-811
+  # read from: crates/takt/src/run.rs:864-903
+  - name: takt.work.RunStoreEvidence
+    kind: struct
+    fields:
+      - name: story
+        type: takt.work.StoryId
+      - name: kind
+        type: takt.work.EvidenceKindId
+      - name: reference
+        type: String
+      - name: at
+        type: Timestamp
+      - name: commit
+        type: Optional<takt.work.Revision>
+
+  # The story moved in the planning store through `aep plan artifact move`, to `implemented`,
+  # and the commit on the case's branch that holds the move.
+  # read from: crates/takt/src/events.rs:82-89
+  # read from: crates/takt/src/run.rs:828-853
+  - name: takt.work.RunStoreMove
+    kind: struct
+    fields:
+      - name: story
+        type: takt.work.StoryId
+      - name: to
+        type: takt.work.StoryStatus
+      - name: commit
+        type: Optional<takt.work.Revision>
+
+  # A refusal: `by` is `takt`, a step the kernel discarded or a write it would not make, or
+  # `store`, the planning store's refusal; the reason verbatim. A refusal of the store is
+  # relayed, never retried, and leaves the stop as the case reached it.
+  # read from: crates/takt/src/events.rs:19-23
+  # read from: crates/takt/src/events.rs:90-92
+  # read from: crates/takt/src/run.rs:905-914
+  - name: takt.work.RunRefusal
+    kind: struct
+    fields:
+      - name: by
+        type: String
+      - name: reason
+        type: String
+
+  # The run pauses on the forge for `seconds`, then observes the actions `on` again.
+  # read from: crates/takt/src/events.rs:93-94
+  # read from: crates/takt/src/run.rs:1257-1263
+  - name: takt.work.RunWait
+    kind: struct
+    fields:
+      - name: on
+        type: List<takt.work.ActionId>
+      - name: seconds
+        type: Decimal
+
+  # The run stopped: the stop as printed, the steps taken and the tokens reported.
+  # read from: crates/takt/src/events.rs:97-102
+  # read from: crates/takt/src/run.rs:736-753
+  - name: takt.work.RunStopped
+    kind: struct
+    fields:
+      - name: stop
+        type: String
+      - name: steps
+        type: Integer
+      - name: tokens
+        type: Integer
+
   # Where a `workflow/1` document is: the `--workflow <file>` argument, or the repository default
   # `.engineering/workflow.yaml`. Not built: the kernel reads neither yet (milestone M3).
   # read from: docs/design/takt.md:35
@@ -854,6 +1049,16 @@ entities:
       - name: stop
         type: Optional<takt.work.Stop>
         summary: Why the run stopped; absent while it runs, and after a run that ended on an error.
+      # One run, many lines of its case's `events.jsonl`: the run appends one per event, beside
+      # each line it prints, and rewrites none; a resumed run appends to the file of the runs
+      # before it, so the file holds every run of the case in order, each opening with `opened`
+      # and ending with `stop` or `error`.
+      # read from: crates/takt/src/events.rs:1-9
+      # read from: crates/takt/src/events.rs:135-151
+      # read from: crates/takt/src/run.rs:705-734
+      - name: events
+        type: List<takt.work.RunEventLine>
+        summary: The lines the run appended to its case's `events.jsonl`, in order.
     relations:
       # One run, one case: the run opens it, or resumes it, and the case outlives the run on disk.
       # read from: crates/takt/src/run.rs:331-332
