@@ -342,7 +342,9 @@ const ENGINEERING: &str = ".engineering";
 
 /// The files that decide what pytest collects and how it reports, at any depth: a
 /// `conftest.py` can rewrite every outcome. `pyproject.toml`'s `[tool.pytest*]` tables are
-/// compared by the manifest scanner ([`pytest_config_changes`]).
+/// compared by the manifest scanner ([`pytest_config_changes`]). And Python's start-up modules,
+/// which the interpreter imports from its import path before it runs anything: a
+/// `sitecustomize.py` that exits 0 passes every run.
 const PYTHON_FILES: &[&str] = &[
     "conftest.py",
     "pytest.ini",
@@ -351,10 +353,62 @@ const PYTHON_FILES: &[&str] = &[
     ".pytest.toml",
     "tox.ini",
     "setup.cfg",
+    "sitecustomize.py",
+    "usercustomize.py",
 ];
 
 /// The judge surface every run guards, as a refusal names it.
-pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini` and `setup.cfg` at any depth, `[tool.pytest*]` in `pyproject.toml`, the module and package `python -m` runs, the test command's own script and its build tool's file, and the repository's own `.engineering/judge-surface.yaml` list";
+pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini`, `setup.cfg`, `sitecustomize.py` and `usercustomize.py` at any depth, `*.pth` at the root, `[tool.pytest*]` in `pyproject.toml`, the module and package `python -m` runs and the `*.pth` files in every directory it imports from (where it runs and what `PYTHONPATH` names), the test command's own script, the scripts it runs, read one level deep (every file beside a script deeper than that), and its build tool's file, every Python file of the tree while a line of such a script cannot be read, and the repository's own `.engineering/judge-surface.yaml` list";
+
+/// How many scripts deep the guard reads: the test command's own script, and the scripts it
+/// runs. A script deeper than that is not read; everything in its directory, and every Python
+/// file of the tree, is guarded instead ([`script_paths`]).
+const SCRIPTS_AT_MOST: usize = 2;
+
+/// The globs a line the guard cannot read guards ([`fail_closed`]): every Python module, compiled
+/// module and path file of the tree, since what it runs, and from where, is unknown.
+const PYTHON_ANYWHERE: &[&str] = &["**/*.py", "**/*.pyc", "**/*.pth"];
+
+/// Guards what a script line the guard cannot read could load ([`PYTHON_ANYWHERE`]).
+fn fail_closed(named: &mut Vec<String>) {
+    named.extend(PYTHON_ANYWHERE.iter().map(|glob| (*glob).to_owned()));
+}
+
+/// The directory marker for a working directory the guard could not follow (`cd "$x"`): a path
+/// named from it is guarded in every directory of the tree ([`landing`]).
+const ANYWHERE: &str = "**";
+
+/// The glob for everything under `dir` of the tree, `""` its root.
+fn under(dir: &str) -> String {
+    if dir.is_empty() {
+        "**".to_owned()
+    } else {
+        format!("{dir}/**")
+    }
+}
+
+/// The shells: a script they run is read line by line ([`script_paths`]).
+const SHELLS: &[&str] = &["sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish"];
+
+/// The shell's words that open or close a compound command, which the guard does not follow: a
+/// line starting with one is not read ([`statement`]).
+const COMPOUND: &[&str] = &[
+    "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "esac",
+    "select", "function", "coproc", "{", "}", "[[", "]]",
+];
+
+/// The shell's built-ins that run code given as text, or undo a directory change the guard
+/// cannot replay: a line with one is not read ([`statement`]).
+const OPAQUE: &[&str] = &["eval", "trap", "alias", "popd"];
+
+/// The variables naming a directory Python loads code from beside `PYTHONPATH`: what each names
+/// in the tree is guarded whole.
+const PYTHON_DIRS: &[&str] = &[
+    "PYTHONHOME",
+    "PYTHONUSERBASE",
+    "PYTHONPYCACHEPREFIX",
+    "PYTHONSTARTUP",
+];
 
 /// How a program of a test command takes its options. A short option is a character of a
 /// cluster (`-eo`); one that takes an argument takes the rest of its cluster or, when that is
@@ -423,10 +477,7 @@ const SHELL: Spec = Spec {
 /// The programs that run a script named after their options: the script is the test command's
 /// own as much as `./check.sh` is.
 const INTERPRETERS: &[(&[&str], Spec)] = &[
-    (
-        &["sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish"],
-        SHELL,
-    ),
+    (SHELLS, SHELL),
     (
         &["python", "pypy"],
         Spec {
@@ -720,6 +771,23 @@ fn normalise(path: &str) -> Option<String> {
 /// the tree and comes back (`../repo/check.sh`) lands inside it; relative to the tree, `""` for
 /// the tree itself, `None` outside it.
 fn landing(tree: &Path, dir: &str, word: &str) -> Option<String> {
+    // From a directory the guard could not follow ([`ANYWHERE`]), a relative path lands in any
+    // directory of the tree: a glob, which `..` never climbs out of.
+    if (dir == ANYWHERE || dir.starts_with("**/")) && !Path::new(word).is_absolute() {
+        let mut parts: Vec<&str> = Vec::new();
+        for part in dir.split('/').chain(word.split('/')) {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    if parts.last() != Some(&ANYWHERE) {
+                        parts.pop();
+                    }
+                }
+                part => parts.push(part),
+            }
+        }
+        return Some(parts.join("/"));
+    }
     let absolute = std::path::absolute(tree).ok()?;
     let joined = if Path::new(word).is_absolute() {
         PathBuf::from(word)
@@ -839,36 +907,564 @@ fn shell_words(line: &str) -> Vec<String> {
     words
 }
 
-/// Guards every word of `line`, a command line a shell reads, that names a path in the tree,
-/// and reads each command of it as a command line of its own.
-fn shell_line_paths(
+/// What the shell that runs a command has set that decides what the command loads, and where the
+/// guard is among the scripts it reads.
+#[derive(Debug, Clone, Default)]
+struct Env {
+    /// The `PYTHONPATH` entries: each as written, named from where Python runs, or as an
+    /// absolute path once a variable in it was expanded.
+    pythonpath: Vec<String>,
+    /// The shell variables whose value the guard knows, expanded.
+    vars: BTreeMap<String, String>,
+    /// The absolute directory of the script being read: what `$(dirname "$0")` stands for.
+    script_dir: Option<String>,
+    /// How many scripts deep the guard is ([`SCRIPTS_AT_MOST`]).
+    level: usize,
+}
+
+/// A shell reading a script: the directories it may be in (a `cd` that fails leaves it where it
+/// was, so every directory it may have changed to is kept beside the ones before; `None` outside
+/// the tree) and what it has set.
+struct Shell {
+    dirs: Vec<Option<String>>,
+    env: Env,
+}
+
+/// The size past which a script is not read: one that large fails closed ([`fail_closed`]).
+const SCRIPT_BYTES_AT_MOST: u64 = 1 << 20;
+
+/// The command substitutions the guard reads, each with what it stands for: the script's own
+/// directory (`\u{1}`) or the directory the shell is in (`\u{2}`). A line with any other
+/// substitution is not read.
+const SUBSTITUTIONS: &[(&str, &str)] = &[
+    ("$(dirname \"$(realpath \"$0\")\")", "\u{1}"),
+    ("$(dirname \"$(realpath -- \"$0\")\")", "\u{1}"),
+    ("$(dirname \"$(readlink -f \"$0\")\")", "\u{1}"),
+    ("$(dirname -- \"$0\")", "\u{1}"),
+    ("$(dirname \"$0\")", "\u{1}"),
+    ("$(dirname $0)", "\u{1}"),
+    ("`dirname \"$0\"`", "\u{1}"),
+    ("`dirname $0`", "\u{1}"),
+    ("$(dirname -- \"${BASH_SOURCE[0]}\")", "\u{1}"),
+    ("$(dirname \"${BASH_SOURCE[0]}\")", "\u{1}"),
+    ("$(dirname \"$BASH_SOURCE\")", "\u{1}"),
+    ("${BASH_SOURCE[0]%/*}", "\u{1}"),
+    ("${BASH_SOURCE%/*}", "\u{1}"),
+    ("${0%/*}", "\u{1}"),
+    ("$(pwd -P)", "\u{2}"),
+    ("$(pwd)", "\u{2}"),
+    ("`pwd`", "\u{2}"),
+];
+
+/// `line` with the substitutions the guard reads ([`SUBSTITUTIONS`]) put in their place, and
+/// `$(cd DIR && pwd)` as `DIR`.
+fn substituted(line: &str) -> String {
+    let mut line = line.to_owned();
+    for (form, by) in SUBSTITUTIONS {
+        line = line.replace(form, by);
+    }
+    while let Some(start) = line.find("$(cd ") {
+        let rest = &line[start + "$(cd ".len()..];
+        let Some(end) = rest.find(')') else {
+            break;
+        };
+        let inner = rest[..end].trim_end();
+        let Some(dir) = ["&& pwd -P", "&& pwd", "; pwd -P", "; pwd"]
+            .iter()
+            .find_map(|tail| inner.strip_suffix(tail))
+            .map(str::trim)
+            .filter(|dir| !dir.contains("$(") && !dir.contains('`'))
+        else {
+            break;
+        };
+        let dir = ["-P ", "-L ", "-- "]
+            .iter()
+            .fold(dir, |dir, option| dir.strip_prefix(option).unwrap_or(dir));
+        line = format!("{}{dir}{}", &line[..start], &rest[end + 1..]);
+    }
+    line
+}
+
+/// Whether `word` holds an expansion the guard could not make: a variable it does not know, a
+/// command substitution, a home directory.
+fn opaque(word: &str) -> bool {
+    word.contains(['$', '`', '\u{1}', '\u{2}'])
+}
+
+/// `word` with its expansions made, from the directory `dir` of the tree: `$PWD` and the
+/// substitutions [`substituted`] put in place, and the variables `env` knows. `None` when one is
+/// not known (`$1`, `${X:-y}`, `~`): the caller fails closed.
+fn expand(tree: &Path, word: &str, dir: Option<&str>, env: &Env) -> Option<String> {
+    let here = || -> Option<String> {
+        let dir = dir.filter(|dir| *dir != ANYWHERE && !dir.starts_with("**/"))?;
+        Some(
+            std::path::absolute(tree)
+                .ok()?
+                .join(dir)
+                .display()
+                .to_string(),
+        )
+    };
+    let mut out = String::new();
+    let mut chars = word.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1}' => out.push_str(env.script_dir.as_deref()?),
+            '\u{2}' => out.push_str(&here()?),
+            '`' => return None,
+            '~' if out.is_empty() => return None,
+            '$' => {
+                let braced = chars.next_if_eq(&'{').is_some();
+                let mut name = String::new();
+                while let Some(c) = chars.next_if(|c| c.is_ascii_alphanumeric() || *c == '_') {
+                    name.push(c);
+                }
+                if name.is_empty() || (braced && chars.next() != Some('}')) {
+                    return None;
+                }
+                if name == "PWD" {
+                    out.push_str(&here()?);
+                } else {
+                    out.push_str(env.vars.get(&name)?);
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    Some(out)
+}
+
+/// `word` as a shell assignment, `NAME=VALUE`.
+fn assignment(word: &str) -> Option<(&str, &str)> {
+    let (name, value) = word.split_once('=')?;
+    let mut chars = name.chars();
+    (chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    .then_some((name, value))
+}
+
+/// Sets `name` to `value` in `env`, made in each of `dirs`: a `PYTHONPATH` adds its entries; a
+/// variable naming where Python loads from ([`PYTHON_DIRS`]) guards what it names in the tree,
+/// whole; a value the guard cannot expand fails closed.
+fn assign(
+    tree: &Path,
+    dirs: &[Option<String>],
+    name: &str,
+    value: &str,
+    env: &mut Env,
+    named: &mut Vec<String>,
+) {
+    let values: Vec<Option<String>> = dirs
+        .iter()
+        .map(|dir| expand(tree, value, dir.as_deref(), env))
+        .collect();
+    if name == "PYTHONPATH" {
+        let mut entries = Vec::new();
+        for dir in dirs {
+            for entry in value.split(':') {
+                if ["$PYTHONPATH", "${PYTHONPATH}"].contains(&entry) {
+                    continue;
+                }
+                match expand(tree, entry, dir.as_deref(), env) {
+                    Some(entry) if entry.is_empty() => entries.push(".".to_owned()),
+                    Some(entry) => entries.push(entry),
+                    None => fail_closed(named),
+                }
+            }
+        }
+        env.pythonpath.extend(entries);
+    } else if PYTHON_DIRS.contains(&name) {
+        for (dir, value) in dirs.iter().zip(&values) {
+            match value {
+                Some(value) => {
+                    if let Some(path) = changed_dir(tree, dir.as_deref(), value) {
+                        named.push(under(&path));
+                        if !path.is_empty() {
+                            named.push(path);
+                        }
+                    }
+                }
+                None => fail_closed(named),
+            }
+        }
+    }
+    match values.first() {
+        Some(Some(first)) if values.iter().all(|value| value.as_ref() == Some(first)) => {
+            env.vars.insert(name.to_owned(), first.clone());
+        }
+        _ => {
+            env.vars.remove(name);
+        }
+    }
+}
+
+/// The directories of the tree Python imports from when it runs in `dir`: `dir` itself (where a
+/// `python -m` and the start-up modules are found first) and every `PYTHONPATH` entry, named from
+/// `dir`.
+fn import_dirs(tree: &Path, dir: Option<&str>, env: &Env) -> Vec<String> {
+    let mut dirs: Vec<String> = dir.map(str::to_owned).into_iter().collect();
+    for entry in &env.pythonpath {
+        dirs.extend(changed_dir(tree, dir, entry));
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+/// The text of the script at `full` when a shell reads it: a file whose first line names a shell
+/// (`#!/bin/sh`, `#!/usr/bin/env bash`), or names none (an `exec` hands it to `sh`), or any file
+/// when a shell named it (`sh check.sh`). `None` for anything else: a link (never followed), a
+/// program, a script another interpreter runs. A script too large or not readable fails closed.
+fn shell_text(full: &Path, by_shell: bool, named: &mut Vec<String>) -> Option<String> {
+    use std::io::Read as _;
+    let meta = std::fs::symlink_metadata(full).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    let read = std::fs::File::open(full)
+        .and_then(|file| file.take(SCRIPT_BYTES_AT_MOST + 1).read_to_end(&mut bytes));
+    if read.is_err() || bytes.len() as u64 > SCRIPT_BYTES_AT_MOST {
+        fail_closed(named);
+        return None;
+    }
+    if bytes.contains(&0) {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    if let Some(shebang) = text.strip_prefix("#!") {
+        let line = shebang.lines().next().unwrap_or_default();
+        let words: Vec<String> = shell_words(line)
+            .iter()
+            .map(|word| program_of(word))
+            .collect();
+        let mut words = words.into_iter();
+        let mut interpreter = words.next()?;
+        if interpreter == "env" {
+            interpreter = words.find(|word| !word.starts_with('-') && !word.contains('='))?;
+        }
+        if !by_shell && !SHELLS.contains(&interpreter.as_str()) {
+            return None;
+        }
+    }
+    Some(text)
+}
+
+/// `text` split into the lines a shell reads: a line ends at a newline outside quotes, a
+/// backslash before a newline joins two, and a `#` starting a word comments out the rest.
+fn logical_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut word_start = true;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                line.push(c);
+                for c in chars.by_ref() {
+                    line.push(c);
+                    if c == '\'' {
+                        break;
+                    }
+                }
+                word_start = false;
+            }
+            '"' => {
+                line.push(c);
+                while let Some(c) = chars.next() {
+                    if c == '\\' {
+                        match chars.next() {
+                            Some('\n') | None => {}
+                            Some(next) => {
+                                line.push(c);
+                                line.push(next);
+                            }
+                        }
+                        continue;
+                    }
+                    line.push(c);
+                    if c == '"' {
+                        break;
+                    }
+                }
+                word_start = false;
+            }
+            '\\' => match chars.next() {
+                Some('\n') | None => {}
+                Some(next) => {
+                    line.push(c);
+                    line.push(next);
+                    word_start = false;
+                }
+            },
+            '#' if word_start => while chars.next_if(|c| *c != '\n').is_some() {},
+            '\n' => {
+                lines.push(std::mem::take(&mut line));
+                word_start = true;
+            }
+            c => {
+                line.push(c);
+                word_start = c.is_whitespace() || ";&|()<>".contains(c);
+            }
+        }
+    }
+    lines.push(line);
+    lines.retain(|line| !line.trim().is_empty());
+    lines
+}
+
+/// Reads the shell script `text` line by line in `shell` ([`read_line`]).
+fn read_text(tree: &Path, text: &str, shell: &mut Shell, named: &mut Vec<String>, depth: usize) {
+    for line in logical_lines(text) {
+        read_line(tree, &line, shell, named, depth, false);
+    }
+}
+
+/// Reads `line`, a command line a shell reads, in `shell`: each command of it by the rules of
+/// the test command ([`statement`]), and with `every_word` (a line given to `sh -c`) every word
+/// that names a path in the tree guarded too. A line holding what the guard does not follow (a
+/// command substitution it does not know, a subshell or a function's parentheses, a
+/// here-document) fails closed, and what it can read of it is read all the same.
+fn read_line(
     tree: &Path,
     line: &str,
-    dir: Option<&str>,
+    shell: &mut Shell,
+    named: &mut Vec<String>,
+    depth: usize,
+    every_word: bool,
+) {
+    let line = substituted(line);
+    let words = shell_words(&line);
+    if line.contains("$(")
+        || line.contains('`')
+        || words.iter().any(|word| word == "(" || word == ")")
+        || words
+            .windows(2)
+            .any(|pair| pair[0] == "<" && pair[1] == "<")
+    {
+        fail_closed(named);
+    }
+    if every_word {
+        for dir in &shell.dirs {
+            for word in &words {
+                let word =
+                    expand(tree, word, dir.as_deref(), &shell.env).unwrap_or_else(|| word.clone());
+                named.extend(named_from(tree, dir.as_deref(), &word));
+            }
+        }
+    }
+    for command in words.split(|word| [";", "&", "|", "(", ")"].contains(&word.as_str())) {
+        statement(tree, command, shell, named, depth);
+    }
+}
+
+/// Reads one command of a shell line in `shell`: a redirection's input is guarded, the target
+/// of an output is the shell's to write; `NAME=VALUE` before nothing sets the shell's variable
+/// ([`assign`]), and before a program that program's; `cd` and `pushd` add the directory they
+/// change to; `export` and its kin set; `source` and `.` read the file in the same shell, one
+/// level deeper; a compound command's word (`if`, `for`, `{`, [`COMPOUND`]) and code given as
+/// text (`eval`, `trap`, `alias`, [`OPAQUE`]) fail closed and the rest is read as a command; any
+/// other is a command line of its own, from every directory the shell may be in
+/// ([`command_paths`]).
+fn statement(
+    tree: &Path,
+    command: &[String],
+    shell: &mut Shell,
     named: &mut Vec<String>,
     depth: usize,
 ) {
-    let words = shell_words(line);
-    for word in &words {
-        named.extend(named_from(tree, dir, word));
-    }
-    for command in words.split(|word| [";", "&", "|", "(", ")"].contains(&word.as_str())) {
-        // A redirection's target is a file the shell opens, named above; the command is the rest.
-        let mut kept: Vec<&str> = Vec::new();
-        let mut skip = false;
-        for word in command {
-            if skip {
-                skip = false;
-                continue;
+    let dirs = shell.dirs.clone();
+    let mut words: Vec<&str> = Vec::new();
+    let mut at = 0;
+    while let Some(word) = command.get(at) {
+        at += 1;
+        if word == "<" || word == ">" {
+            while command
+                .get(at)
+                .is_some_and(|next| next == "<" || next == ">")
+            {
+                at += 1;
             }
-            if word == "<" || word == ">" {
-                skip = true;
-                continue;
+            if let Some(target) = command.get(at) {
+                if word == "<" {
+                    for dir in &dirs {
+                        let target = expand(tree, target, dir.as_deref(), &shell.env)
+                            .unwrap_or_else(|| target.clone());
+                        named.extend(named_from(tree, dir.as_deref(), &target));
+                    }
+                }
+                at += 1;
             }
-            kept.push(word);
+            continue;
         }
-        command_paths(tree, &kept, dir.map(str::to_owned), named, depth + 1);
+        words.push(word);
     }
+    let mut at = 0;
+    while words
+        .get(at)
+        .is_some_and(|word| *word == "!" || COMPOUND.contains(word))
+    {
+        if words[at] != "!" {
+            fail_closed(named);
+        }
+        at += 1;
+    }
+    let mut assignments = Vec::new();
+    while let Some(pair) = words.get(at).and_then(|word| assignment(word)) {
+        assignments.push(pair);
+        at += 1;
+    }
+    while matches!(words.get(at), Some(&("exec" | "command" | "builtin"))) {
+        at += 1;
+        while words.get(at).is_some_and(|word| word.starts_with('-')) {
+            at += 1;
+        }
+    }
+    let rest = &words[at..];
+    let Some(&first) = rest.first() else {
+        for (name, value) in assignments {
+            assign(tree, &dirs, name, value, &mut shell.env, named);
+        }
+        return;
+    };
+    match first {
+        "cd" | "pushd" => {
+            let target = rest[1..]
+                .iter()
+                .find(|word| !word.starts_with('-') && !word.starts_with('+'));
+            for dir in &dirs {
+                let to = match target {
+                    // Home, or a directory taken off the stack: home is outside the tree, and
+                    // a directory on the stack is one the shell may be in already.
+                    None => None,
+                    Some(target) if target.starts_with('~') => None,
+                    Some(target) => match expand(tree, target, dir.as_deref(), &shell.env) {
+                        Some(target) => changed_dir(tree, dir.as_deref(), &target),
+                        None => {
+                            fail_closed(named);
+                            Some(ANYWHERE.to_owned())
+                        }
+                    },
+                };
+                if !shell.dirs.contains(&to) {
+                    shell.dirs.push(to);
+                }
+            }
+        }
+        "export" | "readonly" | "declare" | "typeset" | "local" => {
+            for (name, value) in rest[1..].iter().filter_map(|word| assignment(word)) {
+                assign(tree, &dirs, name, value, &mut shell.env, named);
+            }
+        }
+        "source" | "." => {
+            let Some(target) = rest.get(1) else {
+                return;
+            };
+            for dir in &dirs {
+                let Some(target) = expand(tree, target, dir.as_deref(), &shell.env) else {
+                    fail_closed(named);
+                    continue;
+                };
+                let Some(path) = named_from(tree, dir.as_deref(), &target) else {
+                    continue;
+                };
+                named.push(path.clone());
+                if shell.env.level >= SCRIPTS_AT_MOST {
+                    fail_closed(named);
+                    named.push(under(parent_of(&path)));
+                    continue;
+                }
+                // A file not in the tree to read (a link, nothing yet) is code the guard cannot
+                // see.
+                match shell_text(&tree.join(&path), true, named) {
+                    Some(text) => {
+                        shell.env.level += 1;
+                        read_text(tree, &text, shell, named, depth + 1);
+                        shell.env.level -= 1;
+                    }
+                    None => fail_closed(named),
+                }
+            }
+        }
+        first if OPAQUE.contains(&first) => {
+            fail_closed(named);
+            for word in &rest[1..] {
+                let code = word.split_once('=').map_or(*word, |(_, code)| code);
+                for line in [*word, code] {
+                    let every_word = shell.env.level == 0;
+                    read_line(tree, line, shell, named, depth + 1, every_word);
+                }
+            }
+        }
+        _ => {
+            for dir in &dirs {
+                let mut env = shell.env.clone();
+                for (name, value) in &assignments {
+                    assign(
+                        tree,
+                        std::slice::from_ref(dir),
+                        name,
+                        value,
+                        &mut env,
+                        named,
+                    );
+                }
+                let expanded: Vec<String> = rest
+                    .iter()
+                    .map(|word| {
+                        expand(tree, word, dir.as_deref(), &env)
+                            .unwrap_or_else(|| (*word).to_owned())
+                    })
+                    .collect();
+                let words: Vec<&str> = expanded.iter().map(String::as_str).collect();
+                command_paths(tree, &words, dir.clone(), named, depth + 1, &env);
+            }
+        }
+    }
+}
+
+/// The directory `path`, relative to the tree, is in: `""` for the tree's root.
+fn parent_of(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(parent, _)| parent)
+}
+
+/// Reads the shell script at `script` (relative to the tree), run from `dir` with `env`, by the
+/// rules of the test command ([`read_text`]); a script another interpreter runs is guarded by
+/// itself and not read ([`shell_text`]), and with `by_shell` (`sh check.sh`) any file is read as
+/// a shell script. A script deeper than [`SCRIPTS_AT_MOST`] is not read: everything in its
+/// directory, and every Python file of the tree, is guarded instead.
+fn script_paths(
+    tree: &Path,
+    script: &str,
+    dir: Option<&str>,
+    env: &Env,
+    named: &mut Vec<String>,
+    depth: usize,
+    by_shell: bool,
+) {
+    let Some(text) = shell_text(&tree.join(script), by_shell, named) else {
+        return;
+    };
+    let parent = parent_of(script);
+    if env.level >= SCRIPTS_AT_MOST {
+        fail_closed(named);
+        named.push(under(parent));
+        return;
+    }
+    let script_dir = std::path::absolute(tree)
+        .ok()
+        .map(|tree| tree.join(parent).display().to_string());
+    let mut shell = Shell {
+        dirs: vec![dir.map(str::to_owned)],
+        env: Env {
+            script_dir,
+            level: env.level + 1,
+            ..env.clone()
+        },
+    };
+    read_text(tree, &text, &mut shell, named, depth);
 }
 
 /// Where the options of a program end.
@@ -1015,21 +1611,44 @@ fn spec_of<T: Copy>(table: &[(&[&str], T)], name: &str) -> Option<T> {
         .map(|(_, spec)| *spec)
 }
 
-/// The paths of `tree` the command line `words`, run from `dir`, runs as its own: added to
-/// `named`. See [`scripts_of`].
+/// The paths of `tree` the command line `words`, run from `dir` with what the shell set in
+/// `env`, runs as its own: added to `named`. See [`scripts_of`].
 fn command_paths(
     tree: &Path,
     words: &[&str],
     mut dir: Option<String>,
     named: &mut Vec<String>,
     depth: usize,
+    env: &Env,
 ) {
     if depth > COMMANDS_AT_MOST {
         return;
     }
+    let mut env = env.clone();
     let mut at = 0;
     while let Some(program) = words.get(at).copied() {
-        named.extend(named_from(tree, dir.as_deref(), program));
+        // `NAME=VALUE` before the program: the program's environment.
+        if let Some((name, value)) = assignment(program) {
+            assign(
+                tree,
+                std::slice::from_ref(&dir),
+                name,
+                value,
+                &mut env,
+                named,
+            );
+            at += 1;
+            continue;
+        }
+        // A program the guard cannot name runs what it cannot see.
+        if opaque(program) {
+            fail_closed(named);
+        }
+        // A program in the tree that a shell reads is read line by line.
+        if let Some(path) = named_from(tree, dir.as_deref(), program) {
+            script_paths(tree, &path, dir.as_deref(), &env, named, depth, false);
+            named.push(path);
+        }
         let name = program_of(program);
         at += 1;
         if name == "env" {
@@ -1068,7 +1687,7 @@ fn command_paths(
                             };
                             let mut rest = vec![value];
                             rest.extend(&words[at + 1..]);
-                            return command_paths(tree, &rest, dir, named, depth + 1);
+                            return command_paths(tree, &rest, dir, named, depth + 1, &env);
                         }
                         _ => {}
                     }
@@ -1113,7 +1732,7 @@ fn command_paths(
                         Some(rest) => {
                             let mut words_of = vec![rest];
                             words_of.extend(&words[at + 1..]);
-                            return command_paths(tree, &words_of, dir, named, depth + 1);
+                            return command_paths(tree, &words_of, dir, named, depth + 1, &env);
                         }
                         None => {}
                     }
@@ -1121,6 +1740,16 @@ fn command_paths(
                     continue;
                 }
                 if word.contains('=') {
+                    if let Some((name, value)) = assignment(word) {
+                        assign(
+                            tree,
+                            std::slice::from_ref(&dir),
+                            name,
+                            value,
+                            &mut env,
+                            named,
+                        );
+                    }
                     at += 1;
                     continue;
                 }
@@ -1139,7 +1768,7 @@ fn command_paths(
                 match scanned.end {
                     End::Stop => return,
                     End::Command(from) => {
-                        return command_line(tree, words, from, dir.as_deref(), named, depth);
+                        return command_line(tree, words, from, dir.as_deref(), named, depth, &env);
                     }
                     End::Operand if operands > 0 && scanned.at < words.len() => {
                         at = scanned.at + 1;
@@ -1161,19 +1790,34 @@ fn command_paths(
             for file in scanned.files {
                 named.extend(named_from(tree, dir.as_deref(), file));
             }
-            // `-m pkg.module` imports `pkg` from the directory it runs in first: `pkg.py` and
-            // the package `pkg/` there replace the installed one.
-            for module in scanned.modules {
-                let first = module.split('.').next().unwrap_or(module);
-                named.extend(named_from(tree, dir.as_deref(), &format!("{first}.py")));
-                named.extend(
-                    named_from(tree, dir.as_deref(), first).map(|package| format!("{package}/**")),
-                );
+            // Python imports from the directory it runs in and from every `PYTHONPATH` entry
+            // before the installed modules: `-m pkg.module` imports `pkg`, and `pkg.py`, a
+            // compiled `pkg.*` and the package `pkg/` in any of them replace the installed one;
+            // a `*.pth` file there is a start-up file.
+            if !spec.short_module.is_empty() {
+                let imports = import_dirs(tree, dir.as_deref(), &env);
+                for module in scanned.modules {
+                    if opaque(module) {
+                        fail_closed(named);
+                    }
+                    let first = module.split('.').next().unwrap_or(module);
+                    for import in &imports {
+                        let import = Some(import.as_str());
+                        named.extend(named_from(tree, import, &format!("{first}.py")));
+                        named.extend(named_from(tree, import, &format!("{first}.*")));
+                        named.extend(
+                            named_from(tree, import, first).map(|package| format!("{package}/**")),
+                        );
+                    }
+                }
+                for import in &imports {
+                    named.extend(named_from(tree, Some(import.as_str()), "*.pth"));
+                }
             }
             match scanned.end {
                 End::Stop => {}
                 End::Command(from) => {
-                    command_line(tree, words, from, dir.as_deref(), named, depth);
+                    command_line(tree, words, from, dir.as_deref(), named, depth, &env);
                 }
                 End::Operand => {
                     let mut script = scanned.at;
@@ -1200,12 +1844,22 @@ fn command_paths(
                                     dir.as_deref(),
                                     named,
                                     depth,
+                                    &env,
                                 );
                             }
                         }
                     }
                     if let Some(script) = words.get(script) {
-                        named.extend(named_from(tree, dir.as_deref(), script));
+                        if opaque(script) {
+                            fail_closed(named);
+                        }
+                        // A script a shell runs is read line by line, whatever its first line.
+                        if let Some(path) = named_from(tree, dir.as_deref(), script) {
+                            if SHELLS.contains(&name.as_str()) {
+                                script_paths(tree, &path, dir.as_deref(), &env, named, depth, true);
+                            }
+                            named.push(path);
+                        }
                     }
                 }
             }
@@ -1241,7 +1895,12 @@ fn command_paths(
         // A program in none of the tables: what it reads is not known, so every word of the
         // rest that names a path in the tree is guarded, as written and as a shell would unquote
         // it, an option's value after `=` among them. Whether the path is there yet does not
-        // matter: a step could make it.
+        // matter: a step could make it. Not in a script the test command runs: what a line
+        // there names (`grep -q fixed check.txt`) is the data the tests check, the code under
+        // test's, and only the programs, scripts and modules it runs are guarded.
+        if env.level > 0 {
+            return;
+        }
         for word in &words[at..] {
             let word = if word.starts_with('-') {
                 match word.split_once('=') {
@@ -1261,7 +1920,8 @@ fn command_paths(
 }
 
 /// The command line an option such as `sh -c` or `flock -c` runs: the word at `from`, after a
-/// `--` that ends the options, read as a shell reads it ([`shell_line_paths`]).
+/// `--` that ends the options, read as a shell reads it ([`read_line`]); in the test command
+/// itself, not a script it runs, every word naming a path in the tree is guarded besides.
 fn command_line(
     tree: &Path,
     words: &[&str],
@@ -1269,6 +1929,7 @@ fn command_line(
     dir: Option<&str>,
     named: &mut Vec<String>,
     depth: usize,
+    env: &Env,
 ) {
     if words.get(from) == Some(&"--") {
         from += 1;
@@ -1277,11 +1938,17 @@ fn command_line(
     // arguments. A test command is split at white space, so a line meant to be quoted
     // (`sh -c 'a; b'`) arrives in pieces: each piece, and the pieces joined, are read as well.
     let rest = words.get(from..).unwrap_or_default();
-    for line in rest {
-        shell_line_paths(tree, line, dir, named, depth);
-    }
-    if rest.len() > 1 {
-        shell_line_paths(tree, &rest.join(" "), dir, named, depth);
+    let joined = rest.join(" ");
+    let lines = rest
+        .iter()
+        .copied()
+        .chain((rest.len() > 1).then_some(joined.as_str()));
+    for line in lines {
+        let mut shell = Shell {
+            dirs: vec![dir.map(str::to_owned)],
+            env: env.clone(),
+        };
+        read_line(tree, line, &mut shell, named, depth, env.level == 0);
     }
 }
 
@@ -1293,11 +1960,25 @@ fn command_line(
 /// their arguments, its operands and `NAME=VALUE` pairs; and the file a build tool
 /// ([`BUILD_TOOLS`]: make, task, npm, yarn, pnpm, just) reads, in the directory `-C` names or as
 /// `-f` names it. A word that names nothing yet is named all the same: a step could make it.
+///
+/// A shell script among them is read line by line, by these same rules, and the scripts it runs
+/// one level further ([`script_paths`]); `NAME=VALUE` before a program, `export`, `cd` and
+/// `source` are followed. What `python -m MODULE` imports is named in the directory it runs in
+/// and in every `PYTHONPATH` entry, with the `*.pth` start-up files there. A word with an
+/// expansion the guard cannot make, a line it cannot read, and a script too deep add every Python
+/// file of the tree ([`PYTHON_ANYWHERE`]), as globs, which [`JudgeSurface`] guards whole.
 #[must_use]
 pub fn scripts_of(words: &[String], tree: &Path) -> Vec<String> {
     let words: Vec<&str> = words.iter().map(String::as_str).collect();
     let mut named = Vec::new();
-    command_paths(tree, &words, Some(String::new()), &mut named, 0);
+    command_paths(
+        tree,
+        &words,
+        Some(String::new()),
+        &mut named,
+        0,
+        &Env::default(),
+    );
     named.sort();
     named.dedup();
     named
@@ -1473,6 +2154,7 @@ impl JudgeSurface {
             || name.starts_with("rust-toolchain")
             || name == "build.rs"
             || PYTHON_FILES.contains(&name)
+            || (parts.len() == 1 && name.ends_with(".pth"))
             || self.scripts.iter().any(|script| fold(script) == folded)
             || self.globs.iter().any(|glob| {
                 let glob: Vec<&str> = glob.split('/').collect();
@@ -1483,7 +2165,8 @@ impl JudgeSurface {
     /// Whether a validator or the guarded command would read through a link at `link`: the link
     /// is, or is on the way to, the cargo configuration (`.cargo/` at any depth), the CI
     /// workflows (`.github/workflows/`), the store's directories and project file (while the
-    /// store is on the surface), a manifest, a build script, a toolchain file, or the test
+    /// store is on the surface), a manifest, a build script, a toolchain file, a Python start-up
+    /// file (`sitecustomize.py`, `usercustomize.py`, a `*.pth` at the root), or the test
     /// command's own script, recipe or build-tool configuration. Any other link (an
     /// instructions file under `.github/`) is read by none of them.
     #[must_use]
@@ -1514,6 +2197,7 @@ impl JudgeSurface {
             || name == "build.rs"
             || name.starts_with("rust-toolchain")
             || PYTHON_FILES.contains(&name)
+            || (parts.len() == 1 && name.ends_with(".pth"))
             || folded == fold(JUDGE_LIST)
             || self.scripts.iter().any(|script| is_or_holds(&fold(script)))
             // A path the repository's own list (or a module's package) names: the link is on
@@ -1538,6 +2222,7 @@ impl JudgeSurface {
             if [ENGINEERING, ".cargo", ".github", "build.rs"].contains(&folded.as_str())
                 || folded.starts_with("rust-toolchain")
                 || PYTHON_FILES.contains(&folded.as_str())
+                || folded.ends_with(".pth")
             {
                 roots.push((PathBuf::from(name), true));
             }
