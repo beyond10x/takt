@@ -480,3 +480,197 @@ mod adv {
         );
     }
 }
+
+/// Second adversary pass, after correction 1: the guard's two exit paths, and two mutants the
+/// nine cases above miss (`tests.run` renamed; `abandoned` earned by a claim). Same
+/// `STORY_DELIVERY_PROTOCOL` override as `adv`.
+mod adv2 {
+    use std::sync::Mutex;
+
+    use takt::harness::{Harness, StepContext, StepReport};
+    use takt::validator::{Observation, Validator};
+    use takt::{Run, RunOptions, Stop};
+
+    use super::*;
+
+    fn protocol_path() -> PathBuf {
+        std::env::var_os("STORY_DELIVERY_PROTOCOL")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(PROTOCOL))
+    }
+
+    fn adv2_open(tree: &Path, id: &str) -> CaseDir {
+        let protocol = LoadedProtocol::from_file(&protocol_path())
+            .expect("the protocol loads, validates and compiles");
+        CaseDir::open(tree, protocol, id, "deliver the story", &[]).expect("the case opens")
+    }
+
+    /// A harness that is never stepped; reaching it is the failure.
+    struct Idle;
+
+    impl Harness for Idle {
+        fn name(&self) -> &str {
+            "idle"
+        }
+
+        fn step(&self, context: &StepContext<'_>) -> anyhow::Result<StepReport> {
+            anyhow::bail!(
+                "a judgement step was offered {:?} before any validator ran",
+                context.offered
+            )
+        }
+    }
+
+    /// `tests.run` as the CLI wires it, without a test command: one `test_result` pass.
+    struct TestsPass;
+
+    impl Validator for TestsPass {
+        fn name(&self) -> &str {
+            "adv2.tests-pass"
+        }
+
+        fn action(&self) -> &str {
+            "tests.run"
+        }
+
+        fn kind(&self) -> &str {
+            "test_result"
+        }
+
+        fn subject(&self) -> &str {
+            "implementation"
+        }
+
+        fn observe(&self, _: &Path, revision: &str, seq: usize) -> anyhow::Result<Observation> {
+            Ok(Observation {
+                summary: "pass".to_owned(),
+                records: vec![Record::new(
+                    format!("test-result-{seq}"),
+                    self.kind(),
+                    Some("pass".to_owned()),
+                    self.subject(),
+                    revision,
+                    self.name(),
+                )],
+            })
+        }
+    }
+
+    /// The guard on the success path: a case that opened a case in its tree and returned
+    /// leaves nothing under the build directory.
+    #[test]
+    fn adv2_a_passing_case_leaves_no_scratch_tree() {
+        let tree = scratch("adv2-pass");
+        let path = tree.to_path_buf();
+        let case = adv2_open(&tree, "adv2-pass");
+        assert!(case.dir.starts_with(&path), "{}", case.dir.display());
+        drop(case);
+        drop(tree);
+        assert!(
+            !path.exists(),
+            "the scratch tree survived a passing case: {}",
+            path.display()
+        );
+    }
+
+    /// The guard on the panic path: a case that fails after opening a case in its tree leaves
+    /// nothing under the build directory either.
+    #[test]
+    fn adv2_a_failing_case_leaves_no_scratch_tree() {
+        let seen: Mutex<Option<PathBuf>> = Mutex::new(None);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let tree = scratch("adv2-fail");
+            *seen.lock().expect("the cell") = Some(tree.to_path_buf());
+            let _case = adv2_open(&tree, "adv2-fail");
+            panic!("the case fails on purpose");
+        }));
+        assert!(outcome.is_err(), "the case did not fail");
+        let path = seen
+            .into_inner()
+            .expect("the cell")
+            .expect("the tree was created");
+        assert!(
+            !path.exists(),
+            "the scratch tree survived a failing case: {}",
+            path.display()
+        );
+    }
+
+    /// The README's invocation with `--harness none --iterations 1`, through the loop: the
+    /// first step is the `tests.run` validator, its record earns `tests.pass`, and the step
+    /// budget stops the run. A protocol that renamed `tests.run` would offer the harness a
+    /// judgement step instead, and none of the nine cases above would notice.
+    #[test]
+    fn adv2_the_loop_runs_the_tests_validator_first_on_this_protocol() {
+        let tree = scratch("adv2-loop");
+        let options = RunOptions {
+            protocol: protocol_path().to_string_lossy().into_owned(),
+            intent: "deliver the story".to_owned(),
+            inputs: Vec::new(),
+            iterations: Some(1),
+            hours: None,
+            tokens: None,
+            case_id: Some("adv2-loop".to_owned()),
+            gate: Some("repository.merge".to_owned()),
+        };
+        let validators: Vec<Box<dyn Validator>> = vec![Box::new(TestsPass)];
+        let mut run = Run::open(&tree, options, &Idle, &validators).expect("the case opens");
+        let mut out = Vec::new();
+        let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
+        let text = String::from_utf8(out).expect("utf-8");
+        assert_eq!(stop, Ok(Stop::Iterations(1)), "{text}");
+        assert_eq!(run.steps, 1, "{text}");
+        assert!(text.contains("step 1: tests.run {}"), "{text}");
+        assert!(text.contains("evidence: test_result pass"), "{text}");
+        let decision = run.case.evaluate(99).expect("evaluates");
+        assert_eq!(
+            status(&decision.claims, "tests.pass"),
+            "true",
+            "{}",
+            decision.json
+        );
+        assert_eq!(
+            decision.legitimate(),
+            Vec::<String>::new(),
+            "{}",
+            decision.json
+        );
+    }
+
+    /// `abandoned` is earned by an explicit decision only: declared, blocked before any record,
+    /// still blocked after all five, and `accepted` is then the only legitimate outcome. The
+    /// loop completes through the first legitimate outcome, whichever one it is.
+    #[test]
+    fn adv2_abandoned_needs_an_explicit_decision_not_a_claim() {
+        let tree = scratch("adv2-abandoned");
+        let mut case = adv2_open(&tree, "adv2-abandoned");
+        let revision = case
+            .revision("implementation")
+            .expect("implementation has a revision");
+        let decision = case.evaluate(0).expect("evaluates");
+        assert_eq!(
+            status(&decision.outcomes, "abandoned"),
+            "blocked",
+            "{}",
+            decision.json
+        );
+        for (n, (kind, result, _)) in LADDER.iter().enumerate() {
+            case.add_evidence(&record(n + 1, kind, result, &revision))
+                .expect("the record is written");
+            let decision = case.evaluate(n + 1).expect("evaluates");
+            assert_eq!(
+                status(&decision.outcomes, "abandoned"),
+                "blocked",
+                "after {kind} {result}\n{}",
+                decision.json
+            );
+        }
+        let decision = case.evaluate(9).expect("evaluates");
+        assert_eq!(
+            decision.legitimate(),
+            vec!["accepted".to_owned()],
+            "{}",
+            decision.json
+        );
+    }
+}
