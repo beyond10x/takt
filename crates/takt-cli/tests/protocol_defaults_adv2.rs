@@ -189,8 +189,10 @@ fn adv2_a_store_that_changes_between_the_check_and_the_resume_lets_another_proto
 }
 
 /// The same store, changing between two lists, for a case found only through the store's list:
-/// its take is on `main`, as an operator who merged it by hand leaves it, and not on the case's
-/// branch. The run lists the store once to choose what it resumes: the first list shows no
+/// its take is on `main`, as `git cherry-pick` and `git branch -f` leave it, and not on the
+/// case's branch, a state takt does not support (coordinator decision B); what is pinned here is
+/// only that a case no check saw never runs. The run lists the store once to choose what it
+/// resumes: the first list shows no
 /// story active, so nothing is resumed, and the later lists, which do show it, resume nothing
 /// either. A case the check did not see never runs.
 #[test]

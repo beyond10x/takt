@@ -938,3 +938,112 @@ fn the_case_to_resume_is_named_without_a_change_and_is_the_one_resumed() {
     .expect("the case is resumed");
     assert_eq!(resumed.case.id, case_id);
 }
+
+/// A test command is code a model wrote: one that makes a tag and a branch, leaving `HEAD`, the
+/// index and every file as they were, is refused, and both refs are removed again. Every branch
+/// and tag is guarded around a validator, the ones it makes as well as the ones it moves.
+#[test]
+fn a_test_command_that_makes_a_tag_and_a_branch_is_refused_and_both_removed() {
+    let tree = repository("made-refs");
+    let script = tree.root.join("makes-refs.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\nset -e\ngit tag planted\ngit branch planted-branch\n",
+    )
+    .expect("a script");
+    let validators = tests_run(&format!("sh {}", script.display()));
+    let harness = acting("repository.inspect", |_| {});
+    let (stop, text) = run(&tree, "made-refs", 1, &harness, &validators);
+    let stop = stop.expect("the run stops");
+    assert!(
+        matches!(&stop, Stop::StepRefused(why) if why.contains("refs/tags/planted") && why.contains("refs/heads/planted-branch")),
+        "{stop:?}\n{text}"
+    );
+    assert_eq!(git(&tree, &["tag", "--list"]), "", "{text}");
+    assert_eq!(branches(&tree), "main\ntakt/made-refs", "{text}");
+}
+
+/// A branch checked out in another worktree of the same repository is that worktree's session's
+/// work: one that moves while a step runs (a commit made there meanwhile) is neither refused nor
+/// put back. Every other branch and tag stays guarded.
+#[test]
+fn a_branch_checked_out_in_another_worktree_that_moves_during_a_step_is_left_alone() {
+    let tree = repository("other-worktree");
+    let second = tree.root.join("second");
+    git(
+        &tree,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "elsewhere",
+            second.to_str().expect("utf-8"),
+        ],
+    );
+    let moved = second.clone();
+    let harness = acting("repository.inspect", move |_: &Path| {
+        fs::write(moved.join("theirs.txt"), "another session's work\n").expect("a write");
+        git(&moved, &["add", "theirs.txt"]);
+        git(&moved, &["commit", "-q", "-m", "another session's commit"]);
+    });
+    let none: Vec<Box<dyn Validator>> = Vec::new();
+    let (stop, text) = run(&tree, "other-worktree", 1, &harness, &none);
+    let stop = stop.expect("the run stops");
+    assert!(!matches!(&stop, Stop::StepRefused(_)), "{stop:?}\n{text}");
+    assert_eq!(
+        git(&tree, &["log", "-1", "--format=%s", "elsewhere"]),
+        "another session's commit",
+        "{text}"
+    );
+    assert_eq!(read(&second.join("theirs.txt")), "another session's work\n");
+}
+
+/// The case's base stays guarded when another worktree has it checked out: the base is where
+/// `take_next` reads the store from and what the next case forks from. A run in a linked
+/// worktree opens its case from `feature`; the main worktree then checks `feature` out; a test
+/// command that moves `feature` is refused, and `feature` is put back.
+#[test]
+fn a_test_command_that_moves_the_base_checked_out_in_the_main_worktree_is_refused() {
+    let tree = repository("linked-base");
+    let linked = tree.root.join("linked");
+    git(
+        &tree,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            linked.to_str().expect("utf-8"),
+        ],
+    );
+    let script = tree.root.join("moves-feature.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\nset -e\nc=$(git -c user.name=m -c user.email=m@localhost commit-tree 'feature^{tree}' -p feature -m moved)\ngit update-ref refs/heads/feature \"$c\"\n",
+    )
+    .expect("a script");
+    let validators = tests_run(&format!("sh {}", script.display()));
+    let harness = acting("repository.inspect", |_| {});
+    let mut run = Run::open(&linked, options("linked-base", 1), &harness, &validators)
+        .expect("the case opens");
+    assert_eq!(
+        Branch::read(&run.case.dir)
+            .expect("branch.yaml")
+            .base
+            .as_deref(),
+        Some("feature")
+    );
+    git(&tree, &["checkout", "-q", "feature"]);
+    let base = git(&tree, &["rev-parse", "feature"]);
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    let stop = stop.expect("the run stops");
+    assert!(
+        matches!(&stop, Stop::StepRefused(why) if why.contains("refs/heads/feature")),
+        "{stop:?}\n{text}"
+    );
+    assert_eq!(git(&tree, &["rev-parse", "feature"]), base, "{text}");
+}

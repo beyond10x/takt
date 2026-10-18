@@ -740,9 +740,17 @@ const APPROVALS_AT_MOST: usize = 64;
 /// the case's `story` and nothing else: each with one parent, the subject
 /// [`crate::frontier::approve_subject`] of `story` and one capability, and every path it changes
 /// in the planning store ([`crate::frontier::is_store_path`]). Such a commit is the approval's
-/// own: it records the grant and changes nothing a validator observes or a gate reads. A
-/// commit that does anything else, or a case with no story, is no approval's.
-fn approvals_only(tree: &Path, revision: &str, head: &str, story: Option<&str>) -> Result<bool> {
+/// own: it records the grant and changes no path outside the store. The case stays at
+/// `revision`, and `pr.open` pushes `revision` itself, not `HEAD`
+/// ([`crate::forge::Forge::push_revision`]), so what is pushed, checked and merged is the
+/// revision the grant was given at. A commit that does anything else, or a case with no story,
+/// is no approval's.
+pub fn approvals_only(
+    tree: &Path,
+    revision: &str,
+    head: &str,
+    story: Option<&str>,
+) -> Result<bool> {
     let Some(story) = story else {
         return Ok(false);
     };

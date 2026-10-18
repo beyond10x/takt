@@ -159,7 +159,7 @@ fn executable(bin: &Path, name: &str, text: &str) {
 }
 
 /// A double of the bot route's two programs in `<dir>/stub-bin`, its state in `<dir>/forge`:
-/// `b10x-gates bot -- push <remote> <branch>` keeps the branch and the commit it names,
+/// `b10x-gates bot -- push <remote> <branch>` (or `<revision>:refs/heads/<branch>`) keeps the branch and the commit pushed,
 /// `scan-text` passes, `api --method POST` opens pull request #7, `api --method PUT` merges it
 /// and counts the merge; `gh pr view` reports the pull request's state with the pushed head,
 /// `gh pr checks` one check, passing. Nothing reaches a network.
@@ -177,8 +177,10 @@ fn forge_double(dir: &Path) -> (PathBuf, PathBuf) {
 state='{state_text}'
 case "$1" in
   bot)
-    printf '%s' "$5" > "$state/branch"
-    git rev-parse "refs/heads/$5" > "$state/pushed" || exit 1
+    spec="$5"; branch="${{spec#*:refs/heads/}}"; revision="${{spec%%:*}}"
+    if [ "$branch" = "$spec" ]; then revision="refs/heads/$spec"; fi
+    printf '%s' "$branch" > "$state/branch"
+    git rev-parse "$revision" > "$state/pushed" || exit 1
     exit 0 ;;
   scan-text) exit 0 ;;
   api)

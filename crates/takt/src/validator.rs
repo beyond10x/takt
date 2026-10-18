@@ -657,13 +657,22 @@ impl Validator for PrOpen {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        let dir = current(tree)?;
+        // `HEAD` is the implementation revision, or the approval's own commits on top of it
+        // (`approvals_only`); what is pushed is the revision either way, never `HEAD`.
         let head = crate::git::head(tree)?;
-        if head != revision {
+        if head != revision
+            && !crate::case::approvals_only(
+                tree,
+                revision,
+                &head,
+                crate::case::story_of(&dir)?.as_deref(),
+            )?
+        {
             bail!(
                 "the tree's HEAD {head} is not the implementation revision {revision}; the pull request's head would not be the revision the claim is about"
             );
         }
-        let dir = current(tree)?;
         let mut branch = Branch::read(&dir)?;
         let forge = self.forge.name();
         // The branch pushed and opened for is the case's, from the case id: the `name` in
@@ -712,7 +721,7 @@ impl Validator for PrOpen {
             }
         }
         self.forge
-            .push(tree, &name)
+            .push_revision(tree, &name, revision)
             .with_context(|| format!("push {name} through the forge {forge}"))?;
         branch.pushed = Some(revision.to_owned());
         let (state, summary) = match next {

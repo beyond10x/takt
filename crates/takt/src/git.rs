@@ -875,17 +875,21 @@ pub struct GitDirPutBack {
     pub failed: Vec<String>,
 }
 
-/// The tree as it was before a judgement step: what the step's change is measured against and
-/// what a refused or failed step is put back to. `HEAD` and its branch, and the refs of the
-/// other branches named (the case's base); the index's entries and the index file itself; every
-/// uncommitted path outside the cases directory with what was at it (a validator's run may
-/// leave one); the ignored paths with what is at each a file git names; and what git runs or
+/// The tree as it was before a judgement step or a validator's observation: what its change is
+/// measured against and what a refused or failed one is put back to. `HEAD` and its branch,
+/// and every other branch and tag of the repository (the case's base, a sibling case's branch)
+/// but one checked out in another worktree, which is that session's ([`unguarded_refs`]), the
+/// case's base and its own branch excepted ([`Checkpoint::take_guarding`]); the index's entries
+/// and the index file itself; every uncommitted path outside the cases directory with what was
+/// at it (a validator's run may leave one); the ignored paths with what is at each a file git
+/// names; and what git runs or
 /// reads as configuration in the git directories: the hooks, `info/`, the configuration's keys.
 #[derive(Debug, Clone)]
 pub struct Checkpoint {
     head: String,
     branch: Option<String>,
-    refs: Vec<(String, Option<String>)>,
+    refs: BTreeMap<String, String>,
+    unguarded: BTreeSet<String>,
     index: Vec<u8>,
     index_file: Option<(PathBuf, Vec<u8>)>,
     dirty: BTreeMap<String, Content>,
@@ -939,6 +943,55 @@ fn resolve(tree: &Path, reference: &str) -> Result<Option<String>> {
         .then(|| String::from_utf8_lossy(&found.stdout).trim().to_owned()))
 }
 
+/// The refs a checkpoint leaves out of its guard, read when it is taken: `branch`, `HEAD`'s own,
+/// which is guarded as `HEAD`, and every branch checked out in a worktree of the repository
+/// (`git worktree list --porcelain`), which is another session's work: putting it back would
+/// destroy that work, as putting back other tools' files under `.git` would. The branches
+/// `kept` (the case's base) stay guarded wherever they are checked out.
+fn unguarded_refs(tree: &Path, branch: Option<&str>, kept: &[String]) -> Result<BTreeSet<String>> {
+    let listed = raw(tree, &["worktree", "list", "--porcelain"], None)?;
+    let listed =
+        String::from_utf8(listed).map_err(|_| anyhow!("git worktree list is not in UTF-8"))?;
+    let kept: BTreeSet<String> = kept
+        .iter()
+        .map(|name| format!("refs/heads/{name}"))
+        .collect();
+    let mut refs: BTreeSet<String> = listed
+        .lines()
+        .filter_map(|line| line.strip_prefix("branch "))
+        .filter(|reference| !kept.contains(*reference))
+        .map(str::to_owned)
+        .collect();
+    refs.extend(branch.map(|name| format!("refs/heads/{name}")));
+    Ok(refs)
+}
+
+/// The refs a checkpoint guards beside `HEAD`: every branch and tag of the repository, each with
+/// the object it names, but those `unguarded` names ([`unguarded_refs`]).
+fn guarded_refs(tree: &Path, unguarded: &BTreeSet<String>) -> Result<BTreeMap<String, String>> {
+    let listed = raw(
+        tree,
+        &[
+            "for-each-ref",
+            "--format=%(objectname) %(refname)",
+            "refs/heads/",
+            "refs/tags/",
+        ],
+        None,
+    )?;
+    let listed = String::from_utf8(listed).map_err(|_| anyhow!("git named a ref not in UTF-8"))?;
+    let mut refs = BTreeMap::new();
+    for line in listed.lines().filter(|line| !line.is_empty()) {
+        let (object, reference) = line
+            .split_once(' ')
+            .ok_or_else(|| anyhow!("git for-each-ref gave a line it does not document: {line}"))?;
+        if !unguarded.contains(reference) {
+            refs.insert(reference.to_owned(), object.to_owned());
+        }
+    }
+    Ok(refs)
+}
+
 /// What is at each ignored path of `entries`: the content of a file git names, a directory as
 /// itself.
 fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<String, Content>> {
@@ -951,14 +1004,15 @@ fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<String, C
 }
 
 impl Checkpoint {
-    /// Takes the checkpoint of `tree`, guarding `HEAD` and its branch.
+    /// Takes the checkpoint of `tree`, guarding `HEAD` and its branch and every other branch and
+    /// tag of the repository but one another worktree has checked out.
     pub fn take(tree: &Path) -> Result<Self> {
         Self::take_guarding(tree, &[])
     }
 
-    /// Takes the checkpoint of `tree`, guarding `HEAD` and its branch and the branches
-    /// `branches` (a case's base) too.
-    pub fn take_guarding(tree: &Path, branches: &[String]) -> Result<Self> {
+    /// Takes the checkpoint of `tree` as [`Self::take`] does, the branches `kept` (a case's
+    /// base) guarded even when another worktree has them checked out.
+    pub fn take_guarding(tree: &Path, kept: &[String]) -> Result<Self> {
         let git_dir = PathBuf::from(run(tree, &["rev-parse", "--absolute-git-dir"])?);
         let common = PathBuf::from(run(
             tree,
@@ -989,18 +1043,13 @@ impl Checkpoint {
             .map(|path| Content::of(&tree.join(&path)).map(|content| (path, content)))
             .collect::<Result<_>>()?;
         let branch = current_branch(tree)?;
-        let mut refs = Vec::new();
-        for name in branches {
-            if Some(name) != branch.as_ref() {
-                let reference = format!("refs/heads/{name}");
-                let at = resolve(tree, &reference)?;
-                refs.push((reference, at));
-            }
-        }
+        let unguarded = unguarded_refs(tree, branch.as_deref(), kept)?;
+        let refs = guarded_refs(tree, &unguarded)?;
         Ok(Self {
             head: head(tree)?,
             branch,
             refs,
+            unguarded,
             index: index_entries(tree)?,
             index_file,
             dirty,
@@ -1184,12 +1233,13 @@ impl Checkpoint {
                 on(&branch)
             )
         });
+        let now = guarded_refs(tree, &self.unguarded)?;
         let mut refs = Vec::new();
-        for (reference, before) in &self.refs {
-            let after = resolve(tree, reference)?;
-            if after != *before {
-                let at = |at: &Option<String>| at.as_deref().map_or("nothing", short).to_owned();
-                refs.push(format!("{reference} from {} to {}", at(before), at(&after)));
+        for reference in self.refs.keys().chain(now.keys()).collect::<BTreeSet<_>>() {
+            let (before, after) = (self.refs.get(reference), now.get(reference));
+            if before != after {
+                let at = |at: Option<&String>| at.map_or("nothing", |at| short(at)).to_owned();
+                refs.push(format!("{reference} from {} to {}", at(before), at(after)));
             }
         }
         let entries = status(tree, true)?;
@@ -1268,12 +1318,15 @@ impl Checkpoint {
                 }
             }
         }
-        for (reference, before) in &self.refs {
-            if resolve(tree, reference)? != *before {
-                match before {
-                    Some(at) => run(tree, &["update-ref", reference, at])?,
-                    None => run(tree, &["update-ref", "-d", reference])?,
-                };
+        let now = guarded_refs(tree, &self.unguarded)?;
+        for (reference, at) in &self.refs {
+            if now.get(reference) != Some(at) {
+                run(tree, &["update-ref", reference, at])?;
+            }
+        }
+        for reference in now.keys() {
+            if !self.refs.contains_key(reference) {
+                run(tree, &["update-ref", "-d", reference])?;
             }
         }
         let keep = format!("{CASES_DIR}/");

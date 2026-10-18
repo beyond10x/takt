@@ -128,6 +128,20 @@ pub trait Forge {
     fn name(&self) -> &str;
     /// Pushes `branch` of `tree` to the repository.
     fn push(&self, tree: &Path, branch: &str) -> Result<()>;
+    /// Pushes the commit `revision` of `tree` to the repository as `branch`: [`Self::push`]
+    /// when `branch` is at `revision` locally; else the revision itself, for a branch that
+    /// holds an approval's own commit on top of it. An adapter that cannot push a revision
+    /// refuses that, naming both.
+    fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> Result<()> {
+        let at = crate::git::run(tree, &["rev-parse", &format!("refs/heads/{branch}")])?;
+        if at == revision {
+            return self.push(tree, branch);
+        }
+        bail!(
+            "the forge {} pushes a branch as it is, and {branch} is at {at}, not {revision}",
+            self.name()
+        )
+    }
     /// Opens the pull request `request` describes; `dir` is where the adapter keeps what it
     /// sent and what came back, when it keeps anything. The pull request's number.
     fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64>;
@@ -653,6 +667,17 @@ impl BotRoute {
             .to_vec()
     }
 
+    /// The line that pushes the commit `revision` as `branch`: `<revision>:refs/heads/<branch>`,
+    /// both made by takt (a commit id and the case's branch), never read from a file a step can
+    /// write.
+    #[must_use]
+    pub fn push_revision_argv(&self, branch: &str, revision: &str) -> Vec<String> {
+        let refspec = format!("{revision}:refs/heads/{branch}");
+        ["b10x-gates", "bot", "--", "push", &self.remote, &refspec]
+            .map(str::to_owned)
+            .to_vec()
+    }
+
     /// The line that scans `path` before it leaves the machine.
     #[must_use]
     pub fn scan_argv(&self, path: &Path) -> Vec<String> {
@@ -798,6 +823,15 @@ impl Forge for BotRoute {
 
     fn push(&self, tree: &Path, branch: &str) -> Result<()> {
         self.succeed(tree, &self.push_argv(branch))?;
+        Ok(())
+    }
+
+    fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> Result<()> {
+        let at = crate::git::run(tree, &["rev-parse", &format!("refs/heads/{branch}")])?;
+        if at == revision {
+            return self.push(tree, branch);
+        }
+        self.succeed(tree, &self.push_revision_argv(branch, revision))?;
         Ok(())
     }
 
@@ -1015,6 +1049,20 @@ impl Forge for Memory {
         let sha = crate::git::head(tree)?;
         self.pushed.borrow_mut().insert(branch.to_owned(), sha);
         self.calls.borrow_mut().push(format!("push {branch}"));
+        Ok(())
+    }
+
+    fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> Result<()> {
+        let at = crate::git::run(tree, &["rev-parse", &format!("refs/heads/{branch}")])?;
+        if at == revision {
+            return self.push(tree, branch);
+        }
+        self.pushed
+            .borrow_mut()
+            .insert(branch.to_owned(), revision.to_owned());
+        self.calls
+            .borrow_mut()
+            .push(format!("push {revision} as {branch}"));
         Ok(())
     }
 

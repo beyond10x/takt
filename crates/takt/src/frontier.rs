@@ -8,9 +8,10 @@
 //! taken twice. A store may refuse the move; then the story is not taken, the refusal is printed
 //! verbatim and the next ready story is tried. A run opens the case before it takes the story
 //! and removes the case again when the store refuses ([`crate::Run::open_next`]), so a story is
-//! never `active` without a case to work it. A story `active` with an open case is resumed by
-//! the next run, never given a second case: the case directory records the story, and the store
-//! says which stories are being worked. The operator's grant of a capability to a case is
+//! never `active` without a case to work it. A story with an open case is resumed by the next
+//! run, never given a second case: the case directory records the story, its take is committed
+//! on the case's branch, and the store on the base says which stories are being worked; which
+//! case a run resumes, and from which branch, is [`crate::Run::next_to_resume`]'s. The operator's grant of a capability to a case is
 //! recorded on the story as `approval` evidence through the same adapter ([`approve`]).
 
 use std::io::Write;

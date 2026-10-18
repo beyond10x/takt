@@ -599,6 +599,19 @@ impl<'a> Run<'a> {
         }
     }
 
+    /// The branches a checkpoint guards even when another worktree has them checked out: the
+    /// case's own branch and its base, where `take_next` reads the store from and the next case
+    /// forks from.
+    fn kept_branches(&self) -> Vec<String> {
+        let mut kept = vec![self.case.branch.clone()];
+        kept.extend(
+            crate::case::Branch::read(&self.case.dir)
+                .ok()
+                .and_then(|branch| branch.base),
+        );
+        kept
+    }
+
     fn budget_spent(&self) -> Option<Stop> {
         if let Some(n) = self.options.iterations
             && self.steps >= n
@@ -721,13 +734,14 @@ impl<'a> Run<'a> {
                 // What a validator runs may be code a model wrote (the test command, a gate's
                 // commands): the cases directory is guarded as around a judgement step, and the
                 // tree must be as it was before the observation: the guarded part of `.git`
-                // (hooks, config, `info/`), `HEAD`, the index and every path outside the cases
+                // (hooks, config, `info/`), `HEAD`, every branch and tag, the index and every path outside the cases
                 // directory; ignored files it made (a build's output) may stay. The validator's
                 // own writes under its case are the only change admitted; anything else is put
                 // back, and the observation refused with nothing recorded. `.git` is put back
                 // before any git runs again: git runs what was planted there (a hook,
                 // `core.fsmonitor`).
-                let checkpoint = crate::git::Checkpoint::take(&self.tree)?;
+                let checkpoint =
+                    crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
                 let cases = self.tree.join(CASES_DIR);
                 let kept = snapshot(&cases)?;
                 let observed = validator
@@ -764,6 +778,7 @@ impl<'a> Run<'a> {
                 if let Some(moved) = &change.head {
                     outside.push(format!("HEAD, moved {moved}"));
                 }
+                outside.extend(change.refs.iter().cloned());
                 if !foreign.is_empty() || !outside.is_empty() {
                     restore(&cases, &kept, &touched)?;
                     undo_step(&self.tree, &checkpoint, &cases, &kept)?;
@@ -873,13 +888,12 @@ impl<'a> Run<'a> {
             // ended; a step that touched it is refused.
             let cases = self.tree.join(CASES_DIR);
             let kept = snapshot(&cases)?;
-            // The case's base is guarded beside `HEAD` and the case's branch.
-            let base: Vec<String> = crate::case::Branch::read(&self.case.dir)
-                .ok()
-                .and_then(|branch| branch.base)
-                .into_iter()
-                .collect();
-            let checkpoint = crate::git::Checkpoint::take_guarding(&self.tree, &base)?;
+            // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
+            // base, and a sibling case's branch, which a step could otherwise move under it; a
+            // branch another worktree has checked out is that session's, but never the case's
+            // base or its own branch.
+            let checkpoint =
+                crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
             let stepped = self.harness.step(&context);
             // What git runs or reads as configuration first: every git call after this one
             // would read what the step planted there. Nothing in it ends early; a path it could

@@ -57,8 +57,10 @@ struct RunArgs {
     #[arg(long)]
     repo: PathBuf,
     /// What the run is meant to achieve; without it and without --case, the open case of a
-    /// story the planning store lists active is resumed, else the next ready story is the unit
-    /// and the store records it taken.
+    /// story being worked is resumed: one whose take is committed on its case's branch, or, from
+    /// a tree not on a case's branch, one the planning store lists active; from a tree on a
+    /// case's branch, a case the store lists active is resumed by a run from the base. Else the
+    /// next ready story is the unit and the store records it taken.
     #[arg(long)]
     intent: Option<String>,
     /// The case to resume, by id, instead of opening one; not with --intent.
