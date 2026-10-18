@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-record-and-story-evidence
 kind: story
-status: active
+status: implemented
 title: Record each run as events and as evidence on the story in the planning store
 summary: events.jsonl per case; test_result evidence on the story; implemented on a record
 relations:
@@ -21,10 +21,11 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/tests/run_record.rs
-revision: 8
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":2}}}
 - {from: "proposed", to: "active", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"review_outcome":2}}}
+- {from: "active", to: "implemented", at: "2026-10-18T15:23:35Z", actor: "human:timo", revision: 10, decided_on: {"recorded":{"test_result":1,"review_outcome":4}}}
 ---
 # Story: run-record-and-story-evidence
 
@@ -84,3 +85,19 @@ an implementation (`events.rs`, `tests/run_record.rs` with three cases, the stor
 the case branch `takt/story-run-record-and-story-evidence-20261018T090034Z`, kept locally, outside
 the wave process and without an adversary pass. It is reading material for the wave that delivers
 this story, not a unit.
+
+## Landed (wave 09)
+
+Read from `git diff --stat 8ce2019 fe2e092` at the close of wave 09 (wave branch head 1425689). Records at `accepted` on the case branch; a judgement step touching `.engineering/` outside `cases/` is refused. Carrying the store records to the base is story:records-reach-base.
+
+- `crates/takt-cli/src/main.rs`
+- `crates/takt-cli/tests/run_record_cli.rs`
+- `crates/takt/src/events.rs`
+- `crates/takt/src/frontier.rs`
+- `crates/takt/src/lib.rs`
+- `crates/takt/src/run.rs`
+- `crates/takt/tests/run_record.rs`
+- `crates/takt/tests/run_record_adv1.rs`
+- `crates/takt/tests/run_record_adv2.rs`
+- `crates/takt/tests/validator_confinement.rs`
+- `ess/domains/takt.yaml`

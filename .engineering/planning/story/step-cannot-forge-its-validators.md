@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:step-cannot-forge-its-validators
 kind: story
-status: draft
+status: active
 title: A judgement step cannot forge the validators that judge it
 summary: tests.run and ci.read run their inputs from the base or refuse; a judge-surface edit is refused or flagged
 relations:
@@ -17,7 +17,10 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/step_cannot_forge_its_validators.rs
-revision: 4
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 6}
+- {from: "proposed", to: "active", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 7}
 ---
 # Story: step-cannot-forge-its-validators
 
@@ -34,6 +37,8 @@ Found by an independent code review of 2026-10-18, takt at 2a22093 (line numbers
 - Inferred from the code: an edit under `.github/workflows/**` decides what `ci.read` observes, so the same step can earn `ci.green`.
 - The gate already does what this story asks of the others: what the project file admits is compared with the base revision, and nothing is run while one differs (`crates/takt/src/validator.rs:350-373`).
 - Related: `story:judge-guard` guards the judge surface of takt's own repository, at merge time only. This story covers every repository a run works on, at the step.
+
+- Covered elsewhere: a judgement step that runs `aep plan artifact evidence … --kind test_result` in the tree writes a forged store record that takt would commit as the step's change. Found by the first adversary pass on story:run-record-and-story-evidence at 8ce2019 and reproduced in a test; fixed in that story's correction 1, where a judgement step writing under `.engineering/planning/` or `.engineering/evidence/` is refused and reverted by the step guard. This story keeps the validators' own inputs (`.cargo/**`, the test command's script, the CI workflow).
 
 ## Expected before
 

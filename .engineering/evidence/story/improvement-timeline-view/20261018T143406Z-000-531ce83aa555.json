@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-18T14:34:06Z",
+  "actor": "human:timo",
+  "artifact": "story:improvement-timeline-view",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "python3 -I check-metrics.py at 57e2440: PASS, 23 run records, timeline reproducible, deck embeds it"
+  }
+}

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:judge-surface-delegation-text
 kind: story
-status: active
+status: implemented
 title: Agent rules and protocols state the owner's delegation of judge-surface grants
 summary: AGENTS.md, the operator profile and both improvement protocols carry the delegation-on-record rule of the owner decision at 3ad0bd9
 relations:
@@ -10,17 +10,26 @@ relations:
 - serves: vision:safe-agentic-coding
 scope:
 - confidence: cited
+  path: .agents/developer-agent.md
+- confidence: cited
   path: .agents/operator-agent.md
 - confidence: cited
   path: AGENTS.md
 - confidence: cited
+  path: README.md
+- confidence: cited
+  path: crates/takt/tests/improvement_protocols.rs
+- confidence: cited
+  path: docs/design/takt.md
+- confidence: cited
   path: protocols/loop-improvement/1.yaml
 - confidence: cited
   path: protocols/self-improvement/1.yaml
-revision: 5
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-18T15:23:35Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: judge-surface-delegation-text
 
@@ -57,3 +66,16 @@ On takt at b997031, holds; after the change, fails:
 ## Acceptance
 
 `AGENTS.md` § Rules, `.agents/operator-agent.md` and both improvement protocols state the delegation rule of product-requirements:takt § 2, naming the record, its revocation and story:judge-guard as its enforcement, and none of them says that only a person or only the owner may grant a judge-surface merge; `task check` passes.
+
+## Landed (wave 09)
+
+Read from `git diff --stat 8ce2019 50e695a` at the close of wave 09 (wave branch head 1425689). Merged on the owner's recorded decision, not on the operator role's grant. Also changed: `.agents/developer-agent.md`, `README.md`, the L2 row of `docs/design/takt.md`, one test name.
+
+- `.agents/developer-agent.md`
+- `.agents/operator-agent.md`
+- `AGENTS.md`
+- `README.md`
+- `crates/takt/tests/improvement_protocols.rs`
+- `docs/design/takt.md`
+- `protocols/loop-improvement/1.yaml`
+- `protocols/self-improvement/1.yaml`

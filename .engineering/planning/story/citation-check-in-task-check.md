@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:citation-check-in-task-check
 kind: story
-status: active
+status: implemented
 title: task check fails on a stale read-from citation in ess/
 summary: the citation checker is committed and runs in task check
 relations:
@@ -15,10 +15,11 @@ scope:
   path: Taskfile.yml
 - confidence: inferred
   path: scripts/check-citations
-revision: 5
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-18T14:01:47Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-18T15:23:35Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":3}}}
 ---
 # Story: citation-check-in-task-check
 
@@ -45,3 +46,25 @@ On takt at 7b5aca3, holds; after the fix, fails:
 ## Acceptance
 
 `task check` runs the citation checker; with one cited line changed it exits non-zero and names the citation and the line; on main it exits 0 with every citation resolving.
+
+## Landed (wave 09)
+
+Read from `git diff --stat 8ce2019 25d2978` at the close of wave 09 (wave branch head 1425689). Each line citation carries a digest of its cited text; `fix` only moves identical text; `accept` records a digest after a person read it. Later commits on its branch are wave merges and citation re-points.
+
+- `.agents/developer-agent.md`
+- `.agents/operator-agent.md`
+- `AGENTS.md`
+- `README.md`
+- `Taskfile.yml`
+- `crates/takt-cli/src/main.rs`
+- `crates/takt-cli/tests/citation_check.rs`
+- `crates/takt-cli/tests/citation_check_adv1.rs`
+- `crates/takt-cli/tests/citation_check_adv2.rs`
+- `crates/takt-cli/tests/scenario_help.rs`
+- `crates/takt/tests/improvement_protocols.rs`
+- `docs/design/takt.md`
+- `ess/domains/takt.citations.tsv`
+- `ess/domains/takt.yaml`
+- `protocols/loop-improvement/1.yaml`
+- `protocols/self-improvement/1.yaml`
+- `scripts/check-citations`

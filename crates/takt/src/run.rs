@@ -3,6 +3,13 @@
 //! refused, or the stop criteria are met. A run opens a case, or resumes one a run before it
 //! opened: a case stopped at the gate is resumed once the operator has granted it, and the
 //! merge is then a deterministic step like any other.
+//!
+//! Beside each printed line the run appends an event to the case's `events.jsonl`
+//! ([`crate::events`]); a line about a judgement step is written once the step's change is
+//! kept or put back, so putting the case directory back never takes a line with it. A story's
+//! run given the planning store ([`Run::record_on`]) records its test result and its move to
+//! `implemented` there once its case terminates `accepted`, after the merge when the case has a
+//! pull request, so neither write rides on the revision a grant authorises.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -12,7 +19,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, bail};
 
 use crate::case::{CASES_DIR, CaseDir};
-use crate::frontier::{Frontier, Story, Take, Unit};
+use crate::events::{BY_STORE, BY_TAKT, Event, Events};
+use crate::frontier::{Frontier, IMPLEMENTED, Story, TEST_RESULT, Take, Unit};
 use crate::harness::{Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
 use crate::validator::Validator;
@@ -92,6 +100,14 @@ impl std::fmt::Display for Stop {
     }
 }
 
+/// The outcome of a case whose story is recorded and moved to `implemented` in the store.
+pub const ACCEPTED: &str = "accepted";
+
+/// The first eight characters of a revision, as the loop prints one.
+fn short(revision: &str) -> &str {
+    revision.get(..8).unwrap_or(revision)
+}
+
 /// Whether `validator` is due at a decision: its action is admissible, its evidence is missing
 /// at its subject's current revision, and it has not already observed there without a record.
 /// An evidence record that does not read is an error naming its file, never an answer.
@@ -112,42 +128,101 @@ fn is_due(
     }))
 }
 
-/// One entry of a snapshot: a file with its bytes, or a symbolic link with its target. A link
-/// is an entry by itself and is never followed: what it points at may lie outside the tree,
-/// and nothing the kernel does for a case reaches outside the tree.
+/// One entry of a snapshot: a regular file with its bytes and whether it is executable, a
+/// symbolic link with its target, or anything else (a FIFO, a socket, a device) by its kind
+/// alone. A link is an entry by itself and is never followed: what it points at may lie outside
+/// the tree, and nothing the kernel does for a case reaches outside the tree. Anything else is
+/// never opened: reading a FIFO no one writes would block the run for good.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Entry {
-    File(Vec<u8>),
+    File { bytes: Vec<u8>, executable: bool },
     Link(PathBuf),
+    Other(&'static str),
 }
 
-/// Every file and link under `dir`, by path relative to it: the cases directory as it is
-/// before a judgement step, which the step may not touch.
+/// What a file that is not a regular file, a directory or a link is.
+fn other_kind(kind: std::fs::FileType) -> &'static str {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt as _;
+        if kind.is_fifo() {
+            return "fifo";
+        }
+        if kind.is_socket() {
+            return "socket";
+        }
+        if kind.is_block_device() {
+            return "block device";
+        }
+        if kind.is_char_device() {
+            return "character device";
+        }
+    }
+    let _ = kind;
+    "other"
+}
+
+/// Whether `meta` gives its file an execute bit.
+#[cfg(unix)]
+fn is_executable(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    meta.permissions().mode() & 0o111 != 0
+}
+
+/// Whether `meta` gives its file an execute bit: never on this platform.
+#[cfg(not(unix))]
+fn is_executable(_: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// Every file, link and other entry under `dir`, by path relative to it: the cases directory
+/// as it is before a judgement step, which the step may not touch.
 fn snapshot(dir: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
-    fn walk(root: &Path, dir: &Path, entries: &mut BTreeMap<PathBuf, Entry>) -> Result<()> {
+    snapshot_without(dir, None)
+}
+
+/// [`snapshot`] of `dir` without what lies under `without`, a path relative to it.
+fn snapshot_without(dir: &Path, without: Option<&Path>) -> Result<BTreeMap<PathBuf, Entry>> {
+    fn walk(
+        root: &Path,
+        dir: &Path,
+        without: Option<&Path>,
+        entries: &mut BTreeMap<PathBuf, Entry>,
+    ) -> Result<()> {
         for entry in std::fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
             let path = entry?.path();
             let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
-            let kind = std::fs::symlink_metadata(&path)
-                .with_context(|| format!("read {}", path.display()))?
-                .file_type();
+            if without.is_some_and(|without| relative.starts_with(without)) {
+                continue;
+            }
+            let meta = std::fs::symlink_metadata(&path)
+                .with_context(|| format!("read {}", path.display()))?;
+            let kind = meta.file_type();
             if kind.is_symlink() {
                 let target = std::fs::read_link(&path)
                     .with_context(|| format!("read the link {}", path.display()))?;
                 entries.insert(relative, Entry::Link(target));
             } else if kind.is_dir() {
-                walk(root, &path, entries)?;
-            } else {
+                walk(root, &path, without, entries)?;
+            } else if kind.is_file() {
                 let bytes =
                     std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-                entries.insert(relative, Entry::File(bytes));
+                entries.insert(
+                    relative,
+                    Entry::File {
+                        bytes,
+                        executable: is_executable(&meta),
+                    },
+                );
+            } else {
+                entries.insert(relative, Entry::Other(other_kind(kind)));
             }
         }
         Ok(())
     }
     let mut entries = BTreeMap::new();
     if std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
-        walk(dir, dir, &mut entries)?;
+        walk(dir, dir, without, &mut entries)?;
     }
     Ok(entries)
 }
@@ -181,15 +256,40 @@ fn make_link(target: &Path, at: &Path) -> Result<()> {
     )
 }
 
+/// Writes `bytes` to `at` and gives it an execute bit or takes it away, as `executable` says.
+fn put_back_file(at: &Path, bytes: &[u8], executable: bool) -> Result<()> {
+    std::fs::write(at, bytes).with_context(|| format!("put back {}", at.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut permissions = std::fs::metadata(at)
+            .with_context(|| format!("read {}", at.display()))?
+            .permissions();
+        let mode = permissions.mode();
+        permissions.set_mode(if executable {
+            mode | ((mode & 0o444) >> 2)
+        } else {
+            mode & !0o111
+        });
+        std::fs::set_permissions(at, permissions)
+            .with_context(|| format!("put back the mode of {}", at.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = executable;
+    Ok(())
+}
+
 /// Puts `dir` back to `before` at the paths `changed`: whatever is at the path now is removed
 /// (a link as the link itself, never what it points at; a directory the step made in a file's
-/// place with everything in it), then the file is written again as it was, or the link made
-/// again; a path the step added stays removed. The paths go in order, so a link or file the
-/// step put in place of a directory is gone before anything is written below it.
+/// place with everything in it), then the file is written again as it was, its mode with it,
+/// or the link made again; a path the step added stays removed, and an entry that was neither
+/// a file nor a link (a FIFO) cannot be made again and stays removed too. The paths go in
+/// order, so a link or file the step put in place of a directory is gone before anything is
+/// written below it.
 fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -> Result<()> {
     if std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_symlink()) {
         bail!(
-            "the cases directory {} was replaced by a link; nothing is put back through it",
+            "the directory {} was replaced by a link; nothing is put back through it",
             dir.display()
         );
     }
@@ -210,11 +310,42 @@ fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -
                 .with_context(|| format!("create {}", parent.display()))?;
         }
         match before.get(path) {
-            Some(Entry::File(bytes)) => std::fs::write(&full, bytes)
-                .with_context(|| format!("put back {}", full.display()))?,
+            Some(Entry::File { bytes, executable }) => put_back_file(&full, bytes, *executable)?,
             Some(Entry::Link(target)) => make_link(target, &full)?,
-            None => {}
+            Some(Entry::Other(_)) | None => {}
         }
+    }
+    Ok(())
+}
+
+/// The directory under the tree that holds the planning store, the project file that says
+/// where the store is kept, and the cases: everything in it but the cases is the store's, which
+/// no judgement step writes.
+const ENGINEERING: &str = ".engineering";
+
+/// Whether `path`, relative to the tree as git names it, is the store's: under [`ENGINEERING`]
+/// (or that directory itself) and not under the cases directory.
+fn is_guarded_store_path(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    (path == ENGINEERING || path.starts_with(&format!("{ENGINEERING}/")))
+        && !crate::case::is_under_cases(path)
+}
+
+/// Everything under [`ENGINEERING`] but the cases directory, as [`snapshot`] takes it: what a
+/// step that wrote there is put back to.
+fn snapshot_store(tree: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
+    let cases = Path::new(CASES_DIR)
+        .strip_prefix(ENGINEERING)
+        .unwrap_or(Path::new(CASES_DIR));
+    snapshot_without(&tree.join(ENGINEERING), Some(cases))
+}
+
+/// Puts everything under [`ENGINEERING`] but the cases directory back to `kept`, where it still
+/// differs.
+fn put_back_store(tree: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<()> {
+    let again = differing(kept, &snapshot_store(tree)?);
+    if !again.is_empty() {
+        restore(&tree.join(ENGINEERING), kept, &again)?;
     }
     Ok(())
 }
@@ -342,6 +473,9 @@ pub struct Run<'a> {
     pub tokens: u64,
     /// How long the run waits on the forge before it observes again: [`Run::POLL`] unless set.
     pub poll: Duration,
+    /// The planning store a story's run records its test result and its move in; none until
+    /// [`Run::record_on`] gives one, and only a story's run writes to it.
+    store: Option<&'a dyn Frontier>,
     started: Instant,
     options: RunOptions,
 }
@@ -418,9 +552,19 @@ impl<'a> Run<'a> {
             steps: 0,
             tokens: 0,
             poll: Self::POLL,
+            store: None,
             started: Instant::now(),
             options,
         })
+    }
+
+    /// Gives the run the planning store `store`: a story's run whose case terminates `accepted`
+    /// records there the `test_result` pass record a validator of the case wrote, at the
+    /// record's own `observed_at`, and moves the story to `implemented`, each a commit on the
+    /// case's branch ([`crate::frontier::write_on_case_branch`]); a refusal is relayed and the
+    /// stop is unchanged. A run on an intent has no story and writes nothing there.
+    pub fn record_on(&mut self, store: &'a dyn Frontier) {
+        self.store = Some(store);
     }
 
     /// Prepares a run on the case `id` a run before this one opened under `tree`: the case's
@@ -462,6 +606,7 @@ impl<'a> Run<'a> {
             steps: 0,
             tokens: 0,
             poll: Self::POLL,
+            store: None,
             started: Instant::now(),
             options,
         })
@@ -672,26 +817,315 @@ impl<'a> Run<'a> {
         })
     }
 
-    /// Runs until a stop; prints one line per frontier, step and evidence to `out`. The run
-    /// holds the case while it runs (`run.lock` under the case directory), so no grant lands
-    /// and no second run starts on it meanwhile; it lets go at every stop and on error.
+    /// Runs until a stop; prints one line per frontier, step and evidence to `out`, and appends
+    /// one event per such fact to the case's `events.jsonl`, the stop, or the error the run
+    /// ended on, last. At an `accepted` stop a story's run given the store records there first
+    /// ([`Run::record_on`]); what goes wrong there is recorded as an `error` line and the stop
+    /// is kept. Every run's record ends on its `stop` line, or on an `error` line when the run
+    /// ends on an error, a failing `out` among them. The run holds the case while it runs
+    /// (`run.lock` under the case directory), so no grant lands and no second run starts on it
+    /// meanwhile; it lets go at every stop and on error.
     pub fn run(&mut self, out: &mut dyn Write) -> Result<Stop> {
         self.case.hold()?;
-        let outcome = self.run_held(out);
+        let events = Events::new(&self.case.dir);
+        // A panic in the loop (a harness or a validator that broke) is recorded as the run's
+        // `error` line and the case let go before the panic goes on: the record ends, and the
+        // case is not left held.
+        let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.run_held(&events, out)
+                .and_then(|stop| self.close(&events, &stop, out).map(|()| stop))
+        })) {
+            Ok(outcome) => outcome,
+            Err(panic) => {
+                let what = panic
+                    .downcast_ref::<&str>()
+                    .map(|text| (*text).to_owned())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "a panic with no message".to_owned());
+                let _ = events.emit(
+                    self.steps,
+                    &Event::Error {
+                        error: format!("the run panicked: {what}"),
+                    },
+                );
+                let _ = self.case.release();
+                std::panic::resume_unwind(panic);
+            }
+        };
+        let outcome = match outcome {
+            Ok(stop) => Ok(stop),
+            Err(error) => Err(
+                match events.emit(
+                    self.steps,
+                    &Event::Error {
+                        error: format!("{error:#}"),
+                    },
+                ) {
+                    Ok(()) => error,
+                    Err(unrecorded) => error.context(format!(
+                        "and the error could not be recorded: {unrecorded:#}"
+                    )),
+                },
+            ),
+        };
         let released = self.case.release();
         let stop = outcome?;
         released?;
         Ok(stop)
     }
 
+    /// After the loop stopped: the store's writes of a story's case that terminated
+    /// [`ACCEPTED`], then the stop recorded. Anything that goes wrong with the store's writes
+    /// (an `events.jsonl` that does not read, an `out` that fails) is recorded as an `error`
+    /// line before the stop, which stays the one the case reached.
+    fn close(&self, events: &Events, stop: &Stop, out: &mut dyn Write) -> Result<()> {
+        if let Stop::Completed(outcome) = stop
+            && outcome == ACCEPTED
+            && let (Unit::Story(story), Some(store)) = (&self.unit, self.store)
+            && let Err(error) = self.record_accepted(events, store, &story.id, out)
+        {
+            events.emit(
+                self.steps,
+                &Event::Error {
+                    error: format!(
+                        "recording the accepted case on {} in the store: {error:#}",
+                        story.id
+                    ),
+                },
+            )?;
+        }
+        events.emit(
+            self.steps,
+            &Event::Stop {
+                stop: stop.to_string(),
+                steps: self.steps,
+                tokens: self.tokens,
+            },
+        )
+    }
+
+    /// Records the accepted case's story in `store`: the `test_result` pass record a validator
+    /// of the case wrote ([`Run::observed_pass`]) as `test_result` evidence at its own
+    /// `observed_at`, then the move to `implemented`, which the store judges; each a commit on
+    /// the case's branch with its line in the case's record, written with the commit: a line
+    /// that cannot be written takes the commit back ([`crate::frontier::write_on_case_branch`]).
+    /// A write the case's record names, or whose commit subject the case's branch holds, is not
+    /// made again. A refusal, the store's verbatim or takt's own, is recorded, then printed, and
+    /// nothing is retried. What is printed comes after what is recorded: an `out` that fails
+    /// skips no line and no write, and is the error once both writes were tried.
+    fn record_accepted(
+        &self,
+        events: &Events,
+        store: &dyn Frontier,
+        story: &str,
+        out: &mut dyn Write,
+    ) -> Result<()> {
+        let recorded = events.read()?;
+        let branch = &self.case.branch;
+        let on_branch = format!("refs/heads/{branch}");
+        let done = |event: &str, subject: &str| -> Result<bool> {
+            Ok(recorded
+                .iter()
+                .any(|line| line["event"] == event && line["story"] == story)
+                || crate::git::has_subject(&self.tree, &on_branch, subject)?)
+        };
+        let committed = |commit: &Option<String>| match commit {
+            Some(commit) => format!(" (committed {} on {branch})", short(commit)),
+            None => String::new(),
+        };
+        let mut unprinted: Option<std::io::Error> = None;
+        let mut say = |text: String| {
+            if unprinted.is_none()
+                && let Err(error) = writeln!(out, "{text}")
+            {
+                unprinted = Some(error);
+            }
+        };
+        let evidence_subject = crate::frontier::test_result_subject(story);
+        if !done("store_evidence", &evidence_subject)? {
+            let written = self.observed_pass(&recorded).and_then(|observed| {
+                let Some((reference, at)) = observed else {
+                    return Err(anyhow::anyhow!(
+                        "no {TEST_RESULT} pass record a validator of the case wrote is about the current revision; nothing was recorded"
+                    ));
+                };
+                crate::frontier::write_on_case_branch(
+                    &self.tree,
+                    branch,
+                    story,
+                    &evidence_subject,
+                    || store.record_test_result(&self.tree, story, &reference, &at),
+                    |commit| {
+                        events.emit(
+                            self.steps,
+                            &Event::StoreEvidence {
+                                story: story.to_owned(),
+                                kind: TEST_RESULT.to_owned(),
+                                reference: reference.clone(),
+                                at: at.clone(),
+                                commit: commit.map(str::to_owned),
+                            },
+                        )
+                    },
+                )
+                .map(|written| written.map(|commit| (reference, at, commit)))
+            });
+            match written {
+                Ok(Ok((reference, at, commit))) => say(format!(
+                    "store: {TEST_RESULT} recorded on {story} at {at} from {reference}{}",
+                    committed(&commit)
+                )),
+                Ok(Err(refusal)) => {
+                    self.refused(events, BY_STORE, &refusal)?;
+                    say(format!(
+                        "store: {TEST_RESULT} not recorded on {story}: {refusal}"
+                    ));
+                }
+                Err(error) => {
+                    let why = format!("{error:#}");
+                    self.refused(events, BY_TAKT, &why)?;
+                    say(format!(
+                        "store: {TEST_RESULT} not recorded on {story}: {why}"
+                    ));
+                }
+            }
+        }
+        let move_subject = crate::frontier::implemented_subject(story);
+        if !done("store_move", &move_subject)? {
+            match crate::frontier::write_on_case_branch(
+                &self.tree,
+                branch,
+                story,
+                &move_subject,
+                || store.implemented(&self.tree, story),
+                |commit| {
+                    events.emit(
+                        self.steps,
+                        &Event::StoreMove {
+                            story: story.to_owned(),
+                            to: IMPLEMENTED.to_owned(),
+                            commit: commit.map(str::to_owned),
+                        },
+                    )
+                },
+            ) {
+                Ok(Ok(commit)) => say(format!(
+                    "store: {story} moved to {IMPLEMENTED}{}",
+                    committed(&commit)
+                )),
+                Ok(Err(refusal)) => {
+                    self.refused(events, BY_STORE, &refusal)?;
+                    say(format!(
+                        "store: {story} not moved to {IMPLEMENTED}: {refusal}"
+                    ));
+                }
+                Err(error) => {
+                    let why = format!("{error:#}");
+                    self.refused(events, BY_TAKT, &why)?;
+                    say(format!("store: {story} not moved to {IMPLEMENTED}: {why}"));
+                }
+            }
+        }
+        match unprinted {
+            Some(error) => Err(anyhow::Error::new(error).context("print the store's writes")),
+            None => Ok(()),
+        }
+    }
+
+    /// The latest `test_result` pass record a validator of the case wrote that is about the
+    /// current revision of its subject: its path in the repository and its own `observed_at`.
+    /// A record counts only when an `evidence` line of the case's record, which the kernel
+    /// writes and a step may not, names it under the case's `evidence/`: a record put there by
+    /// any other hand is never one the run observed. `None` when there is none.
+    fn observed_pass(&self, recorded: &[serde_json::Value]) -> Result<Option<(String, String)>> {
+        let mine = Path::new(CASES_DIR).join(&self.case.id).join("evidence");
+        for line in recorded.iter().rev() {
+            if line["event"] != "evidence"
+                || line["kind"] != TEST_RESULT
+                || line["result"] != "pass"
+            {
+                continue;
+            }
+            let Some(path) = line["path"].as_str() else {
+                continue;
+            };
+            let relative = Path::new(path);
+            if relative.parent() != Some(mine.as_path()) {
+                continue;
+            }
+            let full = self.tree.join(relative);
+            let text = std::fs::read_to_string(&full)
+                .with_context(|| format!("read the record {}", full.display()))?;
+            let record: serde_json::Value = serde_json::from_str(&text)
+                .with_context(|| format!("read the record {}", full.display()))?;
+            let current = record["subject"]
+                .as_str()
+                .and_then(|subject| self.case.revision(subject));
+            if record["kind"] == TEST_RESULT
+                && record["result"] == "pass"
+                && current.is_some()
+                && record["subject_revision"].as_str() == current.as_deref()
+                && let Some(at) = record["observed_at"].as_str()
+            {
+                return Ok(Some((path.to_owned(), at.to_owned())));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Records a refusal by `by`, its reason verbatim.
+    fn refused(&self, events: &Events, by: &str, reason: &str) -> Result<()> {
+        events.emit(
+            self.steps,
+            &Event::Refusal {
+                by: by.to_owned(),
+                reason: reason.to_owned(),
+            },
+        )
+    }
+
+    /// Records a step: by a validator or the harness, which one, the action, what it reported.
+    fn stepped(
+        &self,
+        events: &Events,
+        by: &str,
+        name: &str,
+        action: &str,
+        summary: &str,
+        tokens: Option<u64>,
+    ) -> Result<()> {
+        events.emit(
+            self.steps,
+            &Event::Step {
+                by: by.to_owned(),
+                name: name.to_owned(),
+                action: action.to_owned(),
+                summary: summary.to_owned(),
+                tokens,
+            },
+        )
+    }
+
     /// The loop, the case held.
-    fn run_held(&mut self, out: &mut dyn Write) -> Result<Stop> {
+    fn run_held(&mut self, events: &Events, out: &mut dyn Write) -> Result<Stop> {
         let inputs: Vec<String> = self
             .options
             .inputs
             .iter()
             .map(|(k, v)| format!("{k}={v}"))
             .collect();
+        events.emit(
+            self.steps,
+            &Event::Opened {
+                case: self.case.id.clone(),
+                protocol: self.case.protocol.id.clone(),
+                story: match &self.unit {
+                    Unit::Story(story) => Some(story.id.clone()),
+                    Unit::Intent(_) => None,
+                },
+                inputs: inputs.clone(),
+            },
+        )?;
         writeln!(
             out,
             "case {} on {} in {}; inputs {}",
@@ -732,6 +1166,16 @@ impl<'a> Run<'a> {
         loop {
             seq += 1;
             let decision = self.case.evaluate(seq)?;
+            // Each fact is recorded before it is printed, here and below: an `out` that fails
+            // ends the run on an error, never with a fact it printed missing from the record.
+            events.emit(
+                self.steps,
+                &Event::Decision {
+                    seq,
+                    file: format!("decisions/{seq:04}.json"),
+                    frontier: decision.frontier_line(),
+                },
+            )?;
             writeln!(out, "{}", decision.frontier_line())?;
             let state = format!(
                 "{:?}{:?}{:?}",
@@ -788,6 +1232,15 @@ impl<'a> Run<'a> {
                         &revision[..8.min(revision.len())],
                         uncommitted.join(", ")
                     );
+                    self.stepped(
+                        events,
+                        "validator",
+                        validator.name(),
+                        validator.action(),
+                        "nothing observed",
+                        None,
+                    )?;
+                    self.refused(events, BY_TAKT, &why)?;
                     writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
                     writeln!(out, "  refused: {why}; nothing observed")?;
                     return Ok(Stop::StepRefused(why));
@@ -852,6 +1305,17 @@ impl<'a> Run<'a> {
                     if let Err(error) = &observed {
                         why.push_str(&format!("; the observation failed too: {error:#}"));
                     }
+                    // Written after the cases directory was put back, which would take a
+                    // line written before it along.
+                    self.stepped(
+                        events,
+                        "validator",
+                        validator.name(),
+                        validator.action(),
+                        "nothing recorded",
+                        None,
+                    )?;
+                    self.refused(events, BY_TAKT, &why)?;
                     writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
                     writeln!(
                         out,
@@ -860,6 +1324,14 @@ impl<'a> Run<'a> {
                     return Ok(Stop::StepRefused(why));
                 }
                 let (observation, waits) = observed?;
+                self.stepped(
+                    events,
+                    "validator",
+                    validator.name(),
+                    validator.action(),
+                    &observation.summary,
+                    None,
+                )?;
                 writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
                 writeln!(out, "  effect: {}", observation.summary)?;
                 // What the validator retains lands before the records that refer to it: a
@@ -878,7 +1350,20 @@ impl<'a> Run<'a> {
                     )?;
                 }
                 for record in &observation.records {
-                    self.case.add_evidence(record)?;
+                    let written = self.case.add_evidence(record)?;
+                    events.emit(
+                        self.steps,
+                        &Event::Evidence {
+                            id: record.id.clone(),
+                            kind: record.kind.clone(),
+                            result: record.result.clone(),
+                            path: written
+                                .strip_prefix(&self.tree)
+                                .unwrap_or(&written)
+                                .display()
+                                .to_string(),
+                        },
+                    )?;
                     writeln!(
                         out,
                         "  evidence: {} {}",
@@ -936,6 +1421,13 @@ impl<'a> Run<'a> {
                     .iter()
                     .map(|(_, action, _)| action.as_str())
                     .collect();
+                events.emit(
+                    self.steps,
+                    &Event::Waiting {
+                        on: on.iter().map(|action| (*action).to_owned()).collect(),
+                        seconds: pause.as_secs_f64(),
+                    },
+                )?;
                 writeln!(
                     out,
                     "  waiting: {:.1} s on the forge, then {} again",
@@ -986,25 +1478,87 @@ impl<'a> Run<'a> {
             // ended; a step that touched it is refused.
             let cases = self.tree.join(CASES_DIR);
             let kept = snapshot(&cases)?;
+            // The planning store likewise, and everything else under `.engineering/` but the
+            // cases: the project file that says where the store is kept among it. Its
+            // artifacts and evidence are what the store's lifecycle moves a story on, and
+            // evidence comes from validators only. Only takt's own writes, made once a case is
+            // accepted ([`Run::record_on`]), change it. A step whose change git sees there
+            // (a file, a link, a mode, a rename), or that left anything there the snapshot sees
+            // differ (a FIFO, which git does not list), is refused, and put back to the
+            // snapshot taken here.
+            let store_kept = snapshot_store(&self.tree)?;
+            let store_dirty_before: BTreeSet<String> = crate::git::changed_paths(&self.tree)?
+                .into_iter()
+                .filter(|path| is_guarded_store_path(path))
+                .collect();
             // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
             // base, and a sibling case's branch, which a step could otherwise move under it; a
             // branch another worktree has checked out is that session's, but never the case's
             // base or its own branch.
             let checkpoint =
                 crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
-            let stepped = self.harness.step(&context);
+            // A harness that panics is put back like one that failed, then the panic goes on
+            // to `run`, which records it and lets go of the case.
+            let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.harness.step(&context)
+            }));
             // What git runs or reads as configuration first: every git call after this one
             // would read what the step planted there. Nothing in it ends early; a path it could
             // not put back is named in the refusal below.
             let git_dir = checkpoint.put_back_git_dir(&self.tree);
-            let touched = differing(&kept, &snapshot(&cases)?);
+            let tree = self.tree.clone();
+            let undo = || -> Result<()> {
+                undo_step(&tree, &checkpoint, &cases, &kept)?;
+                put_back_store(&tree, &store_kept)
+            };
+            let stepped = match stepped {
+                Ok(stepped) => stepped,
+                Err(panic) => {
+                    if let Err(undo) = undo() {
+                        eprintln!(
+                            "step {}: the harness panicked, and the step's change could not be discarded: {undo:#}",
+                            self.steps
+                        );
+                    }
+                    std::panic::resume_unwind(panic);
+                }
+            };
+            // What the step left, read now; a read that fails (a file the run may not read)
+            // discards the step before the run ends on the error.
+            let seen = (|| -> Result<(Vec<PathBuf>, Vec<String>)> {
+                let touched = differing(&kept, &snapshot(&cases)?);
+                let mut store_touched: BTreeSet<String> =
+                    differing(&store_kept, &snapshot_store(&tree)?)
+                        .iter()
+                        .map(|path| Path::new(ENGINEERING).join(path).display().to_string())
+                        .collect();
+                store_touched.extend(crate::git::changed_paths(&tree)?.into_iter().filter(
+                    |path| is_guarded_store_path(path) && !store_dirty_before.contains(path),
+                ));
+                Ok((touched, store_touched.into_iter().collect()))
+            })();
+            let (touched, store_touched) = match seen {
+                Ok(seen) => seen,
+                Err(error) => {
+                    return Err(match undo() {
+                        Ok(()) => error.context(format!(
+                            "step {}: what the step left could not be read; everything it changed was discarded",
+                            self.steps
+                        )),
+                        Err(undo) => error.context(format!(
+                            "step {}: what the step left could not be read, and its change could not be discarded: {undo:#}",
+                            self.steps
+                        )),
+                    });
+                }
+            };
             if !touched.is_empty() {
                 restore(&cases, &kept, &touched)?;
             }
             let report = match stepped {
                 Ok(report) => report,
                 Err(error) => {
-                    return Err(match undo_step(&self.tree, &checkpoint, &cases, &kept) {
+                    return Err(match undo() {
                         Ok(()) => error.context(format!(
                             "step {}: the harness failed; everything the step changed was discarded",
                             self.steps
@@ -1019,18 +1573,42 @@ impl<'a> Run<'a> {
             if let Some(tokens) = report.tokens {
                 self.tokens += tokens;
             }
-            writeln!(
+            // The step's line is written once its change is kept or put back: putting the
+            // cases directory back to `kept` would take a line written before it along.
+            let harness = self.harness;
+            let record_step = |run: &Self| {
+                run.stepped(
+                    events,
+                    "harness",
+                    harness.name(),
+                    &report.action,
+                    &report.summary,
+                    report.tokens,
+                )
+            };
+            // A step that cannot be told on `out` is not judged: it is discarded whole, as
+            // one whose harness failed, and the run ends on the error.
+            let told = writeln!(
                 out,
                 "step {}: {} ({})",
                 self.steps,
                 report.action,
                 self.harness.name()
-            )?;
-            writeln!(out, "  said: {}", report.summary)?;
+            )
+            .and_then(|()| writeln!(out, "  said: {}", report.summary));
+            if let Err(error) = told {
+                undo()?;
+                record_step(self)?;
+                return Err(anyhow::Error::new(error).context(format!(
+                    "step {}: {} could not be printed; the change was discarded",
+                    self.steps, report.action
+                )));
+            }
             let change = match checkpoint.change(&self.tree) {
                 Ok(change) => change,
                 Err(error) => {
-                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    undo()?;
+                    record_step(self)?;
                     return Err(error.context(format!(
                         "step {}: what {} changed could not be read; the change was discarded",
                         self.steps, report.action
@@ -1039,7 +1617,7 @@ impl<'a> Run<'a> {
             };
             let changed = &change.paths;
             if !touched.is_empty() {
-                undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                undo()?;
                 let paths: Vec<String> = touched
                     .iter()
                     .map(|p| Path::new(CASES_DIR).join(p).display().to_string())
@@ -1049,9 +1627,26 @@ impl<'a> Run<'a> {
                     report.action,
                     paths.join(", ")
                 );
+                record_step(self)?;
+                self.refused(events, BY_TAKT, &why)?;
                 writeln!(
                     out,
                     "  refused: {why}; the cases directory was put back and the change discarded"
+                )?;
+                return Ok(Stop::StepRefused(why));
+            }
+            if !store_touched.is_empty() {
+                undo()?;
+                let why = format!(
+                    "{} wrote into the planning store, which only takt writes once a case is accepted: {}",
+                    report.action,
+                    store_touched.join(", ")
+                );
+                record_step(self)?;
+                self.refused(events, BY_TAKT, &why)?;
+                writeln!(
+                    out,
+                    "  refused: {why}; the planning store was put back and the change discarded"
                 )?;
                 return Ok(Stop::StepRefused(why));
             }
@@ -1110,24 +1705,27 @@ impl<'a> Run<'a> {
                 None
             };
             if let Some(why) = overreach {
-                undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                undo()?;
+                record_step(self)?;
+                self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "  refused: {why}; the change was discarded")?;
                 return Ok(Stop::StepRefused(why));
             }
             if approvals.contains(&report.action) {
                 if !changed.is_empty() {
-                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    undo()?;
+                    let why = format!("{} requested with changes", report.action);
+                    record_step(self)?;
+                    self.refused(events, BY_TAKT, &why)?;
                     writeln!(
                         out,
                         "  refused: {} was requested with {} changed path(s); the change was discarded",
                         report.action,
                         changed.len()
                     )?;
-                    return Ok(Stop::StepRefused(format!(
-                        "{} requested with changes",
-                        report.action
-                    )));
+                    return Ok(Stop::StepRefused(why));
                 }
+                record_step(self)?;
                 writeln!(out, "  effect: none; {} needs an approval", report.action)?;
                 return Ok(Stop::ApprovalRequired(vec![report.action]));
             }
@@ -1146,11 +1744,21 @@ impl<'a> Run<'a> {
                 None
             };
             if let Some(why) = refusal {
-                undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                undo()?;
+                record_step(self)?;
+                self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "  refused: {why}; the change was discarded")?;
                 return Ok(Stop::StepRefused(why));
             }
             if changed.is_empty() {
+                record_step(self)?;
+                events.emit(
+                    self.steps,
+                    &Event::Effect {
+                        paths: Vec::new(),
+                        revision: None,
+                    },
+                )?;
                 writeln!(out, "  effect: no file changed")?;
                 last_idle = Some(state);
                 continue;
@@ -1165,7 +1773,8 @@ impl<'a> Run<'a> {
             ) {
                 Ok(head) => head,
                 Err(error) => {
-                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    undo()?;
+                    record_step(self)?;
                     return Err(error.context(format!(
                         "step {}: the commit of {}'s change failed; the change was discarded",
                         self.steps, report.action
@@ -1173,6 +1782,14 @@ impl<'a> Run<'a> {
                 }
             };
             self.case.set_revision("implementation", &head)?;
+            record_step(self)?;
+            events.emit(
+                self.steps,
+                &Event::Effect {
+                    paths: changed.clone(),
+                    revision: Some(head.clone()),
+                },
+            )?;
             writeln!(
                 out,
                 "  effect: committed {} path(s); implementation is now {}",

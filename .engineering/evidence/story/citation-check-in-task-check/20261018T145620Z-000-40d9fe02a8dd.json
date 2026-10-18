@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-18T14:56:20Z",
+  "actor": "human:timo",
+  "artifact": "story:citation-check-in-task-check",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:adversary-citation-check-pass-2",
+    "review": "review-result:adversary-citation-check-pass-2",
+    "outcome": "fixed"
+  }
+}

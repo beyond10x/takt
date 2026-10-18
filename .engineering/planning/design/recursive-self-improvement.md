@@ -8,7 +8,7 @@ summary: Three levels (work, takt, the loop), two agent roles, a pinned judge, a
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 3
+revision: 5
 ---
 # Design: recursive self-improvement of takt
 
@@ -37,8 +37,15 @@ takt; and improve the self-improvement.
 | role | owns | never |
 |---|---|---|
 | owner (a person) | merge approval for judge surfaces, or its delegation to a named role on record; scorecard definitions; priorities | |
-| operator agent | running takt (scenarios, trials), review, measurement, filing findings in this store, verification runs, approving non-judge merges under a recorded grant, approving judge-surface merges while a delegation on record names its role | writes takt code; grants on a diff that touches a judge surface without a delegation on record naming its role |
-| developer agent | moving stories to active, waves, merges through the bot route, building and installing promoted binaries | marks its own fix verified |
+| planner agent | the main agent and orchestrator until takt drives this flow itself; planning the store (stories, priorities within the owner's, wave order with the developer), filing findings, deciding what the developer escalates, granting merges only on a reviewer verdict (judge surfaces only under a delegation on record naming the planner), dispatching the reviewer and the doc-writer, reporting to the owner | writes takt code; grants without a reviewer verdict on that exact sha; grants a change that widens authority, its own or any other role's, even one that cites the owner's recorded decision |
+| developer agent | moving stories to active, waves, implementation, merges through the bot route, building and installing promoted binaries; README lines that document its own unit's change | marks its own fix verified; edits `docs/**` but its wave pages, the site or the deck |
+| reviewer agent | a verdict with cited findings on each grant request's diff at its exact sha; independent code reviews (correctness, security, usability); adversarial passes on request; trials, scenario runs and verification runs (`scripts/check-finding`, `takt scenario run`); measurement against the baseline | writes takt code; grants; files to the store (it returns findings to the planner, who files them); reviews its own work |
+| doc-writer agent | `docs/**` (designs' prose in `docs/design/`, run records under `docs/runs/`, `docs/metrics/`, `docs/pitch/`; wave pages are the developer's), the structure of `README.md`, the public site on the `gh-pages` branch (publishing pushes only `gh-pages`, never `main`) | writes takt code; changes the planning store; states a figure no record holds |
+
+How each role runs: the planner is the main session; the developer is its own long-running
+session; the reviewer and the doc-writer are started by the planner per task, from their profiles,
+and resumed by name. Until takt drives this flow itself, the planner is the main agent: it starts
+the reviewer and the doc-writer, and the developer reports to it.
 
 Grants are typed: `takt approve --by human:<id>` or `--by agent:<role>`. The owner may delegate a
 grant reserved for the owner, judge surfaces included, to a named role. The delegation is a record
@@ -46,14 +53,26 @@ held at the base revision, and it is revocable. The judge accepts a grant on a d
 judge surface when it is the owner's, or when it is from a role a delegation on record names and
 that delegation was not revoked; it refuses every other grant there. story:judge-guard enforces
 it; until then the delegation is a record the wave cites (`docs/waves/wave-07.md`: four
-judge-surface merges under the operator role's grant on the owner's delegation). The target stays
-0 judge-surface merges without the grant the surface requires (`product-requirements:takt` § 3).
-Merge authority split by surface is the owner's decision (2026-10-18), and so is delegation on
-record (2026-10-18).
+judge-surface merges under the operator role's grant on the owner's delegation, before the
+operator role was split). The planner grants only on the reviewer's verdict at the exact sha it
+grants, and a diff that widens authority waits for the owner's grant. The target stays 0
+judge-surface merges without the grant the surface requires (`product-requirements:takt` § 3).
+Merge authority split by surface is the owner's decision (2026-10-18), and so are delegation on
+record (2026-10-18) and the four agent roles, which split the operator role into planner,
+reviewer and doc-writer (2026-10-18).
 
 The store carries the content between the agents. A message only says that something changed,
-with a fixed first line: `[FINDING takt] <ids>`, `[IMPLEMENTED takt] <story> <sha>`,
-`[VERIFIED takt] <story> <scenario> <before> -> <after>`.
+with a fixed first line:
+
+- from the planner: `[FINDING takt] <ids>`, `[GRANT takt] <story> <sha>`,
+  `[DECIDED takt] <topic>: <option>`, and
+  `[VERIFIED takt] <story> <scenario> <before> -> <after>` on the reviewer's run;
+- from the developer: `[IMPLEMENTED takt] <story|wave> <sha>`, `[WAVE takt] <wave> <units>`,
+  `[GRANT? takt] <story> <branch> <sha> <paths>`, and `[DECIDE takt] <topic>` with options A, B
+  and C, a recommendation and a default;
+- from any role: `[ACK takt]`.
+
+`AGENTS.md` § Messages holds them as a table.
 
 ## One improvement turn
 
@@ -159,14 +178,14 @@ change is a judge-surface change.
 
 | phase | who delivers takt's stories | entry |
 |---|---|---|
-| R0 | the developer agent by waves; the operator agent reviews and runs trials | now |
+| R0 | the developer agent by waves; the planner plans and grants, the reviewer reviews and runs trials, the doc-writer keeps the docs | now |
 | R1 | takt runs the scratch repository's scenarios daily | the first three-month outcome of `product-requirements:takt` § 5: scenario 1 accepted unattended, one invocation plus one grant, daily for a week; blockers story:ci-pending-waits, story:run-record-and-story-evidence |
 | R2 | takt delivers takt's non-judge stories under the pinned judge | the hardening stories implemented (story:validator-confinement, story:tree-hygiene, story:authority-hardening: done, wave 06); a scorecard baseline recorded |
 | R3 | takt proposes stories from its scorecards; the owner prioritises | two weeks of R2 with no regression |
 
 ## Agent profiles
 
-`.agents/operator-agent.md` and `.agents/developer-agent.md` (start reading, owns, watches, loop,
+`.agents/planner-agent.md`, `.agents/developer-agent.md`, `.agents/reviewer-agent.md` and `.agents/doc-writer-agent.md` (start reading, owns, watches, loop,
 forbidden), each with a pointer stub under `.claude/agents/`.
 
 ## Not in this design

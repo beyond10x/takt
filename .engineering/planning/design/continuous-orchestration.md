@@ -10,7 +10,7 @@ relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:declared-loops
 - informed_by: design:recursive-self-improvement
-revision: 5
+revision: 6
 ---
 # Design: continuous work and orchestration as a tree of takt cases
 
@@ -211,7 +211,7 @@ until the root completes | its budget is spent | Paused
 | which admissible action runs next | the dispatcher's order; no model |
 | decomposition, scope, implementation, review findings | a role's judgement step |
 | a stalled child | the § 9 rule; a judgement step only where the protocol names one |
-| direction, epics, judge-surface merges | the owner, as protocol approvals |
+| direction, epics, judge-surface merges | the owner, as protocol approvals, or a role the owner delegated to on record (product-requirements:takt § 2) |
 
 A model in the dispatcher seat would put the highest-value decision where it is hardest to judge,
 against qualities 1 (secure) and 4 (deterministic).

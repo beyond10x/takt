@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T15:23:35Z",
+  "actor": "human:timo",
+  "artifact": "story:run-record-and-story-evidence",
+  "kind": "story",
+  "revision": 9,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check",
+    "reference": "wave/2026-10-18-w9 at 1425689: task check exit 0: ess valid; 367 of 367 citations resolve with digests; fmt, clippy 0; cargo test 55 lanes, 461 passed, 0 failed (scratch/int/close-task.log)"
+  }
+}
