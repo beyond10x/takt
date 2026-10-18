@@ -96,7 +96,7 @@ carried by `epic:recursive-self-improvement`.
 |---|---|---|
 | L0 work | `protocols/story-delivery/1.yaml` | one story of a repository |
 | L1 improve takt | `protocols/self-improvement/1.yaml` | one finding reproduced on the promoted baseline, fixed, verified by another run, merged under the authority its surface needs, scored without regression, promoted |
-| L2 improve the loop | `protocols/loop-improvement/1.yaml` | one loop metric below target, an honest change to the loop merged by the owner, the metric improved |
+| L2 improve the loop | `protocols/loop-improvement/1.yaml` | one loop metric below target, an honest change to the loop merged by the owner or a role the owner delegated the grant to on record, the metric improved |
 
 `crates/takt/tests/improvement_protocols.rs` drives cases on both improvement protocols to their
 outcomes. The validators for their actions are stories of that epic; until they land, the agents

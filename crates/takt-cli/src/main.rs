@@ -53,7 +53,7 @@ enum ScenarioCommands {
     /// `scenario-<id>-trial-<n>`, refused before anything is cut when it or its branch exists;
     /// nothing of an earlier run is resumed. A refusal before the push removes the branch and
     /// puts the tree back.
-    #[command(after_help = EXIT_CODES)]
+    #[command(after_help = SCENARIO_EXIT_CODES)]
     Run(Box<ScenarioRunArgs>),
 }
 
@@ -212,6 +212,17 @@ const EXIT_CODES: &str = "Exit codes:
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent> or no step or hour budget): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; nothing recorded for it, the case stays open and the next run resumes it";
+
+/// What `takt scenario run --help` says about the exit codes: [`EXIT_CODES`] without `frontier:
+/// nothing ready`, which only `takt run` prints; a scenario whose story is not ready is exit 1.
+const SCENARIO_EXIT_CODES: &str = "Exit codes:
+  0  stopped: Completed (an outcome is legitimate)
+  1  refused before the run (an argument, the repository, the scenario, its seed, its story not ready there, its trial base or its case); the reason on stderr, no step run
+  2  the arguments do not parse
+  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress
+  4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
+  5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
+  6  stopped: Waiting (<actions>; <the budget spent> or no step or hour budget): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case";
 
 fn main() -> ExitCode {
     let cli = Cli::parse();

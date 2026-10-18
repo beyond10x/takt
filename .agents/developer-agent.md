@@ -26,7 +26,8 @@ building and installing promoted binaries.
   `docs/waves/`.
 - **Merges through the bot route.** Every commit, push, pull request and merge goes through
   `b10x-gates bot -- <git args>`. A merge waits for its grant: the operator agent's for a diff
-  that touches no judge surface, the owner's for one that does.
+  that touches no judge surface; for one that does, the owner's, or that of a role the owner
+  delegated the grant to by a revocable record (`AGENTS.md` § Rules).
 - **Building and installing promoted binaries.** Only a revision whose fixes are verified and whose
   scorecard shows no regression against the promoted baseline.
 
