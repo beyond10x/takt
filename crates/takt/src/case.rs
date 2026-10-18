@@ -4,6 +4,7 @@
 //! the authority the operator granted the case, once granted. Every evaluation reads the files
 //! and asks Canon. A case is opened once and resumed by every later run on it.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -29,6 +30,44 @@ pub const AUTHORITY_FILE: &str = "authority.yaml";
 
 /// The file under the case directory that names the story the case was opened for.
 pub const STORY_FILE: &str = "story.yaml";
+
+/// The file under the case directory a run writes while it holds the case, holding the run's
+/// start instant: no grant lands and no second run starts meanwhile.
+pub const LOCK_FILE: &str = "run.lock";
+
+/// Whether `path`, relative to the tree, is the cases directory or lies under it: what the
+/// kernel's change detection, commit and clean leave out. The directory and its contents only,
+/// never a path that merely starts with the same characters.
+#[must_use]
+pub fn is_under_cases(path: &str) -> bool {
+    path == CASES_DIR
+        || path
+            .strip_prefix(CASES_DIR)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// The instant the run holding the case at `case_dir` started, from its `run.lock`; `None`
+/// when no run holds it.
+pub fn held_since(case_dir: &Path) -> Result<Option<String>> {
+    let path = case_dir.join(LOCK_FILE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    Ok(Some(text.trim().to_owned()))
+}
+
+/// Refuses while a run holds the case `id` at `case_dir`, naming the lock. A run that crashed
+/// leaves its lock behind; the refusal says to remove the file by hand.
+fn refuse_if_held(case_dir: &Path, id: &str) -> Result<()> {
+    if let Some(since) = held_since(case_dir)? {
+        bail!(
+            "the case {id} is held by a run started at {since} ({CASES_DIR}/{id}/{LOCK_FILE}); if that run is gone, remove the file"
+        );
+    }
+    Ok(())
+}
 
 /// The case's branch, recorded as `branch.yaml` under the case directory: created when the
 /// case opens, at the tip of its base, pushed and given its one pull request by the `pr.open`
@@ -248,6 +287,9 @@ pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<
     if !dir.join("case.yaml").is_file() {
         bail!("no case {id} at {}", dir.display());
     }
+    // A run holds its case while it runs: a grant given meanwhile is refused, not written into
+    // a case a judgement step is in flight on.
+    refuse_if_held(&dir, id)?;
     if capability.is_empty()
         || capability
             .chars()
@@ -346,8 +388,14 @@ pub fn is_finished(case_dir: &Path) -> Result<bool> {
 /// `tree`, in name order, that records a story among them and is not finished, as `(case id,
 /// story id)`. A story has at most one open case, so the first found is the one; a finished
 /// case is skipped, so a story whose case completed and which the store still lists `active`
-/// (until the record story moves it) holds up no other story.
-pub fn resumable(tree: &Path, active: &[String]) -> Result<Option<(String, String)>> {
+/// (until the record story moves it) holds up no other story. A case whose latest decision
+/// does not read (a write cut short) counts as open, and `out` says so: one case's trouble is
+/// not the frontier's.
+pub fn resumable(
+    tree: &Path,
+    active: &[String],
+    out: &mut dyn Write,
+) -> Result<Option<(String, String)>> {
     let cases = tree.join(CASES_DIR);
     if active.is_empty() || !cases.is_dir() {
         return Ok(None);
@@ -363,12 +411,19 @@ pub fn resumable(tree: &Path, active: &[String]) -> Result<Option<(String, Strin
         }
         if let Some(story) = story_of(&dir)?
             && active.contains(&story)
-            && !is_finished(&dir)?
         {
             let id = dir
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            match is_finished(&dir) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(error) => writeln!(
+                    out,
+                    "frontier: the case {id} has a decision that does not read ({error:#}); taken as open"
+                )?,
+            }
             return Ok(Some((id, story)));
         }
     }
@@ -559,6 +614,8 @@ impl CaseDir {
         if !snapshot.is_file() {
             bail!("no case {id} at {}", dir.display());
         }
+        // One run at a time: a case a run holds is not resumed by a second.
+        refuse_if_held(&dir, id)?;
         let protocol = LoadedProtocol::from_file(&dir.join("protocol.yaml"))?;
         let text = std::fs::read_to_string(&snapshot)
             .with_context(|| format!("read {}", snapshot.display()))?;
@@ -587,6 +644,49 @@ impl CaseDir {
             case.set_revision("implementation", &head)?;
         }
         Ok(case)
+    }
+
+    /// Takes hold of the case for a run: writes `run.lock` with the instant now. Refused while
+    /// another run holds it.
+    pub fn hold(&self) -> Result<()> {
+        refuse_if_held(&self.dir, &self.id)?;
+        let path = self.dir.join(LOCK_FILE);
+        std::fs::write(&path, format!("{}\n", crate::now()))
+            .with_context(|| format!("write {}", path.display()))
+    }
+
+    /// Lets go of the case: removes `run.lock`; one already gone is no error.
+    pub fn release(&self) -> Result<()> {
+        let path = self.dir.join(LOCK_FILE);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).with_context(|| format!("remove {}", path.display())),
+        }
+    }
+
+    /// The number of the latest evaluation written under the case, the highest `n` of its
+    /// `decisions/<n>.json`; 0 before the first. One sequence per case, continued across its
+    /// runs: a run numbers its evaluations, and the records its validators write, from here.
+    pub fn evaluations(&self) -> Result<usize> {
+        let decisions = self.dir.join("decisions");
+        if !decisions.is_dir() {
+            return Ok(0);
+        }
+        let mut highest = 0;
+        for entry in std::fs::read_dir(&decisions)
+            .with_context(|| format!("read {}", decisions.display()))?
+        {
+            let path = entry?.path();
+            if let Some(n) = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(|stem| stem.parse::<usize>().ok())
+            {
+                highest = highest.max(n);
+            }
+        }
+        Ok(highest)
     }
 
     /// The story the case was opened for; `None` for a case opened on an intent.
