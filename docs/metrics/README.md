@@ -89,7 +89,10 @@ tokens, not tokens alone.
 ## `waves.jsonl`
 
 One line per wave: its title and a short label from `docs/waves/wave-NN.md`, the stories it
-delivered, the merge commit into `main` and that commit's time.
+delivered, the merge commit into `main` and that commit's time. `closing_store_commit` is the
+planning-store commit that closed the wave, where one is named. `measured_at` is the first
+measured revision that contains the wave, when the merge commit itself was not measured; the
+chart marks the wave before that revision's column.
 
 ## The timeline
 
