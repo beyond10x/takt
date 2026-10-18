@@ -1,0 +1,14 @@
+format: ess/25
+system: takt
+version: v1
+
+summary: >-
+  Takt's own nouns and their relations: the run one `takt run` makes over one case on one unit,
+  the step the loop takes each iteration, the evidence producer a deterministic step is, the
+  workflow a run follows, and the planning-store story a case is opened for. The protocol a case
+  runs under, the case snapshot, the evidence records and the decision are Canon's
+  (`canon.protocol` of b10x-canon 0.6.0, the release `Cargo.toml` pins) and are not redeclared
+  here; this specification names them where a takt noun holds one.
+
+domains:
+  - takt.work
