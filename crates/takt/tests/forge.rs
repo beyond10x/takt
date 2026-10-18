@@ -18,7 +18,7 @@ use takt::case::{Branch, current};
 use takt::evidence::Record;
 use takt::forge::{
     BotRoute, Checks, Exit, Forge, Head, Memory, PullRequest, PullRequestState, PullRequestView,
-    Runner, repository_of,
+    Runner, repository_of, without_userinfo,
 };
 use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{CiRead, PrOpen, Validator};
@@ -1273,4 +1273,554 @@ fn a_pull_request_head_the_forge_reports_elsewhere_earns_no_record() {
             "{what}: the checks are never read"
         );
     }
+}
+
+// Adversary pass 2 over story:forge-pull-request-evidence (the unit and its correction 1): the
+// fork from the base, the forge's report of the pull request's head, and the GitHub-only
+// default. Every helper below is this pass's own; nothing above is changed.
+
+/// A harness that, in the one judgement step that makes the tests pass, also rewrites the
+/// case's `branch.yaml`: the `name` field becomes a refspec of its choosing. The case directory
+/// is outside the kernel's change detection, its commit and its discard, so the kernel sees one
+/// changed path, `ok.txt`. Once `ci.green` holds it asks for the merge.
+struct Repointer;
+
+impl Harness for Repointer {
+    fn name(&self) -> &str {
+        "repointer"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
+        if context.decision.holds("ci.green") {
+            return Ok(StepReport {
+                action: "repository.merge".to_owned(),
+                summary: "merge it".to_owned(),
+                tokens: None,
+            });
+        }
+        fs::write(context.tree.join("ok.txt"), "ok\n")?;
+        let dir = current(context.tree)?;
+        let mut branch = Branch::read(&dir)?;
+        branch.name = "HEAD:main".to_owned();
+        branch.write(&dir)?;
+        Ok(StepReport {
+            action: "implementation.edit".to_owned(),
+            summary: "made the tests pass".to_owned(),
+            tokens: None,
+        })
+    }
+}
+
+/// A committed `.engineering/gates.yaml` whose one gate holds on the scratch tree.
+fn commit_gates(tree: &Path) {
+    fs::create_dir_all(tree.join(".engineering")).expect("a directory");
+    fs::write(
+        tree.join(".engineering/gates.yaml"),
+        "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: readme\n    \
+         text: The repository has its readme.\n    assertions:\n      \
+         - 'fs.file.exists(\"README.md\")'\n",
+    )
+    .expect("a gates document");
+    git(tree, &["add", "-A"]);
+    git(tree, &["commit", "-q", "-m", "gates"]);
+}
+
+/// `pr.open` pushes the case's branch, `takt/<id>`: the branch the tree is on, the one `current`
+/// resolved the case from. It does not push the `name` field of a file the harness can write,
+/// because that field reaches `b10x-gates bot -- push origin <name>` as given: a refspec there
+/// (`HEAD:main`, `:main`, `--all`) is what the bot credential then pushes.
+#[test]
+fn adv2_pr_open_pushes_the_case_branch_not_the_name_the_harness_wrote_into_branch_yaml() {
+    let tree = scratch("adv2-repoint");
+    commit_gates(&tree);
+    let memory = Rc::new(Memory {
+        checks: Checks::Pass,
+        ..Memory::default()
+    });
+    let forge: Rc<dyn Forge> = memory.clone();
+    let options = RunOptions {
+        protocol: PROTOCOL.to_owned(),
+        intent: "deliver the story".to_owned(),
+        inputs: Vec::new(),
+        iterations: Some(12),
+        hours: None,
+        tokens: None,
+        case_id: Some("adv2-repoint".to_owned()),
+        gate: Some("repository.merge".to_owned()),
+    };
+    let validators: Vec<Box<dyn Validator>> = vec![
+        Box::new(takt::validator::TestsRun::new("cat ok.txt").expect("a command")),
+        Box::new(takt::validator::GateRun::new(".engineering/gates.yaml")),
+        Box::new(PrOpen::new(forge.clone())),
+        Box::new(CiRead::new(forge)),
+    ];
+    let mut run = Run::open(&tree, options, &Repointer, &validators).expect("the case opens");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).expect("the run stops without an error");
+    let text = String::from_utf8(out).expect("utf-8");
+    let calls = memory.calls.borrow().clone();
+    let pushes: Vec<&String> = calls.iter().filter(|c| c.starts_with("push ")).collect();
+    assert!(
+        !pushes.is_empty(),
+        "nothing was pushed; stopped {stop}\n{text}"
+    );
+    assert!(
+        pushes.iter().all(|c| *c == "push takt/adv2-repoint"),
+        "the forge was asked to push what the harness wrote into branch.yaml: {calls:?}; stopped {stop}\n{text}"
+    );
+    assert!(
+        memory
+            .opened
+            .borrow()
+            .iter()
+            .all(|pr| pr.branch == "takt/adv2-repoint"),
+        "a pull request was opened for a head the harness named: {:?}",
+        memory.opened.borrow()
+    );
+}
+
+/// Opens case `first` under `tree` (from a detached `HEAD` when `detached`), commits on its
+/// branch, and removes the cases directory when `gone` (as `git clean -fdx` does); the tip of
+/// its branch.
+fn first_case_on_its_branch(tree: &Path, first: &str, detached: bool, gone: bool) -> String {
+    if detached {
+        git(tree, &["checkout", "-q", "--detach"]);
+    }
+    let protocol =
+        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let case = takt::CaseDir::open(tree, protocol, first, "deliver the story", &[])
+        .expect("the first case opens");
+    fs::write(tree.join("README.md"), "a's work\n").expect("a change");
+    git(tree, &["commit", "-q", "-am", "a's work"]);
+    if gone {
+        let cases = case.dir.parent().expect("the cases directory");
+        fs::remove_dir_all(cases).expect("the cases directory goes, as git clean -fdx leaves it");
+    }
+    git(tree, &["rev-parse", "HEAD"])
+}
+
+/// Opens `second` over the tree as it is; a refusal leaves the tree on `left`, an opened case
+/// has its `HEAD` elsewhere than `tip`, the other case's commits.
+fn second_case_does_not_fork_from(tree: &Path, second: &str, left: &str, tip: &str, what: &str) {
+    let protocol =
+        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    match takt::CaseDir::open(tree, protocol, second, "deliver another", &[]) {
+        Err(_) => {
+            assert_eq!(
+                git(tree, &["rev-parse", "--abbrev-ref", "HEAD"]),
+                left,
+                "{what}: a refused case leaves the tree where it was"
+            );
+            assert!(!tree.join(takt::case::CASES_DIR).join(second).exists());
+        }
+        Ok(case) => {
+            let head = git(tree, &["rev-parse", "HEAD"]);
+            assert_ne!(
+                head,
+                tip,
+                "{what}: takt/{second} forks from {left}'s tip, the other case's commits; branch.yaml: {:?}",
+                Branch::read(&case.dir)
+            );
+        }
+    }
+}
+
+/// A case opened while the tree is on a case branch that records no base (that case was opened
+/// from a detached `HEAD`, as a CI checkout leaves it) has no base to fork from. `CaseDir::open`
+/// documents that a case never forks from another case's commits: it refuses, or forks
+/// elsewhere; it does not start the new case on the other branch's tip.
+#[test]
+fn adv2_a_case_opened_over_a_case_branch_without_a_base_does_not_fork_from_its_commits() {
+    let tree = scratch("adv2-nobase");
+    let tip = first_case_on_its_branch(&tree, "adv2-nobase-a", true, false);
+    assert_eq!(
+        Branch::read(&tree.join(takt::case::CASES_DIR).join("adv2-nobase-a"))
+            .expect("the branch file")
+            .base,
+        None
+    );
+    second_case_does_not_fork_from(
+        &tree,
+        "adv2-nobase-b",
+        "takt/adv2-nobase-a",
+        &tip,
+        "no base recorded",
+    );
+}
+
+/// The same when the case branch the tree is on names no case any more: its directory is gone,
+/// as `git clean -fdx` leaves a tree after a run (the directory is untracked). Nothing records
+/// a base; the new case must not fork from the leftover branch's commits.
+#[test]
+fn adv2_a_case_opened_over_a_leftover_case_branch_does_not_fork_from_its_commits() {
+    let tree = scratch("adv2-leftover");
+    let tip = first_case_on_its_branch(&tree, "adv2-leftover-a", false, true);
+    assert!(!tree.join(takt::case::CASES_DIR).exists());
+    second_case_does_not_fork_from(
+        &tree,
+        "adv2-leftover-b",
+        "takt/adv2-leftover-a",
+        &tip,
+        "case directory gone",
+    );
+}
+
+/// `BotRoute::for_tree` names the origin URL in its refusals. A checkout a CI runner leaves
+/// carries a credential in that URL; the credential must not appear in what the refusal says,
+/// which the binary prints.
+#[test]
+fn adv2_a_credential_in_the_origin_url_is_not_printed_by_the_bot_routes_refusal() {
+    for (name, url) in [
+        (
+            "elsewhere",
+            "https://ci-user:t0k3n-not-real@gitlab.example.com/owner/repo.git",
+        ),
+        ("no-owner", "https://ci-user:t0k3n-not-real@github.com/repo"),
+    ] {
+        let tree = scratch(&format!("adv2-cred-{name}"));
+        git(&tree, &["remote", "add", "origin", url]);
+        let error = format!(
+            "{:#}",
+            BotRoute::for_tree(&tree).expect_err("the bot route refuses this origin")
+        );
+        assert!(
+            !error.contains("t0k3n-not-real"),
+            "{name}: the refusal prints the credential: {error}"
+        );
+    }
+}
+
+/// A host name is case-insensitive: an origin written as `GitHub.com` is on github.com, and
+/// the bot route serves it.
+#[test]
+fn adv2_an_origin_host_written_in_upper_case_is_github() {
+    let tree = scratch("adv2-upper");
+    git(
+        &tree,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://GitHub.com/owner/repo.git",
+        ],
+    );
+    let forge = BotRoute::for_tree(&tree).unwrap_or_else(|error| {
+        panic!("GitHub.com is github.com, a host name being case-insensitive: {error:#}")
+    });
+    assert_eq!(forge.repository, "owner/repo");
+}
+
+/// A chain of cases, each opened over the previous one's branch: every case forks from the
+/// shared base at its tip, records that base and the branch it left, and a discarded case
+/// returns the tree to the branch it left, the other cases untouched. Only a chain of three
+/// tells `base` from `left`.
+#[test]
+fn adv2_a_chain_of_cases_each_forks_from_the_shared_base_and_discards_to_the_branch_it_left() {
+    let tree = scratch("adv2-chain");
+    let main_tip = git(&tree, &["rev-parse", "HEAD"]);
+    let protocol =
+        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let first = takt::CaseDir::open(
+        &tree,
+        protocol.clone(),
+        "adv2-chain-a",
+        "deliver the story",
+        &[],
+    )
+    .expect("the first case opens");
+    fs::write(tree.join("README.md"), "a's work\n").expect("a change");
+    git(&tree, &["commit", "-q", "-am", "a's work"]);
+    let a_tip = git(&tree, &["rev-parse", "HEAD"]);
+    let second = takt::CaseDir::open(
+        &tree,
+        protocol.clone(),
+        "adv2-chain-b",
+        "deliver another",
+        &[],
+    )
+    .expect("the second case opens");
+    assert_eq!(git(&tree, &["rev-parse", "HEAD"]), main_tip);
+    fs::write(tree.join("README.md"), "b's work\n").expect("a change");
+    git(&tree, &["commit", "-q", "-am", "b's work"]);
+    let b_tip = git(&tree, &["rev-parse", "HEAD"]);
+    let third = takt::CaseDir::open(&tree, protocol, "adv2-chain-c", "deliver a third", &[])
+        .expect("the third case opens");
+    let branch = Branch::read(&third.dir).expect("the branch file");
+    assert_eq!(branch.base.as_deref(), Some("main"), "{branch:?}");
+    assert_eq!(
+        branch.left.as_deref(),
+        Some("takt/adv2-chain-b"),
+        "{branch:?}"
+    );
+    assert_eq!(git(&tree, &["rev-parse", "HEAD"]), main_tip);
+    assert_eq!(
+        third.revision("implementation").as_deref(),
+        Some(main_tip.as_str())
+    );
+    third.discard().expect("the third case is discarded");
+    assert_eq!(
+        git(&tree, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "takt/adv2-chain-b"
+    );
+    assert_eq!(git(&tree, &["rev-parse", "HEAD"]), b_tip);
+    assert_eq!(git(&tree, &["rev-parse", "takt/adv2-chain-a"]), a_tip);
+    assert!(first.dir.join("case.yaml").is_file());
+    assert!(second.dir.join("case.yaml").is_file());
+    assert_eq!(git(&tree, &["branch", "--list", "takt/adv2-chain-c"]), "");
+}
+
+/// The base moved on (a merge elsewhere) while the tree stayed on the first case's branch: the
+/// second case forks from the base's tip as it is now, its implementation revision is that
+/// tip, and its tree is the base's, not the first case's.
+#[test]
+fn adv2_a_case_opened_over_another_cases_branch_forks_from_the_bases_tip_as_it_is_now() {
+    let tree = scratch("adv2-moved");
+    let old_tip = git(&tree, &["rev-parse", "HEAD"]);
+    let protocol =
+        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let first = takt::CaseDir::open(
+        &tree,
+        protocol.clone(),
+        "adv2-moved-a",
+        "deliver the story",
+        &[],
+    )
+    .expect("the first case opens");
+    fs::write(tree.join("README.md"), "a's work\n").expect("a change");
+    git(&tree, &["commit", "-q", "-am", "a's work"]);
+    let a_tip = git(&tree, &["rev-parse", "HEAD"]);
+    git(&tree, &["checkout", "-q", "main"]);
+    fs::write(tree.join("NEWS.md"), "merged elsewhere\n").expect("a change");
+    git(&tree, &["add", "NEWS.md"]);
+    git(&tree, &["commit", "-q", "-m", "merged elsewhere"]);
+    let new_tip = git(&tree, &["rev-parse", "HEAD"]);
+    assert_ne!(new_tip, old_tip);
+    git(&tree, &["checkout", "-q", "takt/adv2-moved-a"]);
+    let second = takt::CaseDir::open(&tree, protocol, "adv2-moved-b", "deliver another", &[])
+        .expect("the second case opens");
+    assert_eq!(git(&tree, &["rev-parse", "HEAD"]), new_tip);
+    assert_eq!(
+        second.revision("implementation").as_deref(),
+        Some(new_tip.as_str())
+    );
+    let branch = Branch::read(&second.dir).expect("the branch file");
+    assert_eq!(branch.base.as_deref(), Some("main"));
+    assert_eq!(branch.left.as_deref(), Some("takt/adv2-moved-a"));
+    assert!(tree.join("NEWS.md").is_file());
+    assert_eq!(
+        fs::read_to_string(tree.join("README.md")).expect("the readme"),
+        "a story\n"
+    );
+    assert_eq!(git(&tree, &["rev-parse", "takt/adv2-moved-a"]), a_tip);
+    assert!(first.dir.join("case.yaml").is_file());
+}
+
+/// A case opened from a detached `HEAD` records no branch to return to; discarding it leaves
+/// the tree detached at the commit it was on, the branch and the directory gone.
+#[test]
+fn adv2_a_case_opened_from_a_detached_head_discards_back_to_that_detached_head() {
+    let tree = scratch("adv2-detached-discard");
+    git(&tree, &["checkout", "-q", "--detach"]);
+    let tip = git(&tree, &["rev-parse", "HEAD"]);
+    let protocol =
+        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let case = takt::CaseDir::open(&tree, protocol, "adv2-dd", "deliver the story", &[])
+        .expect("the case opens");
+    let branch = Branch::read(&case.dir).expect("the branch file");
+    assert_eq!(branch.left, None, "{branch:?}");
+    case.discard().expect("the case is discarded");
+    assert_eq!(git(&tree, &["rev-parse", "--abbrev-ref", "HEAD"]), "HEAD");
+    assert_eq!(git(&tree, &["rev-parse", "HEAD"]), tip);
+    assert_eq!(git(&tree, &["branch", "--list", "takt/adv2-dd"]), "");
+    assert!(!tree.join(takt::case::CASES_DIR).exists());
+}
+
+/// A dirty tree at open over another case's branch, the dirt in a file that differs between
+/// that branch and the base: git refuses the checkout, and the case is not opened: no
+/// directory, no branch, the tree still on the other case's branch with its dirt.
+#[test]
+fn adv2_a_dirty_tree_over_another_cases_branch_is_refused_before_the_case_is_written() {
+    let tree = scratch("adv2-dirty");
+    let protocol =
+        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let first = takt::CaseDir::open(
+        &tree,
+        protocol.clone(),
+        "adv2-dirty-a",
+        "deliver the story",
+        &[],
+    )
+    .expect("the first case opens");
+    fs::write(tree.join("README.md"), "a's work\n").expect("a change");
+    git(&tree, &["commit", "-q", "-am", "a's work"]);
+    fs::write(tree.join("README.md"), "uncommitted\n").expect("dirt");
+    let error = format!(
+        "{:#}",
+        takt::CaseDir::open(&tree, protocol, "adv2-dirty-b", "deliver another", &[])
+            .expect_err("a dirty tree that the checkout would overwrite is refused")
+    );
+    assert!(error.contains("README.md"), "{error}");
+    assert!(
+        !tree
+            .join(takt::case::CASES_DIR)
+            .join("adv2-dirty-b")
+            .exists()
+    );
+    assert_eq!(git(&tree, &["branch", "--list", "takt/adv2-dirty-b"]), "");
+    assert_eq!(
+        git(&tree, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "takt/adv2-dirty-a"
+    );
+    assert_eq!(
+        fs::read_to_string(tree.join("README.md")).expect("the readme"),
+        "uncommitted\n"
+    );
+    assert!(first.dir.join("case.yaml").is_file());
+}
+
+/// A runner standing in for `gh pr checks` on a pull request whose head has no check run yet:
+/// exit 1, nothing on stdout, the message on stderr.
+struct NoChecksYet;
+
+impl Runner for NoChecksYet {
+    fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
+        assert_eq!(argv.get(2).map(String::as_str), Some("checks"), "{argv:?}");
+        Ok(Exit {
+            code: Some(1),
+            stdout: String::new(),
+            stderr: "no checks reported on the 'takt/c1' branch".to_owned(),
+        })
+    }
+}
+
+/// `gh pr checks` on a head no check has been reported for exits 1 with a message and no
+/// JSON; that is the state of every pull request in the seconds after its push, which is when
+/// `ci.read` first runs. The adapter reads it as pending, not as an error that ends the run.
+#[test]
+fn adv2_no_checks_reported_yet_is_pending_not_an_error() {
+    let tree = scratch("adv2-no-checks");
+    let forge = BotRoute::new("owner/repo", None, Box::new(NoChecksYet));
+    let checks = forge.checks(&tree, 7).unwrap_or_else(|error| {
+        panic!("no checks reported yet is pending, not an error: {error:#}")
+    });
+    assert_eq!(checks, Checks::Pending);
+}
+
+// Correction round 2 over story:forge-pull-request-evidence: the refusal at open with a forge
+// and no base, what takt prints of a remote URL, and the branch name a file cannot change.
+
+/// With a validator for `pr.open` registered, a case opened from a detached `HEAD` has no base
+/// to open its pull request against, and that is known at open: the run is refused before its
+/// first step, in one line, and nothing is left behind: no case directory, no branch, the tree
+/// detached where it was, the forge never asked. Without a forge the same case opens.
+#[test]
+fn a_run_with_a_forge_on_a_detached_head_is_refused_at_open_and_leaves_nothing() {
+    let tree = scratch("detached-run");
+    git(&tree, &["checkout", "-q", "--detach"]);
+    let tip = git(&tree, &["rev-parse", "HEAD"]);
+    let memory = Rc::new(Memory::default());
+    let forge: Rc<dyn Forge> = memory.clone();
+    let options = || RunOptions {
+        protocol: PROTOCOL.to_owned(),
+        intent: "deliver the story".to_owned(),
+        inputs: Vec::new(),
+        iterations: Some(2),
+        hours: None,
+        tokens: None,
+        case_id: Some("detached-run".to_owned()),
+        gate: None,
+    };
+    let validators: Vec<Box<dyn Validator>> = vec![Box::new(PrOpen::new(forge))];
+    let error = format!(
+        "{:#}",
+        Run::open(&tree, options(), &NoHarness, &validators)
+            .err()
+            .expect("refused at open")
+    );
+    assert!(error.contains("no base branch"), "{error}");
+    assert!(error.contains("detached-run"), "{error}");
+    assert!(!tree.join(takt::case::CASES_DIR).exists());
+    assert_eq!(git(&tree, &["branch", "--list", "takt/detached-run"]), "");
+    assert_eq!(git(&tree, &["rev-parse", "--abbrev-ref", "HEAD"]), "HEAD");
+    assert_eq!(git(&tree, &["rev-parse", "HEAD"]), tip);
+    assert!(
+        memory.calls.borrow().is_empty(),
+        "{:?}",
+        memory.calls.borrow()
+    );
+    let none: Vec<Box<dyn Validator>> = Vec::new();
+    let run = Run::open(&tree, options(), &NoHarness, &none).expect("opens without a forge");
+    assert_eq!(run.case.branch, "takt/detached-run");
+}
+
+/// What takt prints of a remote URL carries no userinfo: the credential a CI checkout leaves
+/// in its origin never reaches an error or a line of output.
+#[test]
+fn a_remote_url_is_shown_without_its_userinfo() {
+    for (url, shown) in [
+        (
+            "https://ci-user:t0k3n-not-real@github.com/owner/repo.git",
+            "https://github.com/owner/repo.git",
+        ),
+        (
+            "ssh://git@github.com:22/owner/repo.git",
+            "ssh://github.com:22/owner/repo.git",
+        ),
+        ("git@github.com:owner/repo.git", "github.com:owner/repo.git"),
+        (
+            "https://github.com/owner/repo",
+            "https://github.com/owner/repo",
+        ),
+        ("/var/lib/git/repo", "/var/lib/git/repo"),
+        (
+            "file:///srv/git/owner/repo.git",
+            "file:///srv/git/owner/repo.git",
+        ),
+    ] {
+        assert_eq!(without_userinfo(url), shown, "{url}");
+    }
+}
+
+/// `pr.open` pushes and opens for the case's branch from the case id; a `name` a harness wrote
+/// into `branch.yaml` never reaches the forge, the file is set right, and the summary says so.
+#[test]
+fn pr_open_sets_branch_yaml_right_when_its_name_was_rewritten() {
+    let tree = scratch("renamed");
+    let memory = Rc::new(Memory {
+        checks: Checks::Pass,
+        ..Memory::default()
+    });
+    let outcome = delivered(&tree, "renamed", memory.clone());
+    assert_eq!(outcome.records.len(), 4, "{}", outcome.text);
+    let mut branch = Branch::read(&outcome.case_dir).expect("the branch file");
+    branch.name = "HEAD:main".to_owned();
+    branch
+        .write(&outcome.case_dir)
+        .expect("the harness's write");
+    fs::write(tree.join("README.md"), "second\n").expect("a change");
+    git(&tree, &["commit", "-q", "-am", "second"]);
+    let second = git(&tree, &["rev-parse", "HEAD"]);
+    let observation = PrOpen::new(memory.clone())
+        .observe(&tree, &second, 5)
+        .expect("observes");
+    assert_eq!(observation.records.len(), 1, "{}", observation.summary);
+    assert!(
+        observation
+            .summary
+            .contains("branch.yaml named HEAD:main, not the case's branch; set right"),
+        "{}",
+        observation.summary
+    );
+    let branch = Branch::read(&outcome.case_dir).expect("the branch file");
+    assert_eq!(branch.name, "takt/renamed");
+    assert_eq!(branch.pushed.as_deref(), Some(second.as_str()));
+    let calls = memory.calls.borrow();
+    assert!(
+        calls
+            .iter()
+            .filter(|call| call.starts_with("push "))
+            .all(|call| call == "push takt/renamed"),
+        "{calls:?}"
+    );
+    assert_eq!(calls.last().map(String::as_str), Some("view #1"));
 }

@@ -225,17 +225,32 @@ impl BotRoute {
     /// The host the bot route serves: it pushes under a GitHub App and reads through `gh`.
     pub const HOST: &str = "github.com";
 
+    /// What `gh pr checks` says on stderr, exiting 1 with nothing on stdout, for a head no
+    /// check has been reported for yet: `gh` 2.100.0's message as read from its binary, not
+    /// verified against a live pull request.
+    pub const NO_CHECKS_REPORTED: &str = "no checks reported";
+
+    /// Whether the bot route serves `host`; host names are case-insensitive.
+    #[must_use]
+    pub fn serves(host: &str) -> bool {
+        host.eq_ignore_ascii_case(Self::HOST)
+    }
+
     /// For `tree`: the repository from its `origin` URL, which must be on [`Self::HOST`], the
-    /// policy from the environment, every line run as a process.
+    /// policy from the environment, every line run as a process. A refusal names the URL
+    /// without its userinfo: a credential in it never reaches what takt prints.
     pub fn for_tree(tree: &Path) -> Result<Self> {
         let url = crate::git::remote_url(tree, "origin")
             .context("the forge `bot` needs an origin remote")?;
+        let shown = without_userinfo(&url);
         let origin = repository_of(&url).ok_or_else(|| {
-            anyhow!("the origin remote {url} names no <owner>/<repo> on a host; give --forge none")
+            anyhow!(
+                "the origin remote {shown} names no <owner>/<repo> on a host; give --forge none"
+            )
         })?;
-        if origin.host != Self::HOST {
+        if !Self::serves(&origin.host) {
             bail!(
-                "the origin remote {url} is on {}, not {}: the bot route pushes under a GitHub App and reads through gh; give --forge none",
+                "the origin remote {shown} is on {}, not {}: the bot route pushes under a GitHub App and reads through gh; give --forge none",
                 origin.host,
                 Self::HOST
             );
@@ -333,16 +348,22 @@ impl BotRoute {
     /// naming the line and what the program said, never a reading.
     fn read_json(&self, tree: &Path, argv: &[String]) -> Result<serde_json::Value> {
         let exit = self.runner.run(tree, argv)?;
-        serde_json::from_str(&exit.stdout).map_err(|error| {
-            anyhow!(
-                "{} exited {} and printed no reading ({error}): {}",
-                argv.join(" "),
-                exit.code
-                    .map_or("on a signal".to_owned(), |code| code.to_string()),
-                exit.stderr.trim()
-            )
-        })
+        reading_of(argv, &exit)
     }
+}
+
+/// What `argv` printed, as JSON; anything else is an error naming the line and what the
+/// program said, never a reading.
+fn reading_of(argv: &[String], exit: &Exit) -> Result<serde_json::Value> {
+    serde_json::from_str(&exit.stdout).map_err(|error| {
+        anyhow!(
+            "{} exited {} and printed no reading ({error}): {}",
+            argv.join(" "),
+            exit.code
+                .map_or("on a signal".to_owned(), |code| code.to_string()),
+            exit.stderr.trim()
+        )
+    })
 }
 
 impl Forge for BotRoute {
@@ -408,7 +429,17 @@ impl Forge for BotRoute {
 
     fn checks(&self, tree: &Path, number: u64) -> Result<Checks> {
         let argv = self.checks_argv(number);
-        let document = self.read_json(tree, &argv)?;
+        let exit = self.runner.run(tree, &argv)?;
+        // A head no check has been reported for yet, the state of every pull request in the
+        // seconds after its push: pending, not an error that ends the run. Anything else that
+        // is not a reading stays an error.
+        if !exit.success()
+            && exit.stdout.trim().is_empty()
+            && exit.stderr.contains(Self::NO_CHECKS_REPORTED)
+        {
+            return Ok(Checks::Pending);
+        }
+        let document = reading_of(&argv, &exit)?;
         let checks = document
             .as_array()
             .ok_or_else(|| anyhow!("{} printed no list of checks", argv.join(" ")))?;
@@ -458,6 +489,34 @@ pub fn repository_of(url: &str) -> Option<Origin> {
         host: host.to_owned(),
         repository: format!("{owner}/{repo}"),
     })
+}
+
+/// `url` with its userinfo (`user:password@`) removed, what takt prints of a remote URL: a
+/// credential a checkout carries in its origin never reaches an error or a line of output.
+#[must_use]
+pub fn without_userinfo(url: &str) -> String {
+    if let Some((scheme, rest)) = url.split_once("://") {
+        let (authority, path) = rest
+            .split_once('/')
+            .map_or((rest, None), |(authority, path)| (authority, Some(path)));
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        match path {
+            Some(path) => format!("{scheme}://{host}/{path}"),
+            None => format!("{scheme}://{host}"),
+        }
+    } else {
+        match url.split_once(':') {
+            Some((authority, path)) if authority.contains('@') => {
+                let host = authority
+                    .rsplit_once('@')
+                    .map_or(authority, |(_, host)| host);
+                format!("{host}:{path}")
+            }
+            _ => url.to_owned(),
+        }
+    }
 }
 
 /// The in-memory double: answers what it is set to and logs every call, for the tests. A pull

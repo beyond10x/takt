@@ -221,7 +221,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     .map(repository_of)
                 {
                     None => (None, None),
-                    Some(Some(origin)) if origin.host == BotRoute::HOST => bot(&repo)?,
+                    Some(Some(origin)) if BotRoute::serves(&origin.host) => bot(&repo)?,
                     Some(Some(origin)) => (
                         None,
                         Some(format!(

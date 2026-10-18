@@ -116,3 +116,39 @@ fn a_non_github_origin_does_not_make_the_bot_route_the_default() {
         );
     }
 }
+
+// Adversary pass 2 over story:forge-pull-request-evidence: the GitHub-only default and the
+// `--forge bot` refusal at the binary's edge.
+
+/// `--forge bot` on an origin the bot route refuses: the refusal is printed, and a credential
+/// the origin URL carries (what a CI runner's checkout leaves in `.git/config`) is not.
+#[test]
+fn adv2_the_forge_bot_refusal_does_not_print_the_origin_credential() {
+    let (_outer, repo) = repository(
+        "credential",
+        "https://ci-user:t0k3n-not-real@gitlab.example.com/owner/repo.git",
+    );
+    let mut args = run_args(repo.to_str().expect("utf-8"), "credential");
+    args.extend(["--forge", "bot"]);
+    let (code, out, err) = takt(&args);
+    assert_ne!(
+        code, 0,
+        "the bot route was not refused: stdout {out} stderr {err}"
+    );
+    assert!(
+        !out.contains("t0k3n-not-real") && !err.contains("t0k3n-not-real"),
+        "the credential is printed: exit {code} stdout {out} stderr {err}"
+    );
+}
+
+/// A host name is case-insensitive: without `--forge`, an origin written as `GitHub.com` gets
+/// the bot route by default, as `github.com` does.
+#[test]
+fn adv2_an_origin_host_written_in_upper_case_gets_the_bot_route_by_default() {
+    let (_outer, repo) = repository("upper", "https://GitHub.com/owner/repo.git");
+    let (code, out, err) = takt(&run_args(repo.to_str().expect("utf-8"), "upper"));
+    assert!(
+        out.contains("forge: bot (owner/repo)"),
+        "GitHub.com is github.com: exit {code} stdout {out} stderr {err}"
+    );
+}

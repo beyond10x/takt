@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
-use crate::case::{Branch, current};
+use crate::case::{BRANCH_FILE, Branch, current};
 use crate::evidence::Record;
 use crate::forge::{Checks, Forge, PullRequest, PullRequestState};
 
@@ -394,20 +394,34 @@ enum Next {
     Read(u64),
 }
 
-/// The pull request a case opens: its branch against its base, the intent's first line as the
+/// The case's branch, from the case directory's name: what the validators push and open for,
+/// never the `name` a file under the case directory carries, which a harness can write.
+fn branch_of(case_dir: &Path) -> Result<String> {
+    let id = case_dir
+        .file_name()
+        .ok_or_else(|| anyhow!("the case directory {} has no name", case_dir.display()))?;
+    Ok(Branch::name_of(&id.to_string_lossy()))
+}
+
+/// The pull request a case opens: `name` against `base`, the intent's first line as the
 /// title, the intent and the claims that hold as the body. A case with no base is refused.
-fn request_of(case_dir: &Path, branch: &Branch, revision: &str) -> Result<PullRequest> {
-    let base = branch.base.clone().ok_or_else(|| {
+fn request_of(
+    case_dir: &Path,
+    name: &str,
+    base: Option<&str>,
+    revision: &str,
+) -> Result<PullRequest> {
+    let base = base.ok_or_else(|| {
         anyhow!(
-            "the case has no base branch: it was opened from a detached HEAD or over a case branch left behind; open it from the branch its pull request is against"
+            "the case has no base branch: it was opened from a detached HEAD; open it from the branch its pull request is against"
         )
     })?;
     let intent = case_dir.join("intent.md");
     let intent =
         std::fs::read_to_string(&intent).with_context(|| format!("read {}", intent.display()))?;
     Ok(PullRequest {
-        branch: branch.name.clone(),
-        base,
+        branch: name.to_owned(),
+        base: base.to_owned(),
         title: title_of(&intent),
         body: body_of(case_dir, &intent, revision)?,
     })
@@ -440,27 +454,36 @@ impl Validator for PrOpen {
         let dir = current(tree)?;
         let mut branch = Branch::read(&dir)?;
         let forge = self.forge.name();
+        // The branch pushed and opened for is the case's, from the case id: the `name` in
+        // `branch.yaml` is in a file a harness can write, and a refspec there must never reach
+        // the forge. A `name` that differs is set right, and the summary says so.
+        let name = branch_of(&dir)?;
+        let repaired = if branch.name == name {
+            String::new()
+        } else {
+            let was = std::mem::replace(&mut branch.name, name.clone());
+            format!("{BRANCH_FILE} named {was}, not the case's branch; set right; ")
+        };
         // What follows the push is settled before it: a case with no pull request yet needs its
         // base and its request, and one without a base is refused with nothing pushed.
         let next = match branch.pull_request {
             Some(number) => Next::Read(number),
-            None => Next::Open(request_of(&dir, &branch, revision)?),
+            None => Next::Open(request_of(&dir, &name, branch.base.as_deref(), revision)?),
         };
         self.forge
-            .push(tree, &branch.name)
-            .with_context(|| format!("push {} through the forge {forge}", branch.name))?;
+            .push(tree, &name)
+            .with_context(|| format!("push {name} through the forge {forge}"))?;
         branch.pushed = Some(revision.to_owned());
         let (state, summary) = match next {
             Next::Read(number) => {
                 let view = self.forge.pull_request(tree, number).with_context(|| {
                     format!("read pull request #{number} through the forge {forge}")
                 })?;
-                if view.head.branch == branch.name && view.head.sha == revision {
+                if view.head.branch == name && view.head.sha == revision {
                     (
                         Some(view.state),
                         format!(
-                            "pushed {} at {} through {forge}; pull request #{number} is {}",
-                            branch.name,
+                            "{repaired}pushed {name} at {} through {forge}; pull request #{number} is {}",
                             short(revision),
                             view.state
                         ),
@@ -469,8 +492,7 @@ impl Validator for PrOpen {
                     (
                         None,
                         format!(
-                            "pushed {} at {} through {forge}; pull request #{number} has the head {} at {}, not the case's branch at the revision; no record, the claim stays unknown",
-                            branch.name,
+                            "{repaired}pushed {name} at {} through {forge}; pull request #{number} has the head {} at {}, not the case's branch at the revision; no record, the claim stays unknown",
                             short(revision),
                             view.head.branch,
                             short(&view.head.sha)
@@ -483,17 +505,13 @@ impl Validator for PrOpen {
                     .forge
                     .open_pull_request(tree, &dir.join("artifacts"), &request)
                     .with_context(|| {
-                        format!(
-                            "open the pull request for {} through the forge {forge}",
-                            branch.name
-                        )
+                        format!("open the pull request for {name} through the forge {forge}")
                     })?;
                 branch.pull_request = Some(number);
                 (
                     Some(PullRequestState::Open),
                     format!(
-                        "pushed {} at {} through {forge} and opened pull request #{number}: open",
-                        branch.name,
+                        "{repaired}pushed {name} at {} through {forge} and opened pull request #{number}: open",
                         short(revision)
                     ),
                 )
@@ -567,6 +585,8 @@ impl Validator for CiRead {
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
         let dir = current(tree)?;
         let branch = Branch::read(&dir)?;
+        // The case's branch, from the case id: not the `name` of a file a harness can write.
+        let name = branch_of(&dir)?;
         let nothing = |summary: String| Observation {
             summary,
             records: Vec::new(),
@@ -590,12 +610,11 @@ impl Validator for CiRead {
             .forge
             .pull_request(tree, number)
             .with_context(|| format!("read pull request #{number} through the forge {forge}"))?;
-        if view.head.branch != branch.name || view.head.sha != revision {
+        if view.head.branch != name || view.head.sha != revision {
             return Ok(nothing(format!(
-                "pull request #{number} has the head {} at {}, not {} at {}; nothing to read, the claim stays unknown",
+                "pull request #{number} has the head {} at {}, not {name} at {}; nothing to read, the claim stays unknown",
                 view.head.branch,
                 short(&view.head.sha),
-                branch.name,
                 short(revision)
             )));
         }

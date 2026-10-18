@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 
 use crate::case::{CASES_DIR, CaseDir};
 use crate::frontier::{Frontier, Take, Unit};
@@ -154,6 +154,17 @@ impl<'a> Run<'a> {
             .clone()
             .unwrap_or_else(|| format!("takt-{}", crate::now().replace([':', '-'], "")));
         let case = CaseDir::open(tree, protocol, &id, &options.intent, &options.inputs)?;
+        // A case with no base cannot open its pull request. With a validator for `pr.open`
+        // registered that is known now, so the run is refused before its first step rather
+        // than after the tests, the gate and the harness have run; the case is discarded.
+        if validators.iter().any(|v| v.action() == "pr.open")
+            && crate::case::Branch::read(&case.dir)?.base.is_none()
+        {
+            case.discard()?;
+            bail!(
+                "the case {id} has no base branch to open its pull request against: the tree is on a detached HEAD; check out the branch the pull request is against, or run without a forge"
+            );
+        }
         Ok(Self {
             tree: tree.to_path_buf(),
             case,

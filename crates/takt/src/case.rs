@@ -113,7 +113,8 @@ impl CaseDir {
     /// kernel takes no default, because the inputs select the obligations the case owes. The
     /// case's branch `takt/<id>` is created and checked out at the tip of its base (the branch
     /// the tree is on, or that case's base when the tree is on another case's branch, so a
-    /// case never forks from another case's commits), and recorded with its base and the
+    /// case never forks from another case's commits; a case branch whose base is unknown
+    /// refuses the case before anything is written), and recorded with its base and the
     /// branch it left as `branch.yaml`; a branch that exists refuses the case. Nothing is
     /// written until `HEAD`, the inputs and the branch are in order, and a write that fails
     /// takes the directory with it, so a case directory exists only with its `case.yaml`.
@@ -178,11 +179,17 @@ impl CaseDir {
             .as_deref()
             .map(|name| (name, name.strip_prefix(BRANCH_PREFIX)))
         {
-            Some((_, Some(other))) => {
-                let base = Branch::read(&tree.join(CASES_DIR).join(other))
+            Some((name, Some(other))) => {
+                let Some(base) = Branch::read(&tree.join(CASES_DIR).join(other))
                     .ok()
-                    .and_then(|branch| branch.base);
-                (base.clone(), base)
+                    .and_then(|branch| branch.base)
+                else {
+                    bail!(
+                        "the tree {} is on {name}, a case's branch with no base to fork from (that case was opened from a detached HEAD, or its directory is gone); check out the branch the new case is to fork from",
+                        tree.display()
+                    );
+                };
+                (Some(base.clone()), Some(base))
             }
             Some((name, None)) => (Some(name.to_owned()), None),
             None => (None, None),
