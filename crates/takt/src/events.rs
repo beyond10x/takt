@@ -46,10 +46,13 @@ pub struct TokenUsage {
 }
 
 impl TokenUsage {
-    /// The four components summed.
+    /// The four components summed, at most `u64::MAX`.
     #[must_use]
     pub fn total(&self) -> u64 {
-        self.input + self.output + self.cache_read + self.cache_creation
+        self.input
+            .saturating_add(self.output)
+            .saturating_add(self.cache_read)
+            .saturating_add(self.cache_creation)
     }
 }
 
@@ -246,7 +249,8 @@ impl Events {
     /// skip), or the line after it is the [`Event::Skipped`] line naming it. Lines that do not
     /// read one after another (a repair that was cut short too) are skipped together when the
     /// last of them is such a line. Any other line that does not read is an error naming the
-    /// file and the line.
+    /// file and the line. A line's `at` is its first: a `store_evidence` line an earlier takt
+    /// wrote carries the store's instant as a second `at`, which is read as `observed_at`.
     pub fn read(&self) -> Result<Vec<serde_json::Value>> {
         let text = match std::fs::read_to_string(&self.path) {
             Ok(text) => text,
@@ -257,10 +261,8 @@ impl Events {
         };
         let ended = text.ends_with('\n');
         let lines: Vec<&str> = text.split_terminator('\n').collect();
-        let parsed: Vec<Option<serde_json::Value>> = lines
-            .iter()
-            .map(|line| serde_json::from_str(line).ok())
-            .collect();
+        let parsed: Vec<Option<serde_json::Value>> =
+            lines.iter().map(|line| read_line(line)).collect();
         let mut read = Vec::new();
         let mut n = 0;
         while n < lines.len() {
@@ -299,5 +301,56 @@ impl Events {
             n = last + 1;
         }
         Ok(read)
+    }
+}
+
+/// One line as JSON, its `at` the first the line holds and a later one, when the line holds
+/// two, its `observed_at`; none when it does not read.
+fn read_line(line: &str) -> Option<serde_json::Value> {
+    let mut value: serde_json::Value = serde_json::from_str(line).ok()?;
+    if let Ok(Instants(Some(first), Some(last))) = serde_json::from_str(line)
+        && let Some(object) = value.as_object_mut()
+    {
+        object
+            .entry("observed_at")
+            .or_insert_with(|| last.clone().into());
+        object.insert("at".to_owned(), first.into());
+    }
+    Some(value)
+}
+
+/// The first and the last `at` of a line's object, when it holds two or more.
+struct Instants(Option<String>, Option<String>);
+
+impl<'de> Deserialize<'de> for Instants {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Instants;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an event line")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Instants, A::Error> {
+                let mut ats: Vec<serde_json::Value> = Vec::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "at" {
+                        ats.push(map.next_value()?);
+                    } else {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                let text = |value: &serde_json::Value| value.as_str().map(str::to_owned);
+                Ok(match ats.as_slice() {
+                    [first, .., last] => Instants(text(first), text(last)),
+                    _ => Instants(None, None),
+                })
+            }
+        }
+        deserializer.deserialize_map(Visitor)
     }
 }

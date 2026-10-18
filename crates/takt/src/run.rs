@@ -1592,7 +1592,7 @@ impl<'a> Run<'a> {
             let record_step = |run: &Self| {
                 run.stepped(
                     events,
-                    SteppedBy::Harness(report.tokens, None),
+                    SteppedBy::Harness(report.tokens, harness.last_usage()),
                     harness.name(),
                     &report.action,
                     &report.summary,

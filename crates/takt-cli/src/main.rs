@@ -51,25 +51,30 @@ struct ScorecardArgs {
     /// The repository worktree whose cases are read.
     #[arg(long)]
     repo: PathBuf,
-    /// Save the scorecard as `<dir>/scorecard-<revision>.json`, named by the revision takt was
-    /// built from when the binary knows it, else by `HEAD` of the repository; which one is
-    /// printed.
+    /// Save the scorecard as `<dir>/scorecard-<revision>.json`, named by --revision, which it
+    /// needs; a file there already is not overwritten.
     #[arg(long, value_name = "DIR")]
     save: Option<PathBuf>,
-    /// Compare each run with the same scenario in a saved scorecard: worse when its outcome
-    /// ranks below the best saved run's (accepted, then ApprovalRequired or Waiting, then a
-    /// budget stop, then NoProgress and every other stop, then an error); tokens as n, min,
-    /// median and max per scenario and side, and the difference of the medians, never worse.
+    /// The revision of takt under test, a commit id, that names the saved scorecard; never the
+    /// scenario repository's HEAD.
+    #[arg(long, value_name = "SHA", requires = "save")]
+    revision: Option<String>,
+    /// Compare each scenario with the same scenario in a saved scorecard, over cases (a case's
+    /// outcome is its last run's): worse when the median outcome rank of its cases is below
+    /// the saved one's (accepted, then ApprovalRequired or Waiting, then a budget stop, then
+    /// NoProgress and every other stop, then an error), or when the saved scorecard has the
+    /// scenario and this one has no run of it; tokens as n, min, median and max per scenario
+    /// and side, and the difference of the medians, never worse.
     #[arg(long, value_name = "FILE")]
     against: Option<PathBuf>,
 }
 
 /// What `takt scorecard --help` says about the exit codes.
 const SCORECARD_EXIT_CODES: &str = "Exit codes:
-  0  printed (and saved); with --against, no run is worse than its scenario's best saved run
-  1  refused: the repository, a case's events.jsonl, the saved scorecard or the save directory does not read or write; the reason on stderr
+  0  printed (and saved); with --against, no scenario is worse than the saved one
+  1  refused: the repository, a case's events.jsonl or the saved scorecard does not read; --save without --revision, onto a file that exists, or that cannot be written; the reason on stderr
   2  the arguments do not parse
-  3  with --against: a run's outcome ranks below its scenario's best saved run (tokens never make a run worse)";
+  3  with --against: a scenario is worse: the median outcome rank of its cases is below the saved one's, or it has no run (tokens never make a scenario worse)";
 
 #[derive(Subcommand)]
 enum ScenarioCommands {
@@ -322,9 +327,16 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
         Commands::Scorecard(ScorecardArgs {
             repo,
             save,
+            revision,
             against,
         }) => {
-            let worse = takt::scorecard::report(&repo, save.as_deref(), against.as_deref(), out)?;
+            let worse = takt::scorecard::report(
+                &repo,
+                save.as_deref(),
+                revision.as_deref(),
+                against.as_deref(),
+                out,
+            )?;
             Ok(if worse > 0 { 3 } else { EXIT_DONE })
         }
         Commands::Run(args) => {

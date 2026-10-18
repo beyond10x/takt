@@ -1,17 +1,21 @@
-//! The scorecard: per run of a case under `.engineering/cases/`, its outcome, steps, tokens,
-//! refusals, `NoProgress` and errors, and wall time, read from the case's run record
+//! The scorecard: per case under `.engineering/cases/`, and per run of it, its outcome, steps,
+//! tokens, refusals, `NoProgress` and errors, and wall time, read from the case's run record
 //! (`events.jsonl`, [`crate::events`]) and from nothing else. A number a candidate could plant
 //! in its tree (a `task_spend` file, an evidence record) is never read. A case without a record
 //! is listed as such, never guessed.
 //!
 //! A run is the span from one `opened` line to its `stop`, or to the next `opened` or the end
-//! of the record when it has none (a run that ended on an error). Saved, the scorecard is
-//! `scorecard-<revision>.json` with every run's figures and the version of each metric's
-//! definition; compared with a saved one, a run is worse only when its outcome ranks below the
-//! best outcome the saved scorecard holds for the same scenario. Tokens are printed per
-//! scenario and side as n, minimum, median and maximum with the difference of the medians, and
-//! never make a run worse. A metric whose definition changed between the two is printed with
-//! both figures, each with its version, and not compared.
+//! of the record when it has none (a run that ended on an error); a `skipped` line is no
+//! instant of any run. A case is the unit of comparison: its outcome is its last run's, its
+//! other figures its runs' summed, at most `u64::MAX` and flagged when a sum stopped there.
+//! Saved, the scorecard is `scorecard-<revision>.json`, the revision of takt under test, with
+//! every run's figures and the version of each metric's definition. Compared with a saved one,
+//! a scenario is worse when the median outcome rank of its cases is below the saved median, or
+//! when the saved scorecard has the scenario and the candidate has no run of it. Tokens are
+//! printed per scenario and side as n, minimum, median and maximum over cases with the
+//! difference of the medians, and never make a scenario worse. A metric whose definition
+//! changed between the two is printed with both figures; outcomes are compared under the
+//! current definition whatever the saved one's version.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -38,16 +42,14 @@ pub const METRICS: [(&str, u32); 7] = [
     ("wall", 1),
 ];
 
-/// The revision this takt was built from, when the build was given one (`TAKT_REVISION`).
-pub const BUILT_FROM: Option<&str> = option_env!("TAKT_REVISION");
-
 /// What named a saved scorecard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Named {
-    /// The revision takt was built from.
+    /// The revision of takt under test, as the operator gave it (`takt scorecard --revision`).
     Build,
-    /// `HEAD` of the repository the runs were read from; the binary knew no revision.
+    /// `HEAD` of a repository, as a caller of the library gave it; `takt scorecard` never
+    /// names a file by it.
     Head,
 }
 
@@ -74,6 +76,72 @@ pub struct Row {
     pub errors: u64,
     /// From the run's first instant to its last, in milliseconds.
     pub wall_ms: u64,
+    /// A sum stopped at `u64::MAX`: the figure is at least what it shows.
+    #[serde(default)]
+    pub saturated: bool,
+}
+
+/// One case's figures: its last run's outcome, its runs' other figures summed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Case {
+    /// The case.
+    pub case: String,
+    /// Its scenario, as [`Row::scenario`].
+    pub scenario: Option<String>,
+    /// The last run's outcome.
+    pub outcome: String,
+    /// Its runs.
+    pub runs: u64,
+    /// Its runs' steps, summed.
+    pub steps: u64,
+    /// Its runs' tokens, summed.
+    pub tokens: u64,
+    /// Its runs' refusals, summed.
+    pub refusals: u64,
+    /// 1 when its last run stopped `NoProgress`, else 0.
+    pub no_progress: u64,
+    /// Its runs' errors, summed.
+    pub errors: u64,
+    /// Its runs' wall times, summed.
+    pub wall_ms: u64,
+    /// A sum, the case's or a run's, stopped at `u64::MAX`.
+    pub saturated: bool,
+}
+
+impl Case {
+    /// The case of `runs`, all of one case, in the order they ran; none for no run.
+    fn of(runs: &[&Row]) -> Option<Self> {
+        let last = runs.last()?;
+        let mut saturated = runs.iter().any(|run| run.saturated);
+        let mut sum = |figure: fn(&Row) -> u64| {
+            runs.iter().fold(0_u64, |sum, run| {
+                sum.checked_add(figure(run)).unwrap_or_else(|| {
+                    saturated = true;
+                    u64::MAX
+                })
+            })
+        };
+        let (steps, tokens, refusals, errors, wall_ms) = (
+            sum(|run| run.steps),
+            sum(|run| run.tokens),
+            sum(|run| run.refusals),
+            sum(|run| run.errors),
+            sum(|run| run.wall_ms),
+        );
+        Some(Self {
+            case: last.case.clone(),
+            scenario: last.scenario.clone(),
+            outcome: last.outcome.clone(),
+            runs: runs.len() as u64,
+            steps,
+            tokens,
+            refusals,
+            no_progress: u64::from(last.outcome == "NoProgress"),
+            errors,
+            wall_ms,
+            saturated,
+        })
+    }
 }
 
 /// The scorecard of a repository's runs.
@@ -163,6 +231,7 @@ struct Span {
     tokens: u64,
     refusals: u64,
     errors: u64,
+    saturated: bool,
     stop: Option<String>,
 }
 
@@ -176,9 +245,10 @@ impl Span {
             None if self.errors > 0 => "error".to_owned(),
             None => "unfinished".to_owned(),
         };
-        let wall = match (self.first, self.last) {
-            (Some(first), Some(last)) => u64::try_from((last - first).max(0) / 1_000_000).ok(),
-            _ => None,
+        let (wall_ms, too_long) = match (self.first, self.last) {
+            (Some(first), Some(last)) => u64::try_from((last - first).max(0) / 1_000_000)
+                .map_or((u64::MAX, true), |ms| (ms, false)),
+            _ => (0, false),
         };
         Row {
             case: case.to_owned(),
@@ -189,7 +259,8 @@ impl Span {
             tokens: self.tokens,
             refusals: self.refusals,
             errors: self.errors,
-            wall_ms: wall.unwrap_or(0),
+            wall_ms,
+            saturated: self.saturated || too_long,
         }
     }
 }
@@ -207,7 +278,7 @@ fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
         let Some(span) = open.as_mut() else {
             continue;
         };
-        if span.stop.is_some() {
+        if span.stop.is_some() || line["event"] == "skipped" {
             continue;
         }
         if let Some(at) = line["at"].as_str().and_then(instant) {
@@ -215,10 +286,20 @@ fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
             span.last = Some(span.last.map_or(at, |last| last.max(at)));
         }
         span.steps = span.steps.max(line["step"].as_u64().unwrap_or(0));
+        let count = |figure: &mut u64, by: u64, saturated: &mut bool| {
+            *figure = figure.checked_add(by).unwrap_or_else(|| {
+                *saturated = true;
+                u64::MAX
+            });
+        };
         match line["event"].as_str() {
-            Some("step") => span.tokens += line["tokens"].as_u64().unwrap_or(0),
-            Some("refusal") => span.refusals += 1,
-            Some("error") => span.errors += 1,
+            Some("step") => count(
+                &mut span.tokens,
+                line["tokens"].as_u64().unwrap_or(0),
+                &mut span.saturated,
+            ),
+            Some("refusal") => count(&mut span.refusals, 1, &mut span.saturated),
+            Some("error") => count(&mut span.errors, 1, &mut span.saturated),
             Some("stop") => span.stop = Some(line["stop"].as_str().unwrap_or("").to_owned()),
             _ => {}
         }
@@ -227,17 +308,31 @@ fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
     rows
 }
 
-/// A metric's figure of `row`, as printed.
-fn figure(row: &Row, metric: &str) -> String {
+/// A metric's figure of `case`, as printed.
+fn figure(case: &Case, metric: &str) -> String {
     match metric {
-        "outcome" => row.outcome.clone(),
-        "steps" => row.steps.to_string(),
-        "tokens" => row.tokens.to_string(),
-        "refusals" => row.refusals.to_string(),
-        "no_progress" => row.no_progress.to_string(),
-        "errors" => row.errors.to_string(),
-        "wall" => format!("{}.{:03}", row.wall_ms / 1000, row.wall_ms % 1000),
+        "outcome" => case.outcome.clone(),
+        "steps" => case.steps.to_string(),
+        "tokens" => case.tokens.to_string(),
+        "refusals" => case.refusals.to_string(),
+        "no_progress" => case.no_progress.to_string(),
+        "errors" => case.errors.to_string(),
+        "wall" => format!("{}.{:03}", case.wall_ms / 1000, case.wall_ms % 1000),
         _ => "-".to_owned(),
+    }
+}
+
+/// A metric's figure of `case` as a number, a scenario's median is taken over: an outcome by
+/// its rank, wall time in milliseconds.
+fn number(case: &Case, metric: &str) -> u64 {
+    match metric {
+        "outcome" => u64::from(rank(&case.outcome)),
+        "steps" => case.steps,
+        "tokens" => case.tokens,
+        "refusals" => case.refusals,
+        "no_progress" => case.no_progress,
+        "errors" => case.errors,
+        _ => case.wall_ms,
     }
 }
 
@@ -258,6 +353,14 @@ fn half(twice: i128) -> String {
     let sign = if twice < 0 { "-" } else { "" };
     let abs = twice.abs();
     format!("{sign}{}{}", abs / 2, if abs % 2 == 1 { ".5" } else { "" })
+}
+
+/// Whether `revision` can name a scorecard: a commit id, 7 to 64 lower-case hex digits.
+fn is_revision(revision: &str) -> bool {
+    (7..=64).contains(&revision.len())
+        && revision
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 impl Scorecard {
@@ -308,16 +411,35 @@ impl Scorecard {
         Ok(card)
     }
 
-    /// Prints the definitions' versions, then a row a run, then each case with no record.
+    /// One [`Case`] a case with a record, in case order.
+    #[must_use]
+    pub fn cases(&self) -> Vec<Case> {
+        let mut cases: Vec<Case> = Vec::new();
+        let mut runs: Vec<&Row> = Vec::new();
+        for row in &self.rows {
+            if runs.last().is_some_and(|last| last.case != row.case) {
+                cases.extend(Case::of(&runs));
+                runs.clear();
+            }
+            runs.push(row);
+        }
+        cases.extend(Case::of(&runs));
+        cases
+    }
+
+    /// Prints the definitions' versions, then a row a case, its runs listed under it as
+    /// `<case>#<n>`, then each case with no record.
     pub fn print(&self, out: &mut dyn Write) -> std::io::Result<()> {
         let definitions: Vec<String> = self
             .metrics
             .iter()
             .map(|(metric, version)| format!("{metric} v{version}"))
             .collect();
+        let cases = self.cases();
         writeln!(
             out,
-            "{} runs under {CASES_DIR}; definitions: {}",
+            "{} cases, {} runs under {CASES_DIR}; definitions: {}",
+            cases.len(),
             self.rows.len(),
             definitions.join(", ")
         )?;
@@ -332,22 +454,38 @@ impl Scorecard {
                 "no_progress",
                 "errors",
                 "wall_s",
+                "notes",
             ]
             .map(str::to_owned)
             .to_vec(),
         ];
-        for row in &self.rows {
-            table.push(vec![
-                row.case.clone(),
-                row.scenario.clone().unwrap_or_else(|| "-".to_owned()),
-                figure(row, "outcome"),
-                figure(row, "steps"),
-                figure(row, "tokens"),
-                figure(row, "refusals"),
-                figure(row, "no_progress"),
-                figure(row, "errors"),
-                figure(row, "wall"),
-            ]);
+        let line = |label: String, case: &Case| {
+            let mut cells = vec![
+                label,
+                case.scenario.clone().unwrap_or_else(|| "-".to_owned()),
+            ];
+            for metric in [
+                "outcome",
+                "steps",
+                "tokens",
+                "refusals",
+                "no_progress",
+                "errors",
+                "wall",
+            ] {
+                cells.push(figure(case, metric));
+            }
+            cells.push(if case.saturated { "saturated" } else { "-" }.to_owned());
+            cells
+        };
+        for case in &cases {
+            table.push(line(case.case.clone(), case));
+            let runs = self.rows.iter().filter(|row| row.case == case.case);
+            for (n, run) in runs.enumerate() {
+                if let Some(single) = Case::of(&[run]) {
+                    table.push(line(format!("  {}#{}", case.case, n + 1), &single));
+                }
+            }
         }
         let widths: Vec<usize> = (0..table[0].len())
             .map(|column| table.iter().map(|row| row[column].len()).max().unwrap_or(0))
@@ -366,11 +504,14 @@ impl Scorecard {
         Ok(())
     }
 
-    /// Saves the scorecard as `<dir>/scorecard-<revision>.json`, named by `revision`, which
-    /// `named` says the source of; the path.
+    /// Saves the scorecard as `<dir>/scorecard-<revision>.json`, named by `revision`, a commit
+    /// id, which `named` says the source of; the path. A file there already is not
+    /// overwritten: the save is refused.
     pub fn save(mut self, dir: &Path, revision: &str, named: Named) -> Result<PathBuf> {
-        if revision.is_empty() || !revision.bytes().all(|b| b.is_ascii_alphanumeric()) {
-            bail!("the revision {revision:?} cannot name a scorecard file");
+        if !is_revision(revision) {
+            bail!(
+                "the revision {revision:?} cannot name a scorecard file: give a commit id, 7 to 64 lower-case hex digits"
+            );
         }
         self.revision = Some(revision.to_owned());
         self.named_by = Some(named);
@@ -378,7 +519,24 @@ impl Scorecard {
         let path = dir.join(format!("scorecard-{revision}.json"));
         let mut text = serde_json::to_string_pretty(&self).context("write the scorecard")?;
         text.push('\n');
-        std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                bail!(
+                    "{} exists: a saved scorecard is not overwritten",
+                    path.display()
+                );
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("write {}", path.display()));
+            }
+        };
+        file.write_all(text.as_bytes())
+            .with_context(|| format!("write {}", path.display()))?;
         Ok(path)
     }
 
@@ -398,11 +556,13 @@ impl Scorecard {
         Ok(card)
     }
 
-    /// Compares each run with the same scenario in `saved`, scenario by scenario: a run is
-    /// worse when its outcome ranks below the best saved run's; then each side's n and the
-    /// minimum, median and maximum of tokens, and the difference of the medians. A metric whose
-    /// definition's version differs is printed with both figures, each with its version, and
-    /// not compared. The number of runs marked worse.
+    /// Compares this scorecard with `saved`, scenario by scenario, over cases: each case and
+    /// its outcome; each side's n and the minimum, median and maximum of tokens, and the
+    /// difference of the medians; both figures of every metric whose definition's version
+    /// differs; then the verdict: worse when the median outcome rank of the candidate's cases
+    /// is below the saved one's, under the current definition, or when the saved scorecard has
+    /// the scenario and the candidate has no run of it (`no run`). The number of scenarios
+    /// marked worse.
     pub fn against(&self, saved: &Scorecard, out: &mut dyn Write) -> Result<usize> {
         let version = |card: &Scorecard, metric: &str| {
             card.metrics
@@ -415,135 +575,137 @@ impl Scorecard {
             "against {} ({})",
             saved.revision.as_deref().unwrap_or("-"),
             match saved.named_by {
-                Some(Named::Build) => "the revision takt was built from",
-                Some(Named::Head) => "HEAD of the repository",
+                Some(Named::Build) => "the revision of takt under test",
+                Some(Named::Head) => "HEAD of a repository",
                 None => "unnamed",
             }
         )?;
-        let scenarios: BTreeSet<&str> = self
-            .rows
+        let (candidates, baselines) = (self.cases(), saved.cases());
+        let scenarios: BTreeSet<&str> = candidates
             .iter()
-            .chain(&saved.rows)
-            .filter_map(|row| row.scenario.as_deref())
+            .chain(&baselines)
+            .filter_map(|case| case.scenario.as_deref())
             .collect();
         let mut worse = 0;
         for scenario in scenarios {
-            let of = |card: &'_ Scorecard| -> Vec<Row> {
-                card.rows
+            let of = |cases: &[Case]| -> Vec<Case> {
+                cases
                     .iter()
-                    .filter(|row| row.scenario.as_deref() == Some(scenario))
+                    .filter(|case| case.scenario.as_deref() == Some(scenario))
                     .cloned()
                     .collect()
             };
-            let (candidate, baseline) = (of(self), of(saved));
-            let best = baseline
-                .iter()
-                .max_by_key(|row| (rank(&row.outcome), std::cmp::Reverse(row.tokens)));
-            for row in &candidate {
-                let mut parts = vec![row.case.clone(), format!("scenario {scenario}")];
-                let Some(best) = best else {
-                    parts.push("no baseline".to_owned());
-                    writeln!(out, "{}", parts.join("  "))?;
-                    continue;
-                };
-                for (metric, _) in METRICS {
-                    if metric != "tokens" && changed(metric) {
-                        parts.push(format!(
-                            "{metric} {} {} {} {}",
-                            version(saved, metric),
-                            figure(best, metric),
-                            version(self, metric),
-                            figure(row, metric)
-                        ));
-                    }
-                }
-                if changed("outcome") {
-                    parts.push("not compared".to_owned());
-                } else {
-                    parts.insert(2, format!("{} against {}", row.outcome, best.outcome));
-                    if rank(&row.outcome) < rank(&best.outcome) {
-                        worse += 1;
-                        parts.push("worse".to_owned());
-                    } else {
-                        parts.push("not worse".to_owned());
-                    }
-                }
-                writeln!(out, "{}", parts.join("  "))?;
+            let (candidate, baseline) = (of(&candidates), of(&baselines));
+            for case in &candidate {
+                writeln!(out, "{}  scenario {scenario}  {}", case.case, case.outcome)?;
             }
-            let mut medians = Vec::new();
-            for (side, rows) in [("saved", &baseline), ("candidate", &candidate)] {
-                let tokens: Vec<u64> = rows.iter().map(|row| row.tokens).collect();
-                let (Some(min), Some(max)) = (tokens.iter().min(), tokens.iter().max()) else {
-                    continue;
-                };
-                let median = median2(&tokens);
-                medians.push(median);
+            if baseline.is_empty() {
+                writeln!(out, "scenario {scenario}  no baseline")?;
+                continue;
+            }
+            if candidate.is_empty() {
+                worse += 1;
+                writeln!(out, "scenario {scenario}  no run  worse")?;
+                continue;
+            }
+            let median = |cases: &[Case], metric: &str| {
+                median2(
+                    &cases
+                        .iter()
+                        .map(|case| number(case, metric))
+                        .collect::<Vec<_>>(),
+                )
+            };
+            for (side, cases) in [("saved", &baseline), ("candidate", &candidate)] {
+                let tokens: Vec<u64> = cases.iter().map(|case| case.tokens).collect();
+                let min = tokens.iter().min().copied().unwrap_or(0);
+                let max = tokens.iter().max().copied().unwrap_or(0);
                 writeln!(
                     out,
                     "scenario {scenario}  {side:<9}  n {}  tokens min {min} median {} max {max}",
                     tokens.len(),
-                    half(median)
+                    half(median2(&tokens))
                 )?;
             }
-            if let [saved_median, median] = medians[..] {
-                if changed("tokens") {
+            let (saved_tokens, tokens) =
+                (median(&baseline, "tokens"), median(&candidate, "tokens"));
+            if changed("tokens") {
+                writeln!(
+                    out,
+                    "scenario {scenario}  median tokens {} {} {} {}",
+                    version(saved, "tokens"),
+                    half(saved_tokens),
+                    version(self, "tokens"),
+                    half(tokens)
+                )?;
+            } else {
+                let difference = tokens - saved_tokens;
+                writeln!(
+                    out,
+                    "scenario {scenario}  median tokens {}{}",
+                    if difference >= 0 { "+" } else { "" },
+                    half(difference)
+                )?;
+            }
+            for (metric, _) in METRICS {
+                if metric != "tokens" && changed(metric) {
                     writeln!(
                         out,
-                        "scenario {scenario}  median tokens {} {} {} {}",
-                        version(saved, "tokens"),
-                        half(saved_median),
-                        version(self, "tokens"),
-                        half(median)
-                    )?;
-                } else {
-                    let difference = median - saved_median;
-                    writeln!(
-                        out,
-                        "scenario {scenario}  median tokens {}{}",
-                        if difference >= 0 { "+" } else { "" },
-                        half(difference)
+                        "scenario {scenario}  median {metric} {} {} {} {}",
+                        version(saved, metric),
+                        half(median(&baseline, metric)),
+                        version(self, metric),
+                        half(median(&candidate, metric))
                     )?;
                 }
             }
+            let (saved_rank, rank) = (median(&baseline, "outcome"), median(&candidate, "outcome"));
+            let verdict = if rank < saved_rank {
+                worse += 1;
+                "worse"
+            } else {
+                "not worse"
+            };
+            writeln!(
+                out,
+                "scenario {scenario}  outcome median rank {} against {}  {verdict}",
+                half(rank),
+                half(saved_rank)
+            )?;
         }
-        for row in self.rows.iter().filter(|row| row.scenario.is_none()) {
-            writeln!(out, "{}  no scenario  not compared", row.case)?;
+        for case in candidates.iter().filter(|case| case.scenario.is_none()) {
+            writeln!(out, "{}  no scenario  not compared", case.case)?;
         }
         Ok(worse)
     }
 }
 
 /// `takt scorecard`: prints the scorecard of `repo`'s runs; with `save`, saves it there, named
-/// by [`BUILT_FROM`] when the build knows it, else by `HEAD` of `repo`, and says which; with
-/// `against`, compares it with that saved scorecard. The number of runs marked worse.
+/// by `revision`, the revision of takt under test, which a save needs; with `against`,
+/// compares it with that saved scorecard. The number of scenarios marked worse.
 pub fn report(
     repo: &Path,
     save: Option<&Path>,
+    revision: Option<&str>,
     against: Option<&Path>,
     out: &mut dyn Write,
 ) -> Result<usize> {
     let saved = against.map(Scorecard::load).transpose()?;
     let card = Scorecard::read(repo)?;
+    let named = match (save, revision) {
+        (Some(_), None) => bail!(
+            "--save needs --revision <sha>, the revision of takt under test; a scorecard is never named by the scenario repository's HEAD"
+        ),
+        (Some(dir), Some(revision)) => Some(card.clone().save(dir, revision, Named::Build)?),
+        (None, _) => None,
+    };
     card.print(out)?;
-    if let Some(dir) = save {
-        let (revision, named) = match BUILT_FROM {
-            Some(revision) => (revision.to_owned(), Named::Build),
-            None => (crate::git::head(repo)?, Named::Head),
-        };
-        let path = card.clone().save(dir, &revision, named)?;
-        match named {
-            Named::Build => writeln!(
-                out,
-                "saved: {}, named by the revision this takt was built from",
-                path.display()
-            )?,
-            Named::Head => writeln!(
-                out,
-                "saved: {}, named by HEAD of {}: this takt knows no revision it was built from",
-                path.display(),
-                repo.display()
-            )?,
-        }
+    if let Some(path) = named {
+        writeln!(
+            out,
+            "saved: {}, named by the revision of takt under test",
+            path.display()
+        )?;
     }
     match saved {
         Some(saved) => card.against(&saved, out),

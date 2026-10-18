@@ -48,6 +48,11 @@ pub trait Harness {
     fn name(&self) -> &str;
     /// Performs one of the offered actions in the tree and reports it.
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport>;
+    /// The tokens of the last step by component, when the harness reported them; none by
+    /// default.
+    fn last_usage(&self) -> Option<crate::events::TokenUsage> {
+        None
+    }
 }
 
 /// Claude Code in print mode, with file tools only.
@@ -61,6 +66,9 @@ pub struct ClaudeCode {
     pub max_turns: u32,
     /// What the child is held to.
     pub limits: crate::forge::Limits,
+    /// The tokens by component the last step reported, set by each step; none before the
+    /// first and after a step that reported none.
+    pub reported: std::cell::Cell<Option<crate::events::TokenUsage>>,
 }
 
 impl Default for ClaudeCode {
@@ -73,6 +81,7 @@ impl Default for ClaudeCode {
                 timeout: std::time::Duration::from_secs(1800),
                 output: 8 << 20,
             },
+            reported: std::cell::Cell::new(None),
         }
     }
 }
@@ -170,7 +179,12 @@ impl Harness for ClaudeCode {
         "claude-code"
     }
 
+    fn last_usage(&self) -> Option<crate::events::TokenUsage> {
+        self.reported.get()
+    }
+
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport> {
+        self.reported.set(None);
         let prompt = Self::prompt(context);
         let mut command = Command::new(&self.program);
         command
@@ -229,21 +243,24 @@ impl Harness for ClaudeCode {
         let doc: serde_json::Value =
             serde_json::from_slice(&output.stdout).context("read the harness's JSON output")?;
         let result = doc["result"].as_str().unwrap_or("");
-        let tokens = doc["usage"]
-            .as_object()
-            .map(|usage| {
-                [
-                    "input_tokens",
-                    "output_tokens",
-                    "cache_read_input_tokens",
-                    "cache_creation_input_tokens",
-                ]
-                .iter()
-                .filter_map(|key| usage.get(*key).and_then(serde_json::Value::as_u64))
-                .sum()
-            })
-            .filter(|&tokens: &u64| tokens > 0);
+        let usage = doc["usage"].as_object().map(|usage| {
+            let component = |key: &str| {
+                usage
+                    .get(key)
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0)
+            };
+            crate::events::TokenUsage {
+                input: component("input_tokens"),
+                output: component("output_tokens"),
+                cache_read: component("cache_read_input_tokens"),
+                cache_creation: component("cache_creation_input_tokens"),
+            }
+        });
+        let usage = usage.filter(|usage| usage.total() > 0);
+        let tokens = usage.map(|usage| usage.total());
         let (action, summary) = Self::parse(result)?;
+        self.reported.set(usage);
         Ok(StepReport {
             action,
             summary,

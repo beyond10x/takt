@@ -194,9 +194,24 @@ fn reported(dir: &Path) -> Vec<u64> {
 
 /// What the scorecard printed for `case`, one entry a run, split at white space.
 fn printed<'a>(text: &'a str, case: &str) -> Vec<Vec<&'a str>> {
+    let run = format!("{case}#");
     text.lines()
-        .filter(|line| line.split_whitespace().next() == Some(case))
+        .filter(|line| {
+            line.split_whitespace()
+                .next()
+                .and_then(|first| first.strip_prefix(run.as_str()))
+                .is_some_and(|n| n.parse::<usize>().is_ok())
+        })
         .map(|line| line.split_whitespace().collect())
+        .collect()
+}
+
+/// The line the scorecard printed for the case `case` itself, split at white space.
+fn case_line<'a>(text: &'a str, case: &str) -> Vec<&'a str> {
+    text.lines()
+        .find(|line| line.split_whitespace().next() == Some(case))
+        .unwrap_or_else(|| panic!("{case} in {text}"))
+        .split_whitespace()
         .collect()
 }
 
@@ -229,6 +244,11 @@ fn each_runs_tokens_are_the_sum_its_events_report() {
         for (row, sum) in rows.iter().zip(&sums) {
             assert_eq!(row[tokens], sum.to_string(), "{case}: {text}");
         }
+        assert_eq!(
+            case_line(&text, case)[tokens],
+            sums.iter().sum::<u64>().to_string(),
+            "{case}: {text}"
+        );
     }
     assert_eq!(
         reported(&repo.join(CASES_DIR).join("scenario-1-trial-1")),
@@ -479,17 +499,18 @@ fn against_a_saved_accepted_scenario_a_no_progress_row_is_worse() {
         .expect("the comparison prints");
     let text = String::from_utf8(out).expect("utf-8");
     assert_eq!(worse, 1, "{text}");
-    let row = |case: &str| {
-        text.lines()
-            .find(|line| line.split_whitespace().next() == Some(case))
-            .unwrap_or_else(|| panic!("{case} in {text}"))
-            .to_owned()
-    };
-    let no_progress = row("scenario-1-trial-2");
-    assert!(no_progress.ends_with(" worse"), "{no_progress}");
-    assert!(!no_progress.contains("not worse"), "{no_progress}");
-    let accepted = row("scenario-1-trial-3");
-    assert!(accepted.ends_with("not worse"), "{accepted}");
+    assert!(
+        text.contains("scenario-1-trial-2  scenario 1  NoProgress"),
+        "{text}"
+    );
+    assert!(
+        text.contains("scenario-1-trial-3  scenario 1  accepted"),
+        "{text}"
+    );
+    assert!(
+        text.contains("scenario 1  outcome median rank 2.5 against 4  worse"),
+        "{text}"
+    );
     assert!(
         text.contains("scenario 1  saved      n 1  tokens min 500 median 500 max 500"),
         "{text}"
@@ -553,14 +574,10 @@ fn several_runs_a_side_print_the_token_spread_and_flag_no_row_on_tokens() {
         .expect("the comparison prints");
     let text = String::from_utf8(out).expect("utf-8");
     assert_eq!(worse, 0, "{text}");
-    for trial in 4..=6 {
-        let case = format!("scenario-1-trial-{trial}");
-        let line = text
-            .lines()
-            .find(|line| line.split_whitespace().next() == Some(case.as_str()))
-            .unwrap_or_else(|| panic!("{case} in {text}"));
-        assert!(line.ends_with("not worse"), "{line}");
-    }
+    assert!(
+        text.contains("scenario 1  outcome median rank 4 against 4  not worse"),
+        "{text}"
+    );
     for line in [
         "scenario 1  saved      n 3  tokens min 106003 median 131500 max 167249",
         "scenario 1  candidate  n 3  tokens min 120000 median 140250 max 160000",
@@ -882,5 +899,84 @@ fn a_store_evidence_line_keeps_its_own_instant_beside_the_records() {
     assert!(
         read["at"].as_str().is_some_and(|at| at.len() == 27),
         "{read}"
+    );
+}
+
+/// A case's id, outcome, runs, steps, tokens, refusals, `NoProgress` and errors.
+type CaseFigures<'a> = (&'a str, &'a str, u64, u64, u64, u64, u64, u64);
+
+/// A case's figures: its last run's outcome; its runs' steps, tokens, refusals, errors and wall
+/// times summed. Trial 2 stopped `NoProgress`, then was resumed and ended on an error.
+#[test]
+fn a_case_takes_its_last_runs_outcome_and_its_runs_figures_summed() {
+    let repo = scratch("cases");
+    two_scenario_one_runs(&repo);
+    let card = Scorecard::read(&repo).expect("the scorecard reads");
+    let cases = card.cases();
+    let figures: Vec<CaseFigures<'_>> = cases
+        .iter()
+        .map(|case| {
+            (
+                case.case.as_str(),
+                case.outcome.as_str(),
+                case.runs,
+                case.steps,
+                case.tokens,
+                case.refusals,
+                case.no_progress,
+                case.errors,
+            )
+        })
+        .collect();
+    assert_eq!(
+        figures,
+        [
+            ("scenario-1-trial-1", "accepted", 1, 3, 2000, 0, 0, 0),
+            ("scenario-1-trial-2", "error", 2, 2, 345, 1, 0, 1),
+        ]
+    );
+    let walls: u64 = card
+        .rows
+        .iter()
+        .filter(|row| row.case == "scenario-1-trial-2")
+        .map(|row| row.wall_ms)
+        .sum();
+    assert_eq!(cases[1].wall_ms, walls);
+}
+
+/// A sum that would pass `u64::MAX` stops there and is flagged in the row, the case's and
+/// the run's, and printed as `saturated`.
+#[test]
+fn a_saturated_sum_is_flagged_in_the_row() {
+    let repo = scratch("saturated");
+    record(
+        &repo,
+        "scenario-1-trial-1",
+        &[
+            vec![
+                opened("scenario-1-trial-1"),
+                judged(usage(u64::MAX, 0, 0, 0)),
+                judged(usage(1, 0, 0, 0)),
+                stop("NoProgress", 2, u64::MAX),
+            ],
+            vec![
+                opened("scenario-1-trial-1"),
+                judged(usage(5, 0, 0, 0)),
+                stop("Completed (accepted)", 1, 5),
+            ],
+        ],
+    );
+    let card = Scorecard::read(&repo).expect("the scorecard reads");
+    assert_eq!(card.rows[0].tokens, u64::MAX);
+    assert!(card.rows[0].saturated, "{:?}", card.rows[0]);
+    assert!(!card.rows[1].saturated, "{:?}", card.rows[1]);
+    let case = &card.cases()[0];
+    assert_eq!(case.tokens, u64::MAX);
+    assert!(case.saturated, "{case:?}");
+    let text = print(&card);
+    assert_eq!(
+        case_line(&text, "scenario-1-trial-1").last(),
+        Some(&"saturated"),
+        "{text}"
     );
 }

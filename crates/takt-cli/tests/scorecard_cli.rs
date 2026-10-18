@@ -1,7 +1,7 @@
 //! story:scorecard-reader through the binary: `takt scorecard --repo <path>` prints a row per
-//! run read from the runs' events only; `--save <dir>` writes `scorecard-<revision>.json` and
-//! says what named it; `--against <file>` marks a row worse than the saved scenario's and exits
-//! 3. The case directories are written through `takt::events`, as the run loop writes them.
+//! case and per run read from the runs' events only; `--save <dir> --revision <sha>` writes
+//! `scorecard-<sha>.json`; `--against <file>` marks a scenario worse than the saved one's and
+//! exits 3. The case directories are written through `takt::events`, as the run loop writes them.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -187,10 +187,14 @@ fn scorecard_prints_each_runs_tokens_and_ignores_a_planted_task_spend() {
     assert_eq!(before, after);
 }
 
-/// `--save` writes the scorecard named by `HEAD` of the repository when the binary knows no
-/// revision, and says so; `--against` it marks a `NoProgress` run worse and exits 3.
+/// The revision of takt under test the saves below are named by.
+const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
+
+/// `--save` with `--revision` writes the scorecard named by that revision, and says so;
+/// `--against` it a scenario whose only case stopped `NoProgress` is worse, exit 3; one whose
+/// case was accepted is not, exit 0.
 #[test]
-fn save_then_against_marks_a_worse_row_and_exits_3() {
+fn save_then_against_marks_a_worse_scenario_and_exits_3() {
     let baseline = repository(
         "baseline",
         &[("scenario-1-trial-1", 500, "Completed (accepted)")],
@@ -202,18 +206,20 @@ fn save_then_against_marks_a_worse_row_and_exits_3() {
         &baseline.display().to_string(),
         "--save",
         &saves.display().to_string(),
+        "--revision",
+        REVISION,
     ]);
     assert_eq!(code, 0, "{text}{stderr}");
-    let named = match option_env!("TAKT_REVISION") {
-        Some(revision) => revision.to_owned(),
-        None => git(&baseline, &["rev-parse", "HEAD"]),
-    };
-    let saved = saves.join(format!("scorecard-{named}.json"));
+    let saved = saves.join(format!("scorecard-{REVISION}.json"));
     assert!(saved.is_file(), "{text}");
-    assert!(text.contains(&saved.display().to_string()), "{text}");
-    if option_env!("TAKT_REVISION").is_none() {
-        assert!(text.contains("named by HEAD of"), "{text}");
-    }
+    assert!(
+        text.contains(&format!(
+            "saved: {}, named by the revision of takt under test",
+            saved.display()
+        )),
+        "{text}"
+    );
+    assert_ne!(REVISION, git(&baseline, &["rev-parse", "HEAD"]));
 
     let candidate = repository("candidate", &[("scenario-1-trial-2", 650, "NoProgress")]);
     let (code, text, stderr) = takt(&[
@@ -224,12 +230,10 @@ fn save_then_against_marks_a_worse_row_and_exits_3() {
         &saved.display().to_string(),
     ]);
     assert_eq!(code, 3, "{text}{stderr}");
-    let line = text
-        .lines()
-        .filter(|line| line.starts_with("scenario-1-trial-2"))
-        .find(|line| line.contains("worse"))
-        .unwrap_or_else(|| panic!("a compared row in {text}"));
-    assert!(!line.contains("not worse"), "{line}");
+    assert!(
+        text.contains("scenario 1  outcome median rank 1 against 4  worse"),
+        "{text}"
+    );
     assert!(text.contains("scenario 1  median tokens +150"), "{text}");
 
     let better = repository(
@@ -244,7 +248,64 @@ fn save_then_against_marks_a_worse_row_and_exits_3() {
         &saved.display().to_string(),
     ]);
     assert_eq!(code, 0, "{text}{stderr}");
-    assert!(text.contains("not worse"), "{text}");
+    assert!(
+        text.contains("scenario 1  outcome median rank 4 against 4  not worse"),
+        "{text}"
+    );
+}
+
+/// `--save` without `--revision` is refused, exit 1, and writes nothing: a scorecard is never
+/// named by the scenario repository's `HEAD`. `--revision` without `--save` does not parse.
+#[test]
+fn save_without_a_revision_is_refused() {
+    let repo = repository("no-revision", &[("scenario-1-trial-1", 5, "NoProgress")]);
+    let saves = scratch("no-revision-saves");
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &repo.display().to_string(),
+        "--save",
+        &saves.display().to_string(),
+    ]);
+    assert_eq!(code, 1, "{text}{stderr}");
+    assert!(stderr.contains("--revision"), "{stderr}");
+    assert_eq!(fs::read_dir(&*saves).expect("the directory").count(), 0);
+    let (code, _, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &repo.display().to_string(),
+        "--revision",
+        REVISION,
+    ]);
+    assert_eq!(code, 2, "{stderr}");
+}
+
+/// A saved scorecard is not overwritten: a second save under the same revision is refused,
+/// exit 1, and the first file stays as it was.
+#[test]
+fn a_second_save_under_the_same_revision_is_refused() {
+    let repo = repository("twice", &[("scenario-1-trial-1", 5, "NoProgress")]);
+    let saves = scratch("twice-saves");
+    let save = || {
+        takt(&[
+            "scorecard",
+            "--repo",
+            &repo.display().to_string(),
+            "--save",
+            &saves.display().to_string(),
+            "--revision",
+            REVISION,
+        ])
+    };
+    let (code, text, stderr) = save();
+    assert_eq!(code, 0, "{text}{stderr}");
+    let path = saves.join(format!("scorecard-{REVISION}.json"));
+    let first = fs::read_to_string(&path).expect("the saved file");
+    run(&repo, "scenario-1-trial-2", 7, "Completed (accepted)");
+    let (code, text, stderr) = save();
+    assert_eq!(code, 1, "{text}{stderr}");
+    assert!(stderr.contains("exists"), "{stderr}");
+    assert_eq!(fs::read_to_string(&path).expect("the saved file"), first);
 }
 
 /// A saved scorecard that does not read is refused, exit 1, the reason on stderr.
