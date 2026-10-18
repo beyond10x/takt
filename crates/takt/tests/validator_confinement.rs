@@ -747,3 +747,115 @@ fn ci_read_reads_nothing_when_the_pushed_revision_is_another() {
     );
     drop(run);
 }
+
+/// One run of the delivery protocol whose test command is `script`, written by the model under
+/// `implementation.edit`: what it stopped with and printed, and the case directory.
+fn tested_by(name: &str, script: &str) -> (Scratch, anyhow::Result<Stop>, String, PathBuf) {
+    let tree = repository(name, r#"fs.file.exists("README.md")"#, &[]);
+    let validators: Vec<Box<dyn Validator>> = vec![Box::new(
+        TestsRun::new("sh tests/run.sh").expect("a command"),
+    )];
+    let harness = Writes::new(&[("tests/run.sh", script)]);
+    let mut run = Run::open(&tree, options(name, 6), &harness, &validators).expect("opens");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let dir = run.case.dir.clone();
+    drop(run);
+    (tree, stop, String::from_utf8(out).expect("utf-8"), dir)
+}
+
+/// A test command that plants a hook under `.git` is refused, the hook named and gone, and it
+/// never runs: no later git call of takt's sees it.
+#[test]
+fn a_test_command_that_plants_a_hook_is_refused_and_the_hook_removed() {
+    let script = "#!/bin/sh\nprintf '#!/bin/sh\\ntouch planted-hook-ran\\n' > .git/hooks/post-commit\nchmod +x .git/hooks/post-commit\nexit 0\n";
+    let (tree, stop, text, _) = tested_by("hook", script);
+    let Ok(Stop::StepRefused(why)) = &stop else {
+        panic!("the observation is refused, not {stop:?}\n{text}");
+    };
+    assert!(why.contains(".git/hooks/post-commit"), "{why}");
+    assert!(!tree.join(".git/hooks/post-commit").exists(), "{text}");
+    assert!(!tree.join("planted-hook-ran").exists(), "{text}");
+}
+
+/// A test command that commits (moving `HEAD` under the record's revision) is refused and
+/// `HEAD` put back.
+#[test]
+fn a_test_command_that_commits_is_refused_and_head_put_back() {
+    let script = "#!/bin/sh\necho forged > forged.txt\ngit add forged.txt\ngit -c user.name=m -c user.email=m@localhost commit -q -m forged\nexit 0\n";
+    let (tree, stop, text, _) = tested_by("commits", script);
+    let Ok(Stop::StepRefused(why)) = &stop else {
+        panic!("the observation is refused, not {stop:?}\n{text}");
+    };
+    assert!(why.contains("HEAD"), "{why}");
+    assert_ne!(
+        git(&tree, &["log", "-1", "--format=%s"]),
+        "forged",
+        "{text}"
+    );
+    assert!(!tree.join("forged.txt").exists(), "{text}");
+}
+
+/// takt's own git runs no code the repository's configuration names: not its `core.fsmonitor`,
+/// not its hooks, whether in `.git/hooks` or under a `core.hooksPath`.
+#[test]
+fn takt_git_runs_no_code_the_repository_configures() {
+    let tree = repository("configured", r#"fs.file.exists("README.md")"#, &[]);
+    let marker = |name: &str| tree.join(format!("ran-{name}"));
+    let hook = format!("#!/bin/sh\ntouch '{}'\n", marker("hook").display());
+    for dir in [".git/hooks", "hooks"] {
+        let path = tree.join(dir).join("post-commit");
+        fs::create_dir_all(path.parent().expect("a parent")).expect("hooks");
+        fs::write(&path, &hook).expect("a hook");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("exec bit");
+    }
+    let monitor = tree.join("monitor.sh");
+    fs::write(
+        &monitor,
+        format!(
+            "#!/bin/sh\ntouch '{}'\nexit 1\n",
+            marker("fsmonitor").display()
+        ),
+    )
+    .expect("a monitor");
+    fs::set_permissions(&monitor, fs::Permissions::from_mode(0o755)).expect("exec bit");
+    git(
+        &tree,
+        &["config", "core.fsmonitor", &monitor.display().to_string()],
+    );
+    git(&tree, &["config", "core.hooksPath", "hooks"]);
+    fs::write(tree.join("README.md"), "changed\n").expect("a change");
+    takt::git::changed_paths(&tree).expect("status");
+    takt::git::commit_paths(&tree, &["README.md".to_owned()], "a change").expect("commits");
+    assert!(!marker("fsmonitor").exists(), "core.fsmonitor ran");
+    assert!(!marker("hook").exists(), "a post-commit hook ran");
+}
+
+/// A case opened before the base commit was pinned reads the gate from where `HEAD` forked from
+/// its base branch, and the summary says so.
+#[test]
+fn an_unpinned_case_reads_the_gate_from_the_merge_base_and_names_it() {
+    let tree = repository("unpinned", r#"fs.file.exists("README.md")"#, &[]);
+    let validators: Vec<Box<dyn Validator>> =
+        vec![Box::new(GateRun::new(".engineering/gates.yaml"))];
+    let mut run = Run::open(&tree, options("unpinned", 2), &NoHarness, &validators).expect("opens");
+    let dir = current(&tree).expect("the case");
+    let mut branch = Branch::read(&dir).expect("the branch");
+    assert!(
+        branch.base_commit.is_some(),
+        "the base commit is pinned at open"
+    );
+    branch.base_commit = None;
+    branch.write(&dir).expect("written");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = String::from_utf8(out).expect("utf-8");
+    assert!(
+        text.contains("the merge-base of HEAD and main"),
+        "{stop:?}\n{text}"
+    );
+    assert!(
+        text.contains("evidence: gate_result pass"),
+        "{stop:?}\n{text}"
+    );
+}

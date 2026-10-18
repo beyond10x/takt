@@ -189,23 +189,101 @@ const GATE_INPUTS: &str = "gate-inputs";
 
 /// The case's base revision: the commit the base branch in `branch.yaml` names now.
 fn base_revision(tree: &Path, case_dir: &Path) -> Result<(String, String)> {
-    let base = Branch::read(case_dir)?.base.ok_or_else(|| {
+    let branch = Branch::read(case_dir)?;
+    let shown = branch.base.as_deref().unwrap_or("a detached HEAD");
+    // The commit pinned when the case opened: never what a branch names now, which a test
+    // command can move without touching the tree.
+    if let Some(pinned) = &branch.base_commit {
+        let at = crate::git::run(
+            tree,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &format!("{pinned}^{{commit}}"),
+            ],
+        )
+        .with_context(|| format!("resolve the case's base commit {pinned}"))?;
+        return Ok((format!("{shown} at {}, pinned at open", short(&at)), at));
+    }
+    let base = branch.base.ok_or_else(|| {
         anyhow!(
-            "the case has no base branch: it was opened from a detached HEAD; the gates document and the project file are read from the base revision"
+            "the case pins no base commit and has no base branch: it was opened from a detached HEAD; the gates document and the project file are read from the base revision"
         )
     })?;
     let at = crate::git::run(
         tree,
         &[
-            "rev-parse",
-            "--verify",
-            "--quiet",
+            "merge-base",
+            "HEAD",
             "--end-of-options",
             &format!("{base}^{{commit}}"),
         ],
     )
-    .with_context(|| format!("resolve the case's base branch {base}"))?;
-    Ok((base, at))
+    .with_context(|| format!("find where HEAD forked from the case's base branch {base}"))?;
+    Ok((
+        format!(
+            "the merge-base of HEAD and {base}, {} (the case pins no base commit)",
+            short(&at)
+        ),
+        at,
+    ))
+}
+
+/// The files a project file names that decide what a gate runs: the executables of the
+/// commands and providers it admits, and the catalogs it extends the functions with; those
+/// relative to the tree, which a model can edit, as they are named.
+fn admitted_files(project: &str) -> Result<Vec<String>> {
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(project).context("read the project file")?;
+    let mut paths = Vec::new();
+    let named = |value: &serde_yaml_ng::Value| value.as_str().map(str::to_owned);
+    if let Some(commands) = doc["commands"].as_mapping() {
+        paths.extend(commands.values().filter_map(|c| named(&c["executable"])));
+    }
+    if let Some(providers) = doc["providers"].as_mapping() {
+        paths.extend(
+            providers
+                .values()
+                .filter_map(|p| named(&p["command"]["executable"])),
+        );
+    }
+    if let Some(catalogs) = doc["catalogs"].as_sequence() {
+        paths.extend(catalogs.iter().filter_map(named));
+    }
+    // Relative to the tree and normalised; one that leads out of the tree is not the tree's.
+    let mut inside: Vec<String> = paths
+        .iter()
+        .filter(|path| Path::new(path).is_relative())
+        .filter_map(|path| {
+            let mut parts: Vec<&str> = Vec::new();
+            for part in path.split('/') {
+                match part {
+                    "" | "." => {}
+                    ".." => {
+                        parts.pop()?;
+                    }
+                    part => parts.push(part),
+                }
+            }
+            (!parts.is_empty()).then(|| parts.join("/"))
+        })
+        .collect();
+    inside.sort();
+    inside.dedup();
+    Ok(inside)
+}
+
+/// What git stores at `path` in the commit `at`: its mode and object, or `None` when the commit
+/// has no such path.
+fn object_at(tree: &Path, at: &str, path: &str) -> Result<Option<String>> {
+    let listed = crate::git::run(tree, &["ls-tree", "--full-tree", at, "--", path])?;
+    Ok(listed
+        .split('\t')
+        .next()
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_owned))
 }
 
 /// The text of `path`, relative to the tree, at the commit `at`; `None` when it has no such
@@ -261,7 +339,7 @@ impl Validator for GateRun {
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
         let dir = current(tree)?;
         let (base, at) = base_revision(tree, &dir)?;
-        let document = format!("{} from {base} at {}", self.gates.display(), short(&at));
+        let document = format!("{} from {base}", self.gates.display());
         let gates = file_at(tree, &at, &self.gates)?
             .ok_or_else(|| anyhow!("the gates document {document} is not in the base revision"))?;
         let project = match &self.project {
@@ -269,15 +347,39 @@ impl Validator for GateRun {
                 path.clone(),
                 file_at(tree, &at, path)?.ok_or_else(|| {
                     anyhow!(
-                        "the project file {} is not in the base revision {base} at {}",
-                        path.display(),
-                        short(&at)
+                        "the project file {} is not in the base revision, {base}",
+                        path.display()
                     )
                 })?,
             )),
             None => file_at(tree, &at, Path::new(DEFAULT_PROJECT))?
                 .map(|text| (PathBuf::from(DEFAULT_PROJECT), text)),
         };
+        // What the project file admits runs from the tree: an executable or a catalog the case's
+        // branch changed would let a model's edit decide the gate the base revision defines.
+        // Nothing is run and no record written while one differs from the base revision.
+        if let Some((path, text)) = &project {
+            let mut changed = Vec::new();
+            for file in admitted_files(text)
+                .with_context(|| format!("read the project file {}", path.display()))?
+            {
+                if object_at(tree, &at, &file)? != object_at(tree, revision, &file)? {
+                    changed.push(file);
+                }
+            }
+            if !changed.is_empty() {
+                return Ok(Observation {
+                    summary: format!(
+                        "the gates document {document}: not run; what the project file {} admits differs from the base revision at {}: {}; no record, the claim stays unknown",
+                        path.display(),
+                        short(revision),
+                        changed.join(", ")
+                    ),
+                    records: Vec::new(),
+                    artifact: None,
+                });
+            }
+        }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         // The case directory, which the loop writes every pass, stays out of the bundle's
         // source identity: that identity is the repository tree's. The base revision's two

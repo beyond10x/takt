@@ -81,6 +81,11 @@ pub struct Branch {
     /// when `HEAD` was detached or the other case was gone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// The commit the case's branch forked from, pinned when the case opened: what the gate
+    /// validator reads the gates document and the project file from, whatever the base
+    /// branch names later. Absent for a case opened before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
     /// The branch the tree was on when the case opened, the one a discarded case returns the
     /// tree to; absent when `HEAD` was detached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -579,6 +584,10 @@ impl CaseDir {
         let branch = Branch {
             name: Branch::name_of(id),
             base,
+            base_commit: Some(crate::git::run(
+                tree,
+                &["rev-parse", "--verify", from.as_deref().unwrap_or("HEAD")],
+            )?),
             left,
             pushed: None,
             pull_request: None,

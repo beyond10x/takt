@@ -16,15 +16,46 @@ use anyhow::{Context as _, Result, anyhow, bail};
 
 use crate::case::{CASES_DIR, is_under_cases};
 
-/// Runs `git <args>` in `tree` with `input` on its standard input; answers what it printed,
-/// whatever its exit status.
+/// What every git takt runs is told on its command line, over whatever the repository's, the
+/// user's or the system's configuration says: run no code from configuration. No
+/// `core.fsmonitor` (git runs it during `status`), no hooks (`commit` and `checkout` run them),
+/// no credential helper, no SSH command, no signing program, and no automatic `gc` or
+/// maintenance, which detaches a process of its own. A filter driver a `.gitattributes`
+/// names is not covered: its name is the repository's choice.
+const NO_CONFIGURED_CODE: [&str; 16] = [
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "credential.helper=",
+    "-c",
+    "core.sshCommand=false",
+    "-c",
+    "commit.gpgSign=false",
+    "-c",
+    "tag.gpgSign=false",
+    "-c",
+    "gc.auto=0",
+    "-c",
+    "maintenance.auto=false",
+];
+
+/// Runs `git <args>` in `tree` with `input` on its standard input, with no code from
+/// configuration ([`NO_CONFIGURED_CODE`]) and no credential in its environment; answers what
+/// it printed, whatever its exit status.
 fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
-    let mut child = Command::new("git")
+    let mut command = Command::new("git");
+    crate::forge::without_credentials(&mut command, |_| false);
+    let mut child = command
+        .args(NO_CONFIGURED_CODE)
         .args(args)
         .current_dir(tree)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env_remove("GIT_CONFIG_COUNT")
         .stdin(if input.is_some() {
             Stdio::piped()
         } else {

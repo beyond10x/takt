@@ -7,8 +7,9 @@
 //!
 //! Every child process takt starts, the forge's and the others' (the test command, the
 //! harness, `aep`), goes through [`run_child`]: no standard input, its own process group,
-//! killed with what it started once it outlives its [`Limits`], and only a bounded tail of
-//! what it prints kept. Its environment holds no credential but the ones its adapter reads
+//! killed once it outlives its [`Limits`], what it started killed with it when it ends, and
+//! only a bounded tail of what it prints kept. Its environment holds no credential but the ones
+//! its adapter reads
 //! ([`without_credentials`]): the forge keeps the GitHub ones the bot route's programs read.
 
 use std::cell::RefCell;
@@ -283,24 +284,143 @@ fn tail(
 /// group with no process left is no error.
 fn kill_group(child: &std::process::Child) {
     #[cfg(unix)]
-    {
-        let _ = Command::new("kill")
-            .args(["-KILL", "--", &format!("-{}", child.id())])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+    if let Ok(group) = libc::pid_t::try_from(child.id()) {
+        // SAFETY: `kill` takes two integers and touches no memory of this process.
+        unsafe {
+            libc::kill(-group, libc::SIGKILL);
+        }
     }
     #[cfg(not(unix))]
     let _ = child;
 }
 
+/// The process groups of the children [`run_child`] has running. Held while one is spawned and
+/// while what one left behind is swept, so that a sweep never takes another call's child, or
+/// what stayed in its group, for a leftover.
+static RUNNING: std::sync::Mutex<std::collections::BTreeSet<u32>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// The variable every child of [`run_child`] carries, its value unique to the call: a process
+/// that still carries it after the child ended was started by the child.
+const MARK: &str = "TAKT_CHILD";
+
+/// What a child left behind once it ended: on Linux, takt is the subreaper of everything it
+/// starts (`PR_SET_CHILD_SUBREAPER`), so a process the child started and orphaned, in a session
+/// or a process group of its own, becomes takt's child instead of `init`'s and is found here.
+#[cfg(target_os = "linux")]
+mod leftovers {
+    use std::collections::BTreeSet;
+    use std::time::{Duration, Instant};
+
+    /// Makes this process the subreaper of what it starts, once.
+    pub fn adopt() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            // SAFETY: `prctl` with `PR_SET_CHILD_SUBREAPER` takes integers only.
+            unsafe {
+                libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
+            }
+        });
+    }
+
+    /// A process's parent, process group and session, from `/proc/<pid>/stat`.
+    fn stat(pid: libc::pid_t) -> Option<(libc::pid_t, libc::pid_t, libc::pid_t)> {
+        let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // The command name is in parentheses and may hold anything; the fields follow the last.
+        let rest = text.get(text.rfind(')')? + 2..)?;
+        let mut fields = rest.split(' ').skip(1);
+        let mut next = || fields.next()?.parse().ok();
+        Some((next()?, next()?, next()?))
+    }
+
+    /// Whether the process `pid` was started with `mark` in its environment.
+    fn carries(pid: libc::pid_t, mark: &[u8]) -> bool {
+        std::fs::read(format!("/proc/{pid}/environ"))
+            .is_ok_and(|bytes| bytes.split(|byte| *byte == 0).any(|entry| entry == mark))
+    }
+
+    /// The processes this one adopted that the ended child in `group`, marked `mark`, left:
+    /// in its group, in another session, in a process group no running child of `run_child`
+    /// leads and not this process's own, or carrying its mark. A child of this process that
+    /// another thread started directly stays in this process's own group and session.
+    fn adopted(group: libc::pid_t, mark: &[u8], running: &BTreeSet<u32>) -> Vec<libc::pid_t> {
+        let me = libc::pid_t::try_from(std::process::id()).unwrap_or(0);
+        // SAFETY: `getsid` and `getpgrp` take integers and touch no memory of this process.
+        let (session, own) = unsafe { (libc::getsid(0), libc::getpgrp()) };
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+            .filter(|pid| *pid != me)
+            .filter(|pid| {
+                stat(*pid).is_some_and(|(parent, pgrp, sid)| {
+                    parent == me
+                        && (pgrp == group
+                            || sid != session
+                            || (pgrp != own
+                                && !u32::try_from(pgrp).is_ok_and(|g| running.contains(&g)))
+                            || carries(*pid, mark))
+                })
+            })
+            .collect()
+    }
+
+    /// Kills and reaps what the ended child in `group` left, round after round: killing one
+    /// hands what it started to this process, which the next round finds. An error when
+    /// something is still there after the last round.
+    pub fn sweep(group: u32, mark: &str, running: &BTreeSet<u32>) -> anyhow::Result<()> {
+        let Ok(group) = libc::pid_t::try_from(group) else {
+            return Ok(());
+        };
+        let mark = format!("{}={mark}", super::MARK).into_bytes();
+        for _ in 0..64 {
+            let found = adopted(group, &mark, running);
+            if found.is_empty() {
+                return Ok(());
+            }
+            for pid in &found {
+                // SAFETY: `kill` takes two integers and touches no memory of this process.
+                unsafe {
+                    libc::kill(*pid, libc::SIGKILL);
+                }
+            }
+            let until = Instant::now() + Duration::from_secs(2);
+            let mut left: Vec<libc::pid_t> = found;
+            while !left.is_empty() && Instant::now() < until {
+                left.retain(|pid| {
+                    let mut status = 0;
+                    // SAFETY: `waitpid` writes the status into the integer it is given.
+                    let reaped = unsafe { libc::waitpid(*pid, &raw mut status, libc::WNOHANG) };
+                    reaped == 0
+                });
+                if !left.is_empty() {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+        anyhow::bail!("processes the child started were still running after 64 rounds of killing")
+    }
+}
+
 /// Runs `command` held to `limits`: standard input empty, standard output and error read into
 /// a bounded tail each, in a process group of its own. Past its timeout it is killed with its
-/// group and the answer is an error naming the program and the timeout; once it has ended, what
-/// it started and left in its group is killed too, so nothing it began outlives it and writes
-/// on. An error too when its output stays held open by a process that left its group.
+/// group and the answer is an error naming the program and the timeout. Once it has ended, what
+/// it started is killed with it before this returns: its process group, and on Linux every
+/// process it started and orphaned that takt adopted as their subreaper, however it left the
+/// group (a session of its own included). Not killed: one that left the group into takt's own
+/// group and dropped the call's mark from its environment; on other systems, one that left the
+/// group at all. An error too when its output stays held open after that.
 pub fn run_child(command: &mut Command, limits: Limits) -> Result<Finished> {
+    static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mark = format!(
+        "{}-{}",
+        std::process::id(),
+        CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    command.env(MARK, &mark);
+    #[cfg(target_os = "linux")]
+    leftovers::adopt();
     let program = Path::new(command.get_program())
         .file_name()
         .map_or_else(
@@ -316,12 +436,19 @@ pub fn run_child(command: &mut Command, limits: Limits) -> Result<Finished> {
     std::os::unix::process::CommandExt::process_group(command, 0);
     let mut busy = 0;
     let mut child = loop {
+        let mut running = RUNNING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match command.spawn() {
-            Ok(child) => break child,
+            Ok(child) => {
+                running.insert(child.id());
+                break child;
+            }
             // An executable written a moment ago is busy while a child another thread forked
             // meanwhile still holds the write handle it inherited; that is over as soon as the
             // child has exec'd, so the spawn is retried briefly before it is an error.
             Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && busy < 50 => {
+                drop(running);
                 busy += 1;
                 std::thread::sleep(Duration::from_millis(2));
             }
@@ -348,13 +475,26 @@ pub fn run_child(command: &mut Command, limits: Limits) -> Result<Finished> {
         std::thread::sleep(pause.min(limits.timeout.saturating_sub(started.elapsed())));
         pause = (pause * 2).min(Duration::from_millis(100));
     };
+    // What the child started goes before anything it may have written is looked at.
+    kill_group(&child);
+    let swept = {
+        let mut running = RUNNING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        running.remove(&child.id());
+        #[cfg(target_os = "linux")]
+        let swept = leftovers::sweep(child.id(), &mark, &running);
+        #[cfg(not(target_os = "linux"))]
+        let swept: Result<()> = Ok(());
+        swept
+    };
     let Some(status) = status else {
         bail!(
             "{program} timed out after {:.1} s and was killed",
             limits.timeout.as_secs_f64()
         );
     };
-    kill_group(&child);
+    swept.with_context(|| format!("{program} ended"))?;
     let read = |stream: &mpsc::Receiver<(Vec<u8>, bool)>| {
         stream.recv_timeout(GRACE).map_err(|_| {
             anyhow!(

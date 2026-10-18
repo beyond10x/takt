@@ -660,10 +660,7 @@ impl<'a> Run<'a> {
                 // A record is bound to the revision, `HEAD`: a tree with uncommitted changes
                 // outside the cases directory would be observed on other content than the one
                 // the record names. Nothing is observed, and the changes are left as they are.
-                let uncommitted: Vec<String> = crate::git::changed_paths(&self.tree)?
-                    .into_iter()
-                    .filter(|p| !crate::case::is_under_cases(p))
-                    .collect();
+                let uncommitted = crate::git::uncommitted(&self.tree)?;
                 if !uncommitted.is_empty() {
                     let why = format!(
                         "{} would observe {} with uncommitted changes: {}",
@@ -677,14 +674,20 @@ impl<'a> Run<'a> {
                 }
                 // What a validator runs may be code a model wrote (the test command, a gate's
                 // commands): the cases directory is guarded as around a judgement step, and the
-                // tree must be as clean after the observation as before it. The validator's
+                // tree must be as it was before the observation: the guarded part of `.git`
+                // (hooks, config, `info/`), `HEAD`, the index and every path outside the cases
+                // directory; ignored files it made (a build's output) may stay. The validator's
                 // own writes under its case are the only change admitted; anything else is put
-                // back or discarded, and the observation refused with nothing recorded.
+                // back, and the observation refused with nothing recorded. `.git` is put back
+                // before any git runs again: git runs what was planted there (a hook,
+                // `core.fsmonitor`).
+                let checkpoint = crate::git::Checkpoint::take(&self.tree)?;
                 let cases = self.tree.join(CASES_DIR);
                 let kept = snapshot(&cases)?;
                 let observed = validator
                     .observe(&self.tree, &revision, seq)
                     .with_context(|| format!("{} ({})", validator.action(), validator.name()));
+                let planted = checkpoint.put_back_git_dir(&self.tree)?;
                 let touched = differing(&kept, &snapshot(&cases)?);
                 let own: Vec<PathBuf> = match self.case.dir.file_name() {
                     Some(id) => validator
@@ -699,15 +702,18 @@ impl<'a> Run<'a> {
                     .filter(|path| !own.contains(path))
                     .map(|path| Path::new(CASES_DIR).join(path).display().to_string())
                     .collect();
-                let outside: Vec<String> = crate::git::changed_paths(&self.tree)?
-                    .into_iter()
-                    .filter(|p| !crate::case::is_under_cases(p))
-                    .collect();
+                let change = checkpoint.change(&self.tree)?;
+                let mut outside: Vec<String> = planted;
+                outside.extend(change.paths.iter().cloned());
+                if change.staged {
+                    outside.push("the index".to_owned());
+                }
+                if let Some(moved) = &change.head {
+                    outside.push(format!("HEAD, moved {moved}"));
+                }
                 if !foreign.is_empty() || !outside.is_empty() {
                     restore(&cases, &kept, &touched)?;
-                    if !outside.is_empty() {
-                        crate::git::discard_uncommitted(&self.tree)?;
-                    }
+                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
                     foreign.extend(outside);
                     let mut why = format!(
                         "{} wrote what its validator does not: {}",
