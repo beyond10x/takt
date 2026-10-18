@@ -834,6 +834,56 @@ types:
       - name: saturated
         type: Boolean
 
+  # One improvement turn's row on the loop scorecard (story:loop-scorecard), which `loop.measure`
+  # prints over the recorded `self.improvement/1` cases. Decided 2026-10-18: one row per turn,
+  # its turn id (the turn is a case), its finding, its baseline and candidate revisions, its
+  # verdict, whether it was promoted, and its tokens and wall time taken from the turn's records.
+  # The wall time is in milliseconds, as takt.work.ScorecardRow's. Declared ahead of the code.
+  # read from: .engineering/planning/story/loop-scorecard.md:30-33
+  # read from: .engineering/planning/story/loop-scorecard.md:48
+  # read from: .engineering/planning/design/recursive-self-improvement.md:185-187
+  # read from: crates/takt/src/scorecard.rs:58-84
+  # UNMAPPED: whether a turn whose case has not completed through an outcome gets a row, and so
+  # whether `verdict` may be absent. Open for the owner.
+  - name: takt.work.LoopScorecardRow
+    kind: struct
+    fields:
+      - name: turn
+        type: takt.work.CaseId
+      - name: finding
+        type: takt.work.FindingKey
+      - name: baseline
+        type: takt.work.Revision
+      - name: candidate
+        type: takt.work.Revision
+      # The outcome the turn's case completed through: accepted once promoted, declined when the
+      # candidate still reproduces the finding, unreproducible when the baseline never did.
+      # read from: protocols/self-improvement/1.yaml:11-12
+      - name: verdict
+        type: takt.work.OutcomeId
+      - name: promoted
+        type: Boolean
+      - name: tokens
+        type: Integer
+      - name: wall_ms
+        type: Integer
+
+  # The loop scorecard: its rows, one per improvement turn. Its figures (turns, accepted share,
+  # promoted share, median tokens per accepted turn) are computed from the rows each time it is
+  # printed and never stored, so no field holds them. Decided 2026-10-18; declared ahead of the
+  # code (story:loop-scorecard).
+  # read from: .engineering/planning/story/loop-scorecard.md:49
+  # UNMAPPED: the story's Outcome also lists the time from finding to verified and escaped
+  # defects as human-sourced counts; neither is among the decided figures and no row field holds
+  # what they need (when a finding was filed, a human-sourced count). Open for the owner.
+  # read from: .engineering/planning/story/loop-scorecard.md:50
+  - name: takt.work.LoopScorecard
+    kind: struct
+    fields:
+      - name: rows
+        type: List<takt.work.LoopScorecardRow>
+        summary: One a recorded improvement turn.
+
   # A promotion's id. read from: .engineering/planning/design/recursive-self-improvement.md (§ The judge)
   - name: takt.work.PromotionId
     kind: newtype
@@ -898,6 +948,14 @@ types:
   - name: takt.work.PromotionResult
     kind: enum
     variants: [promoted, mismatch]
+
+  # What a promotion record is, its `kind`: `baseline` for one `takt promote --baseline-only`
+  # wrote, which installed nothing, `promotion` for one that installed a binary. Declared ahead of
+  # the code (story:promotion), decided 2026-10-18.
+  # read from: .engineering/planning/story/promotion.md:58
+  - name: takt.work.PromotionKind
+    kind: enum
+    variants: [baseline, promotion]
 
   # An agent role's name, the `<role>` of `agent:<role>`. Four agent roles work on takt: the
   # planner, the developer, the reviewer and the doc-writer; the owner is a person, not a role.
@@ -1173,6 +1231,13 @@ entities:
       - name: branch
         type: takt.work.BranchName
         summary: The case's branch, `takt/<id>`.
+      # The finding an improvement case verifies, its `finding` artifact; absent for a case under
+      # any other protocol. Declared ahead of the code (story:self-improvement-protocol), decided
+      # 2026-10-18.
+      # read from: protocols/self-improvement/1.yaml:28-32
+      # read from: .engineering/planning/story/self-improvement-protocol.md:52
+      - name: finding
+        type: Optional<takt.work.FindingKey>
     relations:
       # A case opened for a story references it; the story lives in the planning store and
       # outlives the case.
@@ -1192,12 +1257,16 @@ entities:
         cardinality: one
         via: branch
       # An improvement turn is a case under `self.improvement/1`, not a noun of its own, and its
-      # `finding` artifact is the finding the turn verifies.
+      # `finding` artifact is the finding the turn verifies. Decided 2026-10-18: an improvement
+      # case references exactly one finding, and a finding may have many cases (a retried or
+      # re-opened turn); many-to-one, the case side references.
       # read from: .engineering/planning/story/self-improvement-protocol.md:50-52
       # read from: protocols/self-improvement/1.yaml:28-32
-      # UNMAPPED: the story infers "one turn verifies one finding" from the design; no code or
-      # artifact says how a case names its finding (no field of the case holds a FindingKey), so
-      # no relation to takt.work.Finding is declared. Open for the owner.
+      - name: finding
+        kind: references
+        target: takt.work.Finding
+        cardinality: one
+        via: finding
     # A case is open from the moment the run opens it. Closing it through the outcome it
     # completed with is the record story's (story:run-record-and-story-evidence); nothing in the
     # kernel moves a case, which is finished when its latest decision has a legitimate outcome, so
@@ -1879,7 +1948,6 @@ entities:
 
   # A promotion: the takt binary installed for runs, built from a named revision whose scorecard
   # showed no regression. Declared ahead of the code (story:promotion).
-  # UNMAPPED: whether one scorecard may back more than one promotion.
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ The judge)
   # read from: .engineering/planning/story/promotion.md
   # The promotion record names the revision the binary embeds and the scorecard it read, and the
@@ -1890,13 +1958,20 @@ entities:
   # same UTC day, naming it.
   # read from: .engineering/planning/story/promotion.md:35-40
   # read from: .engineering/planning/story/promotion.md:47-49
-  # read from: .engineering/planning/story/promotion.md:93
-  # UNMAPPED: where the record is kept (the story leaves it open and its review asks for a pinned
-  # place outside the repository a candidate changes), the instant it carries (the one-a-UTC-day
-  # rule needs one; no field is declared), and how a `--baseline-only` record tells itself apart
-  # from one that installed a binary. Open for the owner.
-  # read from: .engineering/planning/story/promotion.md:76
-  # read from: .engineering/planning/story/promotion.md:104
+  # read from: .engineering/planning/story/promotion.md:98
+  # Where it is kept, decided 2026-10-18: one JSON file per promotion at
+  # `$XDG_STATE_HOME/takt/promotions/<revision>.json` (`~/.local/state/takt/promotions/` without
+  # `XDG_STATE_HOME`), outside every repository a candidate changes, which the scorecard-reader
+  # review asked for; the latest record by `promoted_at` is the baseline. `promoted_at` is the
+  # instant the one-a-UTC-day rule reads, and `kind` tells a `--baseline-only` record (`baseline`)
+  # from one that installed a binary (`promotion`).
+  # read from: .engineering/planning/story/promotion.md:55-58
+  # read from: .engineering/planning/story/promotion.md:79
+  # read from: .engineering/planning/story/promotion.md:109
+  # One scorecard backs at most one promotion, decided 2026-10-18: one-to-one, the promotion
+  # referencing its scorecard. A relation entry carries no bound on the scorecard's side, so the
+  # bound is stated here.
+  # read from: .engineering/planning/story/promotion.md:53
   # The rule's parameters, n and the margin, are recorded with the scorecard; their fields are
   # declared with the code (story:promotion).
   # read from: .engineering/planning/design/recursive-self-improvement.md:132-138
@@ -1914,6 +1989,12 @@ entities:
         summary: The revision the installed binary embeds in `--version`.
       - name: scorecard
         type: takt.work.ScorecardId
+      - name: promoted_at
+        type: Timestamp
+        summary: When the promotion was made, RFC 3339 in UTC; the one-a-UTC-day rule reads it.
+      - name: kind
+        type: takt.work.PromotionKind
+        summary: Whether the record installed a binary or only recorded the baseline.
     relations:
       - name: scorecard
         kind: references
@@ -2122,14 +2203,3 @@ entities:
       initial: Recorded
       states: [Recorded]
       terminal: [Recorded]
-
-  # UNMAPPED: the loop scorecard (story:loop-scorecard) is not declared. It is printed over the
-  # recorded `self.improvement/1` cases: the share of findings that became fixes, the share of
-  # fixes verified against declined, the time from finding to verified, tokens per verified fix,
-  # and escaped defects as human-sourced counts. The story says one row per recorded turn and the
-  # design "per L1 turn", while each figure is a share or a rate over turns; whether it is one row
-  # per turn or one figure per metric over the turns, and the unit of the time, decide its shape.
-  # Open for the owner.
-  # read from: .engineering/planning/story/loop-scorecard.md:30-33
-  # read from: .engineering/planning/story/loop-scorecard.md:48
-  # read from: .engineering/planning/design/recursive-self-improvement.md:185-187

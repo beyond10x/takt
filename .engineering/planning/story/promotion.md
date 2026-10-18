@@ -26,7 +26,7 @@ scope:
   path: crates/takt/src/promotion.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 10
+revision: 11
 ---
 # Story: promotion
 
@@ -50,9 +50,12 @@ lands, recorded by a first `takt promote --baseline-only` that installs nothing.
 
 ## Domain relations
 
-- Promotion → Scorecard: references exactly one, by id (`ess/domains/takt.yaml`, takt.work.Promotion).
+- Promotion → Scorecard: references exactly one, by id (`ess/domains/takt.yaml`, takt.work.Promotion); one-to-one: a scorecard backs at most one promotion. Decided 2026-10-18.
 - Promotion → Revision: names exactly one, the one the binary embeds.
-- Promotion record: takt.work.Promotion, result takt.work.PromotionResult; store, instant and token rule UNMAPPED there.
+- Promotion record: takt.work.Promotion, result takt.work.PromotionResult. Decided 2026-10-18:
+  - store: one JSON file per promotion at `$XDG_STATE_HOME/takt/promotions/<revision>.json` (`~/.local/state/takt/promotions/` without `XDG_STATE_HOME`), outside every repository a candidate changes; the latest record by `promoted_at` is the baseline.
+  - instant: a field `promoted_at` (RFC 3339, UTC), which the one-a-UTC-day rule reads.
+  - kind: `kind: baseline` on a `--baseline-only` record, `kind: promotion` on one that installed a binary (enum takt.work.PromotionKind).
 
 ## Scope
 
@@ -73,7 +76,9 @@ Derived 2026-10-18 by `story-scoper`. Every line is **cited** (read from the sto
 - **Would collide with:** any unit that adds or changes a `takt-cli` subcommand in `crates/takt-cli/src/main.rs`, and any unit that adds a kernel module to `crates/takt/src/lib.rs` — cited, the story's Ordering names the `main.rs` overlap with story:scorecard-reader, and story:judge-guard names the same file
 - **Safety fact:** nothing in the tree reads `takt --version` output: the only version source is clap's `version` at `crates/takt-cli/src/main.rs:19`, and `git grep -- '--version\|CARGO_PKG_VERSION' crates` finds no reader, so adding the revision breaks no existing caller — step 2, unproven
 
-Not established: where the promotion record is stored (if in a tree a candidate edits, a candidate could plant its own baseline: the security reviewer should prove the location); what "installs" means (cargo install, copy, Taskfile task); the saved scorecard's format and location (story:scorecard-reader); whether a `promoted` validator in `validator.rs` is in scope (`protocols/self-improvement/1.yaml:184-194` declares `binary.promote`); whether `crates/takt-cli/Cargo.toml` needs dependencies.
+Where the promotion record is stored was decided 2026-10-18 (Domain relations: under `$XDG_STATE_HOME/takt/promotions/`, outside every repository a candidate changes); in a tree a candidate edits, a candidate could plant its own baseline, so the security reviewer should still prove a candidate cannot write there.
+
+Not established: what "installs" means (cargo install, copy, Taskfile task); the saved scorecard's format and location (story:scorecard-reader); whether a `promoted` validator in `validator.rs` is in scope (`protocols/self-improvement/1.yaml:184-194` declares `binary.promote`); whether `crates/takt-cli/Cargo.toml` needs dependencies.
 
 Typed entries: `crates/takt-cli/src/main.rs` (cited); `crates/takt-cli/build.rs`, `crates/takt/src/promotion.rs`, `crates/takt/src/lib.rs`, `crates/takt-cli/tests/promote_cli.rs`, `ess/domains/takt.yaml`, `README.md` (inferred).
 
