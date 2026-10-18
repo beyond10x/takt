@@ -165,8 +165,8 @@ types:
     variants: [granted, denied]
 
   # One approval the operator gave a story's case, as the planning store records it: the
-  # capability granted, the case it was granted to, who granted it, when, and the implementation
-  # revision it authorises. `takt approve <case> <capability> --by <approver>` writes it through
+  # capability granted, the case it was granted to, who granted it, when, and the revision it
+  # authorises, of the artifact the granted action is about (its subject). `takt approve <case> <capability> --by <approver>` writes it through
   # `aep plan artifact evidence <story> --kind approval` before it writes the grant: the source
   # `takt approve <capability> --by <approver> at <revision>`, the reference the case's
   # `authority.yaml`, the instant the grant's `granted_at`. What the record changed in the store is
@@ -615,7 +615,8 @@ entities:
       # single artifact is refused a grant, naming the action). The file carries each
       # grant's approver, instant and revision beside the capability and the decision, and Canon is
       # handed only the two keys `canon-authority/1` declares, for the grants given at the case's
-      # current revision, so a new commit needs a new grant. The merge validator checks the grant
+      # current revision of each grant's subject, so a grant authorises nothing once its subject
+      # moves and the moved subject needs a new grant. The merge validator checks the grant
       # at the revision again before it merges. Each approval is also recorded as `approval`
       # evidence on the story in the planning store (`Story.approvals`), before the grant is
       # written. A grant names a capability some action of the case's protocol requires, or it is
@@ -625,6 +626,7 @@ entities:
       # read from: crates/takt/src/case.rs:356-373
       # read from: crates/takt/src/case.rs:639-652
       # read from: crates/takt/src/case.rs:717
+      # read from: crates/takt/src/protocol.rs:139-216
       # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:46-52
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/authority.rs:7-21
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/mod.rs:359-365

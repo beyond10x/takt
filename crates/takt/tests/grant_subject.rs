@@ -249,7 +249,47 @@ fn an_improvement_turn_is_granted_at_its_candidate_revision() {
         "{}",
         d.json
     );
+    // Read again after the move: the grant is still on file, at the old candidate only.
+    let authority = Authority::read(&case.dir)
+        .expect("reads")
+        .expect("an authority");
+    assert!(authority.grants_at("repository.merge.judge_surface", "candidate-1"));
     assert!(!authority.grants_at("repository.merge.judge_surface", "candidate-2"));
+}
+
+#[test]
+fn a_software_change_rollback_is_refused_a_grant_naming_the_action() {
+    let tree = scratch("rollback");
+    let protocol = LoadedProtocol::builtin("software.change/1").expect("a built-in");
+    let case = open(
+        &tree,
+        protocol,
+        "rollback",
+        &[
+            ("risk", "standard"),
+            ("change_kind", "bugfix"),
+            ("affects_security_boundary", "false"),
+        ],
+    );
+    let d = case.evaluate(0).expect("evaluates");
+    assert_eq!(
+        action(&d, "release.rollback"),
+        "approval-required",
+        "{}",
+        d.json
+    );
+
+    let error = grant(&tree, "rollback", "release.rollback", "operator")
+        .expect_err("release.rollback has no precondition, so no artifact to bind to");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("action release.rollback"),
+        "the refusal names the action: {message}"
+    );
+    assert!(
+        Authority::read(&case.dir).expect("reads").is_none(),
+        "a refused grant writes nothing"
+    );
 }
 
 #[test]

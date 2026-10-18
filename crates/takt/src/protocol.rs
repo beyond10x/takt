@@ -140,7 +140,11 @@ impl LoadedProtocol {
     /// precondition of each action requiring it names, directly or through the claims it names.
     /// Refused, naming the action, when an action's precondition names evidence about no
     /// artifact or about more than one, or when two actions requiring it are about different
-    /// artifacts: a grant is never bound to a guess.
+    /// artifacts: a grant is never bound to a guess. A match (`evidence`, `first` or `before`)
+    /// that names no subject reads records about any artifact, so it is about no single one. An
+    /// action with no precondition is about no artifact, so a capability only it requires is
+    /// refused even where a grant used to bind to `implementation` (`software.change/1`'s
+    /// `release.rollback`): never binding to a guess outranks granting as before.
     pub fn grant_subject(&self, capability: &str) -> Result<String> {
         let doc: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(&self.yaml).context("read the protocol document")?;
@@ -163,7 +167,7 @@ impl LoadedProtocol {
                 &mut subjects,
             );
             let mut subjects = subjects.into_iter();
-            let (Some(subject), None) = (subjects.next(), subjects.next()) else {
+            let (Some(Some(subject)), None) = (subjects.next(), subjects.next()) else {
                 bail!(
                     "the action {name} of {} requires {capability}, and its precondition names evidence about no single artifact; a grant of {capability} binds to none",
                     self.id
@@ -185,13 +189,14 @@ impl LoadedProtocol {
     }
 }
 
-/// Adds to `subjects` the subject of every evidence condition in `condition`, following each
-/// claim it names into that claim's `true_when` in `claims`, each claim once.
+/// Adds to `subjects` the subject of every evidence match (`evidence`, `first`, `before`) in
+/// `condition`, `None` for one that names none and so reads records about any artifact,
+/// following each claim it names into that claim's `true_when` in `claims`, each claim once.
 fn subjects_of(
     claims: &serde_yaml_ng::Value,
     condition: &serde_yaml_ng::Value,
     seen: &mut std::collections::BTreeSet<String>,
-    subjects: &mut std::collections::BTreeSet<String>,
+    subjects: &mut std::collections::BTreeSet<Option<String>>,
 ) {
     match condition {
         serde_yaml_ng::Value::Mapping(map) => {
@@ -207,8 +212,8 @@ fn subjects_of(
                             );
                         }
                     }
-                    (Some("subject"), serde_yaml_ng::Value::String(subject)) => {
-                        subjects.insert(subject.clone());
+                    (Some("evidence" | "first" | "before"), serde_yaml_ng::Value::Mapping(_)) => {
+                        subjects.insert(value["subject"].as_str().map(str::to_owned));
                     }
                     _ => subjects_of(claims, value, seen, subjects),
                 }

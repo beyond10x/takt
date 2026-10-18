@@ -348,11 +348,11 @@ impl Authority {
         })
     }
 
-    /// The document as Canon reads it at the implementation revision `at`: a
+    /// The document as Canon reads it with every grant's subject at the revision `at`: a
     /// `canon-authority/1` list of `capability` and `decision` entries, nothing else, holding
     /// the decisions that apply there ([`AuthorityDecision::applies_at`]). A grant given at
     /// another revision is left out, so Canon finds the capability undecided and the action it
-    /// guards approval-required again: a new commit needs a new grant.
+    /// guards approval-required again: a moved subject needs a new grant.
     pub fn canon(&self, at: Option<&str>) -> Result<String> {
         self.canon_by(|_| at.map(str::to_owned))
     }
