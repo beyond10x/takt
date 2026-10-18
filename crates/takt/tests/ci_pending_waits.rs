@@ -411,7 +411,7 @@ fn an_hour_budget_cuts_the_wait_and_stops_waiting() {
     let (id, _) = worked_case(&repo);
     let forge = Rc::new(PendingFor::new(usize::MAX));
     let validators = validators(forge.clone());
-    let hours = 0.5 / 3600.0;
+    let hours = 3.0 / 3600.0;
     let mut run = Run::resume(
         &repo,
         options(None, Some(hours)),

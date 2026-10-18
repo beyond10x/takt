@@ -68,6 +68,19 @@ pub trait Validator {
     ) -> Result<(Observation, bool)> {
         Ok((self.observe(tree, revision, seq)?, false))
     }
+    /// Observes as [`Self::observe_waiting`] does, a child it runs held to `time_left` (what is
+    /// left of the run's hour budget, `None` for a run without one) as well as its own timeout.
+    /// By default `time_left` is not read: the validator runs no child of its own.
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        time_left: Option<std::time::Duration>,
+    ) -> Result<(Observation, bool)> {
+        let _ = time_left;
+        self.observe_waiting(tree, revision, seq)
+    }
     /// The files under the case's directory the validator itself writes while it observes,
     /// relative to it. Nothing else under the cases directory may change during an
     /// observation: the loop puts back whatever else changed and refuses the observation,
@@ -250,6 +263,31 @@ impl Validator for TestsRun {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        self.observe_by(tree, revision, seq, None)
+    }
+
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        time_left: Option<std::time::Duration>,
+    ) -> Result<(Observation, bool)> {
+        let deadline = time_left.and_then(|left| std::time::Instant::now().checked_add(left));
+        Ok((self.observe_by(tree, revision, seq, deadline)?, false))
+    }
+}
+
+impl TestsRun {
+    /// Observes, the test command held to the smaller of its own timeout and what is left
+    /// before `deadline` when it starts.
+    fn observe_by(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Observation> {
         let shown = self.command.join(" ");
         // A tree on no case's branch is no case's observation and has no base to compare with.
         if crate::git::current_branch(tree)?
@@ -275,7 +313,13 @@ impl Validator for TestsRun {
         let mut command = Command::new(&self.command[0]);
         command.args(&self.command[1..]).current_dir(tree);
         crate::forge::without_credentials(&mut command, |_| false);
-        let output = crate::forge::run_child(&mut command, self.limits)
+        let mut limits = self.limits;
+        if let Some(deadline) = deadline {
+            limits.timeout = limits
+                .timeout
+                .min(deadline.saturating_duration_since(std::time::Instant::now()));
+        }
+        let output = crate::forge::run_child(&mut command, limits)
             .with_context(|| format!("run {}", self.command.join(" ")))?;
         let result = if output.success() { "pass" } else { "fail" };
         let tail =

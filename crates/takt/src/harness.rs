@@ -29,9 +29,9 @@ pub struct StepContext<'a> {
     pub protocol: &'a LoadedProtocol,
     /// The step number.
     pub step: usize,
-    /// What is left of the run's hour budget as the step starts; `None` for a run without one.
-    /// A harness ends its step by then: a child it runs is held to the smaller of this and its
-    /// own timeout, and killed past it.
+    /// What is left of the run's hour budget, read just before the harness is called; `None`
+    /// for a run without one. A harness ends its step by then: a child it runs is held to the
+    /// smaller of what is still left when it starts and its own timeout, and killed past it.
     pub time_left: Option<std::time::Duration>,
 }
 
@@ -189,6 +189,11 @@ impl Harness for ClaudeCode {
 
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport> {
         self.reported.set(None);
+        // The instant the step must end by, taken as the call begins: the time spent below
+        // before the child starts comes out of it.
+        let deadline = context
+            .time_left
+            .and_then(|left| std::time::Instant::now().checked_add(left));
         let prompt = Self::prompt(context);
         let mut command = Command::new(&self.program);
         command
@@ -223,8 +228,10 @@ impl Harness for ClaudeCode {
         }
         crate::forge::without_credentials(&mut command, |_| false);
         let mut limits = self.limits;
-        if let Some(left) = context.time_left {
-            limits.timeout = limits.timeout.min(left);
+        if let Some(deadline) = deadline {
+            limits.timeout = limits
+                .timeout
+                .min(deadline.saturating_duration_since(std::time::Instant::now()));
         }
         let output = crate::forge::run_child(&mut command, limits)
             .with_context(|| format!("the harness {}", self.program))?;

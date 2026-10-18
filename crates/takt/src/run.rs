@@ -2898,13 +2898,20 @@ impl<'a> Run<'a> {
         })
     }
 
-    /// What is left of the hour budget; `None` for a run without one, zero once it is spent (a
-    /// budget that is not a number among them). What is left of one too large for a
-    /// [`Duration`], infinite among them, saturates; nothing here panics.
-    fn time_left(&self) -> Option<Duration> {
+    /// The instant the hour budget ends: the run's start and the budget. `None` for a run
+    /// without one, or with one too large for an [`Instant`] (infinite among them), which never
+    /// ends; a budget that is not a number ends at the start. Nothing here panics.
+    fn deadline(&self) -> Option<Instant> {
         let h = self.options.hours?;
-        let left = (h * 3600.0 - self.started.elapsed().as_secs_f64()).max(0.0);
-        Some(Duration::try_from_secs_f64(left).unwrap_or(Duration::MAX))
+        let budget = Duration::try_from_secs_f64((h * 3600.0).max(0.0)).ok()?;
+        self.started.checked_add(budget)
+    }
+
+    /// What is left of the hour budget now ([`Run::deadline`]); `None` for a run without an
+    /// end, zero once it is spent.
+    fn time_left(&self) -> Option<Duration> {
+        self.deadline()
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
     }
 
     /// Runs until a stop; prints one line per frontier, step and evidence to `out`, and appends
@@ -3515,8 +3522,9 @@ impl<'a> Run<'a> {
                 let globs = self.judge_list()?.unwrap_or_default();
                 let (surface, surface_kept) = JudgeSurface::read(&self.runs(), globs, &self.tree)?;
                 let observed = validator
-                    .observe_waiting(&self.tree, &revision, seq)
+                    .observe_within(&self.tree, &revision, seq, self.time_left())
                     .with_context(|| format!("{} ({})", validator.action(), validator.name()));
+                let returned = Instant::now();
                 // What the observation left running is killed before anything is looked at;
                 // one that could not be killed is named with the rest of what it left.
                 let swept = crate::forge::sweep_left();
@@ -3631,6 +3639,30 @@ impl<'a> Run<'a> {
                         "  refused: {why}; the cases directory was put back, the change discarded and nothing recorded"
                     )?;
                     return Ok(Stop::StepRefused(why));
+                }
+                // An observation that failed when the hour budget ended, its child killed by it,
+                // records nothing, and the run stops on the budget.
+                if let Err(error) = &observed
+                    && self.deadline().is_some_and(|deadline| returned >= deadline)
+                    && let Some(h) = self.options.hours
+                {
+                    restore(&cases, &kept, &touched)?;
+                    let why = format!(
+                        "step {}: the hour budget ran out during {}; nothing recorded: {error:#}",
+                        self.steps,
+                        validator.action()
+                    );
+                    self.stepped(
+                        events,
+                        SteppedBy::Validator(Some(&revision)),
+                        validator.name(),
+                        validator.action(),
+                        "nothing recorded",
+                    )?;
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+                    writeln!(out, "  {why}")?;
+                    return Ok(Stop::Hours(h));
                 }
                 let (observation, waits) = observed?;
                 self.stepped(
@@ -3763,7 +3795,7 @@ impl<'a> Run<'a> {
                 .into_iter()
                 .filter(|a| self.options.gate.as_deref() == Some(a.as_str()))
                 .collect();
-            let context = StepContext {
+            let mut context = StepContext {
                 tree: &self.tree,
                 intent: &self.options.intent,
                 offered: &offered,
@@ -3771,7 +3803,7 @@ impl<'a> Run<'a> {
                 decision: &decision,
                 protocol: &self.case.protocol,
                 step: self.steps as usize,
-                time_left: self.time_left(),
+                time_left: None,
             };
             // The step is judged by what it did to the tree, against a checkpoint taken just
             // before it: `HEAD`, the index, every path already uncommitted (a validator's run
@@ -3854,11 +3886,15 @@ impl<'a> Run<'a> {
             // base or its own branch.
             let checkpoint =
                 crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
+            // What is left of the hour budget is read last, just before the call, so the step
+            // ends by the run's end and not by the time its preparation took after it.
+            context.time_left = self.time_left();
             // A harness that panics is put back like one that failed, then the panic goes on
             // to `run`, which records it and lets go of the case.
             let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.harness.step(&context)
             }));
+            let returned = Instant::now();
             // What the step left running (a writer in a process group of its own) is killed
             // before anything it did is looked at, so nothing lands after the step is judged.
             let swept = crate::forge::sweep_left();
@@ -3933,10 +3969,11 @@ impl<'a> Run<'a> {
             }
             let report = match stepped {
                 Ok(report) => report,
-                // A step that failed once the hour budget was spent, killed by it, is discarded
-                // whole like any failed step, and the run stops on the budget.
+                // A step that failed when the hour budget ended, killed by it, is discarded
+                // whole like any failed step, recorded as a refusal, and the run stops on the
+                // budget. One that failed by itself before then failed as any other.
                 Err(error)
-                    if self.time_left() == Some(Duration::ZERO)
+                    if self.deadline().is_some_and(|deadline| returned >= deadline)
                         && let Some(h) = self.options.hours =>
                 {
                     if let Err(undo) = undo() {
@@ -3945,11 +3982,14 @@ impl<'a> Run<'a> {
                             self.steps
                         )));
                     }
-                    writeln!(
-                        out,
+                    let why = format!(
                         "step {}: the hour budget ran out during the step; everything the step changed was discarded: {error:#}",
                         self.steps
-                    )?;
+                    );
+                    // Written after the cases directory was put back, which would take a line
+                    // written before it along.
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(out, "{why}")?;
                     return Ok(Stop::Hours(h));
                 }
                 Err(error) => {

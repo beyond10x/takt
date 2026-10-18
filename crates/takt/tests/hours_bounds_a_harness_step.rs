@@ -251,3 +251,50 @@ fn a_claude_step_past_the_hour_budget_is_killed_and_the_run_stops_on_hours() {
         assert!(!alive(pid), "process {pid} of the step still runs\n{text}");
     }
 }
+
+/// A test command that sleeps 20 s under a 3.6 s hour budget is held to what is left of it: the
+/// run stops on the hour budget within the budget and the grace, no `test_result` is recorded,
+/// and the run record says the budget ended the observation.
+#[test]
+fn a_test_command_past_the_hour_budget_is_killed_and_records_nothing() {
+    let tree = repository("validator-tree");
+    let script = tree.join("check.sh");
+    fs::write(&script, "#!/bin/sh\nsleep 20\nexit 0\n").expect("a script");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("exec bit");
+    git(&tree, &["add", "-A"]);
+    git(&tree, &["commit", "-q", "-m", "check"]);
+    let harness = Sleeps {
+        given: std::cell::Cell::new(None),
+    };
+    let validators: Vec<Box<dyn Validator>> = vec![Box::new(
+        takt::validator::TestsRun::new("./check.sh").expect("a command"),
+    )];
+    let started = Instant::now();
+    let mut run =
+        Run::open(&tree, options("validator-hours"), &harness, &validators).expect("opens");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let elapsed = started.elapsed();
+    let text = String::from_utf8(out).expect("utf-8");
+    let budget = Duration::from_secs_f64(HOURS * 3600.0);
+    assert!(
+        elapsed < budget + GRACE,
+        "the run took {elapsed:?}, past {budget:?} and the grace\n{text}"
+    );
+    assert!(matches!(stop, Ok(Stop::Hours(_))), "{stop:?}\n{text}");
+    assert_eq!(
+        harness.given.get(),
+        None,
+        "no judgement step was taken\n{text}"
+    );
+    let case = tree.join(".engineering/cases/validator-hours");
+    let records = fs::read_dir(case.join("evidence")).map_or(0, Iterator::count);
+    assert_eq!(records, 0, "nothing is recorded\n{text}");
+    let events = fs::read_to_string(case.join("events.jsonl")).expect("the run record");
+    assert!(
+        events
+            .lines()
+            .any(|line| line.contains("\"refusal\"") && line.contains("hour budget")),
+        "{events}"
+    );
+}
