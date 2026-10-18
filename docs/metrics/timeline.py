@@ -110,6 +110,10 @@ def build():
     wall_step = nice_step(wall_top * 1.1)
     wall_max = wall_step * (int(wall_top * 1.1 // wall_step) + 1)
 
+    # every column gets at least 96 px, so the labels under the axis keep apart as revisions are added
+    global W, PW
+    W = max(960, L + R + 96 * len(slots))
+    PW = W - L - R
     slot_w = PW / len(slots)
 
     def x_of(i):
