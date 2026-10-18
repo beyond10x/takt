@@ -1,6 +1,6 @@
 # Wave 04: Open the pull request through the bot route and read its state as evidence
 
-Skill: `aep:implementing` 0.23.1, wave mode. Stage: **2, dispatched** (updated as the unit moves). Approval: the operator's standing approval for the waves of `epic:composable-agentic-work` (same commit boundary each wave; no push).
+Skill: `aep:implementing` 0.23.1, wave mode. Stage: **closed** (unit merged, gate green, story implemented). Approval: the operator's standing approval for the waves of `epic:composable-agentic-work` (same commit boundary each wave; no push).
 
 ## Unit
 
@@ -116,7 +116,7 @@ Selection path: `aep plan artifact waves --kind story --status draft --format js
 | unit | branch | worktree | build dir | scratch |
 |---|---|---|---|---|
 | integration | `wave/2026-10-18-w4` | managed tree `takt-w4-int` | its `target/` | `~/.cache/takt-waves/2026-10-18-w4/int/scratch` |
-| forge-pull-request-evidence | `impl/forge-pull-request-evidence` | managed tree `takt-w4-forge` | its `target/` | `~/.cache/takt-waves/2026-10-18-w4/forge/scratch` |
+| forge-pull-request-evidence | `impl/forge-pull-request-evidence` at 683f771 (471662d unit, ab60835 correction 1, 683f771 correction 2), two adversary passes, merged into `wave/2026-10-18-w4` at 3f5787e | managed tree `takt-w4-forge` | its `target/` | `~/.cache/takt-waves/2026-10-18-w4/forge/scratch` |
 
 ## Dispatch
 
@@ -129,3 +129,7 @@ The opening store commit (this page, the story to `active`), the unit's commits,
 ## Log
 
 - 2026-10-18: opened under the standing approval; `story:forge-pull-request-evidence` moved to active.
+- 2026-10-18: unit green at 471662d (red run: three unresolved imports in the new forge lane; green: forge 10, cli unittests 6→11, the rest unchanged; 80→95 cases; 256,243 tokens, 72 tool uses, 24 min per the harness notification). The implementor's run.rs patch (a refused frontier candidate discarded whole) applied by the coordinator; the `ci.read` precondition on `pr.opened` tried and reverted (three unit cases assume `ci.read` admissible without a pull request). Follow-up: actions a validator owns are offered to the harness when no validator is registered (`pr.open`, `ci.read` under `--forge none`; `gate.run` without a gates file).
+- 2026-10-18: adversary pass 1 CONFIRMED (104 cases, 4 red; 7 findings; 202,018 tokens, 51 tool uses, 18 min), recorded as `review-result:adversary-forge-pass-1`; correction 1 green at ab60835 (108 cases; a case forks from its base, `left` recorded, the forge's head verified, bot route only for github.com).
+- 2026-10-18: adversary pass 2 CONFIRMED (120 cases, 8 red; 7 findings; 207,968 tokens, 50 tool uses, 19 min), recorded as `review-result:adversary-forge-pass-2`; every pass-1 finding re-tested closed; correction 2 green at 683f771 (123 cases; the branch from the case id, refusals at open, no credential printed, case-insensitive host, "no checks reported" read as pending). Deviation accepted: a rewritten `branch.yaml` name is set right rather than refused.
+- 2026-10-18: coordinator verification on 683f771 (`~/.cache/takt-waves/2026-10-18-w4/int/scratch/verify-treatment.txt`): 123 cases (takt 93, takt-cli 30), clippy, fmt, `ess specify validate`, every exit 0; baseline on the base: no `forge` or `forge_cli` test target. Merged into `wave/2026-10-18-w4` at 3f5787e. Domain document: the forge, the case branch, the pull-request and checks states, the two new producers, the refusals at open; citations re-pointed. Story scope rewritten, two typed paths added, `test_result` recorded, moved to implemented. Not proven live against GitHub (no network in the unit; one trial on a scratch repository is the next proof). Closed.
