@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 
@@ -59,6 +59,16 @@ pub enum Stop {
     StepRefused(String),
     /// A judgement step changed no file and the decision did not move: another step would not either.
     NoProgress,
+    /// The run waited on the forge (checks still running, a pull request's head behind the head
+    /// pushed) and may wait no longer: its step or hour budget is spent, or it has neither to
+    /// wait in. Nothing is recorded for what is awaited; the case stays open, and the next run
+    /// resumes it and observes again.
+    Waiting {
+        /// The actions whose observation waits on the forge.
+        on: Vec<String>,
+        /// The budget spent; `None` for a run with no step or hour budget, which does not wait.
+        budget: Option<Box<Stop>>,
+    },
 }
 
 impl std::fmt::Display for Stop {
@@ -74,6 +84,10 @@ impl std::fmt::Display for Stop {
             Stop::Tokens(t) => write!(f, "Tokens ({t})"),
             Stop::StepRefused(why) => write!(f, "StepRefused ({why})"),
             Stop::NoProgress => write!(f, "NoProgress"),
+            Stop::Waiting { on, budget } => match budget {
+                Some(budget) => write!(f, "Waiting ({}; {budget})", on.join(", ")),
+                None => write!(f, "Waiting ({}; no step or hour budget)", on.join(", ")),
+            },
         }
     }
 }
@@ -326,11 +340,16 @@ pub struct Run<'a> {
     pub steps: u64,
     /// Tokens the harness reported.
     pub tokens: u64,
+    /// How long the run waits on the forge before it observes again: [`Run::POLL`] unless set.
+    pub poll: Duration,
     started: Instant,
     options: RunOptions,
 }
 
 impl<'a> Run<'a> {
+    /// How long a run waits on the forge before it observes again, by default: thirty seconds.
+    pub const POLL: Duration = Duration::from_secs(30);
+
     /// Opens the case on the intent in `options` and prepares the run.
     pub fn open(
         tree: &Path,
@@ -398,6 +417,7 @@ impl<'a> Run<'a> {
             validators,
             steps: 0,
             tokens: 0,
+            poll: Self::POLL,
             started: Instant::now(),
             options,
         })
@@ -441,6 +461,7 @@ impl<'a> Run<'a> {
             validators,
             steps: 0,
             tokens: 0,
+            poll: Self::POLL,
             started: Instant::now(),
             options,
         })
@@ -631,6 +652,24 @@ impl<'a> Run<'a> {
         None
     }
 
+    /// How long the run waits on the forge before it observes again: [`Run::poll`], cut to
+    /// what is left of the hour budget. `None` for a run with neither a step nor an hour
+    /// budget: it has nothing to wait in, and a wait without a bound would never end.
+    fn pause(&self) -> Option<Duration> {
+        if self.options.iterations.is_none() && self.options.hours.is_none() {
+            return None;
+        }
+        Some(match self.options.hours {
+            Some(h) => {
+                let left = Duration::from_secs_f64(
+                    (h * 3600.0 - self.started.elapsed().as_secs_f64()).max(0.0),
+                );
+                self.poll.min(left)
+            }
+            None => self.poll,
+        })
+    }
+
     /// Runs until a stop; prints one line per frontier, step and evidence to `out`. The run
     /// holds the case while it runs (`run.lock` under the case directory), so no grant lands
     /// and no second run starts on it meanwhile; it lets go at every stop and on error.
@@ -672,6 +711,22 @@ impl<'a> Run<'a> {
         // observed at: not due again there, because the next observation would end the same
         // way; a commit moves the revision and makes them due again.
         let mut observed_without_record: BTreeSet<(String, String)> = BTreeSet::new();
+        // Of those, the ones whose observation waits on the forge, as `(name, action,
+        // revision)`: observed again after a pause, within the budget, and meanwhile no
+        // judgement step is offered, because what is missing is not the harness's to make.
+        let mut awaited: Vec<(String, String, String)> = Vec::new();
+        let waiting = |awaited: &[(String, String, String)], budget: Option<Stop>| {
+            let mut on: Vec<String> = Vec::new();
+            for (_, action, _) in awaited {
+                if !on.contains(action) {
+                    on.push(action.clone());
+                }
+            }
+            Stop::Waiting {
+                on,
+                budget: budget.map(Box::new),
+            }
+        };
         loop {
             seq += 1;
             let decision = self.case.evaluate(seq)?;
@@ -688,7 +743,11 @@ impl<'a> Run<'a> {
                 return Ok(Stop::Completed(outcome.clone()));
             }
             if let Some(stop) = self.budget_spent() {
-                return Ok(stop);
+                return Ok(if awaited.is_empty() {
+                    stop
+                } else {
+                    waiting(&awaited, Some(stop))
+                });
             }
             let admissible = decision.admissible();
             // The judgement actions: the admissible ones no validator owns.
@@ -745,7 +804,7 @@ impl<'a> Run<'a> {
                 let cases = self.tree.join(CASES_DIR);
                 let kept = snapshot(&cases)?;
                 let observed = validator
-                    .observe(&self.tree, &revision, seq)
+                    .observe_waiting(&self.tree, &revision, seq)
                     .with_context(|| format!("{} ({})", validator.action(), validator.name()));
                 let git_dir = checkpoint.put_back_git_dir(&self.tree);
                 let mut planted = git_dir.touched;
@@ -798,7 +857,7 @@ impl<'a> Run<'a> {
                     )?;
                     return Ok(Stop::StepRefused(why));
                 }
-                let observation = observed?;
+                let (observation, waits) = observed?;
                 writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
                 writeln!(out, "  effect: {}", observation.summary)?;
                 // What the validator retains lands before the records that refer to it: a
@@ -827,11 +886,22 @@ impl<'a> Run<'a> {
                 }
                 // A validator that wrote no record (the gate was unknown) is not due again at
                 // this revision. The pass counts as idle only when nothing else can move the
-                // decision, no judgement step offered and no other validator due: then the
-                // next pass would see the same decision, and the run stops there as no
-                // progress.
+                // decision, no judgement step offered, no other validator due and none waiting
+                // on the forge: then the next pass would see the same decision, and the run
+                // stops there as no progress. One that waits on the forge is due again after
+                // the pause below.
+                awaited.retain(|(name, _, _)| name != validator.name());
                 if observation.records.is_empty() {
-                    observed_without_record.insert((validator.name().to_owned(), revision));
+                    observed_without_record.insert((validator.name().to_owned(), revision.clone()));
+                    if waits {
+                        awaited.push((
+                            validator.name().to_owned(),
+                            validator.action().to_owned(),
+                            revision,
+                        ));
+                        last_idle = None;
+                        continue;
+                    }
                     let mut another_due = false;
                     for v in self.validators {
                         if is_due(
@@ -844,9 +914,35 @@ impl<'a> Run<'a> {
                             break;
                         }
                     }
-                    last_idle = (offered.is_empty() && !another_due).then_some(state);
+                    last_idle =
+                        (offered.is_empty() && !another_due && awaited.is_empty()).then_some(state);
                 } else {
                     last_idle = None;
+                }
+                continue;
+            }
+            // No validator is due, and one waits on the forge whose action is still admissible:
+            // the run pauses and observes it again, offering no judgement step meanwhile. A run
+            // with no step or hour budget has nothing to wait in and stops waiting at once; the
+            // case stays open for the next run.
+            awaited.retain(|(_, action, _)| admissible.contains(action));
+            if !awaited.is_empty() {
+                let Some(pause) = self.pause() else {
+                    return Ok(waiting(&awaited, None));
+                };
+                let on: Vec<&str> = awaited
+                    .iter()
+                    .map(|(_, action, _)| action.as_str())
+                    .collect();
+                writeln!(
+                    out,
+                    "  waiting: {:.1} s on the forge, then {} again",
+                    pause.as_secs_f64(),
+                    on.join(", ")
+                )?;
+                std::thread::sleep(pause);
+                for (name, _, revision) in &awaited {
+                    observed_without_record.remove(&(name.clone(), revision.clone()));
                 }
                 continue;
             }

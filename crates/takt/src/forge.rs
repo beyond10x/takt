@@ -80,6 +80,22 @@ impl fmt::Display for Checks {
     }
 }
 
+/// Whether `error`, the failure of a [`Forge::merge`], is the forge refusing the merge for a
+/// required check that has not reported on the head yet: the API's `405 Required status check
+/// "<name>" is expected`, or a check it names in progress, pending or queued. Nothing was
+/// merged, and the same merge may be taken once the check reports. A required check that
+/// failed, and every other refusal, is not: those stay errors. Read from the error's whole
+/// chain, the forge's own words as the adapter passed them on.
+#[must_use]
+pub fn refused_for_a_pending_check(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}").to_lowercase();
+    text.contains("required status check")
+        && !text.contains("fail")
+        && ["expected", "in progress", "pending", "queued"]
+            .iter()
+            .any(|state| text.contains(state))
+}
+
 /// What a pull request is opened with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullRequest {

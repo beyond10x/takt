@@ -314,7 +314,9 @@ fn with_checks_passing_the_pull_request_and_the_ci_result_are_recorded_at_the_pu
 }
 
 /// The same run with the double reporting the checks pending writes no `ci_result` record, says
-/// so, and leaves `ci.green` unknown; the pull request is still recorded open.
+/// so, and leaves `ci.green` unknown; the pull request is still recorded open. The run's step
+/// budget ends while it waits on the checks: it stops `Waiting` on `ci.read`
+/// (story:ci-pending-waits), not on the bare budget.
 #[test]
 fn with_checks_pending_no_ci_result_is_written_and_ci_green_stays_unknown() {
     let tree = scratch("pending");
@@ -323,7 +325,15 @@ fn with_checks_pending_no_ci_result_is_written_and_ci_green_stays_unknown() {
         ..Memory::default()
     });
     let outcome = delivered(&tree, "pending", memory.clone());
-    assert_eq!(outcome.stop, Stop::Iterations(2), "{}", outcome.text);
+    assert_eq!(
+        outcome.stop,
+        Stop::Waiting {
+            on: vec!["ci.read".to_owned()],
+            budget: Some(Box::new(Stop::Iterations(2))),
+        },
+        "{}",
+        outcome.text
+    );
     assert!(
         outcome.text.contains("step 2: ci.read {}"),
         "{}",

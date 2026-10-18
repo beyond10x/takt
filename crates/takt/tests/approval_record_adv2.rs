@@ -252,6 +252,8 @@ fn merge_run_with(
 ) -> (Result<Stop, String>, String) {
     let validators = validators(forge);
     let mut run = Run::resume(repo, options(), id, harness, &validators).expect("the case resumes");
+    // A run that waits on the forge pauses between its observations; here only briefly.
+    run.poll = std::time::Duration::from_millis(5);
     let mut out = Vec::new();
     let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
     (stop, String::from_utf8_lossy(&out).into_owned())
@@ -646,17 +648,30 @@ fn adv2_checks_answering_for_the_head_before_the_push_do_not_end_the_run_in_an_e
     forge.passing.borrow_mut().push(granted.clone());
     let forge = Rc::new(forge);
 
-    // Today's behaviour, asserted until story:ci-pending-waits lands: the checks read names no
-    // head, so a forge whose answer lags the push lets the merge be tried, the forge refuses it
-    // for its required check, and the run ends in that error with nothing merged. When
-    // story:ci-pending-waits makes such a refusal "nothing merged", flip this to `first.is_ok()`.
-    let (first, first_text) = merge_run_with(&repo, &id, forge.clone(), &Idle);
+    // The checks read names no head, so a forge whose answer lags the push lets the merge be
+    // tried, and the forge refuses it for its required check. Since story:ci-pending-waits that
+    // refusal is nothing merged and no record: the run waits on the forge, offering the harness
+    // no step (`NoHarness` would end it in an error), and stops `Waiting` once its step budget
+    // ends.
+    let (first, first_text) = merge_run_with(&repo, &id, forge.clone(), &NoHarness);
     assert!(memory.merged.borrow().is_empty(), "{first_text}");
     assert!(
-        matches!(&first, Err(error) if error.contains("Required status check")),
-        "story:ci-pending-waits: expected today's error for the merge of {} refused for its required check after a checks read that answered for {}; got {first:?}\n{first_text}",
+        first.is_ok(),
+        "the merge of {} refused for its required check after a checks read that answered for {} ended the run in an error: {first:?}\n{first_text}",
         &approved[..8],
         &granted[..8]
+    );
+    assert_eq!(
+        first,
+        Ok(Stop::Waiting {
+            on: vec!["repository.merge".to_owned()],
+            budget: Some(Box::new(Stop::Iterations(8))),
+        }),
+        "{first_text}"
+    );
+    assert!(
+        first_text.contains("for a required check that has not reported"),
+        "{first_text}"
     );
 
     forge.passing.borrow_mut().push(approved.clone());

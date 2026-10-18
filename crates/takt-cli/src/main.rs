@@ -200,6 +200,8 @@ const EXIT_STOPPED: u8 = 3;
 const EXIT_APPROVAL: u8 = 4;
 /// Exit 5: the run ended on an error once its case was open, `stopped: error:`.
 const EXIT_ERROR: u8 = 5;
+/// Exit 6: the run waited on the forge and its budget ended first, `stopped: Waiting`.
+const EXIT_WAITING: u8 = 6;
 
 /// What `takt run --help` says about the exit codes; each line opens with its code.
 const EXIT_CODES: &str = "Exit codes:
@@ -208,7 +210,8 @@ const EXIT_CODES: &str = "Exit codes:
   2  the arguments do not parse
   3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
-  5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open";
+  5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
+  6  stopped: Waiting: the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; nothing recorded for it, the case stays open and the next run resumes it";
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -234,6 +237,7 @@ fn main() -> ExitCode {
 /// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress` |
 /// | 4 | `ApprovalRequired`: `takt approve` is the next step |
 /// | 5 | `stopped: error:`, the run ended on an error once its case was open: a forge that refused, a validator or the harness that failed |
+/// | 6 | `Waiting`: the run waited on the forge until its budget ended; the next run resumes the case |
 fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
     match cli.command {
         Commands::Protocols => {
@@ -679,6 +683,7 @@ fn finish(run: &mut Run<'_>, forge_line: Option<&str>, out: &mut dyn Write) -> R
     Ok(match stop {
         Stop::Completed(_) => EXIT_DONE,
         Stop::ApprovalRequired(_) => EXIT_APPROVAL,
+        Stop::Waiting { .. } => EXIT_WAITING,
         _ => EXIT_STOPPED,
     })
 }
