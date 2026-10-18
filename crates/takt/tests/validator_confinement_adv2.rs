@@ -71,6 +71,12 @@ fn gates(assertion: &str) -> String {
 
 fn repository(name: &str, assertion: &str) -> Scratch {
     let dir = directory(name);
+    fs::create_dir_all(dir.join("tests")).expect("the tests directory");
+    fs::write(
+        dir.join("tests/run.sh"),
+        "#!/bin/sh\nexec sh \"$(dirname \"$0\")/case.sh\" \"$@\"\n",
+    )
+    .expect("the test runner");
     fs::create_dir_all(dir.join(".engineering")).expect("the engineering directory");
     fs::write(dir.join("README.md"), "a story\n").expect("a file");
     fs::write(dir.join(".engineering/gates.yaml"), gates(assertion)).expect("the gates");
@@ -188,7 +194,7 @@ fn a_legacy_case_without_a_base_pin_lets_a_reset_of_main_decide_the_gate() {
     ];
     let harness = Writes::new(&[
         (".engineering/gates.yaml", &rewritten),
-        ("tests/run.sh", RESET_MAIN_TO_HEAD),
+        ("tests/case.sh", RESET_MAIN_TO_HEAD),
     ]);
     let mut run =
         Run::open(&tree, options("legacy-reset", 10), &harness, &validators).expect("opens");
@@ -221,7 +227,7 @@ fn a_pinned_case_defeats_a_reset_of_main() {
     ];
     let harness = Writes::new(&[
         (".engineering/gates.yaml", &rewritten),
-        ("tests/run.sh", RESET_MAIN_TO_HEAD),
+        ("tests/case.sh", RESET_MAIN_TO_HEAD),
     ]);
     let mut run =
         Run::open(&tree, options("pinned-reset", 10), &harness, &validators).expect("opens");

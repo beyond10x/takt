@@ -707,11 +707,13 @@ impl TrialRoute {
 
 impl Forged {
     /// Adds the forge's validators, `pr.open`, `ci.read` and `repository.merge`, when there is
-    /// a forge.
+    /// a forge; `ci.read` given what the validators already there run from the tree, the test
+    /// command among it, for its judge surface.
     fn register(&self, validators: &mut Vec<Box<dyn Validator>>) {
         if let Some(forge) = &self.forge {
+            let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
             validators.push(Box::new(PrOpen::new(forge.clone())));
-            validators.push(Box::new(CiRead::new(forge.clone())));
+            validators.push(Box::new(CiRead::new(forge.clone()).with_runs(runs)));
             validators.push(Box::new(PrMerged::new(forge.clone())));
         }
     }
