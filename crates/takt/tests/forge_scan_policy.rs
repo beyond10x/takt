@@ -309,7 +309,7 @@ fn pr_open(tree: &Path, id: &str, forge: Rc<dyn Forge>) -> (Result<Stop, String>
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
-    // A commit beyond the case's base at the revision, as `change.read` records it.
+    // A change to publish at the revision, as `change.read` records it.
     run.case
         .add_evidence(&takt::evidence::Record::new(
             "change-record",

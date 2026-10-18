@@ -47,8 +47,8 @@ evidence_kinds:
       continuous integration stay validator evidence; it has no result
   change_record:
     description: >-
-      whether an implementation revision's tree differs, outside .engineering/, from both the
-      case's base pinned at open and the base branch's tip now; its result is ahead or none
+      whether merging an implementation revision into the base branch's tip would change that
+      tip's tree outside .engineering/; its result is ahead or none
 
 claims:
   tests.pass:
@@ -96,8 +96,8 @@ claims:
         subject: implementation
   change.made:
     description: >-
-      the current implementation revision's tree differs, outside .engineering/, from both the
-      case's pinned base and the base branch's tip: there is a change to publish
+      merging the current implementation revision into the base branch's tip would change its
+      tree outside .engineering/: there is a change to publish
     true_when:
       evidence:
         kind: change_record
@@ -145,8 +145,8 @@ actions:
       - evidence: handover
   change.read:
     description: >-
-      read whether the implementation revision's tree differs, outside .engineering/, from both
-      the case's pinned base and the base branch's tip; taken once the change is handed over
+      read whether merging the implementation revision into the base branch's tip would change
+      its tree outside .engineering/; taken once the change is handed over
     effect: read
     precondition:
       claim: change.handed_over
@@ -166,9 +166,9 @@ actions:
     description: >-
       push the implementation revision, with the commits that record its approval above it when
       there are any, and open its pull request through the repository's bot route; needs the
-      tests and the gate green, the change handed over at the revision, and its tree different,
-      outside .engineering/, from both the case's pinned base and the base branch's tip, so
-      nothing is opened at the seed or for content the base already has
+      tests and the gate green, the change handed over at the revision, and a merge of it into
+      the base branch's tip that would change the tip outside .engineering/, so nothing is opened
+      at the seed or for content the base already has
     effect: write
     precondition:
       all:

@@ -172,9 +172,13 @@ fn is_due(
 /// is opened on it: a kind that records a choice and that the protocol reads about no artifact
 /// (its record could be bound to no revision); a kind a built-in validator writes that an
 /// action no built-in validator performs may produce with `effect: read` (it would pass for a
-/// choice); and a protocol where an outcome or an obligation holds with every claim choice
-/// records decide true and every other claim unknown ([`under_choices`]): a choice record may
-/// gate an action, never an outcome or an obligation alone.
+/// choice); a protocol whose outcome or obligation reads a choice kind through a form that is
+/// not monotone in it (`not`, a claim tested `is: false` or `is: unknown`, an order form naming
+/// it), directly or through the claims it tests ([`non_monotone_choice`]); and, with only
+/// monotone forms left, a protocol where an outcome or an obligation holds with every claim
+/// choice records decide true and every other claim unknown ([`under_choices`]), the most
+/// choice records alone can make of it. A choice record may gate an action, never an outcome or
+/// an obligation alone.
 struct Shape {
     effects: BTreeMap<String, String>,
     produces: BTreeMap<String, BTreeSet<String>>,
@@ -301,6 +305,93 @@ fn claim_under_choices(
         .and_then(|(_, claim)| under_choices(&claim.true_when, model, choices, inputs, values));
     values.insert(id.to_owned(), Some(value));
     value
+}
+
+/// The kinds `predicate` reads, directly or through the claims it tests (`reads`: each claim's
+/// kinds through the claims it reads).
+fn kinds_read(
+    predicate: &b10x_canon::model::Predicate,
+    reads: &BTreeMap<String, BTreeSet<String>>,
+) -> BTreeSet<String> {
+    use b10x_canon::model::Predicate;
+    let mut kinds = BTreeSet::new();
+    predicate.visit(&mut |inner| match inner {
+        Predicate::Evidence(matched) => {
+            kinds.insert(matched.kind.as_str().to_owned());
+        }
+        Predicate::First(first) => {
+            kinds.insert(first.kind.as_str().to_owned());
+        }
+        Predicate::Before(order) => {
+            kinds.insert(order.first.as_str().to_owned());
+            kinds.insert(order.then.as_str().to_owned());
+        }
+        Predicate::Claim(test) => {
+            if let Some(through) = reads.get(test.claim.as_str()) {
+                kinds.extend(through.iter().cloned());
+            }
+        }
+        _ => {}
+    });
+    kinds
+}
+
+/// The first form in `predicate`, or in a claim it tests `is: true`, that is not monotone in a
+/// choice kind: `not` over a predicate that reads one, a claim that reads one tested `is: false`
+/// or `is: unknown`, or an order form (`first`, `before`) that names one. With none, a choice
+/// record can only make the predicate truer, and its value with every choice record present
+/// ([`under_choices`]) is the most choice records alone can make of it.
+fn non_monotone_choice(
+    predicate: &b10x_canon::model::Predicate,
+    model: &b10x_canon::model::Protocol,
+    choices: &BTreeMap<String, BTreeSet<String>>,
+    reads: &BTreeMap<String, BTreeSet<String>>,
+    seen: &mut BTreeSet<String>,
+) -> Option<String> {
+    use b10x_canon::model::{Predicate, Truth};
+    let choice_in =
+        |kinds: &BTreeSet<String>| kinds.iter().find(|k| choices.contains_key(*k)).cloned();
+    match predicate {
+        Predicate::All(members) | Predicate::Any(members) => members
+            .iter()
+            .find_map(|member| non_monotone_choice(member, model, choices, reads, seen)),
+        Predicate::Not(inner) => choice_in(&kinds_read(inner, reads))
+            .map(|kind| format!("`not` over a predicate that reads {kind}")),
+        Predicate::First(first) => choices
+            .contains_key(first.kind.as_str())
+            .then(|| format!("an order form naming {}", first.kind.as_str())),
+        Predicate::Before(order) => [&order.first, &order.then]
+            .into_iter()
+            .find(|kind| choices.contains_key(kind.as_str()))
+            .map(|kind| format!("an order form naming {}", kind.as_str())),
+        Predicate::Claim(test) => {
+            let claim = test.claim.as_str();
+            if test.is != Truth::True {
+                let empty = BTreeSet::new();
+                return choice_in(reads.get(claim).unwrap_or(&empty)).map(|kind| {
+                    format!(
+                        "the claim {claim}, which reads {kind}, tested is: {}",
+                        if test.is == Truth::False {
+                            "false"
+                        } else {
+                            "unknown"
+                        }
+                    )
+                });
+            }
+            if !seen.insert(claim.to_owned()) {
+                return None;
+            }
+            model
+                .claims
+                .iter()
+                .find(|(id, _)| id.as_str() == claim)
+                .and_then(|(_, found)| {
+                    non_monotone_choice(&found.true_when, model, choices, reads, seen)
+                })
+        }
+        _ => None,
+    }
 }
 
 impl Shape {
@@ -504,6 +595,33 @@ impl Shape {
                 }
             }
             reads.insert(id.clone(), kinds);
+        }
+        // No outcome and no obligation may read a choice kind through a form a choice record
+        // could make falser: with only monotone forms left, the check above is the worst case.
+        let mut checked: Vec<(String, &Predicate)> = Vec::new();
+        for (id, outcome) in model.outcomes.iter() {
+            if let Some(predicate) = outcome.requires.predicate() {
+                checked.push((format!("outcome {}", id.as_str()), predicate));
+            }
+        }
+        for (id, obligation) in model.obligations.iter() {
+            checked.push((
+                format!("obligation {}", id.as_str()),
+                &obligation.discharged_when,
+            ));
+            if let Some(applicable) = &obligation.applicable_when {
+                checked.push((format!("obligation {}", id.as_str()), applicable));
+            }
+        }
+        for (what, predicate) in checked {
+            if let Some(form) =
+                non_monotone_choice(predicate, &model, &choices, &reads, &mut BTreeSet::new())
+            {
+                bail!(
+                    "the protocol {} reads a choice kind in its {what} through {form}: a choice record could then make it truer by its absence or its order, and a choice may gate an action, never an outcome or an obligation",
+                    protocol.id
+                );
+            }
         }
         Ok(Self {
             effects,

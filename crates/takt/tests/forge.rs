@@ -171,7 +171,7 @@ fn delivered(tree: &Path, id: &str, forge: Rc<dyn Forge>) -> Outcome {
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
-    // A commit beyond the case's base at the revision, as `change.read` records it.
+    // A change to publish at the revision, as `change.read` records it.
     run.case
         .add_evidence(&takt::evidence::Record::new(
             format!("change-record-{}", &revision[..8]),
@@ -911,7 +911,7 @@ fn at_the_untouched_base_the_harness_is_offered_a_step_before_anything_is_pushed
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
-    // A commit beyond the case's base at the revision, as `change.read` records it.
+    // A change to publish at the revision, as `change.read` records it.
     run.case
         .add_evidence(&takt::evidence::Record::new(
             format!("change-record-{}", &revision[..8]),
@@ -1169,7 +1169,7 @@ fn adv_a_closed_pull_request_at_a_second_revision_is_recorded_closed() {
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
-    // A commit beyond the case's base at the revision, as `change.read` records it.
+    // A change to publish at the revision, as `change.read` records it.
     run.case
         .add_evidence(&takt::evidence::Record::new(
             format!("change-record-{}", &first[..8]),

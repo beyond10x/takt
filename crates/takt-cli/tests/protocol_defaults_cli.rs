@@ -632,7 +632,7 @@ fn approval_required_and_completed_exit_with_different_documented_codes() {
         takt::run::CHOICE_PRODUCER,
     ))
     .expect("the record is written");
-    // A commit beyond the case's base at the revision, as `change.read` records it.
+    // A change to publish at the revision, as `change.read` records it.
     case.add_evidence(&takt::evidence::Record::new(
         "change-record",
         "change_record",

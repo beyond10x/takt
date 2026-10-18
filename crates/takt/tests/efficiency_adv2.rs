@@ -332,45 +332,6 @@ fn adv2_an_edit_whose_summary_carries_a_take_line_is_read_as_no_change() {
     );
 }
 
-/// A run of the protocol document `yaml` with no validator and `harness`: the stop (or the
-/// error), what was printed, and a copy of the case directory.
-fn run_protocol(
-    name: &str,
-    yaml: &str,
-    harness: &dyn Harness,
-) -> (Result<Stop, String>, String, PathBuf) {
-    let tree = scratch(name);
-    let protocol = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-        "efficiency-adv2-{}-{name}.yaml",
-        std::process::id()
-    ));
-    fs::write(&protocol, yaml).expect("a protocol");
-    let validators: Vec<Box<dyn Validator>> = Vec::new();
-    let options = RunOptions {
-        protocol: protocol.display().to_string(),
-        intent: "deliver".to_owned(),
-        inputs: Vec::new(),
-        iterations: Some(5),
-        hours: None,
-        tokens: None,
-        case_id: Some(name.to_owned()),
-        gate: None,
-    };
-    let mut run = Run::open(&tree, options, harness, &validators).expect("the case opens");
-    let mut out = Vec::new();
-    let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
-    let dir = run.case.dir.clone();
-    drop(run);
-    let kept = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-        "efficiency-adv2-{}-{name}-case",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&kept);
-    copy(&dir, &kept);
-    let _ = fs::remove_file(&protocol);
-    (stop, String::from_utf8(out).expect("utf-8"), kept)
-}
-
 /// AGENTS.md: a choice record "never makes a claim about the work true (`tests.pass`, ...),
 /// and a protocol may gate an action on it but never an outcome on it alone". The choice rule
 /// keys on action names (`BUILT_IN_ACTIONS`), not on the kinds the built-in validators write.
@@ -389,42 +350,38 @@ fn adv2_a_choice_record_makes_tests_pass_true_when_its_action_is_not_named_tests
         outcomes:\n  accepted:\n    description: the tests pass\n    requires:\n      claim: tests.pass\n";
     let harness = Script::new(&[Move::Name("tests.check")]);
     // Since correction 3 such a protocol is refused when the case would open, before anything
-    // is written: a read action outside the built-in validators may not produce `test_result`.
-    // The run below is the case for a protocol that opens.
-    {
-        let tree = scratch("tests-claimed-open");
-        let protocol = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-            "efficiency-adv2-{}-tests-claimed-open.yaml",
-            std::process::id()
-        ));
-        fs::write(&protocol, yaml).expect("a protocol");
-        let options = RunOptions {
-            protocol: protocol.display().to_string(),
-            intent: "deliver".to_owned(),
-            inputs: Vec::new(),
-            iterations: Some(5),
-            hours: None,
-            tokens: None,
-            case_id: Some("tests-claimed-open".to_owned()),
-            gate: None,
-        };
-        let validators: Vec<Box<dyn Validator>> = Vec::new();
-        let opened = Run::open(&tree, options, &harness, &validators);
-        let _ = fs::remove_file(&protocol);
-        if let Err(error) = opened {
-            let error = format!("{error:#}");
-            assert!(error.contains("test_result"), "{error}");
-            return;
-        }
-    }
-    let (stop, text, case_dir) = run_protocol("tests-claimed", yaml, &harness);
-    let by_takt: Vec<serde_json::Value> = records(&case_dir, "test_result")
-        .into_iter()
-        .filter(|record| record["producer"] == takt::run::CHOICE_PRODUCER)
-        .collect();
+    // is written: a read action outside the built-in validators may not produce `test_result`,
+    // so takt never writes one from the harness's choice.
+    let tree = scratch("tests-claimed-open");
+    let protocol = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "efficiency-adv2-{}-tests-claimed-open.yaml",
+        std::process::id()
+    ));
+    fs::write(&protocol, yaml).expect("a protocol");
+    let options = RunOptions {
+        protocol: protocol.display().to_string(),
+        intent: "deliver".to_owned(),
+        inputs: Vec::new(),
+        iterations: Some(5),
+        hours: None,
+        tokens: None,
+        case_id: Some("tests-claimed-open".to_owned()),
+        gate: None,
+    };
+    let validators: Vec<Box<dyn Validator>> = Vec::new();
+    let opened = Run::open(&tree, options, &harness, &validators).err();
+    let _ = fs::remove_file(&protocol);
+    let error = format!("{:#}", opened.expect("the protocol is refused at open"));
     assert!(
-        by_takt.is_empty() && stop != Ok(Stop::Completed("accepted".to_owned())),
-        "takt wrote test_result from the harness's choice and the case ended {stop:?}: {by_takt:?}\n{text}"
+        error.contains("tests.check") && error.contains("test_result"),
+        "{error}"
+    );
+    assert!(
+        !tree
+            .join(takt::case::CASES_DIR)
+            .join("tests-claimed-open")
+            .exists(),
+        "a case was written for a refused protocol"
     );
 }
 

@@ -1674,9 +1674,10 @@ mod tests {
 
     /// Without `--forge` and without an origin, neither forge validator is registered: no
     /// `forge:` line, no `pr.open` or `ci.read` step. After `tests.run` the none harness hands the
-    /// work over as it stands, `change.read` finds no commit beyond the base, so `pr.open` stays
-    /// blocked, and the edits are the judgement steps left (`gate.run` and `ci.read` only read and
-    /// record no choice, and are not offered to a harness that keeps no state).
+    /// work over as it stands, `change.read` finds nothing a merge into the base would change, so
+    /// `pr.open` stays blocked, and the edits are the judgement steps left (`gate.run` and
+    /// `ci.read` only read and record no choice, and are not offered to a harness that keeps no
+    /// state).
     #[test]
     fn without_an_origin_the_forge_is_none_and_no_forge_step_is_taken() {
         let repo = gated_repository("forge-default-none", None);

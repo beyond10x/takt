@@ -1,8 +1,8 @@
 //! The story-delivery protocol as data: `protocols/story-delivery/1.yaml` is loaded, validated
 //! and compiled by Canon, a case is opened on it over a scratch git tree, and the seven records
 //! the delivery of a story produces are added one at a time, each evaluated: one more claim true
-//! after each, `pr.open` admissible only once the change is handed over and a commit beyond
-//! the base recorded, `repository.merge` approval-required before the last, `accepted`
+//! after each, `pr.open` admissible only once the change is handed over and a change to
+//! publish recorded, `repository.merge` approval-required before the last, `accepted`
 //! legitimate only after it. Every record is about `implementation` at its revision, as the
 //! kernel binds claims.
 

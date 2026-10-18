@@ -1579,12 +1579,13 @@ pub fn is_built_in_kind(kind: &str) -> bool {
 /// `change.read`: observes whether the implementation revision's tree differs from the case's
 /// base outside `.engineering/` (the planning store and the cases, which takt's own take,
 /// approval and records change), by content, not by its commits or their messages, and writes
-/// one `change_record`: `ahead` when it differs from every base it can read, `none` when it is
-/// the tree of one. The bases are the commit pinned in `branch.yaml` when the case opened and
-/// the tip, now, of the base branch it names: the same content landed on the base by another
-/// commit is no change to publish. A case with neither writes no record. It reads git only,
-/// with no code from configuration: nothing is run from the tree and nothing leaves the
-/// machine.
+/// one `change_record`: `ahead` when merging the revision into the tip, now, of the base branch
+/// `branch.yaml` names (`git merge-tree`, nothing checked out) would change that tip's tree
+/// outside `.engineering/`, `none` when it would not: the same content landed on the base by
+/// another commit, with or without more beside it, is no change to publish. When the base
+/// branch is not there, the revision's tree is compared with the commit pinned when the case
+/// opened instead; a case with neither writes no record. It reads git only, with no code from
+/// configuration: nothing is run from the tree and nothing leaves the machine.
 #[derive(Debug, Clone, Default)]
 pub struct ChangeRead;
 
@@ -1614,12 +1615,9 @@ impl Validator for ChangeRead {
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
         let dir = current(tree)?;
-        let mut bases: Vec<(String, String)> = Vec::new();
-        if let Some(pinned) = base_revision(tree, &dir)? {
-            bases.push(pinned);
-        }
-        if let Some(name) = Branch::read(&dir)?.base {
-            let tip = crate::git::run(
+        let pinned = base_revision(tree, &dir)?;
+        let tip = Branch::read(&dir)?.base.and_then(|name| {
+            crate::git::run(
                 tree,
                 &[
                     "rev-parse",
@@ -1630,43 +1628,46 @@ impl Validator for ChangeRead {
                 ],
             )
             .ok()
-            .filter(|tip| !tip.is_empty());
-            if let Some(tip) = tip {
-                bases.push((format!("{name} at {}, its tip now", short(&tip)), tip));
-            }
-        }
-        if bases.is_empty() {
+            .filter(|tip| !tip.is_empty())
+            .map(|tip| (name, tip))
+        });
+        let (differs, summary) = if let Some((name, tip)) = tip {
+            let merged = crate::git::merged_tree(tree, &tip, revision)?;
+            let differs = crate::git::trees_differ_outside(tree, &tip, &merged, ".engineering")?;
+            (
+                differs,
+                format!(
+                    "merging {} into {name} at {}, its tip now, {} its tree outside .engineering/",
+                    short(revision),
+                    short(&tip),
+                    if differs {
+                        "changes"
+                    } else {
+                        "leaves as it is"
+                    }
+                ),
+            )
+        } else if let Some((shown, base)) = pinned {
+            let differs = crate::git::trees_differ_outside(tree, &base, revision, ".engineering")?;
+            (
+                differs,
+                format!(
+                    "the base branch is not there to merge into; the tree of {} {} the tree of {shown} outside .engineering/",
+                    short(revision),
+                    if differs { "differs from" } else { "is" }
+                ),
+            )
+        } else {
             return Ok(Observation {
                 summary: "the case records no base; nothing to compare, the claim stays unknown"
                     .to_owned(),
                 records: Vec::new(),
                 artifact: None,
             });
-        }
-        let mut same = None;
-        for (shown, base) in &bases {
-            if !crate::git::trees_differ_outside(tree, base, revision, ".engineering")? {
-                same = Some(shown.clone());
-                break;
-            }
-        }
-        let result = if same.is_none() { "ahead" } else { "none" };
+        };
+        let result = if differs { "ahead" } else { "none" };
         Ok(Observation {
-            summary: match &same {
-                Some(shown) => format!(
-                    "the tree of {} is the tree of {shown} outside .engineering/: {result}",
-                    short(revision)
-                ),
-                None => format!(
-                    "the tree of {} differs from {} outside .engineering/: {result}",
-                    short(revision),
-                    bases
-                        .iter()
-                        .map(|(shown, _)| shown.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" and ")
-                ),
-            },
+            summary: format!("{summary}: {result}"),
             records: vec![Record::new(
                 format!("change-record-{seq}"),
                 self.kind(),

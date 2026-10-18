@@ -203,7 +203,7 @@ fn to_the_gate(case: &mut CaseDir, first: usize) {
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
-        // A commit beyond the case's base at the revision, as `change.read` records it.
+        // A change to publish at the revision, as `change.read` records it.
         case.add_evidence(&Record::new(
             format!("change-record-e{}", first + owed.len()),
             "change_record",
@@ -327,7 +327,7 @@ fn first_run(tree: &Path, id: &str, memory: &Rc<Memory>) -> (String, PathBuf, St
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
-    // A commit beyond the case's base at the revision, as `change.read` records it.
+    // A change to publish at the revision, as `change.read` records it.
     run.case
         .add_evidence(&takt::evidence::Record::new(
             format!("change-record-{}", &revision[..8]),
@@ -1215,7 +1215,7 @@ fn adv_a_grant_the_harness_writes_into_the_case_does_not_merge() {
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
-    // A commit beyond the case's base at the revision, as `change.read` records it.
+    // A change to publish at the revision, as `change.read` records it.
     run.case
         .add_evidence(&takt::evidence::Record::new(
             format!("change-record-{}", &revision[..8]),
@@ -1578,7 +1578,7 @@ fn run_with(
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
-    // A commit beyond the case's base at the revision, as `change.read` records it.
+    // A change to publish at the revision, as `change.read` records it.
     run.case
         .add_evidence(&takt::evidence::Record::new(
             format!("change-record-{}", &revision[..8]),
@@ -1745,7 +1745,7 @@ fn adv2_a_case_finished_by_a_resumed_run_is_not_resumed_by_the_next_run() {
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
-    // A commit beyond the case's base at the revision, as `change.read` records it.
+    // A change to publish at the revision, as `change.read` records it.
     first
         .case
         .add_evidence(&takt::evidence::Record::new(
@@ -2396,7 +2396,7 @@ fn adv2_a_case_resumed_at_a_new_commit_re_establishes_its_claims_before_the_merg
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
-    // A commit beyond the case's base at the revision, as `change.read` records it.
+    // A change to publish at the revision, as `change.read` records it.
     run.case
         .add_evidence(&takt::evidence::Record::new(
             format!("change-record-{}", &moved[..8]),
