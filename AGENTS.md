@@ -11,6 +11,7 @@ every step validated by Canon over evidence. This file is for agents working on 
 | `product-requirements:takt` (`aep plan artifact show product-requirements:takt`) | users, the five qualities and their order, requirements R1–R18 |
 | `docs/design/takt.md` | the design: foundations, shape, seams, milestones and what each has built |
 | `design:recursive-self-improvement` | how takt improves itself: roles, judge, scorecard, phases |
+| `.agents/operator-agent.md`, `.agents/developer-agent.md` | the two agent roles' profiles a fresh session starts from: what each reads, owns, watches and never does |
 | `design:continuous-orchestration` | continuous work and orchestration: planning as a unit, a tree of cases, one deterministic dispatcher, build steps |
 | `aep plan artifact waves --kind story --status draft` | what can be worked next |
 

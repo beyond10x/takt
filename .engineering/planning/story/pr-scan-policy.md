@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:pr-scan-policy
 kind: story
-status: draft
+status: implemented
 title: pr.open scans the pull-request body under the forge's policy
 summary: scan-text before a pull request gets the forge's --policy; a refusal after the push says the branch left
 relations:
@@ -13,7 +13,11 @@ scope:
   path: crates/takt/src/forge.rs
 - confidence: inferred
   path: crates/takt/tests/forge_scan_policy.rs
-revision: 4
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T12:12:00Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-18T12:12:00Z", actor: "human:timo", revision: 6}
+- {from: "active", to: "implemented", at: "2026-10-18T13:04:29Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":1,"verification":1}}}
 ---
 # Story: pr-scan-policy
 
@@ -47,3 +51,14 @@ On takt at 92b8cf3, each holds; after the fix, each fails:
 ## Acceptance
 
 `scan_argv` carries the forge's `--policy` and `--repository` whenever `api_argv` does, and scenario 1 run with the policy given only through the forge reaches `pr.open` and opens the pull request; a scan refusal after the push names the pushed branch instead of saying nothing left the machine.
+
+## Landed (wave 07)
+
+Read from `git diff --stat 4b86d9a c56f3ce` at the close of wave 07 (wave branch head ea832ee). From the CLI the forge's policy is `B10X_GATES_POLICY`; the unit also closed a pre-existing gap: the published title and body are scanned, not only the JSON request. One line in `validator.rs` (`PrOpen::writes`).
+
+- `README.md`
+- `crates/takt/src/forge.rs`
+- `crates/takt/src/validator.rs`
+- `crates/takt/tests/forge.rs`
+- `crates/takt/tests/forge_scan_policy.rs`
+- `crates/takt/tests/forge_scan_policy_adv1.rs`

@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T13:04:39Z",
+  "actor": "human:timo",
+  "artifact": "story:approval-record-reaches-base",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "cargo test -p b10x-takt --locked --test approval_record",
+    "reference": "baseline c1445fa: record absent on the base after approve, resume, merge (red.log; live: the scratch repository's main kept the story active with no record); treatment 5a41e71: approval_record 6 passed, the merged head carries the record (c3-test.log)"
+  }
+}

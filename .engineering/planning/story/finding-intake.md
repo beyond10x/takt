@@ -10,7 +10,16 @@ relations:
 - serves: vision:safe-agentic-coding
 - depends_on: story:agent-profiles
 - depends_on: story:scenario-corpus
-revision: 4
+scope:
+- confidence: cited
+  path: .agents/operator-agent.md
+- confidence: inferred
+  path: ess/domains/takt.yaml
+- confidence: cited
+  path: scripts/check-finding
+- confidence: cited
+  path: scripts/file-finding
+revision: 7
 ---
 # Story: finding-intake
 
@@ -37,9 +46,24 @@ intake procedure is written into `.agents/operator-agent.md`, which story:agent-
 
 ## Scope
 
-- new: `scripts/file-finding` (inferred)
-- new: `scripts/check-finding` (inferred)
-- `.agents/operator-agent.md` (the intake procedure, in the file story:agent-profiles creates) (inferred)
+Derived 2026-10-18 by `story-scoper`. Every line is **cited** (read from the story or the tree) or
+**inferred** (a reading that could be wrong).
+
+- **Primary surface:** `scripts/` (new directory; absent at 768db1c and on main) — cited, the story's Outcome names both scripts
+- **Files:** new `scripts/file-finding` — cited, story Outcome
+- **Files:** new `scripts/check-finding` — cited, story Outcome
+- **Files:** `.agents/operator-agent.md` (intake procedure appended to the file story:agent-profiles creates; absent at 768db1c) — cited, story Context
+- **Symbols:** none in Rust; the scripts shell out to `aep plan artifact list --ref finding:<key>` and `aep plan artifact new --ref` (both flags exist in the installed aep's `--help`) — cited
+- **Also likely:** `ess/domains/takt.yaml` — inferred, AGENTS.md:37-39 says a story that introduces a noun must declare it first; `takt.work.Scenario` is declared (ess/domains/takt.yaml:1007) but no Finding entity is
+- **Documents:** `.agents/operator-agent.md` (above); filing also writes draft artifacts into `.engineering/planning/` at runtime, which is store content and not a scope file — cited
+- **Confidence:** high — the story names every file it creates or edits; the only open item is the ESS declaration
+- **Would collide with:** any unit editing `.agents/operator-agent.md` (story:agent-profiles creates it; story:loop-scorecard edits it, loop-scorecard.md:43, with no edge to this story), and any unit editing `ess/domains/takt.yaml` if the Finding noun is declared there — cited for the profile, inferred for ess
+- **Collides with nothing in the Rust crates:** no `crates/` path is in scope — inferred, from the story naming only scripts and the profile
+- **Safety fact:** `scripts/check-finding` must print exactly `reproduced` / `not_reproduced`, the result literals of the `scenario_result` evidence kind in protocols/self-improvement/1.yaml:45-48 (and the filer's results must be `filed` / `malformed`, :41-44); story:self-improvement-protocol runs this script for `scenario.reproduce`/`scenario.verify` (self-improvement-protocol.md:48), so this output is a wire format another reader parses — step 2, unproven
+
+Not established: whether `aep plan artifact new blocker` resolves to an accepted kind; how `check-finding` builds takt at a given revision (worktree, promoted binary or `Taskfile.yml` build); whether `check-finding` reads a scenario file in the scratch repository; whether the ESS entity is needed for shell scripts.
+
+Typed entries: `scripts/file-finding` (cited), `scripts/check-finding` (cited), `.agents/operator-agent.md` (cited), `ess/domains/takt.yaml` (inferred).
 
 ## Ordering
 

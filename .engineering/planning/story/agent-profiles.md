@@ -2,13 +2,28 @@
 format: aep.planning-md/3
 id: story:agent-profiles
 kind: story
-status: draft
+status: implemented
 title: Operator agent and developer agent profiles a fresh session starts from
 summary: .agents/operator-agent.md, .agents/developer-agent.md and .claude/agents stubs
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 2
+scope:
+- confidence: cited
+  path: .agents/developer-agent.md
+- confidence: cited
+  path: .agents/operator-agent.md
+- confidence: inferred
+  path: .claude/agents/developer-agent.md
+- confidence: inferred
+  path: .claude/agents/operator-agent.md
+- confidence: inferred
+  path: AGENTS.md
+revision: 9
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T12:07:49Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "proposed", to: "active", at: "2026-10-18T12:07:49Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "active", to: "implemented", at: "2026-10-18T13:04:29Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"test_result":1,"review_outcome":3,"verification":1}}}
 ---
 # Story: agent-profiles
 
@@ -28,10 +43,19 @@ story:loop-scorecard add their procedures to the operator profile after this sto
 
 ## Scope
 
-- new: `.agents/operator-agent.md` (cited by the design)
-- new: `.agents/developer-agent.md` (cited by the design)
-- new: `.claude/agents/operator-agent.md`, `.claude/agents/developer-agent.md` (pointer stubs) (inferred)
-- `AGENTS.md` (one line linking the profiles) (inferred)
+Derived 2026-10-18 by `story-scoper`. Every line is **cited** (read from the story or the tree) or
+**inferred** (a reading that could be wrong).
+
+- **Primary surface:** `.agents/` (new directory: two harness-neutral profiles) — cited, story:agent-profiles Outcome and Scope (`.engineering/planning/story/agent-profiles.md:17-20,31-32`), design § Agent profiles (`.engineering/planning/design/recursive-self-improvement.md:158-161`)
+- **Files:** `.agents/operator-agent.md` (new) — cited, story line 31 and design line 160
+- **Files:** `.agents/developer-agent.md` (new) — cited, story line 32 and design line 160
+- **Files:** `.claude/agents/operator-agent.md`, `.claude/agents/developer-agent.md` (new, pointer stubs) — inferred: the design cites the `.claude/agents/` directory (line 161), but the story itself marks these filenames inferred (line 33); neither `.agents/` nor `.claude/` exists in the tree (`ls` fails)
+- **Also likely:** `AGENTS.md` (one link line, probably in the Layout table at `AGENTS.md:7-14`) — inferred, story line 34 marks it inferred, and the line position is my guess
+- **Symbols:** none; no code symbol is named or needed — cited, the Acceptance (story line 42) and Checks (lines 46-47) are about text only
+- **Documents:** the whole story is documents. The "never" lines to copy word for word are `.engineering/planning/design/recursive-self-improvement.md:40-41`; the text must pass `b10x-gates scan-text` (story line 46, `AGENTS.md:35-36`) — cited
+- **Confidence:** high — the story and the design name both profile paths, and the acceptance is entirely about documents
+- **Would collide with:** any unit that writes `.agents/operator-agent.md` (story:finding-intake and story:loop-scorecard both do, and both `depends_on` this story: `finding-intake.md:11`, `loop-scorecard.md:12`); any unit editing `AGENTS.md`'s Layout or Rules lines; any unit creating `.claude/` — cited (edges), inferred (`AGENTS.md`/`.claude/`)
+- **Safety fact:** no code in the tree reads `.agents/` or `.claude/`, so adding them changes no runtime behaviour. Step 2: `git grep -n -e '\.agents/' -e '\.claude'` over `crates`, `Taskfile.yml` and the tree matches only planning-store text. Unproven.
 
 ## Ordering
 
@@ -49,3 +73,13 @@ Each profile contains every "never" line of its role in the design's roles table
 ## Out of Scope
 
 Scheduling the agents; the intake procedure (story:finding-intake); the L2 turn (story:loop-scorecard).
+
+## Landed (wave 07)
+
+Read from `git diff --stat c1445fa 7508aa9` at the close of wave 07 (wave branch head ea832ee). The AGENTS.md link sits in the Start here table, not Layout; the stubs carry name and description frontmatter so the harness loads them.
+
+- `.agents/developer-agent.md`
+- `.agents/operator-agent.md`
+- `.claude/agents/developer-agent.md`
+- `.claude/agents/operator-agent.md`
+- `AGENTS.md`

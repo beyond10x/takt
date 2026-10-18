@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T12:36:00Z",
+  "actor": "human:timo",
+  "artifact": "story:pr-scan-policy",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "cargo test -p b10x-takt --locked --test forge_scan_policy --test forge_scan_policy_adv1",
+    "reference": "baseline e9a25b0: scan_argv without the forge policy, the published body never scanned (scratch r1-red.log); treatment c56f3ce: 6 + 1 passed (c1-test.log)"
+  }
+}

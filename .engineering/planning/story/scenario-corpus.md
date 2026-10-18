@@ -2,13 +2,24 @@
 format: aep.planning-md/3
 id: story:scenario-corpus
 kind: story
-status: draft
+status: implemented
 title: Each scenario run starts from a fresh trial base with no hand reset
 summary: trial/<n> per run on the scratch repository; PR targets it; story proposed again
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 2
+scope:
+- confidence: inferred
+  path: crates/takt-cli/src/main.rs
+- confidence: inferred
+  path: crates/takt-cli/tests/scenario_run.rs
+- confidence: inferred
+  path: crates/takt/src/git.rs
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T12:07:49Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-18T12:07:50Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-10-18T13:04:29Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":3,"verification":1}}}
 ---
 # Story: scenario-corpus
 
@@ -34,9 +45,22 @@ scenario is declared in the scratch repository, not in takt: its story id, its s
 
 ## Scope
 
-- `crates/takt-cli/src/main.rs` (a `--base` for the case's pull request, or a `scenario run` verb) (inferred)
-- `crates/takt/src/forge.rs` (the base passed through) (inferred)
-- the scratch repository: a `scenarios/` file listing scenario id, story id, seed commit (inferred)
+Derived 2026-10-18 by `story-scoper` against branch `fix/2026-10-18-review` at 768db1c (before tree-hygiene and validator-confinement merged). Every line is **cited** (read from the story or the tree) or **inferred** (a reading that could be wrong).
+
+- **Primary surface:** `crates/takt-cli`: a `scenario run` verb that cuts `trial/<n>` from the seed commit, pushes it through the bot route, checks it out, then runs the normal path; or a `--base` on `run` — inferred, the story's own scope marks it inferred
+- **Files:** `crates/takt-cli/src/main.rs:28-37` (`Commands`), `:54-117` (`RunArgs`), `:189-420` (the `run` dispatch) — inferred
+- **Already in place:** the case's base is the branch the tree is on when the case opens, `crates/takt/src/case.rs:837-859`; it reaches the pull request through `crates/takt/src/validator.rs:398-416` and `crates/takt/src/forge.rs:79,418`. A run started on `trial/<n>` already opens its pull request against `trial/<n>` — cited
+- **Not touched:** `crates/takt/src/forge.rs`. The story's "base passed through" already exists, and `Forge::push` (`forge.rs:406`, `push_argv` `:273-277`) takes any branch name, so pushing `trial/<n>` reuses it unchanged — inferred
+- **Also likely:** `crates/takt/src/git.rs:43` (`create_branch` takes a `from`; `<n>` needs a fetch or ls-remote helper) — inferred
+- **Also likely:** `crates/takt-cli/tests/scenario_run.rs`, new — inferred
+- **Outside this repository:** the scenario declaration (scenario id, story id, seed commit, `expected_before`) sits in the scratch repository (seed `865eaa8`, per decision-blocker:live-trial-repository). The location is cited from the story; the file name `scenarios/…` is inferred
+- **Documents:** none in takt — inferred
+- **Confidence:** medium. The base mechanism is read from the tree. Whether the entry point is a takt verb, a `--base` (that would move the change into `case.rs:837-856`, not `forge.rs`) or a script in the scratch repository is the story's own inferred choice. In the script case takt changes nothing
+- **Would collide with:** any unit touching `crates/takt-cli/src/main.rs` `Commands`, `RunArgs` or the run dispatch. story:scorecard-reader follows on this file (cited from the story's Ordering) — inferred for the rest
+- **Safety fact:** a run that stops before its first commit can leave the store file dirty; `git checkout trial/<n+1>` keeps it, and run 2 would read `active` and resume run 1's case. The setup must refuse a dirty tree, not discard it. (Read against 768db1c; story:tree-hygiene, merged after, commits the take and refuses a dirty open.) — level 3, unproven
+- **Bot-route precheck (Ordering), not run:** `b10x-gates bot` checks only the git verb and hook bypass, no branch-name rule; `api` has no path allow-list. Still to check: (a) a GitHub ruleset or branch protection on `trial/*` in the scratch repository (read-only `gh api …/rulesets`, `…/branches`); (b) the App installation's `contents:write` and `pull_requests:write`; (c) a pre-push hook in the scratch checkout (bot pushes do not bypass hooks; a destination that is not enrolled is refused); (d) the live proof: `b10x-gates bot -- push origin trial/0`, then `b10x-gates api --method POST --path /repos/<owner>/<repo>/pulls` with base `trial/0`. (a) and (d) are network calls, left to the story's first step — cited for the gates lines, inferred for (a) to (c)
+
+Typed entries (all inferred): `crates/takt-cli/src/main.rs`, `crates/takt/src/git.rs`, `crates/takt-cli/tests/scenario_run.rs`.
 
 ## Ordering
 
@@ -61,3 +85,13 @@ The scorecard (story:scorecard-reader); several scenarios per run.
 
 - Where a scenario is declared: `inferable`, in the scratch repository, because the scenario is
   that repository's state; takt only reads it.
+
+## Landed (wave 07)
+
+Read from `git diff --stat c1445fa 85f2a75` at the close of wave 07 (wave branch head ea832ee). The entry point is a `takt scenario run` verb; the declaration is `.engineering/scenarios.conf` in git config syntax; the bot-route fetch and lease push are built in `main.rs` (TrialRoute), not `forge.rs` (follow-up).
+
+- `crates/takt-cli/src/main.rs`
+- `crates/takt-cli/tests/scenario_run.rs`
+- `crates/takt-cli/tests/scenario_run_adv1.rs`
+- `crates/takt-cli/tests/scenario_run_adv2.rs`
+- `crates/takt/src/git.rs`

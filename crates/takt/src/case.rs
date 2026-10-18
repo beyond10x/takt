@@ -737,26 +737,32 @@ pub fn resumable(
 const APPROVALS_AT_MOST: usize = 64;
 
 /// Whether `head` reaches `revision` only through commits that hold an approval's record for
-/// the case's `story` and nothing else: each with one parent, the subject
-/// [`crate::frontier::approve_subject`] of `story` and one capability, and every path it changes
-/// in the planning store ([`crate::frontier::is_store_path`]). Such a commit is the approval's
-/// own: it records the grant and changes no path outside the store. The case stays at
-/// `revision`, and `pr.open` pushes `revision` itself, not `HEAD`
-/// ([`crate::forge::Forge::push_revision`]), so what is pushed, checked and merged is the
-/// revision the grant was given at. A commit that does anything else, or a case with no story,
-/// is no approval's.
-pub fn approvals_only(
-    tree: &Path,
-    revision: &str,
-    head: &str,
-    story: Option<&str>,
-) -> Result<bool> {
-    let Some(story) = story else {
+/// the story of the case at `case_dir` and nothing else: each with one parent, the subject
+/// [`crate::frontier::approve_subject`] of the story and one capability, and every change it
+/// makes the addition of a new regular file directly in the story's evidence directory
+/// (`.engineering/evidence/story/<name>/`), as the store records an approval; and no more such
+/// commits than the case's `authority.yaml` holds grants, one record per grant. Such a commit
+/// is the approval's own: it records the grant and changes nothing else. The case stays at
+/// `revision`, the one the grant was given at and every claim is about; `pr.open` and
+/// `repository.merge` push `HEAD` with those commits above it and merge that head, so the
+/// approval's record reaches the base with the pull request and nothing else rides along. A
+/// commit that does anything else, one beyond the grants, or a case with no story, is no
+/// approval's.
+pub fn approvals_only(tree: &Path, revision: &str, head: &str, case_dir: &Path) -> Result<bool> {
+    let Some(story) = story_of(case_dir)? else {
         return Ok(false);
     };
-    let prefix = crate::frontier::approve_subject(story, "");
+    let grants = Authority::read(case_dir)?.map_or(0, |authority| {
+        authority
+            .decisions
+            .iter()
+            .filter(|decision| decision.decision == Grant::Granted)
+            .count()
+    });
+    let prefix = crate::frontier::approve_subject(&story, "");
+    let evidence = format!(".engineering/evidence/{}/", story.replacen(':', "/", 1));
     let mut at = head.to_owned();
-    for _ in 0..APPROVALS_AT_MOST {
+    for _ in 0..=grants.min(APPROVALS_AT_MOST) {
         if at == revision {
             return Ok(true);
         }
@@ -770,18 +776,53 @@ pub fn approvals_only(
         let [parent] = commit.parents.as_slice() else {
             return Ok(false);
         };
-        if !approval
-            || commit.paths.is_empty()
-            || !commit
-                .paths
-                .iter()
-                .all(|path| crate::frontier::is_store_path(path))
-        {
+        if !approval || !adds_records_only(tree, parent, &at, &evidence)? {
             return Ok(false);
         }
         at.clone_from(parent);
     }
     Ok(false)
+}
+
+/// Whether every change from `parent` to `commit` adds a new regular file directly in the
+/// directory `evidence` (ending in `/`), and there is at least one: what the store's record of
+/// an approval is. Read from `git diff-tree --raw -z`, byte for byte, not from quoted text.
+fn adds_records_only(tree: &Path, parent: &str, commit: &str, evidence: &str) -> Result<bool> {
+    let raw = crate::git::run(
+        tree,
+        &[
+            "diff-tree",
+            "-r",
+            "-z",
+            "--no-renames",
+            "--raw",
+            parent,
+            commit,
+            "--",
+        ],
+    )?;
+    let mut fields = raw.split('\0').filter(|field| !field.is_empty());
+    let mut added = 0;
+    while let Some(change) = fields.next() {
+        let Some(path) = fields.next() else {
+            return Ok(false);
+        };
+        let parts: Vec<&str> = change.trim_start_matches(':').split(' ').collect();
+        let [from_mode, to_mode, _, _, status] = parts.as_slice() else {
+            return Ok(false);
+        };
+        let name = path.strip_prefix(evidence).unwrap_or_default();
+        if *status != "A"
+            || *from_mode != "000000"
+            || *to_mode != "100644"
+            || name.is_empty()
+            || name.contains('/')
+        {
+            return Ok(false);
+        }
+        added += 1;
+    }
+    Ok(added > 0)
 }
 
 /// The directory of the case whose branch `tree` is on: `takt/<id>` names the case `<id>`.
@@ -1052,7 +1093,7 @@ impl CaseDir {
         let head = crate::git::head(tree)?;
         if let Some(revision) = case.revision("implementation")
             && revision != head
-            && !approvals_only(tree, &revision, &head, case.story()?.as_deref())?
+            && !approvals_only(tree, &revision, &head, &case.dir)?
         {
             case.set_revision("implementation", &head)?;
         }

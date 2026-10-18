@@ -10,7 +10,22 @@ relations:
 - serves: vision:safe-agentic-coding
 - depends_on: story:scorecard-reader
 - supersedes: story:pinned-judge-and-promotion
-revision: 1
+scope:
+- confidence: inferred
+  path: README.md
+- confidence: inferred
+  path: crates/takt-cli/build.rs
+- confidence: cited
+  path: crates/takt-cli/src/main.rs
+- confidence: inferred
+  path: crates/takt-cli/tests/promote_cli.rs
+- confidence: inferred
+  path: crates/takt/src/lib.rs
+- confidence: inferred
+  path: crates/takt/src/promotion.rs
+- confidence: inferred
+  path: ess/domains/takt.yaml
+revision: 4
 ---
 # Story: promotion
 
@@ -38,10 +53,26 @@ lands, recorded by a first `takt promote --baseline-only` that installs nothing.
 
 ## Scope
 
-- `crates/takt-cli/src/main.rs` (`promote`, revision in `--version`) (inferred)
-- new: `crates/takt-cli/build.rs` (the revision embedded at build) (inferred)
-- new: `crates/takt/src/promotion.rs` (the record and the defaults) (inferred)
-- `crates/takt/src/lib.rs` (inferred)
+Derived 2026-10-18 by `story-scoper`. Every line is **cited** (read from the story or the tree) or
+**inferred** (a reading that could be wrong).
+
+- **Primary surface:** `crates/takt-cli` — cited, the story's Context names `crates/takt-cli/src/main.rs` for `--version`
+- **Files:** `crates/takt-cli/src/main.rs:16-25` (clap `version`, line 19) — cited, the bare version the story replaces
+- **Files:** `crates/takt-cli/src/main.rs:27-37` (`enum Commands`) and `:189-228` (dispatch in `run`) — inferred, where a `Promote` subcommand and its `--baseline-only` flag go
+- **Files:** new `crates/takt-cli/build.rs` (the git revision embedded at build) — inferred, absent today; Cargo picks a `build.rs` up without a manifest change
+- **Files:** new `crates/takt/src/promotion.rs` (the promotion record, the no-worse / median +10 % / one-per-UTC-day rules) — inferred, absent today
+- **Files:** `crates/takt/src/lib.rs:8-17` (`pub mod promotion;`) — inferred, the module list every kernel module is declared in
+- **Symbols:** `takt.work.Promotion`, `takt.work.PromotionId` — cited, already declared in `ess/domains/takt.yaml:413` and `:1063-1090` ("Declared ahead of the code (story:promotion)")
+- **Also likely:** new `crates/takt-cli/tests/promote_cli.rs` — inferred, from the `*_cli.rs` pattern in `crates/takt-cli/tests/`; it is where the Acceptance and the three Checks run against `CARGO_BIN_EXE_takt`
+- **Also likely:** `ess/domains/takt.yaml:1063-1090` — inferred, the Promotion comment would move from "declared ahead of the code" to code citations, as each wave's domain-document step has done (`docs/waves/wave-05.md:116`)
+- **Documents:** `README.md:16-20` (`cargo install --locked --path crates/takt-cli`, `takt --version`) — inferred, only if installing moves behind `takt promote`
+- **Confidence:** medium — the story names `main.rs` and `--version` and the noun is already declared in ESS; the kernel module, the build script and where the record is stored are guesses, and `crates/takt/src/scorecard.rs` (story:scorecard-reader), which this story reads, does not exist in the tree
+- **Would collide with:** any unit that adds or changes a `takt-cli` subcommand in `crates/takt-cli/src/main.rs`, and any unit that adds a kernel module to `crates/takt/src/lib.rs` — cited, the story's Ordering names the `main.rs` overlap with story:scorecard-reader, and story:judge-guard names the same file
+- **Safety fact:** nothing in the tree reads `takt --version` output: the only version source is clap's `version` at `crates/takt-cli/src/main.rs:19`, and `git grep -- '--version\|CARGO_PKG_VERSION' crates` finds no reader, so adding the revision breaks no existing caller — step 2, unproven
+
+Not established: where the promotion record is stored (if in a tree a candidate edits, a candidate could plant its own baseline: the security reviewer should prove the location); what "installs" means (cargo install, copy, Taskfile task); the saved scorecard's format and location (story:scorecard-reader); whether a `promoted` validator in `validator.rs` is in scope (`protocols/self-improvement/1.yaml:182-192` declares `binary.promote`); whether `crates/takt-cli/Cargo.toml` needs dependencies.
+
+Typed entries: `crates/takt-cli/src/main.rs` (cited); `crates/takt-cli/build.rs`, `crates/takt/src/promotion.rs`, `crates/takt/src/lib.rs`, `crates/takt-cli/tests/promote_cli.rs`, `ess/domains/takt.yaml`, `README.md` (inferred).
 
 ## Ordering
 

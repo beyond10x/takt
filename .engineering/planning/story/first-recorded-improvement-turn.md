@@ -11,7 +11,12 @@ relations:
 - depends_on: story:scenario-corpus
 - depends_on: story:self-improvement-protocol
 - depends_on: story:cli-protocol-defaults
-revision: 2
+scope:
+- confidence: inferred
+  path: .engineering/cases
+- confidence: inferred
+  path: .engineering/evidence/story
+revision: 4
 ---
 # Story: first-recorded-improvement-turn
 
@@ -34,8 +39,23 @@ before a case could record it, so it has no baseline record and is not this turn
 
 ## Scope
 
-- the scratch repository's scenario 1 (cited by the design)
-- `.engineering/cases/<id>/` of the turn's case (inferred)
+Derived 2026-10-18 by `story-scoper`. Every line is **cited** (read from the story or the tree) or
+**inferred** (a reading that could be wrong).
+
+- **Primary surface:** records, not code. The turn's case directory `.engineering/cases/<id>/` in the takt tree that `takt run --repo` is given. `crates/takt/src/case.rs:1` and `:21` put a case at `<tree>/.engineering/cases/<id>/` — inferred: the story names the directory but not which tree
+- **Files:** `.engineering/evidence/story/<finding-story>/`, the evidence record whose `--ref` names the case directory (story Checks). The layout is the one at `.engineering/evidence/story/cli-protocol-defaults/`, and the evidence call is like `crates/takt/src/frontier.rs:365-373` — inferred: the finding's story id does not exist yet
+- **Files:** scenario 1 of the scratch repository (`story:remove-a-todo`), run once at the baseline and once at the candidate, each on its own `trial/<n>` — cited (design § Scenario corpus; story § Scope)
+- **Symbols:** `self.improvement/1`, i.e. `protocols/self-improvement/1.yaml`. The `accepted` outcome requires `scenario.passes_after`, `scorecard.no_regression` and `promoted` (`protocols/self-improvement/1.yaml:194-202`). The story reads this file and does not change it — cited
+- **Symbols:** the defect site. On main it is `crates/takt-cli/src/main.rs:66` (`default_value = "software.change/1"`). On `fix/2026-10-18-review` the candidate is already merged (`316fbfc`), with `STORY_DELIVERY`/`SOFTWARE_CHANGE` at `crates/takt-cli/src/main.rs:478-480` and the doc text at `:66-70` — cited
+- **Also likely:** none in code. The fix is story:cli-protocol-defaults (Out of Scope) and the validators belong to story:self-improvement-protocol — cited (story § Out of Scope; self-improvement-protocol § Scope)
+- **Documents:** none — cited (the Acceptance is a case directory and its last decision)
+- **Confidence:** medium — no code lands, which the story says (cited). The case's tree and the finding's story id are inferred, and the scratch repository's path is not named anywhere read
+- **Would collide with:** any other scenario-1 run on the scratch repository at the same time (`trial/<n>` and the store on it), and any other promotion of the installed takt binary (design § Scorecard allows one a day). It touches no source file, so it is disjoint from every code unit in the wave — inferred
+- **Safety fact:** the case directory is left out of the kernel's change detection, commit and clean (`crates/takt/src/case.rs:40-49`, `is_under_cases`), and case ids cannot leave `.engineering/cases` (`crates/takt/src/case.rs:90-96`). So recording the turn changes no tracked source. Proof level 2 (pointed at file:line), unproven
+
+Not established: which tree holds the case (takt or the scratch repository); the finding's story id (story:finding-intake files it); the scratch repository's local path; whether the case directory gets committed; the edge to story:cli-protocol-defaults can be added once wave 06 is in main.
+
+Typed entries: `.engineering/cases` (inferred), `.engineering/evidence/story` (inferred).
 
 ## Ordering
 
