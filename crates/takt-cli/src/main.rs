@@ -40,7 +40,43 @@ enum Commands {
     /// The repository's scenarios: a story at a known seed commit, run from a fresh base.
     #[command(subcommand)]
     Scenario(ScenarioCommands),
+    /// Print, per run of a case under `.engineering/cases/`, its outcome, steps, tokens,
+    /// refusals, `NoProgress`, errors and wall time, read from the case's `events.jsonl` only;
+    /// a case without one is listed as `no record`.
+    #[command(after_help = SCORECARD_EXIT_CODES)]
+    Scorecard(ScorecardArgs),
 }
+
+#[derive(clap::Args)]
+struct ScorecardArgs {
+    /// The repository worktree whose cases are read.
+    #[arg(long)]
+    repo: PathBuf,
+    /// Save the scorecard as `<dir>/scorecard-<revision>.json`, named by --revision, which it
+    /// needs; a file there already is not overwritten.
+    #[arg(long, value_name = "DIR")]
+    save: Option<PathBuf>,
+    /// The revision of takt under test, a commit id, that names the saved scorecard; never the
+    /// scenario repository's HEAD.
+    #[arg(long, value_name = "SHA", requires = "save")]
+    revision: Option<String>,
+    /// Compare each scenario with the same scenario in a saved scorecard, over cases (a case's
+    /// outcome is the best a run of it completed with, else its last run's): worse when, for
+    /// some outcome rank (accepted, then ApprovalRequired or Waiting, then a budget stop, then
+    /// NoProgress and every other stop, then an error), the share of its cases at that rank or
+    /// better is below the saved share, each such rank printed with both shares, or when the
+    /// saved scorecard has the scenario and this one has no run of it; tokens as n, min, median
+    /// and max per scenario and side, and the difference of the medians, never worse.
+    #[arg(long, value_name = "FILE")]
+    against: Option<PathBuf>,
+}
+
+/// What `takt scorecard --help` says about the exit codes.
+const SCORECARD_EXIT_CODES: &str = "Exit codes:
+  0  printed (and saved); with --against, no scenario is worse than the saved one
+  1  refused: the repository, a case's events.jsonl or the saved scorecard does not read; --save without --revision, onto a file that exists, or that cannot be written; the reason on stderr
+  2  the arguments do not parse
+  3  with --against: a scenario is worse: at some outcome rank the share of its cases at that rank or better is below the saved share, or it has no run (tokens never make a scenario worse)";
 
 #[derive(Subcommand)]
 enum ScenarioCommands {
@@ -290,6 +326,21 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             Ok(EXIT_DONE)
         }
         Commands::Scenario(ScenarioCommands::Run(args)) => scenario_run(*args, out),
+        Commands::Scorecard(ScorecardArgs {
+            repo,
+            save,
+            revision,
+            against,
+        }) => {
+            let worse = takt::scorecard::report(
+                &repo,
+                save.as_deref(),
+                revision.as_deref(),
+                against.as_deref(),
+                out,
+            )?;
+            Ok(if worse > 0 { 3 } else { EXIT_DONE })
+        }
         Commands::Run(args) => {
             let RunArgs {
                 repo,

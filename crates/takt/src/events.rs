@@ -1,9 +1,11 @@
 //! The run record: `events.jsonl` in the case directory, one JSON object per line, appended and
-//! never rewritten. Each line carries the instant it was written (`at`, as [`crate::now`] writes
-//! one), the step it belongs to (`step`, 0 before a run's first) and the event (`event`) with its
-//! fields. What a run prints is for the person watching it; this file is what a person, or a
-//! program, reads back afterwards. Every run on a case appends to the same file, so a case
-//! resumed after its gate continues its record.
+//! never rewritten. Each line carries the instant it was written (`at`, as [`instant`] writes
+//! one, to the microsecond; a line written before had whole seconds), the step it belongs to
+//! (`step`, 0 before a run's first) and the event (`event`) with its fields. A field added to an
+//! event later is optional: a line written before it reads as it did. What a run prints is for
+//! the person watching it; this file is what a person, or a program, reads back afterwards.
+//! Every run on a case appends to the same file, so a case resumed after its gate continues its
+//! record.
 //!
 //! The file lies in the case directory, which a judgement step and a validator's command may
 //! not write: a line in it was written by the kernel.
@@ -12,7 +14,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The file in the case directory that holds the run record.
 pub const EVENTS_FILE: &str = "events.jsonl";
@@ -22,18 +24,53 @@ pub const BY_TAKT: &str = "takt";
 /// The planning store refused a write, its words verbatim.
 pub const BY_STORE: &str = "store";
 
+/// The instant now, to the microsecond: `YYYY-MM-DDTHH:MM:SS.ffffffZ`.
+#[must_use]
+pub fn instant() -> String {
+    let now = time::OffsetDateTime::now_utc();
+    let format = time::macros::format_description!(
+        "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:6]Z"
+    );
+    now.format(&format)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00.000000Z".to_owned())
+}
+
+/// The tokens a harness reported for one step, by component; [`TokenUsage::total`] is the
+/// step's `tokens`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_creation: u64,
+}
+
+impl TokenUsage {
+    /// The four components summed, at most `u64::MAX`.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        self.input
+            .saturating_add(self.output)
+            .saturating_add(self.cache_read)
+            .saturating_add(self.cache_creation)
+    }
+}
+
 /// One event of a run.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     /// A run opened on the case, or resumed it: the protocol, the story when the case works
-    /// one, the inputs as `name=value`.
+    /// one, the inputs as `name=value`, and the commit the case's branch forked from when the
+    /// case recorded one.
     Opened {
         case: String,
         protocol: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         story: Option<String>,
         inputs: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.
@@ -42,8 +79,9 @@ pub enum Event {
         file: String,
         frontier: String,
     },
-    /// A step: by a `validator` or the `harness`, which one, the action, what it reported, and
-    /// the tokens the harness reported when it reported any.
+    /// A step: by a `validator` or the `harness`, which one, the action, what it reported, the
+    /// tokens the harness reported when it reported any, and their four components when it
+    /// reported those; a validator's, the revision it observed.
     Step {
         by: String,
         name: String,
@@ -51,6 +89,10 @@ pub enum Event {
         summary: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         tokens: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage: Option<TokenUsage>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        revision: Option<String>,
     },
     /// What a judgement step changed: the paths committed and the implementation revision they
     /// were committed as; no path and no revision when it changed no file.
@@ -70,12 +112,13 @@ pub enum Event {
     },
     /// An evidence record written on the story in the planning store: the kind, the reference
     /// and the instant given to the store (the case's record's own `observed_at`), and the
-    /// commit on the case's branch that holds it.
+    /// commit on the case's branch that holds it. The instant is `observed_at`, never `at`,
+    /// which is the line's own.
     StoreEvidence {
         story: String,
         kind: String,
         reference: String,
-        at: String,
+        observed_at: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         commit: Option<String>,
     },
@@ -170,7 +213,7 @@ impl Events {
     /// `event` at `step`, the instant now, as one line with its end.
     fn line(step: u64, event: &Event) -> Result<String> {
         let mut line = serde_json::to_string(&Line {
-            at: crate::now(),
+            at: instant(),
             step,
             event,
         })
@@ -206,7 +249,8 @@ impl Events {
     /// skip), or the line after it is the [`Event::Skipped`] line naming it. Lines that do not
     /// read one after another (a repair that was cut short too) are skipped together when the
     /// last of them is such a line. Any other line that does not read is an error naming the
-    /// file and the line.
+    /// file and the line. A line's `at` is its first: a `store_evidence` line an earlier takt
+    /// wrote carries the store's instant as a second `at`, which is read as `observed_at`.
     pub fn read(&self) -> Result<Vec<serde_json::Value>> {
         let text = match std::fs::read_to_string(&self.path) {
             Ok(text) => text,
@@ -217,10 +261,8 @@ impl Events {
         };
         let ended = text.ends_with('\n');
         let lines: Vec<&str> = text.split_terminator('\n').collect();
-        let parsed: Vec<Option<serde_json::Value>> = lines
-            .iter()
-            .map(|line| serde_json::from_str(line).ok())
-            .collect();
+        let parsed: Vec<Option<serde_json::Value>> =
+            lines.iter().map(|line| read_line(line)).collect();
         let mut read = Vec::new();
         let mut n = 0;
         while n < lines.len() {
@@ -259,5 +301,56 @@ impl Events {
             n = last + 1;
         }
         Ok(read)
+    }
+}
+
+/// One line as JSON, its `at` the first the line holds and a later one, when the line holds
+/// two, its `observed_at`; none when it does not read.
+fn read_line(line: &str) -> Option<serde_json::Value> {
+    let mut value: serde_json::Value = serde_json::from_str(line).ok()?;
+    if let Ok(Instants(Some(first), Some(last))) = serde_json::from_str(line)
+        && let Some(object) = value.as_object_mut()
+    {
+        object
+            .entry("observed_at")
+            .or_insert_with(|| last.clone().into());
+        object.insert("at".to_owned(), first.into());
+    }
+    Some(value)
+}
+
+/// The first and the last `at` of a line's object, when it holds two or more.
+struct Instants(Option<String>, Option<String>);
+
+impl<'de> Deserialize<'de> for Instants {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Instants;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an event line")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Instants, A::Error> {
+                let mut ats: Vec<serde_json::Value> = Vec::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "at" {
+                        ats.push(map.next_value()?);
+                    } else {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                let text = |value: &serde_json::Value| value.as_str().map(str::to_owned);
+                Ok(match ats.as_slice() {
+                    [first, .., last] => Instants(text(first), text(last)),
+                    _ => Instants(None, None),
+                })
+            }
+        }
+        deserializer.deserialize_map(Visitor)
     }
 }
