@@ -150,7 +150,7 @@ fn the_run_after_a_story_case_completed_does_not_resume_it() {
 /// A run with no harness on a case that holds everything but the grant: the four records are
 /// true at the revision, `repository.merge` is approval-required, and nothing deterministic is
 /// left. The story: the run stops at `ApprovalRequired (repository.merge)` with nothing merged,
-/// exit 0, and `takt approve` is the next step.
+/// exit 4, and `takt approve` is the next step.
 #[test]
 fn a_run_with_no_harness_on_a_case_that_needs_only_the_grant_stops_approval_required() {
     let repo = repository("one-ready", "no-harness");
@@ -216,7 +216,10 @@ fn a_run_with_no_harness_on_a_case_that_needs_only_the_grant_stops_approval_requ
         "--test-cmd",
         "true",
     ]);
-    assert_eq!(code, 0, "stdout {out} stderr {err}");
+    assert_eq!(
+        code, 4,
+        "ApprovalRequired exits 4, not Completed's 0: stdout {out} stderr {err}"
+    );
     assert!(
         out.contains("stopped: ApprovalRequired (repository.merge)"),
         "stdout {out} stderr {err}"

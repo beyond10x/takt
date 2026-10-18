@@ -27,6 +27,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Run on a repository: take the intent, open a case or resume one, loop until a stop.
+    #[command(after_help = EXIT_CODES)]
     Run(Box<RunArgs>),
     /// Grant a case a capability: write the grant into the case's authority.yaml and record the
     /// approval on the case's story in the planning store. The next run resumes the case.
@@ -62,10 +63,14 @@ struct RunArgs {
     /// The case to resume, by id, instead of opening one; not with --intent.
     #[arg(long)]
     case: Option<String>,
-    /// The protocol: a built-in id or a `protocol/1` file.
-    #[arg(long, default_value = "software.change/1")]
-    protocol: String,
-    /// A case input, `name=value`; repeatable.
+    /// The protocol: a built-in id (`takt protocols`) or a `protocol/1` file. Not given, a story
+    /// the planning store gives opens on `story.delivery/1`, an --intent on `software.change/1`,
+    /// and a resumed case runs on its own. Given for a resumed case, it must be the case's own:
+    /// another is refused before the run, nothing changed.
+    #[arg(long)]
+    protocol: Option<String>,
+    /// A case input, `name=value`; repeatable. One the protocol a case opens on does not declare
+    /// is refused before the case is opened.
     #[arg(long = "input", value_name = "NAME=VALUE")]
     inputs: Vec<String>,
     /// Stop after this many steps.
@@ -104,8 +109,8 @@ struct RunArgs {
     /// The forge: `bot` (the repository's bot route: `b10x-gates` pushes the case's branch,
     /// opens its pull request and merges it, `gh` reads the pull request's state and checks) or
     /// `none` (no pull request is opened; `pr.open`, `ci.read` and `repository.merge` are left
-    /// to the harness). Not given, `bot` when the repository has an `origin` remote, else
-    /// `none`.
+    /// to the harness). Not given, `bot` when the repository's `origin` is a repository on
+    /// github.com, the host the bot route serves, else `none`.
     #[arg(long)]
     forge: Option<String>,
 }
@@ -113,7 +118,7 @@ struct RunArgs {
 /// A harness that performs nothing. Asked while an approval is pending, it requests the gate
 /// action, changing no file, so the run stops `ApprovalRequired` and `takt approve` is the
 /// next step; asked for a judgement step with no approval pending, it ends the run with an
-/// error, because nothing performs that step.
+/// error, `stopped: error:`, because nothing performs that step.
 struct NoHarness;
 
 impl Harness for NoHarness {
@@ -136,6 +141,26 @@ impl Harness for NoHarness {
     }
 }
 
+/// Exit 0: the run completed, the frontier had nothing ready, or the command was done.
+const EXIT_DONE: u8 = 0;
+/// Exit 1: refused before the run, the reason on stderr (`main`).
+const EXIT_REFUSED: u8 = 1;
+/// Exit 3: the run stopped on a budget or with nothing more it may do.
+const EXIT_STOPPED: u8 = 3;
+/// Exit 4: the run stopped for an approval; `takt approve` is the next step.
+const EXIT_APPROVAL: u8 = 4;
+/// Exit 5: the run ended on an error once its case was open, `stopped: error:`.
+const EXIT_ERROR: u8 = 5;
+
+/// What `takt run --help` says about the exit codes; each line opens with its code.
+const EXIT_CODES: &str = "Exit codes:
+  0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
+  1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run
+  2  the arguments do not parse
+  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress
+  4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
+  5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open";
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let stdout = std::io::stdout();
@@ -144,20 +169,29 @@ fn main() -> ExitCode {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
             eprintln!("takt: {error:#}");
-            ExitCode::from(1)
+            ExitCode::from(EXIT_REFUSED)
         }
     }
 }
 
-/// Runs the command, printing to `out`; the exit code: 0 for a completed or approval-bound run,
-/// for a frontier with nothing ready and for an approval given, 3 for any other stop.
+/// Runs the command, printing to `out`; the exit code (an error is exit 1 from `main`, a clap
+/// usage error exit 2, the codes `takt run --help` lists as [`EXIT_CODES`]):
+///
+/// | code | when |
+/// |---|---|
+/// | 0 | `Completed`; the frontier had nothing ready; `approve` and `protocols` done |
+/// | 1 | refused before the run, the reason on stderr, no step run |
+/// | 2 | the arguments do not parse (clap) |
+/// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress` |
+/// | 4 | `ApprovalRequired`: `takt approve` is the next step |
+/// | 5 | `stopped: error:`, the run ended on an error once its case was open: a forge that refused, a validator or the harness that failed |
 fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
     match cli.command {
         Commands::Protocols => {
             for (name, major) in b10x_canon_engineering_list() {
                 writeln!(out, "{name}/{major}")?;
             }
-            Ok(0)
+            Ok(EXIT_DONE)
         }
         Commands::Approve(args) => {
             let ApproveArgs {
@@ -188,7 +222,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     "recorded: nothing; the case was opened on an intent, not a story"
                 )?,
             }
-            Ok(0)
+            Ok(EXIT_DONE)
         }
         Commands::Run(args) => {
             let RunArgs {
@@ -220,10 +254,46 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                         .ok_or_else(|| anyhow!("an input is `name=value`, not `{pair}`"))
                 })
                 .collect::<Result<Vec<_>>>()?;
+            // The protocol given is read now, so a wrong one is refused before anything is
+            // opened. Not given, a case opens on the protocol for its unit: a story the store
+            // gives on the one that delivers it through a pull request, an intent on a software
+            // change; a resumed case runs on its own whatever is given here.
+            let given = protocol
+                .as_deref()
+                .map(LoadedProtocol::resolve)
+                .transpose()?;
+            let opening = match (&protocol, &intent) {
+                (Some(protocol), _) => protocol.clone(),
+                (None, Some(_)) => SOFTWARE_CHANGE.to_owned(),
+                (None, None) => STORY_DELIVERY.to_owned(),
+            };
+            let opens_on = match &given {
+                Some(given) => given.clone(),
+                None => LoadedProtocol::builtin(&opening)?,
+            };
+            // A case keeps only the inputs its protocol declares: one it does not declare would
+            // be dropped without a word, so a case to be opened refuses it before anything is.
+            // A resumed case reads its own inputs, never these.
+            if case.is_none()
+                && let Some((name, _)) = inputs
+                    .iter()
+                    .find(|(name, _)| !opens_on.inputs.iter().any(|(declared, _)| declared == name))
+            {
+                let declared: Vec<&str> = opens_on.inputs.iter().map(|(d, _)| d.as_str()).collect();
+                return Err(anyhow!(
+                    "--input {name}: {} declares no input {name}; it declares {}",
+                    opens_on.id,
+                    if declared.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        declared.join(", ")
+                    }
+                ));
+            }
             // The software change's inputs select the obligations it owes; left out, they take
             // the least demanding values a change can carry, said on the first line of the run.
             let mut inputs = inputs;
-            if protocol == "software.change/1" || protocol == "software-change/1" {
+            if opens_on.id == SOFTWARE_CHANGE {
                 for (name, value) in [
                     ("risk", "standard"),
                     ("change_kind", "feature"),
@@ -235,7 +305,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 }
             }
             let options = RunOptions {
-                protocol,
+                protocol: opening,
                 intent: String::new(),
                 inputs,
                 iterations,
@@ -330,14 +400,35 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     Some(run) => run,
                     None => {
                         writeln!(out, "frontier: nothing ready")?;
-                        return Ok(0);
+                        return Ok(EXIT_DONE);
                     }
                 },
             };
+            // A resumed case keeps the protocol it was opened on: a `--protocol` that names
+            // another is refused here, after the case was read and before anything ran. A case
+            // opened by this run is on the protocol given, by construction.
+            if let (Some(given), Some(spec)) = (&given, &protocol) {
+                refuse_another_protocol(&run.case, given, spec)?;
+            }
             if let Some(line) = &forge_line {
                 writeln!(out, "{line}")?;
             }
-            let stop = run.run(out)?;
+            // An error the loop ends on once the case is open, a forge that refused the pull
+            // request among them, is a stop like any other: one line on stdout, its own code.
+            let stop = match run.run(out) {
+                Ok(stop) => stop,
+                Err(error) => {
+                    writeln!(
+                        out,
+                        "stopped: error: {}; steps {}, tokens {}, case {}",
+                        one_line(&format!("{error:#}")),
+                        run.steps,
+                        run.tokens,
+                        run.case.dir.display()
+                    )?;
+                    return Ok(EXIT_ERROR);
+                }
+            };
             writeln!(
                 out,
                 "stopped: {stop}; steps {}, tokens {}, case {}",
@@ -346,11 +437,49 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 run.case.dir.display()
             )?;
             Ok(match stop {
-                Stop::Completed(_) | Stop::ApprovalRequired(_) => 0,
-                _ => 3,
+                Stop::Completed(_) => EXIT_DONE,
+                Stop::ApprovalRequired(_) => EXIT_APPROVAL,
+                _ => EXIT_STOPPED,
             })
         }
     }
+}
+
+/// The protocol a store story opens on when `--protocol` is not given.
+const STORY_DELIVERY: &str = "story.delivery/1";
+/// The protocol an `--intent` opens on when `--protocol` is not given.
+const SOFTWARE_CHANGE: &str = "software.change/1";
+
+/// Refuses `given`, named on the command line as `spec`, for `case` when it is not the protocol
+/// the case runs on: another id, or another document under the same id.
+fn refuse_another_protocol(case: &takt::CaseDir, given: &LoadedProtocol, spec: &str) -> Result<()> {
+    let own = &case.protocol;
+    if own.id != given.id {
+        return Err(anyhow!(
+            "the case {} runs on {}, not {} (--protocol {spec}): a case keeps the protocol it was opened on; resume it without --protocol; nothing was changed",
+            case.id,
+            own.id,
+            given.id
+        ));
+    }
+    if own.ir_json != given.ir_json {
+        return Err(anyhow!(
+            "the case {} runs on its own copy of {}, and --protocol {spec} is another document of {}: a case keeps the protocol it was opened on; resume it without --protocol; nothing was changed",
+            case.id,
+            own.id,
+            given.id
+        ));
+    }
+    Ok(())
+}
+
+/// `text` on one line: its lines, trimmed, the empty ones left out, joined with ` | `.
+fn one_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 /// The gates document a run takes when `--gates` is not given and this is a file.
@@ -700,10 +829,12 @@ mod tests {
         assert!(out.contains("stopped: Completed (accepted)"), "{out}");
     }
 
+    /// With no harness, the judgement step left ends the run: a `stopped: error:` line naming
+    /// it, exit 5, as every error the loop ends on once the case is open.
     #[test]
     fn without_a_gates_document_gate_run_is_a_judgement_step() {
         let repo = gated_repository("gates-none", None);
-        let error = takt_error(&[
+        let (code, out) = takt(&[
             "run",
             "--repo",
             repo.to_str().expect("utf-8"),
@@ -718,9 +849,10 @@ mod tests {
             "--test-cmd",
             "true",
         ]);
+        assert_eq!(code, 5, "{out}");
         assert!(
-            error.contains("no harness: a judgement step among gate.run is left"),
-            "{error}"
+            out.contains("stopped: error: no harness: a judgement step among gate.run is left"),
+            "{out}"
         );
     }
 
@@ -729,14 +861,6 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/../../protocols/story-delivery/1.yaml"
     );
-
-    /// Runs `takt <args>` in this process; what the run answered and what it printed.
-    fn takt_result(args: &[&str]) -> (anyhow::Result<u8>, String) {
-        let cli = Cli::parse_from(std::iter::once("takt").chain(args.iter().copied()));
-        let mut out = Vec::new();
-        let result = run(cli, &mut out);
-        (result, String::from_utf8(out).expect("utf-8"))
-    }
 
     /// `takt run` on the delivery protocol with no harness and a passing test command, `extra`
     /// last.
@@ -765,17 +889,19 @@ mod tests {
     #[test]
     fn without_an_origin_the_forge_is_none_and_ci_read_is_a_judgement_step() {
         let repo = gated_repository("forge-default-none", None);
-        let (result, out) = takt_result(&delivery_args(
+        let (code, out) = takt(&delivery_args(
             repo.to_str().expect("utf-8"),
             "default-none",
             &[],
         ));
-        let error = format!("{:#}", result.expect_err("a judgement step is left"));
+        assert_eq!(code, 5, "a judgement step is left: {out}");
         assert!(!out.contains("forge:"), "{out}");
         assert!(out.contains("step 1: tests.run {}"), "{out}");
         assert!(
-            error.contains("a judgement step among ci.read, gate.run, implementation.edit"),
-            "{error}"
+            out.contains(
+                "stopped: error: no harness: a judgement step among ci.read, gate.run, implementation.edit"
+            ),
+            "{out}"
         );
     }
 
@@ -786,16 +912,18 @@ mod tests {
             &repo,
             &["remote", "add", "origin", "git@github.com:owner/repo.git"],
         );
-        let (result, out) = takt_result(&delivery_args(
+        let (code, out) = takt(&delivery_args(
             repo.to_str().expect("utf-8"),
             "none",
             &["--forge", "none"],
         ));
-        let error = format!("{:#}", result.expect_err("a judgement step is left"));
+        assert_eq!(code, 5, "a judgement step is left: {out}");
         assert!(!out.contains("forge:"), "{out}");
         assert!(
-            error.contains("a judgement step among ci.read, gate.run, implementation.edit"),
-            "{error}"
+            out.contains(
+                "stopped: error: no harness: a judgement step among ci.read, gate.run, implementation.edit"
+            ),
+            "{out}"
         );
     }
 
