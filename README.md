@@ -10,9 +10,9 @@
 [![terminal frontend: 0/5 stories](https://img.shields.io/badge/terminal%20frontend-0%2F5%20stories-orange)](.engineering/planning/epic/terminal-frontend.md)
 [![continuous orchestration: 0/1 stories](https://img.shields.io/badge/continuous%20orchestration-0%2F1%20stories-orange)](.engineering/planning/epic/continuous-orchestration.md)
 [![improvement turns: 1 accepted, 1 promoted](https://img.shields.io/badge/improvement%20turns-1%20accepted%2C%201%20promoted-blue)](docs/metrics/improvement-turns.jsonl)
-[![scenario runs recorded: 42](https://img.shields.io/badge/scenario%20runs%20recorded-42-blue)](docs/metrics/scenario-runs.jsonl)
-[![held-out check: 30 of 30 pass](https://img.shields.io/badge/held--out%20check-30%20of%2030%20pass-brightgreen)](docs/metrics/scenario-runs.jsonl)
-[![ESS citations resolved: 443 of 443](https://img.shields.io/badge/ESS%20citations%20resolved-443%20of%20443-brightgreen)](ess/domains)
+[![scenario runs recorded: 47](https://img.shields.io/badge/scenario%20runs%20recorded-47-blue)](docs/metrics/scenario-runs.jsonl)
+[![held-out check: 35 of 35 pass](https://img.shields.io/badge/held--out%20check-35%20of%2035%20pass-brightgreen)](docs/metrics/scenario-runs.jsonl)
+[![ESS citations resolved: 458 of 458](https://img.shields.io/badge/ESS%20citations%20resolved-458%20of%20458-brightgreen)](ess/domains)
 <!-- badges end -->
 
 Point `takt` at a repository and say "work on this". It takes an intent, or the next ready story
