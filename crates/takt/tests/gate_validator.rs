@@ -197,6 +197,33 @@ fn the_evaluated_bundle_is_retained_under_the_case_artifacts() {
     assert!(bundle.is_file(), "{}\n{}", bundle.display(), outcome.text);
 }
 
+/// The bundle's `source_identity` is the repository tree's: what the loop writes under
+/// `.engineering/cases` between two observations at one revision does not move it, a change
+/// to the tree does.
+#[test]
+fn the_bundle_source_identity_leaves_the_case_directory_out() {
+    let tree = scratch("identity", r#"fs.file.exists("Cargo.toml")"#);
+    let validator = GateRun::new(".engineering/gates.yaml");
+    let identity = |observation: &takt::validator::Observation| -> String {
+        let bytes = &observation.artifact.as_ref().expect("a bundle").bytes;
+        let bundle: serde_json::Value = serde_json::from_slice(bytes).expect("json");
+        bundle["source_identity"]
+            .as_str()
+            .expect("a source identity")
+            .to_owned()
+    };
+    let first = validator.observe(&tree, "r0", 1).expect("observes");
+    let case = tree.join(".engineering/cases/identity");
+    fs::create_dir_all(case.join("decisions")).expect("a case directory");
+    fs::write(case.join("decisions/0001.json"), "{}\n").expect("a decision");
+    fs::write(case.join("intent.md"), "pass the gate").expect("an intent");
+    let second = validator.observe(&tree, "r0", 2).expect("observes");
+    assert_eq!(identity(&first), identity(&second));
+    fs::write(tree.join("README.md"), "changed\n").expect("a change to the tree");
+    let third = validator.observe(&tree, "r0", 3).expect("observes");
+    assert_ne!(identity(&first), identity(&third));
+}
+
 fn claim<'a>(decision: &'a Decision, id: &str) -> &'a str {
     decision
         .claims
@@ -738,4 +765,318 @@ fn a_command_bound_gate_with_its_project_file_is_evaluated() {
     );
     assert_eq!(ran.records.len(), 1, "{}", ran.text);
     assert_eq!(ran.records[0]["result"], "pass", "{}", ran.text);
+}
+
+// Adversary pass 2 over story:gate-validator: the correction's idle step and its retained
+// bundle. Every helper below is this pass's own; nothing above is changed.
+
+use takt::evidence::Record;
+use takt::validator::Observation;
+
+/// A protocol whose two actions are both validator-owned, `tests.run` and `gate.run`, each
+/// with no precondition, so no judgement step is ever offered; accepted once `gate.green`
+/// holds.
+const TWO_VALIDATORS_PROTOCOL: &str = "format: protocol/1
+
+protocol:
+  id: gate.and.tests
+  revision: 1
+  description: >-
+    Run the tests and the repository's gate against the implementation at its current revision;
+    accepted once the gate is green.
+
+artifacts:
+  implementation:
+    description: a revision of the code
+
+evidence_kinds:
+  test_result:
+    description: the result of running tests against an implementation revision
+  gate_result:
+    description: the result of the repository's gate against an implementation revision
+
+claims:
+  tests.pass:
+    description: the tests pass for the current implementation revision
+    true_when:
+      evidence:
+        kind: test_result
+        result: pass
+        subject: implementation
+  gate.green:
+    description: the repository's gate is green for the current implementation revision
+    true_when:
+      evidence:
+        kind: gate_result
+        result: pass
+        subject: implementation
+
+obligations:
+  gate.required:
+    description: the repository's gate is green for the current implementation revision
+    discharged_when:
+      claim: gate.green
+
+actions:
+  tests.run:
+    description: run the tests against an implementation revision
+    effect: read
+    may_produce:
+      - evidence: test_result
+  gate.run:
+    description: run the repository's gate against an implementation revision
+    effect: read
+    may_produce:
+      - evidence: gate_result
+
+outcomes:
+  accepted:
+    description: the repository's gate is green for the current implementation revision
+    requires:
+      claim: gate.green
+";
+
+/// `tests.run` without a test command: one `test_result` pass at the revision.
+struct TestsPass;
+
+impl Validator for TestsPass {
+    fn name(&self) -> &str {
+        "adv2.tests-pass"
+    }
+
+    fn action(&self) -> &str {
+        "tests.run"
+    }
+
+    fn kind(&self) -> &str {
+        "test_result"
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(&self, _: &Path, revision: &str, seq: usize) -> Result<Observation, anyhow::Error> {
+        Ok(Observation {
+            summary: "pass".to_owned(),
+            records: vec![Record::new(
+                format!("test-result-{seq}"),
+                self.kind(),
+                Some("pass".to_owned()),
+                self.subject(),
+                revision,
+                self.name(),
+            )],
+            artifact: None,
+        })
+    }
+}
+
+#[test]
+fn an_unknown_gate_does_not_stop_the_run_while_another_validator_is_due() {
+    // The gate validator comes first and observes unknown; the tests validator is admissible
+    // and has no evidence, so it is due at the next pass. The idle step the correction added
+    // must not stop the run before that due validator has run.
+    let tree = scratch_document(
+        "gate-then-tests",
+        &document(&[("readme", r#"text.contains("README.md", "x")"#)]),
+        &[("protocol.yaml", TWO_VALIDATORS_PROTOCOL)],
+    );
+    let protocol = tree.join("protocol.yaml");
+    let options = RunOptions {
+        protocol: protocol.to_str().expect("utf-8").to_owned(),
+        intent: "pass the gate".to_owned(),
+        inputs: Vec::new(),
+        iterations: Some(6),
+        hours: None,
+        tokens: None,
+        case_id: Some("gate-then-tests".to_owned()),
+        gate: None,
+    };
+    let validators: Vec<Box<dyn Validator>> = vec![
+        Box::new(GateRun::new(".engineering/gates.yaml")),
+        Box::new(TestsPass),
+    ];
+    let mut run = Run::open(&tree, options, &NoHarness, &validators).expect("the case opens");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).expect("the run stops");
+    let text = String::from_utf8(out).expect("utf-8");
+    let records = records_in(&run.case.dir);
+    let test_results = records
+        .iter()
+        .filter(|record| record["kind"] == "test_result")
+        .count();
+    assert_eq!(
+        test_results, 1,
+        "tests.run was admissible with no evidence at the second pass and never ran; the run \
+         stopped {stop} after {} step(s):\n{text}",
+        run.steps
+    );
+    assert_eq!(run.steps, 2, "{text}");
+    assert_eq!(
+        claim(&run.case.evaluate(99).expect("evaluates"), "tests.pass"),
+        "true",
+        "{text}"
+    );
+}
+
+/// Makes `path` writable again when dropped, so the scratch guard can remove the tree.
+struct WritableAgain(PathBuf);
+
+impl Drop for WritableAgain {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+    }
+}
+
+/// A harness that, offered `implementation.edit`, writes `LICENSE` and makes the case's
+/// `artifacts/` directory read-only, so the bundle of the observation that follows the commit
+/// cannot be retained.
+struct WritesAndLocksArtifacts {
+    artifacts: PathBuf,
+}
+
+impl Harness for WritesAndLocksArtifacts {
+    fn name(&self) -> &str {
+        "writes-and-locks"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert!(
+            context.offered.contains(&"implementation.edit".to_owned()),
+            "implementation.edit is offered, not only {:?}",
+            context.offered
+        );
+        fs::write(context.tree.join("LICENSE"), "MIT\n")?;
+        fs::set_permissions(&self.artifacts, fs::Permissions::from_mode(0o555))?;
+        Ok(StepReport {
+            action: "implementation.edit".to_owned(),
+            summary: "wrote LICENSE".to_owned(),
+            tokens: None,
+        })
+    }
+}
+
+#[test]
+fn a_record_does_not_land_when_its_bundle_cannot_be_retained() {
+    // The summary of every observation says "retained as <bundle>", and the story made the
+    // retained evidence the record's reference. When the loop cannot write the bundle, the
+    // run fails; the record that would have referred to it must not be left behind as a
+    // `pass` at HEAD with nothing retained.
+    let tree = scratch_document(
+        "unretained",
+        &document(&[("license", r#"fs.file.exists("LICENSE")"#)]),
+        &[("protocol.yaml", EDIT_PROTOCOL)],
+    );
+    let artifacts = tree.join(".engineering/cases/unretained/artifacts");
+    let _writable = WritableAgain(artifacts.clone());
+    let protocol = tree.join("protocol.yaml");
+    let harness = WritesAndLocksArtifacts {
+        artifacts: artifacts.clone(),
+    };
+    let ran = run_with(
+        &tree,
+        "unretained",
+        protocol.to_str().expect("utf-8"),
+        &harness,
+        6,
+    );
+    let error = format!(
+        "{:#}",
+        ran.stop
+            .expect_err("the bundle could not be retained, so the run fails")
+    );
+    assert!(
+        error.contains("gate-result-3.bundle.json"),
+        "{error}\n{}",
+        ran.text
+    );
+    assert!(
+        !artifacts.join("gate-result-3.bundle.json").exists(),
+        "{}",
+        ran.text
+    );
+    let head = git(&tree, &["rev-parse", "HEAD"]);
+    let at_head: Vec<&serde_json::Value> = ran
+        .records
+        .iter()
+        .filter(|record| record["subject_revision"] == head.as_str())
+        .collect();
+    assert!(
+        at_head.is_empty(),
+        "a gate_result landed at {head} without its retained bundle: {at_head:?}\n{}",
+        ran.text
+    );
+    assert_eq!(
+        claim(&ran.decision, "gate.green"),
+        "unknown",
+        "{}",
+        ran.decision.json
+    );
+}
+
+#[test]
+fn every_observation_retains_its_own_bundle_and_each_replays_to_its_truth() {
+    // Two observations in one run, a fail at HEAD0 and a pass at HEAD1: two bundles, named by
+    // their records, and each replays through the library to the truth its record carries.
+    let tree = scratch_document(
+        "two-bundles",
+        &document(&[("license", r#"fs.file.exists("LICENSE")"#)]),
+        &[("protocol.yaml", EDIT_PROTOCOL)],
+    );
+    let protocol = tree.join("protocol.yaml");
+    let harness = Writes::new("LICENSE", "MIT\n");
+    let ran = run_with(
+        &tree,
+        "two-bundles",
+        protocol.to_str().expect("utf-8"),
+        &harness,
+        6,
+    );
+    assert_eq!(
+        ran.stop.expect("the run stops"),
+        Stop::Completed("accepted".to_owned()),
+        "{}",
+        ran.text
+    );
+    let artifacts = tree.join(".engineering/cases/two-bundles/artifacts");
+    let mut names: Vec<String> = fs::read_dir(&artifacts)
+        .expect("an artifacts directory")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "gate-result-1.bundle.json".to_owned(),
+            "gate-result-3.bundle.json".to_owned()
+        ],
+        "{}",
+        ran.text
+    );
+    for (name, expected) in [
+        ("gate-result-1.bundle.json", canon_expr::Truth::False),
+        ("gate-result-3.bundle.json", canon_expr::Truth::True),
+    ] {
+        let bytes = fs::read(artifacts.join(name)).expect("the bundle");
+        let bundle: canon_engineering_assertions::Bundle =
+            serde_json::from_slice(&bytes).expect("an engineering-gate-evidence/1 bundle");
+        let report =
+            canon_engineering_assertions::evaluate(&bundle, bundle.evaluated_at, None, None)
+                .expect("the retained bundle replays");
+        assert!(
+            report.truth == expected,
+            "{name} replays to {:?}, not {expected:?}\n{}",
+            report.truth,
+            ran.text
+        );
+    }
 }

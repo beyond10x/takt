@@ -76,6 +76,23 @@ impl std::fmt::Display for Stop {
     }
 }
 
+/// Whether `validator` is due at a decision: its action is admissible, its evidence is missing
+/// at its subject's current revision, and it has not already observed there without a record.
+fn is_due(
+    case: &CaseDir,
+    admissible: &[String],
+    observed_without_record: &BTreeSet<(String, String)>,
+    validator: &dyn Validator,
+) -> bool {
+    admissible.iter().any(|a| a == validator.action())
+        && !case
+            .has_evidence(validator.kind(), validator.subject())
+            .unwrap_or(true)
+        && !case.revision(validator.subject()).is_some_and(|revision| {
+            observed_without_record.contains(&(validator.name().to_owned(), revision))
+        })
+}
+
 /// A run over one case.
 pub struct Run<'a> {
     /// The worktree.
@@ -264,18 +281,14 @@ impl<'a> Run<'a> {
                 .filter(|a| !self.validators.iter().any(|v| v.action() == a.as_str()))
                 .cloned()
                 .collect();
-            // A deterministic step first: a validator whose action is admissible, whose
-            // evidence is missing at the current revision, and which has not already observed
-            // without a record there.
+            // A deterministic step first: a validator due at this decision.
             let due = self.validators.iter().find(|v| {
-                admissible.iter().any(|a| a == v.action())
-                    && !self
-                        .case
-                        .has_evidence(v.kind(), v.subject())
-                        .unwrap_or(true)
-                    && !self.case.revision(v.subject()).is_some_and(|revision| {
-                        observed_without_record.contains(&(v.name().to_owned(), revision))
-                    })
+                is_due(
+                    &self.case,
+                    &admissible,
+                    &observed_without_record,
+                    v.as_ref(),
+                )
             });
             if let Some(validator) = due {
                 self.steps += 1;
@@ -286,15 +299,8 @@ impl<'a> Run<'a> {
                 let observation = validator.observe(&self.tree, &revision, seq)?;
                 writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
                 writeln!(out, "  effect: {}", observation.summary)?;
-                for record in &observation.records {
-                    self.case.add_evidence(record)?;
-                    writeln!(
-                        out,
-                        "  evidence: {} {}",
-                        record.kind,
-                        record.result.as_deref().unwrap_or("-")
-                    )?;
-                }
+                // What the validator retains lands before the records that refer to it: a
+                // retention that fails ends the run with nothing written for the step.
                 if let Some(artifact) = &observation.artifact {
                     let dir = self.case.dir.join("artifacts");
                     std::fs::create_dir_all(&dir)
@@ -308,13 +314,31 @@ impl<'a> Run<'a> {
                         path.strip_prefix(&self.tree).unwrap_or(&path).display()
                     )?;
                 }
+                for record in &observation.records {
+                    self.case.add_evidence(record)?;
+                    writeln!(
+                        out,
+                        "  evidence: {} {}",
+                        record.kind,
+                        record.result.as_deref().unwrap_or("-")
+                    )?;
+                }
                 // A validator that wrote no record (the gate was unknown) is not due again at
-                // this revision. With a judgement step left, the harness gets its turn; with
-                // none, the next pass would see the same decision, so this one counts as an
-                // idle step and the run stops there as no progress.
+                // this revision. The pass counts as idle only when nothing else can move the
+                // decision, no judgement step offered and no other validator due: then the
+                // next pass would see the same decision, and the run stops there as no
+                // progress.
                 if observation.records.is_empty() {
                     observed_without_record.insert((validator.name().to_owned(), revision));
-                    last_idle = offered.is_empty().then_some(state);
+                    let another_due = self.validators.iter().any(|v| {
+                        is_due(
+                            &self.case,
+                            &admissible,
+                            &observed_without_record,
+                            v.as_ref(),
+                        )
+                    });
+                    last_idle = (offered.is_empty() && !another_due).then_some(state);
                 } else {
                     last_idle = None;
                 }

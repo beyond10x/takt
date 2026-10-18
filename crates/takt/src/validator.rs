@@ -194,15 +194,22 @@ impl Validator for GateRun {
                 .then(|| PathBuf::from(DEFAULT_PROJECT))
         });
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        let prepared =
-            canon_engineering_assertions::prepare(tree, &self.gates, project.as_deref(), None)
-                .with_context(|| match &project {
-                    Some(project) => format!(
-                        "prepare the gates document {document} with the project file {}",
-                        project.display()
-                    ),
-                    None => format!("prepare the gates document {document}"),
-                })?;
+        // The case directory, which the loop writes every pass, stays out of the bundle's
+        // source identity: that identity is the repository tree's.
+        let cases = Path::new(crate::case::CASES_DIR);
+        let prepared = canon_engineering_assertions::prepare(
+            tree,
+            &self.gates,
+            project.as_deref(),
+            Some(cases),
+        )
+        .with_context(|| match &project {
+            Some(project) => format!(
+                "prepare the gates document {document} with the project file {}",
+                project.display()
+            ),
+            None => format!("prepare the gates document {document}"),
+        })?;
         let bundle = canon_engineering_assertions::collect(prepared, now)
             .with_context(|| format!("collect the observations of {document}"))?;
         let report = canon_engineering_assertions::evaluate(&bundle, now, None, None)

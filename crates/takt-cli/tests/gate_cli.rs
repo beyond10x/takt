@@ -147,20 +147,33 @@ fn a_gates_document_outside_the_repository_is_refused_and_never_passes() {
     }
 }
 
+/// An explicit `--gates` that is not a file, a directory or a missing path, relative or
+/// absolute, is refused in one line before any case is opened, not silently left out.
 #[test]
-fn a_gates_path_that_names_a_directory_registers_no_validator() {
-    let (_outer, repo) = repository("directory");
-    let (code, out, err) = takt(&run_args(
-        repo.to_str().expect("utf-8"),
-        "directory",
-        ".engineering",
-    ));
-    assert_eq!(code, 1, "stdout {out} stderr {err}");
-    assert!(
-        err.contains("no harness: a judgement step among gate.run is left"),
-        "stdout {out} stderr {err}"
-    );
-    assert!(!out.contains("gate_result"), "stdout {out} stderr {err}");
+fn an_explicit_gates_path_that_is_not_a_file_is_refused_before_the_run() {
+    let (_outer, repo) = repository("gates-not-a-file");
+    let missing_absolute = repo.join("gates/nope.yaml");
+    let missing_absolute = missing_absolute.to_str().expect("utf-8").to_owned();
+    for (case, gates) in [
+        ("gates-directory", ".engineering"),
+        ("gates-missing", "gates/nope.yaml"),
+        ("gates-missing-absolute", missing_absolute.as_str()),
+    ] {
+        let (code, out, err) = takt(&run_args(repo.to_str().expect("utf-8"), case, gates));
+        assert_ne!(code, 0, "--gates {gates}: stdout {out} stderr {err}");
+        assert!(
+            err.contains("--gates") && err.contains("not a file"),
+            "--gates {gates}: stdout {out} stderr {err}"
+        );
+        assert!(
+            !out.contains("case "),
+            "--gates {gates}: a case was opened: stdout {out} stderr {err}"
+        );
+        assert!(
+            !repo.join(".engineering/cases").exists(),
+            "--gates {gates}: a case directory exists"
+        );
+    }
 }
 
 /// A committed repository at `<scratch>/repo` whose gate is a command, `check.sh` exiting 0,
@@ -264,4 +277,93 @@ fn a_project_file_outside_the_repository_is_refused_before_the_run() {
             "--project {project}: a case directory exists"
         );
     }
+}
+
+/// An explicit `--project` naming a directory is refused like a missing one: the admission of
+/// the gate's commands is a file, or the run does not start.
+#[test]
+fn an_explicit_project_path_that_names_a_directory_is_refused_before_the_run() {
+    let (_outer, repo) = command_repository("project-directory", "gates/project.yaml");
+    let (code, out, err) = takt(&project_args(
+        repo.to_str().expect("utf-8"),
+        "project-directory",
+        "gates",
+    ));
+    assert_ne!(code, 0, "stdout {out} stderr {err}");
+    assert!(
+        err.contains("--project gates: not a file"),
+        "stdout {out} stderr {err}"
+    );
+    assert!(
+        !out.contains("case "),
+        "a case was opened: stdout {out} stderr {err}"
+    );
+    assert!(
+        !repo.join(".engineering/cases").exists(),
+        "a case directory exists"
+    );
+}
+
+// Adversary pass 2 over story:gate-validator: `under_repository` at the edges the correction
+// did not test, and the project file the validator falls back to. Every helper below is this
+// pass's own; nothing above is changed.
+
+#[test]
+fn a_relative_gates_path_through_a_symlink_outside_the_repository_is_refused_before_the_run() {
+    // The absolute form of this path is refused at parse (it canonicalises outside); the
+    // relative form must be refused the same way, before any case is opened, not registered
+    // and then aborted by the library at the first observation.
+    let (outer, repo) = repository("symlink");
+    let outside = outer.join("gates.yaml");
+    fs::write(&outside, GATES).expect("a file");
+    fs::create_dir_all(repo.join("gates")).expect("a directory");
+    std::os::unix::fs::symlink(&outside, repo.join("gates/link.yaml")).expect("a symlink");
+    let (code, out, err) = takt(&run_args(
+        repo.to_str().expect("utf-8"),
+        "symlink",
+        "gates/link.yaml",
+    ));
+    assert_ne!(code, 0, "stdout {out} stderr {err}");
+    assert!(
+        err.contains("--gates") && err.contains("not under the repository"),
+        "stdout {out} stderr {err}"
+    );
+    assert!(
+        !out.contains("case "),
+        "a case was opened: stdout {out} stderr {err}"
+    );
+    assert!(
+        !repo.join(".engineering/cases").exists(),
+        "a case directory exists: stdout {out} stderr {err}"
+    );
+}
+
+#[test]
+fn an_explicit_project_path_that_does_not_exist_is_refused_not_replaced_by_the_default() {
+    // The project file is the admission of the commands the gate may run. A `--project` the
+    // user named and that is not there must be refused, not silently replaced by whatever is
+    // at the default path.
+    let (_outer, repo) =
+        command_repository("project-missing", ".engineering/assertions-project.yaml");
+    let (code, out, err) = takt(&project_args(
+        repo.to_str().expect("utf-8"),
+        "project-missing",
+        "gates/nope.yaml",
+    ));
+    assert_ne!(
+        code, 0,
+        "--project gates/nope.yaml does not exist and the run went on: stdout {out} stderr {err}"
+    );
+    assert!(
+        err.contains("--project") && err.contains("gates/nope.yaml"),
+        "stdout {out} stderr {err}"
+    );
+    assert!(
+        !out.contains("evidence: gate_result pass"),
+        "the gate passed on a project file the flag did not name: stdout {out} stderr {err}"
+    );
+    assert!(
+        !repo.join(".engineering/cases").exists(),
+        "a case directory exists: stdout {out} stderr {err}"
+    );
 }

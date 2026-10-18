@@ -8,7 +8,7 @@ use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness};
-use takt::validator::{GateRun, TestsRun, Validator};
+use takt::validator::{DEFAULT_PROJECT, GateRun, TestsRun, Validator};
 use takt::{LoadedProtocol, Run, RunOptions, Stop, Unit};
 
 #[derive(Parser)]
@@ -69,14 +69,15 @@ struct RunArgs {
     /// The approval gate the harness may request to end the run.
     #[arg(long, default_value = "repository.merge")]
     gate: String,
-    /// The gates document, relative to the repository; the gate validator is registered when
-    /// it exists.
-    #[arg(long, default_value = ".engineering/gates.yaml")]
-    gates: PathBuf,
+    /// The gates document, relative to the repository; given, it must be a file, and the gate
+    /// validator runs it. Not given, `.engineering/gates.yaml` when that is a file.
+    #[arg(long)]
+    gates: Option<PathBuf>,
     /// The `engineering-assertions-project/1` file that admits the commands and providers the
-    /// gates bind, relative to the repository; given to the gate validator when it exists.
-    #[arg(long, default_value = ".engineering/assertions-project.yaml")]
-    project: PathBuf,
+    /// gates bind, relative to the repository; given, it must be a file. Not given,
+    /// `.engineering/assertions-project.yaml` when that is a file.
+    #[arg(long)]
+    project: Option<PathBuf>,
 }
 
 /// A harness that performs nothing: the loop stops when only judgement steps are left.
@@ -181,11 +182,11 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 other => return Err(anyhow!("no harness `{other}`: claude or none")),
             };
             let mut validators: Vec<Box<dyn Validator>> = vec![Box::new(TestsRun::new(&test_cmd)?)];
-            let gates = under_repository(&repo, "gates", gates)?;
-            let project = under_repository(&repo, "project", project)?;
-            if repo.join(&gates).is_file() {
+            let gates = repository_file(&repo, "gates", gates, DEFAULT_GATES)?;
+            let project = repository_file(&repo, "project", project, DEFAULT_PROJECT)?;
+            if let Some(gates) = gates {
                 let mut gate = GateRun::new(gates);
-                if repo.join(&project).is_file() {
+                if let Some(project) = project {
                     gate = gate.with_project(project);
                 }
                 validators.push(Box::new(gate));
@@ -228,9 +229,33 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
     }
 }
 
+/// The gates document a run takes when `--gates` is not given and this is a file.
+const DEFAULT_GATES: &str = ".engineering/gates.yaml";
+
+/// The file `--<flag>` names, relative to `repo`: given, it must be a file under the repository,
+/// or the run is refused in one line before any case is opened; not given, `default` when that
+/// is a file, else none.
+fn repository_file(
+    repo: &Path,
+    flag: &str,
+    given: Option<PathBuf>,
+    default: &str,
+) -> Result<Option<PathBuf>> {
+    match given {
+        Some(path) => {
+            let relative = under_repository(repo, flag, path)?;
+            if !repo.join(&relative).is_file() {
+                return Err(anyhow!("--{flag} {}: not a file", relative.display()));
+            }
+            Ok(Some(relative))
+        }
+        None => Ok(repo.join(default).is_file().then(|| PathBuf::from(default))),
+    }
+}
+
 /// `path`, given to `--<flag>` to name a file of the repository, relative to `repo`: an absolute
-/// path under the repository is made relative; a path not under it, absolute elsewhere or
-/// climbing out through `..`, is refused before any case is opened.
+/// path under the repository is made relative; a path not under it, absolute elsewhere, climbing
+/// out through `..`, or resolving outside through a symlink, is refused.
 fn under_repository(repo: &Path, flag: &str, path: PathBuf) -> Result<PathBuf> {
     let refused = |shown: &Path| {
         anyhow!(
@@ -251,6 +276,13 @@ fn under_repository(repo: &Path, flag: &str, path: PathBuf) -> Result<PathBuf> {
     if relative
         .components()
         .any(|c| matches!(c, Component::ParentDir))
+    {
+        return Err(refused(&relative));
+    }
+    // A relative path may still point outside through a symlink: where it exists, what it
+    // resolves to must lie under the repository too.
+    if let Ok(resolved) = repo.join(&relative).canonicalize()
+        && !resolved.starts_with(repo)
     {
         return Err(refused(&relative));
     }
