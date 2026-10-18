@@ -517,7 +517,7 @@ def draw(lanes, legend_kinds, data_dates):
                 cls.append("placed")
             if l["arm"] == "takt" and e.get("by") == "harness":
                 cls.append("call")
-            tip = f'{l["run"]} #{e["seq"]}: {e["kind"]}'
+            tip = f'{l["run"]} op {e["seq"]}: {e["kind"]}'
             if e.get("action"):
                 tip += f' ({e["action"]})'
             if e.get("effect"):
