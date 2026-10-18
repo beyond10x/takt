@@ -237,7 +237,7 @@ types:
   # `takt.gate-run`). Carries
   # canon.protocol.Principal (protocol.yaml:241), an opaque principal Canon records as given.
   # read from: crates/takt/src/validator.rs:46-47
-  # read from: crates/takt/src/validator.rs:233
+  # read from: crates/takt/src/validator.rs:331
   # read from: crates/takt/src/evidence.rs:16
   - name: takt.work.ProducerName
     kind: newtype
@@ -246,7 +246,7 @@ types:
   # An evidence record's id, unique within the case (`test-result-<seq>`). Carries
   # canon.protocol.EvidenceId (protocol.yaml:538).
   # read from: crates/takt/src/evidence.rs:9
-  # read from: crates/takt/src/validator.rs:293
+  # read from: crates/takt/src/validator.rs:383
   # Takt's ids are `<kind>-<evaluation number>`, the number continued across the case's runs, so an
   # id is unique within a case.
   # read from: crates/takt/src/case.rs:1573
@@ -690,12 +690,12 @@ types:
   # `--test-cmd` split at white space; the `gate.run` validator over the gates document `--gates`
   # names, taken from the case's base commit; `pr.open`, `ci.read` and `repository.merge` through
   # the forge, the last admissible only under a recorded grant at the case's revision.
-  # read from: crates/takt/src/validator.rs:1205
-  # read from: crates/takt/src/validator.rs:711
-  # read from: crates/takt/src/validator.rs:1005
-  # read from: crates/takt/src/validator.rs:330
+  # read from: crates/takt/src/validator.rs:1295
+  # read from: crates/takt/src/validator.rs:801
+  # read from: crates/takt/src/validator.rs:1095
+  # read from: crates/takt/src/validator.rs:420
   # read from: docs/design/takt.md:56
-  # read from: crates/takt/src/validator.rs:197-199
+  # read from: crates/takt/src/validator.rs:198-200
   # read from: crates/takt-cli/src/main.rs:178-180
   - name: takt.work.DeterministicStep
     kind: struct
@@ -1266,7 +1266,7 @@ entities:
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/authority.rs:7-21
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/mod.rs:359-365
       # read from: crates/takt/src/case.rs:1802-1803
-      # read from: crates/takt/src/validator.rs:1320
+      # read from: crates/takt/src/validator.rs:1410
       - name: authority
         type: Map<takt.work.CapabilityId, takt.work.Grant>
       # read from: crates/takt/src/case.rs:1309-1310
@@ -1726,7 +1726,7 @@ entities:
       # every observation, record or not.
       # read from: crates/takt/src/validator.rs:16-32
       # read from: crates/takt/src/run.rs:3642-3655
-      # read from: crates/takt/src/validator.rs:609
+      # read from: crates/takt/src/validator.rs:699
       - name: artifact
         type: Optional<String>
         summary: The retained file's name under the case's `artifacts/`.
@@ -1807,20 +1807,20 @@ entities:
   # pending or failing merges nothing. It records the state
   # read back about the granted revision, the merged head kept beside it, `merged` making the
   # protocol's `accepted` outcome legitimate; no record while the pull request is still open.
-  # read from: crates/takt/src/validator.rs:1226-1236
-  # read from: crates/takt/src/validator.rs:815-825
-  # read from: crates/takt/src/validator.rs:1039-1049
-  # read from: crates/takt/src/validator.rs:316-328
-  # read from: crates/takt/src/validator.rs:347-351
-  # read from: crates/takt/src/validator.rs:518
+  # read from: crates/takt/src/validator.rs:1316-1326
+  # read from: crates/takt/src/validator.rs:905-915
+  # read from: crates/takt/src/validator.rs:1129-1139
+  # read from: crates/takt/src/validator.rs:406-418
+  # read from: crates/takt/src/validator.rs:437-441
+  # read from: crates/takt/src/validator.rs:608
   # read from: crates/takt/src/validator.rs:1-2
   # read from: crates/takt/src/validator.rs:45-76
-  # read from: crates/takt/src/validator.rs:231-245
-  # read from: crates/takt/src/validator.rs:188-190
-  # read from: crates/takt/src/validator.rs:278-280
+  # read from: crates/takt/src/validator.rs:329-343
+  # read from: crates/takt/src/validator.rs:188-191
+  # read from: crates/takt/src/validator.rs:376-378
   # read from: crates/takt/src/forge.rs:596-614
-  # read from: crates/takt/src/validator.rs:898
-  # read from: crates/takt/src/validator.rs:1320
+  # read from: crates/takt/src/validator.rs:988
+  # read from: crates/takt/src/validator.rs:1410
   # read from: docs/design/takt.md:47-49
   # read from: docs/design/takt.md:64-65
   # read from: crates/takt/src/forge.rs:734-754
@@ -1864,8 +1864,8 @@ entities:
   # read from: crates/takt/src/case.rs:220-221
   # read from: crates/takt/src/case.rs:187-214
   # read from: crates/takt/src/case.rs:1400-1421
-  # read from: crates/takt/src/validator.rs:784-788
-  # read from: crates/takt/src/validator.rs:877
+  # read from: crates/takt/src/validator.rs:874-878
+  # read from: crates/takt/src/validator.rs:967
   - name: takt.work.CaseBranch
     naming:
       summary: >-
@@ -1886,7 +1886,7 @@ entities:
       # the gates document and the project file from, whatever the base branch names later.
       # Absent for a case opened before it was recorded, whose gate then writes no record.
       # read from: crates/takt/src/case.rs:199-203
-      # read from: crates/takt/src/validator.rs:350-351
+      # read from: crates/takt/src/validator.rs:440-441
       - name: base_commit
         type: Optional<takt.work.Revision>
       # The branch the tree was on when the case opened, what discarding the case returns to;
