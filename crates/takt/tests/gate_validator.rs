@@ -755,6 +755,8 @@ fn a_command_bound_gate_with_its_project_file_is_evaluated() {
     );
     fs::set_permissions(tree.join("check.sh"), fs::Permissions::from_mode(0o755))
         .expect("exec bit");
+    // A case opens only on a clean tree: the mode change is committed too.
+    git(&tree, &["commit", "-qam", "check.sh is executable"]);
     let ran = run_with(&tree, "project", PROTOCOL, &NoHarness, 4);
     assert_eq!(
         ran.stop
