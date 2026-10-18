@@ -210,6 +210,10 @@ n is 1 per task.
   under `after_approval` and are not counted.
 - `timeline.svg` and `journey.svg` draw scenario 1 only, so the ten rows add no point and no lane.
   They count in the badges.
+- **headstart-trial-1** ran worktree-3's unit from the same seed. Unlike worktree-3 it pinned
+  `--model claude-opus-5-5` and compiled the tests before the run. It reached the approval in 6
+  steps with no resume: 592,698 tokens, $0.85, 242 s, held-out check 10/10. Its run record is
+  `docs/runs/2026-10-18-trial-1-worktree.md`.
 
 ## `improvement-turns.jsonl`
 
