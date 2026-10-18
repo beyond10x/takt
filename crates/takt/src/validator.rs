@@ -53,6 +53,21 @@ pub trait Validator {
     fn subject(&self) -> &str;
     /// Performs the action in `tree` about `revision`; `seq` makes record ids unique.
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation>;
+    /// Observes as [`Self::observe`] does, and says whether an observation that wrote no record
+    /// waits on the forge: on a state outside the tree that moves without a commit (checks
+    /// still running, a pull request's head not yet at the head pushed, a merge held for a
+    /// required check that has not reported), so the same observation made again after a while
+    /// may write one. The loop then observes again within its budget and offers no judgement
+    /// step meanwhile. Not waiting by default: an observation without a record is final at its
+    /// revision.
+    fn observe_waiting(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+    ) -> Result<(Observation, bool)> {
+        Ok((self.observe(tree, revision, seq)?, false))
+    }
     /// The files under the case's directory the validator itself writes while it observes,
     /// relative to it. Nothing else under the cases directory may change during an
     /// observation: the loop puts back whatever else changed and refuses the observation,
@@ -691,6 +706,18 @@ impl Validator for PrOpen {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        self.observe_waiting(tree, revision, seq)
+            .map(|(observation, _)| observation)
+    }
+
+    /// Waits on the forge when the pull request's head, on the case's branch, is not yet at
+    /// the head pushed: the forge moves it after the push, without a commit.
+    fn observe_waiting(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+    ) -> Result<(Observation, bool)> {
         let dir = current(tree)?;
         // `HEAD` is the implementation revision, or the approval's own commits on top of it
         // (`approvals_only`); `HEAD` is what is pushed, so the pull request carries the
@@ -737,15 +764,18 @@ impl Validator for PrOpen {
                 ],
             )?;
             if ahead.trim() == "0" {
-                return Ok(Observation {
-                    summary: format!(
-                        "{name} at {} has no commit beyond {}; nothing pushed, no pull request; the claim stays unknown",
-                        short(revision),
-                        request.base
-                    ),
-                    records: Vec::new(),
-                    artifact: None,
-                });
+                return Ok((
+                    Observation {
+                        summary: format!(
+                            "{name} at {} has no commit beyond {}; nothing pushed, no pull request; the claim stays unknown",
+                            short(revision),
+                            request.base
+                        ),
+                        records: Vec::new(),
+                        artifact: None,
+                    },
+                    false,
+                ));
             }
         }
         self.forge
@@ -753,6 +783,7 @@ impl Validator for PrOpen {
             .with_context(|| format!("push {name} through the forge {forge}"))?;
         branch.pushed = Some(head.clone());
         let carried = above(revision, &head);
+        let mut waits = false;
         let (state, summary) = match next {
             Next::Read(number) => {
                 let view = self.forge.pull_request(tree, number).with_context(|| {
@@ -768,6 +799,9 @@ impl Validator for PrOpen {
                         ),
                     )
                 } else {
+                    // The case's branch at another commit: the forge has not moved the pull
+                    // request to the push yet. Another branch is not a lag, and not waited on.
+                    waits = view.head.branch == name;
                     (
                         None,
                         format!(
@@ -809,11 +843,14 @@ impl Validator for PrOpen {
                 )]
             })
             .unwrap_or_default();
-        Ok(Observation {
-            summary,
-            records,
-            artifact: None,
-        })
+        Ok((
+            Observation {
+                summary,
+                records,
+                artifact: None,
+            },
+            waits,
+        ))
     }
 }
 
@@ -823,6 +860,8 @@ impl Validator for PrOpen {
 /// one whose pull request the forge does not report as the case's branch at the head pushed,
 /// the revision or the revision with only the approval's own commits above it: a number the
 /// case directory carries is not trusted on its own. Nothing but the pull request head is read.
+/// Pending checks, and a pull request whose head on the case's branch is not yet at the head
+/// pushed, wait on the forge.
 pub struct CiRead {
     /// The forge the checks are read through.
     pub forge: Rc<dyn Forge>,
@@ -862,29 +901,48 @@ impl Validator for CiRead {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        self.observe_waiting(tree, revision, seq)
+            .map(|(observation, _)| observation)
+    }
+
+    fn observe_waiting(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+    ) -> Result<(Observation, bool)> {
         let dir = current(tree)?;
         let branch = Branch::read(&dir)?;
         // The case's branch, from the case id: not the `name` of a file a harness can write.
         let name = branch_of(&dir)?;
-        let nothing = |summary: String| Observation {
-            summary,
-            records: Vec::new(),
-            artifact: None,
+        let nothing = |summary: String, waits: bool| {
+            (
+                Observation {
+                    summary,
+                    records: Vec::new(),
+                    artifact: None,
+                },
+                waits,
+            )
         };
         let Some(number) = branch.pull_request else {
             return Ok(nothing(
                 "no pull request is open for the case; nothing to read, the claim stays unknown"
                     .to_owned(),
+                false,
             ));
         };
         let pushed = match branch.pushed {
             Some(pushed) if carries(tree, &dir, revision, &pushed)? => pushed,
             pushed => {
-                return Ok(nothing(format!(
-                    "the head of pull request #{number} is {}, not the implementation revision {}; nothing to read, the claim stays unknown",
-                    pushed.as_deref().map_or("not pushed", short),
-                    short(revision)
-                )));
+                return Ok(nothing(
+                    format!(
+                        "the head of pull request #{number} is {}, not the implementation revision {}; nothing to read, the claim stays unknown",
+                        pushed.as_deref().map_or("not pushed", short),
+                        short(revision)
+                    ),
+                    false,
+                ));
             }
         };
         let forge = self.forge.name();
@@ -893,12 +951,15 @@ impl Validator for CiRead {
             .pull_request(tree, number)
             .with_context(|| format!("read pull request #{number} through the forge {forge}"))?;
         if view.head.branch != name || view.head.sha != pushed {
-            return Ok(nothing(format!(
-                "pull request #{number} has the head {} at {}, not {name} at {}; nothing to read, the claim stays unknown",
-                view.head.branch,
-                short(&view.head.sha),
-                short(revision)
-            )));
+            return Ok(nothing(
+                format!(
+                    "pull request #{number} has the head {} at {}, not {name} at {}; nothing to read, the claim stays unknown",
+                    view.head.branch,
+                    short(&view.head.sha),
+                    short(revision)
+                ),
+                view.head.branch == name,
+            ));
         }
         let checks = self.forge.checks(tree, number).with_context(|| {
             format!("read the checks on pull request #{number} through the forge {forge}")
@@ -930,11 +991,14 @@ impl Validator for CiRead {
                 short(revision)
             ),
         };
-        Ok(Observation {
-            summary,
-            records,
-            artifact: None,
-        })
+        Ok((
+            Observation {
+                summary,
+                records,
+                artifact: None,
+            },
+            checks == Checks::Pending,
+        ))
     }
 }
 
@@ -955,7 +1019,10 @@ impl Validator for CiRead {
 /// push, so the head merged carries the record and a push the forge took but reported failed
 /// is merged by the next run. A head carrying the approval's commits is one CI was not read
 /// on: its checks are read before the merge, and pending or failing checks merge nothing and
-/// write no record, the summary saying which; a later run merges it. The merge names
+/// write no record, the summary saying which; a later run merges it. Pending checks, a head
+/// pushed that the pull request does not show yet, and a merge the forge refuses for a required
+/// check that has not reported ([`crate::forge::refused_for_a_pending_check`]) merge nothing,
+/// write no record and wait on the forge. The merge names
 /// the head, so a head that moved meanwhile is refused by the forge rather than merged. The
 /// record is about the revision the grant authorises; the head merged is retained beside it as
 /// `artifacts/merged-head-<seq>.json`. A pull request already merged is recorded without a
@@ -1011,6 +1078,16 @@ impl Validator for PrMerged {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        self.observe_waiting(tree, revision, seq)
+            .map(|(observation, _)| observation)
+    }
+
+    fn observe_waiting(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+    ) -> Result<(Observation, bool)> {
         let dir = current(tree)?;
         let mut branch = Branch::read(&dir)?;
         // The case's branch, from the case id: not the `name` of a file a harness can write.
@@ -1022,19 +1099,25 @@ impl Validator for PrMerged {
             artifact: None,
         };
         let Some(number) = branch.pull_request else {
-            return Ok(nothing(
-                "no pull request is open for the case; nothing to merge, the claim stays unknown"
-                    .to_owned(),
+            return Ok((
+                nothing(
+                    "no pull request is open for the case; nothing to merge, the claim stays unknown"
+                        .to_owned(),
+                ),
+                false,
             ));
         };
         let pushed = match branch.pushed.clone() {
             Some(pushed) if carries(tree, &dir, revision, &pushed)? => pushed,
             pushed => {
-                return Ok(nothing(format!(
-                    "the head of pull request #{number} is {}, not the implementation revision {}; nothing to merge, the claim stays unknown",
-                    pushed.as_deref().map_or("not pushed", short),
-                    short(revision)
-                )));
+                return Ok((
+                    nothing(format!(
+                        "the head of pull request #{number} is {}, not the implementation revision {}; nothing to merge, the claim stays unknown",
+                        pushed.as_deref().map_or("not pushed", short),
+                        short(revision)
+                    )),
+                    false,
+                ));
             }
         };
         let mut view = self
@@ -1045,12 +1128,15 @@ impl Validator for PrMerged {
         // is pushed, so a push the forge never took leaves the pull request at the revision,
         // and the push below is made again.
         if view.head.branch != name || (view.head.sha != pushed && view.head.sha != revision) {
-            return Ok(nothing(format!(
-                "pull request #{number} has the head {} at {}, not {name} at {}; nothing to merge, the claim stays unknown",
-                view.head.branch,
-                short(&view.head.sha),
-                short(&pushed)
-            )));
+            return Ok((
+                nothing(format!(
+                    "pull request #{number} has the head {} at {}, not {name} at {}; nothing to merge, the claim stays unknown",
+                    view.head.branch,
+                    short(&view.head.sha),
+                    short(&pushed)
+                )),
+                false,
+            ));
         }
         let (state, merged_now) = match view.state {
             PullRequestState::Open => {
@@ -1070,11 +1156,14 @@ impl Validator for PrMerged {
                                 )
                             },
                         );
-                    return Ok(nothing(format!(
-                        "pull request #{number} at {} is open, and {} is not granted at that revision ({granted}); nothing merged, the claim stays unknown",
-                        short(revision),
-                        self.action()
-                    )));
+                    return Ok((
+                        nothing(format!(
+                            "pull request #{number} at {} is open, and {} is not granted at that revision ({granted}); nothing merged, the claim stays unknown",
+                            short(revision),
+                            self.action()
+                        )),
+                        false,
+                    ));
                 }
                 // The approval's own commits above the revision go with the pull request, so the
                 // record of the grant reaches the base with the merge: a head still at the
@@ -1095,18 +1184,24 @@ impl Validator for PrMerged {
                         format!("read pull request #{number} through the forge {forge}")
                     })?;
                     if view.head.branch != name || view.head.sha != local {
-                        return Ok(nothing(format!(
-                            "pushed {name} at {} through {forge}, and pull request #{number} has the head {} at {}; nothing merged, the claim stays unknown",
-                            short(&local),
-                            view.head.branch,
-                            short(&view.head.sha)
-                        )));
+                        // The case's branch at another commit: the forge has not moved the
+                        // pull request to the push yet, and is waited on.
+                        return Ok((
+                            nothing(format!(
+                                "pushed {name} at {} through {forge}, and pull request #{number} has the head {} at {}; nothing merged, the claim stays unknown",
+                                short(&local),
+                                view.head.branch,
+                                short(&view.head.sha)
+                            )),
+                            view.head.branch == name,
+                        ));
                     }
                 }
                 // CI was read on the revision; a head carrying the approval's commits above it
                 // is a new head, and a forge that requires checks merges it only once they
                 // pass. Its checks are read first: pending or failing, nothing is merged and no
-                // record written, and a later run merges once they pass.
+                // record written; pending checks are waited on, and a later run merges once
+                // failing ones pass.
                 if view.head.sha != revision {
                     let checks = self.forge.checks(tree, number).with_context(|| {
                         format!(
@@ -1114,18 +1209,38 @@ impl Validator for PrMerged {
                         )
                     })?;
                     if checks != Checks::Pass {
-                        return Ok(nothing(format!(
-                            "checks on pull request #{number} at its head {}, the approval's commits above {}, through {forge}: {checks}; nothing merged, the claim stays unknown",
-                            short(&view.head.sha),
-                            short(revision)
-                        )));
+                        return Ok((
+                            nothing(format!(
+                                "checks on pull request #{number} at its head {}, the approval's commits above {}, through {forge}: {checks}; nothing merged, the claim stays unknown",
+                                short(&view.head.sha),
+                                short(revision)
+                            )),
+                            checks == Checks::Pending,
+                        ));
                     }
                 }
-                self.forge
-                    .merge(tree, &dir.join("artifacts"), number, &view.head.sha)
-                    .with_context(|| {
-                        format!("merge pull request #{number} through the forge {forge}")
-                    })?;
+                // A read of the checks can answer for another head than the one merged (a
+                // forge whose checks lag the push): the forge then refuses the merge for its
+                // required check, and that refusal is nothing merged, waited on like pending
+                // checks. Every other failure of the merge stays an error.
+                if let Err(error) =
+                    self.forge
+                        .merge(tree, &dir.join("artifacts"), number, &view.head.sha)
+                {
+                    if crate::forge::refused_for_a_pending_check(&error) {
+                        return Ok((
+                            nothing(format!(
+                                "the forge {forge} refused the merge of pull request #{number} at its head {} for a required check that has not reported ({}); nothing merged, the claim stays unknown",
+                                short(&view.head.sha),
+                                format!("{error:#}").replace('\n', " ")
+                            )),
+                            true,
+                        ));
+                    }
+                    return Err(error.context(format!(
+                        "merge pull request #{number} through the forge {forge}"
+                    )));
+                }
                 let after = self.forge.pull_request(tree, number).with_context(|| {
                     format!("read pull request #{number} through the forge {forge} after the merge")
                 })?;
@@ -1185,10 +1300,13 @@ impl Validator for PrMerged {
         } else {
             None
         };
-        Ok(Observation {
-            summary,
-            records,
-            artifact,
-        })
+        Ok((
+            Observation {
+                summary,
+                records,
+                artifact,
+            },
+            false,
+        ))
     }
 }

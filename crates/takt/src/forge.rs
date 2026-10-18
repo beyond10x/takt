@@ -80,6 +80,151 @@ impl fmt::Display for Checks {
     }
 }
 
+/// A program a forge adapter ran that did not exit 0: the line it ran, its exit code (`None`
+/// on a signal) and what it printed on standard error, the forge's own words. Shown as `<line>
+/// exited <code>: <stderr>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failed {
+    /// The line, its words joined by spaces.
+    pub line: String,
+    /// The exit code; `None` when a signal ended the program.
+    pub code: Option<i32>,
+    /// Standard error, trimmed.
+    pub stderr: String,
+}
+
+impl fmt::Display for Failed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} exited {}: {}",
+            self.line,
+            self.code
+                .map_or("on a signal".to_owned(), |code| code.to_string()),
+            self.stderr
+        )
+    }
+}
+
+impl std::error::Error for Failed {}
+
+/// How the forge words the state of a required check that has not reported, after `is` or
+/// `are`.
+const CHECK_PENDING: [&str; 4] = ["expected", "in progress", "pending", "queued"];
+
+/// What `b10x-gates api` prints before the forge's own message for a refused write:
+/// `b10x-gates: GitHub operation failed (<status>): <message>`.
+const GATES_PREFIX: &str = "b10x-gates: GitHub operation failed (";
+
+/// The heading of a ruleset's refusal, which runs into its first rule once `b10x-gates` has
+/// dropped the newlines between them.
+const RULESET_HEADING: &str = "repository rule violations found";
+
+/// The forge's own words in one layer of an error: a [`Failed`] program's standard error, or,
+/// from an adapter that reports a program's failure as text, what follows its `exited <code>: `.
+/// The line the program ran (paths, the case id, the repository) is never among them.
+fn forge_words(cause: &(dyn std::error::Error + 'static)) -> Option<String> {
+    if let Some(failed) = cause.downcast_ref::<Failed>() {
+        return Some(failed.stderr.clone());
+    }
+    let text = cause.to_string();
+    text.match_indices("exited ").find_map(|(at, word)| {
+        let rest = &text[at + word.len()..];
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        (digits > 0)
+            .then(|| rest[digits..].strip_prefix(": "))
+            .flatten()
+            .map(str::to_owned)
+    })
+}
+
+/// The forge's message in `words`, its prefix left out: what follows `b10x-gates`' own
+/// prefix and status (`None` when `b10x-gates` withheld the message), or else what follows a
+/// leading HTTP status code (`405 <message>`, as an adapter that reports text passes it on).
+fn forge_message(words: &str) -> Option<&str> {
+    let words = words.trim();
+    if let Some(rest) = words.strip_prefix(GATES_PREFIX) {
+        return rest.split_once("): ").map(|(_, message)| message);
+    }
+    let digits = words.chars().take_while(char::is_ascii_digit).count();
+    Some(
+        (digits > 0)
+            .then(|| words[digits..].strip_prefix(' '))
+            .flatten()
+            .unwrap_or(words),
+    )
+}
+
+/// Whether one clause of a refusal, lowercased and its quoted check name emptied to `""`, says
+/// a required status check has not reported: `required status check "" is <pending>`, or
+/// `<n> of <m> required status checks are <pending>`. Nothing else is.
+fn pending_check_clause(clause: &str) -> bool {
+    if let Some(state) = clause.strip_prefix("required status check \"\" is ") {
+        return CHECK_PENDING.contains(&state);
+    }
+    let mut words = clause.splitn(4, ' ');
+    let count = |word: Option<&str>| {
+        word.is_some_and(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit()))
+    };
+    count(words.next())
+        && words.next() == Some("of")
+        && count(words.next())
+        && words
+            .next()
+            .and_then(|rest| rest.strip_prefix("required status checks are "))
+            .is_some_and(|state| CHECK_PENDING.contains(&state))
+}
+
+/// Whether the forge's `words` refuse a merge only for required checks that have not reported.
+/// A positive rule: past the forge's prefix ([`forge_message`]) and a ruleset's heading, every
+/// clause (split at `.` and `;`, outside the quoted check names) must be a pending-check clause
+/// ([`pending_check_clause`]). A failing check, an approving or code-owner review, an unresolved
+/// conversation, a signed-commits rule or any clause it does not know makes the refusal an
+/// error. A check name is a name, never a state (`"fail-fast"` is pending when it is expected);
+/// words with an unbalanced quote cannot be read that way, and are an error.
+fn pending_check_refusal(words: &str) -> bool {
+    if !words.matches('"').count().is_multiple_of(2) {
+        return false;
+    }
+    let Some(message) = forge_message(words) else {
+        return false;
+    };
+    let mut status = String::new();
+    let mut quoted = false;
+    for c in message.chars() {
+        if c == '"' {
+            if !quoted {
+                status.push_str("\"\"");
+            }
+            quoted = !quoted;
+        } else if !quoted {
+            status.extend(c.to_lowercase());
+        }
+    }
+    let status = status.trim();
+    let status = status.strip_prefix(RULESET_HEADING).unwrap_or(status);
+    let mut clauses = status
+        .split(['.', ';'])
+        .map(str::trim)
+        .filter(|clause| !clause.is_empty())
+        .peekable();
+    clauses.peek().is_some() && clauses.all(pending_check_clause)
+}
+
+/// Whether `error`, the failure of a [`Forge::merge`], is the forge refusing the merge for a
+/// required check that has not reported on the head yet: the API's `405 Required status check
+/// "<name>" is expected`, or a check it names in progress, pending or queued. Nothing was
+/// merged, and the same merge may be taken once the check reports. A required check that
+/// failed, and every other refusal, is not: those stay errors. Only the forge's own words in
+/// the error are read ([`forge_words`]), never the rest of its chain.
+#[must_use]
+pub fn refused_for_a_pending_check(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .filter_map(forge_words)
+        .any(|words| pending_check_refusal(&words))
+}
+
 /// What a pull request is opened with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullRequest {
@@ -795,13 +940,12 @@ impl BotRoute {
     fn succeed(&self, tree: &Path, argv: &[String]) -> Result<Exit> {
         let exit = self.runner.run(tree, argv)?;
         if !exit.success() {
-            bail!(
-                "{} exited {}: {}",
-                argv.join(" "),
-                exit.code
-                    .map_or("on a signal".to_owned(), |code| code.to_string()),
-                exit.stderr.trim()
-            );
+            return Err(Failed {
+                line: argv.join(" "),
+                code: exit.code,
+                stderr: exit.stderr.trim().to_owned(),
+            }
+            .into());
         }
         Ok(exit)
     }

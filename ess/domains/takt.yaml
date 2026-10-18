@@ -316,10 +316,13 @@ types:
   # discarded, or a validator's observation on a tree with uncommitted changes or that wrote what
   # its validator does not, nothing recorded; `no_progress` says a judgement step changed no file
   # and the decision did not move, so another would not either, or a deterministic step wrote no
-  # record while no judgement step was offered and no other validator was due. A run that ends on
-  # an error once its case is open prints `stopped: error:` and has no stop. The binary's exit
-  # code follows the stop: 0 `completed`, 4 `approval_required`, 3 every other stop, 5 an error
-  # once the case is open, 1 a refusal before the run.
+  # record while no judgement step was offered and no other validator was due; `waiting` says the
+  # run waited on the forge (checks still running, a pull request's head behind the push, a
+  # merge held for a required check) and its step or hour budget ended first, or it had none to
+  # wait in, nothing recorded for what it awaited. A run that ends on an error once its case is
+  # open prints `stopped: error:` and has no stop. The binary's exit code follows the stop: 0
+  # `completed`, 4 `approval_required`, 6 `waiting`, 3 every other stop, 5 an error once the
+  # case is open, 1 a refusal before the run.
   # read from: crates/takt/src/run.rs:43-61
   # read from: crates/takt/src/run.rs:684
   # read from: crates/takt/src/run.rs:855-859
@@ -329,6 +332,10 @@ types:
   # read from: crates/takt/src/run.rs:847
   # read from: crates/takt-cli/src/main.rs:680-682
   # read from: crates/takt-cli/src/main.rs:205-211
+  # read from: crates/takt/src/run.rs:62-71
+  # read from: crates/takt/src/run.rs:926-934
+  # read from: crates/takt-cli/src/main.rs:701
+  # read from: crates/takt-cli/src/main.rs:214
   - name: takt.work.Stop
     kind: union
     tag: kind
@@ -341,6 +348,18 @@ types:
       tokens: Integer
       step_refused: String
       no_progress: ~
+      waiting: takt.work.Waiting
+
+  # What a `waiting` stop names: the actions whose observation waits on the forge, and the
+  # budget that ended the wait, absent for a run with neither a step nor an hour budget.
+  # read from: crates/takt/src/run.rs:66-71
+  - name: takt.work.Waiting
+    kind: struct
+    fields:
+      - name: on
+        type: List<takt.work.ActionId>
+      - name: budget
+        type: Optional<takt.work.Stop>
 
   # Where a `workflow/1` document is: the `--workflow <file>` argument, or the repository default
   # `.engineering/workflow.yaml`. Not built: the kernel reads neither yet (milestone M3).
