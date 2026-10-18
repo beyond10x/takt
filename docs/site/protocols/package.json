@@ -1,0 +1,21 @@
+{
+  "name": "takt-protocol-viewer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "collect": "node scripts/collect.mjs",
+    "dev": "npm run collect && vite",
+    "build": "npm run collect && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "mermaid": "^11.4.0",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.0.7",
+    "yaml": "^2.7.0"
+  }
+}

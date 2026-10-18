@@ -12,6 +12,7 @@ relations:
 - depends_on: story:merge-under-authority
 - serves: vision:safe-agentic-coding
 - depends_on: story:story-done-end-to-end
+- decomposes: epic:continuous-orchestration
 scope:
 - confidence: cited
   path: crates/takt-cli/src/main.rs

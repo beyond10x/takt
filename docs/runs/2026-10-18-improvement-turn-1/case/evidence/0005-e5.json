@@ -1,0 +1,10 @@
+{
+  "format": "canon-evidence/1",
+  "id": "e5",
+  "kind": "merge_observation",
+  "result": "merged",
+  "subject": "candidate",
+  "subject_revision": "447423c",
+  "observed_at": "2026-10-18T16:00:30Z",
+  "producer": "developer-run"
+}

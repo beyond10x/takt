@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:first-recorded-improvement-turn
 kind: story
-status: draft
+status: implemented
 title: The first improvement turn recorded as a self.improvement/1 case
 summary: the default-protocol defect, scenario 1 before and after
 relations:
@@ -17,7 +17,11 @@ scope:
   path: .engineering/cases
 - confidence: inferred
   path: .engineering/evidence/story
-revision: 5
+revision: 9
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T17:02:54Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-18T17:02:54Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-10-18T17:02:54Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: first-recorded-improvement-turn
 
@@ -77,3 +81,7 @@ outcome `accepted` is legitimate and claim `promoted` is true.
 ## Out of Scope
 
 Fixing the defect itself (story:cli-protocol-defaults).
+
+## Delivered
+
+Delivered 2026-10-18 in phase R0, by hand: the case is docs/runs/2026-10-18-improvement-turn-1/case/ (protocol self.improvement/1), its last decision makes `accepted` legitimate and `promoted` true. The finding was story:scenario-run-help-exit-codes, not the default-protocol finding named in the Outcome, which wave 06 had already fixed before a turn could record it; the six records, three grants and six deviations are in the run record. A turn driven by validators rather than by hand is story:self-improvement-protocol.

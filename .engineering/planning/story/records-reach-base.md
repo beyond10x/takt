@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:records-reach-base
 kind: story
-status: draft
+status: active
 title: takt's records for a story reach the base with its merge
 summary: test_result and the move to implemented ride to the base with the merge, each file byte-equal to the case's own record
 relations:
@@ -15,7 +15,10 @@ scope:
   path: crates/takt/src/case.rs
 - confidence: inferred
   path: crates/takt/src/validator.rs
-revision: 6
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T18:27:20Z", actor: "human:timo", revision: 7}
+- {from: "proposed", to: "active", at: "2026-10-18T18:27:20Z", actor: "human:timo", revision: 8}
 ---
 # Story: records-reach-base
 

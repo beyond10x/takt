@@ -1,0 +1,10 @@
+- capability: repository.merge.judge_surface
+  decision: granted
+  approver: agent:planner
+  granted_at: 2026-10-18T16:00:22Z
+  revision: 447423c
+- capability: takt.promote
+  decision: granted
+  approver: agent:planner
+  granted_at: 2026-10-18T16:00:37Z
+  revision: 447423c

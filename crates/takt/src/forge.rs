@@ -564,6 +564,27 @@ mod leftovers {
     }
 }
 
+/// Kills and reaps what this process started or adopted that is in a process group of its own
+/// no running child of [`run_child`] leads, or in a session of its own: what a judgement step's
+/// harness, or a validator that ran a program by itself, left running once it returned (a writer
+/// in the background). On Linux this process is made the subreaper of what it starts first, so
+/// an orphan is found too; elsewhere nothing is done. The run calls it after each judgement step
+/// and each observation.
+pub fn sweep_left() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        leftovers::adopt();
+        let running = RUNNING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Group 0 leads nothing and no process carries an empty mark: what is swept is what
+        // left the run's own group or session.
+        leftovers::sweep(0, "", &running)
+    }
+    #[cfg(not(target_os = "linux"))]
+    Ok(())
+}
+
 /// Runs `command` held to `limits`: standard input empty, standard output and error read into
 /// a bounded tail each, in a process group of its own. Past its timeout it is killed with its
 /// group and the answer is an error naming the program and the timeout. Once it has ended, what
