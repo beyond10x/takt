@@ -165,8 +165,10 @@ fn make_link(target: &Path, at: &Path) -> Result<()> {
 }
 
 /// Puts `dir` back to `before` at the paths `changed`: whatever is at the path now is removed
-/// (a link as the link itself, never what it points at), then the file is written again as it
-/// was, or the link made again; a path the step added stays removed.
+/// (a link as the link itself, never what it points at; a directory the step made in a file's
+/// place with everything in it), then the file is written again as it was, or the link made
+/// again; a path the step added stays removed. The paths go in order, so a link or file the
+/// step put in place of a directory is gone before anything is written below it.
 fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -> Result<()> {
     if std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_symlink()) {
         bail!(
@@ -176,8 +178,13 @@ fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -
     }
     for path in changed {
         let full = dir.join(path);
-        if std::fs::symlink_metadata(&full).is_ok() {
-            std::fs::remove_file(&full).with_context(|| format!("remove {}", full.display()))?;
+        if let Ok(meta) = std::fs::symlink_metadata(&full) {
+            if meta.is_dir() {
+                std::fs::remove_dir_all(&full)
+            } else {
+                std::fs::remove_file(&full)
+            }
+            .with_context(|| format!("remove {}", full.display()))?;
         }
         if let Some(parent) = full.parent()
             && before.contains_key(path)
@@ -192,6 +199,105 @@ fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -
             None => {}
         }
     }
+    Ok(())
+}
+
+/// Discards everything a judgement step did, back to `checkpoint`, and puts the cases directory
+/// back to `kept` once more: a reset can remove a case file the step had staged.
+fn undo_step(
+    tree: &Path,
+    checkpoint: &crate::git::Checkpoint,
+    cases: &Path,
+    kept: &BTreeMap<PathBuf, Entry>,
+) -> Result<()> {
+    checkpoint
+        .restore(tree)
+        .context("discard the step's change")?;
+    let again = differing(kept, &snapshot(cases)?);
+    if !again.is_empty() {
+        restore(cases, kept, &again)?;
+    }
+    Ok(())
+}
+
+/// The subject of the commit that records a take on the case's branch: `takt: take <story>`.
+#[must_use]
+pub fn take_subject(story: &str) -> String {
+    format!("takt: take {story}")
+}
+
+/// The stories whose case is under `tree` and whose take is committed on that case's branch,
+/// in case order: the stories a case is being worked for, wherever the store's own copy says
+/// otherwise (the base's copy lists a story `proposed` until its case's branch is merged).
+fn taken_on_case_branches(tree: &Path) -> Result<Vec<String>> {
+    let mut taken = Vec::new();
+    for (case, story) in cases_with_story(tree)? {
+        let branch = format!("refs/heads/{}", crate::case::Branch::name_of(&case));
+        if crate::git::has_subject(tree, &branch, &take_subject(&story))? && !taken.contains(&story)
+        {
+            taken.push(story);
+        }
+    }
+    Ok(taken)
+}
+
+/// Every case under `tree` that records a story, as `(case id, story id)` in case order.
+fn cases_with_story(tree: &Path) -> Result<Vec<(String, String)>> {
+    let cases = tree.join(CASES_DIR);
+    if !cases.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&cases)
+        .with_context(|| format!("read {}", cases.display()))?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    dirs.sort();
+    let mut found = Vec::new();
+    for dir in dirs {
+        if !dir.join("case.yaml").is_file() {
+            continue;
+        }
+        if let Some(story) = crate::case::story_of(&dir)? {
+            let id = dir
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            found.push((id, story));
+        }
+    }
+    Ok(found)
+}
+
+/// Puts the tree on the base of the case whose branch it is on, so that the store is read as
+/// the base has it, never as a case's branch, which carries a model's commits, has it. A tree
+/// on any other branch, or detached, stays where it is. Refused when the case's base is not
+/// known, or when the tree has uncommitted work, which the checkout would carry along.
+fn to_base(tree: &Path) -> Result<()> {
+    let Some(branch) = crate::git::current_branch(tree)? else {
+        return Ok(());
+    };
+    let Some(case) = branch.strip_prefix(crate::case::BRANCH_PREFIX) else {
+        return Ok(());
+    };
+    let Some(base) = crate::case::Branch::read(&tree.join(CASES_DIR).join(case))
+        .ok()
+        .and_then(|recorded| recorded.base)
+    else {
+        bail!(
+            "the tree {} is on {branch}, a case's branch with no base recorded; the store is read from the base, never from a case's branch: check out the branch to take the next story from",
+            tree.display()
+        );
+    };
+    let uncommitted = crate::git::uncommitted(tree)?;
+    if !uncommitted.is_empty() {
+        bail!(
+            "the tree {} is on {branch} with uncommitted work: {}; the next story is read from {base}, and checking it out would carry the work along: commit it, or move it out of the tree, first",
+            tree.display(),
+            uncommitted.join(", ")
+        );
+    }
+    crate::git::run(tree, &["checkout", "-q", &base])
+        .with_context(|| format!("check out {base} to read the store from"))?;
     Ok(())
 }
 
@@ -331,13 +437,23 @@ impl<'a> Run<'a> {
         })
     }
 
-    /// Resumes the open case of a story `frontier` lists `active`, if there is one; else opens
-    /// the case on the next ready story, the store told last: for each candidate in order, the
-    /// case is opened first (the protocol loaded, the inputs checked), then the story is taken;
-    /// a refusal removes the case just opened, is printed on `out` verbatim, and the next
-    /// candidate is tried. `None`, with no case opened, when nothing is open and nothing is
-    /// ready. One case directory per taken story, none for a refused one, never a second for a
-    /// story with one open.
+    /// Resumes the open case of a story being worked, if there is one; else opens the case on
+    /// the next ready story, the store told last. A story is being worked when its take is
+    /// committed on its case's branch, or when the store lists it `active`. The store is read
+    /// from the base: a tree on a case's branch is put on that case's base first, so neither a
+    /// story's text nor its status ever comes from a branch a model committed on. For each
+    /// candidate in order, the case is opened first (on a clean tree, the protocol loaded, the
+    /// inputs checked), then the story is taken, and the take committed on the case's branch,
+    /// exactly the paths the store changed, as `takt: take <story>`: a refused step that
+    /// discards the tree's change keeps it, and the case's implementation revision is that
+    /// commit, the one its validators observe. A refusal removes the case just opened, is
+    /// printed on `out` verbatim, and the next candidate is tried; a take or its commit that
+    /// fails removes it too and is the error. A candidate a case already records is not taken
+    /// again, and not resumed either when its take is neither committed on the case's branch
+    /// nor listed `active` by the base (a case whose take was left uncommitted, before takes
+    /// were committed): it is skipped with a line on `out`. `None`, with no case opened, when
+    /// nothing is resumed and nothing else is ready, such a skipped case included. One case
+    /// directory per taken story, none for a refused one, never a second for a story with one.
     pub fn open_next(
         tree: &Path,
         options: RunOptions,
@@ -346,31 +462,52 @@ impl<'a> Run<'a> {
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Option<Self>> {
+        let taken = taken_on_case_branches(tree)?;
+        if let Some((case_id, story_id)) = crate::case::resumable(tree, &taken, out)? {
+            return Self::resumed(tree, options, &case_id, &story_id, harness, validators, out)
+                .map(Some);
+        }
+        to_base(tree)?;
         let active = frontier.active(tree)?;
         if let Some((case_id, story_id)) = crate::case::resumable(tree, &active, out)? {
-            let run = Self::resume(tree, options, &case_id, harness, validators)?;
-            let title = match &run.unit {
-                Unit::Story(story) => story.title.clone(),
-                Unit::Intent(intent) => intent.clone(),
-            };
-            writeln!(
-                out,
-                "frontier: resumed {story_id}: {title} (case {case_id})"
-            )?;
-            return Ok(Some(run));
+            return Self::resumed(tree, options, &case_id, &story_id, harness, validators, out)
+                .map(Some);
         }
+        let cased = cases_with_story(tree)?;
         for id in frontier.candidates(tree)? {
+            if let Some((case, _)) = cased.iter().find(|(_, story)| *story == id) {
+                writeln!(
+                    out,
+                    "frontier: {id} not taken: the case {case} was opened for it already"
+                )?;
+                continue;
+            }
             let story = frontier.show(tree, &id)?;
             let title = story.title.clone();
-            let run = Self::open_unit(
+            let mut run = Self::open_unit(
                 tree,
                 options.clone(),
                 Unit::Story(story),
                 harness,
                 validators,
             )?;
-            match frontier.take(tree, &id)? {
+            let taken = match frontier.take(tree, &id) {
+                Ok(taken) => taken,
+                Err(error) => return Err(Self::discarded(run, error)),
+            };
+            match taken {
                 Take::Taken => {
+                    let changed = match crate::git::uncommitted(tree) {
+                        Ok(changed) => changed,
+                        Err(error) => return Err(Self::discarded(run, error)),
+                    };
+                    let head = match crate::git::commit_paths(tree, &changed, &take_subject(&id)) {
+                        Ok(head) => head,
+                        Err(error) => return Err(Self::discarded(run, error)),
+                    };
+                    if run.case.revision("implementation").is_some() {
+                        run.case.set_revision("implementation", &head)?;
+                    }
                     writeln!(out, "frontier: took {id}: {title}")?;
                     return Ok(Some(run));
                 }
@@ -386,6 +523,41 @@ impl<'a> Run<'a> {
             }
         }
         Ok(None)
+    }
+
+    /// Resumes the case `case_id` of the story `story_id` and says so on `out`.
+    fn resumed(
+        tree: &Path,
+        options: RunOptions,
+        case_id: &str,
+        story_id: &str,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+        out: &mut dyn Write,
+    ) -> Result<Self> {
+        let run = Self::resume(tree, options, case_id, harness, validators)?;
+        let title = match &run.unit {
+            Unit::Story(story) => story.title.clone(),
+            Unit::Intent(intent) => intent.clone(),
+        };
+        writeln!(
+            out,
+            "frontier: resumed {story_id}: {title} (case {case_id})"
+        )?;
+        Ok(run)
+    }
+
+    /// Removes the case `run` just opened, whose take failed with `error`, and answers the
+    /// error; a removal that fails too is added to it.
+    fn discarded(run: Self, error: anyhow::Error) -> anyhow::Error {
+        let dir = run.case.dir.clone();
+        match run.case.discard() {
+            Ok(()) => error,
+            Err(removal) => error.context(format!(
+                "and the case {} could not be removed: {removal:#}",
+                dir.display()
+            )),
+        }
     }
 
     fn budget_spent(&self) -> Option<Stop> {
@@ -488,7 +660,87 @@ impl<'a> Run<'a> {
                     .case
                     .revision(validator.subject())
                     .context("the validator's subject has a revision")?;
-                let observation = validator.observe(&self.tree, &revision, seq)?;
+                // A record is bound to the revision, `HEAD`: a tree with uncommitted changes
+                // outside the cases directory would be observed on other content than the one
+                // the record names. Nothing is observed, and the changes are left as they are.
+                let uncommitted = crate::git::uncommitted(&self.tree)?;
+                if !uncommitted.is_empty() {
+                    let why = format!(
+                        "{} would observe {} with uncommitted changes: {}",
+                        validator.action(),
+                        &revision[..8.min(revision.len())],
+                        uncommitted.join(", ")
+                    );
+                    writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+                    writeln!(out, "  refused: {why}; nothing observed")?;
+                    return Ok(Stop::StepRefused(why));
+                }
+                // What a validator runs may be code a model wrote (the test command, a gate's
+                // commands): the cases directory is guarded as around a judgement step, and the
+                // tree must be as it was before the observation: the guarded part of `.git`
+                // (hooks, config, `info/`), `HEAD`, the index and every path outside the cases
+                // directory; ignored files it made (a build's output) may stay. The validator's
+                // own writes under its case are the only change admitted; anything else is put
+                // back, and the observation refused with nothing recorded. `.git` is put back
+                // before any git runs again: git runs what was planted there (a hook,
+                // `core.fsmonitor`).
+                let checkpoint = crate::git::Checkpoint::take(&self.tree)?;
+                let cases = self.tree.join(CASES_DIR);
+                let kept = snapshot(&cases)?;
+                let observed = validator
+                    .observe(&self.tree, &revision, seq)
+                    .with_context(|| format!("{} ({})", validator.action(), validator.name()));
+                let git_dir = checkpoint.put_back_git_dir(&self.tree);
+                let mut planted = git_dir.touched;
+                planted.extend(
+                    git_dir
+                        .failed
+                        .into_iter()
+                        .map(|path| format!("not put back: {path}")),
+                );
+                let touched = differing(&kept, &snapshot(&cases)?);
+                let own: Vec<PathBuf> = match self.case.dir.file_name() {
+                    Some(id) => validator
+                        .writes()
+                        .iter()
+                        .map(|path| Path::new(id).join(path))
+                        .collect(),
+                    None => Vec::new(),
+                };
+                let mut foreign: Vec<String> = touched
+                    .iter()
+                    .filter(|path| !own.contains(path))
+                    .map(|path| Path::new(CASES_DIR).join(path).display().to_string())
+                    .collect();
+                let change = checkpoint.change(&self.tree)?;
+                let mut outside: Vec<String> = planted;
+                outside.extend(change.paths.iter().cloned());
+                if change.staged {
+                    outside.push("the index".to_owned());
+                }
+                if let Some(moved) = &change.head {
+                    outside.push(format!("HEAD, moved {moved}"));
+                }
+                if !foreign.is_empty() || !outside.is_empty() {
+                    restore(&cases, &kept, &touched)?;
+                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    foreign.extend(outside);
+                    let mut why = format!(
+                        "{} wrote what its validator does not: {}",
+                        validator.action(),
+                        foreign.join(", ")
+                    );
+                    if let Err(error) = &observed {
+                        why.push_str(&format!("; the observation failed too: {error:#}"));
+                    }
+                    writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+                    writeln!(
+                        out,
+                        "  refused: {why}; the cases directory was put back, the change discarded and nothing recorded"
+                    )?;
+                    return Ok(Stop::StepRefused(why));
+                }
+                let observation = observed?;
                 writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
                 writeln!(out, "  effect: {}", observation.summary)?;
                 // What the validator retains lands before the records that refer to it: a
@@ -560,9 +812,12 @@ impl<'a> Run<'a> {
                 protocol: &self.case.protocol,
                 step: self.steps as usize,
             };
-            // What the step changed is the difference to what was already uncommitted: a
-            // validator's run may leave files (a lock file) that are not the harness's doing.
-            let before: Vec<String> = crate::git::changed_paths(&self.tree)?;
+            // The step is judged by what it did to the tree, against a checkpoint taken just
+            // before it: `HEAD`, the index, every path already uncommitted (a validator's run
+            // may leave one) with what is at it, the ignored paths, and the guarded part of the
+            // git directory. An accepted step commits exactly the paths it changed; a refused
+            // one, or one whose harness failed, is put back to the checkpoint whole.
+            //
             // The cases directory is the kernel's, every case under it: its files are what
             // the evaluations read, and a harness that wrote into it (a grant, a record, a
             // branch number, the protocol, for this case or a sibling waiting for its grant)
@@ -571,12 +826,37 @@ impl<'a> Run<'a> {
             // ended; a step that touched it is refused.
             let cases = self.tree.join(CASES_DIR);
             let kept = snapshot(&cases)?;
+            // The case's base is guarded beside `HEAD` and the case's branch.
+            let base: Vec<String> = crate::case::Branch::read(&self.case.dir)
+                .ok()
+                .and_then(|branch| branch.base)
+                .into_iter()
+                .collect();
+            let checkpoint = crate::git::Checkpoint::take_guarding(&self.tree, &base)?;
             let stepped = self.harness.step(&context);
+            // What git runs or reads as configuration first: every git call after this one
+            // would read what the step planted there. Nothing in it ends early; a path it could
+            // not put back is named in the refusal below.
+            let git_dir = checkpoint.put_back_git_dir(&self.tree);
             let touched = differing(&kept, &snapshot(&cases)?);
             if !touched.is_empty() {
                 restore(&cases, &kept, &touched)?;
             }
-            let report = stepped?;
+            let report = match stepped {
+                Ok(report) => report,
+                Err(error) => {
+                    return Err(match undo_step(&self.tree, &checkpoint, &cases, &kept) {
+                        Ok(()) => error.context(format!(
+                            "step {}: the harness failed; everything the step changed was discarded",
+                            self.steps
+                        )),
+                        Err(undo) => error.context(format!(
+                            "step {}: the harness failed, and the step's change could not be discarded: {undo:#}",
+                            self.steps
+                        )),
+                    });
+                }
+            };
             if let Some(tokens) = report.tokens {
                 self.tokens += tokens;
             }
@@ -588,12 +868,19 @@ impl<'a> Run<'a> {
                 self.harness.name()
             )?;
             writeln!(out, "  said: {}", report.summary)?;
-            let changed: Vec<String> = crate::git::changed_paths(&self.tree)?
-                .into_iter()
-                .filter(|p| !crate::case::is_under_cases(p) && !before.contains(p))
-                .collect();
+            let change = match checkpoint.change(&self.tree) {
+                Ok(change) => change,
+                Err(error) => {
+                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    return Err(error.context(format!(
+                        "step {}: what {} changed could not be read; the change was discarded",
+                        self.steps, report.action
+                    )));
+                }
+            };
+            let changed = &change.paths;
             if !touched.is_empty() {
-                crate::git::discard_all(&self.tree)?;
+                undo_step(&self.tree, &checkpoint, &cases, &kept)?;
                 let paths: Vec<String> = touched
                     .iter()
                     .map(|p| Path::new(CASES_DIR).join(p).display().to_string())
@@ -609,9 +896,68 @@ impl<'a> Run<'a> {
                 )?;
                 return Ok(Stop::StepRefused(why));
             }
+            // What only takt does, or what nobody may: `.git/`, `HEAD`, the index, ignored
+            // paths, and a path that was uncommitted before the step, whose change cannot be
+            // told apart from what was there.
+            let action = &report.action;
+            let overreach = if !git_dir.touched.is_empty() {
+                let mut why = format!(
+                    "{action} wrote under .git, where git runs or reads it: {}",
+                    git_dir.touched.join(", ")
+                );
+                if !git_dir.failed.is_empty() {
+                    why.push_str(&format!("; not put back: {}", git_dir.failed.join("; ")));
+                }
+                Some(why)
+            } else if let Some(moved) = &change.head {
+                Some(format!("{action} moved HEAD {moved}"))
+            } else if !change.refs.is_empty() {
+                Some(format!("{action} moved {}", change.refs.join(", ")))
+            } else if change.staged {
+                Some(format!(
+                    "{action} changed the index; takt stages and commits a step's change, the step does not"
+                ))
+            } else if !change.ignored_added.is_empty()
+                || !change.ignored_changed.is_empty()
+                || !change.ignored_removed.is_empty()
+            {
+                let mut what = Vec::new();
+                if !change.ignored_added.is_empty() {
+                    what.push(format!("wrote {}", change.ignored_added.join(", ")));
+                }
+                if !change.ignored_changed.is_empty() {
+                    what.push(format!("rewrote {}", change.ignored_changed.join(", ")));
+                }
+                if !change.ignored_removed.is_empty() {
+                    what.push(format!("removed {}", change.ignored_removed.join(", ")));
+                }
+                let mut why = format!(
+                    "{action} {} ignored by git, which no commit would carry",
+                    what.join(" and ")
+                );
+                if !change.ignored_lost.is_empty() {
+                    why.push_str(&format!(
+                        "; nothing was kept to put back of {}",
+                        change.ignored_lost.join(", ")
+                    ));
+                }
+                Some(why)
+            } else if !change.already_uncommitted.is_empty() {
+                Some(format!(
+                    "{action} changed {}, uncommitted before the step already",
+                    change.already_uncommitted.join(", ")
+                ))
+            } else {
+                None
+            };
+            if let Some(why) = overreach {
+                undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                writeln!(out, "  refused: {why}; the change was discarded")?;
+                return Ok(Stop::StepRefused(why));
+            }
             if approvals.contains(&report.action) {
                 if !changed.is_empty() {
-                    crate::git::discard_all(&self.tree)?;
+                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
                     writeln!(
                         out,
                         "  refused: {} was requested with {} changed path(s); the change was discarded",
@@ -641,7 +987,7 @@ impl<'a> Run<'a> {
                 None
             };
             if let Some(why) = refusal {
-                crate::git::discard_all(&self.tree)?;
+                undo_step(&self.tree, &checkpoint, &cases, &kept)?;
                 writeln!(out, "  refused: {why}; the change was discarded")?;
                 return Ok(Stop::StepRefused(why));
             }
@@ -651,10 +997,22 @@ impl<'a> Run<'a> {
                 continue;
             }
             last_idle = None;
-            let head = crate::git::commit_all(
+            // A commit that fails (a hook of the repository's own refused it) leaves nothing
+            // of the step behind either.
+            let head = match crate::git::commit_paths(
                 &self.tree,
+                changed,
                 &format!("{}: {}", report.action, report.summary),
-            )?;
+            ) {
+                Ok(head) => head,
+                Err(error) => {
+                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    return Err(error.context(format!(
+                        "step {}: the commit of {}'s change failed; the change was discarded",
+                        self.steps, report.action
+                    )));
+                }
+            };
             self.case.set_revision("implementation", &head)?;
             writeln!(
                 out,

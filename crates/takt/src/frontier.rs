@@ -218,49 +218,45 @@ pub fn approve(
 pub struct Aep {
     /// The command, `aep` on the path by default.
     pub command: String,
+    /// What each `aep` child is held to.
+    pub limits: crate::forge::Limits,
 }
 
 impl Default for Aep {
     fn default() -> Self {
         Self {
             command: "aep".to_owned(),
+            limits: crate::forge::Limits {
+                timeout: std::time::Duration::from_secs(120),
+                output: 16 << 20,
+            },
         }
     }
 }
 
 impl Aep {
-    /// Runs `aep plan artifact <args>` in `repo`: what it printed on success, or what it
-    /// printed on a non-zero exit, trimmed, as the inner error.
+    /// Runs `aep plan artifact <args>` in `repo`, held to the limits and with no credential:
+    /// what it printed on success, or what it printed on a non-zero exit, trimmed, as the
+    /// inner error. A reply longer than the limit is an error, never read cut.
     fn plan(&self, repo: &Path, args: &[&str]) -> Result<std::result::Result<String, String>> {
-        let mut busy = 0;
-        let output = loop {
-            match Command::new(&self.command)
-                .args(["plan", "artifact"])
-                .args(args)
-                .current_dir(repo)
-                .output()
-            {
-                Ok(output) => break output,
-                // An executable written a moment ago is busy while a child another thread forked
-                // meanwhile still holds the write handle it inherited; that is over as soon as
-                // the child has exec'd, so the spawn is retried briefly before it is an error.
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && busy < 50 =>
-                {
-                    busy += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(2));
-                }
-                Err(error) => {
-                    return Err(anyhow!(
-                        "run {} plan artifact {}: {error}",
-                        self.command,
-                        args.join(" ")
-                    ));
-                }
-            }
-        };
+        let mut command = Command::new(&self.command);
+        command
+            .args(["plan", "artifact"])
+            .args(args)
+            .current_dir(repo);
+        crate::forge::without_credentials(&mut command, |_| false);
+        let output = crate::forge::run_child(&mut command, self.limits)
+            .with_context(|| format!("run {} plan artifact {}", self.command, args.join(" ")))?;
+        if output.stdout_cut {
+            return Err(anyhow!(
+                "{} plan artifact {} printed more than {} bytes; its reply was cut and is not read",
+                self.command,
+                args.join(" "),
+                self.limits.output
+            ));
+        }
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        if output.status.success() {
+        if output.success() {
             return Ok(Ok(stdout));
         }
         let stderr = String::from_utf8_lossy(&output.stderr);

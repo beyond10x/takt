@@ -244,6 +244,20 @@ fn aep(repo: &Path, args: &[&str]) {
     );
 }
 
+/// Keeps a stub and its log out of the tree's uncommitted work: a case opens only on a clean
+/// tree, and the stub is the test's, not work in progress.
+fn ignore_stub(dir: &Path) {
+    let exclude = dir.join(".git/info/exclude");
+    let mut text = fs::read_to_string(&exclude).unwrap_or_default();
+    for name in ["aep-stub*.sh", "calls.log"] {
+        if !text.lines().any(|line| line == name) {
+            text.push_str(name);
+            text.push('\n');
+        }
+    }
+    fs::write(&exclude, text).expect("the stub is ignored");
+}
+
 /// A stand-in for the `aep` command line, written as a shell script into `dir`: it lists three
 /// `proposed` stories, shows any of them, refuses to move `story:a` and moves the others, and
 /// appends every call to `calls.log` beside it. The store's refusal is the one shape the fixture
@@ -275,6 +289,7 @@ esac
     .replace("@LOG@", &log.display().to_string());
     let path = dir.join("aep-stub.sh");
     fs::write(&path, script).expect("the stub is written");
+    ignore_stub(dir);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -291,6 +306,7 @@ fn a_refused_take_is_printed_verbatim_and_the_next_ready_story_is_taken() {
     let repo = repository("one-ready", "refused");
     let frontier = Aep {
         command: refusing_aep(&repo),
+        ..Aep::default()
     };
     let mut out = Vec::new();
     let story = frontier
@@ -453,6 +469,7 @@ fn a_refused_take_removes_the_case_it_opened_and_the_next_story_gets_one() {
     let repo = repository("one-ready", "refused-case");
     let frontier = Aep {
         command: refusing_aep(&repo),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut out = Vec::new();
@@ -560,6 +577,7 @@ esac
     .replace("@REFUSED@", &pattern);
     let path = dir.join("aep-stub-adv2.sh");
     fs::write(&path, script).expect("the stub is written");
+    ignore_stub(dir);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -595,6 +613,7 @@ fn a_store_refusing_every_candidate_leaves_no_cases_directory_behind() {
     let repo = repository("one-ready", "adv2-all-refused");
     let frontier = Aep {
         command: stub_aep(&repo, &["story:a", "story:b", "story:c"]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut out = Vec::new();
@@ -628,6 +647,7 @@ fn a_given_case_id_names_the_taken_story_case_after_a_refusal() {
     let repo = repository("one-ready", "adv2-given-id");
     let frontier = Aep {
         command: stub_aep(&repo, &["story:a"]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut options = options();
@@ -672,6 +692,7 @@ fn a_refusal_removes_only_the_case_it_opened_not_its_neighbours() {
     .expect("its snapshot");
     let frontier = Aep {
         command: stub_aep(&repo, &["story:a"]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut out = Vec::new();
@@ -699,6 +720,7 @@ fn an_open_that_fails_asks_for_no_move_and_leaves_no_case() {
     let repo = repository("one-ready", "adv2-open-fails");
     let frontier = Aep {
         command: stub_aep(&repo, &[]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut options = options();
@@ -739,6 +761,7 @@ fn an_open_refused_on_its_inputs_asks_for_no_move_and_leaves_no_case() {
     let repo = repository("one-ready", "adv2-input-refused");
     let frontier = Aep {
         command: stub_aep(&repo, &[]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut options = options();

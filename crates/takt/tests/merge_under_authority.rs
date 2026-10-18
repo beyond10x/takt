@@ -1352,7 +1352,15 @@ fn adv_a_case_recording_a_story_the_store_does_not_list_active_is_not_resumed() 
         .expect("the story is recorded");
     drop(left);
     assert_eq!(status(&repo, "story:blocked-one"), "proposed");
-    assert_eq!(status(&repo, "story:ready-one"), "active");
+    // The take is committed on the open case's branch; the left-behind case forked from the
+    // base, where the story is still `proposed`.
+    assert_eq!(
+        git(
+            &repo,
+            &["log", "-1", "--format=%s", &format!("takt/{open_case}")]
+        ),
+        "takt: take story:ready-one"
+    );
     assert!("adv-stale" < open_case.as_str(), "{open_case}");
     let mut out = Vec::new();
     let next = Run::open_next(
