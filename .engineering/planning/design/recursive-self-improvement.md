@@ -8,7 +8,7 @@ summary: Three levels (work, takt, the loop), two agent roles, a pinned judge, a
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 6
+revision: 7
 ---
 # Design: recursive self-improvement of takt
 
@@ -125,6 +125,9 @@ new ones, so a metric cannot be redefined to look better.
 
 
 Open question, from the first recorded improvement turn (2026-10-18): at n=3 the token default trips on run-to-run noise. On scenario 1 with an unchanged harness, six takt runs at two revisions spread from 106,003 to 167,249 tokens; the turn's candidate, which changed only help text, had a median 24 % over its baseline because two of its three runs hit the known `repository.inspect` NoProgress (story:no-inspect-for-stateless-harness). `takt scorecard --against` therefore prints n and the minimum, median and maximum per side and flags only worse outcomes (story:scorecard-reader); which token rule promotion applies (a larger n, a spread-aware rule, or tokens per accepted unit with the known waste removed) is open and decided before story:promotion lands.
+
+
+Outcomes are compared by dominance (story:scorecard-reader, wave 10): per scenario the candidate is worse when, for some outcome rank, its share of cases at that rank or better is below the baseline's; a median rank missed regressions in fewer than half a scenario's cases (68 of 200 seeded worse candidates passed in its adversary pass). Dominance is strict, so a re-run of unchanged code with one flaky outcome, such as the `repository.inspect` NoProgress that scenario 1 hit in 3 of 6 runs, reports worse. How many trials promotion needs, and whether it re-runs or allows a margin, is decided with the token rule above.
 
 ## What earns each claim
 
