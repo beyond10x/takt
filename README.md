@@ -106,7 +106,25 @@ request targets `trial/<n>`. A trial branch is deleted afterwards with `b10x-gat
 --repository <owner>/<repo> -- delete-branch trial/<n>`, which the bot route admits only while the
 branch's tip is merged into the default branch.
 
-## Build
+## Install
+
+From a release, with no Rust toolchain: each version tag publishes `takt-<version>-<target>.tar.gz`
+for `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` and `aarch64-apple-darwin`, with a
+`SHA256SUMS` file, at <https://github.com/beyond10x/takt/releases>.
+
+```
+version=0.1.0 target=x86_64-unknown-linux-gnu
+release=https://github.com/beyond10x/takt/releases/download/$version
+curl -fsSLO "$release/takt-$version-$target.tar.gz"
+curl -fsSLO "$release/SHA256SUMS"
+sha256sum --check --ignore-missing SHA256SUMS
+tar -xzf "takt-$version-$target.tar.gz"
+"takt-$version-$target/takt" --version
+```
+
+`takt --version` prints the version and the commit the binary was built from.
+
+From source:
 
 ```
 cargo install --locked --path crates/takt-cli

@@ -2,12 +2,17 @@
 format: aep.planning-md/3
 id: story:finding-on-any-repository
 kind: story
-status: draft
+status: implemented
 title: A finding names the repository, seed and test of the task it was seen on
 relations:
 - informed_by: story:finding-intake
 - decomposes: epic:recursive-self-improvement
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T23:06:57Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-18T23:06:58Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-18T23:07:06Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 

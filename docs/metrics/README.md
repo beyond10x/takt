@@ -242,17 +242,25 @@ an empty column at its merge commit, and a measured revision that is an ancestor
 ## The timeline
 
 `python3 -I docs/metrics/timeline.py` writes `timeline.svg`: for each scenario-1 takt run, tokens
-(left axis) and wall time where known (right axis) per takt revision, resumes as a label, the
-waves and the improvement turns as markers, and the free-running medians as reference lines. If
+(left axis) and wall time where known (right axis) per takt revision, a run's resumes as a label
+where it had any, the waves and the improvement turns as markers above the plot, the counts per
+revision in rows under the axis, the turns' results under the legend, and the free-running
+medians as reference lines. If
 `docs/pitch/index.html` carries the `timeline.svg begin`/`end` markers, the script replaces the
 chart between them, so the deck needs no hand edit. Append a record and re-run it.
+
+Both charts are drawn at their own size, 960 px wide while the revisions fit, with no text under 12 px, and each label
+goes where its estimated box meets no other label. A page shows them at 1:1 and scrolls them
+sideways on a narrow screen rather than shrinking them; the svg carries its width and height for
+that.
 
 ## The journeys
 
 `python3 -I docs/metrics/journey.py` reads, for every record in `scenario-runs.jsonl`, the raw
 files the record names and the run's `steps.jsonl` and `events.jsonl` beside them, and writes one
 line per operation to `journeys.jsonl`. It draws `journey.svg`: one lane per run, grouped by arm and
-then by takt revision. If `docs/pitch/index.html` carries the `journey.svg begin`/`end` markers,
+then by takt revision, with the patterns `mark_patterns` labels (`seed pr.open`, `2nd CI`,
+`inspect, then NoProgress`) as marks above the operation, named in the legend. If `docs/pitch/index.html` carries the `journey.svg begin`/`end` markers,
 the chart between them is replaced. A new record adds a lane with no hand edit.
 
 **No token or cost figure comes from `journeys.jsonl`.** It holds order, kind and time only; token

@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T23:07:06Z",
+  "actor": "human:timo",
+  "artifact": "story:prebuilt-binaries-in-ci",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check at a33101e by the reviewer: exit 0, 647 passed, 0 failed, citations 465/465; merged into main at 4dde62f",
+    "reference": "a33101e"
+  }
+}

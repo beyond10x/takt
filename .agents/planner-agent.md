@@ -151,6 +151,10 @@ once at least three turns have been filed since the merge.
 - `b10x-gates scan-text` gates the commit: run it unpiped in a chain that stops on its exit
   status (`set -eo pipefail`). A `| tail` after it hid a refusal on 2026-10-18 and a personal path
   reached local main.
+- A store write can move lines that `ess/` cites (`relate` adds a frontmatter line). Before the
+  commit, run `python3 -I scripts/check-citations --require-digests`; on an unresolved line, run
+  `check-citations fix` and commit the re-point with the store change. On 2026-10-19 a `relate`
+  left main red with 5 unresolved citations.
 
 ## Intake
 
@@ -176,12 +180,16 @@ goes to standard error.
    | key | what |
    |---|---|
    | `scenario` | the scenario's id in the scratch repository's `.engineering/scenarios.conf` |
-   | `command` | one shell line, run in a fresh clone of the scenario's seed, with `$TAKT` the binary under test and `$SCENARIO` the clone, in a fresh HOME of the check's own; no credential of the caller's environment or home reaches it |
+   | `repository` | instead of `scenario`: the repository the defect was seen on, an `https://` URL and never a path (the predicate is committed to a public repository and must hold on every machine), which `check-finding` clones without `--scenarios`; a local checkout stands in for the URL only through `check-finding --checkout <url>=<path>` at check time |
+   | `seed` | with `repository`: the commit the task starts from, a commit id |
+   | `test` | with `repository`, optional: the task's test command, handed to the command as `$TEST` |
+   | `command` | one shell line, run in a fresh clone of the scenario's seed, or of `repository` at `seed`, with `$TAKT` the binary under test and `$SCENARIO` the clone, in a fresh HOME of the check's own; no credential of the caller's environment or home reaches it |
    | `exit` | the exit status while the defect is present, 0 to 255 but 124 and 137, which `check-finding` reads as its timeout and `file-finding` refuses as `malformed` |
    | `output` | a fixed string the command's standard output or standard error then holds |
    | `source` | the run record or review that produced the finding, a path in this repository |
 
-   `exit`, `output` or both; the predicate holds when every one given holds.
+   `scenario` or `repository`, one of the two; `exit`, `output` or both; the predicate holds when
+   every one given holds.
 3. **File.** `scripts/file-finding --key <key> --title "<title>" --from <body.md>`, with
    `--kind blocker` when the finding stops other work and no takt change resolves it; a story
    otherwise. `filed`: the store holds `story:<key>` (or `blocker:<key>`) with the reference
