@@ -59,6 +59,8 @@ pub struct ClaudeCode {
     pub model: Option<String>,
     /// The most turns one step may take.
     pub max_turns: u32,
+    /// What the child is held to.
+    pub limits: crate::forge::Limits,
 }
 
 impl Default for ClaudeCode {
@@ -67,6 +69,10 @@ impl Default for ClaudeCode {
             program: "claude".to_owned(),
             model: None,
             max_turns: 40,
+            limits: crate::forge::Limits {
+                timeout: std::time::Duration::from_secs(1800),
+                output: 8 << 20,
+            },
         }
     }
 }
@@ -85,6 +91,20 @@ fn describe(action: &str) -> &'static str {
 }
 
 impl ClaudeCode {
+    /// The arguments that keep the child from loading anything the tree or the user's own
+    /// configuration supplies: `--restricted` ignores the user, project and local settings
+    /// files (their hooks, plugins and permissions with them), confines the file tools to the
+    /// tree and leaves writes to settings and git files to a person; `--strict-mcp-config`
+    /// starts no MCP server; the `--settings` given turns hooks off in whatever settings are
+    /// still read, as far as their precedence lets it. Not `--bare`: it reads only an API key,
+    /// and the step runs on the user's login.
+    pub const ISOLATION: [&str; 4] = [
+        "--restricted",
+        "--strict-mcp-config",
+        "--settings",
+        r#"{"disableAllHooks":true}"#,
+    ];
+
     fn prompt(context: &StepContext<'_>) -> String {
         let mut text = String::new();
         text.push_str("You are the judgement step of a governed engineering run (takt).\n\n");
@@ -167,14 +187,15 @@ impl Harness for ClaudeCode {
             .arg("--max-turns")
             .arg(self.max_turns.to_string())
             .arg("--no-session-persistence")
+            .args(Self::ISOLATION)
             .current_dir(context.tree);
         if let Some(model) = &self.model {
             command.arg("--model").arg(model);
         }
         // The step runs on the user's claude.ai login: an API key in the environment would take
         // precedence and spend, and a parent Claude Code session's variables would make the child
-        // a nested session.
-        command.env_remove("ANTHROPIC_API_KEY");
+        // a nested session. No other credential reaches it either: what the model does in the
+        // tree needs none.
         command.env_remove("CLAUDECODE");
         command.env_remove("CLAUDE_PID");
         for (name, _) in std::env::vars_os() {
@@ -182,18 +203,27 @@ impl Harness for ClaudeCode {
                 command.env_remove(name);
             }
         }
-        let output = command
-            .output()
-            .with_context(|| format!("run {}", self.program))?;
-        if !output.status.success() {
+        crate::forge::without_credentials(&mut command, |_| false);
+        let output = crate::forge::run_child(&mut command, self.limits)
+            .with_context(|| format!("the harness {}", self.program))?;
+        if !output.success() {
             bail!(
                 "{} exited {}: {}",
                 self.program,
-                output.status,
+                output
+                    .code
+                    .map_or("on a signal".to_owned(), |code| code.to_string()),
                 String::from_utf8_lossy(&output.stderr)
                     .chars()
                     .take(400)
                     .collect::<String>()
+            );
+        }
+        if output.stdout_cut {
+            bail!(
+                "{} printed more than {} bytes; its reply was cut and is not read",
+                self.program,
+                self.limits.output
             );
         }
         let doc: serde_json::Value =
@@ -256,10 +286,22 @@ mod tests {
             "src/test_foo.py",
             "web/app.test.ts",
             "web/app.spec.ts",
+            "tests/a b.rs",
+            "tests/ü.rs",
         ] {
             assert!(is_test_path(path), "{path}");
         }
-        for path in ["src/lib.rs", "Cargo.toml", "src/testing.rs", "tester/x.rs"] {
+        // A path as git names it, whole: never with its first character cut off or quoted.
+        for path in [
+            "src/lib.rs",
+            "Cargo.toml",
+            "src/testing.rs",
+            "tester/x.rs",
+            "rc/lib.rs",
+            "ests/a.rs",
+            "\"tests/a b.rs\"",
+            " src/lib.rs",
+        ] {
             assert!(!is_test_path(path), "{path}");
         }
     }

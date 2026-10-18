@@ -169,22 +169,42 @@ fn the_one_ready_story_is_taken_once_and_becomes_the_case() {
     let intent = fs::read_to_string(run.case.dir.join("intent.md")).expect("intent.md");
     assert_eq!(intent, format!("{}\n\n{}", story.title, story.body));
 
-    // Taken once: the story is active now, so a second ask finds nothing ready.
-    let again = frontier
-        .next(&repo, &mut out)
-        .expect("the frontier answers");
-    assert_eq!(again, None, "{}", String::from_utf8_lossy(&out));
+    // Taken once: the story is active with its case open, so a second ask resumes that case and
+    // takes nothing; no second case is opened for it.
+    let case_id = run.case.id.clone();
+    drop(run);
+    let mut out = Vec::new();
+    let again = Run::open_next(&repo, options(), &frontier, &Never, &validators, &mut out)
+        .expect("the frontier answers")
+        .expect("the open case is resumed");
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert_eq!(again.case.id, case_id, "{text}");
+    assert_eq!(
+        text,
+        format!("frontier: resumed story:ready-one: Make the check pass (case {case_id})\n"),
+        "nothing is taken on the second ask"
+    );
     assert_eq!(status(&repo, "story:ready-one"), "active");
+    assert_eq!(case_names(&repo), Some(vec![case_id]), "{text}");
 }
 
+/// Nothing ready: no unit, no case directory opened at all, nothing said and nothing moved.
 #[test]
 fn a_store_with_nothing_ready_gives_no_unit_and_moves_nothing() {
     let repo = repository("none-ready", "nothing");
+    let validators: Vec<Box<dyn Validator>> = vec![];
     let mut out = Vec::new();
-    let unit = Aep::default()
-        .next(&repo, &mut out)
-        .expect("the frontier answers");
-    assert_eq!(unit, None, "{}", String::from_utf8_lossy(&out));
+    let run = Run::open_next(
+        &repo,
+        options(),
+        &Aep::default(),
+        &Never,
+        &validators,
+        &mut out,
+    )
+    .expect("the frontier answers");
+    assert!(run.is_none(), "{}", String::from_utf8_lossy(&out));
+    assert_eq!(String::from_utf8_lossy(&out), "");
     assert!(!repo.join(".engineering/cases").exists());
     assert_eq!(status(&repo, "story:blocked-one"), "proposed");
     assert_eq!(status(&repo, "story:waits-one"), "proposed");
@@ -200,12 +220,21 @@ fn a_repository_without_a_planning_store_is_refused_not_searched_upward() {
     git(&dir, &["init", "-q", "-b", "main"]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-q", "-m", "start"]);
+    let validators: Vec<Box<dyn Validator>> = vec![];
     let mut out = Vec::new();
-    let error = Aep::default()
-        .next(&dir, &mut out)
-        .expect_err("a repository without a store is refused")
-        .to_string();
+    let error = match Run::open_next(
+        &dir,
+        options(),
+        &Aep::default(),
+        &Never,
+        &validators,
+        &mut out,
+    ) {
+        Ok(_) => panic!("a repository without a store answered"),
+        Err(error) => error.to_string(),
+    };
     assert!(error.contains("no planning store"), "{error}");
+    assert!(!dir.join(".engineering").exists(), "nothing was written");
 }
 
 #[test]
@@ -244,6 +273,20 @@ fn aep(repo: &Path, args: &[&str]) {
     );
 }
 
+/// Keeps a stub and its log out of the tree's uncommitted work: a case opens only on a clean
+/// tree, and the stub is the test's, not work in progress.
+fn ignore_stub(dir: &Path) {
+    let exclude = dir.join(".git/info/exclude");
+    let mut text = fs::read_to_string(&exclude).unwrap_or_default();
+    for name in ["aep-stub*.sh", "calls.log"] {
+        if !text.lines().any(|line| line == name) {
+            text.push_str(name);
+            text.push('\n');
+        }
+    }
+    fs::write(&exclude, text).expect("the stub is ignored");
+}
+
 /// A stand-in for the `aep` command line, written as a shell script into `dir`: it lists three
 /// `proposed` stories, shows any of them, refuses to move `story:a` and moves the others, and
 /// appends every call to `calls.log` beside it. The store's refusal is the one shape the fixture
@@ -275,6 +318,7 @@ esac
     .replace("@LOG@", &log.display().to_string());
     let path = dir.join("aep-stub.sh");
     fs::write(&path, script).expect("the stub is written");
+    ignore_stub(dir);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -283,44 +327,16 @@ esac
     path.display().to_string()
 }
 
-/// A store that refuses to hand over the first ready story: the refusal is printed verbatim on
-/// `out`, the story is skipped, and the next ready story in id order is taken. `story:c` is
-/// never asked for, since `story:b` was taken.
-#[test]
-fn a_refused_take_is_printed_verbatim_and_the_next_ready_story_is_taken() {
-    let repo = repository("one-ready", "refused");
-    let frontier = Aep {
-        command: refusing_aep(&repo),
-    };
-    let mut out = Vec::new();
-    let story = frontier
-        .next(&repo, &mut out)
-        .expect("the frontier answers")
-        .expect("story:b is ready and taken");
-    assert_eq!(story.id, "story:b");
-    assert_eq!(story.title, "Title of story:b");
-    let out = String::from_utf8(out).expect("utf-8");
-    assert_eq!(
-        out,
-        "frontier: story:a not taken: story:a is proposed; the profile wants it to serve an objective first\n"
-    );
-    let calls = fs::read_to_string(repo.join("calls.log")).expect("the stub logged its calls");
-    let moves: Vec<&str> = calls
-        .lines()
-        .filter(|line| line.starts_with("plan artifact move "))
-        .collect();
-    assert_eq!(
-        moves,
-        [
-            "plan artifact move story:a --to active --executor agent:takt",
-            "plan artifact move story:b --to active --executor agent:takt",
-        ],
-        "{calls}"
-    );
+/// Commits whatever the fixture store's own verbs changed: a case opens only on a clean tree.
+fn commit_store(repo: &Path, message: &str) {
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", message]);
 }
 
-/// Two ready stories in the real store: the first in id order is taken first, the second on
-/// the next ask, and the third ask finds nothing.
+/// Two ready stories in the real store: the first in id order is taken first; the next ask
+/// resumes its open case and takes nothing; asked to take regardless ([`Run::take_next`], what a
+/// run calls when nothing is to resume), the frontier skips the story whose case is open and
+/// takes the second; asked once more, it finds nothing.
 #[test]
 fn two_ready_stories_are_taken_in_id_order_one_per_ask() {
     let repo = repository("one-ready", "two-ready");
@@ -339,37 +355,82 @@ fn two_ready_stories_are_taken_in_id_order_one_per_ask() {
             "agent:fixture",
         ],
     );
+    commit_store(&repo, "a second ready story");
     let frontier = Aep::default();
+    let validators: Vec<Box<dyn Validator>> = vec![];
+
     let mut out = Vec::new();
-    let first = frontier
-        .next(&repo, &mut out)
+    let first = Run::open_next(&repo, options(), &frontier, &Never, &validators, &mut out)
         .expect("the frontier answers")
         .expect("a story is ready");
-    assert_eq!(first.id, "story:aaa-first");
-    assert_eq!(first.title, "First by id");
-    assert_eq!(status(&repo, "story:aaa-first"), "active");
-    assert_eq!(status(&repo, "story:ready-one"), "proposed");
-    let second = frontier
-        .next(&repo, &mut out)
-        .expect("the frontier answers")
-        .expect("the second story is ready");
-    assert_eq!(second.id, "story:ready-one");
-    assert_eq!(status(&repo, "story:ready-one"), "active");
-    let third = frontier
-        .next(&repo, &mut out)
-        .expect("the frontier answers");
-    assert_eq!(third, None);
+    let Unit::Story(story) = &first.unit else {
+        panic!("the unit is a story, not {:?}", first.unit);
+    };
+    assert_eq!(story.id, "story:aaa-first");
+    assert_eq!(story.title, "First by id");
     assert_eq!(
         String::from_utf8_lossy(&out),
-        "",
-        "nothing was refused along the way"
+        "frontier: took story:aaa-first: First by id\n"
     );
+    assert_eq!(status(&repo, "story:aaa-first"), "active");
+    assert_eq!(status(&repo, "story:ready-one"), "proposed");
+    let first_case = first.case.id.clone();
+    drop(first);
+
+    let mut out = Vec::new();
+    let resumed = Run::open_next(&repo, options(), &frontier, &Never, &validators, &mut out)
+        .expect("the frontier answers")
+        .expect("the open case is resumed");
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert_eq!(resumed.case.id, first_case, "{text}");
+    assert!(
+        text.starts_with("frontier: resumed story:aaa-first"),
+        "{text}"
+    );
+    assert_eq!(status(&repo, "story:ready-one"), "proposed", "{text}");
+    drop(resumed);
+
+    let mut out = Vec::new();
+    let second = Run::take_next(&repo, options(), &frontier, &Never, &validators, &mut out)
+        .expect("the frontier answers")
+        .expect("the second story is ready");
+    let Unit::Story(story) = &second.unit else {
+        panic!("the unit is a story, not {:?}", second.unit);
+    };
+    assert_eq!(story.id, "story:ready-one");
+    assert_eq!(
+        String::from_utf8_lossy(&out),
+        format!(
+            "frontier: story:aaa-first not taken: the case {first_case} was opened for it already\n\
+             frontier: took story:ready-one: Make the check pass\n"
+        )
+    );
+    assert_eq!(status(&repo, "story:ready-one"), "active");
+    let second_case = second.case.id.clone();
+    drop(second);
+
+    let mut out = Vec::new();
+    let third = Run::take_next(&repo, options(), &frontier, &Never, &validators, &mut out)
+        .expect("the frontier answers");
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(third.is_none(), "{text}");
+    assert_eq!(
+        text,
+        format!(
+            "frontier: story:aaa-first not taken: the case {first_case} was opened for it already\n\
+             frontier: story:ready-one not taken: the case {second_case} was opened for it already\n"
+        )
+    );
+    let mut cases = vec![first_case, second_case];
+    cases.sort();
+    assert_eq!(case_names(&repo), Some(cases), "one case per story");
 }
 
 /// A dependency at `archived` is done, so the story waiting on it becomes ready; one at
 /// `rejected` is not, so it stays waiting.
 #[test]
 fn an_archived_dependency_is_done_and_a_rejected_one_is_not() {
+    let validators: Vec<Box<dyn Validator>> = vec![];
     let archived = repository("none-ready", "dep-archived");
     aep(
         &archived,
@@ -382,12 +443,22 @@ fn an_archived_dependency_is_done_and_a_rejected_one_is_not() {
             "agent:fixture",
         ],
     );
+    commit_store(&archived, "the dependency archived");
     assert_eq!(status(&archived, "story:draft-dep"), "archived");
     let mut out = Vec::new();
-    let story = Aep::default()
-        .next(&archived, &mut out)
-        .expect("the frontier answers")
-        .expect("the waiting story is ready now");
+    let run = Run::open_next(
+        &archived,
+        options(),
+        &Aep::default(),
+        &Never,
+        &validators,
+        &mut out,
+    )
+    .expect("the frontier answers")
+    .expect("the waiting story is ready now");
+    let Unit::Story(story) = &run.unit else {
+        panic!("the unit is a story, not {:?}", run.unit);
+    };
     assert_eq!(story.id, "story:waits-one");
     assert_eq!(status(&archived, "story:waits-one"), "active");
 
@@ -414,12 +485,21 @@ fn an_archived_dependency_is_done_and_a_rejected_one_is_not() {
             "agent:fixture",
         ],
     );
+    commit_store(&rejected, "the dependency rejected");
     assert_eq!(status(&rejected, "story:draft-dep"), "rejected");
-    let unit = Aep::default()
-        .next(&rejected, &mut out)
-        .expect("the frontier answers");
-    assert_eq!(unit, None, "{}", String::from_utf8_lossy(&out));
+    let mut out = Vec::new();
+    let run = Run::open_next(
+        &rejected,
+        options(),
+        &Aep::default(),
+        &Never,
+        &validators,
+        &mut out,
+    )
+    .expect("the frontier answers");
+    assert!(run.is_none(), "{}", String::from_utf8_lossy(&out));
     assert_eq!(status(&rejected, "story:waits-one"), "proposed");
+    assert_eq!(case_names(&rejected), None);
 }
 
 /// `show` and `take` are public and run `aep` in the repository given, like `list`, but only
@@ -446,13 +526,15 @@ fn show_and_take_refuse_a_repository_without_a_planning_store() {
 
 /// A run opens the case before the store is told and removes it when the store refuses: with
 /// the refusing stand-in, `story:a`'s case is opened, the take is refused, the case directory
-/// goes, the refusal is printed verbatim, and `story:b` gets the one case there is. The stub's
-/// log shows the order: each story is shown, its case opened, then its move asked for.
+/// goes, the refusal is printed verbatim, and `story:b`, the next ready story in id order,
+/// gets the one case there is; `story:c` is never asked for. The stub's log shows the order:
+/// each story is shown, its case opened, then its move asked for.
 #[test]
 fn a_refused_take_removes_the_case_it_opened_and_the_next_story_gets_one() {
     let repo = repository("one-ready", "refused-case");
     let frontier = Aep {
         command: refusing_aep(&repo),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut out = Vec::new();
@@ -463,6 +545,7 @@ fn a_refused_take_removes_the_case_it_opened_and_the_next_story_gets_one() {
         panic!("the unit is a story, not {:?}", run.unit);
     };
     assert_eq!(story.id, "story:b");
+    assert_eq!(story.title, "Title of story:b");
     assert!(run.case.id.starts_with("story-b-"), "{}", run.case.id);
     let cases: Vec<String> = fs::read_dir(repo.join(".engineering/cases"))
         .expect("a cases directory")
@@ -500,26 +583,6 @@ fn a_refused_take_removes_the_case_it_opened_and_the_next_story_gets_one() {
         ],
         "{calls}"
     );
-}
-
-/// Nothing ready through the case-first path: no case directory is opened at all.
-#[test]
-fn nothing_ready_opens_no_case_through_the_run() {
-    let repo = repository("none-ready", "nothing-run");
-    let validators: Vec<Box<dyn Validator>> = vec![];
-    let mut out = Vec::new();
-    let run = Run::open_next(
-        &repo,
-        options(),
-        &Aep::default(),
-        &Never,
-        &validators,
-        &mut out,
-    )
-    .expect("the frontier answers");
-    assert!(run.is_none(), "{}", String::from_utf8_lossy(&out));
-    assert_eq!(String::from_utf8_lossy(&out), "");
-    assert!(!repo.join(".engineering/cases").exists());
 }
 
 /// A stand-in for `aep` like [`refusing_aep`], refusing to move every id in `refused` and
@@ -560,6 +623,7 @@ esac
     .replace("@REFUSED@", &pattern);
     let path = dir.join("aep-stub-adv2.sh");
     fs::write(&path, script).expect("the stub is written");
+    ignore_stub(dir);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -595,6 +659,7 @@ fn a_store_refusing_every_candidate_leaves_no_cases_directory_behind() {
     let repo = repository("one-ready", "adv2-all-refused");
     let frontier = Aep {
         command: stub_aep(&repo, &["story:a", "story:b", "story:c"]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut out = Vec::new();
@@ -628,6 +693,7 @@ fn a_given_case_id_names_the_taken_story_case_after_a_refusal() {
     let repo = repository("one-ready", "adv2-given-id");
     let frontier = Aep {
         command: stub_aep(&repo, &["story:a"]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut options = options();
@@ -672,6 +738,7 @@ fn a_refusal_removes_only_the_case_it_opened_not_its_neighbours() {
     .expect("its snapshot");
     let frontier = Aep {
         command: stub_aep(&repo, &["story:a"]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut out = Vec::new();
@@ -699,6 +766,7 @@ fn an_open_that_fails_asks_for_no_move_and_leaves_no_case() {
     let repo = repository("one-ready", "adv2-open-fails");
     let frontier = Aep {
         command: stub_aep(&repo, &[]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut options = options();
@@ -739,6 +807,7 @@ fn an_open_refused_on_its_inputs_asks_for_no_move_and_leaves_no_case() {
     let repo = repository("one-ready", "adv2-input-refused");
     let frontier = Aep {
         command: stub_aep(&repo, &[]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut options = options();

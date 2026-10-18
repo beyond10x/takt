@@ -598,8 +598,9 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
                 input.display(),
                 output.display()
             ),
-            "gh pr view 7 --json state,mergedAt,headRefName,headRefOid".to_owned(),
-            "gh pr checks 7 --json bucket".to_owned(),
+            "gh pr view 7 --json state,mergedAt,headRefName,headRefOid --repo owner/repo"
+                .to_owned(),
+            "gh pr checks 7 --json bucket --repo owner/repo".to_owned(),
         ]
     );
     let sent: serde_json::Value =

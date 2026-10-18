@@ -10,6 +10,7 @@ relations:
 - serves: vision:safe-agentic-coding
 - depends_on: story:scenario-corpus
 - depends_on: story:self-improvement-protocol
+- depends_on: story:cli-protocol-defaults
 revision: 2
 ---
 # Story: first-recorded-improvement-turn

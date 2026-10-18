@@ -4,6 +4,7 @@
 //! the authority the operator granted the case, once granted. Every evaluation reads the files
 //! and asks Canon. A case is opened once and resumed by every later run on it.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -31,8 +32,10 @@ pub const AUTHORITY_FILE: &str = "authority.yaml";
 /// The file under the case directory that names the story the case was opened for.
 pub const STORY_FILE: &str = "story.yaml";
 
-/// The file under the case directory a run writes while it holds the case, holding the run's
-/// start instant: no grant lands and no second run starts meanwhile.
+/// The file under the case directory whoever holds the case creates, holding the instant it
+/// took hold: a run while it runs, `resume` while it brings the case to its branch, a grant
+/// while it is checked, recorded and written. Created with `create_new`, so of two that try at
+/// once exactly one holds; no grant lands and no second run starts meanwhile.
 pub const LOCK_FILE: &str = "run.lock";
 
 /// Whether `path`, relative to the tree, is the cases directory or lies under it: what the
@@ -46,8 +49,79 @@ pub fn is_under_cases(path: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
-/// The instant the run holding the case at `case_dir` started, from its `run.lock`; `None`
-/// when no run holds it.
+/// The Unicode format characters, general category Cf (Unicode 15.1), as inclusive ranges:
+/// invisible, or changing the direction of the text around them.
+const FORMAT_CHARACTERS: &[(u32, u32)] = &[
+    (0x00AD, 0x00AD),
+    (0x0600, 0x0605),
+    (0x061C, 0x061C),
+    (0x06DD, 0x06DD),
+    (0x070F, 0x070F),
+    (0x0890, 0x0891),
+    (0x08E2, 0x08E2),
+    (0x180E, 0x180E),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x2064),
+    (0x2066, 0x206F),
+    (0xFEFF, 0xFEFF),
+    (0xFFF9, 0xFFFB),
+    (0x110BD, 0x110BD),
+    (0x110CD, 0x110CD),
+    (0x13430, 0x1343F),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0001, 0xE0001),
+    (0xE0020, 0xE007F),
+];
+
+/// Whether `c` has no business in a name that is shown to people: a control character, a
+/// whitespace or separator character (spaces, U+2028, U+2029), or a format character.
+fn is_unshowable(c: char) -> bool {
+    let point = u32::from(c);
+    c.is_control()
+        || c.is_whitespace()
+        || FORMAT_CHARACTERS
+            .iter()
+            .any(|&(first, last)| (first..=last).contains(&point))
+}
+
+/// Refuses a case id that is not one plain name under the cases directory: empty, `.`, a `..`
+/// anywhere, a leading `/`, a path separator, or a character that does not show as itself (a
+/// control, whitespace, separator or Unicode format character, named by its code point). Every
+/// id an operator gives (`takt approve`, `takt run --case`, `RunOptions.case_id`) passes here
+/// before it is joined to a path, so no id reaches outside `.engineering/cases`, nests a case
+/// inside another, or displays as another id in a message or a `takt/<id>` branch.
+pub fn check_id(id: &str) -> Result<()> {
+    let why = if id.is_empty() {
+        Some("it is empty".to_owned())
+    } else if id == "." {
+        Some("it names the cases directory itself".to_owned())
+    } else if id.contains("..") {
+        Some("it contains `..`".to_owned())
+    } else if id.starts_with('/') {
+        Some("it starts with `/`".to_owned())
+    } else if id.contains(['/', '\\']) {
+        Some("it contains a path separator".to_owned())
+    } else {
+        id.chars().find(|c| is_unshowable(*c)).map(|c| {
+            format!(
+                "it contains U+{:04X}, a control, whitespace, separator or format character",
+                u32::from(c)
+            )
+        })
+    };
+    match why {
+        Some(why) => bail!(
+            "the case id `{}` is refused: {why}; a case id is one name under {CASES_DIR}",
+            id.escape_debug()
+        ),
+        None => Ok(()),
+    }
+}
+
+/// The instant whoever holds the case at `case_dir` took hold, from its `run.lock`; `None`
+/// when nobody holds it.
 pub fn held_since(case_dir: &Path) -> Result<Option<String>> {
     let path = case_dir.join(LOCK_FILE);
     if !path.is_file() {
@@ -58,15 +132,54 @@ pub fn held_since(case_dir: &Path) -> Result<Option<String>> {
     Ok(Some(text.trim().to_owned()))
 }
 
-/// Refuses while a run holds the case `id` at `case_dir`, naming the lock. A run that crashed
-/// leaves its lock behind; the refusal says to remove the file by hand.
-fn refuse_if_held(case_dir: &Path, id: &str) -> Result<()> {
-    if let Some(since) = held_since(case_dir)? {
-        bail!(
-            "the case {id} is held by a run started at {since} ({CASES_DIR}/{id}/{LOCK_FILE}); if that run is gone, remove the file"
-        );
+/// Takes hold of the case `id` at `case_dir`: creates `run.lock` with `create_new`, so the
+/// check and the take are one step and of two holders exactly one gets the file, then writes
+/// the instant into it. Refused while another holds it, naming the lock; a holder that crashed
+/// leaves its lock behind, and the refusal says to remove the file by hand.
+fn take_hold(case_dir: &Path, id: &str) -> Result<()> {
+    let path = case_dir.join(LOCK_FILE);
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let since = match held_since(case_dir).ok().flatten() {
+                Some(since) if !since.is_empty() => format!("since {since}"),
+                _ => "since a moment ago".to_owned(),
+            };
+            bail!(
+                "the case {id} is held {since} ({CASES_DIR}/{id}/{LOCK_FILE}) by a run or an approval; if neither is in progress, remove the file"
+            );
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("create {}", path.display()));
+        }
+    };
+    if let Err(error) = writeln!(file, "{}", crate::now()) {
+        let _ = std::fs::remove_file(&path);
+        return Err(error).with_context(|| format!("write {}", path.display()));
     }
     Ok(())
+}
+
+/// A hold taken for the length of one operation, `resume`'s or a grant's: let go when dropped,
+/// whichever way the operation ends.
+#[derive(Debug)]
+struct Held(PathBuf);
+
+impl Held {
+    fn take(case_dir: &Path, id: &str) -> Result<Self> {
+        take_hold(case_dir, id)?;
+        Ok(Self(case_dir.join(LOCK_FILE)))
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 /// The case's branch, recorded as `branch.yaml` under the case directory: created when the
@@ -81,6 +194,11 @@ pub struct Branch {
     /// when `HEAD` was detached or the other case was gone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// The commit the case's branch forked from, pinned when the case opened: what the gate
+    /// validator reads the gates document and the project file from, whatever the base
+    /// branch names later. Absent for a case opened before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
     /// The branch the tree was on when the case opened, the one a discarded case returns the
     /// tree to; absent when `HEAD` was detached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -145,9 +263,10 @@ impl std::fmt::Display for Grant {
 }
 
 /// One entry of the case's `authority.yaml`: the `capability` and `decision` a
-/// `canon-authority/1` entry has, and beside them who decided it and when. Canon is handed the
-/// two keys it declares ([`Authority::canon`]) and would refuse the other two, which are the
-/// case's own record of the operator's decision.
+/// `canon-authority/1` entry has, and beside them who decided it, when, and at which
+/// implementation revision. Canon is handed the two keys it declares ([`Authority::canon`])
+/// and would refuse the others, which are the case's own record of the operator's decision;
+/// the revision is enforced by takt, not by Canon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorityDecision {
     /// The capability decided, `repository.merge`.
@@ -158,12 +277,30 @@ pub struct AuthorityDecision {
     pub approver: String,
     /// When, as [`crate::now`] writes an instant.
     pub granted_at: String,
+    /// The implementation revision the case was at the gate at when the grant was given: the
+    /// one revision it authorises. A grant without one (written before grants were bound to a
+    /// revision) authorises none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+}
+
+impl AuthorityDecision {
+    /// Whether the decision applies at the implementation revision `at`: a denial everywhere,
+    /// a grant only at the revision it was given at.
+    #[must_use]
+    pub fn applies_at(&self, at: Option<&str>) -> bool {
+        match self.decision {
+            Grant::Denied => true,
+            Grant::Granted => self.revision.is_some() && self.revision.as_deref() == at,
+        }
+    }
 }
 
 /// The authority the operator granted the case, `authority.yaml`: a list of decisions, at most
 /// one per capability (Canon refuses a capability decided twice), read into every evaluation
-/// of the case as the supplied authority. Absent until the first grant: a case with none stops
-/// at the gate with `ApprovalRequired`, and a connection to the forge is never authority.
+/// of the case as the supplied authority, each grant only at the revision it was given at.
+/// Absent until the first grant: a case with none stops at the gate with `ApprovalRequired`,
+/// and a connection to the forge is never authority.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Authority {
@@ -200,9 +337,21 @@ impl Authority {
             .find(|decision| decision.capability == capability)
     }
 
-    /// The document as Canon reads it: a `canon-authority/1` list of `capability` and
-    /// `decision` entries, nothing else.
-    pub fn canon(&self) -> Result<String> {
+    /// Whether the case holds a grant of `capability` at the implementation revision
+    /// `revision`.
+    #[must_use]
+    pub fn grants_at(&self, capability: &str, revision: &str) -> bool {
+        self.decision(capability).is_some_and(|decision| {
+            decision.decision == Grant::Granted && decision.applies_at(Some(revision))
+        })
+    }
+
+    /// The document as Canon reads it at the implementation revision `at`: a
+    /// `canon-authority/1` list of `capability` and `decision` entries, nothing else, holding
+    /// the decisions that apply there ([`AuthorityDecision::applies_at`]). A grant given at
+    /// another revision is left out, so Canon finds the capability undecided and the action it
+    /// guards approval-required again: a new commit needs a new grant.
+    pub fn canon(&self, at: Option<&str>) -> Result<String> {
         #[derive(Serialize)]
         struct Entry<'a> {
             capability: &'a str,
@@ -211,6 +360,7 @@ impl Authority {
         let entries: Vec<Entry<'_>> = self
             .decisions
             .iter()
+            .filter(|decision| decision.applies_at(at))
             .map(|decision| Entry {
                 capability: &decision.capability,
                 decision: decision.decision,
@@ -235,6 +385,8 @@ pub struct Approval {
     pub approver: String,
     /// When, as [`crate::now`] writes an instant.
     pub granted_at: String,
+    /// The implementation revision the grant authorises: the one the case reached the gate at.
+    pub revision: String,
 }
 
 impl Approval {
@@ -245,10 +397,11 @@ impl Approval {
     }
 }
 
-/// The capabilities the actions of the case's protocol require, read from the case's own
-/// `protocol.yaml` (each action's `requires` list of `capability` entries), sorted, with the
-/// protocol's id: what a grant may name.
-fn required_capabilities(case_dir: &Path) -> Result<(String, Vec<String>)> {
+/// The actions of the case's protocol that require a capability, each with the capabilities
+/// it requires, read from the case's own `protocol.yaml` (each action's `requires` list of
+/// `capability` entries), with the protocol's id: what a grant may name, and which actions
+/// show whether the case is at the gate for it.
+fn required_capabilities(case_dir: &Path) -> Result<(String, BTreeMap<String, Vec<String>>)> {
     let path = case_dir.join("protocol.yaml");
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
@@ -259,37 +412,109 @@ fn required_capabilities(case_dir: &Path) -> Result<(String, Vec<String>)> {
         doc["protocol"]["id"].as_str().unwrap_or("?"),
         doc["protocol"]["revision"].as_u64().unwrap_or(0)
     );
-    let mut capabilities: Vec<String> = doc["actions"]
+    let actions: BTreeMap<String, Vec<String>> = doc["actions"]
         .as_mapping()
         .map(|actions| {
             actions
-                .values()
-                .filter_map(|action| action["requires"].as_sequence())
-                .flatten()
-                .filter_map(|requirement| requirement["capability"].as_str().map(str::to_owned))
+                .iter()
+                .filter_map(|(name, action)| {
+                    let capabilities: Vec<String> = action["requires"]
+                        .as_sequence()?
+                        .iter()
+                        .filter_map(|requirement| {
+                            requirement["capability"].as_str().map(str::to_owned)
+                        })
+                        .collect();
+                    (!capabilities.is_empty())
+                        .then(|| Some((name.as_str()?.to_owned(), capabilities)))?
+                })
                 .collect()
         })
         .unwrap_or_default();
-    capabilities.sort();
-    capabilities.dedup();
-    Ok((id, capabilities))
+    Ok((id, actions))
 }
 
-/// Grants `capability` to the case `id` under `tree`, decided by `approver` now: the decision
-/// is appended to the case's `authority.yaml`, and what was granted is answered for the store
-/// to record. Refused with nothing written: a case that does not exist, a capability that is
-/// not an identifier, a capability no action of the case's protocol requires (a grant nothing
-/// asks for is a typo, told at the command line rather than by a run that stops at the gate
-/// again), a capability the case already decides (Canon refuses a capability decided twice,
-/// so a second grant would break every later evaluation), an empty approver.
+/// The implementation revision a decision was computed at, from what its explanation says it
+/// was computed from; `None` when it does not say.
+fn decided_at(decision: &Decision) -> Option<String> {
+    let doc: serde_json::Value = serde_json::from_str(&decision.json).ok()?;
+    doc["explanation"]["computed_from"]["case"]["artifacts"]["implementation"]["revision"]
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// The implementation revision the case at `case_dir` is at, from its `case.yaml`.
+fn implementation_of(case_dir: &Path) -> Result<Option<String>> {
+    let path = case_dir.join("case.yaml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    Ok(doc["artifacts"]["implementation"]["revision"]
+        .as_str()
+        .map(str::to_owned))
+}
+
+/// A grant checked and ready to be written, the case held until it is written or dropped: what
+/// `takt approve` records on the story before the grant lands, so a record the store refuses
+/// leaves nothing written and the same approval can be given again.
+#[derive(Debug)]
+pub struct PendingGrant {
+    dir: PathBuf,
+    authority: Authority,
+    approval: Approval,
+    _held: Held,
+}
+
+impl PendingGrant {
+    /// What the grant will grant, for the store to record.
+    #[must_use]
+    pub fn approval(&self) -> &Approval {
+        &self.approval
+    }
+
+    /// Writes the grant into the case's `authority.yaml` and lets go of the case; answers what
+    /// was granted.
+    pub fn write(self) -> Result<Approval> {
+        self.authority.write(&self.dir)?;
+        Ok(self.approval)
+    }
+}
+
+/// Grants `capability` to the case `id` under `tree`, decided by `approver` now, at the
+/// implementation revision the case reached the gate at: the decision goes into the case's
+/// `authority.yaml`, and what was granted is answered for the store to record. Shorthand for
+/// [`prepare_grant`] and [`PendingGrant::write`].
 pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<Approval> {
+    prepare_grant(tree, id, capability, approver)?.write()
+}
+
+/// Checks a grant of `capability` to the case `id` under `tree` by `approver` and holds the case
+/// for it, writing nothing. The case is held first (`run.lock`, taken atomically), so a grant
+/// never lands while a run holds the case, and no run starts until the grant is written or
+/// dropped. Refused: an id that is not a case id ([`check_id`]), a case that does not exist, a
+/// case another holds, a capability that is not an identifier, an empty approver, a capability
+/// no action of the case's protocol requires (a grant nothing asks for is a typo, told at the
+/// command line rather than by a run that stops at the gate again), a case that is not at the
+/// gate for the capability (its latest decision does not find an action requiring it
+/// approval-required, or was computed at another implementation revision than the case is at
+/// now), and a capability the case already decides at that revision. A grant given at another
+/// revision is replaced: it authorises nothing here, and Canon refuses a capability decided
+/// twice.
+pub fn prepare_grant(
+    tree: &Path,
+    id: &str,
+    capability: &str,
+    approver: &str,
+) -> Result<PendingGrant> {
+    check_id(id)?;
     let dir = tree.join(CASES_DIR).join(id);
     if !dir.join("case.yaml").is_file() {
         bail!("no case {id} at {}", dir.display());
     }
     // A run holds its case while it runs: a grant given meanwhile is refused, not written into
-    // a case a judgement step is in flight on.
-    refuse_if_held(&dir, id)?;
+    // a case a judgement step is in flight on; and the grant holds the case until it is written.
+    let held = Held::take(&dir, id)?;
     if capability.is_empty()
         || capability
             .chars()
@@ -300,41 +525,102 @@ pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<
     if approver.trim().is_empty() {
         bail!("the approver is empty; say who grants {capability}");
     }
-    let (protocol, required) = required_capabilities(&dir)?;
-    if !required.iter().any(|required| required == capability) {
+    let (protocol, actions) = required_capabilities(&dir)?;
+    let requiring: Vec<&String> = actions
+        .iter()
+        .filter(|(_, capabilities)| capabilities.iter().any(|c| c == capability))
+        .map(|(action, _)| action)
+        .collect();
+    if requiring.is_empty() {
+        let mut required: Vec<&String> = actions.values().flatten().collect();
+        required.sort();
+        required.dedup();
         if required.is_empty() {
             bail!(
                 "no action of {protocol} requires a capability; {capability} grants the case {id} nothing"
             );
         }
+        let required: Vec<&str> = required.into_iter().map(String::as_str).collect();
         bail!(
             "no action of {protocol} requires {capability}; the capabilities its actions require: {}",
             required.join(", ")
         );
     }
-    let mut authority = Authority::read(&dir)?.unwrap_or_default();
-    if let Some(decided) = authority.decision(capability) {
+    // At the gate: the latest decision finds an action requiring the capability
+    // approval-required, and was computed at the revision the case is at now. That revision is
+    // the one the grant authorises.
+    let Some(latest) = latest_decision(&dir)? else {
         bail!(
-            "the case {id} already decides {capability}: {} by {} at {}",
+            "the case {id} is not at the gate for {capability}: it has not been evaluated yet; run it until it stops ApprovalRequired"
+        );
+    };
+    if !requiring
+        .iter()
+        .any(|action| latest.actions.get(*action).map(String::as_str) == Some("approval-required"))
+    {
+        let statuses: Vec<String> = requiring
+            .iter()
+            .map(|action| {
+                format!(
+                    "{action} {}",
+                    latest.actions.get(*action).map_or("absent", String::as_str)
+                )
+            })
+            .collect();
+        bail!(
+            "the case {id} is not at the gate for {capability}: its latest decision finds {}, not approval-required; run it until it stops ApprovalRequired",
+            statuses.join(", ")
+        );
+    }
+    let Some(revision) = implementation_of(&dir)? else {
+        bail!(
+            "the case {id} has no implementation revision for a grant of {capability} to authorise"
+        );
+    };
+    let gate = decided_at(&latest);
+    if gate.as_deref() != Some(revision.as_str()) {
+        bail!(
+            "the case {id} is not at the gate for {capability}: its latest decision was computed at {}, and the case is at {revision} now; run it until it stops ApprovalRequired at {revision}",
+            gate.as_deref().unwrap_or("an unknown revision")
+        );
+    }
+    let mut authority = Authority::read(&dir)?.unwrap_or_default();
+    if let Some(decided) = authority.decision(capability)
+        && decided.applies_at(Some(&revision))
+    {
+        bail!(
+            "the case {id} already decides {capability} at {revision}: {} by {} at {}",
             decided.decision,
             decided.approver,
             decided.granted_at
         );
     }
+    // A decision on the capability at another revision authorises nothing at this one; the
+    // new grant takes its place, one decision per capability.
+    authority
+        .decisions
+        .retain(|decision| decision.capability != capability);
     let granted_at = crate::now();
     authority.decisions.push(AuthorityDecision {
         capability: capability.to_owned(),
         decision: Grant::Granted,
         approver: approver.to_owned(),
         granted_at: granted_at.clone(),
+        revision: Some(revision.clone()),
     });
-    authority.write(&dir)?;
-    Ok(Approval {
+    let approval = Approval {
         case: id.to_owned(),
         story: story_of(&dir)?,
         capability: capability.to_owned(),
         approver: approver.to_owned(),
         granted_at,
+        revision,
+    };
+    Ok(PendingGrant {
+        dir,
+        authority,
+        approval,
+        _held: held,
     })
 }
 
@@ -357,24 +643,41 @@ pub fn story_of(case_dir: &Path) -> Result<Option<String>> {
     Ok(Some(story.id))
 }
 
-/// The latest decision written under the case, the `decisions/*.json` with the highest name;
-/// `None` before the first evaluation.
+/// The latest decision written under the case, the `decisions/<n>.json` with the highest
+/// sequence number `n`, read as a number, so `10000.json` comes after `9999.json`; a file whose
+/// name is not a number is no decision. `None` before the first evaluation.
 pub fn latest_decision(case_dir: &Path) -> Result<Option<Decision>> {
     let decisions = case_dir.join("decisions");
     if !decisions.is_dir() {
         return Ok(None);
     }
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(&decisions)
-        .with_context(|| format!("read {}", decisions.display()))?
-        .map(|entry| entry.map(|e| e.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    paths.sort();
-    let Some(latest) = paths.last() else {
+    let mut latest: Option<(u64, PathBuf)> = None;
+    for entry in
+        std::fs::read_dir(&decisions).with_context(|| format!("read {}", decisions.display()))?
+    {
+        let path = entry?.path();
+        if path.extension().is_none_or(|extension| extension != "json") {
+            continue;
+        }
+        let Some(n) = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .and_then(|stem| stem.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        if latest.as_ref().is_none_or(|(highest, _)| n > *highest) {
+            latest = Some((n, path));
+        }
+    }
+    let Some((_, latest)) = latest else {
         return Ok(None);
     };
     let json =
-        std::fs::read_to_string(latest).with_context(|| format!("read {}", latest.display()))?;
-    Decision::from_json(&json).map(Some)
+        std::fs::read_to_string(&latest).with_context(|| format!("read {}", latest.display()))?;
+    Decision::from_json(&json)
+        .with_context(|| format!("read {}", latest.display()))
+        .map(Some)
 }
 
 /// Whether the case at `case_dir` is finished: its latest decision has a legitimate outcome.
@@ -430,6 +733,57 @@ pub fn resumable(
     Ok(None)
 }
 
+/// The most approval commits [`approvals_only`] walks back through.
+const APPROVALS_AT_MOST: usize = 64;
+
+/// Whether `head` reaches `revision` only through commits that hold an approval's record for
+/// the case's `story` and nothing else: each with one parent, the subject
+/// [`crate::frontier::approve_subject`] of `story` and one capability, and every path it changes
+/// in the planning store ([`crate::frontier::is_store_path`]). Such a commit is the approval's
+/// own: it records the grant and changes no path outside the store. The case stays at
+/// `revision`, and `pr.open` pushes `revision` itself, not `HEAD`
+/// ([`crate::forge::Forge::push_revision`]), so what is pushed, checked and merged is the
+/// revision the grant was given at. A commit that does anything else, or a case with no story,
+/// is no approval's.
+pub fn approvals_only(
+    tree: &Path,
+    revision: &str,
+    head: &str,
+    story: Option<&str>,
+) -> Result<bool> {
+    let Some(story) = story else {
+        return Ok(false);
+    };
+    let prefix = crate::frontier::approve_subject(story, "");
+    let mut at = head.to_owned();
+    for _ in 0..APPROVALS_AT_MOST {
+        if at == revision {
+            return Ok(true);
+        }
+        let commit = crate::git::commit(tree, &at)?;
+        let approval = commit
+            .subject
+            .strip_prefix(&prefix)
+            .is_some_and(|capability| {
+                !capability.is_empty() && !capability.contains(char::is_whitespace)
+            });
+        let [parent] = commit.parents.as_slice() else {
+            return Ok(false);
+        };
+        if !approval
+            || commit.paths.is_empty()
+            || !commit
+                .paths
+                .iter()
+                .all(|path| crate::frontier::is_store_path(path))
+        {
+            return Ok(false);
+        }
+        at.clone_from(parent);
+    }
+    Ok(false)
+}
+
 /// The directory of the case whose branch `tree` is on: `takt/<id>` names the case `<id>`.
 pub fn current(tree: &Path) -> Result<PathBuf> {
     let branch = crate::git::current_branch(tree)?
@@ -440,6 +794,7 @@ pub fn current(tree: &Path) -> Result<PathBuf> {
             tree.display()
         )
     })?;
+    check_id(id).with_context(|| format!("the branch {branch} names no case"))?;
     let dir = tree.join(CASES_DIR).join(id);
     if !dir.join("case.yaml").is_file() {
         bail!("the branch {branch} names no case at {}", dir.display());
@@ -475,9 +830,14 @@ impl CaseDir {
     /// the tree is on, or that case's base when the tree is on another case's branch, so a
     /// case never forks from another case's commits; a case branch whose base is unknown
     /// refuses the case before anything is written), and recorded with its base and the
-    /// branch it left as `branch.yaml`; a branch that exists refuses the case. Nothing is
-    /// written until `HEAD`, the inputs and the branch are in order, and a write that fails
-    /// takes the directory with it, so a case directory exists only with its `case.yaml`.
+    /// branch it left as `branch.yaml`; a branch that exists refuses the case. A tree with
+    /// uncommitted work outside the cases directory (staged, unstaged or untracked; ignored
+    /// files are not work) refuses the case before anything is touched: everything a run
+    /// commits or discards afterwards is then its own. Nothing is written until the tree,
+    /// `HEAD`, the inputs and the branch are in order, and an open that fails after the branch
+    /// was made takes the directory, the cases directory when it was the last, and the branch
+    /// with it, the tree back where it was, so a case directory exists only with its
+    /// `case.yaml` and a `takt/<id>` branch only with its case.
     pub fn open(
         tree: &Path,
         protocol: LoadedProtocol,
@@ -485,9 +845,27 @@ impl CaseDir {
         intent: &str,
         inputs: &[(String, String)],
     ) -> Result<Self> {
+        check_id(id)?;
         let dir = tree.join(CASES_DIR).join(id);
         if dir.exists() {
             return Err(anyhow!("the case {id} already exists at {}", dir.display()));
+        }
+        let uncommitted = crate::git::uncommitted(tree)?;
+        if !uncommitted.is_empty() {
+            const SHOWN: usize = 10;
+            let mut named = uncommitted
+                .iter()
+                .take(SHOWN)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            if uncommitted.len() > SHOWN {
+                named.push_str(&format!(" and {} more", uncommitted.len() - SHOWN));
+            }
+            bail!(
+                "the tree {} has uncommitted work: {named}; a case opens only on a clean tree, so that nothing a run commits or discards is anyone else's: commit it, or move it out of the tree, first",
+                tree.display()
+            );
         }
         let head = crate::git::head(tree)?;
         let mut artifacts = serde_yaml_ng::Mapping::new();
@@ -557,47 +935,73 @@ impl CaseDir {
         let branch = Branch {
             name: Branch::name_of(id),
             base,
+            base_commit: Some(crate::git::run(
+                tree,
+                &["rev-parse", "--verify", from.as_deref().unwrap_or("HEAD")],
+            )?),
             left,
             pushed: None,
             pull_request: None,
         };
         crate::git::create_branch(tree, &branch.name, from.as_deref())?;
-        // The branch's tip is the implementation revision: not the HEAD the case was asked on
-        // when the branch forked from a base elsewhere.
-        let head = crate::git::head(tree)?;
-        let mut case = Self {
-            id: id.to_owned(),
-            dir,
-            branch: branch.name.clone(),
-            tree: tree.to_path_buf(),
-            protocol,
-            doc: doc.into(),
-            written: 0,
-        };
-        if case
-            .protocol
-            .artifacts
-            .iter()
-            .any(|artifact| artifact == "implementation")
-        {
-            case.doc["artifacts"]["implementation"]["revision"] = head.into();
-        }
-        if let Err(error) = case.create(intent, &branch) {
-            if case.dir.exists()
-                && let Err(removal) = std::fs::remove_dir_all(&case.dir)
+        let opened = (|| {
+            // The branch's tip is the implementation revision: not the HEAD the case was asked
+            // on when the branch forked from a base elsewhere.
+            let tip = crate::git::head(tree)?;
+            let mut case = Self {
+                id: id.to_owned(),
+                dir: dir.clone(),
+                branch: branch.name.clone(),
+                tree: tree.to_path_buf(),
+                protocol,
+                doc: doc.into(),
+                written: 0,
+            };
+            if case
+                .protocol
+                .artifacts
+                .iter()
+                .any(|artifact| artifact == "implementation")
             {
-                return Err(error.context(format!(
-                    "and the half-written case {} could not be removed: {removal}",
-                    case.dir.display()
-                )));
+                case.doc["artifacts"]["implementation"]["revision"] = tip.into();
             }
-            // The cases directory stays only while a case is in it.
-            if let Some(cases) = case.dir.parent() {
-                let _ = std::fs::remove_dir(cases);
+            case.create(intent, &branch)?;
+            Ok(case)
+        })();
+        opened.map_err(|error: anyhow::Error| {
+            match Self::undo_open(tree, &dir, &branch.name, branch.left.as_deref(), &head) {
+                Ok(()) => error,
+                Err(undo) => error.context(format!(
+                    "and the half-opened case {id} could not be taken back: {undo:#}"
+                )),
             }
-            return Err(error);
+        })
+    }
+
+    /// Takes back an open that failed after its branch was made: the case directory if any of
+    /// it was written, the cases directory when it is empty, and the branch, the tree back on
+    /// `left`, or detached at `start` when it was detached.
+    fn undo_open(
+        tree: &Path,
+        dir: &Path,
+        branch: &str,
+        left: Option<&str>,
+        start: &str,
+    ) -> Result<()> {
+        if std::fs::symlink_metadata(dir).is_ok() {
+            std::fs::remove_dir_all(dir)
+                .with_context(|| format!("remove the half-written case {}", dir.display()))?;
         }
-        Ok(case)
+        // The cases directory stays only while a case is in it.
+        if let Some(cases) = dir.parent() {
+            let _ = std::fs::remove_dir(cases);
+        }
+        match left {
+            Some(left) => crate::git::run(tree, &["checkout", "-q", left])?,
+            None => crate::git::run(tree, &["checkout", "-q", "--detach", start])?,
+        };
+        crate::git::run(tree, &["branch", "-q", "-D", branch])?;
+        Ok(())
     }
 
     /// Opens the case `id` that exists under `tree` again, for a run that resumes it: its files
@@ -606,16 +1010,25 @@ impl CaseDir {
     /// which the validators resolve the case from. The implementation revision is the branch's
     /// `HEAD`: a commit made on the branch between two runs moves it, and with it every claim
     /// returns to unknown and the validators run again, so nothing goes through on records
-    /// about the commit before. Nothing else is written. A directory without a `case.yaml` is
-    /// no case.
+    /// about the commit before. The one exception is the approval's own commit
+    /// ([`crate::frontier::approve`]): a `HEAD` that reaches the implementation revision only
+    /// through commits holding an approval's record ([`approvals_only`]) leaves it where it is,
+    /// the revision the grant authorises. Nothing else is written. A directory without a `case.yaml` is
+    /// no case, and an id that is not a case id ([`check_id`]) is refused before it is joined
+    /// to a path. The case is held (`run.lock`, taken atomically) before the checkout and the
+    /// revision are written and let go once they are: a case another holds is refused with
+    /// nothing written, and of two resuming at once only one writes. The run takes its own
+    /// hold when it starts ([`CaseDir::hold`]).
     pub fn resume(tree: &Path, id: &str) -> Result<Self> {
+        check_id(id)?;
         let dir = tree.join(CASES_DIR).join(id);
         let snapshot = dir.join("case.yaml");
         if !snapshot.is_file() {
             bail!("no case {id} at {}", dir.display());
         }
-        // One run at a time: a case a run holds is not resumed by a second.
-        refuse_if_held(&dir, id)?;
+        // One holder at a time: a case another holds is not resumed, and nothing below is
+        // written while another holds it.
+        let _held = Held::take(&dir, id)?;
         let protocol = LoadedProtocol::from_file(&dir.join("protocol.yaml"))?;
         let text = std::fs::read_to_string(&snapshot)
             .with_context(|| format!("read {}", snapshot.display()))?;
@@ -637,22 +1050,20 @@ impl CaseDir {
         };
         case.written = case.evidence_texts()?.len();
         let head = crate::git::head(tree)?;
-        if case
-            .revision("implementation")
-            .is_some_and(|revision| revision != head)
+        if let Some(revision) = case.revision("implementation")
+            && revision != head
+            && !approvals_only(tree, &revision, &head, case.story()?.as_deref())?
         {
             case.set_revision("implementation", &head)?;
         }
         Ok(case)
     }
 
-    /// Takes hold of the case for a run: writes `run.lock` with the instant now. Refused while
-    /// another run holds it.
+    /// Takes hold of the case for a run: creates `run.lock` atomically (`create_new`) with the
+    /// instant now, so of two runs taking hold at once exactly one does. Refused while another
+    /// run, a `resume` or a grant holds it.
     pub fn hold(&self) -> Result<()> {
-        refuse_if_held(&self.dir, &self.id)?;
-        let path = self.dir.join(LOCK_FILE);
-        std::fs::write(&path, format!("{}\n", crate::now()))
-            .with_context(|| format!("write {}", path.display()))
+        take_hold(&self.dir, &self.id)
     }
 
     /// Lets go of the case: removes `run.lock`; one already gone is no error.
@@ -741,11 +1152,17 @@ impl CaseDir {
         self.write()
     }
 
-    /// Removes the case, for one the store would not take: its directory, the cases directory
-    /// when this was the last case in it, and its branch, the tree returning to the branch the
-    /// case left (detached when it left none). Nothing of the case remains.
+    /// Removes a case just opened, for one the store would not take or whose take failed: what
+    /// was left uncommitted on its branch since it opened (the case opened on a clean tree, so
+    /// that is the take's, the index included), its directory, the cases directory when this was
+    /// the last case in it, and its branch, the tree returning to the branch the case left
+    /// (detached when it left none). Nothing of the case remains. Not for a case with commits
+    /// of its own on its branch.
     pub fn discard(self) -> Result<()> {
         let branch = Branch::read(&self.dir)?;
+        if crate::git::current_branch(&self.tree)?.as_deref() == Some(branch.name.as_str()) {
+            crate::git::discard_uncommitted(&self.tree)?;
+        }
         std::fs::remove_dir_all(&self.dir)
             .with_context(|| format!("remove the case {}", self.dir.display()))?;
         if let Some(cases) = self.dir.parent() {
@@ -792,51 +1209,77 @@ impl CaseDir {
         Ok(path)
     }
 
-    /// Whether a record of `kind` exists about `subject` at its current revision.
+    /// Whether a record of `kind` exists about `subject` at its current revision. Each record
+    /// is read by Canon's reader, as [`CaseDir::evaluate`] reads it (YAML, of which a JSON
+    /// record is one); a record that does not read is an error naming its file, never an
+    /// answer either way: every record is read before the answer is given.
     pub fn has_evidence(&self, kind: &str, subject: &str) -> Result<bool> {
+        let records = self.evidence_records()?;
         let Some(revision) = self.revision(subject) else {
             return Ok(false);
         };
-        for text in self.evidence_texts()? {
-            let doc: serde_json::Value = serde_json::from_str(&text)?;
-            if doc["kind"] == kind
-                && doc["subject"] == subject
-                && doc["subject_revision"] == revision.as_str()
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        Ok(records.iter().any(|record| {
+            record.kind.as_str() == kind
+                && record.subject.as_str() == subject
+                && record.subject_revision.as_str() == revision
+        }))
     }
 
-    fn evidence_texts(&self) -> Result<Vec<String>> {
-        let mut names: Vec<_> = std::fs::read_dir(self.dir.join("evidence"))?
+    /// Every evidence record under the case, read by Canon's own reader, in name order; the
+    /// first that does not read (an empty file, a bare scalar, a missing field) is an error
+    /// naming its file, and nothing is answered. What [`CaseDir::evaluate`] hands Canon and
+    /// what [`CaseDir::has_evidence`] answers from: one reader, all records or none.
+    fn evidence_records(&self) -> Result<Vec<b10x_canon::model::EvidenceRecord>> {
+        self.evidence_texts()?
+            .iter()
+            .map(|(path, text)| {
+                eval::read_evidence(text)
+                    .map_err(|r| anyhow!("{r}"))
+                    .with_context(|| format!("read the evidence record {}", path.display()))
+            })
+            .collect()
+    }
+
+    /// The evidence records under the case, `evidence/*.json` and `*.yaml`, in name order, each
+    /// with its path.
+    fn evidence_texts(&self) -> Result<Vec<(PathBuf, String)>> {
+        let evidence = self.dir.join("evidence");
+        let mut names: Vec<_> = std::fs::read_dir(&evidence)
+            .with_context(|| format!("read {}", evidence.display()))?
             .map(|entry| entry.map(|e| e.path()))
             .collect::<std::io::Result<Vec<_>>>()?;
         names.sort();
         names
-            .iter()
+            .into_iter()
             .filter(|path| path.extension().is_some_and(|e| e == "json" || e == "yaml"))
             .map(|path| {
-                std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
+                let text = std::fs::read_to_string(&path)
+                    .with_context(|| format!("read {}", path.display()))?;
+                Ok((path, text))
             })
             .collect()
     }
 
     /// Asks Canon for the decision over the case, its evidence and the authority the operator
     /// granted it (`authority.yaml`, read now, so a grant written since the last evaluation is
-    /// seen), now; writes it under `decisions/` and answers it.
+    /// seen; a grant only at the implementation revision it was given at), now; writes it
+    /// under `decisions/` and answers it. An evidence record that does not read is an error
+    /// naming its file.
     pub fn evaluate(&self, seq: usize) -> Result<Decision> {
         let ir = eval::read_ir(&self.protocol.ir_json).map_err(|r| anyhow!("{r}"))?;
         let case_yaml = std::fs::read_to_string(self.dir.join("case.yaml"))?;
         let case = eval::read_case(&case_yaml).map_err(|r| anyhow!("{r}"))?;
-        let records = self
-            .evidence_texts()?
-            .iter()
-            .map(|text| eval::read_evidence(text).map_err(|r| anyhow!("{r}")))
-            .collect::<Result<Vec<_>>>()?;
+        let records = self.evidence_records()?;
+        // The revision a grant is filtered by is the one in the `case.yaml` Canon is handed,
+        // read from the same bytes: never this `CaseDir`'s in-memory copy, which another
+        // holder may have moved on since it was read.
+        let snapshot: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&case_yaml).context("read the case snapshot")?;
+        let implementation = snapshot["artifacts"]["implementation"]["revision"]
+            .as_str()
+            .map(str::to_owned);
         let authority = Authority::read(&self.dir)?
-            .map(|authority| authority.canon())
+            .map(|authority| authority.canon(implementation.as_deref()))
             .transpose()?;
         let now = crate::now();
         let supplied = eval::Supplied {

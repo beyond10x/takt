@@ -254,12 +254,19 @@ esac
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable");
     }
+    // A case opens only on a clean tree: the stub is the test's, not work in progress.
+    let exclude = dir.join(".git/info/exclude");
+    let mut text = fs::read_to_string(&exclude).unwrap_or_default();
+    text.push_str("stub-bin/\n");
+    fs::write(&exclude, text).expect("the stub is ignored");
     bin
 }
 
 /// A case input outside the protocol's declared values: `CaseDir::open` refuses it before it
 /// writes anything, so the run exits 1, asks for no move (the story stays `proposed`) and
-/// leaves no case directory. An operator's typo in `--input risk=…` reaches it.
+/// leaves no case directory. An operator's typo in `--input risk=…` reaches it. The protocol is
+/// `software.change/1`, which declares `risk`, so the value check is what refuses it, not the
+/// binary's refusal of an input the protocol does not declare.
 #[test]
 fn a_run_whose_input_is_refused_leaves_the_story_proposed_and_no_case_directory() {
     let repo = repository("one-ready", "adv2-input");
@@ -273,11 +280,16 @@ fn a_run_whose_input_is_refused_leaves_the_story_proposed_and_no_case_directory(
         "1",
         "--test-cmd",
         "true",
+        "--protocol",
+        "software.change/1",
         "--input",
         "risk=bogus",
     ]);
     assert_eq!(code, 1, "the run fails: stdout {out} stderr {err}");
-    assert!(err.contains("risk"), "the error names the input: {err}");
+    assert!(
+        err.contains("the input risk takes one of") && err.contains("not `bogus`"),
+        "the value check of CaseDir::open names the input: {err}"
+    );
     assert!(!out.contains("frontier: took"), "{out}");
     assert_eq!(
         status(&repo, "story:ready-one"),

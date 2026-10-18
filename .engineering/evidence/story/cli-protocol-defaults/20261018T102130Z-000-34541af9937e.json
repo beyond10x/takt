@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T10:21:30Z",
+  "actor": "human:timo",
+  "artifact": "story:cli-protocol-defaults",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "cargo test -p b10x-takt-cli --locked --test protocol_defaults_cli",
+    "reference": "baseline ae94ccb: no protocol_defaults_cli target; treatment 9271e74: 11 passed (c2-gate-test.txt)"
+  }
+}
