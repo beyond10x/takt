@@ -8,7 +8,7 @@ summary: Three levels (work, takt, the loop), two agent roles, a pinned judge, a
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 7
+revision: 8
 ---
 # Design: recursive self-improvement of takt
 
@@ -192,7 +192,8 @@ change is a judge-surface change.
 ## Agent profiles
 
 `.agents/planner-agent.md`, `.agents/developer-agent.md`, `.agents/reviewer-agent.md` and `.agents/doc-writer-agent.md` (start reading, owns, watches, loop,
-forbidden), each with a pointer stub under `.claude/agents/`.
+forbidden), each opening with a frontmatter of `name` and `description`, and each linked from
+`.claude/agents/` by a relative symlink of the same name.
 
 ## Not in this design
 
