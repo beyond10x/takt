@@ -511,10 +511,20 @@ fn approve_shaped_commit(repo: &Path, path: &str, text: &str) -> String {
     git(repo, &["rev-parse", "HEAD"])
 }
 
+/// The text of the one record the commit `HEAD` added, as the store wrote it.
+fn head_record(repo: &Path) -> String {
+    let added = git(repo, &["show", "--name-only", "--format=", "HEAD"]);
+    assert!(
+        added.starts_with(EVIDENCE) && added.lines().count() == 1,
+        "{added}"
+    );
+    git(repo, &["show", &format!("HEAD:{added}")])
+}
+
 /// An approval's own commit adds new records to its story's evidence and nothing else, one
 /// commit per grant the case holds. A second approve-shaped commit beyond the one grant, even
-/// one that only adds a record to the story's evidence, is no approval's: the case moves to it,
-/// and the grant authorises nothing there.
+/// one that only adds the store's record of that grant again, is no approval's: the case moves
+/// to it, and the grant authorises nothing there.
 #[test]
 fn approve_shaped_commits_beyond_the_grants_the_case_holds_are_no_approvals() {
     let repo = repository("count");
@@ -523,14 +533,15 @@ fn approve_shaped_commits_beyond_the_grants_the_case_holds_are_no_approvals() {
     approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
         .expect("the approval is given");
     assert_eq!(resumed_revision(&repo, &id), granted);
+    let record = head_record(&repo);
 
-    let second = approve_shaped_commit(&repo, &format!("{EVIDENCE}/second.json"), "{\"a\": 1}\n");
+    let second = approve_shaped_commit(&repo, &format!("{EVIDENCE}/second.json"), &record);
     assert_eq!(resumed_revision(&repo, &id), second);
 }
 
 /// An approve-shaped commit, the one the case's grant counts, that adds a record anywhere but
 /// its own story's evidence (here another story's, or a directory below its own) is no
-/// approval's.
+/// approval's, even when the record is the store's own record of the grant.
 #[test]
 fn an_approve_shaped_commit_adding_anything_but_a_record_of_its_story_is_no_approval() {
     let repo = repository("paths");
@@ -539,8 +550,7 @@ fn an_approve_shaped_commit_adding_anything_but_a_record_of_its_story_is_no_appr
     approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
         .expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
-    let record = git(&repo, &["show", "--name-only", "--format=", "HEAD"]);
-    assert!(record.starts_with(EVIDENCE), "{record}");
+    let record = head_record(&repo);
 
     // A resume moves the case to a `HEAD` that is no approval's and keeps it there: each
     // variant starts from the case back at the granted revision, the branch reset to it.
@@ -554,13 +564,13 @@ fn an_approve_shaped_commit_adding_anything_but_a_record_of_its_story_is_no_appr
     let elsewhere = approve_shaped_commit(
         &repo,
         ".engineering/evidence/story/blocked-one/record.json",
-        "{\"a\": 1}\n",
+        &record,
     );
     assert_eq!(resumed_revision(&repo, &id), elsewhere);
 
     // A record nested deeper under the story's evidence is not one the store writes.
     rewind();
-    let nested = approve_shaped_commit(&repo, &format!("{EVIDENCE}/deeper/record.json"), "{}\n");
+    let nested = approve_shaped_commit(&repo, &format!("{EVIDENCE}/deeper/record.json"), &record);
     assert_eq!(resumed_revision(&repo, &id), nested);
 
     // The approval's own commit is one.

@@ -278,15 +278,23 @@ fn approve_commit(repo: &Path, all: bool) -> String {
 }
 
 /// A case approved through the double, the branch then put back at the granted revision so a
-/// variant can stand in for the approval's commit: the one commit the one grant counts.
-fn approved_case(name: &str) -> (Scratch, String, String) {
+/// variant can stand in for the approval's commit: the one commit the one grant counts. Also
+/// the text of the record the approval's commit added, as the store wrote it: what a variant
+/// adds, so the only thing that differs from the approval's own commit is what it varies.
+fn approved_case(name: &str) -> (Scratch, String, String, String) {
     let repo = repository(name, true);
     let memory = double();
     let (id, granted) = at_the_gate(&repo, &memory);
     approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
         .expect("the approval is given");
     assert_eq!(resumed_revision(&repo, &id), granted);
-    (repo, id, granted)
+    let added = git(&repo, &["show", "--name-only", "--format=", "HEAD"]);
+    assert!(
+        added.starts_with(EVIDENCE) && added.lines().count() == 1,
+        "{added}"
+    );
+    let record = git(&repo, &["show", &format!("HEAD:{added}")]);
+    (repo, id, granted, record)
 }
 
 fn rewind(repo: &Path, id: &str, granted: &str) {
@@ -299,16 +307,17 @@ fn rewind(repo: &Path, id: &str, granted: &str) {
 /// grant counts, that changes the record rather than adding one, or adds something that is not
 /// a regular file, is no approval's: the resumed case moves to it. Each variant is a commit the
 /// unit's own cases do not make (they add regular files only), so the mode and status checks of
-/// `adds_records_only` are otherwise unobserved.
+/// `added_records` are otherwise unobserved. A file a variant adds holds the store's own record
+/// of the grant, so the mode or the status is what refuses it, not the text.
 #[test]
 fn adv2_an_approve_commit_that_is_not_a_pure_addition_of_a_regular_file_is_no_approval() {
-    let (repo, id, granted) = approved_case("not-added");
+    let (repo, id, granted, record) = approved_case("not-added");
     let new_record = format!("{EVIDENCE}/20261018T999999Z-000-111111111111.json");
 
     // A new file, executable.
     rewind(&repo, &id, &granted);
     let path = repo.join(&new_record);
-    fs::write(&path, "{}\n").expect("a file");
+    fs::write(&path, &record).expect("a file");
     fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).expect("chmod");
     git(&repo, &["add", &new_record]);
     let executable = approve_commit(&repo, false);
@@ -324,16 +333,22 @@ fn adv2_an_approve_commit_that_is_not_a_pure_addition_of_a_regular_file_is_no_ap
         "an executable file"
     );
 
-    // A new symlink in the story's evidence, pointing out of the store.
+    // A new symlink in the story's evidence whose target is the store's record of the grant: the
+    // blob git holds is that text, so the mode is what refuses it.
     rewind(&repo, &id, &granted);
-    std::os::unix::fs::symlink("../../../../check.txt", repo.join(&new_record)).expect("a symlink");
+    std::os::unix::fs::symlink(&record, repo.join(&new_record)).expect("a symlink");
     git(&repo, &["add", &new_record]);
+    assert_eq!(
+        git(&repo, &["cat-file", "-p", &format!(":{new_record}")]),
+        record,
+        "the symlink's blob is the record"
+    );
     let symlink = approve_commit(&repo, false);
     assert_eq!(resumed_revision(&repo, &id), symlink, "a symlink");
 
     // A record added, and the seeded record rewritten in the same commit.
     rewind(&repo, &id, &granted);
-    fs::write(repo.join(&new_record), "{}\n").expect("a file");
+    fs::write(repo.join(&new_record), &record).expect("a file");
     fs::write(repo.join(SEEDED), "{\"rewritten\": true}\n").expect("a file");
     git(&repo, &["add", "-A", EVIDENCE]);
     let modifies = approve_commit(&repo, false);
@@ -375,14 +390,15 @@ fn adv2_an_approve_commit_that_is_not_a_pure_addition_of_a_regular_file_is_no_ap
 /// Names the store never writes but that are still a new regular file directly in the story's
 /// evidence (a newline and a tab in the name) are read byte for byte and admitted; a sibling
 /// directory whose name has the story's name as a prefix, and a file beside the story's
-/// directory whose name starts with it, are not the story's evidence.
+/// directory whose name starts with it, are not the story's evidence. Each file holds the store's
+/// own record of the grant, so the name is what decides.
 #[test]
 fn adv2_names_are_read_byte_for_byte_and_a_story_name_prefix_is_not_the_story() {
-    let (repo, id, granted) = approved_case("names");
+    let (repo, id, granted, record) = approved_case("names");
 
     rewind(&repo, &id, &granted);
     let odd = format!("{EVIDENCE}/odd\nname\t.json");
-    fs::write(repo.join(&odd), "{}\n").expect("a file");
+    fs::write(repo.join(&odd), &record).expect("a file");
     git(&repo, &["add", &odd]);
     approve_commit(&repo, false);
     assert_eq!(
@@ -394,7 +410,7 @@ fn adv2_names_are_read_byte_for_byte_and_a_story_name_prefix_is_not_the_story() 
     rewind(&repo, &id, &granted);
     let sibling = ".engineering/evidence/story/ready-one-x/record.json";
     fs::create_dir_all(repo.join(sibling).parent().expect("a parent")).expect("a directory");
-    fs::write(repo.join(sibling), "{}\n").expect("a file");
+    fs::write(repo.join(sibling), &record).expect("a file");
     git(&repo, &["add", sibling]);
     let other = approve_commit(&repo, false);
     assert_eq!(
@@ -405,7 +421,7 @@ fn adv2_names_are_read_byte_for_byte_and_a_story_name_prefix_is_not_the_story() 
 
     rewind(&repo, &id, &granted);
     let beside = ".engineering/evidence/story/ready-onerecord.json";
-    fs::write(repo.join(beside), "{}\n").expect("a file");
+    fs::write(repo.join(beside), &record).expect("a file");
     git(&repo, &["add", beside]);
     let prefixed = approve_commit(&repo, false);
     assert_eq!(

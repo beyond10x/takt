@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-18T14:19:35Z",
+  "actor": "human:timo",
+  "artifact": "story:judge-surface-delegation-text",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:adversary-delegation-text-pass-1",
+    "review": "review-result:adversary-delegation-text-pass-1",
+    "outcome": "fixed"
+  }
+}

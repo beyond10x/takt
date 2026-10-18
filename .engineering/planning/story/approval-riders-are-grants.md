@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:approval-riders-are-grants
 kind: story
-status: draft
+status: implemented
 title: Only approval records of granted capabilities ride on a granted revision
 summary: approvals_only reads each riding evidence file and accepts only approval records matching a grant in authority.yaml
 relations:
@@ -13,7 +13,11 @@ scope:
   path: crates/takt/src/case.rs
 - confidence: inferred
   path: crates/takt/tests/approval_riders.rs
-revision: 4
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 6}
+- {from: "active", to: "implemented", at: "2026-10-18T15:23:35Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # Story: approval-riders-are-grants
 
@@ -41,3 +45,15 @@ On takt at 7b5aca3, holds; after the fix, fails:
 ## Acceptance
 
 `approvals_only` is true only when each added file parses as the planning store's approval record for the case's story, its capability and grantor match a `Granted` decision in `authority.yaml`, and no grant is recorded twice; a file of any other kind, or one naming a capability not granted, makes it false and the merge merges nothing.
+
+## Landed (wave 09)
+
+Read from `git diff --stat 8ce2019 cc8a4e3` at the close of wave 09 (wave branch head 1425689). A rider is the exact record `takt approve` writes for a grant at the bound revision; `crates/takt/src/git.rs` gained `blob`. Three low reviewer findings carried by story:records-reach-base.
+
+- `crates/takt/src/case.rs`
+- `crates/takt/src/git.rs`
+- `crates/takt/tests/approval_record.rs`
+- `crates/takt/tests/approval_record_adv2.rs`
+- `crates/takt/tests/approval_riders.rs`
+- `crates/takt/tests/approval_riders_adv1.rs`
+- `crates/takt/tests/approval_riders_adv2.rs`
