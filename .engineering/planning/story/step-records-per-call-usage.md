@@ -7,7 +7,18 @@ title: A harness step's record carries its model, cost, duration and turns
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+scope:
+- confidence: cited
+  path: crates/takt/src/events.rs
+- confidence: cited
+  path: crates/takt/src/harness.rs
+- confidence: inferred
+  path: crates/takt/src/run.rs
+- confidence: inferred
+  path: docs/metrics/README.md
+- confidence: inferred
+  path: ess/domains/takt.yaml
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 3}
