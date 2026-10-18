@@ -21,8 +21,9 @@ use crate::case::{CASES_DIR, is_under_cases};
 /// `core.fsmonitor` (git runs it during `status`), no hooks (`commit` and `checkout` run them),
 /// no credential helper, no SSH command, no signing program, and no automatic `gc` or
 /// maintenance, which detaches a process of its own. A filter driver a `.gitattributes`
-/// names is not covered: its name is the repository's choice.
-const NO_CONFIGURED_CODE: [&str; 16] = [
+/// names is not covered: its name is the repository's choice. No signature check either, which
+/// `log.showSignature` would make `git log` run.
+const NO_CONFIGURED_CODE: [&str; 18] = [
     "-c",
     "core.fsmonitor=false",
     "-c",
@@ -39,20 +40,55 @@ const NO_CONFIGURED_CODE: [&str; 16] = [
     "gc.auto=0",
     "-c",
     "maintenance.auto=false",
+    "-c",
+    "log.showSignature=false",
+];
+
+/// The variables of the caller's environment that would point git elsewhere than the tree, or
+/// change how it reads a path or its configuration; none reaches a git takt runs.
+const REDIRECTING_ENV: [&str; 12] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_GLOB_PATHSPECS",
+    "GIT_NOGLOB_PATHSPECS",
+    "GIT_ICASE_PATHSPECS",
+    "GIT_LITERAL_PATHSPECS",
 ];
 
 /// Runs `git <args>` in `tree` with `input` on its standard input, with no code from
 /// configuration ([`NO_CONFIGURED_CODE`]); answers what it printed, whatever its exit status.
+/// Git runs pinned to the tree: its `.git` is the git directory and the tree the work tree, so
+/// a `.git` a step garbled makes the call fail rather than find a repository further up; and
+/// for a tree without a `.git` git searches no further than the tree itself.
 fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
-    let mut child = Command::new("git")
+    let tree =
+        std::path::absolute(tree).with_context(|| format!("make {} absolute", tree.display()))?;
+    let tree = tree.as_path();
+    let mut command = Command::new("git");
+    let dot_git = tree.join(".git");
+    if std::fs::symlink_metadata(&dot_git).is_ok() {
+        let mut git_dir = std::ffi::OsString::from("--git-dir=");
+        git_dir.push(&dot_git);
+        let mut work_tree = std::ffi::OsString::from("--work-tree=");
+        work_tree.push(tree);
+        command.arg(git_dir).arg(work_tree);
+    }
+    for name in REDIRECTING_ENV {
+        command.env_remove(name);
+    }
+    if let Some(parent) = tree.parent() {
+        command.env("GIT_CEILING_DIRECTORIES", parent);
+    }
+    let mut child = command
         .args(NO_CONFIGURED_CODE)
         .args(args)
         .current_dir(tree)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_CONFIG_PARAMETERS")
-        .env_remove("GIT_CONFIG_COUNT")
         .stdin(if input.is_some() {
             Stdio::piped()
         } else {
@@ -317,23 +353,51 @@ const KEPT_AT_MOST: u64 = 64 * 1024 * 1024;
 
 /// What is at one path: nothing, a file with its bytes and whether it is executable, a link with
 /// its target, a directory taken as itself, or something never opened (a FIFO, a socket, a
-/// device, a file that cannot be read or is too large to keep), compared by its kind, size, mode
-/// and modification time.
+/// device, a file that cannot be read or is too large to keep), compared by its kind and
+/// [`Stamp`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Content {
     Absent,
-    File {
-        bytes: Vec<u8>,
-        executable: bool,
-    },
+    File { bytes: Vec<u8>, executable: bool },
     Link(PathBuf),
     Dir,
-    Opaque {
-        what: &'static str,
-        len: u64,
-        mode: u32,
-        modified: Option<std::time::SystemTime>,
-    },
+    Opaque { what: &'static str, stamp: Stamp },
+}
+
+/// What a path that is never opened is compared by: its size, mode and modification time,
+/// which a step can set back, and its change time, device and inode, which it cannot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    len: u64,
+    mode: u32,
+    modified: Option<std::time::SystemTime>,
+    changed: (i64, i64),
+    inode: (u64, u64),
+}
+
+impl Stamp {
+    #[cfg(unix)]
+    fn of(meta: &std::fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt as _;
+        Self {
+            len: meta.len(),
+            mode: mode(meta),
+            modified: meta.modified().ok(),
+            changed: (meta.ctime(), meta.ctime_nsec()),
+            inode: (meta.dev(), meta.ino()),
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn of(meta: &std::fs::Metadata) -> Self {
+        Self {
+            len: meta.len(),
+            mode: mode(meta),
+            modified: meta.modified().ok(),
+            changed: (0, 0),
+            inode: (0, 0),
+        }
+    }
 }
 
 impl Content {
@@ -353,9 +417,7 @@ impl Content {
         let kind = meta.file_type();
         let opaque = |what| Self::Opaque {
             what,
-            len: meta.len(),
-            mode: mode(&meta),
-            modified: meta.modified().ok(),
+            stamp: Stamp::of(&meta),
         };
         if kind.is_symlink() {
             let target =
@@ -466,6 +528,18 @@ fn make_listable(_: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        .with_context(|| format!("set the mode of {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn set_mode(_: &Path, _: u32) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
 fn set_executable(path: &Path, executable: bool) -> Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     let mode = if executable { 0o755 } else { 0o644 };
@@ -502,15 +576,61 @@ const GUARDED_DIRS: [&str; 2] = ["hooks", "info"];
 /// change what git does ([`is_guarded_key`]).
 const CONFIG_FILES: [&str; 2] = ["config", "config.worktree"];
 
+/// The other worktrees' git directories under the shared git directory `dir`, by path relative
+/// to it (`worktrees/<name>`), but `own`, the tree's own, which is guarded by itself.
+fn siblings(dir: &Path, own: &Path) -> Vec<PathBuf> {
+    let Ok(listing) = std::fs::read_dir(dir.join("worktrees")) else {
+        return Vec::new();
+    };
+    let mut found: Vec<PathBuf> = listing
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path != own && path.is_dir())
+        .filter_map(|path| path.strip_prefix(dir).ok().map(Path::to_path_buf))
+        .collect();
+    found.sort();
+    found
+}
+
+/// The guarded directories of the git directory `dir`, relative to it: its hooks and `info/`,
+/// and each sibling worktree's `info/` (its sparse-checkout).
+fn guarded_roots(dir: &Path, own: &Path) -> Vec<PathBuf> {
+    GUARDED_DIRS
+        .iter()
+        .map(PathBuf::from)
+        .chain(
+            siblings(dir, own)
+                .into_iter()
+                .map(|sibling| sibling.join("info")),
+        )
+        .collect()
+}
+
+/// The configuration files of the git directory `dir`, relative to it: its own, and each
+/// sibling worktree's `config.worktree`.
+fn config_files(dir: &Path, own: &Path) -> Vec<PathBuf> {
+    CONFIG_FILES
+        .iter()
+        .map(PathBuf::from)
+        .chain(
+            siblings(dir, own)
+                .into_iter()
+                .map(|sibling| sibling.join("config.worktree")),
+        )
+        .collect()
+}
+
 /// Whether the configuration key `key`, as `git config --list` writes it (section and name in
 /// lower case), runs code or changes what git does: `core.*`, `filter.*`, `diff.*`,
 /// `merge.*`, `alias.*`, `include.*`, `includeIf.*`, `credential.*`, `remote.<name>.*`,
-/// `url.*`. Any other key (`branch.<name>.vscode-merge-base`, a tool's own section) is not.
+/// `url.*`, `gpg.*`, `sequence.*`, `pager.*`, `trailer.*`, `difftool.*`, `mergetool.*`,
+/// `submodule.*`, `extensions.*`. Any other key (`branch.<name>.vscode-merge-base`, a tool's
+/// own section) is not.
 fn is_guarded_key(key: &str) -> bool {
     let section = key.split('.').next().unwrap_or_default();
     match section {
         "core" | "filter" | "diff" | "merge" | "alias" | "include" | "includeif" | "credential"
-        | "url" => true,
+        | "url" | "gpg" | "sequence" | "pager" | "trailer" | "difftool" | "mergetool"
+        | "submodule" | "extensions" => true,
         "remote" => key.split('.').count() >= 3,
         _ => false,
     }
@@ -563,11 +683,23 @@ impl Config {
     }
 }
 
-/// Every entry under the guarded directories of the git directory `dir`, by path relative to
-/// it. A directory that cannot be listed is an entry of its own, never opened.
-fn guarded(dir: &Path) -> Result<BTreeMap<PathBuf, Content>> {
-    fn walk(root: &Path, dir: &Path, entries: &mut BTreeMap<PathBuf, Content>) -> Result<()> {
+/// What is under the guarded directories of a git directory: every entry but a directory, and
+/// every directory with its mode, by path relative to the git directory.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Guarded {
+    files: BTreeMap<PathBuf, Content>,
+    dirs: BTreeMap<PathBuf, u32>,
+}
+
+/// Every entry under the directories `roots` of the git directory `dir`. A directory that
+/// cannot be listed is an entry of its own, never opened.
+fn guarded(dir: &Path, roots: &[PathBuf]) -> Result<Guarded> {
+    fn walk(root: &Path, dir: &Path, found: &mut Guarded) -> Result<()> {
         let relative = |path: &Path| path.strip_prefix(root).unwrap_or(path).to_path_buf();
+        if let Ok(meta) = std::fs::symlink_metadata(dir) {
+            found.dirs.insert(relative(dir), mode(&meta));
+        }
+        let entries = &mut found.files;
         let listing = match std::fs::read_dir(dir) {
             Ok(listing) => listing,
             Err(_) => {
@@ -577,52 +709,91 @@ fn guarded(dir: &Path) -> Result<BTreeMap<PathBuf, Content>> {
                     relative(dir),
                     Content::Opaque {
                         what: "a directory that cannot be listed",
-                        len: meta.len(),
-                        mode: mode(&meta),
-                        modified: meta.modified().ok(),
+                        stamp: Stamp::of(&meta),
                     },
                 );
                 return Ok(());
             }
         };
+        let mut subdirs = Vec::new();
         for entry in listing {
             let path = entry?.path();
             let content = Content::of(&path)?;
             if content == Content::Dir {
-                walk(root, &path, entries)?;
+                subdirs.push(path);
             } else {
-                entries.insert(relative(&path), content);
+                found.files.insert(relative(&path), content);
             }
+        }
+        for sub in subdirs {
+            walk(root, &sub, found)?;
         }
         Ok(())
     }
-    let mut entries = BTreeMap::new();
-    for name in GUARDED_DIRS {
+    let mut found = Guarded::default();
+    for name in roots {
         let sub = dir.join(name);
         match Content::of(&sub)? {
-            Content::Dir => walk(dir, &sub, &mut entries)?,
+            Content::Dir => walk(dir, &sub, &mut found)?,
             Content::Absent => {}
             other => {
-                entries.insert(PathBuf::from(name), other);
+                found.files.insert(name.clone(), other);
             }
         }
     }
-    Ok(entries)
+    Ok(found)
 }
 
-/// The guarded part of one git directory: its hooks and `info/` file by file, and its
-/// configuration files.
+/// Makes every directory under `roots` of the git directory `dir` listable and writable, so
+/// that what a step put there can be removed and what it removed written again; answers the
+/// mode each had, by path relative to `dir`. A directory that cannot be made so is left as it
+/// is; putting back below it then fails and says so.
+fn unlock(dir: &Path, roots: &[PathBuf]) -> BTreeMap<PathBuf, u32> {
+    fn walk(root: &Path, dir: &Path, modes: &mut BTreeMap<PathBuf, u32>) {
+        let Ok(meta) = std::fs::symlink_metadata(dir) else {
+            return;
+        };
+        if !meta.is_dir() {
+            return;
+        }
+        let relative = dir.strip_prefix(root).unwrap_or(dir).to_path_buf();
+        modes.insert(relative, mode(&meta));
+        let _ = make_listable(dir);
+        let Ok(listing) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in listing.flatten() {
+            let path = entry.path();
+            if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+                walk(root, &path, modes);
+            }
+        }
+    }
+    let mut modes = BTreeMap::new();
+    for name in roots {
+        walk(dir, &dir.join(name), &mut modes);
+    }
+    modes
+}
+
+/// The guarded part of one git directory: its hooks and `info/` (and its sibling worktrees'
+/// `info/`) file by file with every directory's mode, and its configuration files (and its
+/// sibling worktrees' `config.worktree`).
 #[derive(Debug, Clone)]
 struct GitDir {
     dir: PathBuf,
-    files: BTreeMap<PathBuf, Content>,
+    own: PathBuf,
+    roots: Vec<PathBuf>,
+    guarded: Guarded,
     configs: Vec<(PathBuf, Config)>,
 }
 
 impl GitDir {
-    fn of(tree: &Path, dir: &Path) -> Result<Self> {
-        let configs = CONFIG_FILES
-            .iter()
+    /// The guarded part of `dir`; `own` is the tree's own git directory, guarded by itself.
+    fn of(tree: &Path, dir: &Path, own: &Path) -> Result<Self> {
+        let roots = guarded_roots(dir, own);
+        let configs = config_files(dir, own)
+            .into_iter()
             .map(|name| {
                 let path = dir.join(name);
                 Config::of(tree, &path).map(|config| (path, config))
@@ -630,7 +801,9 @@ impl GitDir {
             .collect::<Result<_>>()?;
         Ok(Self {
             dir: dir.to_path_buf(),
-            files: guarded(dir)?,
+            own: own.to_path_buf(),
+            guarded: guarded(dir, &roots)?,
+            roots,
             configs,
         })
     }
@@ -661,6 +834,8 @@ pub struct Checkpoint {
     dirty: BTreeMap<String, Content>,
     ignored: BTreeMap<String, Content>,
     dot_git: Content,
+    head_file: (PathBuf, Content),
+    index_lock: (PathBuf, bool),
     git_dirs: Vec<GitDir>,
 }
 
@@ -732,10 +907,14 @@ impl Checkpoint {
             tree,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         )?);
-        let mut git_dirs = vec![GitDir::of(tree, &common)?];
+        let mut git_dirs = vec![GitDir::of(tree, &common, &git_dir)?];
         if git_dir != common {
-            git_dirs.push(GitDir::of(tree, &git_dir)?);
+            git_dirs.push(GitDir::of(tree, &git_dir, &git_dir)?);
         }
+        let head_path = git_dir.join("HEAD");
+        let head_file = (head_path.clone(), Content::of(&head_path)?);
+        let lock = git_dir.join("index.lock");
+        let index_lock = (lock.clone(), std::fs::symlink_metadata(&lock).is_ok());
         // A `.git` directory is guarded through what is in it; a `.git` file (a linked
         // worktree's pointer to its git directory) by its bytes.
         let dot_git = Content::of(&tree.join(".git"))?;
@@ -770,15 +949,21 @@ impl Checkpoint {
             dirty,
             ignored: ignored_contents(tree, &entries)?,
             dot_git,
+            head_file,
+            index_lock,
             git_dirs,
         })
     }
 
-    /// Puts what git runs or reads as configuration back as it was: the tree's `.git`, the
-    /// hooks and `info/` file by file, a configuration file whose guarded keys changed byte for
-    /// byte. Run before any other git call after the step: those would read and run what the
-    /// step planted. Nothing here ends early: a path that cannot be read or put back is named
-    /// in [`GitDirPutBack::failed`] and the rest is still put back.
+    /// Puts what git runs or reads as configuration back as it was: the tree's `.git`; the
+    /// tree's own `HEAD`, before anything here runs git, since a `HEAD` git cannot read makes
+    /// the git directory no repository; an `index.lock` the step left (only a process the step
+    /// started takes the tree's own index lock, and the step's processes are gone when the
+    /// harness returns); the hooks and `info/` file by file, their directories made writable
+    /// for it and given their modes back; a configuration file whose guarded keys changed byte
+    /// for byte. Run before any other git call after the step: those would read and run what
+    /// the step planted. Nothing here ends early: a path that cannot be read or put back is
+    /// named in [`GitDirPutBack::failed`] and the rest is still put back.
     pub fn put_back_git_dir(&self, tree: &Path) -> GitDirPutBack {
         let mut found = GitDirPutBack::default();
         let shown = |path: &Path| match path.strip_prefix(tree) {
@@ -803,8 +988,31 @@ impl Checkpoint {
                 found.failed.push(format!(".git: {error:#}"));
             }
         }
+        let (head_path, head_before) = &self.head_file;
+        if Content::of(head_path).ok().as_ref() != Some(head_before) {
+            found.touched.push(shown(head_path));
+            if let Err(error) = head_before.put_back(head_path) {
+                found
+                    .failed
+                    .push(format!("{}: {error:#}", shown(head_path)));
+            }
+        }
+        let (lock, existed) = &self.index_lock;
+        if !existed && std::fs::symlink_metadata(lock).is_ok() {
+            found.touched.push(shown(lock));
+            if let Err(error) = remove(lock) {
+                found.failed.push(format!("{}: {error:#}", shown(lock)));
+            }
+        }
         for before in &self.git_dirs {
-            let after = match guarded(&before.dir) {
+            let mut roots = before.roots.clone();
+            for root in guarded_roots(&before.dir, &before.own) {
+                if !roots.contains(&root) {
+                    roots.push(root);
+                }
+            }
+            let modes = unlock(&before.dir, &roots);
+            let after = match guarded(&before.dir, &roots) {
                 Ok(after) => after,
                 Err(error) => {
                     found.touched.push(shown(&before.dir));
@@ -815,15 +1023,17 @@ impl Checkpoint {
                 }
             };
             let differing: BTreeSet<&PathBuf> = before
+                .guarded
                 .files
                 .keys()
-                .chain(after.keys())
-                .filter(|path| before.files.get(*path) != after.get(*path))
+                .chain(after.files.keys())
+                .filter(|path| before.guarded.files.get(*path) != after.files.get(*path))
                 .collect();
             for path in differing {
                 let full = before.dir.join(path);
                 found.touched.push(shown(&full));
                 if let Err(error) = before
+                    .guarded
                     .files
                     .get(path)
                     .unwrap_or(&Content::Absent)
@@ -832,7 +1042,54 @@ impl Checkpoint {
                     found.failed.push(format!("{}: {error:#}", shown(&full)));
                 }
             }
-            for (path, config) in &before.configs {
+            // A directory the step made goes; one it made read-only or listable only gets its
+            // mode back, now that what is in it is put back.
+            for (path, mode) in modes.iter().rev() {
+                let full = before.dir.join(path);
+                match before.guarded.dirs.get(path) {
+                    None => {
+                        found.touched.push(shown(&full));
+                        if let Err(error) = remove(&full) {
+                            found.failed.push(format!("{}: {error:#}", shown(&full)));
+                        }
+                    }
+                    Some(was) => {
+                        if was != mode {
+                            found.touched.push(shown(&full));
+                        }
+                        if let Err(error) = set_mode(&full, *was) {
+                            found.failed.push(format!("{}: {error:#}", shown(&full)));
+                        }
+                    }
+                }
+            }
+            // A directory the step removed was made again by putting its files back.
+            for (path, was) in before.guarded.dirs.iter().rev() {
+                if modes.contains_key(path) {
+                    continue;
+                }
+                let full = before.dir.join(path);
+                found.touched.push(shown(&full));
+                if std::fs::symlink_metadata(&full).is_ok_and(|meta| meta.is_dir())
+                    && let Err(error) = set_mode(&full, *was)
+                {
+                    found.failed.push(format!("{}: {error:#}", shown(&full)));
+                }
+            }
+            let mut configs = before.configs.clone();
+            for name in config_files(&before.dir, &before.own) {
+                let path = before.dir.join(name);
+                if !configs.iter().any(|(known, _)| *known == path) {
+                    configs.push((
+                        path,
+                        Config {
+                            content: Content::Absent,
+                            guarded: Some(Vec::new()),
+                        },
+                    ));
+                }
+            }
+            for (path, config) in &configs {
                 let now = match Config::of(tree, path) {
                     Ok(now) => now,
                     Err(error) => {
@@ -1037,6 +1294,14 @@ mod tests {
             "credential.helper",
             "remote.origin.url",
             "url.https://x/.insteadof",
+            "gpg.program",
+            "sequence.editor",
+            "pager.log",
+            "trailer.x.cmd",
+            "difftool.x.cmd",
+            "mergetool.x.cmd",
+            "submodule.x.update",
+            "extensions.worktreeconfig",
         ] {
             assert!(is_guarded_key(key), "{key}");
         }

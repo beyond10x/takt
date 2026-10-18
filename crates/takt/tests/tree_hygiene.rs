@@ -835,3 +835,57 @@ fn a_step_that_moves_the_base_branch_is_refused_and_the_base_put_back() {
     assert_eq!(git(&tree, &["rev-parse", "main"]), main, "{text}");
     assert_eq!(read(&tree.join("src/lib.rs")), "a\n", "{text}");
 }
+
+#[test]
+fn a_hooks_directory_the_step_made_read_only_gets_its_mode_back() {
+    let tree = repository("hooks-mode");
+    let hooks = tree.join(".git/hooks");
+    let mode = fs::metadata(&hooks).expect("hooks").permissions().mode() & 0o7777;
+    let validators = tests_run("true");
+    let harness = acting("implementation.edit", |tree: &Path| {
+        let hooks = tree.join(".git/hooks");
+        fs::write(hooks.join("pre-commit"), "#!/bin/sh\n").expect("a hook");
+        fs::create_dir_all(hooks.join("made")).expect("a dir");
+        fs::set_permissions(&hooks, fs::Permissions::from_mode(0o555)).expect("read-only");
+    });
+    let (stop, text) = run(&tree, "hooks-mode", 4, &harness, &validators);
+    let stop = stop.expect("the run stops");
+    assert!(matches!(&stop, Stop::StepRefused(_)), "{stop:?}\n{text}");
+    let now = fs::metadata(&hooks).expect("hooks").permissions().mode() & 0o7777;
+    assert_eq!(now, mode, "{text}");
+    assert!(!hooks.join("pre-commit").exists(), "{text}");
+    assert!(!hooks.join("made").exists(), "{text}");
+}
+
+#[test]
+fn a_sibling_worktrees_sparse_checkout_is_guarded() {
+    let tree = repository("sibling-sparse");
+    let sibling = tree.parent().expect("a parent").join("sibling");
+    git(
+        &tree,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "side",
+            sibling.to_str().expect("utf-8"),
+        ],
+    );
+    let sparse = tree.join(".git/worktrees/sibling/info/sparse-checkout");
+    let validators = tests_run("true");
+    let harness = acting("implementation.edit", |tree: &Path| {
+        let info = tree.join(".git/worktrees/sibling/info");
+        fs::create_dir_all(&info).expect("info");
+        fs::write(info.join("sparse-checkout"), "/nothing\n").expect("a write");
+        fs::write(tree.join("src/lib.rs"), "model\n").expect("a write");
+    });
+    let (stop, text) = run(&tree, "sibling-sparse", 4, &harness, &validators);
+    let stop = stop.expect("the run stops");
+    assert!(
+        matches!(&stop, Stop::StepRefused(why) if why.contains("sparse-checkout")),
+        "{stop:?}\n{text}"
+    );
+    assert!(!sparse.exists(), "{text}");
+    assert_eq!(read(&tree.join("src/lib.rs")), "a\n", "{text}");
+}
