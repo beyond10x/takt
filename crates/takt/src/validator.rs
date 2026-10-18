@@ -462,6 +462,31 @@ impl Validator for PrOpen {
             Some(number) => Next::Read(number),
             None => Next::Open(request_of(&dir, &name, branch.base.as_deref(), revision)?),
         };
+        // A pull request needs a commit on the case's branch beyond its base: at the base itself
+        // the forge has nothing to compare, and opening one would be refused there. Nothing is
+        // pushed and no record written; a commit moves the revision and makes `pr.open` due
+        // again.
+        if let Next::Open(request) = &next {
+            let ahead = crate::git::run(
+                tree,
+                &[
+                    "rev-list",
+                    "--count",
+                    &format!("{}..{revision}", request.base),
+                ],
+            )?;
+            if ahead.trim() == "0" {
+                return Ok(Observation {
+                    summary: format!(
+                        "{name} at {} has no commit beyond {}; nothing pushed, no pull request; the claim stays unknown",
+                        short(revision),
+                        request.base
+                    ),
+                    records: Vec::new(),
+                    artifact: None,
+                });
+            }
+        }
         self.forge
             .push(tree, &name)
             .with_context(|| format!("push {name} through the forge {forge}"))?;

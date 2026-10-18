@@ -111,6 +111,18 @@ fn record(n: usize, kind: &str, result: &str, revision: &str) -> Record {
     )
 }
 
+/// One commit on the case's branch beyond its base, as an implementation step leaves it, and the
+/// case's `implementation` moved to it; answers the new revision.
+fn implemented(tree: &Path, case: &mut takt::CaseDir) -> String {
+    fs::write(tree.join("implemented.txt"), "done\n").expect("a file");
+    git(tree, &["add", "implemented.txt"]);
+    git(tree, &["commit", "-q", "-m", "implemented by the test"]);
+    let revision = git(tree, &["rev-parse", "HEAD"]);
+    case.set_revision("implementation", &revision)
+        .expect("the revision moves");
+    revision
+}
+
 /// What a run left: how it stopped, what it printed, the records it wrote in file order, the
 /// decision after it, the case directory and the revision the case was opened at.
 struct Outcome {
@@ -141,10 +153,7 @@ fn delivered(tree: &Path, id: &str, forge: Rc<dyn Forge>) -> Outcome {
         Box::new(CiRead::new(forge)),
     ];
     let mut run = Run::open(tree, options, &NoHarness, &validators).expect("the case opens");
-    let revision = run
-        .case
-        .revision("implementation")
-        .expect("implementation has a revision");
+    let revision = implemented(tree, &mut run.case);
     run.case
         .add_evidence(&record(1, "test_result", "pass", &revision))
         .expect("the record is written");
@@ -199,12 +208,12 @@ fn action<'a>(decision: &'a Decision, id: &str) -> &'a str {
 #[test]
 fn with_checks_passing_the_pull_request_and_the_ci_result_are_recorded_at_the_pushed_revision() {
     let tree = scratch("pass");
-    let head = git(&tree, &["rev-parse", "HEAD"]);
     let memory = Rc::new(Memory {
         checks: Checks::Pass,
         ..Memory::default()
     });
     let outcome = delivered(&tree, "pass", memory.clone());
+    let head = git(&tree, &["rev-parse", "HEAD"]);
     assert_eq!(outcome.stop, Stop::Iterations(2), "{}", outcome.text);
     assert_eq!(outcome.revision, head, "{}", outcome.text);
     assert!(
@@ -770,6 +779,86 @@ fn adv_pr_open_on_a_detached_head_pushes_nothing_before_refusing() {
     );
 }
 
+/// `pr.open` on a case branch with no commit beyond its base pushes nothing and writes no
+/// record: the forge has nothing to compare there and refuses the pull request.
+#[test]
+fn pr_open_at_the_untouched_base_pushes_nothing_and_writes_no_record() {
+    let tree = scratch("untouched");
+    let protocol =
+        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let case = takt::CaseDir::open(&tree, protocol, "untouched", "deliver the story", &[])
+        .expect("the case opens");
+    let revision = case
+        .revision("implementation")
+        .expect("implementation has a revision");
+    let memory = Rc::new(Memory::default());
+    let observation = PrOpen::new(memory.clone())
+        .observe(&tree, &revision, 1)
+        .expect("observes");
+    assert!(observation.records.is_empty(), "{}", observation.summary);
+    assert!(
+        observation.summary.contains("no commit beyond main"),
+        "{}",
+        observation.summary
+    );
+    assert!(
+        memory.calls.borrow().is_empty(),
+        "{:?}",
+        memory.calls.borrow()
+    );
+    assert_eq!(
+        Branch::read(&case.dir).expect("the branch file").pushed,
+        None
+    );
+}
+
+/// Through the loop, with the tests and the gate green at the untouched base, the harness is
+/// offered a judgement step before `pr.open` reaches the forge.
+#[test]
+fn at_the_untouched_base_the_harness_is_offered_a_step_before_anything_is_pushed() {
+    let tree = scratch("untouched-loop");
+    let memory = Rc::new(Memory::default());
+    let forge: Rc<dyn Forge> = memory.clone();
+    let options = RunOptions {
+        protocol: PROTOCOL.to_owned(),
+        intent: "deliver the story".to_owned(),
+        inputs: Vec::new(),
+        iterations: Some(3),
+        hours: None,
+        tokens: None,
+        case_id: Some("untouched-loop".to_owned()),
+        gate: Some("repository.merge".to_owned()),
+    };
+    let validators: Vec<Box<dyn Validator>> = vec![
+        Box::new(PrOpen::new(forge.clone())),
+        Box::new(CiRead::new(forge)),
+    ];
+    let mut run = Run::open(&tree, options, &NoHarness, &validators).expect("the case opens");
+    let revision = run
+        .case
+        .revision("implementation")
+        .expect("implementation has a revision");
+    run.case
+        .add_evidence(&record(1, "test_result", "pass", &revision))
+        .expect("the record is written");
+    run.case
+        .add_evidence(&record(2, "gate_result", "pass", &revision))
+        .expect("the record is written");
+    let mut out = Vec::new();
+    let error = format!(
+        "{:#}",
+        run.run(&mut out)
+            .expect_err("NoHarness refuses the judgement step")
+    );
+    let text = String::from_utf8(out).expect("utf-8");
+    assert!(error.contains("implementation.edit"), "{error}\n{text}");
+    assert!(
+        memory.calls.borrow().is_empty(),
+        "{:?}\n{text}",
+        memory.calls.borrow()
+    );
+}
+
 /// A case opened while the tree is on another case's branch (the state every finished run
 /// leaves the tree in) is discarded back to the branch it left, as `CaseDir::discard`
 /// documents, not to the base it lent from the other case; the other case keeps its directory.
@@ -985,10 +1074,7 @@ fn adv_a_closed_pull_request_at_a_second_revision_is_recorded_closed() {
         Box::new(CiRead::new(forge)),
     ];
     let mut run = Run::open(&tree, options, &NoHarness, &validators).expect("the case opens");
-    let first = run
-        .case
-        .revision("implementation")
-        .expect("implementation has a revision");
+    let first = implemented(&tree, &mut run.case);
     run.case
         .add_evidence(&record(1, "test_result", "pass", &first))
         .expect("the record is written");
