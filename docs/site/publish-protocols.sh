@@ -13,8 +13,9 @@ rev=$(git -C "$repo" rev-parse --short HEAD)
 
 (cd "$app" && npm ci --no-audit --no-fund && npm run build)
 
-id="site-protocols-$rev"
-tree=$(cd "$repo" && worktree create --purpose "publish protocol viewer at $rev" --id "$id" --base gh-pages | tail -1)
+id="site-protocols-$rev-$(date +%s)"
+(cd "$repo" && b10x-gates bot -- fetch origin '+refs/heads/gh-pages:refs/remotes/origin/gh-pages' >/dev/null)
+tree=$(cd "$repo" && worktree create --purpose "publish protocol viewer at $rev" --id "$id" --base origin/gh-pages | tail -1)
 rm -rf "$tree/protocols"
 cp -r "$app/dist" "$tree/protocols"
 cd "$tree"
