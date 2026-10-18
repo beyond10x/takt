@@ -11,6 +11,8 @@ refs:
   reference: no-merge-approval-without-a-change
 relations:
 - informed_by: review-result:variety-runs-a0b8576
+- decomposes: epic:composable-agentic-work
+- depends_on: story:pr-opens-when-change-is-done
 scope:
 - confidence: cited
   path: crates/takt-cli/src/main.rs
