@@ -454,9 +454,12 @@ const APPROVER_KINDS: [&str; 2] = ["human", "agent"];
 /// Whether `approver` may grant a story's capability: `human:<name>` or `agent:<role>`, an
 /// actor the store writes ([`is_store_actor`]). The store writes an approval's record as its
 /// approver ([`crate::frontier::Aep`] sets `AEP_ACTOR`); `system` and `service:<name>` are the
-/// store's and tools' own actors, not who grants.
+/// store's and tools' own actors, not who grants, and takt's own actor
+/// ([`crate::frontier::ACTOR`]), which writes the story's `test_result` and move, never grants
+/// its own merge.
 fn is_approver(approver: &str) -> bool {
-    is_store_actor(approver)
+    approver != crate::frontier::ACTOR
+        && is_store_actor(approver)
         && approver
             .split_once(':')
             .is_some_and(|(kind, _)| APPROVER_KINDS.contains(&kind))
@@ -506,6 +509,24 @@ impl StoreRecord {
 /// artifact was at when it was written, and an approval's record adds evidence only, so every
 /// approval's record above `revision` carries this one.
 fn story_revision_at(tree: &Path, revision: &str, story: &str) -> Result<Option<u64>> {
+    Ok(story_front_at(tree, revision, story)?.and_then(|doc| doc["revision"].as_u64()))
+}
+
+/// The status the planning store holds `story` at in the commit `revision`: the `status` of the
+/// front matter of its file there; `None` when the commit holds no such file or it states none.
+pub fn story_status_at(tree: &Path, revision: &str, story: &str) -> Result<Option<String>> {
+    Ok(story_front_at(tree, revision, story)?
+        .and_then(|doc| doc["status"].as_str().map(str::to_owned)))
+}
+
+/// The front matter of `.engineering/planning/<kind>/<name>.md` for `story` in the commit
+/// `revision`, read as the store reads it ([`front_matter`]); `None` when the commit holds no
+/// such file or its front matter does not read.
+fn story_front_at(
+    tree: &Path,
+    revision: &str,
+    story: &str,
+) -> Result<Option<serde_yaml_ng::Value>> {
     let Some((kind, name)) = story.split_once(':') else {
         return Ok(None);
     };
@@ -519,10 +540,7 @@ fn story_revision_at(tree: &Path, revision: &str, story: &str) -> Result<Option<
     let Some(front) = front_matter(&text) else {
         return Ok(None);
     };
-    let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&front) else {
-        return Ok(None);
-    };
-    Ok(doc["revision"].as_u64())
+    Ok(serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&front).ok())
 }
 
 /// The front matter of a planning document, as the store reads it: the lines between a first
@@ -682,8 +700,9 @@ pub fn prepare_grant(
     let story = story_of(&dir)?;
     if story.is_some() && !is_approver(approver) {
         bail!(
-            "the approver `{}` is not an actor the planning store records; say who grants {capability} as human:<name> or agent:<role>",
-            approver.escape_debug()
+            "the approver `{}` is not an actor the planning store records as granting; say who grants {capability} as human:<name> or agent:<role>, not takt's own {}",
+            approver.escape_debug(),
+            crate::frontier::ACTOR
         );
     }
     let (protocol, actions) = required_capabilities(&dir)?;
