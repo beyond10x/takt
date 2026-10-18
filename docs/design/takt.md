@@ -79,3 +79,20 @@ the repository's bot route), `Confinement` (none first; Substrate later).
 
 A hosted service, a console, a database, cross-repository scheduling, and any runtime of its own
 for model turns: the harness is an adapter, the loop is in this binary, the truth is Canon's.
+
+## 6. Self-improvement
+
+takt is improved by takt: the improvement process is itself modelled as protocols, and the same
+loop improves the loop. The design is the planning-store artifact
+`design:recursive-self-improvement` (`.engineering/planning/design/recursive-self-improvement.md`),
+carried by `epic:recursive-self-improvement`.
+
+| level | protocol | one case is |
+|---|---|---|
+| L0 work | `protocols/story-delivery/1.yaml` | one story of a repository |
+| L1 improve takt | `protocols/self-improvement/1.yaml` | one finding reproduced on the promoted baseline, fixed, verified by another run, merged under the authority its surface needs, scored without regression, promoted |
+| L2 improve the loop | `protocols/loop-improvement/1.yaml` | one loop metric below target, an honest change to the loop merged by the owner, the metric improved |
+
+`crates/takt/tests/improvement_protocols.rs` drives cases on both improvement protocols to their
+outcomes. The validators for their actions are stories of that epic; until they land, the agents
+perform the actions and record the evidence.

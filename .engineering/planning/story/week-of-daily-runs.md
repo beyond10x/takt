@@ -12,6 +12,7 @@ relations:
 - depends_on: story:merge-under-authority
 - serves: vision:safe-agentic-coding
 - depends_on: story:confinement-seam
+- depends_on: story:scorecard-reader
 scope:
 - confidence: cited
   path: crates/takt-cli/src/main.rs
@@ -23,7 +24,7 @@ scope:
   path: crates/takt/tests/report.rs
 - confidence: inferred
   path: docs/reports
-revision: 6
+revision: 7
 ---
 # Story: week-of-daily-runs
 
@@ -63,7 +64,7 @@ This story adds `takt report --cases <dir>...` reading those records: units acce
 
 ## Out of Scope
 
-Choosing the repositories; a dashboard or a hosted service (`docs/design/takt.md` § 5); comparing against any baseline; running the schedule from inside takt.
+Choosing the repositories; a dashboard or a hosted service (`docs/design/takt.md` § 5); running the schedule from inside takt. The per-run figures and the comparison against a promoted baseline are story:scorecard-reader's; this story sums them over a week and adds defects escaped.
 
 ## Ambiguities
 

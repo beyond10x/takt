@@ -24,4 +24,5 @@ Built on [Canon](https://github.com/beyond10x/canon) and
 built-ins, `protocols/story-delivery/1.yaml` is this repository's own `protocol/1` for delivering
 a planning-store story (`--protocol protocols/story-delivery/1.yaml`, a path read from the directory you run `takt` in, so give it in full from elsewhere): tests, gate, pull request,
 CI and merge as claims about the implementation revision, `accepted` once the pull request is
-merged. Licence: Apache-2.0.
+merged. `protocols/self-improvement/1.yaml` and `protocols/loop-improvement/1.yaml` model how takt
+improves itself and how that loop improves itself (`docs/design/takt.md` § 6). Licence: Apache-2.0.
