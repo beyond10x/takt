@@ -395,6 +395,129 @@ impl Approval {
     pub fn reference(&self) -> String {
         format!("{}/{AUTHORITY_FILE}", self.case)
     }
+
+    /// Where the store's record of the approval says it came from: `takt approve <capability>
+    /// --by <approver> at <revision>`.
+    #[must_use]
+    pub fn source(&self) -> String {
+        format!(
+            "takt approve {} --by {} at {}",
+            self.capability, self.approver, self.revision
+        )
+    }
+}
+
+/// The planning store's record of an approval, as `aep plan artifact evidence --kind approval
+/// --source … --ref … --at …` writes it for [`crate::frontier::approve`]: these fields and no
+/// other, at either level. A field the store would also read (a `review` and its `outcome`,
+/// which it takes as that review's outcome whatever the kind) makes the file no such record.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoreRecord {
+    at: String,
+    actor: String,
+    artifact: String,
+    kind: String,
+    revision: u64,
+    change: StoreChange,
+}
+
+/// What a [`StoreRecord`] records: evidence, with its kind, source and reference, nothing else.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoreChange {
+    change: String,
+    kind: String,
+    source: String,
+    reference: String,
+}
+
+/// The kinds of actor the store writes a record as, each followed by `:` and a name.
+const ACTOR_KINDS: [&str; 3] = ["human", "agent", "service"];
+
+/// Whether `actor` is an actor the store writes: `system`, or `human`, `agent` or `service`, a
+/// `:`, and a name of ASCII letters, digits, `.`, `_`, `@` and `-`. Who the store writes as is
+/// the environment's (`AEP_ACTOR`, else `human:$USER`), not the grant's, so only its shape is
+/// checked.
+fn is_store_actor(actor: &str) -> bool {
+    actor == "system"
+        || actor.split_once(':').is_some_and(|(kind, name)| {
+            ACTOR_KINDS.contains(&kind)
+                && !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._@-".contains(&byte))
+        })
+}
+
+impl StoreRecord {
+    /// Whether this is the store's record of `approval` on its story, exactly as
+    /// [`crate::frontier::approve`] has the store write it, the story at `story_revision` in the
+    /// store: evidence of kind `approval` on the story, the story's kind and revision, the
+    /// approval's own source, reference and instant, and an actor of the store's shape.
+    fn records(&self, approval: &Approval, story_revision: u64) -> bool {
+        let Some(story) = approval.story.as_deref() else {
+            return false;
+        };
+        let Some((kind, _)) = story.split_once(':') else {
+            return false;
+        };
+        self.artifact == story
+            && self.kind == kind
+            && self.revision == story_revision
+            && self.at == approval.granted_at
+            && is_store_actor(&self.actor)
+            && self.change.change == "evidence"
+            && self.change.kind == "approval"
+            && self.change.source == approval.source()
+            && self.change.reference == approval.reference()
+    }
+}
+
+/// The revision the planning store holds `story` at in the commit `revision`: the `revision`
+/// of the front matter of `.engineering/planning/<kind>/<name>.md` there; `None` when the
+/// commit holds no such file or it states none. A record of the store carries the revision the
+/// artifact was at when it was written, and an approval's record adds evidence only, so every
+/// approval's record above `revision` carries this one.
+fn story_revision_at(tree: &Path, revision: &str, story: &str) -> Result<Option<u64>> {
+    let Some((kind, name)) = story.split_once(':') else {
+        return Ok(None);
+    };
+    let blob = format!("{revision}:.engineering/planning/{kind}/{name}.md");
+    if crate::git::run(tree, &["cat-file", "-e", &blob]).is_err() {
+        return Ok(None);
+    }
+    let Ok(text) = String::from_utf8(crate::git::blob(tree, &blob)?) else {
+        return Ok(None);
+    };
+    let Some(front) = front_matter(&text) else {
+        return Ok(None);
+    };
+    let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&front) else {
+        return Ok(None);
+    };
+    Ok(doc["revision"].as_u64())
+}
+
+/// The front matter of a planning document, as the store reads it: the lines between a first
+/// line `---` and the next line `---`, each line read without its line end, LF or CRLF. `None`
+/// when the text does not open with that line (whitespace or anything else before it) or the
+/// front matter is never closed.
+fn front_matter(text: &str) -> Option<String> {
+    let mut lines = text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line));
+    if lines.next()? != "---" {
+        return None;
+    }
+    let mut front = Vec::new();
+    for line in lines {
+        if line == "---" {
+            return Some(front.join("\n"));
+        }
+        front.push(line);
+    }
+    None
 }
 
 /// The actions of the case's protocol that require a capability, each with the capabilities
@@ -736,58 +859,117 @@ pub fn resumable(
 /// The most approval commits [`approvals_only`] walks back through.
 const APPROVALS_AT_MOST: usize = 64;
 
+/// The largest file [`approvals_only`] reads as a record; the store's record of an approval is
+/// a few hundred bytes.
+const RECORD_AT_MOST: u64 = 64 << 10;
+
 /// Whether `head` reaches `revision` only through commits that hold an approval's record for
 /// the story of the case at `case_dir` and nothing else: each with one parent, the subject
 /// [`crate::frontier::approve_subject`] of the story and one capability, and every change it
 /// makes the addition of a new regular file directly in the story's evidence directory
-/// (`.engineering/evidence/story/<name>/`), as the store records an approval; and no more such
-/// commits than the case's `authority.yaml` holds grants, one record per grant. Such a commit
-/// is the approval's own: it records the grant and changes nothing else. The case stays at
-/// `revision`, the one the grant was given at and every claim is about; `pr.open` and
-/// `repository.merge` push `HEAD` with those commits above it and merge that head, so the
-/// approval's record reaches the base with the pull request and nothing else rides along. A
-/// commit that does anything else, one beyond the grants, or a case with no story, is no
-/// approval's.
+/// (`.engineering/evidence/story/<name>/`), as the store records an approval. Each file added,
+/// read from the commit (never from the tree), is exactly the store's record, no field more, of
+/// a grant the case's `authority.yaml` holds at `revision`, of the capability the subject
+/// names, by its grantor ([`StoreRecord::records`]); no grant is recorded twice, so there are no more such commits
+/// than grants. Such a commit is the approval's own: it records the grant and changes nothing
+/// else. The case stays at `revision`, the one the grant was given at and every claim is about;
+/// `pr.open` and `repository.merge` push `HEAD` with those commits above it and merge that
+/// head, so the approval's record reaches the base with the pull request and nothing else rides
+/// along. A commit that does anything else, a file that is any other record (a `test_result`,
+/// a capability not granted, another grantor, story or revision), a grant recorded twice, or a
+/// case with no story, is no approval's.
 pub fn approvals_only(tree: &Path, revision: &str, head: &str, case_dir: &Path) -> Result<bool> {
     let Some(story) = story_of(case_dir)? else {
         return Ok(false);
     };
-    let grants = Authority::read(case_dir)?.map_or(0, |authority| {
-        authority
-            .decisions
-            .iter()
-            .filter(|decision| decision.decision == Grant::Granted)
-            .count()
-    });
+    let case = case_dir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // The grants at `revision` not yet found recorded; each record found takes its grant out.
+    let mut unrecorded: Vec<Approval> = Authority::read(case_dir)?
+        .map(|authority| authority.decisions)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|decision| {
+            decision.decision == Grant::Granted && decision.revision.as_deref() == Some(revision)
+        })
+        .map(|decision| Approval {
+            case: case.clone(),
+            story: Some(story.clone()),
+            capability: decision.capability,
+            approver: decision.approver,
+            granted_at: decision.granted_at,
+            revision: revision.to_owned(),
+        })
+        .collect();
+    let grants = unrecorded.len();
     let prefix = crate::frontier::approve_subject(&story, "");
     let evidence = format!(".engineering/evidence/{}/", story.replacen(':', "/", 1));
+    if head == revision {
+        return Ok(true);
+    }
+    let Some(story_revision) = story_revision_at(tree, revision, &story)? else {
+        return Ok(false);
+    };
     let mut at = head.to_owned();
     for _ in 0..=grants.min(APPROVALS_AT_MOST) {
         if at == revision {
             return Ok(true);
         }
         let commit = crate::git::commit(tree, &at)?;
-        let approval = commit
-            .subject
-            .strip_prefix(&prefix)
-            .is_some_and(|capability| {
-                !capability.is_empty() && !capability.contains(char::is_whitespace)
-            });
+        let Some(capability) = commit.subject.strip_prefix(&prefix).filter(|capability| {
+            !capability.is_empty() && !capability.contains(char::is_whitespace)
+        }) else {
+            return Ok(false);
+        };
         let [parent] = commit.parents.as_slice() else {
             return Ok(false);
         };
-        if !approval || !adds_records_only(tree, parent, &at, &evidence)? {
+        let Some(blobs) = added_records(tree, parent, &at, &evidence)? else {
             return Ok(false);
+        };
+        for blob in blobs {
+            let Some(record) = record_at(tree, &blob)? else {
+                return Ok(false);
+            };
+            let Some(granted) = unrecorded.iter().position(|approval| {
+                approval.capability == capability && record.records(approval, story_revision)
+            }) else {
+                return Ok(false);
+            };
+            unrecorded.swap_remove(granted);
         }
         at.clone_from(parent);
     }
     Ok(false)
 }
 
-/// Whether every change from `parent` to `commit` adds a new regular file directly in the
-/// directory `evidence` (ending in `/`), and there is at least one: what the store's record of
-/// an approval is. Read from `git diff-tree --raw -z`, byte for byte, not from quoted text.
-fn adds_records_only(tree: &Path, parent: &str, commit: &str, evidence: &str) -> Result<bool> {
+/// The blob `blob` read as a [`StoreRecord`]: `None` when it is larger than
+/// [`RECORD_AT_MOST`] or is no record.
+fn record_at(tree: &Path, blob: &str) -> Result<Option<StoreRecord>> {
+    let size = crate::git::run(tree, &["cat-file", "-s", blob])?;
+    if size
+        .parse::<u64>()
+        .ok()
+        .is_none_or(|size| size > RECORD_AT_MOST)
+    {
+        return Ok(None);
+    }
+    let text = crate::git::run(tree, &["cat-file", "blob", blob])?;
+    Ok(serde_json::from_str(&text).ok())
+}
+
+/// The blobs `commit` adds, when every change from `parent` to `commit` adds a new regular file
+/// directly in the directory `evidence` (ending in `/`), and there is at least one: the shape of
+/// the store's record of an approval; `None` otherwise. Read from `git diff-tree --raw -z`,
+/// byte for byte, not from quoted text.
+fn added_records(
+    tree: &Path,
+    parent: &str,
+    commit: &str,
+    evidence: &str,
+) -> Result<Option<Vec<String>>> {
     let raw = crate::git::run(
         tree,
         &[
@@ -802,14 +984,14 @@ fn adds_records_only(tree: &Path, parent: &str, commit: &str, evidence: &str) ->
         ],
     )?;
     let mut fields = raw.split('\0').filter(|field| !field.is_empty());
-    let mut added = 0;
+    let mut added = Vec::new();
     while let Some(change) = fields.next() {
         let Some(path) = fields.next() else {
-            return Ok(false);
+            return Ok(None);
         };
         let parts: Vec<&str> = change.trim_start_matches(':').split(' ').collect();
-        let [from_mode, to_mode, _, _, status] = parts.as_slice() else {
-            return Ok(false);
+        let [from_mode, to_mode, _, blob, status] = parts.as_slice() else {
+            return Ok(None);
         };
         let name = path.strip_prefix(evidence).unwrap_or_default();
         if *status != "A"
@@ -818,11 +1000,11 @@ fn adds_records_only(tree: &Path, parent: &str, commit: &str, evidence: &str) ->
             || name.is_empty()
             || name.contains('/')
         {
-            return Ok(false);
+            return Ok(None);
         }
-        added += 1;
+        added.push((*blob).to_owned());
     }
-    Ok(added > 0)
+    Ok((!added.is_empty()).then_some(added))
 }
 
 /// The directory of the case whose branch `tree` is on: `takt/<id>` names the case `<id>`.

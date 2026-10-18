@@ -134,6 +134,12 @@ pub fn run(tree: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
 }
 
+/// The bytes of the blob `object` names (`<revision>:<path>`, or a blob id) as git holds them:
+/// nothing trimmed, nothing decoded.
+pub fn blob(tree: &Path, object: &str) -> Result<Vec<u8>> {
+    raw(tree, &["cat-file", "blob", object], None)
+}
+
 /// The commit `HEAD` names.
 pub fn head(tree: &Path) -> Result<String> {
     run(tree, &["rev-parse", "HEAD"])
