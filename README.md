@@ -7,8 +7,9 @@ admissible step at a time, and accepts nothing a validator has not turned into e
 decides what is permitted, what is owed and whether completion was earned; the model never does.
 
 Agents choose how to do the work. The protocol defines what must be true before the work counts
-and which actions wait for a person's grant (`takt approve`); a merge through the bot route always
-does.
+and which actions wait for a grant (`takt approve`). A merge through the bot route always waits
+for the grant its protocol requires; on a judge surface that grant is the owner's, or that of a
+role the owner delegated it to on record.
 
 ## Status
 
