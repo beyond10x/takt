@@ -6,12 +6,14 @@
 //!
 //! A run is the span from one `opened` line to its `stop`, or to the next `opened` or the end
 //! of the record when it has none (a run that ended on an error); a `skipped` line is no
-//! instant of any run. A case is the unit of comparison: its outcome is its last run's, its
-//! other figures its runs' summed, at most `u64::MAX` and flagged when a sum stopped there.
+//! instant of any run. A case is the unit of comparison: its outcome is the best a run of it
+//! completed with, else its last run's (a completed case is final); its other figures are its
+//! runs' summed, at most `u64::MAX` and flagged when a sum stopped there.
 //! Saved, the scorecard is `scorecard-<revision>.json`, the revision of takt under test, with
 //! every run's figures and the version of each metric's definition. Compared with a saved one,
-//! a scenario is worse when the median outcome rank of its cases is below the saved median, or
-//! when the saved scorecard has the scenario and the candidate has no run of it. Tokens are
+//! a scenario is worse when, for some outcome rank, the share of its cases at that rank or
+//! better is below the saved share, or when the saved scorecard has the scenario and the
+//! candidate has no run of it. Tokens are
 //! printed per scenario and side as n, minimum, median and maximum over cases with the
 //! difference of the medians, and never make a scenario worse. A metric whose definition
 //! changed between the two is printed with both figures; outcomes are compared under the
@@ -81,14 +83,17 @@ pub struct Row {
     pub saturated: bool,
 }
 
-/// One case's figures: its last run's outcome, its runs' other figures summed.
+/// One case's figures: its outcome, the best a run of it completed with, else its last run's;
+/// its runs' other figures summed. A case that completed is final (a merged case does not
+/// reopen): a run on it after it completed changes nothing it reached, so an `accepted` case
+/// stays `accepted` whatever a later run ended on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Case {
     /// The case.
     pub case: String,
     /// Its scenario, as [`Row::scenario`].
     pub scenario: Option<String>,
-    /// The last run's outcome.
+    /// The best outcome a run of it completed with, else its last run's.
     pub outcome: String,
     /// Its runs.
     pub runs: u64,
@@ -98,7 +103,7 @@ pub struct Case {
     pub tokens: u64,
     /// Its runs' refusals, summed.
     pub refusals: u64,
-    /// 1 when its last run stopped `NoProgress`, else 0.
+    /// 1 when its outcome is `NoProgress`, else 0.
     pub no_progress: u64,
     /// Its runs' errors, summed.
     pub errors: u64,
@@ -112,6 +117,13 @@ impl Case {
     /// The case of `runs`, all of one case, in the order they ran; none for no run.
     fn of(runs: &[&Row]) -> Option<Self> {
         let last = runs.last()?;
+        let outcome = runs
+            .iter()
+            .enumerate()
+            .filter(|(_, run)| is_completed(&run.outcome))
+            .max_by_key(|(n, run)| (rank(&run.outcome), *n))
+            .map_or(&last.outcome, |(_, run)| &run.outcome)
+            .clone();
         let mut saturated = runs.iter().any(|run| run.saturated);
         let mut sum = |figure: fn(&Row) -> u64| {
             runs.iter().fold(0_u64, |sum, run| {
@@ -131,12 +143,12 @@ impl Case {
         Some(Self {
             case: last.case.clone(),
             scenario: last.scenario.clone(),
-            outcome: last.outcome.clone(),
+            no_progress: u64::from(outcome == "NoProgress"),
+            outcome,
             runs: runs.len() as u64,
             steps,
             tokens,
             refusals,
-            no_progress: u64::from(last.outcome == "NoProgress"),
             errors,
             wall_ms,
             saturated,
@@ -181,6 +193,34 @@ pub fn rank(outcome: &str) -> u8 {
         _ => 1,
     }
 }
+
+/// The outcomes that are no completion: a stop's kind, an error, no stop. Any other outcome
+/// is one a `Completed` stop named.
+const NOT_COMPLETED: [&str; 10] = [
+    "ApprovalRequired",
+    "Waiting",
+    "Iterations",
+    "Hours",
+    "Tokens",
+    "NothingAdmissible",
+    "StepRefused",
+    "NoProgress",
+    "error",
+    "unfinished",
+];
+
+/// Whether `outcome` is one a `Completed` stop named: the case completed with it.
+fn is_completed(outcome: &str) -> bool {
+    !NOT_COMPLETED.contains(&outcome)
+}
+
+/// The ranks [`rank`] gives, best first, each with the outcomes it covers.
+const RANKS: [(u8, &str); 4] = [
+    (4, "accepted"),
+    (3, "ApprovalRequired or Waiting"),
+    (2, "a budget stop"),
+    (1, "NoProgress or another stop"),
+];
 
 /// An event line's instant as nanoseconds since the epoch: `YYYY-MM-DDTHH:MM:SS[.f...]Z`,
 /// whole seconds as a run wrote them before instants had a fraction.
@@ -559,10 +599,12 @@ impl Scorecard {
     /// Compares this scorecard with `saved`, scenario by scenario, over cases: each case and
     /// its outcome; each side's n and the minimum, median and maximum of tokens, and the
     /// difference of the medians; both figures of every metric whose definition's version
-    /// differs; then the verdict: worse when the median outcome rank of the candidate's cases
-    /// is below the saved one's, under the current definition, or when the saved scorecard has
-    /// the scenario and the candidate has no run of it (`no run`). The number of scenarios
-    /// marked worse.
+    /// differs; each outcome rank at which the candidate falls short, with both shares; then the
+    /// verdict: worse when, for some rank, the share of the candidate's cases at that rank or
+    /// better is below the saved share, under the current definition, or when the saved
+    /// scorecard has the scenario and the candidate has no run of it (`no run`). A scorecard is
+    /// never worse than itself, and one case lowered with none raised always is. The number of
+    /// scenarios marked worse.
     pub fn against(&self, saved: &Scorecard, out: &mut dyn Write) -> Result<usize> {
         let version = |card: &Scorecard, metric: &str| {
             card.metrics
@@ -659,19 +701,32 @@ impl Scorecard {
                     )?;
                 }
             }
-            let (saved_rank, rank) = (median(&baseline, "outcome"), median(&candidate, "outcome"));
-            let verdict = if rank < saved_rank {
+            let at_least = |cases: &[Case], at: u8| {
+                cases
+                    .iter()
+                    .filter(|case| rank(&case.outcome) >= at)
+                    .count() as u64
+            };
+            let (n, saved_n) = (candidate.len() as u64, baseline.len() as u64);
+            let mut short = false;
+            for (at, covers) in RANKS {
+                let (share, saved_share) = (at_least(&candidate, at), at_least(&baseline, at));
+                if u128::from(share) * u128::from(saved_n) < u128::from(saved_share) * u128::from(n)
+                {
+                    short = true;
+                    writeln!(
+                        out,
+                        "scenario {scenario}  rank {at} or better ({covers}): candidate {share}/{n} against saved {saved_share}/{saved_n}"
+                    )?;
+                }
+            }
+            let verdict = if short {
                 worse += 1;
                 "worse"
             } else {
                 "not worse"
             };
-            writeln!(
-                out,
-                "scenario {scenario}  outcome median rank {} against {}  {verdict}",
-                half(rank),
-                half(saved_rank)
-            )?;
+            writeln!(out, "scenario {scenario}  outcomes by rank  {verdict}")?;
         }
         for case in candidates.iter().filter(|case| case.scenario.is_none()) {
             writeln!(out, "{}  no scenario  not compared", case.case)?;

@@ -230,10 +230,12 @@ fn save_then_against_marks_a_worse_scenario_and_exits_3() {
         &saved.display().to_string(),
     ]);
     assert_eq!(code, 3, "{text}{stderr}");
-    assert!(
-        text.contains("scenario 1  outcome median rank 1 against 4  worse"),
-        "{text}"
-    );
+    for line in [
+        "scenario 1  rank 4 or better (accepted): candidate 0/1 against saved 1/1",
+        "scenario 1  outcomes by rank  worse",
+    ] {
+        assert!(text.contains(line), "{line} in {text}");
+    }
     assert!(text.contains("scenario 1  median tokens +150"), "{text}");
 
     let better = repository(
@@ -249,7 +251,7 @@ fn save_then_against_marks_a_worse_scenario_and_exits_3() {
     ]);
     assert_eq!(code, 0, "{text}{stderr}");
     assert!(
-        text.contains("scenario 1  outcome median rank 4 against 4  not worse"),
+        text.contains("scenario 1  outcomes by rank  not worse"),
         "{text}"
     );
 }

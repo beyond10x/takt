@@ -60,11 +60,12 @@ struct ScorecardArgs {
     #[arg(long, value_name = "SHA", requires = "save")]
     revision: Option<String>,
     /// Compare each scenario with the same scenario in a saved scorecard, over cases (a case's
-    /// outcome is its last run's): worse when the median outcome rank of its cases is below
-    /// the saved one's (accepted, then ApprovalRequired or Waiting, then a budget stop, then
-    /// NoProgress and every other stop, then an error), or when the saved scorecard has the
-    /// scenario and this one has no run of it; tokens as n, min, median and max per scenario
-    /// and side, and the difference of the medians, never worse.
+    /// outcome is the best a run of it completed with, else its last run's): worse when, for
+    /// some outcome rank (accepted, then ApprovalRequired or Waiting, then a budget stop, then
+    /// NoProgress and every other stop, then an error), the share of its cases at that rank or
+    /// better is below the saved share, each such rank printed with both shares, or when the
+    /// saved scorecard has the scenario and this one has no run of it; tokens as n, min, median
+    /// and max per scenario and side, and the difference of the medians, never worse.
     #[arg(long, value_name = "FILE")]
     against: Option<PathBuf>,
 }
@@ -74,7 +75,7 @@ const SCORECARD_EXIT_CODES: &str = "Exit codes:
   0  printed (and saved); with --against, no scenario is worse than the saved one
   1  refused: the repository, a case's events.jsonl or the saved scorecard does not read; --save without --revision, onto a file that exists, or that cannot be written; the reason on stderr
   2  the arguments do not parse
-  3  with --against: a scenario is worse: the median outcome rank of its cases is below the saved one's, or it has no run (tokens never make a scenario worse)";
+  3  with --against: a scenario is worse: at some outcome rank the share of its cases at that rank or better is below the saved share, or it has no run (tokens never make a scenario worse)";
 
 #[derive(Subcommand)]
 enum ScenarioCommands {
