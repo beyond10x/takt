@@ -286,10 +286,22 @@ mod tests {
             "src/test_foo.py",
             "web/app.test.ts",
             "web/app.spec.ts",
+            "tests/a b.rs",
+            "tests/ü.rs",
         ] {
             assert!(is_test_path(path), "{path}");
         }
-        for path in ["src/lib.rs", "Cargo.toml", "src/testing.rs", "tester/x.rs"] {
+        // A path as git names it, whole: never with its first character cut off or quoted.
+        for path in [
+            "src/lib.rs",
+            "Cargo.toml",
+            "src/testing.rs",
+            "tester/x.rs",
+            "rc/lib.rs",
+            "ests/a.rs",
+            "\"tests/a b.rs\"",
+            " src/lib.rs",
+        ] {
             assert!(!is_test_path(path), "{path}");
         }
     }

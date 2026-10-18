@@ -475,9 +475,14 @@ impl CaseDir {
     /// the tree is on, or that case's base when the tree is on another case's branch, so a
     /// case never forks from another case's commits; a case branch whose base is unknown
     /// refuses the case before anything is written), and recorded with its base and the
-    /// branch it left as `branch.yaml`; a branch that exists refuses the case. Nothing is
-    /// written until `HEAD`, the inputs and the branch are in order, and a write that fails
-    /// takes the directory with it, so a case directory exists only with its `case.yaml`.
+    /// branch it left as `branch.yaml`; a branch that exists refuses the case. A tree with
+    /// uncommitted work outside the cases directory (staged, unstaged or untracked; ignored
+    /// files are not work) refuses the case before anything is touched: everything a run
+    /// commits or discards afterwards is then its own. Nothing is written until the tree,
+    /// `HEAD`, the inputs and the branch are in order, and an open that fails after the branch
+    /// was made takes the directory, the cases directory when it was the last, and the branch
+    /// with it, the tree back where it was, so a case directory exists only with its
+    /// `case.yaml` and a `takt/<id>` branch only with its case.
     pub fn open(
         tree: &Path,
         protocol: LoadedProtocol,
@@ -488,6 +493,23 @@ impl CaseDir {
         let dir = tree.join(CASES_DIR).join(id);
         if dir.exists() {
             return Err(anyhow!("the case {id} already exists at {}", dir.display()));
+        }
+        let uncommitted = crate::git::uncommitted(tree)?;
+        if !uncommitted.is_empty() {
+            const SHOWN: usize = 10;
+            let mut named = uncommitted
+                .iter()
+                .take(SHOWN)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            if uncommitted.len() > SHOWN {
+                named.push_str(&format!(" and {} more", uncommitted.len() - SHOWN));
+            }
+            bail!(
+                "the tree {} has uncommitted work: {named}; a case opens only on a clean tree, so that nothing a run commits or discards is anyone else's: commit it, or move it out of the tree, first",
+                tree.display()
+            );
         }
         let head = crate::git::head(tree)?;
         let mut artifacts = serde_yaml_ng::Mapping::new();
@@ -562,42 +584,64 @@ impl CaseDir {
             pull_request: None,
         };
         crate::git::create_branch(tree, &branch.name, from.as_deref())?;
-        // The branch's tip is the implementation revision: not the HEAD the case was asked on
-        // when the branch forked from a base elsewhere.
-        let head = crate::git::head(tree)?;
-        let mut case = Self {
-            id: id.to_owned(),
-            dir,
-            branch: branch.name.clone(),
-            tree: tree.to_path_buf(),
-            protocol,
-            doc: doc.into(),
-            written: 0,
-        };
-        if case
-            .protocol
-            .artifacts
-            .iter()
-            .any(|artifact| artifact == "implementation")
-        {
-            case.doc["artifacts"]["implementation"]["revision"] = head.into();
-        }
-        if let Err(error) = case.create(intent, &branch) {
-            if case.dir.exists()
-                && let Err(removal) = std::fs::remove_dir_all(&case.dir)
+        let opened = (|| {
+            // The branch's tip is the implementation revision: not the HEAD the case was asked
+            // on when the branch forked from a base elsewhere.
+            let tip = crate::git::head(tree)?;
+            let mut case = Self {
+                id: id.to_owned(),
+                dir: dir.clone(),
+                branch: branch.name.clone(),
+                tree: tree.to_path_buf(),
+                protocol,
+                doc: doc.into(),
+                written: 0,
+            };
+            if case
+                .protocol
+                .artifacts
+                .iter()
+                .any(|artifact| artifact == "implementation")
             {
-                return Err(error.context(format!(
-                    "and the half-written case {} could not be removed: {removal}",
-                    case.dir.display()
-                )));
+                case.doc["artifacts"]["implementation"]["revision"] = tip.into();
             }
-            // The cases directory stays only while a case is in it.
-            if let Some(cases) = case.dir.parent() {
-                let _ = std::fs::remove_dir(cases);
+            case.create(intent, &branch)?;
+            Ok(case)
+        })();
+        opened.map_err(|error: anyhow::Error| {
+            match Self::undo_open(tree, &dir, &branch.name, branch.left.as_deref(), &head) {
+                Ok(()) => error,
+                Err(undo) => error.context(format!(
+                    "and the half-opened case {id} could not be taken back: {undo:#}"
+                )),
             }
-            return Err(error);
+        })
+    }
+
+    /// Takes back an open that failed after its branch was made: the case directory if any of
+    /// it was written, the cases directory when it is empty, and the branch, the tree back on
+    /// `left`, or detached at `start` when it was detached.
+    fn undo_open(
+        tree: &Path,
+        dir: &Path,
+        branch: &str,
+        left: Option<&str>,
+        start: &str,
+    ) -> Result<()> {
+        if std::fs::symlink_metadata(dir).is_ok() {
+            std::fs::remove_dir_all(dir)
+                .with_context(|| format!("remove the half-written case {}", dir.display()))?;
         }
-        Ok(case)
+        // The cases directory stays only while a case is in it.
+        if let Some(cases) = dir.parent() {
+            let _ = std::fs::remove_dir(cases);
+        }
+        match left {
+            Some(left) => crate::git::run(tree, &["checkout", "-q", left])?,
+            None => crate::git::run(tree, &["checkout", "-q", "--detach", start])?,
+        };
+        crate::git::run(tree, &["branch", "-q", "-D", branch])?;
+        Ok(())
     }
 
     /// Opens the case `id` that exists under `tree` again, for a run that resumes it: its files
@@ -741,11 +785,17 @@ impl CaseDir {
         self.write()
     }
 
-    /// Removes the case, for one the store would not take: its directory, the cases directory
-    /// when this was the last case in it, and its branch, the tree returning to the branch the
-    /// case left (detached when it left none). Nothing of the case remains.
+    /// Removes a case just opened, for one the store would not take or whose take failed: what
+    /// was left uncommitted on its branch since it opened (the case opened on a clean tree, so
+    /// that is the take's, the index included), its directory, the cases directory when this was
+    /// the last case in it, and its branch, the tree returning to the branch the case left
+    /// (detached when it left none). Nothing of the case remains. Not for a case with commits
+    /// of its own on its branch.
     pub fn discard(self) -> Result<()> {
         let branch = Branch::read(&self.dir)?;
+        if crate::git::current_branch(&self.tree)?.as_deref() == Some(branch.name.as_str()) {
+            crate::git::discard_uncommitted(&self.tree)?;
+        }
         std::fs::remove_dir_all(&self.dir)
             .with_context(|| format!("remove the case {}", self.dir.display()))?;
         if let Some(cases) = self.dir.parent() {

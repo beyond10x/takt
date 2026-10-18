@@ -244,6 +244,20 @@ fn aep(repo: &Path, args: &[&str]) {
     );
 }
 
+/// Keeps a stub and its log out of the tree's uncommitted work: a case opens only on a clean
+/// tree, and the stub is the test's, not work in progress.
+fn ignore_stub(dir: &Path) {
+    let exclude = dir.join(".git/info/exclude");
+    let mut text = fs::read_to_string(&exclude).unwrap_or_default();
+    for name in ["aep-stub*.sh", "calls.log"] {
+        if !text.lines().any(|line| line == name) {
+            text.push_str(name);
+            text.push('\n');
+        }
+    }
+    fs::write(&exclude, text).expect("the stub is ignored");
+}
+
 /// A stand-in for the `aep` command line, written as a shell script into `dir`: it lists three
 /// `proposed` stories, shows any of them, refuses to move `story:a` and moves the others, and
 /// appends every call to `calls.log` beside it. The store's refusal is the one shape the fixture
@@ -275,6 +289,7 @@ esac
     .replace("@LOG@", &log.display().to_string());
     let path = dir.join("aep-stub.sh");
     fs::write(&path, script).expect("the stub is written");
+    ignore_stub(dir);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -562,6 +577,7 @@ esac
     .replace("@REFUSED@", &pattern);
     let path = dir.join("aep-stub-adv2.sh");
     fs::write(&path, script).expect("the stub is written");
+    ignore_stub(dir);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
