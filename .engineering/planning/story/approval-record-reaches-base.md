@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:approval-record-reaches-base
 kind: story
-status: active
+status: implemented
 title: The approval record reaches the base's planning store
 summary: An approval committed on the case branch after the granted revision is lost at merge
 relations:
@@ -13,10 +13,11 @@ scope:
   path: crates/takt/src/frontier.rs
 - confidence: inferred
   path: crates/takt/src/validator.rs
-revision: 5
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T12:07:50Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-18T12:07:50Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-18T13:04:29Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # Story: approval-record-reaches-base
 
@@ -36,3 +37,14 @@ Found by the adversary pass over wave 06's integration fixes (`review-result:adv
 ## Acceptance
 
 With the forge double, a case approved and merged leaves the story's approval evidence (approver, capability, revision) in the base branch's planning store after the run, and the merged revision is still the granted one.
+
+## Landed (wave 07)
+
+Read from `git diff --stat c1445fa 5a41e71` at the close of wave 07 (wave branch head ea832ee). Design: the record travels with the pull request (`frontier.rs` unchanged); `validator.rs` and `case.rs` carry it; protocol text updated.
+
+- `crates/takt/src/case.rs`
+- `crates/takt/src/validator.rs`
+- `crates/takt/tests/approval_record.rs`
+- `crates/takt/tests/approval_record_adv1.rs`
+- `crates/takt/tests/approval_record_adv2.rs`
+- `protocols/story-delivery/1.yaml`

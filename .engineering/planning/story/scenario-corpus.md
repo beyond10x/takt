@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scenario-corpus
 kind: story
-status: active
+status: implemented
 title: Each scenario run starts from a fresh trial base with no hand reset
 summary: trial/<n> per run on the scratch repository; PR targets it; story proposed again
 relations:
@@ -15,10 +15,11 @@ scope:
   path: crates/takt-cli/tests/scenario_run.rs
 - confidence: inferred
   path: crates/takt/src/git.rs
-revision: 6
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T12:07:49Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-10-18T12:07:50Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-10-18T13:04:29Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":3,"verification":1}}}
 ---
 # Story: scenario-corpus
 
@@ -84,3 +85,13 @@ The scorecard (story:scorecard-reader); several scenarios per run.
 
 - Where a scenario is declared: `inferable`, in the scratch repository, because the scenario is
   that repository's state; takt only reads it.
+
+## Landed (wave 07)
+
+Read from `git diff --stat c1445fa 85f2a75` at the close of wave 07 (wave branch head ea832ee). The entry point is a `takt scenario run` verb; the declaration is `.engineering/scenarios.conf` in git config syntax; the bot-route fetch and lease push are built in `main.rs` (TrialRoute), not `forge.rs` (follow-up).
+
+- `crates/takt-cli/src/main.rs`
+- `crates/takt-cli/tests/scenario_run.rs`
+- `crates/takt-cli/tests/scenario_run_adv1.rs`
+- `crates/takt-cli/tests/scenario_run_adv2.rs`
+- `crates/takt/src/git.rs`

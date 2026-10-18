@@ -27,6 +27,7 @@ The design is `docs/design/takt.md`; its § 4 lists what each milestone has.
 takt run --repo <path> --intent "make the failing test pass" --iterations 1
 takt run --repo <path> --hours 1
 takt approve --repo <path> <case> repository.merge --by <who>
+takt scenario run --repo <path> <id> --hours 1
 takt protocols
 ```
 
@@ -47,6 +48,13 @@ one, adds the gate. `takt run --help` lists every default and the exit codes:
 | 3 | stopped on a budget, with nothing admissible, on a refused step, or with no progress |
 | 4 | waits for an approval (`takt approve`); the next run resumes the case |
 | 5 | stopped on an error once its case was open; the case stays open |
+
+`takt scenario run` replays a declared scenario: `.engineering/scenarios.conf` on `main` names
+its story and seed commit. The run fetches the remote's `trial/*` branches, cuts the next free
+`trial/<n>` from the seed, pushes it (it must not exist yet), and runs the story on it, so its pull
+request targets `trial/<n>`. A trial branch is deleted afterwards with `b10x-gates bot
+--repository <owner>/<repo> -- delete-branch trial/<n>`, which the bot route admits only while the
+branch's tip is merged into the default branch.
 
 ## Build
 

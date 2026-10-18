@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:agent-profiles
 kind: story
-status: active
+status: implemented
 title: Operator agent and developer agent profiles a fresh session starts from
 summary: .agents/operator-agent.md, .agents/developer-agent.md and .claude/agents stubs
 relations:
@@ -19,10 +19,11 @@ scope:
   path: .claude/agents/operator-agent.md
 - confidence: inferred
   path: AGENTS.md
-revision: 7
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T12:07:49Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":3}}}
 - {from: "proposed", to: "active", at: "2026-10-18T12:07:49Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "active", to: "implemented", at: "2026-10-18T13:04:29Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"test_result":1,"review_outcome":3,"verification":1}}}
 ---
 # Story: agent-profiles
 
@@ -72,3 +73,13 @@ Each profile contains every "never" line of its role in the design's roles table
 ## Out of Scope
 
 Scheduling the agents; the intake procedure (story:finding-intake); the L2 turn (story:loop-scorecard).
+
+## Landed (wave 07)
+
+Read from `git diff --stat c1445fa 7508aa9` at the close of wave 07 (wave branch head ea832ee). The AGENTS.md link sits in the Start here table, not Layout; the stubs carry name and description frontmatter so the harness loads them.
+
+- `.agents/developer-agent.md`
+- `.agents/operator-agent.md`
+- `.claude/agents/developer-agent.md`
+- `.claude/agents/operator-agent.md`
+- `AGENTS.md`

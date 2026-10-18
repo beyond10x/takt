@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T12:56:55Z",
+  "actor": "human:timo",
+  "artifact": "story:scenario-corpus",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "operator role: live bot-route proof on the scratch repository; cargo test scenario_run",
+    "reference": "baseline c1445fa: no scenario subcommand (red: unrecognized subcommand); treatment 85f2a75: scenario_run 11, adv1 4, adv2 4 passed; live: lease push *, = and ! as expected"
+  }
+}

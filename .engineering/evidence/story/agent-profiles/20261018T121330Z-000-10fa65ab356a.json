@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T12:13:30Z",
+  "actor": "human:timo",
+  "artifact": "story:agent-profiles",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "scratch/agent-profiles/check_profiles.py",
+    "reference": "baseline c1445fa: 3 failures (profiles missing); treatment 7508aa9: 0 failures"
+  }
+}

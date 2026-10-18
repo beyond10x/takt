@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T13:04:29Z",
+  "actor": "human:timo",
+  "artifact": "story:approval-record-reaches-base",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --locked --no-fail-fast",
+    "reference": "wave/2026-10-18-w7 at ea832ee: 38 binaries, 323 passed, 0 failed; fmt, clippy exit 0; ess valid, 300 of 300 citations resolve (scratch/int/close2-*.log)"
+  }
+}
