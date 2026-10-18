@@ -8,7 +8,7 @@ use std::rc::Rc;
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
 use takt::forge::{BotRoute, Forge, repository_of};
-use takt::frontier::{Aep, Frontier as _};
+use takt::frontier::{Aep, Frontier};
 use takt::harness::{ClaudeCode, Harness};
 use takt::validator::{CiRead, DEFAULT_PROJECT, GateRun, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{LoadedProtocol, Run, RunOptions, Stop, Unit};
@@ -70,7 +70,8 @@ struct RunArgs {
     #[arg(long)]
     protocol: Option<String>,
     /// A case input, `name=value`; repeatable. One the protocol a case opens on does not declare
-    /// is refused before the case is opened.
+    /// is refused before the case is opened. Given for a resumed case, any input is refused
+    /// before the case is resumed: the case keeps the inputs it was opened with.
     #[arg(long = "input", value_name = "NAME=VALUE")]
     inputs: Vec<String>,
     /// Stop after this many steps.
@@ -275,16 +276,16 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // tree out onto the case's branch and records its head, so every refusal of what was
             // given for it comes first. A resumed case keeps the protocol and the inputs it was
             // opened with: a `--protocol` that names another, or any `--input`, is refused.
-            let resuming = case_to_resume(&repo, case.as_deref(), intent.is_some())?;
-            if let Some((id, own)) = &resuming {
-                if let (Some(given), Some(spec)) = (&given, &protocol) {
-                    refuse_another_protocol(id, own, given, spec)?;
-                }
-                if let Some((name, _)) = inputs.first() {
-                    return Err(anyhow!(
-                        "--input {name}: the case {id} is resumed, and a resumed case keeps the inputs it was opened with; run without --input; nothing was changed"
-                    ));
-                }
+            let resuming = case_to_resume(&repo, case.as_deref(), intent.is_some(), out)?;
+            let given_for_resume = given.as_ref().zip(protocol.as_deref());
+            let first_input = inputs.first().map(|(name, _)| name.clone());
+            if let Some(resuming) = &resuming {
+                refuse_for_resume(
+                    &resuming.id,
+                    &resuming.protocol,
+                    given_for_resume,
+                    first_input.as_deref(),
+                )?;
             }
             // A case keeps only the inputs its protocol declares: one it does not declare would
             // be dropped without a word, so a case to be opened refuses it before anything is.
@@ -394,30 +395,49 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // The unit: the case to resume, the intent given, or else the open case of an
             // active story or the next ready story of the planning store; a case is opened
             // before the store is told, so a run that cannot open its case takes nothing.
-            let mut run = match (case, intent) {
-                (Some(_), Some(_)) => {
+            let mut run = match (case, intent, resuming) {
+                (Some(_), Some(_), _) => {
                     return Err(anyhow!(
                         "--case resumes a case and --intent opens one; give one of them"
                     ));
                 }
-                (Some(case), None) => Run::resume(&repo, options, &case, harness, &validators)?,
-                (None, Some(intent)) => {
+                (Some(case), None, _) => Run::resume(&repo, options, &case, harness, &validators)?,
+                (None, Some(intent), _) => {
                     Run::open_unit(&repo, options, Unit::Intent(intent), harness, &validators)?
                 }
-                (None, None) => match Run::open_next(
-                    &repo,
-                    options,
-                    &Aep::default(),
-                    harness,
-                    &validators,
-                    out,
-                )? {
-                    Some(run) => run,
-                    None => {
-                        writeln!(out, "frontier: nothing ready")?;
-                        return Ok(EXIT_DONE);
+                // The open case of an active story, found and checked above: resumed as found,
+                // the store not read again.
+                (None, None, Some(resuming)) => {
+                    let run = Run::resume(&repo, options, &resuming.id, harness, &validators)?;
+                    let title = match &run.unit {
+                        Unit::Story(story) => story.title.clone(),
+                        Unit::Intent(intent) => intent.clone(),
+                    };
+                    writeln!(
+                        out,
+                        "frontier: resumed {}: {title} (case {})",
+                        resuming.story.as_deref().unwrap_or_default(),
+                        resuming.id
+                    )?;
+                    run
+                }
+                // Nothing to resume when the store was read above; should the store list a story
+                // active with an open case by the time `open_next` reads it again, that case is
+                // checked on the very list `open_next` resumes it from, before it is resumed.
+                (None, None, None) => {
+                    let frontier = CheckedResume {
+                        store: Aep::default(),
+                        given: given_for_resume,
+                        input: first_input.as_deref(),
+                    };
+                    match Run::open_next(&repo, options, &frontier, harness, &validators, out)? {
+                        Some(run) => run,
+                        None => {
+                            writeln!(out, "frontier: nothing ready")?;
+                            return Ok(EXIT_DONE);
+                        }
                     }
-                },
+                }
             };
             if let Some(line) = &forge_line {
                 writeln!(out, "{line}")?;
@@ -459,58 +479,136 @@ const STORY_DELIVERY: &str = "story.delivery/1";
 /// The protocol an `--intent` opens on when `--protocol` is not given.
 const SOFTWARE_CHANGE: &str = "software.change/1";
 
-/// The case a run will resume, read without resuming it, with the protocol from its own
-/// `protocol.yaml`: the one `--case` names, when its directory holds a case; for a run with
-/// neither `--case` nor `--intent`, the open case of a story the store lists active, found as
-/// `Run::open_next` finds it. `None` when the run opens a case, or when `--case` names none
+/// The case a run resumes, read without resuming it.
+struct Resuming {
+    /// The case id.
+    id: String,
+    /// The protocol from the case's own `protocol.yaml`.
+    protocol: LoadedProtocol,
+    /// The active story whose open case it is, when the store gave it.
+    story: Option<String>,
+}
+
+/// The case a run will resume, read without resuming it: the one `--case` names, when its
+/// directory holds a case; for a run with neither `--case` nor `--intent`, the open case of a
+/// story the store lists active, found as `Run::open_next` finds it, a decision that does not
+/// read said on `out`. `None` when the run opens a case, or when `--case` names none
 /// (`Run::resume` refuses that). Nothing is checked out and nothing written.
 fn case_to_resume(
     repo: &Path,
     case: Option<&str>,
     intent: bool,
-) -> Result<Option<(String, LoadedProtocol)>> {
-    let id = match (case, intent) {
-        (Some(id), false) => id.to_owned(),
+    out: &mut dyn Write,
+) -> Result<Option<Resuming>> {
+    let (id, story) = match (case, intent) {
+        (Some(id), false) => (id.to_owned(), None),
         (None, false) => {
             let active = Aep::default().active(repo)?;
-            match takt::case::resumable(repo, &active, &mut std::io::sink())? {
-                Some((id, _story)) => id,
+            match takt::case::resumable(repo, &active, out)? {
+                Some((id, story)) => (id, Some(story)),
                 None => return Ok(None),
             }
         }
         (_, true) => return Ok(None),
     };
-    let dir = repo.join(takt::case::CASES_DIR).join(&id);
+    Ok(case_protocol(repo, &id)?.map(|protocol| Resuming {
+        id,
+        protocol,
+        story,
+    }))
+}
+
+/// The protocol of the case `id` under `repo`, from its own `protocol.yaml`; `None` when its
+/// directory holds no case.
+fn case_protocol(repo: &Path, id: &str) -> Result<Option<LoadedProtocol>> {
+    let dir = repo.join(takt::case::CASES_DIR).join(id);
     if !dir.join("case.yaml").is_file() {
         return Ok(None);
     }
-    let own = LoadedProtocol::from_file(&dir.join("protocol.yaml"))?;
-    Ok(Some((id, own)))
+    LoadedProtocol::from_file(&dir.join("protocol.yaml")).map(Some)
 }
 
-/// Refuses `given`, named on the command line as `spec`, for the case `id` when it is not
-/// `own`, the protocol the case runs on: another id, or another document under the same id.
-fn refuse_another_protocol(
+/// Refuses what was given for the case `id`, which runs on `own` and is about to be resumed:
+/// `given`, a protocol named on the command line as its spec, when it is not `own` (another id,
+/// or another document under the same id); `input`, the first `--input`, whatever it is, because
+/// a resumed case keeps the inputs it was opened with.
+fn refuse_for_resume(
     id: &str,
     own: &LoadedProtocol,
-    given: &LoadedProtocol,
-    spec: &str,
+    given: Option<(&LoadedProtocol, &str)>,
+    input: Option<&str>,
 ) -> Result<()> {
-    if own.id != given.id {
-        return Err(anyhow!(
-            "the case {id} runs on {}, not {} (--protocol {spec}): a case keeps the protocol it was opened on; resume it without --protocol; nothing was changed",
-            own.id,
-            given.id
-        ));
+    if let Some((given, spec)) = given {
+        if own.id != given.id {
+            return Err(anyhow!(
+                "the case {id} runs on {}, not {} (--protocol {spec}): a case keeps the protocol it was opened on; resume it without --protocol; nothing was changed",
+                own.id,
+                given.id
+            ));
+        }
+        if own.ir_json != given.ir_json {
+            return Err(anyhow!(
+                "the case {id} runs on its own copy of {}, and --protocol {spec} is another document of {}: a case keeps the protocol it was opened on; resume it without --protocol; nothing was changed",
+                own.id,
+                given.id
+            ));
+        }
     }
-    if own.ir_json != given.ir_json {
+    if let Some(name) = input {
         return Err(anyhow!(
-            "the case {id} runs on its own copy of {}, and --protocol {spec} is another document of {}: a case keeps the protocol it was opened on; resume it without --protocol; nothing was changed",
-            own.id,
-            given.id
+            "--input {name}: the case {id} is resumed, and a resumed case keeps the inputs it was opened with; run without --input; nothing was changed"
         ));
     }
     Ok(())
+}
+
+/// The planning store as `Run::open_next` reads it when the read before found nothing to
+/// resume: the stories it lists active are read once more, and the open case `open_next` will
+/// resume from that very list, if any, is put through [`refuse_for_resume`] before the list is
+/// handed over, so a store that changed between the two reads cannot get a case resumed past
+/// what was given. Every other question goes to the store as asked.
+struct CheckedResume<'a> {
+    store: Aep,
+    given: Option<(&'a LoadedProtocol, &'a str)>,
+    input: Option<&'a str>,
+}
+
+impl Frontier for CheckedResume<'_> {
+    fn name(&self) -> &str {
+        self.store.name()
+    }
+
+    fn candidates(&self, repo: &Path) -> Result<Vec<String>> {
+        self.store.candidates(repo)
+    }
+
+    fn active(&self, repo: &Path) -> Result<Vec<String>> {
+        let active = self.store.active(repo)?;
+        // `open_next` says what it finds on its own `out`; this read only checks.
+        if let Some((id, _)) = takt::case::resumable(repo, &active, &mut std::io::sink())?
+            && let Some(own) = case_protocol(repo, &id)?
+        {
+            refuse_for_resume(&id, &own, self.given, self.input)?;
+        }
+        Ok(active)
+    }
+
+    fn show(&self, repo: &Path, id: &str) -> Result<takt::Story> {
+        self.store.show(repo, id)
+    }
+
+    fn take(&self, repo: &Path, id: &str) -> Result<takt::frontier::Take> {
+        self.store.take(repo, id)
+    }
+
+    fn record_approval(
+        &self,
+        repo: &Path,
+        story: &str,
+        approval: &takt::case::Approval,
+    ) -> Result<()> {
+        self.store.record_approval(repo, story, approval)
+    }
 }
 
 /// `text` on one line: its lines, trimmed, the empty ones left out, joined with ` | `.
