@@ -11,6 +11,7 @@ refs:
   reference: hours-bounds-a-harness-step
 relations:
 - informed_by: story:cli-small-fixes
+- supersedes: story:cli-small-fixes
 revision: 1
 ---
 ## Outcome
