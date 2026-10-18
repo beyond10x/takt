@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:approval-record-reaches-base
 kind: story
-status: draft
+status: active
 title: The approval record reaches the base's planning store
 summary: An approval committed on the case branch after the granted revision is lost at merge
 relations:
@@ -13,7 +13,10 @@ scope:
   path: crates/takt/src/frontier.rs
 - confidence: inferred
   path: crates/takt/src/validator.rs
-revision: 3
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T12:07:50Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-18T12:07:50Z", actor: "human:timo", revision: 5}
 ---
 # Story: approval-record-reaches-base
 

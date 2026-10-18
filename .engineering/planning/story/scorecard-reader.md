@@ -10,7 +10,16 @@ relations:
 - serves: vision:safe-agentic-coding
 - depends_on: story:run-record-and-story-evidence
 - depends_on: story:scenario-corpus
-revision: 2
+scope:
+- confidence: cited
+  path: crates/takt-cli/src/main.rs
+- confidence: cited
+  path: crates/takt/src/lib.rs
+- confidence: inferred
+  path: crates/takt/src/scorecard.rs
+- confidence: inferred
+  path: crates/takt/tests/scorecard.rs
+revision: 5
 ---
 # Story: scorecard-reader
 
@@ -39,9 +48,24 @@ reader.
 
 ## Scope
 
-- new: `crates/takt/src/scorecard.rs` (inferred)
-- `crates/takt/src/lib.rs` (inferred)
-- `crates/takt-cli/src/main.rs` (`scorecard`) (inferred)
+Derived 2026-10-18 by `story-scoper`. Every line is **cited** (read from the story or the tree) or
+**inferred** (a reading that could be wrong).
+
+- **Primary surface:** `crates/takt` (a new `scorecard` module) — inferred, from the story's own Scope, which marks it inferred
+- **Files:** new `crates/takt/src/scorecard.rs` — inferred, the story's Scope lists it
+- **Files:** `crates/takt/src/lib.rs:8-17` (the `pub mod scorecard;` line among the module list) — cited, the story names the file and the tree shows where modules are registered
+- **Files:** `crates/takt-cli/src/main.rs:28-37` (`enum Commands`, a `Scorecard` variant) and `:190` (`match cli.command`, its arm) — cited, the story names the file and `scorecard`, and the tree shows the subcommand enum and dispatch
+- **Files:** new `crates/takt/tests/scorecard.rs` (two recorded scenario-1 case directories as fixtures, plus a planted `task_spend` file) — inferred, from the Acceptance and Checks
+- **Symbols:** `Commands`, `CASES_DIR` (`crates/takt/src/case.rs:21`, `.engineering/cases`), `Stop::NoProgress` (`crates/takt/src/run.rs:61`) — cited
+- **Also likely:** read only, not edited: the event types in `crates/takt/src/events.rs`, which story:run-record-and-story-evidence creates — inferred, the file does not exist in this tree
+- **Documents:** none — inferred, the acceptance is all CLI output and nothing names a document
+- **Confidence:** medium — the three files are named in the story and confirmed in the tree, but the event format the reader parses does not exist yet (no `events.jsonl` match anywhere in `crates/`)
+- **Would collide with:** any unit adding or changing a `takt-cli` subcommand in `crates/takt-cli/src/main.rs` (story:scenario-corpus, story:promotion and story:week-of-daily-runs all edit it), and any unit registering a module in `crates/takt/src/lib.rs` — cited, from those stories' Scope sections
+- **Safety fact:** tokens from the events can be trusted over a `task_spend` file because the run loop snapshots `.engineering/cases` before every harness step and restores whatever the step touched (`crates/takt/src/run.rs:566-578`), so a candidate cannot plant or edit a case's events — step 2, unproven; it does not cover writes made outside `Run::step`, such as an `events.jsonl` emitted from another code path, or a case directory supplied by hand
+
+Not established: the event format (`events.jsonl`/`events.rs` do not exist yet); `task_spend` matches nothing in `crates/`; no source names where `--save` writes; no revision source for the saved file name; no home for metric definitions; refusals are printed, not counted (`run.rs:384`, `:608`).
+
+Typed entries: `crates/takt/src/scorecard.rs` (inferred), `crates/takt/src/lib.rs` (cited), `crates/takt-cli/src/main.rs` (cited), `crates/takt/tests/scorecard.rs` (inferred).
 
 ## Ordering
 
