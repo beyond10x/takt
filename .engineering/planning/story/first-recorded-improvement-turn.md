@@ -11,6 +11,7 @@ relations:
 - depends_on: story:scenario-corpus
 - depends_on: story:self-improvement-protocol
 - depends_on: story:cli-protocol-defaults
+- depends_on: story:grant-binds-to-action-subject
 scope:
 - confidence: inferred
   path: .engineering/cases
