@@ -39,6 +39,16 @@ evidence_kinds:
       the observation that the pull request whose head is an implementation revision, or that
       revision with only the commits that record its approval above it, was merged; its result
       is merged
+  handover:
+    description: >-
+      the harness chose to hand the change over at this implementation revision, with no file
+      changed: takt records the choice from the step, as it records a request for an approval.
+      The record attests a choice, not that the change is correct: the tests, the gate and
+      continuous integration stay validator evidence; it has no result
+  change_record:
+    description: >-
+      whether merging an implementation revision into the base branch's tip would change that
+      tip's tree outside .engineering/; its result is ahead or none
 
 claims:
   tests.pass:
@@ -76,6 +86,23 @@ claims:
         kind: merge_observation
         result: merged
         subject: implementation
+  change.handed_over:
+    description: >-
+      the harness handed the change over at the current implementation revision, saying it is
+      complete; a new commit returns it to unknown
+    true_when:
+      evidence:
+        kind: handover
+        subject: implementation
+  change.made:
+    description: >-
+      merging the current implementation revision into the base branch's tip would change its
+      tree outside .engineering/: there is a change to publish
+    true_when:
+      evidence:
+        kind: change_record
+        result: ahead
+        subject: implementation
 
 obligations:
   tests.required:
@@ -105,6 +132,26 @@ actions:
   implementation.edit:
     description: change the implementation in the repository's working revision
     effect: write
+  change.handover:
+    description: >-
+      hand the change over, changing no file, once it is complete (the story's tests written
+      and the implementation done) and no further edit is needed; takt records the choice, and
+      the pull request is opened for this revision and its continuous integration read once
+    effect: read
+    precondition:
+      claim: change.handed_over
+      is: unknown
+    may_produce:
+      - evidence: handover
+  change.read:
+    description: >-
+      read whether merging the implementation revision into the base branch's tip would change
+      its tree outside .engineering/; taken once the change is handed over
+    effect: read
+    precondition:
+      claim: change.handed_over
+    may_produce:
+      - evidence: change_record
   tests.run:
     description: run the tests against an implementation revision
     effect: read
@@ -119,17 +166,25 @@ actions:
     description: >-
       push the implementation revision, with the commits that record its approval above it when
       there are any, and open its pull request through the repository's bot route; needs the
-      tests and the gate green
+      tests and the gate green, the change handed over at the revision, and a merge of it into
+      the base branch's tip that would change the tip outside .engineering/, so nothing is opened
+      at the seed or for content the base already has
     effect: write
     precondition:
       all:
         - claim: tests.pass
         - claim: gate.green
+        - claim: change.handed_over
+        - claim: change.made
     may_produce:
       - evidence: pull_request
   ci.read:
-    description: read the continuous integration result for the pull request's head
+    description: >-
+      read the continuous integration result for the pull request's head; needs the pull
+      request open for the implementation revision
     effect: read
+    precondition:
+      claim: pr.opened
     may_produce:
       - evidence: ci_result
   repository.merge:

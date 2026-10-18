@@ -455,9 +455,11 @@ fn dumper(at: &Path, names: &Path, argv: &Path, stdout: &str) -> PathBuf {
     script
 }
 
-/// What the fake `claude` prints: a result whose last line names `repository.inspect`.
+/// What the fake `claude` prints: a result whose last line names `implementation.edit`, which it
+/// performs by changing nothing. Not `repository.inspect`: the Claude Code adapter keeps no state
+/// and is not offered it (story:no-inspect-for-stateless-harness).
 const CLAUDE_REPLY: &str =
-    r#"{"result": "{\"action\": \"repository.inspect\", \"summary\": \"read\"}"}"#;
+    r#"{"result": "{\"action\": \"implementation.edit\", \"summary\": \"read\"}"}"#;
 
 /// One judgement step by `harness` on the delivery protocol with no validator.
 fn one_step(tree: &Path, id: &str, harness: &dyn Harness) -> (anyhow::Result<Stop>, String) {

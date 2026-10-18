@@ -1422,6 +1422,70 @@ impl Checkpoint {
     }
 }
 
+/// Whether the trees of the commits `from` and `to` differ at any path outside the directory
+/// `outside` (relative to the tree): `git diff --quiet`, with no external diff and no text
+/// conversion, and no code from configuration ([`NO_CONFIGURED_CODE`]). Exit 0 is no
+/// difference, 1 a difference; any other exit is an error naming what git said.
+pub fn trees_differ_outside(tree: &Path, from: &str, to: &str, outside: &str) -> Result<bool> {
+    let exclude = format!(":(exclude){outside}");
+    let args = [
+        "diff",
+        "--quiet",
+        "--no-ext-diff",
+        "--no-textconv",
+        from,
+        to,
+        "--",
+        ".",
+        exclude.as_str(),
+    ];
+    let output = output(tree, &args, None)?;
+    match output.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => bail!(
+            "git {} in {} exited {}: {}",
+            args.join(" "),
+            tree.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
+}
+
+/// The tree merging `revision` into `base` would leave: `git merge-tree --write-tree`, which
+/// writes the merge's tree object and touches neither the work tree nor the index, with no code
+/// from configuration ([`NO_CONFIGURED_CODE`]). A merge with conflicts still answers its tree,
+/// the conflicted files in it as git leaves them; any exit but 0 (clean) or 1 (conflicts) is an
+/// error naming what git said.
+pub fn merged_tree(tree: &Path, base: &str, revision: &str) -> Result<String> {
+    let args = [
+        "merge-tree",
+        "--write-tree",
+        "--no-messages",
+        base,
+        revision,
+    ];
+    let output = output(tree, &args, None)?;
+    match output.status.code() {
+        Some(0 | 1) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let merged = stdout.lines().next().unwrap_or_default().trim().to_owned();
+            if merged.is_empty() {
+                bail!("git {} in {} named no tree", args.join(" "), tree.display());
+            }
+            Ok(merged)
+        }
+        _ => bail!(
+            "git {} in {} exited {}: {}",
+            args.join(" "),
+            tree.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

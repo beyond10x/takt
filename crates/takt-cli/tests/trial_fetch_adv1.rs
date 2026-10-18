@@ -247,6 +247,9 @@ exit 2
         r#"#!/bin/sh
 case "$2" in
   *"These need an approval"*) action=repository.merge ;;
+  *"- change.handover:"*)
+    if [ -e work.txt ]; then action=change.handover;
+    else echo "the work" >> work.txt; action=implementation.edit; fi ;;
   *) echo "the work" >> work.txt; action=implementation.edit ;;
 esac
 printf '{"result":"{\\"action\\": \\"%s\\", \\"summary\\": \\"the double\\"}","usage":{"input_tokens":1}}' "$action"
