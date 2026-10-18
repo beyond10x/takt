@@ -16,6 +16,7 @@ pub mod git;
 pub mod harness;
 pub mod protocol;
 pub mod run;
+pub mod scorecard;
 pub mod validator;
 
 pub use case::CaseDir;

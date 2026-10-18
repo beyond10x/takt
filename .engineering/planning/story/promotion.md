@@ -25,7 +25,7 @@ scope:
   path: crates/takt/src/promotion.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 4
+revision: 5
 ---
 # Story: promotion
 
@@ -70,7 +70,7 @@ Derived 2026-10-18 by `story-scoper`. Every line is **cited** (read from the sto
 - **Would collide with:** any unit that adds or changes a `takt-cli` subcommand in `crates/takt-cli/src/main.rs`, and any unit that adds a kernel module to `crates/takt/src/lib.rs` — cited, the story's Ordering names the `main.rs` overlap with story:scorecard-reader, and story:judge-guard names the same file
 - **Safety fact:** nothing in the tree reads `takt --version` output: the only version source is clap's `version` at `crates/takt-cli/src/main.rs:19`, and `git grep -- '--version\|CARGO_PKG_VERSION' crates` finds no reader, so adding the revision breaks no existing caller — step 2, unproven
 
-Not established: where the promotion record is stored (if in a tree a candidate edits, a candidate could plant its own baseline: the security reviewer should prove the location); what "installs" means (cargo install, copy, Taskfile task); the saved scorecard's format and location (story:scorecard-reader); whether a `promoted` validator in `validator.rs` is in scope (`protocols/self-improvement/1.yaml:182-192` declares `binary.promote`); whether `crates/takt-cli/Cargo.toml` needs dependencies.
+Not established: where the promotion record is stored (if in a tree a candidate edits, a candidate could plant its own baseline: the security reviewer should prove the location); what "installs" means (cargo install, copy, Taskfile task); the saved scorecard's format and location (story:scorecard-reader); whether a `promoted` validator in `validator.rs` is in scope (`protocols/self-improvement/1.yaml:184-194` declares `binary.promote`); whether `crates/takt-cli/Cargo.toml` needs dependencies.
 
 Typed entries: `crates/takt-cli/src/main.rs` (cited); `crates/takt-cli/build.rs`, `crates/takt/src/promotion.rs`, `crates/takt/src/lib.rs`, `crates/takt-cli/tests/promote_cli.rs`, `ess/domains/takt.yaml`, `README.md` (inferred).
 

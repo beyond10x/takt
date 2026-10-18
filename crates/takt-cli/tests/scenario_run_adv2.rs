@@ -135,7 +135,8 @@ fn world(name: &str) -> World {
     }
 }
 
-/// `b10x-gates bot -- fetch <remote> <refspec>`: a real `git fetch` from the bare `remote`, or
+/// `b10x-gates bot -- fetch <remote> <refspec>`: a real `git fetch` from the bare `remote`
+/// (standing in for the HTTPS server, so without the HTTPS-only transport takt sets), or
 /// nothing when `state/no-fetch` exists. `b10x-gates bot -- push [options] <remote> <spec>`: when
 /// `state/race` exists, first the push it holds (a refspec) is made into `remote` and the file
 /// removed, standing in for another checkout's run landing between this run's fetch and its
@@ -169,7 +170,7 @@ case "$1" in
     case "$verb" in
       fetch)
         if [ -e "$state/no-fetch" ]; then exit 0; fi
-        git fetch -q "$remote" "$spec"; exit $? ;;
+        env -u GIT_ALLOW_PROTOCOL git fetch -q "$remote" "$spec"; exit $? ;;
       push)
         if [ -e "$state/race" ]; then
           git push -q "$remote" "$(cat "$state/race")" || exit 3

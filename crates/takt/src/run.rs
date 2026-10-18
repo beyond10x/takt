@@ -108,6 +108,13 @@ fn short(revision: &str) -> &str {
     revision.get(..8).unwrap_or(revision)
 }
 
+/// Who took a step, with what its event records of it: a validator, and the revision it
+/// observed when it observed; or the harness, the tokens it reported and their components.
+enum SteppedBy<'r> {
+    Validator(Option<&'r str>),
+    Harness(Option<u64>, Option<crate::events::TokenUsage>),
+}
+
 /// Whether `validator` is due at a decision: its action is admissible, its evidence is missing
 /// at its subject's current revision, and it has not already observed there without a record.
 /// An evidence record that does not read is an error naming its file, never an answer.
@@ -2615,7 +2622,7 @@ impl<'a> Run<'a> {
                                 story: story.to_owned(),
                                 kind: TEST_RESULT.to_owned(),
                                 reference: reference.clone(),
-                                at: at.clone(),
+                                observed_at: at.clone(),
                                 commit: commit.map(str::to_owned),
                             },
                         )
@@ -2737,16 +2744,20 @@ impl<'a> Run<'a> {
         )
     }
 
-    /// Records a step: by a validator or the harness, which one, the action, what it reported.
+    /// Records a step: by a validator, with the revision it observed, or by the harness, with
+    /// the tokens it reported and their components; which one, the action, what it reported.
     fn stepped(
         &self,
         events: &Events,
-        by: &str,
+        by: SteppedBy<'_>,
         name: &str,
         action: &str,
         summary: &str,
-        tokens: Option<u64>,
     ) -> Result<()> {
+        let (by, tokens, usage, revision) = match by {
+            SteppedBy::Validator(revision) => ("validator", None, None, revision),
+            SteppedBy::Harness(tokens, usage) => ("harness", tokens, usage, None),
+        };
         events.emit(
             self.steps,
             &Event::Step {
@@ -2755,6 +2766,8 @@ impl<'a> Run<'a> {
                 action: action.to_owned(),
                 summary: summary.to_owned(),
                 tokens,
+                usage,
+                revision: revision.map(str::to_owned),
             },
         )
     }
@@ -2777,6 +2790,9 @@ impl<'a> Run<'a> {
                     Unit::Intent(_) => None,
                 },
                 inputs: inputs.clone(),
+                base: crate::case::Branch::read(&self.case.dir)
+                    .ok()
+                    .and_then(|branch| branch.base_commit),
             },
         )?;
         writeln!(
@@ -2887,11 +2903,10 @@ impl<'a> Run<'a> {
                     );
                     self.stepped(
                         events,
-                        "validator",
+                        SteppedBy::Validator(None),
                         validator.name(),
                         validator.action(),
                         "nothing observed",
-                        None,
                     )?;
                     self.refused(events, BY_TAKT, &why)?;
                     writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
@@ -3004,11 +3019,10 @@ impl<'a> Run<'a> {
                     // line written before it along.
                     self.stepped(
                         events,
-                        "validator",
+                        SteppedBy::Validator(Some(&revision)),
                         validator.name(),
                         validator.action(),
                         "nothing recorded",
-                        None,
                     )?;
                     self.refused(events, BY_TAKT, &why)?;
                     writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
@@ -3021,11 +3035,10 @@ impl<'a> Run<'a> {
                 let (observation, waits) = observed?;
                 self.stepped(
                     events,
-                    "validator",
+                    SteppedBy::Validator(Some(&revision)),
                     validator.name(),
                     validator.action(),
                     &observation.summary,
-                    None,
                 )?;
                 writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
                 writeln!(out, "  effect: {}", observation.summary)?;
@@ -3302,11 +3315,10 @@ impl<'a> Run<'a> {
             let record_step = |run: &Self| {
                 run.stepped(
                     events,
-                    "harness",
+                    SteppedBy::Harness(report.tokens, harness.last_usage()),
                     harness.name(),
                     &report.action,
                     &report.summary,
-                    report.tokens,
                 )
             };
             // A step that cannot be told on `out` is not judged: it is discarded whole, as
