@@ -323,31 +323,456 @@ fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -
 /// no judgement step writes.
 const ENGINEERING: &str = ".engineering";
 
-/// Whether `path`, relative to the tree as git names it, is the store's: under [`ENGINEERING`]
-/// (or that directory itself) and not under the cases directory.
-fn is_guarded_store_path(path: &str) -> bool {
-    let path = path.trim_end_matches('/');
-    (path == ENGINEERING || path.starts_with(&format!("{ENGINEERING}/")))
-        && !crate::case::is_under_cases(path)
+/// The judge surface every run guards, as a refusal names it.
+pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, and the test command's own script";
+
+/// The programs that run a script named after them: the word after their options is the
+/// script, which is the test command's own as much as `./check.sh` is.
+const INTERPRETERS: &[&str] = &[
+    "sh",
+    "bash",
+    "dash",
+    "zsh",
+    "ksh",
+    "mksh",
+    "ash",
+    "fish",
+    "busybox",
+    "python",
+    "pypy",
+    "perl",
+    "ruby",
+    "node",
+    "nodejs",
+    "deno",
+    "bun",
+    "php",
+    "rscript",
+    "lua",
+    "tclsh",
+    "pwsh",
+    "powershell",
+];
+
+/// How many links deep the judge surface is followed through links on it.
+const LINKS_AT_MOST: usize = 64;
+
+/// `path` with its case folded as a file system that ignores case folds it: lower case, and the
+/// two letters outside ASCII that fold into the ASCII letters of the guarded names.
+fn fold(path: &str) -> String {
+    path.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            '\u{17f}' => 's',
+            '\u{212a}' => 'k',
+            c => c,
+        })
+        .collect()
 }
 
-/// Everything under [`ENGINEERING`] but the cases directory, as [`snapshot`] takes it: what a
-/// step that wrote there is put back to.
-fn snapshot_store(tree: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
-    let cases = Path::new(CASES_DIR)
-        .strip_prefix(ENGINEERING)
-        .unwrap_or(Path::new(CASES_DIR));
-    snapshot_without(&tree.join(ENGINEERING), Some(cases))
-}
-
-/// Puts everything under [`ENGINEERING`] but the cases directory back to `kept`, where it still
-/// differs.
-fn put_back_store(tree: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<()> {
-    let again = differing(kept, &snapshot_store(tree)?);
-    if !again.is_empty() {
-        restore(&tree.join(ENGINEERING), kept, &again)?;
+/// `path` relative to the tree with `.` and `..` resolved and empty parts dropped, as git names
+/// a path; `None` when it leads out of the tree, `""` for the tree itself.
+fn normalise(path: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
     }
-    Ok(())
+    Some(parts.join("/"))
+}
+
+/// What the tree's path is to a path named relative to it or absolute: `None` outside it.
+fn in_tree(tree: &Path, word: &str) -> Option<String> {
+    let path = Path::new(word);
+    if path.is_relative() {
+        return normalise(word).filter(|path| !path.is_empty());
+    }
+    let roots = [
+        std::path::absolute(tree).ok(),
+        std::fs::canonicalize(tree).ok(),
+    ];
+    roots
+        .iter()
+        .flatten()
+        .find_map(|root| path.strip_prefix(root).ok())
+        .and_then(|inside| inside.to_str())
+        .and_then(normalise)
+        .filter(|path| !path.is_empty())
+}
+
+/// The program a word names, without its directory and its version: `python3.12` is `python`.
+fn program_of(word: &str) -> String {
+    let name = word.rsplit('/').next().unwrap_or(word);
+    fold(name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.'))
+}
+
+/// The paths in `tree` the command `words` runs as its own script: the program when it names a
+/// path, and, when the program is an interpreter ([`INTERPRETERS`]), the first word after its
+/// options (the script, or what `-c` runs); `env` and the assignments it is given are skipped.
+/// A word that names nothing yet is named all the same: a step could make it.
+#[must_use]
+pub fn scripts_of(words: &[String], tree: &Path) -> Vec<String> {
+    let mut words = words.iter().map(String::as_str).peekable();
+    let mut named = Vec::new();
+    while let Some(program) = words.next() {
+        named.extend(in_tree(tree, program));
+        if program_of(program) == "env" {
+            while words
+                .peek()
+                .is_some_and(|word| word.starts_with('-') || word.contains('='))
+            {
+                words.next();
+            }
+            continue;
+        }
+        if INTERPRETERS.contains(&program_of(program).as_str()) {
+            for word in words.by_ref() {
+                if let Some(value) = word.strip_prefix('-') {
+                    if let Some((_, value)) = value.split_once('=') {
+                        named.extend(in_tree(tree, value));
+                    }
+                    continue;
+                }
+                named.extend(in_tree(tree, word));
+                break;
+            }
+        }
+        break;
+    }
+    named.sort();
+    named.dedup();
+    named
+}
+
+/// A run's judge surface: what decides its validators, which no judgement step changes
+/// ([`JUDGE_SURFACE`]). Paths are matched whatever their case, as a file system that folds case
+/// would open them; what lies under a link on the surface, inside the tree, is on it too, since
+/// what reads the surface reads through the link. The cases directory is the kernel's and not on
+/// it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JudgeSurface {
+    /// The test command's own scripts, each by itself.
+    scripts: BTreeSet<String>,
+    /// What links on the surface lead to inside the tree, each with everything under it; `""` is
+    /// the whole tree.
+    through: BTreeSet<String>,
+    /// Where the cases directory is when a link puts it elsewhere.
+    cases: Option<String>,
+    /// Whether the planning store is on it: always, but for what decides a validator alone
+    /// ([`JudgeSurface::without_store`]).
+    store: bool,
+}
+
+impl JudgeSurface {
+    /// The surface of a run whose validators run `runs` ([`Validator::runs`]) in `tree`, links
+    /// not followed yet.
+    #[must_use]
+    pub fn new(runs: &[String], tree: &Path) -> Self {
+        let cases = std::fs::canonicalize(tree.join(CASES_DIR))
+            .ok()
+            .zip(std::fs::canonicalize(tree).ok())
+            .and_then(|(cases, root)| {
+                cases
+                    .strip_prefix(root)
+                    .ok()
+                    .and_then(Path::to_str)
+                    .map(str::to_owned)
+            })
+            .filter(|cases| cases != CASES_DIR);
+        Self {
+            scripts: scripts_of(runs, tree).into_iter().collect(),
+            through: BTreeSet::new(),
+            cases,
+            store: true,
+        }
+    }
+
+    /// The surface without the planning store: what decides `tests.run` and `ci.read`. The
+    /// store decides no test and no check, and takt writes it on a case's branch itself; a
+    /// step is still refused for writing it.
+    #[must_use]
+    pub fn without_store(mut self) -> Self {
+        self.store = false;
+        self
+    }
+
+    /// Whether `path`, relative to the tree as git names it, is under the cases directory.
+    fn is_cases(&self, path: &str) -> bool {
+        crate::case::is_under_cases(path)
+            || self.cases.as_deref().is_some_and(|cases| {
+                path == cases
+                    || path
+                        .strip_prefix(cases)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
+    }
+
+    /// Whether `path` is the store's: under `.engineering/`, whatever its case, and not a case's.
+    #[must_use]
+    pub fn is_store(path: &str) -> bool {
+        let path = path.trim_end_matches('/');
+        let folded = fold(path);
+        (folded == ENGINEERING || folded.starts_with(&format!("{ENGINEERING}/")))
+            && !crate::case::is_under_cases(path)
+    }
+
+    /// Whether `path`, relative to the tree as git names it, is on the surface.
+    #[must_use]
+    pub fn contains(&self, path: &str) -> bool {
+        let path = path.trim_end_matches('/');
+        if self.is_cases(path) {
+            return false;
+        }
+        let folded = fold(path);
+        let under = |prefix: &str| {
+            prefix.is_empty()
+                || folded == prefix
+                || folded
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        };
+        let parts: Vec<&str> = folded.split('/').collect();
+        let name = parts.last().copied().unwrap_or_default();
+        (self.store && Self::is_store(path))
+            || under(".github")
+            || parts.contains(&".cargo")
+            || name.starts_with("rust-toolchain")
+            || name == "build.rs"
+            || self.scripts.iter().any(|script| fold(script) == folded)
+            || self.through.iter().any(|at| under(&fold(at)))
+    }
+
+    /// Whether what reads the surface reads through a link at `link`: the link is on the surface,
+    /// or a script or what another link leads to is under it.
+    fn reaches(&self, link: &str) -> bool {
+        let folded = fold(link.trim_end_matches('/'));
+        let below = |path: &String| {
+            fold(path)
+                .strip_prefix(&folded)
+                .is_some_and(|rest| rest.starts_with('/'))
+        };
+        self.contains(link) || self.scripts.iter().any(below) || self.through.iter().any(below)
+    }
+
+    /// Puts what the link at `link` leads to, `at` relative to the tree, on the surface, with
+    /// everything under it: whether it was not there yet. The cases directory is not put on it.
+    fn lead(&mut self, link: &str, at: String) -> bool {
+        if !self.reaches(link) || self.is_cases(&at) {
+            return false;
+        }
+        self.through.insert(at)
+    }
+
+    /// Puts on the surface what the link `link` in git's tree, to `target`, leads to, read as
+    /// git holds it: its target resolved against the link's directory, inside the tree. Whether
+    /// the surface grew.
+    pub fn follow_git_link(&mut self, tree: &Path, link: &str, target: &str) -> bool {
+        let at = if Path::new(target).is_absolute() {
+            in_tree(tree, target)
+        } else {
+            let dir = link.rsplit_once('/').map_or("", |(dir, _)| dir);
+            normalise(&format!("{dir}/{target}"))
+        };
+        at.is_some_and(|at| self.lead(link, at))
+    }
+
+    /// Puts on the surface what the link at `link` in `tree`, to `target`, leads to on the file
+    /// system: through every further link, or, for a target that is not there, as named. Whether
+    /// the surface grew.
+    fn follow_link(&mut self, tree: &Path, link: &Path, target: &Path) -> bool {
+        let Some(link_name) = link.to_str() else {
+            return false;
+        };
+        let Ok(root) = std::fs::canonicalize(tree) else {
+            return false;
+        };
+        let dir = link.parent().unwrap_or(Path::new(""));
+        let Ok(dir) = std::fs::canonicalize(tree.join(dir)) else {
+            return false;
+        };
+        let joined = dir.join(target);
+        let resolved = std::fs::canonicalize(&joined).ok().or_else(|| {
+            joined
+                .to_str()
+                .and_then(|joined| normalise(joined.trim_start_matches('/')))
+                .map(|path| PathBuf::from(format!("/{path}")))
+        });
+        let at = resolved
+            .as_deref()
+            .and_then(|path| path.strip_prefix(&root).ok())
+            .and_then(Path::to_str)
+            .and_then(normalise);
+        at.is_some_and(|at| self.lead(link_name, at))
+    }
+
+    /// Where the surface is read in `tree`: the guarded names at its root, whatever their case,
+    /// each with what is under it; the scripts, each by itself; what links lead to, each with
+    /// what is under it, but the whole tree and `.git`, which git and the checkpoint guard.
+    fn roots(&self, tree: &Path) -> Result<Vec<(PathBuf, bool)>> {
+        let mut roots = Vec::new();
+        for entry in std::fs::read_dir(tree).with_context(|| format!("read {}", tree.display()))? {
+            let name = entry?.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let folded = fold(name);
+            if [ENGINEERING, ".cargo", ".github", "build.rs"].contains(&folded.as_str())
+                || folded.starts_with("rust-toolchain")
+            {
+                roots.push((PathBuf::from(name), true));
+            }
+        }
+        roots.extend(
+            self.scripts
+                .iter()
+                .map(|script| (PathBuf::from(script), false)),
+        );
+        roots.extend(
+            self.through
+                .iter()
+                .filter(|at| {
+                    let first = fold(at.split('/').next().unwrap_or_default());
+                    !at.is_empty() && first != ".git"
+                })
+                .map(|at| (PathBuf::from(at), true)),
+        );
+        Ok(roots)
+    }
+
+    /// Every file, link and other entry on the surface in `tree`, by path relative to it, as
+    /// [`snapshot`] takes them: a link is never followed, and a root reached through a link is
+    /// that link.
+    fn snapshot(&self, tree: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
+        fn walk(
+            tree: &Path,
+            at: &Path,
+            surface: &JudgeSurface,
+            entries: &mut BTreeMap<PathBuf, Entry>,
+            descend: bool,
+        ) -> Result<()> {
+            if at.to_str().is_some_and(|at| surface.is_cases(at)) {
+                return Ok(());
+            }
+            let full = tree.join(at);
+            let meta = match std::fs::symlink_metadata(&full) {
+                Ok(meta) => meta,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => {
+                    return Err(error).with_context(|| format!("read {}", full.display()));
+                }
+            };
+            let kind = meta.file_type();
+            if kind.is_symlink() {
+                let target = std::fs::read_link(&full)
+                    .with_context(|| format!("read the link {}", full.display()))?;
+                entries.insert(at.to_path_buf(), Entry::Link(target));
+            } else if kind.is_dir() {
+                if descend {
+                    for entry in std::fs::read_dir(&full)
+                        .with_context(|| format!("read {}", full.display()))?
+                    {
+                        walk(tree, &at.join(entry?.file_name()), surface, entries, true)?;
+                    }
+                }
+            } else if kind.is_file() {
+                let bytes =
+                    std::fs::read(&full).with_context(|| format!("read {}", full.display()))?;
+                entries.insert(
+                    at.to_path_buf(),
+                    Entry::File {
+                        bytes,
+                        executable: is_executable(&meta),
+                    },
+                );
+            } else {
+                entries.insert(at.to_path_buf(), Entry::Other(other_kind(kind)));
+            }
+            Ok(())
+        }
+        let mut entries = BTreeMap::new();
+        for (root, descend) in self.roots(tree)? {
+            // A root under a link is reached through it: the link is the entry, never followed.
+            let linked = root
+                .ancestors()
+                .skip(1)
+                .filter(|a| !a.as_os_str().is_empty())
+                .find(|ancestor| {
+                    std::fs::symlink_metadata(tree.join(ancestor))
+                        .is_ok_and(|meta| meta.file_type().is_symlink())
+                });
+            match linked {
+                Some(link) => walk(tree, link, self, &mut entries, false)?,
+                None => walk(tree, &root, self, &mut entries, descend)?,
+            }
+        }
+        Ok(entries)
+    }
+
+    /// The surface of a run whose validators run `runs`, read in `tree` as it is now, with every
+    /// link on it followed, and what is on it now.
+    fn read(runs: &[String], tree: &Path) -> Result<(Self, BTreeMap<PathBuf, Entry>)> {
+        let mut surface = Self::new(runs, tree);
+        let mut kept = surface.snapshot(tree)?;
+        for _ in 0..LINKS_AT_MOST {
+            let mut grew = false;
+            for (path, entry) in &kept {
+                if let Entry::Link(target) = entry {
+                    grew |= surface.follow_link(tree, path, target);
+                }
+            }
+            if !grew {
+                break;
+            }
+            kept = surface.snapshot(tree)?;
+        }
+        Ok((surface, kept))
+    }
+
+    /// Puts the surface in `tree` back to `kept`, where it still differs; through the tree's
+    /// real path, so a tree named through a link is not taken for a directory a step replaced.
+    fn put_back(&self, tree: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<()> {
+        let again = differing(kept, &self.snapshot(tree)?);
+        if !again.is_empty() {
+            let real = std::fs::canonicalize(tree)
+                .with_context(|| format!("resolve {}", tree.display()))?;
+            restore(&real, kept, &again)?;
+        }
+        Ok(())
+    }
+}
+
+/// How a refusal names what a step changed on the judge surface: the store first, as the store's,
+/// then the rest.
+fn surface_refusal(action: &str, touched: &[String]) -> String {
+    let (store, other): (Vec<&String>, Vec<&String>) = touched
+        .iter()
+        .partition(|path| JudgeSurface::is_store(path));
+    let join = |paths: &[&String]| {
+        paths
+            .iter()
+            .map(|path| path.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut parts = Vec::new();
+    if !store.is_empty() {
+        parts.push(format!(
+            "wrote into the planning store, which only takt writes once a case is accepted: {}",
+            join(&store)
+        ));
+    }
+    if !other.is_empty() {
+        parts.push(format!(
+            "changed the judge surface, what decides its validators ({JUDGE_SURFACE}): {}",
+            join(&other)
+        ));
+    }
+    format!("{action} {}", parts.join("; and "))
 }
 
 /// Discards everything a judgement step did, back to `checkpoint`, and puts the cases directory
@@ -776,6 +1201,12 @@ impl<'a> Run<'a> {
                 .and_then(|branch| branch.base),
         );
         kept
+    }
+
+    /// The words of every command the run's validators run from the tree ([`Validator::runs`]):
+    /// what names the test command's own script on the judge surface.
+    fn runs(&self) -> Vec<String> {
+        self.validators.iter().flat_map(|v| v.runs()).collect()
     }
 
     fn budget_spent(&self) -> Option<Stop> {
@@ -1253,11 +1684,15 @@ impl<'a> Run<'a> {
                 // own writes under its case are the only change admitted; anything else is put
                 // back, and the observation refused with nothing recorded. `.git` is put back
                 // before any git runs again: git runs what was planted there (a hook,
-                // `core.fsmonitor`).
+                // `core.fsmonitor`). The judge surface is snapshotted as around a judgement
+                // step: what the observation left there that git does not list (a FIFO, a file
+                // in an ignored directory) or that git lists as ignored is put back and the
+                // observation refused like any other foreign write.
                 let checkpoint =
                     crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
                 let cases = self.tree.join(CASES_DIR);
                 let kept = snapshot(&cases)?;
+                let (surface, surface_kept) = JudgeSurface::read(&self.runs(), &self.tree)?;
                 let observed = validator
                     .observe_waiting(&self.tree, &revision, seq)
                     .with_context(|| format!("{} ({})", validator.action(), validator.name()));
@@ -1269,6 +1704,26 @@ impl<'a> Run<'a> {
                         .into_iter()
                         .map(|path| format!("not put back: {path}")),
                 );
+                // What the observation left on the judge surface; a read that fails (a file
+                // the run may not read) discards everything it did before the run ends on the
+                // error.
+                let on_surface = match surface.snapshot(&self.tree) {
+                    Ok(now) => differing(&surface_kept, &now),
+                    Err(error) => {
+                        let undone = undo_step(&self.tree, &checkpoint, &cases, &kept)
+                            .and_then(|()| surface.put_back(&self.tree, &surface_kept));
+                        return Err(match undone {
+                            Ok(()) => error.context(format!(
+                                "{}: what the observation left on the judge surface could not be read; everything it changed was discarded",
+                                validator.action()
+                            )),
+                            Err(undo) => error.context(format!(
+                                "{}: what the observation left on the judge surface could not be read, and its change could not be discarded: {undo:#}",
+                                validator.action()
+                            )),
+                        });
+                    }
+                };
                 let touched = differing(&kept, &snapshot(&cases)?);
                 let own: Vec<PathBuf> = match self.case.dir.file_name() {
                     Some(id) => validator
@@ -1293,9 +1748,27 @@ impl<'a> Run<'a> {
                     outside.push(format!("HEAD, moved {moved}"));
                 }
                 outside.extend(change.refs.iter().cloned());
+                for path in on_surface
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .chain(
+                        change
+                            .ignored_added
+                            .iter()
+                            .chain(&change.ignored_changed)
+                            .chain(&change.ignored_removed)
+                            .filter(|path| surface.contains(path))
+                            .cloned(),
+                    )
+                {
+                    if !outside.contains(&path) {
+                        outside.push(path);
+                    }
+                }
                 if !foreign.is_empty() || !outside.is_empty() {
                     restore(&cases, &kept, &touched)?;
                     undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    surface.put_back(&self.tree, &surface_kept)?;
                     foreign.extend(outside);
                     let mut why = format!(
                         "{} wrote what its validator does not: {}",
@@ -1478,18 +1951,23 @@ impl<'a> Run<'a> {
             // ended; a step that touched it is refused.
             let cases = self.tree.join(CASES_DIR);
             let kept = snapshot(&cases)?;
-            // The planning store likewise, and everything else under `.engineering/` but the
-            // cases: the project file that says where the store is kept among it. Its
-            // artifacts and evidence are what the store's lifecycle moves a story on, and
-            // evidence comes from validators only. Only takt's own writes, made once a case is
-            // accepted ([`Run::record_on`]), change it. A step whose change git sees there
+            // The judge surface likewise ([`JudgeSurface`]): the planning store and everything
+            // else under `.engineering/` but the cases (the project file that says where the
+            // store is kept, the gates and the assertions project file among it), whose
+            // artifacts and evidence the store's lifecycle moves a story on and which only
+            // takt's own writes change once a case is accepted ([`Run::record_on`]); and what
+            // decides the validators, which a step that changed it would decide its own
+            // verdict with: the cargo configuration, the toolchain, build scripts, the CI
+            // workflows and the test command's own script. Matched whatever the case, and
+            // through every link on it the tree holds now. A step whose change git sees there
             // (a file, a link, a mode, a rename), or that left anything there the snapshot sees
-            // differ (a FIFO, which git does not list), is refused, and put back to the
-            // snapshot taken here.
-            let store_kept = snapshot_store(&self.tree)?;
-            let store_dirty_before: BTreeSet<String> = crate::git::changed_paths(&self.tree)?
+            // differ (a FIFO, which git does not list, a file in an ignored directory), is
+            // refused, and put back to the snapshot taken here.
+            let runs = self.runs();
+            let (surface, surface_kept) = JudgeSurface::read(&runs, &self.tree)?;
+            let surface_dirty_before: BTreeSet<String> = crate::git::changed_paths(&self.tree)?
                 .into_iter()
-                .filter(|path| is_guarded_store_path(path))
+                .filter(|path| surface.contains(path))
                 .collect();
             // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
             // base, and a sibling case's branch, which a step could otherwise move under it; a
@@ -1509,7 +1987,7 @@ impl<'a> Run<'a> {
             let tree = self.tree.clone();
             let undo = || -> Result<()> {
                 undo_step(&tree, &checkpoint, &cases, &kept)?;
-                put_back_store(&tree, &store_kept)
+                surface.put_back(&tree, &surface_kept)
             };
             let stepped = match stepped {
                 Ok(stepped) => stepped,
@@ -1525,19 +2003,20 @@ impl<'a> Run<'a> {
             };
             // What the step left, read now; a read that fails (a file the run may not read)
             // discards the step before the run ends on the error.
-            let seen = (|| -> Result<(Vec<PathBuf>, Vec<String>)> {
-                let touched = differing(&kept, &snapshot(&cases)?);
-                let mut store_touched: BTreeSet<String> =
-                    differing(&store_kept, &snapshot_store(&tree)?)
-                        .iter()
-                        .map(|path| Path::new(ENGINEERING).join(path).display().to_string())
-                        .collect();
-                store_touched.extend(crate::git::changed_paths(&tree)?.into_iter().filter(
-                    |path| is_guarded_store_path(path) && !store_dirty_before.contains(path),
-                ));
-                Ok((touched, store_touched.into_iter().collect()))
-            })();
-            let (touched, store_touched) = match seen {
+            let seen =
+                (|| -> Result<(Vec<PathBuf>, Vec<String>)> {
+                    let touched = differing(&kept, &snapshot(&cases)?);
+                    let mut surface_touched: BTreeSet<String> =
+                        differing(&surface_kept, &surface.snapshot(&tree)?)
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect();
+                    surface_touched.extend(crate::git::changed_paths(&tree)?.into_iter().filter(
+                        |path| surface.contains(path) && !surface_dirty_before.contains(path),
+                    ));
+                    Ok((touched, surface_touched.into_iter().collect()))
+                })();
+            let (touched, surface_touched) = match seen {
                 Ok(seen) => seen,
                 Err(error) => {
                     return Err(match undo() {
@@ -1635,18 +2114,14 @@ impl<'a> Run<'a> {
                 )?;
                 return Ok(Stop::StepRefused(why));
             }
-            if !store_touched.is_empty() {
+            if !surface_touched.is_empty() {
                 undo()?;
-                let why = format!(
-                    "{} wrote into the planning store, which only takt writes once a case is accepted: {}",
-                    report.action,
-                    store_touched.join(", ")
-                );
+                let why = surface_refusal(&report.action, &surface_touched);
                 record_step(self)?;
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(
                     out,
-                    "  refused: {why}; the planning store was put back and the change discarded"
+                    "  refused: {why}; the judge surface was put back and the change discarded"
                 )?;
                 return Ok(Stop::StepRefused(why));
             }

@@ -71,6 +71,12 @@ fn gates(assertion: &str) -> String {
 
 fn repository(name: &str, assertion: &str, files: &[(&str, &str)]) -> Scratch {
     let dir = directory(name);
+    fs::create_dir_all(dir.join("tests")).expect("the tests directory");
+    fs::write(
+        dir.join("tests/run.sh"),
+        "#!/bin/sh\nexec sh \"$(dirname \"$0\")/case.sh\" \"$@\"\n",
+    )
+    .expect("the test runner");
     fs::create_dir_all(dir.join(".engineering")).expect("the engineering directory");
     fs::write(dir.join("README.md"), "a story\n").expect("a file");
     fs::write(dir.join(".engineering/gates.yaml"), gates(assertion)).expect("the gates");
@@ -188,7 +194,7 @@ fn original_finding_1_a_forging_test_command_merges_nothing() {
         ..Memory::default()
     });
     let validators = pipeline(&memory, "sh tests/run.sh");
-    let harness = Writes::new(&[("tests/run.sh", FORGER)]);
+    let harness = Writes::new(&[("tests/case.sh", FORGER)]);
     let mut run = Run::open(&tree, options("orig1", 20), &harness, &validators).expect("opens");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
@@ -260,7 +266,7 @@ fn a_test_command_that_plants_core_fsmonitor_leaves_no_grant() {
         ..Memory::default()
     });
     let validators = pipeline(&memory, "sh tests/run.sh");
-    let harness = Writes::new(&[("tests/run.sh", FSMONITOR)]);
+    let harness = Writes::new(&[("tests/case.sh", FSMONITOR)]);
     let mut run = Run::open(&tree, options("fsmonitor", 20), &harness, &validators).expect("opens");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
@@ -310,7 +316,7 @@ fn a_test_command_that_plants_core_fsmonitor_gets_no_credential() {
     let validators: Vec<Box<dyn Validator>> = vec![Box::new(
         TestsRun::new("sh tests/run.sh").expect("a command"),
     )];
-    let harness = Writes::new(&[("tests/run.sh", FSMONITOR)]);
+    let harness = Writes::new(&[("tests/case.sh", FSMONITOR)]);
     let mut run =
         Run::open(&tree, options("fsmonitor-env", 6), &harness, &validators).expect("opens");
     let mut out = Vec::new();
@@ -352,7 +358,7 @@ fn a_test_command_that_moves_the_base_branch_does_not_change_the_gate_verdict() 
         Box::new(TestsRun::new("sh tests/run.sh").expect("a command")),
         Box::new(GateRun::new(".engineering/gates.yaml")),
     ];
-    let harness = Writes::new(&[("tests/run.sh", MOVES_BASE)]);
+    let harness = Writes::new(&[("tests/case.sh", MOVES_BASE)]);
     let mut run = Run::open(&tree, options("moves-base", 8), &harness, &validators).expect("opens");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
@@ -384,7 +390,7 @@ fn a_test_command_that_leaves_a_detached_writer_leaves_no_grant() {
     let validators: Vec<Box<dyn Validator>> = vec![Box::new(
         TestsRun::new("sh tests/run.sh").expect("a command"),
     )];
-    let harness = Writes::new(&[("tests/run.sh", DETACHED)]);
+    let harness = Writes::new(&[("tests/case.sh", DETACHED)]);
     let mut run = Run::open(&tree, options("detached", 6), &harness, &validators).expect("opens");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
