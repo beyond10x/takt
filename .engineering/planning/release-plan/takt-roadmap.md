@@ -8,7 +8,7 @@ summary: Now (waves 10-11), Next (12-13), Later; outcomes in PRD order; the read
 relations:
 - derived_from: product-requirements:takt
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 3
 ---
 # Release plan: takt roadmap, from 2026-10-18
 
@@ -63,6 +63,7 @@ Done on 2026-10-18: the first improvement turn, `self.improvement/1`, recorded b
 | normalized-harness-trace | measurement | harness-journey-timeline (done) |
 | second-harness-adapter | the seams (M4) | normalized-harness-trace helps |
 | epic:continuous-orchestration (build steps 2–8 of design:continuous-orchestration) | outcome 4 | declared-loops, workflow-schema-and-loader; decompose before wave 14 |
+| epic:benchmark-integration (design:benchmark-integration): six realistic scenarios and the in-repository runner first (scenario-corpus-realistic, baseline-runner-in-repo, bench-nouns-in-ess), then Terminal-Bench 2.0 and SWE-bench Verified Mini through the organization's benchmark instrument | measurement for every outcome | none for the first three; the container and protocol stories for the benchmarks |
 | workflow-schema-and-loader, declared-loops | M3 and outcome 4 | the store-guard constraint in workflow-schema-and-loader |
 
 ## Open decisions held by the owner
