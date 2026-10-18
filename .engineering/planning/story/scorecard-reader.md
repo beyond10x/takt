@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scorecard-reader
 kind: story
-status: draft
+status: implemented
 title: takt scorecard reads run events per scenario against the promoted baseline
 summary: outcome, steps, tokens, refusals, errors, wall time from events.jsonl only
 relations:
@@ -19,7 +19,11 @@ scope:
   path: crates/takt/src/scorecard.rs
 - confidence: inferred
   path: crates/takt/tests/scorecard.rs
-revision: 5
+revision: 9
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":4}}}
+- {from: "proposed", to: "active", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":4}}}
+- {from: "active", to: "implemented", at: "2026-10-18T18:21:53Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"test_result":1,"review_outcome":6}}}
 ---
 # Story: scorecard-reader
 
@@ -87,3 +91,22 @@ to the sum of the harness-reported tokens in that run's events.
 
 Choosing the baseline and promoting (story:promotion); the weekly report and defects escaped
 (story:week-of-daily-runs); the loop scorecard (story:loop-scorecard).
+
+## Landed (wave 10)
+
+Read from `git diff --stat 8b0afc5^1 8b0afc5` (the unit's merge into the wave branch) at the close of wave 10 (wave branch head 8858b49). Comparison by dominance per outcome rank; a case accepted in any run stays accepted. Saved-file provenance, case identity and the flakiness and token questions are carried by story:promotion.
+
+- `crates/takt-cli/src/main.rs`
+- `crates/takt-cli/tests/scorecard_adv1.rs`
+- `crates/takt-cli/tests/scorecard_cli.rs`
+- `crates/takt/src/events.rs`
+- `crates/takt/src/harness.rs`
+- `crates/takt/src/lib.rs`
+- `crates/takt/src/run.rs`
+- `crates/takt/src/scorecard.rs`
+- `crates/takt/tests/run_record.rs`
+- `crates/takt/tests/scorecard.rs`
+- `crates/takt/tests/scorecard_adv1.rs`
+- `crates/takt/tests/scorecard_adv2.rs`
+- `ess/domains/takt.citations.tsv`
+- `ess/domains/takt.yaml`

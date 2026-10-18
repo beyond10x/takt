@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
@@ -39,7 +40,43 @@ enum Commands {
     /// The repository's scenarios: a story at a known seed commit, run from a fresh base.
     #[command(subcommand)]
     Scenario(ScenarioCommands),
+    /// Print, per run of a case under `.engineering/cases/`, its outcome, steps, tokens,
+    /// refusals, `NoProgress`, errors and wall time, read from the case's `events.jsonl` only;
+    /// a case without one is listed as `no record`.
+    #[command(after_help = SCORECARD_EXIT_CODES)]
+    Scorecard(ScorecardArgs),
 }
+
+#[derive(clap::Args)]
+struct ScorecardArgs {
+    /// The repository worktree whose cases are read.
+    #[arg(long)]
+    repo: PathBuf,
+    /// Save the scorecard as `<dir>/scorecard-<revision>.json`, named by --revision, which it
+    /// needs; a file there already is not overwritten.
+    #[arg(long, value_name = "DIR")]
+    save: Option<PathBuf>,
+    /// The revision of takt under test, a commit id, that names the saved scorecard; never the
+    /// scenario repository's HEAD.
+    #[arg(long, value_name = "SHA", requires = "save")]
+    revision: Option<String>,
+    /// Compare each scenario with the same scenario in a saved scorecard, over cases (a case's
+    /// outcome is the best a run of it completed with, else its last run's): worse when, for
+    /// some outcome rank (accepted, then ApprovalRequired or Waiting, then a budget stop, then
+    /// NoProgress and every other stop, then an error), the share of its cases at that rank or
+    /// better is below the saved share, each such rank printed with both shares, or when the
+    /// saved scorecard has the scenario and this one has no run of it; tokens as n, min, median
+    /// and max per scenario and side, and the difference of the medians, never worse.
+    #[arg(long, value_name = "FILE")]
+    against: Option<PathBuf>,
+}
+
+/// What `takt scorecard --help` says about the exit codes.
+const SCORECARD_EXIT_CODES: &str = "Exit codes:
+  0  printed (and saved); with --against, no scenario is worse than the saved one
+  1  refused: the repository, a case's events.jsonl or the saved scorecard does not read; --save without --revision, onto a file that exists, or that cannot be written; the reason on stderr
+  2  the arguments do not parse
+  3  with --against: a scenario is worse: at some outcome rank the share of its cases at that rank or better is below the saved share, or it has no run (tokens never make a scenario worse)";
 
 #[derive(Subcommand)]
 enum ScenarioCommands {
@@ -289,6 +326,21 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             Ok(EXIT_DONE)
         }
         Commands::Scenario(ScenarioCommands::Run(args)) => scenario_run(*args, out),
+        Commands::Scorecard(ScorecardArgs {
+            repo,
+            save,
+            revision,
+            against,
+        }) => {
+            let worse = takt::scorecard::report(
+                &repo,
+                save.as_deref(),
+                revision.as_deref(),
+                against.as_deref(),
+                out,
+            )?;
+            Ok(if worse > 0 { 3 } else { EXIT_DONE })
+        }
         Commands::Run(args) => {
             let RunArgs {
                 repo,
@@ -513,17 +565,54 @@ struct Forged {
 /// rejected, never fast-forwarded; and it reports in `--porcelain` form, where only a `*` (new
 /// ref) for the branch counts: a branch the remote already holds at the same commit is "up to
 /// date", exit 0, which the lease does not refuse.
+///
+/// The fetch names the remote's HTTPS URL, not `remote`: `origin` may be an SSH URL, and takt
+/// gives no child the user's SSH agent, so a fetch from it has no credential. Over HTTPS it
+/// goes under the bot route's credential (or none, for a public repository). Its child gets
+/// `GIT_ALLOW_PROTOCOL=https` ([`Self::FETCH_ENV`]), so an `insteadOf` rule in the
+/// repository's own configuration, which the bot route's git still reads, cannot turn it back
+/// into SSH: git refuses the transport and never starts `ssh`. Only the fetch gets it; a push or
+/// another bot-route line keeps whatever transport it uses. It is held to
+/// [`Self::FETCH_TIMEOUT`], and its child can wait on no prompt ([`takt::forge::NO_PROMPT`]).
 struct TrialRoute {
-    /// The remote the bot route pushes to.
+    /// The remote the bot route pushes to; its remote-tracking refs take the fetched branches.
     remote: String,
+    /// The remote's HTTPS URL, `https://github.com/<owner>/<repo>.git`, the fetch's source.
+    url: String,
+    /// What the fetch runs as, held to [`Self::FETCH_TIMEOUT`].
+    fetcher: Process,
     runner: Box<dyn Runner>,
 }
 
 impl TrialRoute {
-    /// The line that fetches the remote's trial branches into its remote-tracking refs.
+    /// How long the fetch may take before it is killed and the run refused.
+    const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// What the fetch's child is started with beyond every forge child's: git may use HTTPS
+    /// alone, whatever URL the repository's configuration rewrites the fetch's to.
+    const FETCH_ENV: [(&str, &str); 1] = [("GIT_ALLOW_PROTOCOL", "https")];
+
+    /// The trial route of `bot`: its remote, the HTTPS URL of its repository, the fetch held to
+    /// [`Self::FETCH_TIMEOUT`] and the push to the forge's limits.
+    fn of(bot: &BotRoute) -> Self {
+        Self {
+            remote: bot.remote.clone(),
+            url: format!("https://{}/{}.git", BotRoute::HOST, bot.repository),
+            fetcher: Process {
+                limits: takt::forge::Limits {
+                    timeout: Self::FETCH_TIMEOUT,
+                    ..Process::LIMITS
+                },
+            },
+            runner: Box::new(Process::default()),
+        }
+    }
+
+    /// The line that fetches the remote's trial branches, from its HTTPS URL, into its
+    /// remote-tracking refs.
     fn fetch_argv(&self) -> Vec<String> {
         let refspec = format!("+refs/heads/trial/*:refs/remotes/{}/trial/*", self.remote);
-        ["b10x-gates", "bot", "--", "fetch", &self.remote, &refspec]
+        ["b10x-gates", "bot", "--", "fetch", &self.url, &refspec]
             .map(str::to_owned)
             .to_vec()
     }
@@ -547,10 +636,9 @@ impl TrialRoute {
         .to_vec()
     }
 
-    /// Runs `argv` in `tree`; a program that did not exit 0 is an error naming the line and
+    /// `exit`, how `argv` ended; a program that did not exit 0 is an error naming the line and
     /// what it said.
-    fn succeed(&self, tree: &Path, argv: &[String]) -> Result<takt::forge::Exit> {
-        let exit = self.runner.run(tree, argv)?;
+    fn succeed(argv: &[String], exit: takt::forge::Exit) -> Result<takt::forge::Exit> {
         if !exit.success() {
             return Err(anyhow!(
                 "{} exited {}: {}",
@@ -563,9 +651,12 @@ impl TrialRoute {
         Ok(exit)
     }
 
-    /// Fetches the remote's trial branches.
+    /// Fetches the remote's trial branches over HTTPS only ([`Self::FETCH_ENV`]), killed past
+    /// [`Self::FETCH_TIMEOUT`].
     fn fetch(&self, tree: &Path) -> Result<()> {
-        self.succeed(tree, &self.fetch_argv()).map(|_| ())
+        let argv = self.fetch_argv();
+        let exit = self.fetcher.run_with(tree, &argv, &Self::FETCH_ENV)?;
+        Self::succeed(&argv, exit).map(|_| ())
     }
 
     /// Pushes `trial` and answers only when the push exits 0 and reports it created on the
@@ -616,11 +707,13 @@ impl TrialRoute {
 
 impl Forged {
     /// Adds the forge's validators, `pr.open`, `ci.read` and `repository.merge`, when there is
-    /// a forge.
+    /// a forge; `ci.read` given what the validators already there run from the tree, the test
+    /// command among it, for its judge surface.
     fn register(&self, validators: &mut Vec<Box<dyn Validator>>) {
         if let Some(forge) = &self.forge {
+            let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
             validators.push(Box::new(PrOpen::new(forge.clone())));
-            validators.push(Box::new(CiRead::new(forge.clone())));
+            validators.push(Box::new(CiRead::new(forge.clone()).with_runs(runs)));
             validators.push(Box::new(PrMerged::new(forge.clone())));
         }
     }
@@ -637,10 +730,7 @@ fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
             "forge: bot ({}); pr.open, ci.read and repository.merge go through the bot route",
             bot.repository
         );
-        let trials = TrialRoute {
-            remote: bot.remote.clone(),
-            runner: Box::new(Process::default()),
-        };
+        let trials = TrialRoute::of(&bot);
         Ok(Forged {
             forge: Some(Rc::new(bot)),
             line: Some(line),

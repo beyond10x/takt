@@ -76,11 +76,123 @@ pub trait Validator {
     fn writes(&self) -> Vec<PathBuf> {
         Vec::new()
     }
+    /// The words of the command the validator runs from the tree, the test command's: what
+    /// names the command's own script on the run's judge surface
+    /// ([`crate::run::JudgeSurface`]), which no judgement step changes. None by default.
+    fn runs(&self) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+/// What the case's branch did to the judge surface between its base and a revision.
+enum Judged {
+    /// Nothing on it differs.
+    Unchanged,
+    /// These paths differ from the case's base, shown as the summary names it.
+    Changed { base: String, paths: Vec<String> },
+    /// The case pins no base commit to compare with.
+    NoBase,
+}
+
+/// Whether the case's branch changed what decides `tests.run` and `ci.read` between the case's
+/// base at `dir` and `revision`: the run's judge surface ([`crate::run::JudgeSurface`]) but the
+/// planning store, a link on it or on the way to a script at either commit, and the entries of a
+/// cargo manifest that decide how cargo builds or runs the tests
+/// ([`crate::run::manifest_build_changes`]) and of `pyproject.toml`'s pytest tables, the surface
+/// extended by the repository's own list ([`crate::run::JUDGE_LIST`]) read at the base, which
+/// records nothing when it does not parse. A change no step
+/// could make, because the step guard refuses it, but one that reached the branch by another
+/// route (a commit made outside the loop) would decide the verdict all the same. The store is
+/// guarded at the step too, but it decides no test and no check, and takt itself writes it on
+/// the case's branch (the take, an accepted case's test result and move): it is not compared.
+fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Judged> {
+    let Some((base, at)) = base_revision(tree, dir)? else {
+        return Ok(Judged::NoBase);
+    };
+    // The repository's own list, read at the base: one that does not parse records nothing.
+    let mut paths: Vec<String> = Vec::new();
+    let globs = match crate::run::judge_list_at(tree, &at)? {
+        Ok(globs) => globs,
+        Err(why) => {
+            paths.push(why);
+            Vec::new()
+        }
+    };
+    let surface = crate::run::JudgeSurface::new(runs, tree)
+        .without_store()
+        .with_globs(globs);
+    // A link is never followed: one the base or the revision holds on the surface, or on the
+    // way to a script, is named, and nothing is recorded while it is there.
+    for commit in [at.as_str(), revision] {
+        let listed = crate::git::run(tree, &["ls-tree", "-r", "-z", "--full-tree", commit])?;
+        for entry in listed.split('\0') {
+            let Some((meta, path)) = entry.split_once('\t') else {
+                continue;
+            };
+            if meta.starts_with("120000 ") && surface.reads_through(path) {
+                let named = format!("{path} (a link)");
+                if !paths.contains(&named) {
+                    paths.push(named);
+                }
+            }
+        }
+    }
+    let diff = crate::git::run(
+        tree,
+        &[
+            "diff-tree",
+            "-r",
+            "-z",
+            "--no-renames",
+            "--name-only",
+            &at,
+            revision,
+            "--",
+        ],
+    )?;
+    for path in diff.split('\0').filter(|path| !path.is_empty()) {
+        if surface.contains(path) {
+            paths.push(path.to_owned());
+        } else if crate::run::is_manifest(path) || crate::run::is_pyproject(path) {
+            let before = crate::run::manifest_at(tree, &at, path)?;
+            let after = crate::run::manifest_at(tree, revision, path)?;
+            let compared = if crate::run::is_manifest(path) {
+                crate::run::manifest_build_changes(&before, &after)
+            } else {
+                crate::run::pytest_config_changes(&before, &after)
+            };
+            match compared {
+                Ok(keys) => paths.extend(keys.into_iter().map(|key| format!("{path}: {key}"))),
+                Err(line) => paths.push(format!(
+                    "{path}: a line the manifest scanner cannot read with certainty, {line}"
+                )),
+            }
+        }
+    }
+    Ok(if paths.is_empty() {
+        Judged::Unchanged
+    } else {
+        Judged::Changed { base, paths }
+    })
+}
+
+/// An observation that recorded nothing, its summary `summary`.
+fn nothing_recorded(summary: String) -> Observation {
+    Observation {
+        summary,
+        records: Vec::new(),
+        artifact: None,
+    }
 }
 
 /// `tests.run`: runs the test command without a shell; exit 0 is `pass`, anything else `fail`.
 /// The command is code from the tree: it gets no credential, no standard input, a timeout past
 /// which it is killed with what it started, and only a bounded tail of its output is kept.
+/// What decides it besides the code under test is on the run's judge surface, which no step
+/// changes: the cargo configuration, the toolchain, build scripts and the command's own script
+/// ([`crate::run::JudgeSurface`]). In a case, nothing is run and no record written while the
+/// case's branch changed one of those since its base, or when the case pins no base to compare
+/// with; the summary names the paths.
 #[derive(Debug, Clone)]
 pub struct TestsRun {
     /// The command and its arguments.
@@ -133,7 +245,33 @@ impl Validator for TestsRun {
         "implementation"
     }
 
+    fn runs(&self) -> Vec<String> {
+        self.command.clone()
+    }
+
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        let shown = self.command.join(" ");
+        // A tree on no case's branch is no case's observation and has no base to compare with.
+        if crate::git::current_branch(tree)?
+            .is_some_and(|branch| branch.starts_with(crate::case::BRANCH_PREFIX))
+        {
+            let dir = current(tree)?;
+            match judged(tree, &dir, revision, &self.command)? {
+                Judged::Unchanged => {}
+                Judged::NoBase => {
+                    return Ok(nothing_recorded(format!(
+                        "the test command `{shown}`: not run; the case pins no base commit ({BRANCH_FILE} has no base_commit) to compare its judge surface with; no record, the claim stays unknown; abandon the case and open it again"
+                    )));
+                }
+                Judged::Changed { base, paths } => {
+                    return Ok(nothing_recorded(format!(
+                        "the test command `{shown}`: not run; the case's branch at {} changed the judge surface since {base}: {}; no record, the claim stays unknown",
+                        short(revision),
+                        paths.join(", ")
+                    )));
+                }
+            }
+        }
         let mut command = Command::new(&self.command[0]);
         command.args(&self.command[1..]).current_dir(tree);
         crate::forge::without_credentials(&mut command, |_| false);
@@ -861,17 +999,34 @@ impl Validator for PrOpen {
 /// the revision or the revision with only the approval's own commits above it: a number the
 /// case directory carries is not trusted on its own. Nothing but the pull request head is read.
 /// Pending checks, and a pull request whose head on the case's branch is not yet at the head
-/// pushed, wait on the forge.
+/// pushed, wait on the forge. What the checks run is decided by the run's judge surface (the CI
+/// workflows under `.github/`, the cargo configuration, the toolchain, build scripts, the test
+/// command's own script; [`crate::run::JudgeSurface`]), which no step changes: nothing is read
+/// and no record written while the case's branch changed it since its base, or when the case
+/// pins no base to compare with; the summary names the paths.
 pub struct CiRead {
     /// The forge the checks are read through.
     pub forge: Rc<dyn Forge>,
+    /// The words of the commands the run's validators run from the tree ([`Validator::runs`]):
+    /// what names the test command's own script on the judge surface.
+    pub runs: Vec<String>,
 }
 
 impl CiRead {
     /// Over `forge`.
     #[must_use]
     pub fn new(forge: Rc<dyn Forge>) -> Self {
-        Self { forge }
+        Self {
+            forge,
+            runs: Vec::new(),
+        }
+    }
+
+    /// With the run's validators running `runs` from the tree ([`Validator::runs`]).
+    #[must_use]
+    pub fn with_runs(mut self, runs: Vec<String>) -> Self {
+        self.runs = runs;
+        self
     }
 }
 
@@ -925,6 +1080,27 @@ impl Validator for CiRead {
                 waits,
             )
         };
+        match judged(tree, &dir, revision, &self.runs)? {
+            Judged::Unchanged => {}
+            Judged::NoBase => {
+                return Ok(nothing(
+                    format!(
+                        "the case pins no base commit ({BRANCH_FILE} has no base_commit) to compare its judge surface with; nothing read, the claim stays unknown; abandon the case and open it again"
+                    ),
+                    false,
+                ));
+            }
+            Judged::Changed { base, paths } => {
+                return Ok(nothing(
+                    format!(
+                        "the case's branch at {} changed the judge surface since {base}: {}; nothing read, the claim stays unknown",
+                        short(revision),
+                        paths.join(", ")
+                    ),
+                    false,
+                ));
+            }
+        }
         let Some(number) = branch.pull_request else {
             return Ok(nothing(
                 "no pull request is open for the case; nothing to read, the claim stays unknown"

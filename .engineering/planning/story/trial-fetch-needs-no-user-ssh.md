@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:trial-fetch-needs-no-user-ssh
 kind: story
-status: draft
+status: implemented
 title: takt scenario run fetches trial branches without the user's SSH credential
 summary: the trial-branch fetch hung 300 s twice because takt strips SSH_AUTH_SOCK and the bot fetch uses origin's SSH URL
 relations:
@@ -13,7 +13,11 @@ scope:
   path: crates/takt-cli/src/main.rs
 - confidence: inferred
   path: crates/takt/src/forge.rs
-revision: 3
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-18T18:21:52Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: trial-fetch-needs-no-user-ssh
 
@@ -44,3 +48,15 @@ On takt at 0a776d2, holds; after the fix, fails:
 ## Acceptance
 
 In a fresh SSH clone with the user's agent loaded, `takt scenario run` fetches the trial branches through a route that needs no user credential (the bot route over HTTPS, or an anonymous fetch of a public repository) and proceeds to cut `trial/<n>`; a fetch that cannot authenticate exits within 30 s naming the remote and the reason, with nothing changed.
+
+## Landed (wave 10)
+
+Read from `git diff --stat e9a6deb^1 e9a6deb` (the unit's merge into the wave branch) at the close of wave 10 (wave branch head 8858b49). The trial fetch runs with GIT_ALLOW_PROTOCOL=https only; forge children run with no askpass, no terminal prompt and ssh BatchMode, under a 30 s bound. The push side is story:scan-before-push.
+
+- `crates/takt-cli/src/main.rs`
+- `crates/takt-cli/tests/scenario_run.rs`
+- `crates/takt-cli/tests/scenario_run_adv2.rs`
+- `crates/takt-cli/tests/trial_fetch_adv1.rs`
+- `crates/takt/src/forge.rs`
+- `ess/domains/takt.citations.tsv`
+- `ess/domains/takt.yaml`

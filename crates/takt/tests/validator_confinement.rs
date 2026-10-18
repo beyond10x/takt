@@ -103,6 +103,12 @@ fn gates(assertion: &str) -> String {
 /// `files`; executable when their name ends in `.sh`.
 fn repository(name: &str, assertion: &str, files: &[(&str, &str)]) -> Scratch {
     let dir = directory(name);
+    fs::create_dir_all(dir.join("tests")).expect("the tests directory");
+    fs::write(
+        dir.join("tests/run.sh"),
+        "#!/bin/sh\nexec sh \"$(dirname \"$0\")/case.sh\" \"$@\"\n",
+    )
+    .expect("the test runner");
     fs::create_dir_all(dir.join(".engineering")).expect("the engineering directory");
     fs::write(dir.join("README.md"), "a story\n").expect("a file");
     fs::write(dir.join(".engineering/gates.yaml"), gates(assertion)).expect("the gates");
@@ -234,7 +240,7 @@ fn a_test_command_that_writes_a_grant_records_and_the_gates_is_refused_and_undon
         Box::new(CiRead::new(forge.clone())),
         Box::new(PrMerged::new(forge)),
     ];
-    let harness = Writes::new(&[("tests/run.sh", FORGER)]);
+    let harness = Writes::new(&[("tests/case.sh", FORGER)]);
     let mut run =
         Run::open(&tree, options("forger", 20), &harness, &validators).expect("the case opens");
     let mut out = Vec::new();
@@ -786,7 +792,7 @@ fn tested_by(name: &str, script: &str) -> (Scratch, anyhow::Result<Stop>, String
     let validators: Vec<Box<dyn Validator>> = vec![Box::new(
         TestsRun::new("sh tests/run.sh").expect("a command"),
     )];
-    let harness = Writes::new(&[("tests/run.sh", script)]);
+    let harness = Writes::new(&[("tests/case.sh", script)]);
     let mut run = Run::open(&tree, options(name, 6), &harness, &validators).expect("opens");
     let mut out = Vec::new();
     let stop = run.run(&mut out);

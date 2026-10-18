@@ -407,7 +407,7 @@ fn a_story_run_whose_tests_pass_records_a_line_per_evaluation_step_evidence_and_
         assert!(
             line["at"]
                 .as_str()
-                .is_some_and(|at| at.len() == 20 && at.ends_with('Z')),
+                .is_some_and(|at| at.len() == 27 && at.ends_with('Z') && at.as_bytes()[19] == b'.'),
             "{line}"
         );
         assert!(line["step"].is_u64(), "{line}");
@@ -447,7 +447,7 @@ fn the_story_holds_one_test_result_at_the_records_own_instant_from_takt() {
     assert_eq!(recorded[0]["actor"], "agent:takt", "{}", recorded[0]);
     let written = of(&lines, "store_evidence");
     assert_eq!(written.len(), 1, "{lines:#?}");
-    assert_eq!(written[0]["at"], observed_at);
+    assert_eq!(written[0]["observed_at"], observed_at);
     assert_eq!(written[0]["reference"], path.as_str());
     assert!(
         text.contains("store: test_result recorded on story:ready-one"),

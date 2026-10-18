@@ -386,7 +386,8 @@ pub fn is_credential(name: &str) -> bool {
 }
 
 /// The credentials the bot route's programs read: `gh`'s GitHub tokens and `b10x-gates`' own
-/// variables. Not the SSH agent: a push goes under the bot's credential, never the user's.
+/// variables. Not the SSH agent: a push or a fetch goes under the bot's credential, never the
+/// user's.
 #[must_use]
 pub fn bot_route_reads(name: &str) -> bool {
     matches!(
@@ -563,6 +564,27 @@ mod leftovers {
     }
 }
 
+/// Kills and reaps what this process started or adopted that is in a process group of its own
+/// no running child of [`run_child`] leads, or in a session of its own: what a judgement step's
+/// harness, or a validator that ran a program by itself, left running once it returned (a writer
+/// in the background). On Linux this process is made the subreaper of what it starts first, so
+/// an orphan is found too; elsewhere nothing is done. The run calls it after each judgement step
+/// and each observation.
+pub fn sweep_left() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        leftovers::adopt();
+        let running = RUNNING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Group 0 leads nothing and no process carries an empty mark: what is swept is what
+        // left the run's own group or session.
+        leftovers::sweep(0, "", &running)
+    }
+    #[cfg(not(target_os = "linux"))]
+    Ok(())
+}
+
 /// Runs `command` held to `limits`: standard input empty, standard output and error read into
 /// a bounded tail each, in a process group of its own. Past its timeout it is killed with its
 /// group and the answer is an error naming the program and the timeout. Once it has ended, what
@@ -673,7 +695,10 @@ pub fn run_child(command: &mut Command, limits: Limits) -> Result<Finished> {
 }
 
 /// The runner that runs the line as a process, without a shell, held to its limits, with no
-/// credential but the ones the bot route reads ([`bot_route_reads`]).
+/// credential but the ones the bot route reads ([`bot_route_reads`]), and with nothing that can
+/// wait on a person ([`NO_PROMPT`]): standard input is `/dev/null` ([`run_child`]), git asks no
+/// question, neither on the terminal nor through an askpass program, and SSH runs in batch mode,
+/// so a line that cannot authenticate fails at once instead of waiting until its timeout.
 #[derive(Debug, Clone, Copy)]
 pub struct Process {
     /// What the process is held to.
@@ -688,6 +713,16 @@ impl Process {
     };
 }
 
+/// What every [`Process`] child is started with, over what takt inherited: git never prompts
+/// on the terminal, and an empty `GIT_ASKPASS` ends git's search for an askpass program before
+/// it reaches `core.askPass` or the user's `GIT_ASKPASS` or `SSH_ASKPASS`; SSH, should a line
+/// reach it, never asks for a password or a host key.
+pub const NO_PROMPT: [(&str, &str); 3] = [
+    ("GIT_TERMINAL_PROMPT", "0"),
+    ("GIT_ASKPASS", ""),
+    ("GIT_SSH_COMMAND", "ssh -o BatchMode=yes"),
+];
+
 impl Default for Process {
     fn default() -> Self {
         Self {
@@ -698,11 +733,23 @@ impl Default for Process {
 
 impl Runner for Process {
     fn run(&self, tree: &Path, argv: &[String]) -> Result<Exit> {
+        self.run_with(tree, argv, &[])
+    }
+}
+
+impl Process {
+    /// Runs `argv` in `tree` as [`Runner::run`] does, with `env` set over [`NO_PROMPT`]: what
+    /// one line needs that every other line must not get.
+    pub fn run_with(&self, tree: &Path, argv: &[String], env: &[(&str, &str)]) -> Result<Exit> {
         let (program, args) = argv
             .split_first()
             .ok_or_else(|| anyhow!("an empty argument line"))?;
         let mut command = Command::new(program);
-        command.args(args).current_dir(tree);
+        command
+            .args(args)
+            .current_dir(tree)
+            .envs(NO_PROMPT)
+            .envs(env.iter().copied());
         without_credentials(&mut command, bot_route_reads);
         let finished = run_child(&mut command, self.limits)
             .with_context(|| format!("run {} in {}", argv.join(" "), tree.display()))?;

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:grant-binds-to-action-subject
 kind: story
-status: draft
+status: implemented
 title: A grant binds to the revision of the artifact its action is about
 summary: grants read artifacts.implementation only, so a self.improvement/1 case cannot pass its merge gate
 relations:
@@ -13,7 +13,11 @@ scope:
   path: crates/takt/src/case.rs
 - confidence: inferred
   path: crates/takt/tests/grant_subject.rs
-revision: 4
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 6}
+- {from: "active", to: "implemented", at: "2026-10-18T18:21:50Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: grant-binds-to-action-subject
 
@@ -41,3 +45,15 @@ On takt at main, holds; after the fix, fails:
 ## Acceptance
 
 On a `self.improvement/1` case at the merge gate, `grant` of `repository.merge.judge_surface` records the grant at the `candidate` revision and the next decision makes `candidate.merge_judge_surface` admissible; after `candidate` moves to another revision the grant authorises nothing; a `story.delivery/1` case is granted at its `implementation` revision exactly as today.
+
+## Landed (wave 10)
+
+Read from `git diff --stat 93bd7c3^1 93bd7c3` (the unit's merge into the wave branch) at the close of wave 10 (wave branch head 8858b49). The grant's subject is read from the protocol's precondition evidence; a grant naming no subject, or more than one, is refused. Granted by the owner. Low reviewer findings carried by story:judge-guard.
+
+- `crates/takt/src/case.rs`
+- `crates/takt/src/frontier.rs`
+- `crates/takt/src/protocol.rs`
+- `crates/takt/tests/grant_subject.rs`
+- `crates/takt/tests/grant_subject_adv1.rs`
+- `ess/domains/takt.citations.tsv`
+- `ess/domains/takt.yaml`
