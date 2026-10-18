@@ -112,8 +112,9 @@ establishes each claim, and the actions that wait for a grant, for example <code
 <a href="https://github.com/beyond10x/todo-app-example">beyond10x/todo-app-example</a>. Finish line:
 a pull request open against its own trial branch with CI green; for takt, the stop at the merge
 approval. Held-out check: a script no agent saw. Tokens = input + output + cache read + cache
-write, as each harness reported them. All runs are from 2026-10-18 (UTC). Rounds 1 to 3 ran every
-arm 3 times, so the isolated arm and Codex have n = 6. After that only takt ran: 5 runs at
+write, as each harness reported them. All runs are from 2026-10-18 (UTC). Rounds 1 and 3 ran every
+arm 3 times, so the isolated arm and Codex have n = 6. Round 2 (T-4..9) ran takt only, and so did
+every run after round 3: 5 runs at
 <code>a0b8576</code>, the binary the first turn promoted, and 10 of the second turn's candidate. The model is read from each run's
 usage record: claude-opus-5-5 unless the row names another.</p>
 <div class="scroll">
