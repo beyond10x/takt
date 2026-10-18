@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:trial-fetch-needs-no-user-ssh
 kind: story
-status: draft
+status: active
 title: takt scenario run fetches trial branches without the user's SSH credential
 summary: the trial-branch fetch hung 300 s twice because takt strips SSH_AUTH_SOCK and the bot fetch uses origin's SSH URL
 relations:
@@ -13,7 +13,10 @@ scope:
   path: crates/takt-cli/src/main.rs
 - confidence: inferred
   path: crates/takt/src/forge.rs
-revision: 3
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 5}
 ---
 # Story: trial-fetch-needs-no-user-ssh
 

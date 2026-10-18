@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:step-cannot-forge-its-validators
 kind: story
-status: draft
+status: active
 title: A judgement step cannot forge the validators that judge it
 summary: tests.run and ci.read run their inputs from the base or refuse; a judge-surface edit is refused or flagged
 relations:
@@ -17,7 +17,10 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/step_cannot_forge_its_validators.rs
-revision: 5
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 6}
+- {from: "proposed", to: "active", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 7}
 ---
 # Story: step-cannot-forge-its-validators
 

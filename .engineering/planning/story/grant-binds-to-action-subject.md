@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:grant-binds-to-action-subject
 kind: story
-status: draft
+status: active
 title: A grant binds to the revision of the artifact its action is about
 summary: grants read artifacts.implementation only, so a self.improvement/1 case cannot pass its merge gate
 relations:
@@ -13,7 +13,10 @@ scope:
   path: crates/takt/src/case.rs
 - confidence: inferred
   path: crates/takt/tests/grant_subject.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 6}
 ---
 # Story: grant-binds-to-action-subject
 

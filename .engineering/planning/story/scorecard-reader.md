@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scorecard-reader
 kind: story
-status: draft
+status: active
 title: takt scorecard reads run events per scenario against the promoted baseline
 summary: outcome, steps, tokens, refusals, errors, wall time from events.jsonl only
 relations:
@@ -19,7 +19,10 @@ scope:
   path: crates/takt/src/scorecard.rs
 - confidence: inferred
   path: crates/takt/tests/scorecard.rs
-revision: 5
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":4}}}
+- {from: "proposed", to: "active", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":4}}}
 ---
 # Story: scorecard-reader
 
