@@ -4,15 +4,15 @@ id: product-requirements:takt
 kind: product-requirements
 status: draft
 title: 'takt: secure, autonomous, reliable, deterministic, efficient agentic coding as one OSS binary'
-summary: Users (operator agent first), five qualities in priority order with measures, requirements R1-R15 traced to stories, three-month success, orchestration prepared for
+summary: Users (operator agent first), five qualities in priority order with measures, requirements R1-R18 traced to stories and designs, three-month success, orchestration inside one repository in the horizon and across repositories prepared for
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 3
 ---
 # Product requirements: takt
 
 Status: draft proposal, 2026-10-18. Serves `vision:safe-agentic-coding`. Sources: the owner's interview answers of
-2026-10-18, `docs/design/takt.md`, `design:recursive-self-improvement`, the store's epics and stories.
+2026-10-18, `docs/design/takt.md`, `design:recursive-self-improvement`, `design:continuous-orchestration`, the store's epics and stories.
 
 ## 1. Problem
 
@@ -62,9 +62,12 @@ determinism.
 | R10 | Bounded runs: `--iterations`, `--hours`, `--tokens`, and loops declared in `workflow/1` | a run stops at the first bound reached, with a stop naming it | run.rs today, story:declared-loops, story:workflow-schema-and-loader |
 | R11 | Scorecard per scenario with tokens, wall time, money and human minutes per accepted unit, against the promoted baseline | `takt scorecard` prints all four figures, each traceable to records or marked unknown | story:scorecard-reader (tokens, time); money and human minutes: no story yet |
 | R12 | Next unit from the planning store, or an intent | `takt run` with no intent takes the next ready story | story:frontier-next-ready-story |
-| R13 | Orchestration-ready: a run is addressable from outside (stable CLI exit codes, a machine-readable decision and stop, a per-case lock), so a later orchestrator can drive many repositories without a takt change | an external script runs takt on two repositories in parallel and reads both outcomes from files | story H4 (lock); the rest: no story yet |
+| R13 | Orchestration-ready: a run is addressable from outside (stable CLI exit codes, a machine-readable decision and stop, a per-case lock), so a later orchestrator can drive many repositories without a takt change | an external script runs takt on two repositories in parallel and reads both outcomes from files | the per-case lock `run.lock` (built); exit codes 0–5 (built on the wave 06 branch); design:continuous-orchestration § 6, § 9 (root case, dispatcher state in files); the rest: no story yet |
 | R14 | Install and first run for an outside maintainer in one documented page | a maintainer with Rust and Claude Code reaches a first decision document from the README alone | no story yet |
 | R15 | takt improves itself through its own protocols (`self.improvement/1`, `loop.improvement/1`) | one promotion decided by the scorecard with no regression | epic:recursive-self-improvement |
+| R16 | Continuous work: a bounded run plans when its ready stories hold less work than the budget left, and ends for lack of work only with a named stop when no approved epic has unplanned work | a `--hours 2` run on a store with one ready story and one `active` epic with no stories plans that epic and delivers at least one story it planned; with no such epic it stops `FrontierExhausted` | design:continuous-orchestration § 2–3; no story yet |
+| R17 | Steer and pause without losing work: a store edit takes effect at the next pick, `takt pause` stops at the next step boundary, `takt run` resumes, and a crashed run loses no case | the dispatcher killed mid-wave; the next `takt run` resumes every open case from files, with no lock removed by hand | design:continuous-orchestration § 4–5, § 9; no story yet |
+| R18 | One repository's whole delivery as a tree of cases: planner, wave, reviewers and parallel implementation workers are child cases dispatched by protocol, each with its own role, worktree and budget | a wave of three stories runs as three parallel child cases under one root, merges through one integration branch, and every child's decision documents sit under that root | design:continuous-orchestration § 6–9, build steps 2–5; story:declared-loops (interim, serial) |
 
 ## 5. Success at about three months
 
@@ -73,13 +76,13 @@ determinism.
 | self-delivery | takt delivers its own non-judge stories under the pinned judge (RSI phase R2) | design:recursive-self-improvement § 9 |
 | daily runs | three repositories, one bounded run per day for a week, with units accepted, the four efficiency figures, human touches and defects escaped | story:week-of-daily-runs |
 | outside users | at least one repository outside beyond10x runs takt and keeps the decision documents | no story yet |
-| wave delivery through takt | AEP waves in other beyond10x repositories are delivered by takt runs instead of by hand | no story yet |
+| wave delivery through takt | AEP waves in other beyond10x repositories are delivered by takt runs instead of by hand | design:continuous-orchestration build steps 1–4; no story yet beyond story:declared-loops |
 
 ## 6. Not now, prepared for
 
 | item | status |
 |---|---|
-| orchestration across repositories | planned; not built in this PRD's horizon. No decision may close it off: R13 keeps every run addressable from outside, and no state lives only in a process |
+| orchestration across repositories | designed as the last build step of design:continuous-orchestration; not built in this PRD's horizon. Orchestration inside one repository is in the horizon (R16–R18). No decision may close the cross-repository step off: R13 keeps every run addressable from outside, and no state lives only in a process |
 | hosted service, console, database | not now; records stay files in the repository |
 | a model runtime of takt's own | not planned; the harness is an adapter |
 
