@@ -530,10 +530,11 @@ fn short(revision: &str) -> &str {
 }
 
 /// Whether the pull request head `head` carries the implementation revision `revision` of the
-/// case at `case_dir`: it is the revision, or it reaches the revision only through the
-/// approval's own commits ([`crate::case::approvals_only`]), which add the approval's records
-/// to the story's evidence and nothing else, and are how they reach the base with the pull
-/// request. A head that is not a commit of the repository carries nothing.
+/// case at `case_dir`: it is the revision, or it reaches the revision only through takt's
+/// riders for the story ([`crate::case::approvals_only`]: the approval's commits, the
+/// `test_result` and the move to `implemented`, each file byte-equal to the record the case
+/// keeps), which are how those records reach the base with the pull request. A head that is
+/// not a commit of the repository carries nothing.
 fn carries(tree: &Path, case_dir: &Path, revision: &str, head: &str) -> Result<bool> {
     if head == revision {
         return Ok(true);
@@ -547,16 +548,13 @@ fn carries(tree: &Path, case_dir: &Path, revision: &str, head: &str) -> Result<b
     crate::case::approvals_only(tree, revision, head, case_dir)
 }
 
-/// How a summary names a head that carries the approval's commits above the revision; nothing
+/// How a summary names a head that carries takt's riders above the revision; nothing
 /// for a head that is the revision.
 fn above(revision: &str, head: &str) -> String {
     if head == revision {
         String::new()
     } else {
-        format!(
-            "; its head {} carries the approval's record above it",
-            short(head)
-        )
+        format!("; its head {} carries takt's records above it", short(head))
     }
 }
 
@@ -564,10 +562,10 @@ fn above(revision: &str, head: &str) -> String {
 /// head at the implementation revision; writes one `pull_request` record with the state the
 /// forge reports, `open` for a pull request just opened. At a later revision the branch is
 /// pushed again and the pull request's state read: one pull request per case. The tree's
-/// `HEAD` must be the revision, or the revision with only the approval's own commits above it
-/// ([`crate::case::approvals_only`]), which are pushed with it so the record of the grant
-/// reaches the base with the pull request; anything else would not be what the claim is
-/// about. A number the case directory carries is trusted only once the forge reports the pull
+/// `HEAD` must be the revision, or the revision with only takt's riders for the story above it
+/// ([`crate::case::approvals_only`]), which are pushed with it so the store's records reach the
+/// base with the pull request; anything else would not be what the claim is about, and nothing
+/// is pushed. A number the case directory carries is trusted only once the forge reports the pull
 /// request's head as the case's branch at the head pushed, else no record is written. A case
 /// with no base is refused before anything is pushed. The title is the intent's first line,
 /// the body the intent and the claims that hold; the forge passes both through `scan-text`
@@ -719,9 +717,9 @@ impl Validator for PrOpen {
         seq: usize,
     ) -> Result<(Observation, bool)> {
         let dir = current(tree)?;
-        // `HEAD` is the implementation revision, or the approval's own commits on top of it
+        // `HEAD` is the implementation revision, or takt's riders on top of it
         // (`approvals_only`); `HEAD` is what is pushed, so the pull request carries the
-        // approval's record to the base, and the record written is about the revision.
+        // store's records to the base, and the record written is about the revision.
         let head = crate::git::head(tree)?;
         if head != revision && !crate::case::approvals_only(tree, revision, &head, &dir)? {
             bail!(
@@ -858,7 +856,7 @@ impl Validator for PrOpen {
 /// writes one `ci_result` record, `pass` or `fail`. Pending checks write no record, because a
 /// claim that could not be observed stays unknown; so does a case with no pull request yet, or
 /// one whose pull request the forge does not report as the case's branch at the head pushed,
-/// the revision or the revision with only the approval's own commits above it: a number the
+/// the revision or the revision with only takt's riders above it: a number the
 /// case directory carries is not trusted on its own. Nothing but the pull request head is read.
 /// Pending checks, and a pull request whose head on the case's branch is not yet at the head
 /// pushed, wait on the forge.
@@ -1011,14 +1009,14 @@ impl Validator for CiRead {
 /// at and no other, and the step checks that again itself: an open pull request at a revision
 /// the case holds no grant for is not merged. Nothing is merged unless the forge reports the
 /// pull request's head as the case's branch at the head last pushed, or at the revision, and
-/// that head carries the revision: it is the revision, or the revision with only the approval's
-/// own commits above it ([`crate::case::approvals_only`]), the record of the grant in the
-/// planning store, which so reaches the base with the merge. Any other head is not merged and
-/// not replaced. When the pull request's head is the revision and the case's branch holds the
-/// approval's commits above it, the branch is pushed first, named in `branch.yaml` before the
-/// push, so the head merged carries the record and a push the forge took but reported failed
-/// is merged by the next run. A head carrying the approval's commits is one CI was not read
-/// on: its checks are read before the merge, and pending or failing checks merge nothing and
+/// that head carries the revision: it is the revision, or the revision with only takt's riders
+/// for the story above it ([`crate::case::approvals_only`]), the store's records of the grant,
+/// the test result and the move to `implemented`, which so reach the base with the merge. Any
+/// other head is not merged and not replaced. When the case's branch holds riders above the
+/// pull request's head that it descends from and that carry the revision, the branch is pushed
+/// first, named in `branch.yaml` before the push, so the head merged carries the records and a
+/// push the forge took but reported failed is merged by the next run. A head carrying riders
+/// is one CI was not read on: its checks are read before the merge, and pending or failing checks merge nothing and
 /// write no record, the summary saying which; a later run merges it. Pending checks, a head
 /// pushed that the pull request does not show yet, and a merge the forge refuses for a required
 /// check that has not reported ([`crate::forge::refused_for_a_pending_check`]) merge nothing,
@@ -1066,7 +1064,7 @@ impl Validator for PrMerged {
         "implementation"
     }
 
-    /// The case's `branch.yaml`, when the approval's commits are pushed before the merge, and
+    /// The case's `branch.yaml`, when takt's riders are pushed before the merge, and
     /// what the bot route keeps of the merge request it sent and the response it read.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
@@ -1165,13 +1163,17 @@ impl Validator for PrMerged {
                         false,
                     ));
                 }
-                // The approval's own commits above the revision go with the pull request, so the
-                // record of the grant reaches the base with the merge: a head still at the
-                // revision is brought up to the branch's `HEAD` when that carries the revision.
+                // takt's riders above the revision go with the pull request, so the store's
+                // records reach the base with the merge: the head is brought up to the
+                // branch's `HEAD` when that carries the revision and descends from the head.
                 let local = crate::git::head(tree)?;
-                if view.head.sha == revision
-                    && local != revision
+                if local != view.head.sha
                     && carries(tree, &dir, revision, &local)?
+                    && crate::git::run(
+                        tree,
+                        &["merge-base", "--is-ancestor", &view.head.sha, &local],
+                    )
+                    .is_ok()
                 {
                     // Named before the push: a push the forge took but reported failed leaves
                     // the head it took recorded, and the next run merges it.
@@ -1197,7 +1199,7 @@ impl Validator for PrMerged {
                         ));
                     }
                 }
-                // CI was read on the revision; a head carrying the approval's commits above it
+                // CI was read on the revision; a head carrying takt's riders above it
                 // is a new head, and a forge that requires checks merges it only once they
                 // pass. Its checks are read first: pending or failing, nothing is merged and no
                 // record written; pending checks are waited on, and a later run merges once
@@ -1211,7 +1213,7 @@ impl Validator for PrMerged {
                     if checks != Checks::Pass {
                         return Ok((
                             nothing(format!(
-                                "checks on pull request #{number} at its head {}, the approval's commits above {}, through {forge}: {checks}; nothing merged, the claim stays unknown",
+                                "checks on pull request #{number} at its head {}, takt's riders above {}, through {forge}: {checks}; nothing merged, the claim stays unknown",
                                 short(&view.head.sha),
                                 short(revision)
                             )),
@@ -1286,7 +1288,7 @@ impl Validator for PrMerged {
             })
             .unwrap_or_default();
         // The record is about the revision the grant authorises; which head was merged, the
-        // revision or the revision with the approval's commits above it, is kept beside it.
+        // revision or the revision with takt's riders above it, is kept beside it.
         let artifact = if state == PullRequestState::Merged {
             let kept = serde_json::json!({
                 "pull_request": number,

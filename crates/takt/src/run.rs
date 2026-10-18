@@ -8,8 +8,9 @@
 //! ([`crate::events`]); a line about a judgement step is written once the step's change is
 //! kept or put back, so putting the case directory back never takes a line with it. A story's
 //! run given the planning store ([`Run::record_on`]) records its test result and its move to
-//! `implemented` there once its case terminates `accepted`, after the merge when the case has a
-//! pull request, so neither write rides on the revision a grant authorises.
+//! `implemented` there: just before the step a grant authorises (the merge), so both ride to the
+//! base with it above the granted revision, the move last ([`crate::case::approvals_only`]); or
+//! once its case terminates `accepted`, when there was no such step.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -18,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::case::{CASES_DIR, CaseDir};
+use crate::case::{CASES_DIR, CaseDir, KEPT_MOVE, KEPT_TEST_RESULT};
 use crate::events::{BY_STORE, BY_TAKT, Event, Events};
 use crate::frontier::{Frontier, IMPLEMENTED, Story, TEST_RESULT, Take, Unit};
 use crate::harness::{Harness, StepContext, is_test_path};
@@ -565,11 +566,12 @@ impl<'a> Run<'a> {
         })
     }
 
-    /// Gives the run the planning store `store`: a story's run whose case terminates `accepted`
-    /// records there the `test_result` pass record a validator of the case wrote, at the
-    /// record's own `observed_at`, and moves the story to `implemented`, each a commit on the
-    /// case's branch ([`crate::frontier::write_on_case_branch`]); a refusal is relayed and the
-    /// stop is unchanged. A run on an intent has no story and writes nothing there.
+    /// Gives the run the planning store `store`: a story's run records there the `test_result`
+    /// pass record a validator of the case wrote, at the record's own `observed_at`, and moves
+    /// the story to `implemented`, each a commit on the case's branch
+    /// ([`crate::frontier::write_on_case_branch`]), before the step the case's grant authorises
+    /// or, without one, once the case terminates `accepted`; a refusal is relayed and the stop
+    /// is unchanged. A run on an intent has no story and writes nothing there.
     pub fn record_on(&mut self, store: &'a dyn Frontier) {
         self.store = Some(store);
     }
@@ -911,15 +913,17 @@ impl<'a> Run<'a> {
         )
     }
 
-    /// Records the accepted case's story in `store`: the `test_result` pass record a validator
-    /// of the case wrote ([`Run::observed_pass`]) as `test_result` evidence at its own
-    /// `observed_at`, then the move to `implemented`, which the store judges; each a commit on
-    /// the case's branch with its line in the case's record, written with the commit: a line
-    /// that cannot be written takes the commit back ([`crate::frontier::write_on_case_branch`]).
-    /// A write the case's record names, or whose commit subject the case's branch holds, is not
-    /// made again. A refusal, the store's verbatim or takt's own, is recorded, then printed, and
-    /// nothing is retried. What is printed comes after what is recorded: an `out` that fails
-    /// skips no line and no write, and is the error once both writes were tried.
+    /// Records the case's story in `store`, before the step the grant authorises or once the
+    /// case is accepted: the `test_result` pass record a validator of the case wrote
+    /// ([`Run::observed_pass`]) as `test_result` evidence at its own `observed_at`, then the move
+    /// to `implemented`, which the store judges, the last; each a commit on the case's branch
+    /// with what it committed kept in the case directory ([`crate::case::keep_rider`]) and its
+    /// line in the case's record, written with the commit: either that cannot be written takes
+    /// the commit back ([`crate::frontier::write_on_case_branch`]). A write the case's record
+    /// names, or whose commit subject the case's branch holds, is not made again. A refusal, the
+    /// store's verbatim or takt's own, is recorded, then printed, and nothing is retried. What is
+    /// printed comes after what is recorded: an `out` that fails skips no line and no write, and
+    /// is the error once both writes were tried.
     fn record_accepted(
         &self,
         events: &Events,
@@ -963,16 +967,18 @@ impl<'a> Run<'a> {
                     &evidence_subject,
                     || store.record_test_result(&self.tree, story, &reference, &at),
                     |commit| {
-                        events.emit(
-                            self.steps,
-                            &Event::StoreEvidence {
-                                story: story.to_owned(),
-                                kind: TEST_RESULT.to_owned(),
-                                reference: reference.clone(),
-                                observed_at: at.clone(),
-                                commit: commit.map(str::to_owned),
-                            },
-                        )
+                        self.kept_and_recorded(commit, KEPT_TEST_RESULT, || {
+                            events.emit(
+                                self.steps,
+                                &Event::StoreEvidence {
+                                    story: story.to_owned(),
+                                    kind: TEST_RESULT.to_owned(),
+                                    reference: reference.clone(),
+                                    observed_at: at.clone(),
+                                    commit: commit.map(str::to_owned),
+                                },
+                            )
+                        })
                     },
                 )
                 .map(|written| written.map(|commit| (reference, at, commit)))
@@ -1006,14 +1012,16 @@ impl<'a> Run<'a> {
                 &move_subject,
                 || store.implemented(&self.tree, story),
                 |commit| {
-                    events.emit(
-                        self.steps,
-                        &Event::StoreMove {
-                            story: story.to_owned(),
-                            to: IMPLEMENTED.to_owned(),
-                            commit: commit.map(str::to_owned),
-                        },
-                    )
+                    self.kept_and_recorded(commit, KEPT_MOVE, || {
+                        events.emit(
+                            self.steps,
+                            &Event::StoreMove {
+                                story: story.to_owned(),
+                                to: IMPLEMENTED.to_owned(),
+                                commit: commit.map(str::to_owned),
+                            },
+                        )
+                    })
                 },
             ) {
                 Ok(Ok(commit)) => say(format!(
@@ -1037,6 +1045,61 @@ impl<'a> Run<'a> {
             Some(error) => Err(anyhow::Error::new(error).context("print the store's writes")),
             None => Ok(()),
         }
+    }
+
+    /// Keeps in the case directory, as `name` at the implementation revision, what the store's
+    /// write `commit` committed ([`crate::case::keep_rider`]), then writes its line with
+    /// `record`: a line that cannot be written takes the kept file back. A write that changed
+    /// nothing keeps nothing.
+    fn kept_and_recorded(
+        &self,
+        commit: Option<&str>,
+        name: &str,
+        record: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        let kept = match (commit, self.case.revision("implementation")) {
+            (Some(commit), Some(revision)) => Some(crate::case::keep_rider(
+                &self.tree,
+                &self.case.dir,
+                &revision,
+                commit,
+                name,
+            )?),
+            _ => None,
+        };
+        let recorded = record();
+        if recorded.is_err()
+            && let Some(kept) = &kept
+        {
+            let _ = std::fs::remove_file(kept);
+        }
+        recorded
+    }
+
+    /// Before the step for `action`: when the case holds the grant that authorises it
+    /// ([`CaseDir::grants`]), a story's run given the store records the story there
+    /// ([`Run::record_accepted`]), so the `test_result` and the move, the last, ride to the base
+    /// with the step's merge. What goes wrong is recorded as an `error` line, and the step is
+    /// taken as it would have been. Answers whether it recorded.
+    fn record_before(&self, events: &Events, action: &str, out: &mut dyn Write) -> Result<bool> {
+        let (Unit::Story(story), Some(store)) = (&self.unit, self.store) else {
+            return Ok(false);
+        };
+        if !self.case.grants(action)? {
+            return Ok(false);
+        }
+        if let Err(error) = self.record_accepted(events, store, &story.id, out) {
+            events.emit(
+                self.steps,
+                &Event::Error {
+                    error: format!(
+                        "recording {} in the store before {action}: {error:#}",
+                        story.id
+                    ),
+                },
+            )?;
+        }
+        Ok(true)
     }
 
     /// The latest `test_result` pass record a validator of the case wrote that is about the
@@ -1167,6 +1230,8 @@ impl<'a> Run<'a> {
         // revision)`: observed again after a pause, within the budget, and meanwhile no
         // judgement step is offered, because what is missing is not the harness's to make.
         let mut awaited: Vec<(String, String, String)> = Vec::new();
+        // Whether the story's records were written before a granted step this run.
+        let mut recorded_before = false;
         let waiting = |awaited: &[(String, String, String)], budget: Option<Stop>| {
             let mut on: Vec<String> = Vec::new();
             for (_, action, _) in awaited {
@@ -1232,6 +1297,11 @@ impl<'a> Run<'a> {
                 }
             }
             if let Some(validator) = due {
+                // The story's records in the store, once a run, just before the step its grant
+                // authorises: they ride to the base with the merge.
+                if !recorded_before {
+                    recorded_before = self.record_before(events, validator.action(), out)?;
+                }
                 self.steps += 1;
                 let revision = self
                     .case

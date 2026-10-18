@@ -16,7 +16,9 @@
 //! a story whose case terminates `accepted` records the `test_result` pass record a validator of
 //! the case wrote as [`TEST_RESULT`] evidence on the story, at the record's own instant, and
 //! moves the story to [`IMPLEMENTED`]; each write is a commit on the case's branch, store paths
-//! only ([`write_on_case_branch`]), and a refusal is relayed, never retried.
+//! only ([`write_on_case_branch`]), made as [`ACTOR`], and a refusal is relayed, never retried.
+//! With a forge both are made before the merge and ride to the base with it
+//! ([`crate::case::approvals_only`]).
 
 use std::path::Path;
 use std::process::Command;
@@ -592,8 +594,9 @@ impl Frontier for Aep {
     /// `evidence <story> --kind approval --source "takt approve <capability> --by <approver> at
     /// <revision>" --ref <case>/authority.yaml --at <granted at>`, written before the grant: the
     /// source names the command, the capability, the approver and the revision of the grant's
-    /// subject the grant authorises, the reference the grant, the instant the grant's own; the
-    /// repository's own store only, like `list`.
+    /// subject the grant authorises, the reference the grant, the instant the grant's own; as
+    /// the approver (`AEP_ACTOR`), so the record's actor is who granted; the repository's own
+    /// store only, like `list`.
     fn record_approval(&self, repo: &Path, story: &str, approval: &Approval) -> Result<()> {
         Self::store(repo)?;
         let source = format!(
@@ -601,7 +604,7 @@ impl Frontier for Aep {
             approval.capability, approval.approver, approval.revision
         );
         let reference = approval.reference();
-        self.plan(
+        self.plan_as(
             repo,
             &[
                 "evidence",
@@ -615,6 +618,7 @@ impl Frontier for Aep {
                 "--at",
                 &approval.granted_at,
             ],
+            Some(&approval.approver),
         )?
         .map(drop)
         .map_err(|refusal| anyhow!("aep plan artifact evidence {story}: {refusal}"))
@@ -654,15 +658,16 @@ impl Frontier for Aep {
         )
     }
 
-    /// `move <story> --to implemented --executor agent:takt`, which the store's lifecycle allows
-    /// once the story holds a `test_result` record; the repository's own store only, like
-    /// `list`.
+    /// `move <story> --to implemented --executor agent:takt`, as [`ACTOR`], which the store's
+    /// lifecycle allows once the story holds a `test_result` record; the repository's own store
+    /// only, like `list`.
     fn implemented(&self, repo: &Path, story: &str) -> Result<Written> {
         Self::store(repo)?;
         Ok(
-            match self.plan(
+            match self.plan_as(
                 repo,
                 &["move", story, "--to", IMPLEMENTED, "--executor", ACTOR],
+                Some(ACTOR),
             )? {
                 Ok(_) => Written::Done,
                 Err(refusal) => Written::Refused(refusal),

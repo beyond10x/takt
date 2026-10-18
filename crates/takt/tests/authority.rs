@@ -506,15 +506,27 @@ fn approve_records_on_the_story_first_and_retries_cleanly_after_a_failed_record(
     };
     let error = format!(
         "{:#}",
-        approve(&tree, &frontier, "approve", "repository.merge", "operator")
-            .expect_err("the record failed")
+        approve(
+            &tree,
+            &frontier,
+            "approve",
+            "repository.merge",
+            "human:operator"
+        )
+        .expect_err("the record failed")
     );
     assert!(error.contains("the store is unreachable"), "{error}");
     assert!(!case.dir.join(AUTHORITY_FILE).exists(), "{error}");
     assert!(!case.dir.join(LOCK_FILE).exists(), "{error}");
 
-    let approval = approve(&tree, &frontier, "approve", "repository.merge", "operator")
-        .expect("the retry goes through");
+    let approval = approve(
+        &tree,
+        &frontier,
+        "approve",
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the retry goes through");
     assert_eq!(approval.revision, revision);
     assert!(!frontier.written_before_record.get());
     assert_eq!(frontier.recorded.borrow().as_slice(), [approval]);

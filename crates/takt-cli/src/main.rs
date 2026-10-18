@@ -1867,12 +1867,12 @@ mod tests {
             &id,
             "repository.merge",
             "--by",
-            "operator",
+            "human:operator",
         ]);
         assert_eq!(code, 0, "{out}");
         assert!(
             out.contains(&format!(
-                "approved: repository.merge for case {id} by operator, written to {id}/authority.yaml"
+                "approved: repository.merge for case {id} by human:operator, written to {id}/authority.yaml"
             )),
             "{out}"
         );
@@ -1884,7 +1884,7 @@ mod tests {
         let recorded = approvals_recorded(&repo, "story:ready-one");
         assert_eq!(recorded.len(), 1, "{recorded:?}");
         assert!(
-            recorded[0].contains("takt approve repository.merge --by operator"),
+            recorded[0].contains("takt approve repository.merge --by human:operator"),
             "{recorded:?}"
         );
         assert!(
