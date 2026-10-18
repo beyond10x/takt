@@ -449,7 +449,10 @@ impl<'a> Run<'a> {
     /// commit, the one its validators observe. A refusal removes the case just opened, is
     /// printed on `out` verbatim, and the next candidate is tried; a take or its commit that
     /// fails removes it too and is the error. A candidate a case already records is not taken
-    /// again. `None`, with no case opened, when nothing is open and nothing is ready. One case
+    /// again, and not resumed either when its take is neither committed on the case's branch
+    /// nor listed `active` by the base (a case whose take was left uncommitted, before takes
+    /// were committed): it is skipped with a line on `out`. `None`, with no case opened, when
+    /// nothing is resumed and nothing else is ready, such a skipped case included. One case
     /// directory per taken story, none for a refused one, never a second for a story with one.
     pub fn open_next(
         tree: &Path,
@@ -743,11 +746,18 @@ impl<'a> Run<'a> {
             // ended; a step that touched it is refused.
             let cases = self.tree.join(CASES_DIR);
             let kept = snapshot(&cases)?;
-            let checkpoint = crate::git::Checkpoint::take(&self.tree)?;
+            // The case's base is guarded beside `HEAD` and the case's branch.
+            let base: Vec<String> = crate::case::Branch::read(&self.case.dir)
+                .ok()
+                .and_then(|branch| branch.base)
+                .into_iter()
+                .collect();
+            let checkpoint = crate::git::Checkpoint::take_guarding(&self.tree, &base)?;
             let stepped = self.harness.step(&context);
-            // `.git/` first, from the file system: every git call after this one would read,
-            // and run, what the step planted there (a hook, `core.fsmonitor`, a filter).
-            let git_dir = checkpoint.put_back_git_dir(&self.tree)?;
+            // What git runs or reads as configuration first: every git call after this one
+            // would read what the step planted there. Nothing in it ends early; a path it could
+            // not put back is named in the refusal below.
+            let git_dir = checkpoint.put_back_git_dir(&self.tree);
             let touched = differing(&kept, &snapshot(&cases)?);
             if !touched.is_empty() {
                 restore(&cases, &kept, &touched)?;
@@ -778,7 +788,16 @@ impl<'a> Run<'a> {
                 self.harness.name()
             )?;
             writeln!(out, "  said: {}", report.summary)?;
-            let change = checkpoint.change(&self.tree)?;
+            let change = match checkpoint.change(&self.tree) {
+                Ok(change) => change,
+                Err(error) => {
+                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    return Err(error.context(format!(
+                        "step {}: what {} changed could not be read; the change was discarded",
+                        self.steps, report.action
+                    )));
+                }
+            };
             let changed = &change.paths;
             if !touched.is_empty() {
                 undo_step(&self.tree, &checkpoint, &cases, &kept)?;
@@ -801,29 +820,48 @@ impl<'a> Run<'a> {
             // paths, and a path that was uncommitted before the step, whose change cannot be
             // told apart from what was there.
             let action = &report.action;
-            let overreach = if !git_dir.is_empty() {
-                Some(format!("{action} wrote under .git: {}", git_dir.join(", ")))
+            let overreach = if !git_dir.touched.is_empty() {
+                let mut why = format!(
+                    "{action} wrote under .git, where git runs or reads it: {}",
+                    git_dir.touched.join(", ")
+                );
+                if !git_dir.failed.is_empty() {
+                    why.push_str(&format!("; not put back: {}", git_dir.failed.join("; ")));
+                }
+                Some(why)
             } else if let Some(moved) = &change.head {
                 Some(format!("{action} moved HEAD {moved}"))
+            } else if !change.refs.is_empty() {
+                Some(format!("{action} moved {}", change.refs.join(", ")))
             } else if change.staged {
                 Some(format!(
                     "{action} changed the index; takt stages and commits a step's change, the step does not"
                 ))
-            } else if !change.ignored_added.is_empty() || !change.ignored_removed.is_empty() {
+            } else if !change.ignored_added.is_empty()
+                || !change.ignored_changed.is_empty()
+                || !change.ignored_removed.is_empty()
+            {
                 let mut what = Vec::new();
                 if !change.ignored_added.is_empty() {
                     what.push(format!("wrote {}", change.ignored_added.join(", ")));
                 }
-                if !change.ignored_removed.is_empty() {
-                    what.push(format!(
-                        "removed {} (not put back: nothing of an ignored path is kept)",
-                        change.ignored_removed.join(", ")
-                    ));
+                if !change.ignored_changed.is_empty() {
+                    what.push(format!("rewrote {}", change.ignored_changed.join(", ")));
                 }
-                Some(format!(
+                if !change.ignored_removed.is_empty() {
+                    what.push(format!("removed {}", change.ignored_removed.join(", ")));
+                }
+                let mut why = format!(
                     "{action} {} ignored by git, which no commit would carry",
                     what.join(" and ")
-                ))
+                );
+                if !change.ignored_lost.is_empty() {
+                    why.push_str(&format!(
+                        "; nothing was kept to put back of {}",
+                        change.ignored_lost.join(", ")
+                    ));
+                }
+                Some(why)
             } else if !change.already_uncommitted.is_empty() {
                 Some(format!(
                     "{action} changed {}, uncommitted before the step already",

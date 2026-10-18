@@ -383,7 +383,9 @@ fn a_step_that_writes_under_git_is_refused_and_nothing_it_planted_runs() {
             "{hook}\n{text}"
         );
     }
-    assert!(!tree.join(".git/monitor.sh").exists(), "{text}");
+    // `.git/monitor.sh` itself is no file git runs or reads as configuration, so it is left
+    // where it is; the config key that would run it is put back, and the marker below shows it
+    // never ran.
     assert!(!tree.join("src/hidden.rs").exists(), "{text}");
 
     // The next step is accepted and committed: nothing the refused step planted runs.
@@ -779,4 +781,57 @@ fn the_next_case_reads_the_store_from_the_base_branch() {
     assert_eq!(branch.base.as_deref(), Some("main"));
     let main = git(&tree, &["rev-parse", "main"]);
     assert_eq!(git(&tree, &["rev-parse", "HEAD^"]), main, "{text}");
+}
+
+#[test]
+fn a_take_commit_runs_no_hook_of_the_repository() {
+    let tree = store("one-ready", "take-no-hook");
+    let hook = tree.join(".git/hooks/commit-msg");
+    fs::write(
+        &hook,
+        "#!/bin/sh\nif grep -q \"^takt: take\" \"$1\"; then echo rejected >&2; exit 1; fi\n",
+    )
+    .expect("a hook");
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("exec bit");
+    let validators: Vec<Box<dyn Validator>> = Vec::new();
+    let harness = acting("repository.inspect", |_| {});
+    let mut out = Vec::new();
+    let run = Run::open_next(
+        &tree,
+        store_options(),
+        &Aep::default(),
+        &harness,
+        &validators,
+        &mut out,
+    )
+    .expect("the take is committed past a commit-msg hook that rejects it")
+    .expect("story:ready-one is taken");
+    assert_eq!(
+        git(&tree, &["log", "-1", "--format=%s"]),
+        "takt: take story:ready-one"
+    );
+    drop(run);
+}
+
+#[test]
+fn a_step_that_moves_the_base_branch_is_refused_and_the_base_put_back() {
+    let tree = repository("base-moved");
+    let main = git(&tree, &["rev-parse", "main"]);
+    let validators = tests_run("true");
+    let harness = acting("implementation.edit", |tree: &Path| {
+        let commit = git(
+            tree,
+            &["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "moved"],
+        );
+        git(tree, &["update-ref", "refs/heads/main", &commit]);
+        fs::write(tree.join("src/lib.rs"), "model\n").expect("a write");
+    });
+    let (stop, text) = run(&tree, "base-moved", 4, &harness, &validators);
+    let stop = stop.expect("the run stops");
+    assert!(
+        matches!(&stop, Stop::StepRefused(why) if why.contains("refs/heads/main")),
+        "{stop:?}\n{text}"
+    );
+    assert_eq!(git(&tree, &["rev-parse", "main"]), main, "{text}");
+    assert_eq!(read(&tree.join("src/lib.rs")), "a\n", "{text}");
 }
