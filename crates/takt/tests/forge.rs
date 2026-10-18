@@ -732,6 +732,11 @@ impl Forge for AnyNumber {
         self.calls.borrow_mut().push(format!("checks #{number}"));
         Ok(Checks::Pass)
     }
+
+    fn merge(&self, _: &Path, _: &Path, number: u64, _: &str) -> anyhow::Result<()> {
+        self.calls.borrow_mut().push(format!("merge #{number}"));
+        Ok(())
+    }
 }
 
 /// `pr.open` on a case opened from a detached `HEAD` has no base to open the pull request

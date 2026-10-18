@@ -1,6 +1,8 @@
 //! The loop: evaluate, frontier, one step, effect, observation, validator, evidence, evaluate;
 //! until an outcome is legitimate, an approval is needed, nothing is admissible, a step is
-//! refused, or the stop criteria are met.
+//! refused, or the stop criteria are met. A run opens a case, or resumes one a run before it
+//! opened: a case stopped at the gate is resumed once the operator has granted it, and the
+//! merge is then a deterministic step like any other.
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -10,7 +12,7 @@ use std::time::Instant;
 use anyhow::{Context as _, Result, bail};
 
 use crate::case::{CASES_DIR, CaseDir};
-use crate::frontier::{Frontier, Take, Unit};
+use crate::frontier::{Frontier, Story, Take, Unit};
 use crate::harness::{Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
 use crate::validator::Validator;
@@ -165,6 +167,14 @@ impl<'a> Run<'a> {
                 "the case {id} has no base branch to open its pull request against: the tree is on a detached HEAD; check out the branch the pull request is against, or run without a forge"
             );
         }
+        // A case opened for a story records it: the next run on the repository finds the story
+        // `active` with this case open and resumes it, never opens a second.
+        if let Unit::Story(story) = &unit
+            && let Err(error) = case.set_story(&story.id)
+        {
+            case.discard()?;
+            return Err(error);
+        }
         Ok(Self {
             tree: tree.to_path_buf(),
             case,
@@ -178,11 +188,56 @@ impl<'a> Run<'a> {
         })
     }
 
-    /// Opens the case on the next ready story of `frontier`, the store told last: for each
-    /// candidate in order, the case is opened first (the protocol loaded, the inputs checked),
-    /// then the story is taken; a refusal removes the case just opened, is printed on `out`
-    /// verbatim, and the next candidate is tried. `None`, with no case opened, when nothing is
-    /// ready. One case directory per taken story, none for a refused one.
+    /// Prepares a run on the case `id` a run before this one opened under `tree`: the case's
+    /// files as they are, its `authority.yaml` read into every evaluation, its intent and inputs
+    /// the run's. The unit is the story the case records, or the intent it was opened on.
+    /// Nothing is opened and nothing discarded; the protocol, inputs and case id in `options`
+    /// are not read: the case's own rule.
+    pub fn resume(
+        tree: &Path,
+        mut options: RunOptions,
+        id: &str,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        let case = CaseDir::resume(tree, id)?;
+        let intent = case.intent()?;
+        let unit = match case.story()? {
+            Some(story) => {
+                // `intent.md` of a story's case is its title, a blank line, its body.
+                let (title, body) = intent.split_once("\n\n").unwrap_or((intent.as_str(), ""));
+                Unit::Story(Story {
+                    id: story,
+                    title: title.to_owned(),
+                    body: body.to_owned(),
+                })
+            }
+            None => Unit::Intent(intent.clone()),
+        };
+        options.intent = intent;
+        options.inputs = case.inputs();
+        options.case_id = Some(id.to_owned());
+        options.protocol = case.protocol.id.clone();
+        Ok(Self {
+            tree: tree.to_path_buf(),
+            case,
+            unit,
+            harness,
+            validators,
+            steps: 0,
+            tokens: 0,
+            started: Instant::now(),
+            options,
+        })
+    }
+
+    /// Resumes the open case of a story `frontier` lists `active`, if there is one; else opens
+    /// the case on the next ready story, the store told last: for each candidate in order, the
+    /// case is opened first (the protocol loaded, the inputs checked), then the story is taken;
+    /// a refusal removes the case just opened, is printed on `out` verbatim, and the next
+    /// candidate is tried. `None`, with no case opened, when nothing is open and nothing is
+    /// ready. One case directory per taken story, none for a refused one, never a second for a
+    /// story with one open.
     pub fn open_next(
         tree: &Path,
         options: RunOptions,
@@ -191,6 +246,19 @@ impl<'a> Run<'a> {
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Option<Self>> {
+        let active = frontier.active(tree)?;
+        if let Some((case_id, story_id)) = crate::case::resumable(tree, &active)? {
+            let run = Self::resume(tree, options, &case_id, harness, validators)?;
+            let title = match &run.unit {
+                Unit::Story(story) => story.title.clone(),
+                Unit::Intent(intent) => intent.clone(),
+            };
+            writeln!(
+                out,
+                "frontier: resumed {story_id}: {title} (case {case_id})"
+            )?;
+            return Ok(Some(run));
+        }
         for id in frontier.candidates(tree)? {
             let story = frontier.show(tree, &id)?;
             let title = story.title.clone();
