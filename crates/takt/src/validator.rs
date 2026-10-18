@@ -90,6 +90,11 @@ pub struct TestsRun {
 }
 
 impl TestsRun {
+    /// The action it performs.
+    pub const ACTION: &str = "tests.run";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "test_result";
+
     /// Splits `command` at white space.
     pub fn new(command: &str) -> Result<Self> {
         let command: Vec<String> = command.split_whitespace().map(str::to_owned).collect();
@@ -122,11 +127,11 @@ impl Validator for TestsRun {
     }
 
     fn action(&self) -> &str {
-        "tests.run"
+        Self::ACTION
     }
 
     fn kind(&self) -> &str {
-        "test_result"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {
@@ -300,6 +305,11 @@ fn file_at(tree: &Path, at: &str, path: &Path) -> Result<Option<String>> {
 }
 
 impl GateRun {
+    /// The action it performs.
+    pub const ACTION: &str = "gate.run";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "gate_result";
+
     /// Over the gates document at `gates`, relative to the tree.
     #[must_use]
     pub fn new(gates: impl Into<PathBuf>) -> Self {
@@ -323,11 +333,11 @@ impl Validator for GateRun {
     }
 
     fn action(&self) -> &str {
-        "gate.run"
+        Self::ACTION
     }
 
     fn kind(&self) -> &str {
-        "gate_result"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {
@@ -578,6 +588,11 @@ pub struct PrOpen {
 }
 
 impl PrOpen {
+    /// The action it performs.
+    pub const ACTION: &str = "pr.open";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "pull_request";
+
     /// Over `forge`.
     #[must_use]
     pub fn new(forge: Rc<dyn Forge>) -> Self {
@@ -682,11 +697,11 @@ impl Validator for PrOpen {
     }
 
     fn action(&self) -> &str {
-        "pr.open"
+        Self::ACTION
     }
 
     fn kind(&self) -> &str {
-        "pull_request"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {
@@ -868,6 +883,11 @@ pub struct CiRead {
 }
 
 impl CiRead {
+    /// The action it performs.
+    pub const ACTION: &str = "ci.read";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "ci_result";
+
     /// Over `forge`.
     #[must_use]
     pub fn new(forge: Rc<dyn Forge>) -> Self {
@@ -889,11 +909,11 @@ impl Validator for CiRead {
     }
 
     fn action(&self) -> &str {
-        "ci.read"
+        Self::ACTION
     }
 
     fn kind(&self) -> &str {
-        "ci_result"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {
@@ -1034,6 +1054,11 @@ pub struct PrMerged {
 }
 
 impl PrMerged {
+    /// The action it performs.
+    pub const ACTION: &str = "repository.merge";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "merge_observation";
+
     /// Over `forge`.
     #[must_use]
     pub fn new(forge: Rc<dyn Forge>) -> Self {
@@ -1055,11 +1080,11 @@ impl Validator for PrMerged {
     }
 
     fn action(&self) -> &str {
-        "repository.merge"
+        Self::ACTION
     }
 
     fn kind(&self) -> &str {
-        "merge_observation"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {
@@ -1311,30 +1336,82 @@ impl Validator for PrMerged {
     }
 }
 
-/// The actions takt's built-in validators perform, whether or not a run has them configured:
-/// an evidence kind any of them may produce is an observation, never a choice the step choice
-/// records (`crate::run`).
-pub const BUILT_IN_ACTIONS: [&str; 6] = [
-    "tests.run",
-    "gate.run",
-    "pr.open",
-    "ci.read",
-    "repository.merge",
-    ChangeRead::ACTION,
+/// A built-in validator: its type's name, the action it performs and the evidence kind it
+/// writes, each read from the type's own `ACTION` and `KIND`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltIn {
+    /// The type's name, as `impl Validator for` names it.
+    pub validator: &'static str,
+    /// The action it performs.
+    pub action: &'static str,
+    /// The evidence kind it writes.
+    pub kind: &'static str,
+}
+
+/// takt's built-in validators, whether or not a run has them configured. An action one of them
+/// performs is the run loop's to take, never the harness's, and a kind one of them writes is an
+/// observation, never a choice the step choice records (`crate::run`): a record `takt.choice`
+/// writes never makes `tests.pass`, `gate.green`, `ci.green` or `pr.merged` true.
+pub const BUILT_IN: [BuiltIn; 6] = [
+    BuiltIn {
+        validator: "TestsRun",
+        action: TestsRun::ACTION,
+        kind: TestsRun::KIND,
+    },
+    BuiltIn {
+        validator: "GateRun",
+        action: GateRun::ACTION,
+        kind: GateRun::KIND,
+    },
+    BuiltIn {
+        validator: "PrOpen",
+        action: PrOpen::ACTION,
+        kind: PrOpen::KIND,
+    },
+    BuiltIn {
+        validator: "CiRead",
+        action: CiRead::ACTION,
+        kind: CiRead::KIND,
+    },
+    BuiltIn {
+        validator: "PrMerged",
+        action: PrMerged::ACTION,
+        kind: PrMerged::KIND,
+    },
+    BuiltIn {
+        validator: "ChangeRead",
+        action: ChangeRead::ACTION,
+        kind: ChangeRead::KIND,
+    },
 ];
 
-/// `change.read`: observes whether the implementation revision carries a commit beyond the
-/// case's base, takt's own take of the story (`takt: take <story>`) aside, and writes one
-/// `change_record`: `ahead` when it does, `none` when it does not. The base is the commit
+/// Whether a built-in validator performs `action`.
+#[must_use]
+pub fn is_built_in_action(action: &str) -> bool {
+    BUILT_IN.iter().any(|built_in| built_in.action == action)
+}
+
+/// Whether a built-in validator writes `kind`.
+#[must_use]
+pub fn is_built_in_kind(kind: &str) -> bool {
+    BUILT_IN.iter().any(|built_in| built_in.kind == kind)
+}
+
+/// `change.read`: observes whether the implementation revision's tree differs from the case's
+/// base outside `.engineering/` (the planning store and the cases, which takt's own take,
+/// approval and records change), by content, not by its commits or their messages, and writes
+/// one `change_record`: `ahead` when it differs, `none` when it does not. The base is the commit
 /// pinned in `branch.yaml` when the case opened, else the base branch it names; a case with
-/// neither writes no record. It reads git only: nothing is run from the tree and nothing leaves
-/// the machine.
+/// neither writes no record. It reads git only, with no code from configuration: nothing is run
+/// from the tree and nothing leaves the machine.
 #[derive(Debug, Clone, Default)]
 pub struct ChangeRead;
 
 impl ChangeRead {
     /// The action it performs.
     pub const ACTION: &str = "change.read";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "change_record";
 }
 
 impl Validator for ChangeRead {
@@ -1347,7 +1424,7 @@ impl Validator for ChangeRead {
     }
 
     fn kind(&self) -> &str {
-        "change_record"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {
@@ -1368,23 +1445,13 @@ impl Validator for ChangeRead {
                 artifact: None,
             });
         };
-        let ahead = crate::git::run(
-            tree,
-            &[
-                "rev-list",
-                "--count",
-                "--invert-grep",
-                "--extended-regexp",
-                "--grep=^takt: take [^ ]+$",
-                &format!("{base}..{revision}"),
-            ],
-        )?;
-        let result = if ahead.trim() == "0" { "none" } else { "ahead" };
+        let differs = crate::git::trees_differ_outside(tree, &base, revision, ".engineering")?;
+        let result = if differs { "ahead" } else { "none" };
         Ok(Observation {
             summary: format!(
-                "{} carries {} commit(s) beyond {shown} but the take: {result}",
+                "the tree of {} {} the tree of {shown} outside .engineering/: {result}",
                 short(revision),
-                ahead.trim()
+                if differs { "differs from" } else { "is" }
             ),
             records: vec![Record::new(
                 format!("change-record-{seq}"),

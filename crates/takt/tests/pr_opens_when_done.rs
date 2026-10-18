@@ -510,23 +510,145 @@ fn after_a_failed_ci_the_next_change_is_pushed_once_it_is_handed_over_again() {
     );
 }
 
-/// The list the choice rule reads (`takt::validator::BUILT_IN_ACTIONS`) names exactly the actions
-/// takt's built-in validators perform: a validator added without its action there would let its
-/// evidence kind pass for a choice the step choice records.
+/// The list the choice rule and the offer read (`takt::validator::BUILT_IN`) is the validators'
+/// own: every `impl Validator for` in the library's sources has an entry, and each entry's
+/// action and kind are what an instance of that validator answers. A validator added without
+/// its entry fails here, whatever its action is called.
 #[test]
-fn the_built_in_actions_are_the_actions_of_the_built_in_validators() {
+fn the_built_in_list_is_every_built_in_validator_with_its_own_action_and_kind() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut implemented: Vec<String> = Vec::new();
+    for entry in fs::read_dir(&src).expect("the sources") {
+        let path = entry.expect("an entry").path();
+        if path.extension().is_some_and(|ext| ext == "rs") {
+            let text = fs::read_to_string(&path).expect("a source");
+            for line in text.lines() {
+                if let Some(rest) = line.trim().strip_prefix("impl Validator for ") {
+                    implemented.push(rest.trim_end_matches(" {").to_owned());
+                }
+            }
+        }
+    }
+    implemented.sort();
+    let mut listed: Vec<String> = takt::validator::BUILT_IN
+        .iter()
+        .map(|built_in| built_in.validator.to_owned())
+        .collect();
+    listed.sort();
+    assert_eq!(implemented, listed);
+
     let forge: Rc<dyn Forge> = Rc::new(Memory::default());
-    let built_in: Vec<Box<dyn Validator>> = vec![
-        Box::new(takt::validator::TestsRun::new("true").expect("a command")),
-        Box::new(takt::validator::GateRun::new(".engineering/gates.yaml")),
-        Box::new(PrOpen::new(forge.clone())),
-        Box::new(CiRead::new(forge.clone())),
-        Box::new(takt::validator::PrMerged::new(forge)),
-        Box::new(ChangeRead),
+    let instances: Vec<(&str, Box<dyn Validator>)> = vec![
+        (
+            "TestsRun",
+            Box::new(takt::validator::TestsRun::new("true").expect("a command")),
+        ),
+        (
+            "GateRun",
+            Box::new(takt::validator::GateRun::new(".engineering/gates.yaml")),
+        ),
+        ("PrOpen", Box::new(PrOpen::new(forge.clone()))),
+        ("CiRead", Box::new(CiRead::new(forge.clone()))),
+        ("PrMerged", Box::new(takt::validator::PrMerged::new(forge))),
+        ("ChangeRead", Box::new(ChangeRead)),
     ];
-    let mut actions: Vec<&str> = built_in.iter().map(|v| v.action()).collect();
-    actions.sort_unstable();
-    let mut listed = takt::validator::BUILT_IN_ACTIONS.to_vec();
-    listed.sort_unstable();
-    assert_eq!(actions, listed);
+    for (name, instance) in &instances {
+        let built_in = takt::validator::BUILT_IN
+            .iter()
+            .find(|built_in| built_in.validator == *name)
+            .unwrap_or_else(|| panic!("{name} is not listed"));
+        assert_eq!(
+            (built_in.action, built_in.kind),
+            (instance.action(), instance.kind()),
+            "{name}"
+        );
+    }
+    assert_eq!(instances.len(), takt::validator::BUILT_IN.len());
+}
+
+/// Keeps every offer it is given and answers with an edit that changes nothing.
+struct Watching {
+    keeps: bool,
+    offers: RefCell<Vec<Vec<String>>>,
+}
+
+impl Harness for Watching {
+    fn name(&self) -> &str {
+        "watching"
+    }
+
+    fn keeps_state(&self) -> bool {
+        self.keeps
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> anyhow::Result<StepReport> {
+        self.offers.borrow_mut().push(context.offered.to_vec());
+        let action = if self.offers.borrow().len() == 1 {
+            fs::write(context.tree.join("work.txt"), "the work\n")?;
+            "implementation.edit"
+        } else {
+            "change.handover"
+        };
+        Ok(StepReport {
+            action: action.to_owned(),
+            summary: "watched".to_owned(),
+            tokens: None,
+        })
+    }
+}
+
+/// `change.read` is the run loop's to take and is never offered to the harness: not to one that
+/// keeps state, not with the validator left out of the run, and not with it registered, where
+/// the loop takes it once the change is handed over. The same holds for every built-in action.
+#[test]
+fn change_read_is_taken_by_the_loop_and_never_offered_to_the_harness() {
+    for (keeps, registered) in [(false, true), (true, true), (true, false), (false, false)] {
+        let tree = scratch(&format!("change-read-offer-{keeps}-{registered}"));
+        let mut validators: Vec<Box<dyn Validator>> = vec![
+            Box::new(Green {
+                action: "tests.run",
+                kind: "test_result",
+            }),
+            Box::new(Green {
+                action: "gate.run",
+                kind: "gate_result",
+            }),
+        ];
+        if registered {
+            validators.push(Box::new(ChangeRead));
+        }
+        let options = RunOptions {
+            protocol: PROTOCOL.to_owned(),
+            intent: "remove a todo by its number".to_owned(),
+            inputs: Vec::new(),
+            iterations: Some(12),
+            hours: None,
+            tokens: None,
+            case_id: Some("offer".to_owned()),
+            gate: Some("repository.merge".to_owned()),
+        };
+        let harness = Watching {
+            keeps,
+            offers: RefCell::new(Vec::new()),
+        };
+        let mut run = Run::open(&tree, options, &harness, &validators).expect("the case opens");
+        let mut out = Vec::new();
+        let _ = run.run(&mut out);
+        let text = String::from_utf8(out).expect("utf-8");
+        let offers = harness.offers.borrow();
+        assert!(!offers.is_empty(), "{text}");
+        for offer in offers.iter() {
+            for action in offer {
+                assert!(
+                    !takt::validator::is_built_in_action(action),
+                    "{action} offered (keeps state: {keeps}, change.read registered: {registered}): {offer:?}\n{text}"
+                );
+            }
+        }
+        assert_eq!(
+            text.contains(": change.read {}"),
+            registered,
+            "the loop takes change.read once handed over, when registered: {text}"
+        );
+    }
 }

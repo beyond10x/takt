@@ -108,6 +108,14 @@ pub const ACCEPTED: &str = "accepted";
 /// record attests the harness's choice, not an observation's outcome.
 pub const CHOICE_PRODUCER: &str = "takt.choice";
 
+/// `text` on one line: every run of white space, line breaks among them, as one space. A
+/// judgement step's commit message is `<action>: <summary>`, the summary the harness reported;
+/// a line of its own there could read as one of takt's (`takt: take`, `takt: approve`) to what
+/// reads commit messages.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// The first eight characters of a revision, as the loop prints one.
 fn short(revision: &str) -> &str {
     revision.get(..8).unwrap_or(revision)
@@ -144,14 +152,16 @@ fn is_due(
 /// action's effect, the evidence kinds each action may produce, the kinds each claim is decided
 /// from (through the claims it reads), and the kinds that record a choice.
 ///
-/// A kind records a choice when every action that may produce it declares `effect: read`, none
-/// of them is an action a built-in validator performs ([`crate::validator::BUILT_IN_ACTIONS`],
-/// whether or not the run has that validator), and every predicate that reads it (a claim's, an
-/// obligation's, a precondition, an outcome's) reads it without a `result`: what it attests is
-/// that the harness took the action, not an observation's outcome. Such a record is written by
-/// takt from the step itself ([`Run::run`]); every other kind only a validator writes. A kind
-/// that records a choice and that the protocol reads about no artifact is refused when the
-/// protocol is read: its record could be bound to no revision.
+/// A kind records a choice when no built-in validator writes it, every action that may produce
+/// it declares `effect: read` and none of them is an action a built-in validator performs
+/// ([`crate::validator::BUILT_IN`], whether or not the run has that validator), and every
+/// predicate that reads it (a claim's, an obligation's, a precondition, an outcome's) reads it
+/// without a `result`: what it attests is that the harness took the action, not an
+/// observation's outcome. Such a record is written by takt from the step itself ([`Run::run`]);
+/// every other kind only a validator writes, so a choice record never makes `tests.pass`,
+/// `gate.green`, `ci.green` or `pr.merged` true. A kind that records a choice and that the
+/// protocol reads about no artifact is refused when the protocol is read, before any case is
+/// opened on it: its record could be bound to no revision.
 struct Shape {
     effects: BTreeMap<String, String>,
     produces: BTreeMap<String, BTreeSet<String>>,
@@ -278,13 +288,14 @@ impl Shape {
                 .map(|(action, _)| action)
                 .collect();
             if !*read_with_result
+                && !crate::validator::is_built_in_kind(kind)
                 && !producers.is_empty()
                 && producers
                     .iter()
                     .all(|action| effects.get(*action).is_some_and(|e| e == "read"))
                 && !producers
                     .iter()
-                    .any(|action| crate::validator::BUILT_IN_ACTIONS.contains(&action.as_str()))
+                    .any(|action| crate::validator::is_built_in_action(action))
             {
                 let about = subjects.get(kind).cloned().unwrap_or_default();
                 if about.is_empty() {
@@ -384,6 +395,18 @@ impl Shape {
     /// would end the run.
     fn for_stateless(&self, action: &str) -> bool {
         !self.is(action, "read") || !self.choices_of(action).is_empty()
+    }
+
+    /// Whether `action` may be offered to the harness at all: never one that may produce a kind
+    /// a built-in validator writes (`change.read` among them), whether or not the run has that
+    /// validator. Only a validator writes such a kind, so the action is the run loop's to take,
+    /// and a harness that took it could move nothing.
+    fn for_harness(&self, action: &str) -> bool {
+        self.produces.get(action).is_none_or(|produced| {
+            !produced
+                .iter()
+                .any(|kind| crate::validator::is_built_in_kind(kind))
+        })
     }
 
     /// The actions that may produce evidence `claim` is decided from, but those the case's
@@ -816,6 +839,9 @@ impl<'a> Run<'a> {
         } else {
             LoadedProtocol::builtin(&options.protocol)?
         };
+        // What the step choice will refuse is refused here, before a case directory or a
+        // branch exists for it.
+        Shape::of(&protocol, &options.inputs)?;
         let id = options
             .case_id
             .clone()
@@ -1504,12 +1530,14 @@ impl<'a> Run<'a> {
                 });
             }
             let admissible = decision.admissible();
-            // The judgement actions: the admissible ones no validator owns. A harness that keeps
-            // nothing between steps is offered an action that only reads only when the action
-            // records a choice ([`Shape::for_stateless`]).
+            // The judgement actions: the admissible ones no validator owns, but none whose evidence
+            // only a validator writes ([`Shape::for_harness`]). A harness that keeps nothing
+            // between steps is offered an action that only reads only when the action records a
+            // choice ([`Shape::for_stateless`]).
             let offered: Vec<String> = admissible
                 .iter()
                 .filter(|a| !self.validators.iter().any(|v| v.action() == a.as_str()))
+                .filter(|a| shape.for_harness(a))
                 .filter(|a| keeps_state || shape.for_stateless(a))
                 .cloned()
                 .collect();
@@ -2162,7 +2190,7 @@ impl<'a> Run<'a> {
             let head = match crate::git::commit_paths(
                 &self.tree,
                 changed,
-                &format!("{}: {}", report.action, report.summary),
+                &format!("{}: {}", report.action, one_line(&report.summary)),
             ) {
                 Ok(head) => head,
                 Err(error) => {

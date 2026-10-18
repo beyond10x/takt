@@ -355,6 +355,36 @@ fn adv_a_choice_kind_read_about_no_artifact_is_offered_and_then_ends_the_run_on_
         \x20 ack.give:\n    description: acknowledge\n    effect: read\n    may_produce:\n      - evidence: ack\n\
         outcomes:\n  accepted:\n    description: acknowledged\n    requires:\n      claim: acked\n";
     let harness = Script::new(&[Move::Name("ack.give")]);
+    // Since correction 2 such a protocol is refused when the case would open, before any step
+    // and before anything is written: `ack.give` is then never offered. The run below is the
+    // case for a protocol that opens.
+    {
+        let tree = scratch("ack-no-subject-open");
+        let protocol = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+            "efficiency-adv1-{}-ack-open.yaml",
+            std::process::id()
+        ));
+        fs::write(&protocol, yaml).expect("a protocol");
+        let options = RunOptions {
+            protocol: protocol.display().to_string(),
+            intent: "deliver".to_owned(),
+            inputs: Vec::new(),
+            iterations: Some(5),
+            hours: None,
+            tokens: None,
+            case_id: Some("ack-open".to_owned()),
+            gate: None,
+        };
+        let validators: Vec<Box<dyn Validator>> = Vec::new();
+        let opened = Run::open(&tree, options, &harness, &validators);
+        let _ = fs::remove_file(&protocol);
+        if let Err(error) = opened {
+            let error = format!("{error:#}");
+            assert!(error.contains("ack"), "{error}");
+            assert!(harness.offered.borrow().is_empty());
+            return;
+        }
+    }
     let (stop, text, _) = run_protocol("ack-no-subject", yaml, &[], &harness);
     let offered_first = harness
         .offered

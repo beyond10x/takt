@@ -249,19 +249,18 @@ fn offered_to(keeps: bool, name: &str) -> Vec<String> {
 }
 
 /// The marker decides it, and only for the actions the protocol declares `effect: read` that
-/// record no choice: a harness that keeps state is offered `repository.inspect`, `tests.run`
-/// and `gate.run` beside the edits and `change.handover`; one that does not, the default, the
-/// edits and `change.handover`, a read whose `handover` record moves the decision.
+/// record no choice: a harness that keeps state is offered `repository.inspect` beside the
+/// edits and `change.handover`; one that does not, the default, the edits and
+/// `change.handover`, a read whose `handover` record moves the decision. Neither is offered
+/// `tests.run` or `gate.run` with no validator for them: only a validator writes their kinds.
 #[test]
 fn only_a_harness_that_keeps_state_is_offered_the_actions_that_only_read() {
     assert_eq!(
         offered_to(true, "stateful"),
         [
             "change.handover",
-            "gate.run",
             "implementation.edit",
             "repository.inspect",
-            "tests.run",
             "tests.write"
         ]
     );
