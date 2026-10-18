@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:takt-domain-model
 kind: story
-status: draft
+status: active
 title: Declare takt's nouns and their relations as an ESS domain document
 summary: Case, Run, Workflow, Step and EvidenceProducer typed and validated; the story's case and the authority grant as decided; no UNMAPPED marker
 relations:
@@ -17,7 +17,10 @@ scope:
   path: ess/ess-inputs.yaml
 - confidence: inferred
   path: ess/system.yaml
-revision: 5
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":1}}}
 ---
 # Story: takt-domain-model
 

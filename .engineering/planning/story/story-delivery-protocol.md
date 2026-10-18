@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:story-delivery-protocol
 kind: story
-status: draft
+status: active
 title: A protocol/1 document for delivering a planning-store story
 summary: Claims tests.pass, gate.green, pr.opened, ci.green, pr.merged and outcome accepted, as data Canon validates
 relations:
@@ -17,7 +17,10 @@ scope:
   path: crates/takt/tests/story_delivery.rs
 - confidence: inferred
   path: protocols/story-delivery/1.yaml
-revision: 3
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 5}
 ---
 # Story: story-delivery-protocol
 
