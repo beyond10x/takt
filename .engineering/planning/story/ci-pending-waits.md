@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:ci-pending-waits
 kind: story
-status: draft
+status: implemented
 title: A story run waits for pending checks instead of stopping on NoProgress
 summary: pending CI or a lagging pull-request head is polled within the budget; a run out of budget stops as waiting, not NoProgress
 relations:
@@ -15,7 +15,11 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/ci_pending_waits.rs
-revision: 4
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T13:07:06Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-18T13:07:06Z", actor: "human:timo", revision: 6}
+- {from: "active", to: "implemented", at: "2026-10-18T13:58:13Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # Story: ci-pending-waits
 
@@ -50,3 +54,20 @@ On takt at 92b8cf3, holds; after the fix, fails:
 ## Acceptance
 
 With a stub forge whose checks stay pending for N reads, a run with budget left polls the checks at a bounded interval, records `ci_result` when they finish and reaches `ApprovalRequired`; when the budget ends first, the run stops with a stop and exit code that say it waits on the forge, distinct from `NoProgress`, and the next run resumes the case. A pull request whose head lags a push is read again after the same bounded wait.
+
+## Landed (wave 08)
+
+Read from `git diff --stat 4cbc096 913dd62` at the close of wave 08 (wave branch head c5d9ae3). A validator's observation can wait on the forge (pending checks, a pull-request head behind the push); the loop pauses within its budget and stops `Waiting`, exit 6. A 405 merge refusal waits only when every clause is a pending required check (`forge::refused_for_a_pending_check`). The checks read still takes no head; the adversary showed `ci.read` requires the pushed head first.
+
+- `README.md`
+- `crates/takt-cli/src/main.rs`
+- `crates/takt/src/forge.rs`
+- `crates/takt/src/run.rs`
+- `crates/takt/src/validator.rs`
+- `crates/takt/tests/approval_record_adv1.rs`
+- `crates/takt/tests/approval_record_adv2.rs`
+- `crates/takt/tests/ci_pending_waits.rs`
+- `crates/takt/tests/ci_pending_waits_adv1.rs`
+- `crates/takt/tests/ci_pending_waits_adv2.rs`
+- `crates/takt/tests/forge.rs`
+- `ess/domains/takt.yaml`

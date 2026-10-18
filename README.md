@@ -48,6 +48,7 @@ one, adds the gate. `takt run --help` lists every default and the exit codes:
 | 3 | stopped on a budget, with nothing admissible, on a refused step, or with no progress |
 | 4 | waits for an approval (`takt approve`); the next run resumes the case |
 | 5 | stopped on an error once its case was open; the case stays open |
+| 6 | waited on the forge (pending checks or a pull-request head behind the push) until the budget ended; the next run resumes the case |
 
 `takt scenario run` replays a declared scenario: `.engineering/scenarios.conf` on `main` names
 its story and seed commit. The run fetches the remote's `trial/*` branches, cuts the next free

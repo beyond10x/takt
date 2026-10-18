@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T13:58:13Z",
+  "actor": "human:timo",
+  "artifact": "story:ci-pending-waits",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --locked --no-fail-fast",
+    "reference": "wave/2026-10-18-w8 at c5d9ae3: 44 lanes, 361 passed, 0 failed; fmt, clippy, ess exit 0; 310 of 310 in-repository citations resolve (scratch/int/close-*.log, cite-check-3.txt)"
+  }
+}

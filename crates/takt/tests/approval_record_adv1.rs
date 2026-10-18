@@ -218,24 +218,6 @@ fn merge_run(repo: &Path, id: &str, forge: Rc<dyn Forge>) -> (Result<Stop, Strin
     merge_run_with(repo, id, forge, &NoHarness)
 }
 
-/// A harness that inspects and changes nothing: the loop offers it the remaining judgement
-/// steps while the merge waits, as a harness with nothing left to do would answer.
-struct Idle;
-
-impl Harness for Idle {
-    fn name(&self) -> &str {
-        "idle"
-    }
-
-    fn step(&self, _: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
-        Ok(StepReport {
-            action: "repository.inspect".to_owned(),
-            summary: "nothing to change".to_owned(),
-            tokens: None,
-        })
-    }
-}
-
 fn merge_run_with(
     repo: &Path,
     id: &str,
@@ -244,6 +226,8 @@ fn merge_run_with(
 ) -> (Result<Stop, String>, String) {
     let validators = validators(forge);
     let mut run = Run::resume(repo, options(), id, harness, &validators).expect("the case resumes");
+    // A run that waits on the forge pauses between its observations; here only briefly.
+    run.poll = std::time::Duration::from_millis(5);
     let mut out = Vec::new();
     let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
     (stop, String::from_utf8_lossy(&out).into_owned())
@@ -446,16 +430,24 @@ fn adv1_required_checks_on_the_pushed_approval_commit_hold_the_merge_without_an_
         green: std::cell::RefCell::new(vec![granted.clone()]),
     });
 
-    // The run waits with an idle harness: with `NoHarness` the loop's offer of the remaining
-    // judgement steps ends in a harness error, which is the loop's behaviour while CI is pending
-    // (story:ci-pending-waits), not this validator's.
-    let (first, first_text) = merge_run_with(&repo, &id, real.clone(), &Idle);
+    // The run waits on the forge with no judgement step offered (story:ci-pending-waits): with
+    // `NoHarness` an offer would end the run in a harness error. Its step budget ends while the
+    // checks are still pending, and it stops `Waiting` on the merge.
+    let (first, first_text) = merge_run(&repo, &id, real.clone());
     assert!(memory.merged.borrow().is_empty(), "{first_text}");
     assert!(
         first.is_ok(),
         "checks pending on {} (the approval's commit pushed by repository.merge; CI was read on {}) ended the run in an error: {first:?}\n{first_text}",
         &approved[..8],
         &granted[..8]
+    );
+    assert_eq!(
+        first,
+        Ok(Stop::Waiting {
+            on: vec!["repository.merge".to_owned()],
+            budget: Some(Box::new(Stop::Iterations(8))),
+        }),
+        "{first_text}"
     );
 
     real.green.borrow_mut().push(approved.clone());
