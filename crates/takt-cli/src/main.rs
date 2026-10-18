@@ -211,7 +211,7 @@ const EXIT_CODES: &str = "Exit codes:
   3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
-  6  stopped: Waiting: the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; nothing recorded for it, the case stays open and the next run resumes it";
+  6  stopped: Waiting (<actions>; <the budget spent> or no step or hour budget): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; nothing recorded for it, the case stays open and the next run resumes it";
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -288,6 +288,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 case_id,
                 looping,
             } = *args;
+            looping.check()?;
             let repo = repo
                 .canonicalize()
                 .with_context(|| format!("the repository {}", repo.display()))?;
@@ -426,6 +427,20 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
 }
 
 impl LoopArgs {
+    /// Refuses, before anything of the run is done, an hour budget that is not a finite
+    /// positive number: `--hours inf` would never end a wait, `--hours NaN` never compare, and
+    /// zero or less would be spent before the first step.
+    fn check(&self) -> Result<()> {
+        if let Some(hours) = self.hours
+            && !(hours.is_finite() && hours > 0.0)
+        {
+            return Err(anyhow!(
+                "--hours is {hours}: an hour budget is a finite number above 0"
+            ));
+        }
+        Ok(())
+    }
+
     /// The run's options: the protocol a case opens on, its inputs and its id, with this loop's
     /// budgets and gate.
     fn options(
@@ -821,6 +836,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         declared_on,
         looping,
     } = args;
+    looping.check()?;
     let repo = repo
         .canonicalize()
         .with_context(|| format!("the repository {}", repo.display()))?;
@@ -1901,6 +1917,34 @@ mod tests {
             "operator",
         ]);
         assert!(error.contains("absent"), "{error}");
+        assert!(!repo.join(".engineering/cases").exists());
+    }
+
+    /// An hour budget that is not a finite number above 0 is refused before the run, for
+    /// `takt run` and `takt scenario run`, and no case is opened.
+    #[test]
+    fn an_hour_budget_that_is_not_finite_and_positive_is_refused_before_the_run() {
+        let repo = repository("one-ready", "hours-refused");
+        let path = repo.to_str().expect("utf-8");
+        for value in ["inf", "NaN", "0", "-1", "1e400"] {
+            let hours = format!("--hours={value}");
+            for args in [
+                vec!["run", "--repo", path, "--harness", "none", &hours],
+                vec![
+                    "scenario",
+                    "run",
+                    "--repo",
+                    path,
+                    "one",
+                    "--harness",
+                    "none",
+                    &hours,
+                ],
+            ] {
+                let error = takt_error(&args);
+                assert!(error.contains("--hours"), "{args:?}: {error}");
+            }
+        }
         assert!(!repo.join(".engineering/cases").exists());
     }
 }

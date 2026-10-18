@@ -80,20 +80,99 @@ impl fmt::Display for Checks {
     }
 }
 
+/// A program a forge adapter ran that did not exit 0: the line it ran, its exit code (`None`
+/// on a signal) and what it printed on standard error, the forge's own words. Shown as `<line>
+/// exited <code>: <stderr>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failed {
+    /// The line, its words joined by spaces.
+    pub line: String,
+    /// The exit code; `None` when a signal ended the program.
+    pub code: Option<i32>,
+    /// Standard error, trimmed.
+    pub stderr: String,
+}
+
+impl fmt::Display for Failed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} exited {}: {}",
+            self.line,
+            self.code
+                .map_or("on a signal".to_owned(), |code| code.to_string()),
+            self.stderr
+        )
+    }
+}
+
+impl std::error::Error for Failed {}
+
+/// How the forge words a required check that has not reported: expected, in progress, pending
+/// or queued.
+const CHECK_PENDING: [&str; 8] = [
+    "is expected",
+    "are expected",
+    "is in progress",
+    "are in progress",
+    "is pending",
+    "are pending",
+    "is queued",
+    "are queued",
+];
+
+/// How the forge words a required check that failed.
+const CHECK_FAILING: [&str; 4] = ["is failing", "are failing", "has failed", "have failed"];
+
+/// The forge's own words in one layer of an error: a [`Failed`] program's standard error, or,
+/// from an adapter that reports a program's failure as text, what follows its `exited <code>: `.
+/// The line the program ran (paths, the case id, the repository) is never among them.
+fn forge_words(cause: &(dyn std::error::Error + 'static)) -> Option<String> {
+    if let Some(failed) = cause.downcast_ref::<Failed>() {
+        return Some(failed.stderr.clone());
+    }
+    let text = cause.to_string();
+    text.match_indices("exited ").find_map(|(at, word)| {
+        let rest = &text[at + word.len()..];
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        (digits > 0)
+            .then(|| rest[digits..].strip_prefix(": "))
+            .flatten()
+            .map(str::to_owned)
+    })
+}
+
+/// Whether the forge's `words` refuse a merge for a required check that has not reported: the
+/// status phrase after the check, its quoted name left out (a check named `fail-fast` is a
+/// name, not a status). A failing check among them is a failure, not a wait.
+fn pending_check_refusal(words: &str) -> bool {
+    let mut status = String::new();
+    let mut quoted = false;
+    for c in words.chars() {
+        if c == '"' {
+            quoted = !quoted;
+        } else if !quoted {
+            status.push(c);
+        }
+    }
+    let status = status.to_lowercase();
+    status.contains("required status check")
+        && !CHECK_FAILING.iter().any(|phrase| status.contains(phrase))
+        && CHECK_PENDING.iter().any(|phrase| status.contains(phrase))
+}
+
 /// Whether `error`, the failure of a [`Forge::merge`], is the forge refusing the merge for a
 /// required check that has not reported on the head yet: the API's `405 Required status check
 /// "<name>" is expected`, or a check it names in progress, pending or queued. Nothing was
 /// merged, and the same merge may be taken once the check reports. A required check that
-/// failed, and every other refusal, is not: those stay errors. Read from the error's whole
-/// chain, the forge's own words as the adapter passed them on.
+/// failed, and every other refusal, is not: those stay errors. Only the forge's own words in
+/// the error are read ([`forge_words`]), never the rest of its chain.
 #[must_use]
 pub fn refused_for_a_pending_check(error: &anyhow::Error) -> bool {
-    let text = format!("{error:#}").to_lowercase();
-    text.contains("required status check")
-        && !text.contains("fail")
-        && ["expected", "in progress", "pending", "queued"]
-            .iter()
-            .any(|state| text.contains(state))
+    error
+        .chain()
+        .filter_map(forge_words)
+        .any(|words| pending_check_refusal(&words))
 }
 
 /// What a pull request is opened with.
@@ -811,13 +890,12 @@ impl BotRoute {
     fn succeed(&self, tree: &Path, argv: &[String]) -> Result<Exit> {
         let exit = self.runner.run(tree, argv)?;
         if !exit.success() {
-            bail!(
-                "{} exited {}: {}",
-                argv.join(" "),
-                exit.code
-                    .map_or("on a signal".to_owned(), |code| code.to_string()),
-                exit.stderr.trim()
-            );
+            return Err(Failed {
+                line: argv.join(" "),
+                code: exit.code,
+                stderr: exit.stderr.trim().to_owned(),
+            }
+            .into());
         }
         Ok(exit)
     }

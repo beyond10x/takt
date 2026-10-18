@@ -639,8 +639,9 @@ impl<'a> Run<'a> {
         {
             return Some(Stop::Iterations(n));
         }
+        // An hour budget that is not a number is spent: no comparison would ever end it.
         if let Some(h) = self.options.hours
-            && self.started.elapsed().as_secs_f64() >= h * 3600.0
+            && (h.is_nan() || self.started.elapsed().as_secs_f64() >= h * 3600.0)
         {
             return Some(Stop::Hours(h));
         }
@@ -654,17 +655,18 @@ impl<'a> Run<'a> {
 
     /// How long the run waits on the forge before it observes again: [`Run::poll`], cut to
     /// what is left of the hour budget. `None` for a run with neither a step nor an hour
-    /// budget: it has nothing to wait in, and a wait without a bound would never end.
+    /// budget: it has nothing to wait in, and a wait without a bound would never end. What is
+    /// left of an hour budget too large for a [`Duration`], infinite among them, saturates and
+    /// leaves the poll as it is; nothing here panics.
     fn pause(&self) -> Option<Duration> {
         if self.options.iterations.is_none() && self.options.hours.is_none() {
             return None;
         }
         Some(match self.options.hours {
             Some(h) => {
-                let left = Duration::from_secs_f64(
-                    (h * 3600.0 - self.started.elapsed().as_secs_f64()).max(0.0),
-                );
-                self.poll.min(left)
+                let left = (h * 3600.0 - self.started.elapsed().as_secs_f64()).max(0.0);
+                self.poll
+                    .min(Duration::try_from_secs_f64(left).unwrap_or(Duration::MAX))
             }
             None => self.poll,
         })
