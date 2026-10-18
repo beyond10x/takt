@@ -26,7 +26,7 @@ scope:
   path: crates/takt/tests/workflow.rs
 - confidence: inferred
   path: docs/workflow-1.md
-revision: 8
+revision: 9
 ---
 # Story: workflow-schema-and-loader
 
@@ -80,3 +80,9 @@ Running loops (story:declared-loops); the story run from a `workflow/1` file, th
 
 - Whether `loop.steps` may hold a loop: `inferable`, `docs/design/takt.md` § 3 loop row makes the outer loop contain the inner and validation loops.
 - Flags beside a file: `inferable` as recorded here, refused, so a run has one source of truth; the operator can change this to override semantics in one place.
+
+## Constraint from the store guard
+
+Since story:run-record-and-story-evidence (granted at f6056dd, wave 09), a judgement step that changes any path under `.engineering/` other than `cases/` is refused and put back: the planning store, the evidence directory, `project.yaml`, `gates.yaml`, `assertions-project.yaml` and any new file such as `.engineering/workflow.yaml`. Found by the reviewer's verdict on that unit.
+
+This story as drafted conflicts with it in two places: its `planner` role writes `.engineering/planning/story/**` through `implementation.edit`, and a repository's default workflow is `.engineering/workflow.yaml`, which no takt step could then add or change. Before it is scheduled: a planner's store writes become deterministic actions (an `aep plan artifact` verb run by takt, its output a validator record), never a judgement step's file edit; and the workflow file is added or changed by a person or the developer role, as gates and project files are.
