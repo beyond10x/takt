@@ -26,7 +26,7 @@ scope:
   path: crates/takt/src/promotion.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 5
+revision: 6
 ---
 # Story: promotion
 
@@ -93,3 +93,11 @@ exits non-zero, installs nothing and writes no promotion record.
 ## Out of Scope
 
 The merge-time judge guard (story:judge-guard); the loop's own promotion (story:loop-scorecard).
+
+## From the scorecard-reader review
+
+From the reviewer verdict on story:scorecard-reader at 1c3cf0f (approve):
+
+- medium: `takt scorecard --against <file>` checks neither where the saved scorecard is nor where it came from (`crates/takt/src/scorecard.rs:584-597`, `:558`): a copy renamed `scorecard-aaaaaaa.json` with every outcome set to `NoProgress` printed `against 97623a6` and `not worse`; `--save` accepts a directory inside `--repo`, which a harness step could write and the case commit. Promotion therefore reads the baseline it compares against from a pinned place outside the repository the candidate changes, requires the file's `revision` field to equal its name and the promoted revision, and refuses a `--save` or `--against` path inside the repository.
+- low: a case and its scenario are taken from the directory name and the `case` field on `opened` is not read (`scorecard.rs:309-349`, `:295`); a case directory that is a link is dropped without being listed (`:416`, `:440`). Promotion counts only cases whose `opened` names them, and lists every directory it skipped.
+- open, from design:recursive-self-improvement § Scorecard: the token rule at small n and the tolerance for flaky outcomes under dominance.
