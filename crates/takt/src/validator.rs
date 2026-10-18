@@ -1528,8 +1528,9 @@ pub struct BuiltIn {
 
 /// takt's built-in validators, whether or not a run has them configured. An action one of them
 /// performs is the run loop's to take, never the harness's, and a kind one of them writes is an
-/// observation, never a choice the step choice records (`crate::run`): a record `takt.choice`
-/// writes never makes `tests.pass`, `gate.green`, `ci.green` or `pr.merged` true.
+/// observation, never a choice the step choice records (`crate::run`): a protocol in which an
+/// action no built-in validator performs may produce one with `effect: read` is refused, and so
+/// is one where an outcome or an obligation holds on choice records alone.
 pub const BUILT_IN: [BuiltIn; 6] = [
     BuiltIn {
         validator: "TestsRun",
@@ -1578,10 +1579,12 @@ pub fn is_built_in_kind(kind: &str) -> bool {
 /// `change.read`: observes whether the implementation revision's tree differs from the case's
 /// base outside `.engineering/` (the planning store and the cases, which takt's own take,
 /// approval and records change), by content, not by its commits or their messages, and writes
-/// one `change_record`: `ahead` when it differs, `none` when it does not. The base is the commit
-/// pinned in `branch.yaml` when the case opened, else the base branch it names; a case with
-/// neither writes no record. It reads git only, with no code from configuration: nothing is run
-/// from the tree and nothing leaves the machine.
+/// one `change_record`: `ahead` when it differs from every base it can read, `none` when it is
+/// the tree of one. The bases are the commit pinned in `branch.yaml` when the case opened and
+/// the tip, now, of the base branch it names: the same content landed on the base by another
+/// commit is no change to publish. A case with neither writes no record. It reads git only,
+/// with no code from configuration: nothing is run from the tree and nothing leaves the
+/// machine.
 #[derive(Debug, Clone, Default)]
 pub struct ChangeRead;
 
@@ -1611,26 +1614,59 @@ impl Validator for ChangeRead {
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
         let dir = current(tree)?;
-        let base = match base_revision(tree, &dir)? {
-            Some((shown, commit)) => Some((shown, commit)),
-            None => Branch::read(&dir)?.base.map(|name| (name.clone(), name)),
-        };
-        let Some((shown, base)) = base else {
+        let mut bases: Vec<(String, String)> = Vec::new();
+        if let Some(pinned) = base_revision(tree, &dir)? {
+            bases.push(pinned);
+        }
+        if let Some(name) = Branch::read(&dir)?.base {
+            let tip = crate::git::run(
+                tree,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "--end-of-options",
+                    &format!("refs/heads/{name}^{{commit}}"),
+                ],
+            )
+            .ok()
+            .filter(|tip| !tip.is_empty());
+            if let Some(tip) = tip {
+                bases.push((format!("{name} at {}, its tip now", short(&tip)), tip));
+            }
+        }
+        if bases.is_empty() {
             return Ok(Observation {
                 summary: "the case records no base; nothing to compare, the claim stays unknown"
                     .to_owned(),
                 records: Vec::new(),
                 artifact: None,
             });
-        };
-        let differs = crate::git::trees_differ_outside(tree, &base, revision, ".engineering")?;
-        let result = if differs { "ahead" } else { "none" };
+        }
+        let mut same = None;
+        for (shown, base) in &bases {
+            if !crate::git::trees_differ_outside(tree, base, revision, ".engineering")? {
+                same = Some(shown.clone());
+                break;
+            }
+        }
+        let result = if same.is_none() { "ahead" } else { "none" };
         Ok(Observation {
-            summary: format!(
-                "the tree of {} {} the tree of {shown} outside .engineering/: {result}",
-                short(revision),
-                if differs { "differs from" } else { "is" }
-            ),
+            summary: match &same {
+                Some(shown) => format!(
+                    "the tree of {} is the tree of {shown} outside .engineering/: {result}",
+                    short(revision)
+                ),
+                None => format!(
+                    "the tree of {} differs from {} outside .engineering/: {result}",
+                    short(revision),
+                    bases
+                        .iter()
+                        .map(|(shown, _)| shown.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                ),
+            },
             records: vec![Record::new(
                 format!("change-record-{seq}"),
                 self.kind(),

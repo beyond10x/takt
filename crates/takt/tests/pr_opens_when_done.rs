@@ -652,3 +652,201 @@ fn change_read_is_taken_by_the_loop_and_never_offered_to_the_harness() {
         );
     }
 }
+
+/// Opens a case on the protocol document `yaml` with no validator: the error `Run::open` answers,
+/// if any, and whether a case directory was written.
+fn open_on(name: &str, yaml: &str, inputs: &[(&str, &str)]) -> (Option<String>, bool) {
+    let tree = scratch(name);
+    let protocol = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "pr-opens-when-done-{}-{name}.yaml",
+        std::process::id()
+    ));
+    fs::write(&protocol, yaml).expect("a protocol");
+    let options = RunOptions {
+        protocol: protocol.display().to_string(),
+        intent: "deliver".to_owned(),
+        inputs: inputs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect(),
+        iterations: Some(1),
+        hours: None,
+        tokens: None,
+        case_id: Some(name.to_owned()),
+        gate: None,
+    };
+    let validators: Vec<Box<dyn Validator>> = Vec::new();
+    let harness = Scripted::new(&[]);
+    let opened = Run::open(&tree, options, &harness, &validators).err();
+    let _ = fs::remove_file(&protocol);
+    let written = tree.join(CASES_DIR).join(name).exists();
+    (opened.map(|error| format!("{error:#}")), written)
+}
+
+/// A protocol head, its one artifact, the `implementation.edit` action, then `rest`.
+fn protocol_with(id: &str, rest: &str) -> String {
+    format!(
+        "format: protocol/1\nprotocol:\n  id: {id}\n  revision: 1\nartifacts:\n  implementation:\n    description: the code\n{rest}"
+    )
+}
+
+/// F1: an outcome, or an obligation, that holds with every claim a choice record decides true and
+/// every other claim unknown is refused when the case would open, naming it, with nothing
+/// written. A choice record may gate an action (story delivery's `change.handover` gates
+/// `pr.open`), never an outcome or an obligation alone.
+#[test]
+fn a_protocol_whose_outcome_or_obligation_holds_on_choice_records_alone_is_refused_at_open() {
+    let kinds = "evidence_kinds:\n  tests_said:\n    description: the model said the tests pass\n\
+        claims:\n  tests.pass:\n    description: the tests pass\n    true_when:\n      evidence:\n        kind: tests_said\n        subject: implementation\n";
+    let actions = "actions:\n  implementation.edit:\n    description: change the code\n    effect: write\n\
+        \x20 tests.say:\n    description: say the tests pass\n    effect: read\n    may_produce:\n      - evidence: tests_said\n";
+    let outcome = protocol_with(
+        "tests.said",
+        &format!(
+            "{kinds}{actions}outcomes:\n  accepted:\n    description: the tests pass\n    requires:\n      claim: tests.pass\n"
+        ),
+    );
+    let (error, written) = open_on("outcome-on-choice", &outcome, &[]);
+    let error = error.expect("the protocol is refused");
+    assert!(error.contains("outcome accepted"), "{error}");
+    assert!(!written, "a case was written for a refused protocol");
+
+    let obligation = protocol_with(
+        "tests.said.owed",
+        &format!(
+            "{kinds}obligations:\n  tests.required:\n    description: the tests pass\n    discharged_when:\n      claim: tests.pass\n\
+             {actions}outcomes:\n  abandoned:\n    description: given up\n    requires:\n      decision: explicitly_abandoned\n"
+        ),
+    );
+    let (error, _) = open_on("obligation-on-choice", &obligation, &[]);
+    let error = error.expect("the protocol is refused");
+    assert!(error.contains("obligation tests.required"), "{error}");
+
+    // Gated on a choice and on evidence only a validator writes, the outcome cannot hold on the
+    // choice alone, and the protocol opens.
+    let gated = protocol_with(
+        "tests.said.and.run",
+        "evidence_kinds:\n  tests_said:\n    description: the model said so\n  test_result:\n    description: the tests\n\
+             claims:\n  tests.pass:\n    description: the tests pass\n    true_when:\n      all:\n        - evidence:\n            kind: tests_said\n            subject: implementation\n        - evidence:\n            kind: test_result\n            result: pass\n            subject: implementation\n\
+             actions:\n  implementation.edit:\n    description: change the code\n    effect: write\n\
+             \x20 tests.say:\n    description: say the tests pass\n    effect: read\n    may_produce:\n      - evidence: tests_said\n\
+             \x20 tests.run:\n    description: run the tests\n    effect: read\n    may_produce:\n      - evidence: test_result\n\
+             outcomes:\n  accepted:\n    description: the tests pass\n    requires:\n      claim: tests.pass\n",
+    );
+    let (error, written) = open_on("outcome-on-choice-and-tests", &gated, &[]);
+    assert_eq!(error, None);
+    assert!(written);
+}
+
+/// F3: a kind a built-in validator writes that a read action no built-in validator performs may
+/// produce is refused when the case would open, nothing written. An action outside the
+/// built-in validators that writes one with `effect: write` and needs a grant (the merges of
+/// this repository's improvement protocols) can never pass for a choice, and opens.
+#[test]
+fn a_built_in_kind_a_foreign_read_action_may_produce_is_refused_at_open() {
+    let shadow = protocol_with(
+        "shadow.made",
+        "evidence_kinds:\n  change_record:\n    description: shadow\n\
+         claims:\n  change.made:\n    description: made\n    true_when:\n      evidence:\n        kind: change_record\n        subject: implementation\n\
+         actions:\n  implementation.edit:\n    description: change the code\n    effect: write\n\
+         \x20 change.ack:\n    description: ack\n    effect: read\n    may_produce:\n      - evidence: change_record\n\
+         outcomes:\n  abandoned:\n    description: given up\n    requires:\n      decision: explicitly_abandoned\n",
+    );
+    let (error, written) = open_on("shadow", &shadow, &[]);
+    let error = error.expect("the protocol is refused");
+    assert!(
+        error.contains("change.ack") && error.contains("change_record"),
+        "{error}"
+    );
+    assert!(!written);
+
+    for (name, file, inputs) in [
+        (
+            "self-improvement",
+            "self-improvement/1.yaml",
+            &[("surface", "judge")][..],
+        ),
+        ("loop-improvement", "loop-improvement/1.yaml", &[][..]),
+    ] {
+        let yaml = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../protocols")
+                .join(file),
+        )
+        .expect("the protocol");
+        let (error, written) = open_on(name, &yaml, inputs);
+        assert_eq!(error, None, "{file}");
+        assert!(written, "{file}");
+    }
+}
+
+/// F2: the same content landed on the base branch by another commit after the case's edit.
+/// `change.read` compares the revision's tree with the base pinned at open and with the base
+/// branch's tip now, outside `.engineering/`: it reads `ahead` while the base lacks the edit and
+/// `none` once its tip has the same content, so no pull request is opened for nothing.
+#[test]
+fn change_read_reads_none_once_the_base_tip_has_the_same_content() {
+    let tree = scratch("base-tip");
+    let memory = Rc::new(Memory::default());
+    let forge: Rc<dyn Forge> = memory;
+    let validators: Vec<Box<dyn Validator>> = vec![Box::new(PrOpen::new(forge))];
+    let options = RunOptions {
+        protocol: PROTOCOL.to_owned(),
+        intent: "deliver".to_owned(),
+        inputs: Vec::new(),
+        iterations: Some(1),
+        hours: None,
+        tokens: None,
+        case_id: Some("base-tip".to_owned()),
+        gate: None,
+    };
+    let harness = Scripted::new(&[]);
+    let mut run = Run::open(&tree, options, &harness, &validators).expect("the case opens");
+    fs::write(tree.join("README.md"), "a story\nthe fix\n").expect("an edit");
+    git(&tree, &["commit", "-q", "-am", "the fix"]);
+    let revision = git(&tree, &["rev-parse", "HEAD"]);
+    run.case
+        .set_revision("implementation", &revision)
+        .expect("the revision moves");
+    let first = ChangeRead.observe(&tree, &revision, 1).expect("observes");
+    assert_eq!(
+        first.records[0].result.as_deref(),
+        Some("ahead"),
+        "{}",
+        first.summary
+    );
+    let other = tree.with_extension("other");
+    let _ = fs::remove_dir_all(&other);
+    git(
+        &tree,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            other.to_str().expect("utf-8"),
+            "main",
+        ],
+    );
+    fs::write(other.join("README.md"), "a story\nthe fix\n").expect("the same edit");
+    git(
+        &other,
+        &["commit", "-q", "-am", "the same fix by another commit"],
+    );
+    git(
+        &tree,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            other.to_str().expect("utf-8"),
+        ],
+    );
+    let second = ChangeRead.observe(&tree, &revision, 2).expect("observes");
+    assert_eq!(
+        second.records[0].result.as_deref(),
+        Some("none"),
+        "{}",
+        second.summary
+    );
+    assert!(second.summary.contains("its tip now"), "{}", second.summary);
+}

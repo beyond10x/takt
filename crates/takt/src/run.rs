@@ -168,10 +168,13 @@ fn is_due(
 /// predicate that reads it (a claim's, an obligation's, a precondition, an outcome's) reads it
 /// without a `result`: what it attests is that the harness took the action, not an
 /// observation's outcome. Such a record is written by takt from the step itself ([`Run::run`]);
-/// every other kind only a validator writes, so a choice record never makes `tests.pass`,
-/// `gate.green`, `ci.green` or `pr.merged` true. A kind that records a choice and that the
-/// protocol reads about no artifact is refused when the protocol is read, before any case is
-/// opened on it: its record could be bound to no revision.
+/// every other kind only a validator writes. Refused when the protocol is read, before any case
+/// is opened on it: a kind that records a choice and that the protocol reads about no artifact
+/// (its record could be bound to no revision); a kind a built-in validator writes that an
+/// action no built-in validator performs may produce with `effect: read` (it would pass for a
+/// choice); and a protocol where an outcome or an obligation holds with every claim choice
+/// records decide true and every other claim unknown ([`under_choices`]): a choice record may
+/// gate an action, never an outcome or an obligation alone.
 struct Shape {
     effects: BTreeMap<String, String>,
     produces: BTreeMap<String, BTreeSet<String>>,
@@ -218,6 +221,86 @@ fn by_inputs(
             .map(|(_, value)| test.holds_for(&InputValue::new(value.clone()))),
         _ => None,
     }
+}
+
+/// The value of `predicate` when every kind in `choices` has its record, every other evidence
+/// match and every order form is unknown, and every claim has the value its own predicate takes
+/// so ([`claim_under_choices`]): `Some(true)` when choice records alone would make it hold.
+/// Inputs are the case's.
+fn under_choices(
+    predicate: &b10x_canon::model::Predicate,
+    model: &b10x_canon::model::Protocol,
+    choices: &BTreeMap<String, BTreeSet<String>>,
+    inputs: &[(String, String)],
+    values: &mut BTreeMap<String, Option<Option<bool>>>,
+) -> Option<bool> {
+    use b10x_canon::model::{Predicate, Truth};
+    match predicate {
+        Predicate::All(members) => {
+            let found: Vec<Option<bool>> = members
+                .iter()
+                .map(|m| under_choices(m, model, choices, inputs, values))
+                .collect();
+            if found.contains(&Some(false)) {
+                Some(false)
+            } else if found.iter().all(|v| *v == Some(true)) {
+                Some(true)
+            } else {
+                None
+            }
+        }
+        Predicate::Any(members) => {
+            let found: Vec<Option<bool>> = members
+                .iter()
+                .map(|m| under_choices(m, model, choices, inputs, values))
+                .collect();
+            if found.contains(&Some(true)) {
+                Some(true)
+            } else if found.iter().all(|v| *v == Some(false)) {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        Predicate::Not(inner) => {
+            under_choices(inner, model, choices, inputs, values).map(|value| !value)
+        }
+        Predicate::Evidence(matched) => choices.contains_key(matched.kind.as_str()).then_some(true),
+        Predicate::Input(_) => by_inputs(predicate, inputs),
+        Predicate::Claim(test) => {
+            let value = claim_under_choices(test.claim.as_str(), model, choices, inputs, values);
+            match test.is {
+                Truth::True => value,
+                Truth::False => value.map(|value| !value),
+                Truth::Unknown => Some(value.is_none()),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The value claim `id` takes under [`under_choices`], kept in `values`; a claim that reads
+/// itself, through others, is unknown.
+fn claim_under_choices(
+    id: &str,
+    model: &b10x_canon::model::Protocol,
+    choices: &BTreeMap<String, BTreeSet<String>>,
+    inputs: &[(String, String)],
+    values: &mut BTreeMap<String, Option<Option<bool>>>,
+) -> Option<bool> {
+    match values.get(id) {
+        Some(Some(value)) => return *value,
+        Some(None) => return None,
+        None => {}
+    }
+    values.insert(id.to_owned(), None);
+    let value = model
+        .claims
+        .iter()
+        .find(|(claim, _)| claim.as_str() == id)
+        .and_then(|(_, claim)| under_choices(&claim.true_when, model, choices, inputs, values));
+    values.insert(id.to_owned(), Some(value));
+    value
 }
 
 impl Shape {
@@ -290,6 +373,25 @@ impl Shape {
                 predicate.visit(&mut note);
             }
         }
+        // A kind a built-in validator writes is an observation whatever action a protocol names
+        // as its producer: one a read action outside the built-in validators may produce would
+        // pass for a choice, and the protocol is refused.
+        for (action, produced) in &produces {
+            if crate::validator::is_built_in_action(action)
+                || effects.get(action).is_none_or(|effect| effect != "read")
+            {
+                continue;
+            }
+            if let Some(kind) = produced
+                .iter()
+                .find(|kind| crate::validator::is_built_in_kind(kind))
+            {
+                bail!(
+                    "the protocol {} has {action}, an action no built-in validator performs, produce {kind}, which only a built-in validator writes: a record of it from that action would pass for an observation",
+                    protocol.id
+                );
+            }
+        }
         let mut choices = BTreeMap::new();
         for (kind, read_with_result) in &with_result {
             let producers: Vec<&String> = produces
@@ -320,6 +422,38 @@ impl Shape {
                     );
                 }
                 choices.insert(kind.clone(), about);
+            }
+        }
+        // No outcome and no obligation may hold on choice records alone.
+        let mut values = BTreeMap::new();
+        for (id, _) in model.claims.iter() {
+            claim_under_choices(id.as_str(), &model, &choices, inputs, &mut values);
+        }
+        for (id, outcome) in model.outcomes.iter() {
+            if let Some(predicate) = outcome.requires.predicate()
+                && under_choices(predicate, &model, &choices, inputs, &mut values) == Some(true)
+            {
+                bail!(
+                    "the protocol {} lets its outcome {} hold with every claim a choice record decides true and every other claim unknown: a choice record may gate an action, never an outcome alone",
+                    protocol.id,
+                    id.as_str()
+                );
+            }
+        }
+        for (id, obligation) in model.obligations.iter() {
+            if under_choices(
+                &obligation.discharged_when,
+                &model,
+                &choices,
+                inputs,
+                &mut values,
+            ) == Some(true)
+            {
+                bail!(
+                    "the protocol {} discharges its obligation {} with every claim a choice record decides true and every other claim unknown: a choice record may gate an action, never an obligation alone",
+                    protocol.id,
+                    id.as_str()
+                );
             }
         }
         let blocked_for_good = model

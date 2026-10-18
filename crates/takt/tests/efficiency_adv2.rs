@@ -291,12 +291,13 @@ fn adv2_change_read_reads_ahead_for_a_revision_whose_tree_is_the_base() {
     );
 }
 
-/// `change.read` leaves out takt's take with `--invert-grep --grep=^takt: take [^ ]+$`, which
+/// `change.read` once left out takt's take with `--invert-grep --grep=^takt: take [^ ]+$`, which
 /// git matches against every line of a commit message, and the commit of a judgement step is
 /// `<action>: <summary>`, the summary the harness reported (a model's JSON string, which may
-/// hold a newline). An edit whose summary has a second line `takt: take <anything>` is not
-/// counted: the change it commits is read `none`, `change.made` is false, and the hand-over
-/// opens no pull request for a revision that does change the code.
+/// hold a newline). An edit whose summary had a second line `takt: take <anything>` was not
+/// counted: the change it commits was read `none`, `change.made` false, and the hand-over
+/// opened no pull request for a revision that does change the code. `change.read` now compares
+/// trees, and a judgement step's commit message is one line; the case stays as the check.
 #[test]
 fn adv2_an_edit_whose_summary_carries_a_take_line_is_read_as_no_change() {
     let memory = Rc::new(Memory {
@@ -387,6 +388,35 @@ fn adv2_a_choice_record_makes_tests_pass_true_when_its_action_is_not_named_tests
         \x20 tests.check:\n    description: check the tests\n    effect: read\n    may_produce:\n      - evidence: test_result\n\
         outcomes:\n  accepted:\n    description: the tests pass\n    requires:\n      claim: tests.pass\n";
     let harness = Script::new(&[Move::Name("tests.check")]);
+    // Since correction 3 such a protocol is refused when the case would open, before anything
+    // is written: a read action outside the built-in validators may not produce `test_result`.
+    // The run below is the case for a protocol that opens.
+    {
+        let tree = scratch("tests-claimed-open");
+        let protocol = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+            "efficiency-adv2-{}-tests-claimed-open.yaml",
+            std::process::id()
+        ));
+        fs::write(&protocol, yaml).expect("a protocol");
+        let options = RunOptions {
+            protocol: protocol.display().to_string(),
+            intent: "deliver".to_owned(),
+            inputs: Vec::new(),
+            iterations: Some(5),
+            hours: None,
+            tokens: None,
+            case_id: Some("tests-claimed-open".to_owned()),
+            gate: None,
+        };
+        let validators: Vec<Box<dyn Validator>> = Vec::new();
+        let opened = Run::open(&tree, options, &harness, &validators);
+        let _ = fs::remove_file(&protocol);
+        if let Err(error) = opened {
+            let error = format!("{error:#}");
+            assert!(error.contains("test_result"), "{error}");
+            return;
+        }
+    }
     let (stop, text, case_dir) = run_protocol("tests-claimed", yaml, &harness);
     let by_takt: Vec<serde_json::Value> = records(&case_dir, "test_result")
         .into_iter()
