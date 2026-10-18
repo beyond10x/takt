@@ -424,17 +424,20 @@ types:
   # inputs as `name=value`, and the base: the commit the case's branch forked from, as the case's
   # `branch.yaml` pinned it when the case opened; absent for a case opened before it was pinned.
   # The binary: the git revision the running takt was built from, as `takt --version` prints it
-  # in parentheses, read by the build with git: the commit's sha, `-dirty` after it when a
-  # tracked file differed from the commit, or `unknown revision` when no git checkout with a
-  # commit tracked the crate. The binary gives it to every run; absent on a line an earlier takt
-  # wrote and on a run through the library whose caller gave none.
+  # in parentheses, read by the build with git, none of the build's redirecting git environment
+  # and no code from git configuration reaching it: the commit's sha, `-dirty` after it when a
+  # tracked file differed from the commit or an untracked, unignored file other than a
+  # `Cargo.lock` lay under the workspace's `crates/` or the crate's own directory, or `unknown
+  # revision` when no git checkout with a commit tracked the crate. The binary gives it to every
+  # run; absent on a line an earlier takt wrote and on a run through the library whose caller
+  # gave none.
   # read from: crates/takt/src/events.rs:63-76
   # read from: crates/takt/src/run.rs:1136-1151
   # read from: crates/takt/src/run.rs:483-486
   # read from: crates/takt/src/case.rs:197-201
   # read from: crates/takt-cli/src/main.rs:18-20
   # read from: crates/takt-cli/src/main.rs:778
-  # read from: crates/takt-cli/build.rs:40-70
+  # read from: crates/takt-cli/build.rs:119-160
   - name: takt.work.RunOpened
     kind: struct
     fields:
