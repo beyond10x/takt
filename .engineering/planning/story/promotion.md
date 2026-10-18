@@ -26,7 +26,7 @@ scope:
   path: crates/takt/src/promotion.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 11
+revision: 13
 ---
 # Story: promotion
 
@@ -41,12 +41,24 @@ names that revision and the scorecard it read, which becomes the next turn's bas
 
 ## Context
 
-design:recursive-self-improvement § Scorecard, § The judge. `takt --version` prints a bare version
-today (clap `version`, `crates/takt-cli/src/main.rs`), so nothing can check which revision an
-installed binary was built from. story:scorecard-reader saves scorecards and compares two; this
-story decides which saved scorecard is the promoted baseline: the one named by the latest
+design:recursive-self-improvement § Scorecard, § The judge. `takt --version` prints the git
+revision the binary was built from since story:binary-embeds-revision (wave 11, `takt <version>
+(<sha>)`, `-dirty` or `unknown revision` where it must), so an installed binary can be checked
+against the revision a promotion names. story:scorecard-reader saves scorecards and compares two;
+this story decides which saved scorecard is the promoted baseline: the one named by the latest
 promotion record. The first baseline is the scorecard of the revision installed when this story
 lands, recorded by a first `takt promote --baseline-only` that installs nothing.
+
+Decisions taken 2026-10-18 before and during the unit (the planner, under the owner's standing
+grant): the margin and the token rule live in `Scorecard::against`, so `takt scorecard --against`
+prints the rule it applied, and `takt promote` calls it; "installs" is `cargo install --locked
+--path crates/takt-cli` from the promoted revision's clean checkout, into `--install-root`
+(`CARGO_INSTALL_ROOT`, else `CARGO_HOME`, else `~/.cargo`); promote refuses a `-dirty` or
+`unknown revision` build and compares the full sha; a candidate's scorecard and the promotion
+store must lie outside the candidate's repository; a refused candidate is recorded
+(`<revision>.refused.json`) and not judged again until it changes; the `promoted` validator stays
+with story:self-improvement-protocol; `--dry-run` prints the verdict and the record it would write
+and writes nothing, so R0 turns can use the verdict before the install path is trusted.
 
 ## Domain relations
 
@@ -84,7 +96,13 @@ Typed entries: `crates/takt-cli/src/main.rs` (cited); `crates/takt-cli/build.rs`
 
 ## Ordering
 
-- depends_on story:scorecard-reader: promotion reads its saved scorecards; both edit `crates/takt-cli/src/main.rs`, so this story follows it on that file.
+- depends_on story:scorecard-reader (implemented, wave 10): promotion reads its saved scorecards
+  and extends its comparison with the rule; both edit `crates/takt-cli/src/main.rs`.
+- depends_on story:binary-embeds-revision (implemented, wave 11): the installed binary's
+  `--version` is what a promotion record is checked against.
+- Delivered by the headstart session off main 0afff2b beside wave 12; the only shared lines with
+  wave 12's loop-scorecard unit are one `pub mod` line in `crates/takt/src/lib.rs` and ESS
+  citations.
 
 ## Acceptance
 
