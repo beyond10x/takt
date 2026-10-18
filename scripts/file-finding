@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# file-finding: file a finding in this repository's planning store, as a draft story or an open
+# blocker, carrying its `expected_before` predicate, the run record or review it came from, and
+# the reference `finding:<key>`. A key already in the store is refused, and so is a finding whose
+# predicate does not parse; in both cases nothing is written. The store is written only through
+# `aep plan artifact new`.
+#
+#   file-finding --key <key> --title <title> --from <body.md> [--kind story|blocker] [--repo <dir>]
+#   file-finding --predicate <body.md>
+#
+# The body is the artifact's whole markdown body. It holds exactly one fenced block whose info
+# string is `expected_before`, one `key: value` a line:
+#
+#   ```expected_before
+#   scenario: 1
+#   command: "$TAKT" run --repo . --harness none --forge none --iterations 1
+#   exit: 3
+#   output: on software.change/1
+#   source: docs/runs/trial-1.md
+#   ```
+#
+#   scenario  the scenario's id, as `.engineering/scenarios.conf` of the scenario repository
+#             declares it (letters, digits, `-` and `_`)
+#   command   one shell line, run by `scripts/check-finding` in a fresh checkout of the scenario's
+#             seed with `$TAKT` the takt binary under test and `$SCENARIO` the checkout
+#   exit      the exit status the command gives while the defect is present, 0 to 255
+#   output    a fixed string its standard output or standard error then holds
+#   source    the run record or review that produced the finding, a path relative to the
+#             repository that exists
+#
+# `exit`, `output` or both; the predicate holds when every one given does.
+#
+# Standard output is one line, the result of the `finding_record` evidence kind
+# (protocols/self-improvement/1.yaml): `filed` (exit 0) or `malformed` (exit 2). Everything else
+# goes to standard error. A key already filed exits 3, a usage error 64, any other failure 1;
+# those print nothing on standard output. `--predicate` prints the block's entries, one
+# `key<TAB>value` a line, for `scripts/check-finding`, or `malformed`.
+set -euo pipefail
+
+say() { printf 'file-finding: %s\n' "$*" >&2; }
+usage() {
+    say "$*"
+    say "usage: file-finding --key <key> --title <title> --from <body.md> [--kind story|blocker] [--repo <dir>]"
+    say "       file-finding --predicate <body.md>"
+    exit 64
+}
+malformed() {
+    say "malformed: $*"
+    printf 'malformed\n'
+    exit 2
+}
+
+# Reads the `expected_before` block of the file $1 into the associative array PREDICATE, or
+# refuses the finding as malformed.
+declare -A PREDICATE=()
+read_predicate() {
+    local file=$1 fence='```' line inside=0 blocks=0 key value
+    while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%$'\r'}
+        if ((!inside)); then
+            if [[ $line == "${fence}expected_before" ]]; then
+                blocks=$((blocks + 1))
+                inside=1
+            fi
+            continue
+        fi
+        if [[ $line == "$fence" ]]; then
+            inside=0
+            continue
+        fi
+        ((blocks > 1)) && continue
+        [[ -z ${line//[[:space:]]/} ]] && continue
+        [[ $line =~ ^([a-z_]+):(.*)$ ]] || malformed "\`$line\` in the expected_before block is no \`key: value\`"
+        key=${BASH_REMATCH[1]}
+        value=${BASH_REMATCH[2]}
+        value=${value#"${value%%[![:space:]]*}"}
+        value=${value%"${value##*[![:space:]]}"}
+        case $key in
+        scenario | command | exit | output | source) ;;
+        *) malformed "the expected_before block gives \`$key\`, which nothing reads; it gives scenario, command, exit, output and source" ;;
+        esac
+        [[ -v PREDICATE[$key] ]] && malformed "the expected_before block gives \`$key\` twice"
+        [[ -n $value ]] || malformed "the expected_before block gives \`$key\` no value"
+        PREDICATE[$key]=$value
+    done <"$file"
+    ((blocks > 0)) || malformed "the body holds no \`${fence}expected_before\` block: a finding without a predicate a machine can check is a note"
+    ((blocks == 1)) || malformed "the body holds $blocks expected_before blocks; a finding has one predicate"
+    ((!inside)) || malformed "the expected_before block is never closed"
+    local name
+    for name in scenario command source; do
+        [[ -v PREDICATE[$name] ]] || malformed "the expected_before block gives no \`$name\`"
+    done
+    [[ ${PREDICATE[scenario]} =~ ^[A-Za-z0-9_-]+$ ]] ||
+        malformed "scenario \`${PREDICATE[scenario]}\`: a scenario id is letters, digits, \`-\` and \`_\`"
+    [[ -v PREDICATE[exit] || -v PREDICATE[output] ]] ||
+        malformed "the expected_before block gives neither \`exit\` nor \`output\`: nothing to check the command against"
+    if [[ -v PREDICATE[exit] ]]; then
+        [[ ${PREDICATE[exit]} =~ ^[0-9]{1,3}$ ]] && ((10#${PREDICATE[exit]} <= 255)) ||
+            malformed "exit \`${PREDICATE[exit]}\` is no exit status, 0 to 255"
+    fi
+}
+
+key= key_given= title= from= kind=story repo= predicate_only=
+while (($#)); do
+    case $1 in
+    --key | --title | --from | --kind | --repo | --predicate)
+        (($# >= 2)) || usage "$1 takes a value"
+        case $1 in
+        --key) key=$2 key_given=1 ;;
+        --title) title=$2 ;;
+        --from) from=$2 ;;
+        --kind) kind=$2 ;;
+        --repo) repo=$2 ;;
+        --predicate) predicate_only=$2 ;;
+        esac
+        shift 2
+        ;;
+    -h | --help)
+        sed -n '2,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//;p}' "$0"
+        exit 0
+        ;;
+    *) usage "unexpected argument \`$1\`" ;;
+    esac
+done
+
+if [[ -n $predicate_only ]]; then
+    [[ -f $predicate_only && -r $predicate_only ]] || usage "--predicate $predicate_only: no readable file"
+    read_predicate "$predicate_only"
+    for name in scenario command exit output source; do
+        [[ -v PREDICATE[$name] ]] && printf '%s\t%s\n' "$name" "${PREDICATE[$name]}"
+    done
+    exit 0
+fi
+
+[[ -n $key_given ]] || usage "--key is required"
+[[ -n $title ]] || usage "--title is required"
+[[ -n $from ]] || usage "--from is required"
+[[ $kind == story || $kind == blocker ]] || usage "--kind $kind: a finding is filed as a story or a blocker"
+[[ -f $from && -r $from ]] || usage "--from $from: no readable file"
+if [[ -z $repo ]]; then
+    repo=$(git rev-parse --show-toplevel 2>/dev/null) || usage "not inside a repository; give --repo"
+fi
+repo=$(cd "$repo" && pwd -P) || usage "--repo $repo: no directory"
+
+[[ $key =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] ||
+    malformed "key \`$key\`: a finding key is lower-case letters and digits in words joined by \`-\`"
+read_predicate "$from"
+
+# The source is a path of this repository, relative, that exists and stays inside it.
+source=${PREDICATE[source]}
+[[ $source != /* ]] || malformed "source \`$source\` is absolute; it is a path relative to the repository"
+case /$source/ in
+*/../*) malformed "source \`$source\` climbs out of the repository" ;;
+esac
+[[ -e $repo/$source ]] || malformed "source \`$source\` does not exist in $repo"
+resolved=$(realpath -e -- "$repo/$source") || malformed "source \`$source\` does not resolve"
+[[ $resolved == "$repo" || $resolved == "$repo"/* ]] ||
+    malformed "source \`$source\` resolves outside the repository"
+
+cd "$repo"
+# `aep plan artifact new` accepts a second artifact with the same reference, so the refusal is
+# this script's: whatever kind holds the key already, the key is filed.
+held=$(aep plan artifact list --ref "finding:$key") || {
+    say "aep plan artifact list --ref finding:$key failed; nothing was written"
+    exit 1
+}
+if [[ -n $held ]]; then
+    say "finding:$key is filed already, as $(printf '%s\n' "$held" | awk 'NF { printf "%s%s", sep, $1; sep = ", " }'); nothing was written"
+    exit 3
+fi
+aep plan artifact new "$kind" "$key" --title "$title" --ref "finding:$key" --tag finding --from "$from" >&2 || {
+    say "aep plan artifact new $kind $key failed"
+    exit 1
+}
+say "filed $kind:$key (finding:$key), source $source"
+printf 'filed\n'

@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# check-finding: run a filed finding's `expected_before` predicate on its scenario with a takt
+# built from a given revision, and print whether the defect is there.
+#
+#   check-finding --scenarios <repo> [--declared-on <rev>] [--repo <dir>] <finding> <revision>
+#
+#   <finding>        the finding's artifact id in this repository's planning store, as
+#                    `scripts/file-finding` filed it (`story:<key>` or `blocker:<key>`)
+#   <revision>       the takt revision to build, resolved in this repository; the promoted
+#                    revision for the baseline, the candidate's for a fix
+#   --scenarios      a checkout of the scenario repository; it is only read: the predicate runs
+#                    in a clone of it
+#   --declared-on    the revision of the scenario repository whose `.engineering/scenarios.conf`
+#                    declares the scenario (`[scenario "<id>"]`, `story` and `seed`); `main`
+#   --repo           this repository; the top of the tree the script is run in
+#
+# Steps: the predicate is read from the store (`aep plan artifact show`) and parsed by
+# `scripts/file-finding --predicate`; the revision's tree is exported with `git archive` into a
+# build directory of its own under the cache and built with `cargo build --locked`, its target
+# directory inside that build directory whatever CARGO_TARGET_DIR says; the binary is kept per
+# revision, the build directory removed. The scenario repository is cloned, the clone's `trial/0`
+# cut from the scenario's seed and checked out and its remote removed, and the predicate's command
+# runs there through `sh -c`, with `$TAKT` the binary and `$SCENARIO` the clone, in an environment
+# holding only PATH, HOME, LANG, TAKT and SCENARIO, so no credential of the caller reaches it.
+# The cache is `$XDG_CACHE_HOME/takt/check-finding`, `~/.cache/takt/check-finding` without it:
+# `builds/<sha>/takt`, and one directory per check under `runs/` holding the finding, the clone,
+# the command's output and the result, kept as the record of the check.
+#
+# Standard output is one line, the result of the `scenario_result` evidence kind
+# (protocols/self-improvement/1.yaml): `reproduced` when every expectation the predicate gives
+# held (the exit status, the fixed string in standard output or standard error), else
+# `not_reproduced`; both exit 0. A check that cannot run its predicate (no such finding, a
+# predicate that does not parse, a revision that names no commit, a scenario not declared, a
+# build that fails, a command past CHECK_FINDING_TIMEOUT seconds, 900 by default) prints nothing
+# on standard output and exits 1; a usage error exits 64.
+set -euo pipefail
+
+say() { printf 'check-finding: %s\n' "$*" >&2; }
+usage() {
+    say "$*"
+    say "usage: check-finding --scenarios <repo> [--declared-on <rev>] [--repo <dir>] <finding> <revision>"
+    exit 64
+}
+fail() {
+    say "$*; no result"
+    exit 1
+}
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+scenarios= declared_on=main repo=
+positional=()
+while (($#)); do
+    case $1 in
+    --scenarios | --declared-on | --repo)
+        (($# >= 2)) || usage "$1 takes a value"
+        case $1 in
+        --scenarios) scenarios=$2 ;;
+        --declared-on) declared_on=$2 ;;
+        --repo) repo=$2 ;;
+        esac
+        shift 2
+        ;;
+    -h | --help)
+        sed -n '2,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//;p}' "$0"
+        exit 0
+        ;;
+    --) shift; positional+=("$@"); break ;;
+    -*) usage "unexpected option \`$1\`" ;;
+    *) positional+=("$1"); shift ;;
+    esac
+done
+((${#positional[@]} == 2)) || usage "give the finding and the revision"
+finding=${positional[0]}
+revision=${positional[1]}
+[[ -n $scenarios ]] || usage "--scenarios is required: the scenario repository's checkout"
+scenarios=$(cd "$scenarios" 2>/dev/null && pwd -P) || usage "--scenarios: no directory"
+if [[ -z $repo ]]; then
+    repo=$(git rev-parse --show-toplevel 2>/dev/null) || usage "not inside a repository; give --repo"
+fi
+repo=$(cd "$repo" 2>/dev/null && pwd -P) || usage "--repo: no directory"
+
+cache=${XDG_CACHE_HOME:-}
+[[ $cache == /* ]] || cache=$HOME/.cache
+root=$cache/takt/check-finding
+mkdir -p "$root/runs" "$root/builds"
+run=$(mktemp -d "$root/runs/${finding//[^A-Za-z0-9-]/-}-XXXXXX")
+say "record: $run"
+
+# The finding and its predicate, from the store.
+cd "$repo"
+aep plan artifact show "$finding" >"$run/finding.md" 2>"$run/finding.err" ||
+    fail "the store in $repo holds no $finding: $(head -n 1 "$run/finding.err")"
+"$here/file-finding" --predicate "$run/finding.md" >"$run/predicate.tsv" 2>"$run/predicate.err" ||
+    fail "$finding: its predicate does not parse: $(tail -n 1 "$run/predicate.err")"
+declare -A predicate=()
+while IFS=$'\t' read -r key value; do
+    predicate[$key]=$value
+done <"$run/predicate.tsv"
+scenario=${predicate[scenario]}
+command=${predicate[command]}
+
+# The revision, in this repository.
+sha=$(git -C "$repo" rev-parse --verify --quiet "$revision^{commit}") ||
+    fail "$revision names no commit in $repo"
+
+# The scenario, as the scenario repository declares it.
+conf=.engineering/scenarios.conf
+git -C "$scenarios" cat-file -e "$declared_on:$conf" 2>/dev/null ||
+    fail "$declared_on holds no $conf in $scenarios; the scenarios are declared there"
+seed=$(git -C "$scenarios" config --blob "$declared_on:$conf" --get "scenario.$scenario.seed") ||
+    fail "$conf at $declared_on declares no seed of scenario $scenario"
+story=$(git -C "$scenarios" config --blob "$declared_on:$conf" --get "scenario.$scenario.story") ||
+    fail "$conf at $declared_on declares no story of scenario $scenario"
+seed=$(git -C "$scenarios" rev-parse --verify --quiet "$seed^{commit}") ||
+    fail "scenario $scenario: its seed $seed is no commit in $scenarios"
+
+# takt, built from the revision in a tree of its own, once per revision.
+takt=$root/builds/$sha/takt
+if [[ ! -x $takt ]]; then
+    work=$(mktemp -d "$root/builds/$sha.work-XXXXXX")
+    trap 'rm -rf -- "$work"' EXIT
+    git -C "$repo" archive --format=tar "$sha" | tar -x -C "$work" ||
+        fail "export $sha from $repo"
+    say "building takt at ${sha:0:12} in $work"
+    (cd "$work" && env -u CARGO_TARGET_DIR -u CARGO_BUILD_TARGET_DIR \
+        cargo build --locked -p b10x-takt-cli --bin takt --target-dir "$work/target") >&2 ||
+        fail "takt does not build at ${sha:0:12}"
+    mkdir -p "$root/builds/$sha"
+    cp "$work/target/debug/takt" "$takt.$$"
+    mv -f "$takt.$$" "$takt"
+    rm -rf -- "$work"
+    trap - EXIT
+fi
+
+# The scenario's starting state: a clone of the scenario repository on `trial/0` at the seed,
+# with no remote, so nothing the predicate does reaches the checkout it was cloned from.
+clone=$run/scenario
+git clone --quiet --no-checkout -- "$scenarios" "$clone" >&2 ||
+    fail "clone $scenarios"
+git -C "$clone" cat-file -e "$seed^{commit}" 2>/dev/null ||
+    fail "scenario $scenario: its seed ${seed:0:12} is reachable from no branch of $scenarios"
+git -C "$clone" checkout --quiet -b trial/0 "$seed" >&2 || fail "check out the seed ${seed:0:12}"
+git -C "$clone" remote remove origin
+git -C "$clone" config user.name check-finding
+git -C "$clone" config user.email check-finding@example.invalid
+
+limit=${CHECK_FINDING_TIMEOUT:-900}
+say "$finding: scenario $scenario ($story at ${seed:0:12}), takt at ${sha:0:12}: $command"
+set +e
+(cd "$clone" && env -i PATH="$PATH" HOME="$HOME" LANG="${LANG:-C.UTF-8}" TAKT="$takt" \
+    SCENARIO="$clone" timeout --kill-after=10 "$limit" sh -c "$command") \
+    >"$run/output" 2>&1 </dev/null
+status=$?
+set -e
+((status != 124 && status != 137)) || fail "the command ran past $limit seconds"
+
+result=reproduced
+if [[ -v predicate[exit] ]] && ((status != 10#${predicate[exit]})); then
+    result=not_reproduced
+fi
+if [[ -v predicate[output] ]] && ! grep -qF -- "${predicate[output]}" "$run/output"; then
+    result=not_reproduced
+fi
+{
+    printf 'finding: %s\nrevision: %s\nscenario: %s\nstory: %s\nseed: %s\n' \
+        "$finding" "$sha" "$scenario" "$story" "$seed"
+    printf 'exit: %s\nresult: %s\n' "$status" "$result"
+} >"$run/result"
+say "exit $status; $result"
+printf '%s\n' "$result"

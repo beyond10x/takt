@@ -63,6 +63,51 @@ deliver → verify → promote):
 8. **Grant** the merge if the diff touches no judge surface; a judge-surface diff waits for the
    owner.
 
+## Intake
+
+How a finding enters the store (step 5 of the loop) and how its predicate is run (steps 4 and 7).
+Both scripts print one word on standard output, the result the self-improvement protocol reads
+(`protocols/self-improvement/1.yaml`, `finding_record` and `scenario_result`); everything else
+goes to standard error.
+
+1. **Key.** Lower-case words joined by `-`, naming the defect, not the run that saw it. The key is
+   the finding's identity: the same defect seen again is the same key.
+2. **Body.** A markdown file: a heading, what is wrong, and exactly one `expected_before` block,
+   one `key: value` a line:
+
+   ````
+   ```expected_before
+   scenario: 1
+   command: "$TAKT" run --repo . --harness none --forge none --iterations 1 --test-cmd true
+   output: on software.change/1
+   source: docs/runs/<record>.md
+   ```
+   ````
+
+   | key | what |
+   |---|---|
+   | `scenario` | the scenario's id in the scratch repository's `.engineering/scenarios.conf` |
+   | `command` | one shell line, run in a fresh clone of the scenario's seed, with `$TAKT` the binary under test and `$SCENARIO` the clone; no credential of the caller's environment reaches it |
+   | `exit` | the exit status while the defect is present, 0 to 255 |
+   | `output` | a fixed string the command's standard output or standard error then holds |
+   | `source` | the run record or review that produced the finding, a path in this repository |
+
+   `exit`, `output` or both; the predicate holds when every one given holds.
+3. **File.** `scripts/file-finding --key <key> --title "<title>" --from <body.md>`, with
+   `--kind blocker` when the finding stops other work and no takt change resolves it; a story
+   otherwise. `filed`: the store holds `story:<key>` (or `blocker:<key>`) with the reference
+   `finding:<key>`. `malformed` (exit 2): nothing was written; standard error says what to fix.
+   Exit 3: the key is filed already, under the id standard error names; a new source for the same
+   defect goes into that artifact's body (`aep plan artifact body`), never into a second finding.
+4. **Reproduce.** `scripts/check-finding --scenarios <scratch checkout> <id> <revision>` at the
+   promoted revision, until story:promotion records one the revision the run was taken with. It
+   builds takt from that revision and prints `reproduced` or `not_reproduced`; any other exit
+   printed no result. `not_reproduced` here means the predicate does not catch the defect:
+   correct the body and check again before announcing it.
+5. **Announce.** `[FINDING takt] <ids>`, the ids `reproduced` held for.
+6. **Verify** (loop step 7): the same `scripts/check-finding` at the candidate's revision. The fix
+   is verified when the promoted revision gives `reproduced` and the candidate `not_reproduced`.
+
 ## Messages
 
 The store carries the content; a message only announces that the store changed. Its first line is
