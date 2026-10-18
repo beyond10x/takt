@@ -340,31 +340,2071 @@ fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -
 /// no judgement step writes.
 const ENGINEERING: &str = ".engineering";
 
-/// Whether `path`, relative to the tree as git names it, is the store's: under [`ENGINEERING`]
-/// (or that directory itself) and not under the cases directory.
-fn is_guarded_store_path(path: &str) -> bool {
-    let path = path.trim_end_matches('/');
-    (path == ENGINEERING || path.starts_with(&format!("{ENGINEERING}/")))
-        && !crate::case::is_under_cases(path)
+/// The files that decide what pytest collects and how it reports, at any depth: a
+/// `conftest.py` can rewrite every outcome. `pyproject.toml`'s `[tool.pytest*]` tables are
+/// compared by the manifest scanner ([`pytest_config_changes`]).
+const PYTHON_FILES: &[&str] = &[
+    "conftest.py",
+    "pytest.ini",
+    ".pytest.ini",
+    "pytest.toml",
+    ".pytest.toml",
+    "tox.ini",
+    "setup.cfg",
+];
+
+/// The judge surface every run guards, as a refusal names it.
+pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini` and `setup.cfg` at any depth, `[tool.pytest*]` in `pyproject.toml`, the module and package `python -m` runs, the test command's own script and its build tool's file, and the repository's own `.engineering/judge-surface.yaml` list";
+
+/// How a program of a test command takes its options. A short option is a character of a
+/// cluster (`-eo`); one that takes an argument takes the rest of its cluster or, when that is
+/// empty, the next word. A long option (`--name`) takes `=value` or the next word.
+#[derive(Clone, Copy)]
+struct Spec {
+    /// Options that take an argument and name nothing guarded.
+    short_arg: &'static str,
+    long_arg: &'static [&'static str],
+    /// Options after which the rest is code, not a file (`python -c`, `python -m`).
+    short_stop: &'static str,
+    long_stop: &'static [&'static str],
+    /// Options whose argument is a command line of its own (`sh -c`, `flock -c`).
+    short_command: &'static str,
+    long_command: &'static [&'static str],
+    /// Options that change the directory the rest is named from (`make -C`, `env -C`).
+    short_chdir: &'static str,
+    long_chdir: &'static [&'static str],
+    /// Options that name the file the program runs (`make -f`, `pwsh -File`).
+    short_file: &'static str,
+    long_file: &'static [&'static str],
+    /// Whole words that name the file the program runs, or stop as `short_stop` does
+    /// (`pwsh -File`, `pwsh -Command`), matched whatever their case.
+    word_file: &'static [&'static str],
+    word_stop: &'static [&'static str],
+    /// Whether `+o` is an option as `-o` is (a shell's).
+    plus: bool,
+    /// Operands before the script or the command (`timeout DURATION`, `flock FILE`), or the
+    /// subcommands skipped before the script (`deno run`).
+    operands: usize,
+    subcommands: &'static [&'static str],
+    /// Options that name a module the program runs from the directory it runs in
+    /// (`python -m MODULE`), which a file or a package there replaces.
+    short_module: &'static str,
 }
 
-/// Everything under [`ENGINEERING`] but the cases directory, as [`snapshot`] takes it: what a
-/// step that wrote there is put back to.
-fn snapshot_store(tree: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
-    let cases = Path::new(CASES_DIR)
-        .strip_prefix(ENGINEERING)
-        .unwrap_or(Path::new(CASES_DIR));
-    snapshot_without(&tree.join(ENGINEERING), Some(cases))
+/// A program with no option of note.
+const PLAIN: Spec = Spec {
+    short_arg: "",
+    long_arg: &[],
+    short_stop: "",
+    long_stop: &[],
+    short_command: "",
+    long_command: &[],
+    short_chdir: "",
+    long_chdir: &[],
+    short_file: "",
+    long_file: &[],
+    word_file: &[],
+    word_stop: &[],
+    plus: false,
+    operands: 0,
+    subcommands: &[],
+    short_module: "",
+};
+
+/// A shell: `-o OPT`, `-O OPT`, `+o OPT`, `--rcfile FILE`; `-c` runs a command line.
+const SHELL: Spec = Spec {
+    short_arg: "oO",
+    long_arg: &["rcfile", "init-file"],
+    short_command: "c",
+    plus: true,
+    ..PLAIN
+};
+
+/// The programs that run a script named after their options: the script is the test command's
+/// own as much as `./check.sh` is.
+const INTERPRETERS: &[(&[&str], Spec)] = &[
+    (
+        &["sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish"],
+        SHELL,
+    ),
+    (
+        &["python", "pypy"],
+        Spec {
+            short_arg: "WX",
+            long_arg: &["check-hash-based-pycs"],
+            short_stop: "c",
+            short_module: "m",
+            ..PLAIN
+        },
+    ),
+    (
+        &["perl"],
+        Spec {
+            short_arg: "I",
+            short_stop: "eE",
+            ..PLAIN
+        },
+    ),
+    (
+        &["ruby"],
+        Spec {
+            short_arg: "IrEF",
+            long_arg: &["encoding"],
+            short_stop: "e",
+            short_chdir: "C",
+            ..PLAIN
+        },
+    ),
+    (
+        &["node", "nodejs"],
+        Spec {
+            short_arg: "rC",
+            long_arg: &[
+                "require",
+                "import",
+                "loader",
+                "experimental-loader",
+                "conditions",
+                "env-file",
+                "input-type",
+                "title",
+            ],
+            short_stop: "ep",
+            long_stop: &["eval", "print"],
+            ..PLAIN
+        },
+    ),
+    (
+        &["deno"],
+        Spec {
+            short_arg: "cL",
+            long_arg: &[
+                "config",
+                "import-map",
+                "cert",
+                "location",
+                "seed",
+                "log-level",
+            ],
+            subcommands: &["run", "test"],
+            ..PLAIN
+        },
+    ),
+    (
+        &["bun"],
+        Spec {
+            short_arg: "r",
+            long_arg: &["preload", "config"],
+            long_chdir: &["cwd"],
+            short_stop: "e",
+            long_stop: &["eval", "print"],
+            subcommands: &["run", "test"],
+            ..PLAIN
+        },
+    ),
+    (
+        &["php"],
+        Spec {
+            short_arg: "cdz",
+            short_stop: "rBRE",
+            ..PLAIN
+        },
+    ),
+    (
+        &["rscript"],
+        Spec {
+            short_stop: "e",
+            ..PLAIN
+        },
+    ),
+    (
+        &["lua"],
+        Spec {
+            short_arg: "l",
+            short_stop: "e",
+            ..PLAIN
+        },
+    ),
+    (&["tclsh"], PLAIN),
+    (
+        &["pwsh", "powershell"],
+        Spec {
+            word_file: &["-file", "-f"],
+            word_stop: &["-command", "-c", "-encodedcommand", "-e", "-ec"],
+            ..PLAIN
+        },
+    ),
+];
+
+/// The programs that run the command after their options and operands.
+const WRAPPERS: &[(&[&str], Spec)] = &[
+    (
+        &["timeout"],
+        Spec {
+            short_arg: "sk",
+            long_arg: &["signal", "kill-after"],
+            operands: 1,
+            ..PLAIN
+        },
+    ),
+    (
+        &["nice"],
+        Spec {
+            short_arg: "n",
+            long_arg: &["adjustment"],
+            ..PLAIN
+        },
+    ),
+    (
+        &["ionice"],
+        Spec {
+            short_arg: "cnpPu",
+            long_arg: &["class", "classdata", "pid", "pgid", "uid"],
+            ..PLAIN
+        },
+    ),
+    (
+        &["stdbuf"],
+        Spec {
+            short_arg: "ioe",
+            long_arg: &["input", "output", "error"],
+            ..PLAIN
+        },
+    ),
+    (&["nohup", "chronic", "setsid", "busybox"], PLAIN),
+    (
+        &["time"],
+        Spec {
+            short_arg: "fo",
+            long_arg: &["format", "output"],
+            ..PLAIN
+        },
+    ),
+    (
+        &["xvfb-run"],
+        Spec {
+            short_arg: "nsfepw",
+            long_arg: &[
+                "server-num",
+                "server-args",
+                "auth-file",
+                "error-file",
+                "xauth-protocol",
+                "wait",
+            ],
+            ..PLAIN
+        },
+    ),
+    (
+        &["flock"],
+        Spec {
+            short_arg: "wE",
+            long_arg: &["timeout", "wait", "conflict-exit-code"],
+            short_command: "c",
+            long_command: &["command"],
+            operands: 1,
+            ..PLAIN
+        },
+    ),
+];
+
+/// The build tools whose own file decides what their target runs: the files they read in the
+/// directory they run in, unless an option names another; and the configuration they read
+/// there beside it, which decides how they run it (`.npmrc`'s `script-shell`).
+type BuildTool = (
+    &'static [&'static str],
+    Spec,
+    &'static [&'static str],
+    &'static [&'static str],
+);
+
+/// The build tools ([`BuildTool`]).
+const BUILD_TOOLS: &[BuildTool] = &[
+    (
+        &["make", "gmake"],
+        Spec {
+            short_arg: "IoWE",
+            long_arg: &[
+                "include-dir",
+                "old-file",
+                "assume-old",
+                "what-if",
+                "new-file",
+                "assume-new",
+                "eval",
+            ],
+            short_chdir: "C",
+            long_chdir: &["directory"],
+            short_file: "f",
+            long_file: &["file", "makefile"],
+            ..PLAIN
+        },
+        &["Makefile", "makefile", "GNUmakefile"],
+        &[],
+    ),
+    (
+        &["task", "go-task"],
+        Spec {
+            short_chdir: "d",
+            long_chdir: &["dir"],
+            short_file: "t",
+            long_file: &["taskfile"],
+            ..PLAIN
+        },
+        &[
+            "Taskfile.yml",
+            "Taskfile.yaml",
+            "Taskfile.dist.yml",
+            "Taskfile.dist.yaml",
+        ],
+        &[],
+    ),
+    (
+        &["npm", "yarn", "pnpm"],
+        Spec {
+            short_chdir: "C",
+            long_chdir: &["prefix", "dir", "cwd"],
+            ..PLAIN
+        },
+        &["package.json"],
+        &[".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs"],
+    ),
+    (
+        &["just"],
+        Spec {
+            short_chdir: "d",
+            long_chdir: &["working-directory"],
+            short_file: "f",
+            long_file: &["justfile"],
+            ..PLAIN
+        },
+        &["justfile", ".justfile"],
+        &[],
+    ),
+];
+
+/// How deep a command line inside a command line (`sh -c`, `env -S`) is read.
+const COMMANDS_AT_MOST: usize = 16;
+
+/// `path` with its case folded as a file system that ignores case folds it: lower case, and the
+/// two letters outside ASCII that fold into the ASCII letters of the guarded names.
+fn fold(path: &str) -> String {
+    path.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            '\u{17f}' => 's',
+            '\u{212a}' => 'k',
+            c => c,
+        })
+        .collect()
 }
 
-/// Puts everything under [`ENGINEERING`] but the cases directory back to `kept`, where it still
-/// differs.
-fn put_back_store(tree: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<()> {
-    let again = differing(kept, &snapshot_store(tree)?);
-    if !again.is_empty() {
-        restore(&tree.join(ENGINEERING), kept, &again)?;
+/// `path` relative to the tree with `.` and `..` resolved and empty parts dropped, as git names
+/// a path; `None` when it leads out of the tree, `""` for the tree itself.
+fn normalise(path: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
     }
-    Ok(())
+    Some(parts.join("/"))
+}
+
+/// Where `word`, named from the directory `dir` of the tree (relative to it), lands: resolved
+/// as a path from the tree's absolute path, `.` and `..` lexically, so a path that climbs above
+/// the tree and comes back (`../repo/check.sh`) lands inside it; relative to the tree, `""` for
+/// the tree itself, `None` outside it.
+fn landing(tree: &Path, dir: &str, word: &str) -> Option<String> {
+    let absolute = std::path::absolute(tree).ok()?;
+    let joined = if Path::new(word).is_absolute() {
+        PathBuf::from(word)
+    } else {
+        absolute.join(dir).join(word)
+    };
+    let mut parts: Vec<std::path::Component> = Vec::new();
+    for component in joined.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if matches!(parts.last(), Some(std::path::Component::Normal(_))) {
+                    parts.pop();
+                }
+            }
+            component => parts.push(component),
+        }
+    }
+    let resolved: PathBuf = parts.iter().collect();
+    [Some(absolute), std::fs::canonicalize(tree).ok()]
+        .iter()
+        .flatten()
+        .find_map(|root| resolved.strip_prefix(root).ok())
+        .and_then(|inside| inside.to_str())
+        .and_then(normalise)
+}
+
+/// The program a word names, without its directory and its version: `python3.12` is `python`.
+fn program_of(word: &str) -> String {
+    let name = word.rsplit('/').next().unwrap_or(word);
+    fold(name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.'))
+}
+
+/// `word` named from `dir` (relative to the tree; `None` once a directory change left it), as a
+/// path in the tree; `None` outside it.
+fn named_from(tree: &Path, dir: Option<&str>, word: &str) -> Option<String> {
+    if word.is_empty() {
+        return None;
+    }
+    let dir = if Path::new(word).is_absolute() {
+        ""
+    } else {
+        dir?
+    };
+    landing(tree, dir, word).filter(|path| !path.is_empty())
+}
+
+/// The directory `dir` changes to by `to`: `None` outside the tree.
+fn changed_dir(tree: &Path, dir: Option<&str>, to: &str) -> Option<String> {
+    let dir = if Path::new(to).is_absolute() {
+        ""
+    } else {
+        dir?
+    };
+    landing(tree, dir, to)
+}
+
+/// `line` split into words as a POSIX shell splits a command line: white space between words,
+/// `'…'` taken as it is, `"…"` with `\` escaping `"`, `\`, `$` and a backquote, `\` outside quotes
+/// escaping the next character, and each of `;`, `&`, `|`, `(`, `)`, `<`, `>` a word by itself,
+/// so the commands of a list are told apart. Expansions are not made; an unclosed quote ends at
+/// the end of the line.
+fn shell_words(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                started = true;
+                for c in chars.by_ref() {
+                    if c == '\'' {
+                        break;
+                    }
+                    word.push(c);
+                }
+            }
+            '"' => {
+                started = true;
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' if matches!(chars.peek(), Some('"' | '\\' | '$' | '`')) => {
+                            word.extend(chars.next());
+                        }
+                        c => word.push(c),
+                    }
+                }
+            }
+            '\\' => {
+                started = true;
+                word.extend(chars.next());
+            }
+            ';' | '&' | '|' | '(' | ')' | '<' | '>' => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+                words.push(c.to_string());
+            }
+            c if c.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            c => {
+                started = true;
+                word.push(c);
+            }
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
+/// Guards every word of `line`, a command line a shell reads, that names a path in the tree,
+/// and reads each command of it as a command line of its own.
+fn shell_line_paths(
+    tree: &Path,
+    line: &str,
+    dir: Option<&str>,
+    named: &mut Vec<String>,
+    depth: usize,
+) {
+    let words = shell_words(line);
+    for word in &words {
+        named.extend(named_from(tree, dir, word));
+    }
+    for command in words.split(|word| [";", "&", "|", "(", ")"].contains(&word.as_str())) {
+        // A redirection's target is a file the shell opens, named above; the command is the rest.
+        let mut kept: Vec<&str> = Vec::new();
+        let mut skip = false;
+        for word in command {
+            if skip {
+                skip = false;
+                continue;
+            }
+            if word == "<" || word == ">" {
+                skip = true;
+                continue;
+            }
+            kept.push(word);
+        }
+        command_paths(tree, &kept, dir.map(str::to_owned), named, depth + 1);
+    }
+}
+
+/// Where the options of a program end.
+enum End {
+    /// At the operand at this index, or past the last word.
+    Operand,
+    /// The rest is code, not a file.
+    Stop,
+    /// The command line of its own starting at this index.
+    Command(usize),
+}
+
+/// What a program's options said, read from the word at `at` on.
+struct Scanned<'w> {
+    at: usize,
+    end: End,
+    chdirs: Vec<&'w str>,
+    files: Vec<&'w str>,
+    /// The modules an option names to run (`python -m MODULE`).
+    modules: Vec<&'w str>,
+}
+
+/// Reads the options of a program from `words[at..]` by `spec`, to the first operand.
+fn scan<'w>(words: &[&'w str], mut at: usize, spec: &Spec) -> Scanned<'w> {
+    let mut chdirs = Vec::new();
+    let mut files = Vec::new();
+    let mut modules = Vec::new();
+    let done = |at, end, chdirs, files| Scanned {
+        at,
+        end,
+        chdirs,
+        files,
+        modules: Vec::new(),
+    };
+    while let Some(word) = words.get(at).copied() {
+        if word == "--" {
+            return done(at + 1, End::Operand, chdirs, files);
+        }
+        let folded = fold(word);
+        if spec.word_stop.contains(&folded.as_str()) {
+            return done(at, End::Stop, chdirs, files);
+        }
+        if spec.word_file.contains(&folded.as_str()) {
+            at += 1;
+            files.extend(words.get(at).copied());
+            at += 1;
+            continue;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, value) = match long.split_once('=') {
+                Some((name, value)) => (name, Some(value)),
+                None => (long, None),
+            };
+            if spec.long_stop.contains(&name) {
+                return done(at, End::Stop, chdirs, files);
+            }
+            if spec.long_command.contains(&name) {
+                return done(
+                    at,
+                    if value.is_some() {
+                        End::Stop
+                    } else {
+                        End::Command(at + 1)
+                    },
+                    chdirs,
+                    files,
+                );
+            }
+            let chdir = spec.long_chdir.contains(&name);
+            let file = spec.long_file.contains(&name);
+            if chdir || file || spec.long_arg.contains(&name) {
+                let argument = match value {
+                    Some(value) => Some(value),
+                    None => {
+                        at += 1;
+                        words.get(at).copied()
+                    }
+                };
+                if chdir {
+                    chdirs.extend(argument);
+                }
+                if file {
+                    files.extend(argument);
+                }
+            }
+            at += 1;
+            continue;
+        }
+        let cluster = word
+            .strip_prefix('-')
+            .or_else(|| word.strip_prefix('+').filter(|_| spec.plus))
+            .filter(|cluster| !cluster.is_empty());
+        let Some(cluster) = cluster else {
+            return done(at, End::Operand, chdirs, files);
+        };
+        for (k, c) in cluster.char_indices() {
+            let rest = &cluster[k + c.len_utf8()..];
+            if spec.short_stop.contains(c) {
+                return done(at, End::Stop, chdirs, files);
+            }
+            if spec.short_command.contains(c) {
+                return done(at, End::Command(at + 1), chdirs, files);
+            }
+            if spec.short_module.contains(c) {
+                let module = if rest.is_empty() {
+                    words.get(at + 1).copied()
+                } else {
+                    Some(rest)
+                };
+                modules.extend(module);
+                return Scanned {
+                    modules,
+                    ..done(at, End::Stop, chdirs, files)
+                };
+            }
+            let chdir = spec.short_chdir.contains(c);
+            let file = spec.short_file.contains(c);
+            if chdir || file || spec.short_arg.contains(c) {
+                let argument = if rest.is_empty() {
+                    at += 1;
+                    words.get(at).copied()
+                } else {
+                    Some(rest)
+                };
+                if chdir {
+                    chdirs.extend(argument);
+                }
+                if file {
+                    files.extend(argument);
+                }
+                break;
+            }
+        }
+        at += 1;
+    }
+    done(at, End::Operand, chdirs, files)
+}
+
+/// The spec of `name` in `table`.
+fn spec_of<T: Copy>(table: &[(&[&str], T)], name: &str) -> Option<T> {
+    table
+        .iter()
+        .find(|(names, _)| names.contains(&name))
+        .map(|(_, spec)| *spec)
+}
+
+/// The paths of `tree` the command line `words`, run from `dir`, runs as its own: added to
+/// `named`. See [`scripts_of`].
+fn command_paths(
+    tree: &Path,
+    words: &[&str],
+    mut dir: Option<String>,
+    named: &mut Vec<String>,
+    depth: usize,
+) {
+    if depth > COMMANDS_AT_MOST {
+        return;
+    }
+    let mut at = 0;
+    while let Some(program) = words.get(at).copied() {
+        named.extend(named_from(tree, dir.as_deref(), program));
+        let name = program_of(program);
+        at += 1;
+        if name == "env" {
+            // `NAME=VALUE` pairs and the options: `-u NAME`, `-C DIR`, `-S STRING`, whose
+            // words are the command, `--unset=`, `--chdir=`, `--split-string=`.
+            while let Some(word) = words.get(at).copied() {
+                if word == "--" {
+                    at += 1;
+                    break;
+                }
+                if let Some(long) = word.strip_prefix("--") {
+                    let (option, value) = match long.split_once('=') {
+                        Some((option, value)) => (option, Some(value)),
+                        None => (long, None),
+                    };
+                    let argument = |at: &mut usize| match value {
+                        Some(value) => Some(value),
+                        None => {
+                            *at += 1;
+                            words.get(*at).copied()
+                        }
+                    };
+                    match option {
+                        "unset" => {
+                            argument(&mut at);
+                        }
+                        "chdir" => {
+                            if let Some(to) = argument(&mut at) {
+                                dir = changed_dir(tree, dir.as_deref(), to);
+                            }
+                        }
+                        "split-string" => {
+                            let Some(value) = value else {
+                                at += 1;
+                                break;
+                            };
+                            let mut rest = vec![value];
+                            rest.extend(&words[at + 1..]);
+                            return command_paths(tree, &rest, dir, named, depth + 1);
+                        }
+                        _ => {}
+                    }
+                    at += 1;
+                    continue;
+                }
+                if let Some(cluster) = word.strip_prefix('-').filter(|c| !c.is_empty()) {
+                    let mut split = None;
+                    for (k, c) in cluster.char_indices() {
+                        let rest = &cluster[k + c.len_utf8()..];
+                        match c {
+                            'u' => {
+                                if rest.is_empty() {
+                                    at += 1;
+                                }
+                                break;
+                            }
+                            'C' => {
+                                let to = if rest.is_empty() {
+                                    at += 1;
+                                    words.get(at).copied()
+                                } else {
+                                    Some(rest)
+                                };
+                                if let Some(to) = to {
+                                    dir = changed_dir(tree, dir.as_deref(), to);
+                                }
+                                break;
+                            }
+                            'S' => {
+                                split = Some(rest);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    match split {
+                        Some("") => {
+                            at += 1;
+                            break;
+                        }
+                        Some(rest) => {
+                            let mut words_of = vec![rest];
+                            words_of.extend(&words[at + 1..]);
+                            return command_paths(tree, &words_of, dir, named, depth + 1);
+                        }
+                        None => {}
+                    }
+                    at += 1;
+                    continue;
+                }
+                if word.contains('=') {
+                    at += 1;
+                    continue;
+                }
+                break;
+            }
+            continue;
+        }
+        if let Some(spec) = spec_of(WRAPPERS, &name) {
+            // Options may stand before the operands and after them (`flock FILE -c CMD`).
+            let mut operands = spec.operands;
+            loop {
+                let scanned = scan(words, at, &spec);
+                for to in scanned.chdirs {
+                    dir = changed_dir(tree, dir.as_deref(), to);
+                }
+                match scanned.end {
+                    End::Stop => return,
+                    End::Command(from) => {
+                        return command_line(tree, words, from, dir.as_deref(), named, depth);
+                    }
+                    End::Operand if operands > 0 && scanned.at < words.len() => {
+                        at = scanned.at + 1;
+                        operands -= 1;
+                    }
+                    End::Operand => {
+                        at = scanned.at;
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if let Some(spec) = spec_of(INTERPRETERS, &name) {
+            let scanned = scan(words, at, &spec);
+            for to in scanned.chdirs {
+                dir = changed_dir(tree, dir.as_deref(), to);
+            }
+            for file in scanned.files {
+                named.extend(named_from(tree, dir.as_deref(), file));
+            }
+            // `-m pkg.module` imports `pkg` from the directory it runs in first: `pkg.py` and
+            // the package `pkg/` there replace the installed one.
+            for module in scanned.modules {
+                let first = module.split('.').next().unwrap_or(module);
+                named.extend(named_from(tree, dir.as_deref(), &format!("{first}.py")));
+                named.extend(
+                    named_from(tree, dir.as_deref(), first).map(|package| format!("{package}/**")),
+                );
+            }
+            match scanned.end {
+                End::Stop => {}
+                End::Command(from) => {
+                    command_line(tree, words, from, dir.as_deref(), named, depth);
+                }
+                End::Operand => {
+                    let mut script = scanned.at;
+                    // A subcommand (`deno run`) has options of its own before the script.
+                    if words
+                        .get(script)
+                        .is_some_and(|word| spec.subcommands.contains(word))
+                    {
+                        let after = scan(words, script + 1, &spec);
+                        for to in after.chdirs {
+                            dir = changed_dir(tree, dir.as_deref(), to);
+                        }
+                        for file in after.files {
+                            named.extend(named_from(tree, dir.as_deref(), file));
+                        }
+                        match after.end {
+                            End::Operand => script = after.at,
+                            End::Stop => return,
+                            End::Command(from) => {
+                                return command_line(
+                                    tree,
+                                    words,
+                                    from,
+                                    dir.as_deref(),
+                                    named,
+                                    depth,
+                                );
+                            }
+                        }
+                    }
+                    if let Some(script) = words.get(script) {
+                        named.extend(named_from(tree, dir.as_deref(), script));
+                    }
+                }
+            }
+            return;
+        }
+        if let Some((spec, defaults, configs)) = BUILD_TOOLS
+            .iter()
+            .find(|(names, _, _, _)| names.contains(&name.as_str()))
+            .map(|(_, spec, defaults, configs)| (*spec, *defaults, *configs))
+        {
+            // Options and targets interleave: every option up to the last word is read.
+            let mut files = Vec::new();
+            loop {
+                let scanned = scan(words, at, &spec);
+                for to in scanned.chdirs {
+                    dir = changed_dir(tree, dir.as_deref(), to);
+                }
+                files.extend(scanned.files);
+                match scanned.end {
+                    End::Operand if scanned.at < words.len() => at = scanned.at + 1,
+                    _ => break,
+                }
+            }
+            if files.is_empty() {
+                files.extend(defaults);
+            }
+            files.extend(configs);
+            for file in files {
+                named.extend(named_from(tree, dir.as_deref(), file));
+            }
+            return;
+        }
+        // A program in none of the tables: what it reads is not known, so every word of the
+        // rest that names a path in the tree is guarded, as written and as a shell would unquote
+        // it, an option's value after `=` among them. Whether the path is there yet does not
+        // matter: a step could make it.
+        for word in &words[at..] {
+            let word = if word.starts_with('-') {
+                match word.split_once('=') {
+                    Some((_, value)) => value,
+                    None => continue,
+                }
+            } else {
+                word
+            };
+            named.extend(named_from(tree, dir.as_deref(), word));
+            for unquoted in shell_words(word) {
+                named.extend(named_from(tree, dir.as_deref(), &unquoted));
+            }
+        }
+        return;
+    }
+}
+
+/// The command line an option such as `sh -c` or `flock -c` runs: the word at `from`, after a
+/// `--` that ends the options, read as a shell reads it ([`shell_line_paths`]).
+fn command_line(
+    tree: &Path,
+    words: &[&str],
+    mut from: usize,
+    dir: Option<&str>,
+    named: &mut Vec<String>,
+    depth: usize,
+) {
+    if words.get(from) == Some(&"--") {
+        from += 1;
+    }
+    // The command line is the one word at `from`; the words after it are its `$0` and
+    // arguments. A test command is split at white space, so a line meant to be quoted
+    // (`sh -c 'a; b'`) arrives in pieces: each piece, and the pieces joined, are read as well.
+    let rest = words.get(from..).unwrap_or_default();
+    for line in rest {
+        shell_line_paths(tree, line, dir, named, depth);
+    }
+    if rest.len() > 1 {
+        shell_line_paths(tree, &rest.join(" "), dir, named, depth);
+    }
+}
+
+/// The paths in `tree` the command `words` runs as its own: the program when it names a path;
+/// the script an interpreter ([`INTERPRETERS`]) runs, past the options that take an argument
+/// (`sh -o OPT`), or nothing more for code given inline (`python -c`, `python -m`); what a
+/// command line given to `sh -c`, `flock -c` or `env -S` runs, read the same way; the command a
+/// wrapper ([`WRAPPERS`]: `timeout DURATION`, `nice -n N`, …) or `env` runs, past its options,
+/// their arguments, its operands and `NAME=VALUE` pairs; and the file a build tool
+/// ([`BUILD_TOOLS`]: make, task, npm, yarn, pnpm, just) reads, in the directory `-C` names or as
+/// `-f` names it. A word that names nothing yet is named all the same: a step could make it.
+#[must_use]
+pub fn scripts_of(words: &[String], tree: &Path) -> Vec<String> {
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    let mut named = Vec::new();
+    command_paths(tree, &words, Some(String::new()), &mut named, 0);
+    named.sort();
+    named.dedup();
+    named
+}
+
+/// A run's judge surface: what decides its validators, which no judgement step changes
+/// ([`JUDGE_SURFACE`]). Paths are matched whatever their case, as a file system that folds case
+/// would open them. A link is never followed: a guarded path whose resolution crosses a link
+/// anywhere on the way, or leaves the tree, is not guarded through it, and the step guard refuses
+/// a step while there is one ([`JudgeSurface::links`]). The cases directory is the kernel's and
+/// not on it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JudgeSurface {
+    /// The test command's own scripts and its build tool's files, each by itself.
+    scripts: BTreeSet<String>,
+    /// Whether the planning store is on it: always, but for what decides a validator alone
+    /// ([`JudgeSurface::without_store`]).
+    store: bool,
+    /// The repository's own additions ([`JUDGE_LIST`]), path globs folded, each guarding what it
+    /// matches and everything under it.
+    globs: Vec<String>,
+}
+
+/// The repository's own list of judge-surface path globs, which extends the default and never
+/// shrinks it: read at the case's base revision, never from the tree a step edits, and itself on
+/// the surface.
+pub const JUDGE_LIST: &str = ".engineering/judge-surface.yaml";
+
+/// The globs of a judge-surface list: a YAML sequence of path globs relative to the tree
+/// (`*` and `?` within a part, `**` across parts), each matched whatever its case. Anything else
+/// (not a sequence of strings, an empty glob, an absolute one, one with `..` or a backslash) is
+/// the error: the caller fails closed.
+pub fn parse_judge_list(text: &str) -> std::result::Result<Vec<String>, String> {
+    let globs: Vec<String> = serde_yaml_ng::from_str(text)
+        .map_err(|error| format!("{JUDGE_LIST} is not a list of path globs: {error}"))?;
+    globs
+        .into_iter()
+        .map(|glob| {
+            let trimmed = glob.trim().trim_end_matches('/');
+            if trimmed.is_empty()
+                || trimmed.starts_with('/')
+                || trimmed.contains('\\')
+                || trimmed
+                    .split('/')
+                    .any(|part| part == ".." || part.is_empty())
+            {
+                return Err(format!(
+                    "{JUDGE_LIST} holds `{glob}`, which is no path glob relative to the tree"
+                ));
+            }
+            Ok(fold(trimmed))
+        })
+        .collect()
+}
+
+/// The judge-surface list at the commit `revision` ([`JUDGE_LIST`]): none when the commit has no
+/// such file; the inner error when it does not parse ([`parse_judge_list`]).
+pub fn judge_list_at(
+    tree: &Path,
+    revision: &str,
+) -> Result<std::result::Result<Vec<String>, String>> {
+    let spec = format!("{revision}:./{JUDGE_LIST}");
+    if crate::git::run(tree, &["cat-file", "-e", &spec]).is_err() {
+        return Ok(Ok(Vec::new()));
+    }
+    let text = crate::git::blob(tree, &spec)?;
+    Ok(String::from_utf8(text)
+        .map_err(|_| format!("{JUDGE_LIST} is not UTF-8"))
+        .and_then(|text| parse_judge_list(&text)))
+}
+
+/// Whether the part `name` matches the glob part `glob`: `*` any run of characters, `?` one.
+fn part_matches(glob: &[char], name: &[char]) -> bool {
+    match glob.split_first() {
+        None => name.is_empty(),
+        Some(('*', rest)) => (0..=name.len()).any(|skip| part_matches(rest, &name[skip..])),
+        Some(('?', rest)) => !name.is_empty() && part_matches(rest, &name[1..]),
+        Some((c, rest)) => name.first() == Some(c) && part_matches(rest, &name[1..]),
+    }
+}
+
+/// Whether the path parts `path` lead towards what the glob parts `glob` can match: each part of
+/// the path matches the glob's part at its place, up to the path's end, or the glob reaches a
+/// `**` first. A link at such a path is on the way to what the glob guards.
+fn glob_towards(glob: &[&str], path: &[&str]) -> bool {
+    match (glob.split_first(), path.split_first()) {
+        (_, None) => true,
+        (None, Some(_)) => false,
+        (Some((&"**", _)), Some(_)) => true,
+        (Some((part, glob)), Some((name, path))) => {
+            part_matches(
+                &part.chars().collect::<Vec<_>>(),
+                &name.chars().collect::<Vec<_>>(),
+            ) && glob_towards(glob, path)
+        }
+    }
+}
+
+/// Whether the path parts `path` match the glob parts `glob`, `**` matching any number of parts.
+fn glob_matches(glob: &[&str], path: &[&str]) -> bool {
+    match glob.split_first() {
+        None => path.is_empty(),
+        Some((&"**", rest)) => {
+            glob_matches(rest, path) || (!path.is_empty() && glob_matches(glob, &path[1..]))
+        }
+        Some((part, rest)) => {
+            !path.is_empty()
+                && part_matches(
+                    &part.chars().collect::<Vec<_>>(),
+                    &path[0].chars().collect::<Vec<_>>(),
+                )
+                && glob_matches(rest, &path[1..])
+        }
+    }
+}
+
+impl JudgeSurface {
+    /// The surface of a run whose validators run `runs` ([`Validator::runs`]) in `tree`.
+    #[must_use]
+    pub fn new(runs: &[String], tree: &Path) -> Self {
+        // What [`scripts_of`] names with a wildcard (a module's package, `pkg/**`) is guarded
+        // as a glob, everything under it with it; the rest each by itself.
+        let (globs, scripts): (Vec<String>, Vec<String>) = scripts_of(runs, tree)
+            .into_iter()
+            .partition(|path| path.contains(['*', '?']));
+        Self {
+            scripts: scripts.into_iter().collect(),
+            store: true,
+            globs: globs.iter().map(|glob| fold(glob)).collect(),
+        }
+    }
+
+    /// With the repository's own globs `globs` ([`JUDGE_LIST`]) added to the default.
+    #[must_use]
+    pub fn with_globs(mut self, globs: Vec<String>) -> Self {
+        self.globs.extend(globs);
+        self
+    }
+
+    /// The surface without the planning store: what decides `tests.run` and `ci.read`. The
+    /// store decides no test and no check, and takt writes it on a case's branch itself; a
+    /// step is still refused for writing it.
+    #[must_use]
+    pub fn without_store(mut self) -> Self {
+        self.store = false;
+        self
+    }
+
+    /// Whether `path` is the store's: under `.engineering/`, whatever its case, and not a case's.
+    #[must_use]
+    pub fn is_store(path: &str) -> bool {
+        let path = path.trim_end_matches('/');
+        let folded = fold(path);
+        (folded == ENGINEERING || folded.starts_with(&format!("{ENGINEERING}/")))
+            && !crate::case::is_under_cases(path)
+    }
+
+    /// Whether `path`, relative to the tree as git names it, is on the surface.
+    #[must_use]
+    pub fn contains(&self, path: &str) -> bool {
+        let path = path.trim_end_matches('/');
+        if crate::case::is_under_cases(path) {
+            return false;
+        }
+        let folded = fold(path);
+        let parts: Vec<&str> = folded.split('/').collect();
+        let name = parts.last().copied().unwrap_or_default();
+        (self.store && Self::is_store(path))
+            || folded == fold(JUDGE_LIST)
+            || folded == ".github"
+            || folded.starts_with(".github/")
+            || parts.contains(&".cargo")
+            || name.starts_with("rust-toolchain")
+            || name == "build.rs"
+            || PYTHON_FILES.contains(&name)
+            || self.scripts.iter().any(|script| fold(script) == folded)
+            || self.globs.iter().any(|glob| {
+                let glob: Vec<&str> = glob.split('/').collect();
+                (1..=parts.len()).any(|len| glob_matches(&glob, &parts[..len]))
+            })
+    }
+
+    /// Whether a validator or the guarded command would read through a link at `link`: the link
+    /// is, or is on the way to, the cargo configuration (`.cargo/` at any depth), the CI
+    /// workflows (`.github/workflows/`), the store's directories and project file (while the
+    /// store is on the surface), a manifest, a build script, a toolchain file, or the test
+    /// command's own script, recipe or build-tool configuration. Any other link (an
+    /// instructions file under `.github/`) is read by none of them.
+    #[must_use]
+    pub fn reads_through(&self, link: &str) -> bool {
+        let folded = fold(link.trim_end_matches('/'));
+        let parts: Vec<&str> = folded.split('/').collect();
+        let name = parts.last().copied().unwrap_or_default();
+        let is_or_holds = |path: &str| {
+            folded == path
+                || folded
+                    .strip_prefix(path)
+                    .is_some_and(|rest| rest.starts_with('/'))
+                || path
+                    .strip_prefix(folded.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+        };
+        parts.contains(&".cargo")
+            || is_or_holds(".github/workflows")
+            || (self.store
+                && [
+                    ".engineering/planning",
+                    ".engineering/evidence",
+                    ".engineering/project.yaml",
+                ]
+                .into_iter()
+                .any(is_or_holds))
+            || name == "cargo.toml"
+            || name == "build.rs"
+            || name.starts_with("rust-toolchain")
+            || PYTHON_FILES.contains(&name)
+            || folded == fold(JUDGE_LIST)
+            || self.scripts.iter().any(|script| is_or_holds(&fold(script)))
+            // A path the repository's own list (or a module's package) names: the link is on
+            // it, or on the way towards it.
+            || self.globs.iter().any(|glob| {
+                let glob: Vec<&str> = glob.split('/').collect();
+                (1..=parts.len()).any(|len| glob_matches(&glob, &parts[..len]))
+                    || glob_towards(&glob, &parts)
+            })
+    }
+
+    /// Where the surface is read in `tree`: the guarded names at its root, whatever their case,
+    /// each with what is under it; the scripts and build files, each by itself.
+    fn roots(&self, tree: &Path) -> Result<Vec<(PathBuf, bool)>> {
+        let mut roots = Vec::new();
+        for entry in std::fs::read_dir(tree).with_context(|| format!("read {}", tree.display()))? {
+            let name = entry?.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let folded = fold(name);
+            if [ENGINEERING, ".cargo", ".github", "build.rs"].contains(&folded.as_str())
+                || folded.starts_with("rust-toolchain")
+                || PYTHON_FILES.contains(&folded.as_str())
+            {
+                roots.push((PathBuf::from(name), true));
+            }
+        }
+        roots.extend(
+            self.scripts
+                .iter()
+                .map(|script| (PathBuf::from(script), false)),
+        );
+        // A glob naming a path outright is read like a root name; one with a wildcard is
+        // guarded through git's view of the change.
+        roots.extend(
+            self.globs
+                .iter()
+                .filter(|glob| !glob.contains(['*', '?']))
+                .map(|glob| (PathBuf::from(glob), true)),
+        );
+        Ok(roots)
+    }
+
+    /// Every file, link and other entry on the surface in `tree`, by path relative to it, as
+    /// [`snapshot`] takes them: a link is never followed, and a root whose way crosses a link,
+    /// checked component by component, is that link.
+    fn snapshot(&self, tree: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
+        fn walk(
+            tree: &Path,
+            at: &Path,
+            entries: &mut BTreeMap<PathBuf, Entry>,
+            descend: bool,
+        ) -> Result<()> {
+            if at.to_str().is_some_and(crate::case::is_under_cases) {
+                return Ok(());
+            }
+            let full = tree.join(at);
+            let meta = match std::fs::symlink_metadata(&full) {
+                Ok(meta) => meta,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => {
+                    return Err(error).with_context(|| format!("read {}", full.display()));
+                }
+            };
+            let kind = meta.file_type();
+            if kind.is_symlink() {
+                let target = std::fs::read_link(&full)
+                    .with_context(|| format!("read the link {}", full.display()))?;
+                entries.insert(at.to_path_buf(), Entry::Link(target));
+            } else if kind.is_dir() {
+                if descend {
+                    for entry in std::fs::read_dir(&full)
+                        .with_context(|| format!("read {}", full.display()))?
+                    {
+                        walk(tree, &at.join(entry?.file_name()), entries, true)?;
+                    }
+                }
+            } else if kind.is_file() {
+                let bytes =
+                    std::fs::read(&full).with_context(|| format!("read {}", full.display()))?;
+                entries.insert(
+                    at.to_path_buf(),
+                    Entry::File {
+                        bytes,
+                        executable: is_executable(&meta),
+                    },
+                );
+            } else {
+                entries.insert(at.to_path_buf(), Entry::Other(other_kind(kind)));
+            }
+            Ok(())
+        }
+        let mut entries = BTreeMap::new();
+        for (root, descend) in self.roots(tree)? {
+            // The way to a root, component by component from the tree: the first link on it is
+            // the entry, and nothing under it is read.
+            let mut way = PathBuf::new();
+            let mut linked = None;
+            for component in root.components() {
+                way.push(component);
+                if way == root {
+                    break;
+                }
+                if std::fs::symlink_metadata(tree.join(&way))
+                    .is_ok_and(|meta| meta.file_type().is_symlink())
+                {
+                    linked = Some(way.clone());
+                    break;
+                }
+            }
+            match linked {
+                Some(link) => walk(tree, &link, &mut entries, false)?,
+                None => walk(tree, &root, &mut entries, descend)?,
+            }
+        }
+        Ok(entries)
+    }
+
+    /// The surface of a run whose validators run `runs`, and what is on it in `tree` now.
+    fn read(
+        runs: &[String],
+        globs: Vec<String>,
+        tree: &Path,
+    ) -> Result<(Self, BTreeMap<PathBuf, Entry>)> {
+        let surface = Self::new(runs, tree).with_globs(globs);
+        let kept = surface.snapshot(tree)?;
+        Ok((surface, kept))
+    }
+
+    /// The links a validator or the guarded command would read through
+    /// ([`JudgeSurface::reads_through`]), each with where it leads: on the surface as `kept`
+    /// holds it, among the links git tracks, at the root manifest, and a tracked link to a
+    /// directory that holds a manifest (a workspace member reached through it). What they guard
+    /// would be read wherever they point, inside the tree or out of it, so the step guard takes
+    /// no judgement step while there is one.
+    fn locking_links(&self, tree: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<Vec<String>> {
+        let mut links: BTreeMap<String, PathBuf> = kept
+            .iter()
+            .filter_map(|(path, entry)| match entry {
+                Entry::Link(target) => Some((path.display().to_string(), target.clone())),
+                _ => None,
+            })
+            .filter(|(path, _)| self.reads_through(path))
+            .collect();
+        let tracked = crate::git::run(tree, &["ls-files", "-s", "-z"])?;
+        let mut candidates: Vec<String> = tracked
+            .split('\0')
+            .filter_map(|entry| {
+                let (meta, path) = entry.split_once('\t')?;
+                meta.starts_with("120000 ").then(|| path.to_owned())
+            })
+            .collect();
+        candidates.push("Cargo.toml".to_owned());
+        for path in candidates {
+            let full = tree.join(&path);
+            if !std::fs::symlink_metadata(&full).is_ok_and(|meta| meta.file_type().is_symlink()) {
+                continue;
+            }
+            if self.reads_through(&path) || full.join("Cargo.toml").exists() {
+                let target = std::fs::read_link(&full)
+                    .with_context(|| format!("read the link {}", full.display()))?;
+                links.insert(path, target);
+            }
+        }
+        Ok(links
+            .into_iter()
+            .map(|(path, target)| format!("{path} -> {}", target.display()))
+            .collect())
+    }
+
+    /// Puts the surface in `tree` back to `kept`, where it still differs; through the tree's
+    /// real path, so a tree named through a link is not taken for a directory a step replaced.
+    fn put_back(&self, tree: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<()> {
+        let again = differing(kept, &self.snapshot(tree)?);
+        if !again.is_empty() {
+            let real = std::fs::canonicalize(tree)
+                .with_context(|| format!("resolve {}", tree.display()))?;
+            restore(&real, kept, &again)?;
+        }
+        Ok(())
+    }
+}
+
+/// The files outside the tree that decide how cargo and rustup build and run the tests from it:
+/// `.cargo/config` and `.cargo/config.toml` in every directory above the tree, `rust-toolchain`
+/// and `rust-toolchain.toml` there, and every `config*` in `$CARGO_HOME` (`~/.cargo` when it is
+/// not set), each by its absolute path with its anchor (the directory it is found from) and what
+/// is at it, `None` for nothing; each part of the way between the anchor and the file (`.cargo`,
+/// `$CARGO_HOME`) is a path of its own, so a link there is seen as a link. Read around each
+/// judgement step and each observation: a step that changed one is refused and the file put
+/// back, and no validator records while one differs from what the run found when it began. A
+/// file behind a link is read through it, so its change is seen, but nothing is ever written or
+/// removed through a link. Confining the step to the tree is not this.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Outside(BTreeMap<PathBuf, (PathBuf, Option<Entry>)>);
+
+impl Outside {
+    /// The paths [`Outside`] reads for `tree`, each with its anchor: the directory above the
+    /// tree it is in, or the parent of `$CARGO_HOME`. Every part between the anchor and the path
+    /// (`.cargo`, `$CARGO_HOME` itself) is a path of its own too, so a link made there is seen
+    /// as the link it is.
+    fn paths(tree: &Path) -> Vec<(PathBuf, PathBuf)> {
+        let mut paths = BTreeMap::new();
+        let roots = [
+            std::path::absolute(tree).ok(),
+            std::fs::canonicalize(tree).ok(),
+        ];
+        for root in roots.iter().flatten() {
+            for above in root.ancestors().skip(1) {
+                for name in [
+                    ".cargo",
+                    ".cargo/config",
+                    ".cargo/config.toml",
+                    "rust-toolchain",
+                    "rust-toolchain.toml",
+                ] {
+                    paths.insert(above.join(name), above.to_path_buf());
+                }
+            }
+        }
+        let home = std::env::var_os("CARGO_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")));
+        if let Some(home) = home
+            && let Some(anchor) = home.parent()
+        {
+            paths.insert(home.clone(), anchor.to_path_buf());
+            paths.insert(home.join("config"), anchor.to_path_buf());
+            paths.insert(home.join("config.toml"), anchor.to_path_buf());
+            if !std::fs::symlink_metadata(&home).is_ok_and(|meta| meta.file_type().is_symlink())
+                && let Ok(entries) = std::fs::read_dir(&home)
+            {
+                for entry in entries.flatten() {
+                    if entry.file_name().to_string_lossy().starts_with("config") {
+                        paths.insert(entry.path(), anchor.to_path_buf());
+                    }
+                }
+            }
+        }
+        paths.into_iter().collect()
+    }
+
+    /// The first part between `anchor` and `path`, the path itself left out, that is a link:
+    /// checked part by part with `symlink_metadata`, never followed.
+    fn link_on_the_way(anchor: &Path, path: &Path) -> Option<PathBuf> {
+        let below = path.strip_prefix(anchor).ok()?;
+        let mut way = anchor.to_path_buf();
+        let parts: Vec<_> = below.components().collect();
+        for part in parts.iter().take(parts.len().saturating_sub(1)) {
+            way.push(part);
+            if std::fs::symlink_metadata(&way).is_ok_and(|meta| meta.file_type().is_symlink()) {
+                return Some(way);
+            }
+        }
+        None
+    }
+
+    /// What is at each of the paths now. A path whose way crosses a link is read through it,
+    /// so a change there is seen, and is never written or removed through it ([`Self::put_back`]).
+    fn read(tree: &Path) -> Result<Self> {
+        let mut entries = BTreeMap::new();
+        for (path, anchor) in Self::paths(tree) {
+            let entry = match std::fs::symlink_metadata(&path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                // A path whose way is not a directory (`.cargo` a file) holds nothing.
+                Err(error) if error.raw_os_error() == Some(20) => None,
+                // One the run may not read is compared by that alone.
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    Some(Entry::Other("unreadable"))
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| format!("read {}", path.display()));
+                }
+                Ok(meta) if meta.file_type().is_symlink() => Some(Entry::Link(
+                    std::fs::read_link(&path)
+                        .with_context(|| format!("read the link {}", path.display()))?,
+                )),
+                Ok(meta) if meta.is_file() => Some(Entry::File {
+                    bytes: std::fs::read(&path)
+                        .with_context(|| format!("read {}", path.display()))?,
+                    executable: is_executable(&meta),
+                }),
+                Ok(meta) if meta.is_dir() => Some(Entry::Other("directory")),
+                Ok(meta) => Some(Entry::Other(other_kind(meta.file_type()))),
+            };
+            entries.insert(path, (anchor, entry));
+        }
+        Ok(Self(entries))
+    }
+
+    /// The paths at which `now` differs from this, in path order: a part of the way (`.cargo`)
+    /// before what is under it.
+    fn differing(&self, now: &Self) -> Vec<PathBuf> {
+        let entry = |outside: &Self, path: &PathBuf| {
+            outside.0.get(path).and_then(|(_, entry)| entry.clone())
+        };
+        self.0
+            .keys()
+            .chain(now.0.keys())
+            .filter(|path| entry(self, path) != entry(now, path))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// Puts each path where the tree's outside now differs from this back, in path order: what
+    /// was created is removed (a link as the link itself), what was changed or removed is written
+    /// again (a link made again, a directory made again empty). Nothing is ever written or
+    /// removed through a link: a path whose way crosses one, checked part by part, is left as it
+    /// is and answered, for the refusal to name.
+    fn put_back(&self, tree: &Path) -> Result<Vec<PathBuf>> {
+        let mut left = Vec::new();
+        for path in self.differing(&Self::read(tree)?) {
+            let anchor = match self.0.get(&path) {
+                Some((anchor, _)) => anchor.clone(),
+                None => continue,
+            };
+            if Self::link_on_the_way(&anchor, &path).is_some() {
+                left.push(path);
+                continue;
+            }
+            if let Ok(meta) = std::fs::symlink_metadata(&path) {
+                if meta.is_dir() {
+                    std::fs::remove_dir_all(&path)
+                } else {
+                    std::fs::remove_file(&path)
+                }
+                .with_context(|| format!("remove {}", path.display()))?;
+            }
+            match self.0.get(&path).and_then(|(_, entry)| entry.clone()) {
+                Some(Entry::File { bytes, executable }) => {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)
+                            .with_context(|| format!("create {}", parent.display()))?;
+                    }
+                    put_back_file(&path, &bytes, executable)?;
+                }
+                Some(Entry::Link(target)) => make_link(&target, &path)?,
+                Some(Entry::Other("directory")) => std::fs::create_dir_all(&path)
+                    .with_context(|| format!("create {}", path.display()))?,
+                Some(Entry::Other(_)) | None => {}
+            }
+        }
+        Ok(left)
+    }
+}
+
+/// How a refusal names the paths outside the tree that differ.
+fn outside_named(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A key path of a manifest read strictly: bare keys (`A-Za-z0-9_-`) and quoted keys holding no
+/// escape, joined by dots with optional white space; `None` for anything else, an escape in a
+/// key among it, which the scanner cannot read with certainty.
+fn strict_key(key: &str) -> Option<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut chars = key.chars().peekable();
+    let skip = |chars: &mut std::iter::Peekable<std::str::Chars<'_>>| {
+        while chars.peek().is_some_and(|c| *c == ' ' || *c == '\t') {
+            chars.next();
+        }
+    };
+    loop {
+        skip(&mut chars);
+        let mut part = String::new();
+        match chars.peek().copied() {
+            Some(quote @ ('"' | '\'')) => {
+                chars.next();
+                loop {
+                    match chars.next()? {
+                        c if c == quote => break,
+                        '\\' | '\n' | '\r' => return None,
+                        c => part.push(c),
+                    }
+                }
+            }
+            Some(c) if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {
+                while let Some(c) = chars.peek().copied() {
+                    if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                        part.push(c);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            _ => return None,
+        }
+        parts.push(part);
+        skip(&mut chars);
+        match chars.next() {
+            None => return Some(parts),
+            Some('.') => {}
+            Some(_) => return None,
+        }
+    }
+}
+
+/// The kind of string a manifest value is inside.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Quoted {
+    Basic,
+    Literal,
+    MultiBasic,
+    MultiLiteral,
+}
+
+/// A manifest value read strictly, line by line: strings of the four kinds, arrays and inline
+/// tables, bare scalars. Anything the scanner cannot read with certainty makes it uncertain: an
+/// escape inside an array or inline table (it could spell a key), any `\` in a multi-line basic
+/// string, a multi-line string whose delimiter is followed by another quote, a basic or literal
+/// string left open at the end of a line, a bracket closed that was not open, a character a
+/// value does not hold, anything after a complete value but a comment.
+#[derive(Default)]
+struct StrictValue {
+    text: String,
+    quoted: Option<Quoted>,
+    depth: i64,
+    ended: bool,
+    uncertain: bool,
+}
+
+impl StrictValue {
+    /// Reads `line`; whether the value is complete after it.
+    fn line(&mut self, line: &str) -> bool {
+        let mut rest = line;
+        while !rest.is_empty() && !self.uncertain {
+            let c = rest.chars().next().unwrap_or_default();
+            let width = c.len_utf8();
+            match self.quoted {
+                Some(Quoted::Basic) => {
+                    if c == '\\' {
+                        if self.depth > 0 {
+                            self.uncertain = true;
+                            break;
+                        }
+                        let escaped: usize = rest.chars().take(2).map(char::len_utf8).sum();
+                        self.text.push_str(&rest[..escaped]);
+                        rest = &rest[escaped..];
+                        continue;
+                    }
+                    if c == '"' {
+                        self.close();
+                    }
+                }
+                Some(Quoted::Literal) => {
+                    if c == '\'' {
+                        self.close();
+                    }
+                }
+                Some(quoted @ (Quoted::MultiBasic | Quoted::MultiLiteral)) => {
+                    let delimiter = if quoted == Quoted::MultiBasic {
+                        "\"\"\""
+                    } else {
+                        "'''"
+                    };
+                    if quoted == Quoted::MultiBasic && c == '\\' {
+                        self.uncertain = true;
+                        break;
+                    }
+                    if rest.starts_with(delimiter) {
+                        if rest[3..].starts_with(&delimiter[..1]) {
+                            self.uncertain = true;
+                            break;
+                        }
+                        self.text.push_str(delimiter);
+                        rest = &rest[3..];
+                        self.close();
+                        continue;
+                    }
+                }
+                None => {
+                    if self.ended && !c.is_whitespace() && c != '#' {
+                        self.uncertain = true;
+                        break;
+                    }
+                    if c == '#' {
+                        if self.text.trim().is_empty() {
+                            self.uncertain = true;
+                        }
+                        break;
+                    }
+                    if let Some((quoted, opening)) = [
+                        (Quoted::MultiBasic, "\"\"\""),
+                        (Quoted::MultiLiteral, "'''"),
+                        (Quoted::Basic, "\""),
+                        (Quoted::Literal, "'"),
+                    ]
+                    .into_iter()
+                    .find(|(_, opening)| rest.starts_with(opening))
+                    {
+                        self.text.push_str(opening);
+                        rest = &rest[opening.len()..];
+                        self.quoted = Some(quoted);
+                        continue;
+                    }
+                    match c {
+                        '[' | '{' => self.depth += 1,
+                        ']' | '}' => {
+                            self.depth -= 1;
+                            if self.depth < 0 {
+                                self.uncertain = true;
+                                break;
+                            }
+                            if self.depth == 0 {
+                                self.ended = true;
+                            }
+                        }
+                        ',' | '=' if self.depth > 0 => {}
+                        c if c.is_whitespace() => {
+                            if self.depth == 0 && !self.text.trim().is_empty() {
+                                self.ended = true;
+                            }
+                        }
+                        c if c.is_ascii_alphanumeric() || "_-+.:".contains(c) => {}
+                        _ => {
+                            self.uncertain = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            self.text.push_str(&rest[..width]);
+            rest = &rest[width..];
+        }
+        match self.quoted {
+            Some(Quoted::Basic | Quoted::Literal) => {
+                self.uncertain = true;
+                true
+            }
+            Some(Quoted::MultiBasic | Quoted::MultiLiteral) => {
+                self.text.push('\n');
+                false
+            }
+            None => {
+                self.text.push(' ');
+                self.uncertain || (self.depth == 0 && !self.text.trim().is_empty())
+            }
+        }
+    }
+
+    /// A string closed: at the outermost level, the value is complete.
+    fn close(&mut self) {
+        self.quoted = None;
+        if self.depth == 0 {
+            self.ended = true;
+        }
+    }
+}
+
+/// Every entry of the manifest `text`, by its full key path, its value as written with white
+/// space outside strings collapsed: a strict scanner of sections and keys, not a TOML parser. An
+/// entry of an array of tables (`[[bin]]`) is told apart by its index. A line it cannot read with
+/// certainty (a header with anything after it, an escape in a key, an odd string, anything that
+/// is no header, key or comment) is the error, by its number and text: the caller refuses.
+fn manifest_entries(text: &str) -> std::result::Result<BTreeMap<Vec<String>, String>, String> {
+    let mut entries = BTreeMap::new();
+    let mut table: Vec<String> = Vec::new();
+    let mut arrays: BTreeMap<Vec<String>, usize> = BTreeMap::new();
+    let mut pending: Option<(Vec<String>, StrictValue, usize)> = None;
+    let uncertain = |number: usize, line: &str| format!("line {number}: {}", line.trim());
+    for (index, line) in text.lines().enumerate() {
+        let number = index + 1;
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if let Some((key, mut value, from)) = pending.take() {
+            let complete = value.line(line);
+            if value.uncertain {
+                return Err(uncertain(number, line));
+            }
+            if complete {
+                entries.insert(key, collapse(&value.text));
+            } else {
+                pending = Some((key, value, from));
+            }
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(header) = trimmed.strip_prefix("[[") {
+            let path = header
+                .strip_suffix("]]")
+                .and_then(strict_key)
+                .ok_or_else(|| uncertain(number, line))?;
+            let index = arrays.entry(path.clone()).or_insert(0);
+            table = path;
+            table.push(index.to_string());
+            *index += 1;
+            continue;
+        }
+        if let Some(header) = trimmed.strip_prefix('[') {
+            table = header
+                .strip_suffix(']')
+                .and_then(strict_key)
+                .ok_or_else(|| uncertain(number, line))?;
+            continue;
+        }
+        // `key = value`: the first `=` outside a quoted key.
+        let mut quote = None;
+        let split = trimmed.char_indices().find(|&(_, c)| match (quote, c) {
+            (None, '"' | '\'') => {
+                quote = Some(c);
+                false
+            }
+            (Some(q), c) if c == q => {
+                quote = None;
+                false
+            }
+            (None, '=') => true,
+            _ => false,
+        });
+        let (at, _) = split.ok_or_else(|| uncertain(number, line))?;
+        let mut key = table.clone();
+        key.extend(strict_key(&trimmed[..at]).ok_or_else(|| uncertain(number, line))?);
+        let mut value = StrictValue::default();
+        let complete = value.line(&trimmed[at + 1..]);
+        if value.uncertain {
+            return Err(uncertain(number, line));
+        }
+        if complete {
+            entries.insert(key, collapse(&value.text));
+        } else {
+            pending = Some((key, value, number));
+        }
+    }
+    if let Some((_, _, from)) = pending {
+        return Err(format!("line {from}: a value that does not end"));
+    }
+    Ok(entries)
+}
+
+/// `value` with runs of white space made one space, trimmed.
+fn collapse(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Whether the manifest entry at `key`, with `value`, decides how cargo builds or runs the tests:
+/// `package.build`, `package.links`, a target's `harness`, any entry of `[profile.*]`,
+/// `[patch.*]`, `[replace]`, `[build-dependencies]`, and of `[target.*]` but a target's
+/// `dependencies` and `dev-dependencies`; and an inline table that could hold one of those.
+fn builds(key: &[String], value: &str) -> bool {
+    let parts: Vec<String> = key.iter().map(|part| fold(part)).collect();
+    let first = parts.first().map(String::as_str).unwrap_or_default();
+    let names = |words: &[&str]| words.iter().any(|word| fold(value).contains(word));
+    match first {
+        "profile" | "patch" | "replace" | "build-dependencies" | "build_dependencies" => true,
+        "target" => !matches!(
+            parts.get(2).map(String::as_str),
+            Some("dependencies" | "dev-dependencies" | "dev_dependencies")
+        ),
+        "package" => match parts.get(1).map(String::as_str) {
+            Some("build" | "links") => true,
+            None => names(&["build", "links"]),
+            Some(_) => false,
+        },
+        "lib" | "bin" | "test" | "bench" | "example" => {
+            parts.iter().skip(1).any(|part| part == "harness") || names(&["harness"])
+        }
+        _ => false,
+    }
+}
+
+/// The entries that decide how cargo builds or runs the tests ([`builds`]) and differ between the
+/// manifests `before` and `after`, by key path: added, changed or removed. A manifest the
+/// scanner cannot read with certainty is the error, naming the line: the caller refuses.
+pub fn manifest_build_changes(
+    before: &str,
+    after: &str,
+) -> std::result::Result<Vec<String>, String> {
+    let before = manifest_entries(before).map_err(|line| format!("before, {line}"))?;
+    let after = manifest_entries(after).map_err(|line| format!("after, {line}"))?;
+    Ok(before
+        .keys()
+        .chain(after.keys())
+        .filter(|key| {
+            let (was, is) = (before.get(*key), after.get(*key));
+            was != is
+                && (was.is_some_and(|value| builds(key, value))
+                    || is.is_some_and(|value| builds(key, value)))
+        })
+        .map(|key| key.join("."))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect())
+}
+
+/// The build scripts and `links` of each package cargo reads, by manifest path; `None` for a
+/// tree with no manifest at its root; the error is cargo's failure.
+type CargoBuilds =
+    std::result::Result<Option<BTreeMap<String, (Vec<String>, Option<String>)>>, String>;
+
+/// What cargo itself reads as each package's build script and `links`, by manifest path:
+/// `cargo metadata --offline --no-deps --format-version 1` run in `tree` as a confined child (no
+/// credential, no standard input, a timeout, a bounded output), packages with neither left out.
+/// `Ok(None)` when the tree has no manifest at its root; the error is cargo's failure.
+fn cargo_builds(tree: &Path) -> CargoBuilds {
+    if !std::fs::symlink_metadata(tree.join("Cargo.toml")).is_ok_and(|meta| meta.is_file()) {
+        return Ok(None);
+    }
+    let mut command = std::process::Command::new("cargo");
+    command
+        .args([
+            "metadata",
+            "--offline",
+            "--no-deps",
+            "--format-version",
+            "1",
+        ])
+        .current_dir(tree);
+    crate::forge::without_credentials(&mut command, |_| false);
+    let limits = crate::forge::Limits {
+        timeout: Duration::from_secs(120),
+        output: 64 << 20,
+    };
+    let output = crate::forge::run_child(&mut command, limits)
+        .map_err(|error| format!("cargo metadata did not run: {error:#}"))?;
+    if !output.success() {
+        let said = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "cargo metadata exited {}: {}",
+            output
+                .code
+                .map_or("on a signal".to_owned(), |code| code.to_string()),
+            said.trim().chars().take(300).collect::<String>()
+        ));
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("cargo metadata wrote what is not its JSON: {error}"))?;
+    let mut builds = BTreeMap::new();
+    for package in metadata["packages"].as_array().into_iter().flatten() {
+        let scripts: Vec<String> = package["targets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|target| {
+                target["kind"]
+                    .as_array()
+                    .is_some_and(|kinds| kinds.iter().any(|kind| kind == "custom-build"))
+            })
+            .filter_map(|target| target["src_path"].as_str().map(str::to_owned))
+            .collect();
+        let links = package["links"].as_str().map(str::to_owned);
+        if !scripts.is_empty() || links.is_some() {
+            let manifest = package["manifest_path"].as_str().unwrap_or_default();
+            builds.insert(manifest.to_owned(), (scripts, links));
+        }
+    }
+    Ok(Some(builds))
+}
+
+/// How the build scripts and `links` cargo reads changed across a step, `before` and `after`
+/// it ([`cargo_builds`]): each difference named; cargo failing after the step but not before is
+/// one.
+fn cargo_build_changes(before: &CargoBuilds, after: &CargoBuilds) -> Vec<String> {
+    match (before, after) {
+        (_, Err(failed)) if before.is_ok() => {
+            vec![format!(
+                "cargo cannot read the manifests after the step: {failed}"
+            )]
+        }
+        (Err(_), Err(_)) => Vec::new(),
+        (before, Ok(after)) => {
+            let empty = BTreeMap::new();
+            let before = before
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .unwrap_or(&empty);
+            let after = after.as_ref().unwrap_or(&empty);
+            before
+                .keys()
+                .chain(after.keys())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .filter(|manifest| before.get(*manifest) != after.get(*manifest))
+                .map(|manifest| {
+                    let shown = |builds: Option<&(Vec<String>, Option<String>)>| {
+                        builds.map_or("none".to_owned(), |(scripts, links)| {
+                            format!(
+                                "build script {}, links {}",
+                                if scripts.is_empty() {
+                                    "none".to_owned()
+                                } else {
+                                    scripts.join(" ")
+                                },
+                                links.as_deref().unwrap_or("none")
+                            )
+                        })
+                    };
+                    format!(
+                        "cargo reads {manifest}: {} before, {} after",
+                        shown(before.get(manifest)),
+                        shown(after.get(manifest))
+                    )
+                })
+                .collect()
+        }
+        (Ok(_), Err(_)) => Vec::new(),
+    }
+}
+
+/// The text of the manifest at `path`, relative to the tree, in the commit `revision`: empty
+/// when the commit has none there.
+pub fn manifest_at(tree: &Path, revision: &str, path: &str) -> Result<String> {
+    let spec = format!("{revision}:./{path}");
+    if crate::git::run(tree, &["cat-file", "-e", &spec]).is_err() {
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&crate::git::blob(tree, &spec)?).into_owned())
+}
+
+/// The entries of `pyproject.toml`'s `[tool.pytest*]` tables that differ between `before` and
+/// `after`, by key path: pytest's configuration, read by the same strict scanner as a cargo
+/// manifest ([`manifest_entries`]). A file the scanner cannot read with certainty is the error,
+/// naming the line: the caller refuses.
+pub fn pytest_config_changes(
+    before: &str,
+    after: &str,
+) -> std::result::Result<Vec<String>, String> {
+    let before = manifest_entries(before).map_err(|line| format!("before, {line}"))?;
+    let after = manifest_entries(after).map_err(|line| format!("after, {line}"))?;
+    let pytest = |key: &Vec<String>, value: &String| {
+        let parts: Vec<String> = key.iter().map(|part| fold(part)).collect();
+        match (parts.first().map(String::as_str), parts.get(1)) {
+            (Some("tool"), Some(table)) => table.starts_with("pytest"),
+            (Some("tool"), None) => fold(value).contains("pytest"),
+            _ => false,
+        }
+    };
+    Ok(before
+        .keys()
+        .chain(after.keys())
+        .filter(|key| {
+            let (was, is) = (before.get(*key), after.get(*key));
+            was != is
+                && (was.is_some_and(|value| pytest(key, value))
+                    || is.is_some_and(|value| pytest(key, value)))
+        })
+        .map(|key| key.join("."))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect())
+}
+
+/// Whether `path`, relative to the tree, is a `pyproject.toml`, whatever its case.
+#[must_use]
+pub fn is_pyproject(path: &str) -> bool {
+    fold(path.rsplit('/').next().unwrap_or(path)) == "pyproject.toml"
+}
+
+/// Whether `path`, relative to the tree, is a cargo manifest, whatever its case.
+#[must_use]
+pub fn is_manifest(path: &str) -> bool {
+    fold(path.rsplit('/').next().unwrap_or(path)) == "cargo.toml"
+}
+
+/// How a refusal names what a step changed on the judge surface: the store first, as the store's,
+/// then the rest.
+fn surface_refusal(action: &str, touched: &[String]) -> String {
+    let (store, other): (Vec<&String>, Vec<&String>) = touched
+        .iter()
+        .partition(|path| JudgeSurface::is_store(path));
+    let join = |paths: &[&String]| {
+        paths
+            .iter()
+            .map(|path| path.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut parts = Vec::new();
+    if !store.is_empty() {
+        parts.push(format!(
+            "wrote into the planning store, which only takt writes once a case is accepted: {}",
+            join(&store)
+        ));
+    }
+    if !other.is_empty() {
+        parts.push(format!(
+            "changed the judge surface, what decides its validators ({JUDGE_SURFACE}): {}",
+            join(&other)
+        ));
+    }
+    format!("{action} {}", parts.join("; and "))
 }
 
 /// Discards everything a judgement step did, back to `checkpoint`, and puts the cases directory
@@ -495,6 +2535,9 @@ pub struct Run<'a> {
     store: Option<&'a dyn Frontier>,
     started: Instant,
     options: RunOptions,
+    /// The files outside the tree that decide how cargo and rustup build and run the tests
+    /// ([`Outside`]), as the run found them when it began.
+    outside: Outside,
 }
 
 impl<'a> Run<'a> {
@@ -571,6 +2614,7 @@ impl<'a> Run<'a> {
             poll: Self::POLL,
             store: None,
             started: Instant::now(),
+            outside: Outside::read(tree)?,
             options,
         })
     }
@@ -626,6 +2670,7 @@ impl<'a> Run<'a> {
             poll: Self::POLL,
             store: None,
             started: Instant::now(),
+            outside: Outside::read(tree)?,
             options,
         })
     }
@@ -794,6 +2839,22 @@ impl<'a> Run<'a> {
                 .and_then(|branch| branch.base),
         );
         kept
+    }
+
+    /// The words of every command the run's validators run from the tree ([`Validator::runs`]):
+    /// what names the test command's own script on the judge surface.
+    fn runs(&self) -> Vec<String> {
+        self.validators.iter().flat_map(|v| v.runs()).collect()
+    }
+
+    /// The repository's own judge-surface globs ([`JUDGE_LIST`]) at the case's pinned base
+    /// revision, never the tree's; none for a case that pins no base. The inner error is a list
+    /// that does not parse.
+    fn judge_list(&self) -> Result<std::result::Result<Vec<String>, String>> {
+        match crate::case::Branch::read(&self.case.dir)?.base_commit {
+            Some(base) => judge_list_at(&self.tree, &base),
+            None => Ok(Ok(Vec::new())),
+        }
     }
 
     fn budget_spent(&self) -> Option<Stop> {
@@ -1406,14 +3467,47 @@ impl<'a> Run<'a> {
                 // own writes under its case are the only change admitted; anything else is put
                 // back, and the observation refused with nothing recorded. `.git` is put back
                 // before any git runs again: git runs what was planted there (a hook,
-                // `core.fsmonitor`).
+                // `core.fsmonitor`). The judge surface is snapshotted as around a judgement
+                // step: what the observation left there that git does not list (a FIFO, a file
+                // in an ignored directory) or that git lists as ignored is put back and the
+                // observation refused like any other foreign write. So are the files outside
+                // the tree that decide how cargo and rustup build and run the tests
+                // ([`Outside`]): one that differs from what the run found when it began (a
+                // change no step could keep, by another route) and nothing is observed or
+                // recorded; one the observation changed is put back and the observation refused.
+                let outside_kept = Outside::read(&self.tree)?;
+                let outside_moved = self.outside.differing(&outside_kept);
+                if !outside_moved.is_empty() {
+                    let why = format!(
+                        "{} would observe {} while what cargo or rustup reads outside the tree differs from what the run found when it began: {}",
+                        validator.action(),
+                        &revision[..8.min(revision.len())],
+                        outside_named(&outside_moved)
+                    );
+                    self.stepped(
+                        events,
+                        SteppedBy::Validator(None),
+                        validator.name(),
+                        validator.action(),
+                        "nothing observed",
+                    )?;
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+                    writeln!(out, "  refused: {why}; nothing observed")?;
+                    return Ok(Stop::StepRefused(why));
+                }
                 let checkpoint =
                     crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
                 let cases = self.tree.join(CASES_DIR);
                 let kept = snapshot(&cases)?;
+                let globs = self.judge_list()?.unwrap_or_default();
+                let (surface, surface_kept) = JudgeSurface::read(&self.runs(), globs, &self.tree)?;
                 let observed = validator
                     .observe_waiting(&self.tree, &revision, seq)
                     .with_context(|| format!("{} ({})", validator.action(), validator.name()));
+                // What the observation left running is killed before anything is looked at;
+                // one that could not be killed is named with the rest of what it left.
+                let swept = crate::forge::sweep_left();
                 let git_dir = checkpoint.put_back_git_dir(&self.tree);
                 let mut planted = git_dir.touched;
                 planted.extend(
@@ -1422,6 +3516,29 @@ impl<'a> Run<'a> {
                         .into_iter()
                         .map(|path| format!("not put back: {path}")),
                 );
+                if let Err(error) = swept {
+                    planted.push(format!("processes still running: {error:#}"));
+                }
+                // What the observation left on the judge surface; a read that fails (a file
+                // the run may not read) discards everything it did before the run ends on the
+                // error.
+                let on_surface = match surface.snapshot(&self.tree) {
+                    Ok(now) => differing(&surface_kept, &now),
+                    Err(error) => {
+                        let undone = undo_step(&self.tree, &checkpoint, &cases, &kept)
+                            .and_then(|()| surface.put_back(&self.tree, &surface_kept));
+                        return Err(match undone {
+                            Ok(()) => error.context(format!(
+                                "{}: what the observation left on the judge surface could not be read; everything it changed was discarded",
+                                validator.action()
+                            )),
+                            Err(undo) => error.context(format!(
+                                "{}: what the observation left on the judge surface could not be read, and its change could not be discarded: {undo:#}",
+                                validator.action()
+                            )),
+                        });
+                    }
+                };
                 let touched = differing(&kept, &snapshot(&cases)?);
                 let own: Vec<PathBuf> = match self.case.dir.file_name() {
                     Some(id) => validator
@@ -1446,10 +3563,38 @@ impl<'a> Run<'a> {
                     outside.push(format!("HEAD, moved {moved}"));
                 }
                 outside.extend(change.refs.iter().cloned());
+                for path in on_surface
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .chain(
+                        change
+                            .ignored_added
+                            .iter()
+                            .chain(&change.ignored_changed)
+                            .chain(&change.ignored_removed)
+                            .filter(|path| surface.contains(path))
+                            .cloned(),
+                    )
+                {
+                    if !outside.contains(&path) {
+                        outside.push(path);
+                    }
+                }
+                outside.extend(
+                    outside_kept
+                        .differing(&Outside::read(&self.tree)?)
+                        .iter()
+                        .map(|path| path.display().to_string()),
+                );
                 if !foreign.is_empty() || !outside.is_empty() {
                     restore(&cases, &kept, &touched)?;
                     undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    surface.put_back(&self.tree, &surface_kept)?;
+                    let left = outside_kept.put_back(&self.tree)?;
                     foreign.extend(outside);
+                    foreign.extend(left.iter().map(|path| {
+                        format!("not put back, its way crosses a link: {}", path.display())
+                    }));
                     let mut why = format!(
                         "{} wrote what its validator does not: {}",
                         validator.action(),
@@ -1629,19 +3774,67 @@ impl<'a> Run<'a> {
             // ended; a step that touched it is refused.
             let cases = self.tree.join(CASES_DIR);
             let kept = snapshot(&cases)?;
-            // The planning store likewise, and everything else under `.engineering/` but the
-            // cases: the project file that says where the store is kept among it. Its
-            // artifacts and evidence are what the store's lifecycle moves a story on, and
-            // evidence comes from validators only. Only takt's own writes, made once a case is
-            // accepted ([`Run::record_on`]), change it. A step whose change git sees there
-            // (a file, a link, a mode, a rename), or that left anything there the snapshot sees
-            // differ (a FIFO, which git does not list), is refused, and put back to the
+            // The judge surface likewise ([`JudgeSurface`]): the planning store and everything
+            // else under `.engineering/` but the cases (the project file that says where the
+            // store is kept, the gates and the assertions project file among it), whose
+            // artifacts and evidence the store's lifecycle moves a story on and which only
+            // takt's own writes change once a case is accepted ([`Run::record_on`]); and what
+            // decides the validators, which a step that changed it would decide its own
+            // verdict with: the cargo configuration, the toolchain, build scripts, the CI
+            // workflows, pytest's configuration, the test command's own script and its build
+            // tool's file, and what the repository's own list adds. Matched
+            // whatever the case. A step whose change git sees there (a file, a link, a mode, a
+            // rename), or that left anything there the snapshot sees differ (a FIFO, which git
+            // does not list, a file in an ignored directory), is refused, and put back to the
             // snapshot taken here.
-            let store_kept = snapshot_store(&self.tree)?;
-            let store_dirty_before: BTreeSet<String> = crate::git::changed_paths(&self.tree)?
+            let runs = self.runs();
+            // The repository's own list extends the surface, read at the case's base: a list
+            // that does not parse takes no judgement step at all.
+            let globs = match self.judge_list()? {
+                Ok(globs) => globs,
+                Err(why) => {
+                    let why = format!(
+                        "{why}; no judgement step is taken while the repository's judge-surface list does not parse"
+                    );
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(
+                        out,
+                        "step {}: refused before the harness: {why}",
+                        self.steps
+                    )?;
+                    return Ok(Stop::StepRefused(why));
+                }
+            };
+            let (surface, surface_kept) = JudgeSurface::read(&runs, globs, &self.tree)?;
+            // A link is never followed: while what a validator or the guarded command reads is
+            // reached through one, what it guards could be anywhere, in the tree or out of it,
+            // and no judgement step is taken ([`JudgeSurface::locking_links`]). Any other link
+            // on the surface is an entry by itself: changing it is refused like any change.
+            let links = surface.locking_links(&self.tree, &surface_kept)?;
+            if !links.is_empty() {
+                let why = format!(
+                    "the judge surface is reached through a link, which takt never follows: {}; no judgement step is taken while one is there",
+                    links.join(", ")
+                );
+                self.refused(events, BY_TAKT, &why)?;
+                writeln!(
+                    out,
+                    "step {}: refused before the harness: {why}",
+                    self.steps
+                )?;
+                return Ok(Stop::StepRefused(why));
+            }
+            let surface_dirty_before: BTreeSet<String> = crate::git::changed_paths(&self.tree)?
                 .into_iter()
-                .filter(|path| is_guarded_store_path(path))
+                .filter(|path| surface.contains(path))
                 .collect();
+            // The cargo manifests as `HEAD` has them before the step: what decides how cargo
+            // builds and runs the tests is compared with them after it.
+            let head_before = crate::git::head(&self.tree)?;
+            let cargo_before = cargo_builds(&self.tree);
+            // What cargo and rustup read outside the tree ([`Outside`]), put back with the rest
+            // of a step that is discarded.
+            let outside_before = Outside::read(&self.tree)?;
             // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
             // base, and a sibling case's branch, which a step could otherwise move under it; a
             // branch another worktree has checked out is that session's, but never the case's
@@ -1653,6 +3846,9 @@ impl<'a> Run<'a> {
             let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.harness.step(&context)
             }));
+            // What the step left running (a writer in a process group of its own) is killed
+            // before anything it did is looked at, so nothing lands after the step is judged.
+            let swept = crate::forge::sweep_left();
             // What git runs or reads as configuration first: every git call after this one
             // would read what the step planted there. Nothing in it ends early; a path it could
             // not put back is named in the refusal below.
@@ -1660,7 +3856,8 @@ impl<'a> Run<'a> {
             let tree = self.tree.clone();
             let undo = || -> Result<()> {
                 undo_step(&tree, &checkpoint, &cases, &kept)?;
-                put_back_store(&tree, &store_kept)
+                surface.put_back(&tree, &surface_kept)?;
+                outside_before.put_back(&tree).map(|_| ())
             };
             let stepped = match stepped {
                 Ok(stepped) => stepped,
@@ -1674,21 +3871,36 @@ impl<'a> Run<'a> {
                     std::panic::resume_unwind(panic);
                 }
             };
+            // A step whose leftovers could not all be killed is not judged: it is discarded
+            // whole and the run ends on the error.
+            if let Err(error) = swept {
+                return Err(match undo() {
+                    Ok(()) => error.context(format!(
+                        "step {}: what the step left running could not be killed; everything it changed was discarded",
+                        self.steps
+                    )),
+                    Err(undo) => error.context(format!(
+                        "step {}: what the step left running could not be killed, and its change could not be discarded: {undo:#}",
+                        self.steps
+                    )),
+                });
+            }
             // What the step left, read now; a read that fails (a file the run may not read)
             // discards the step before the run ends on the error.
-            let seen = (|| -> Result<(Vec<PathBuf>, Vec<String>)> {
-                let touched = differing(&kept, &snapshot(&cases)?);
-                let mut store_touched: BTreeSet<String> =
-                    differing(&store_kept, &snapshot_store(&tree)?)
-                        .iter()
-                        .map(|path| Path::new(ENGINEERING).join(path).display().to_string())
-                        .collect();
-                store_touched.extend(crate::git::changed_paths(&tree)?.into_iter().filter(
-                    |path| is_guarded_store_path(path) && !store_dirty_before.contains(path),
-                ));
-                Ok((touched, store_touched.into_iter().collect()))
-            })();
-            let (touched, store_touched) = match seen {
+            let seen =
+                (|| -> Result<(Vec<PathBuf>, Vec<String>)> {
+                    let touched = differing(&kept, &snapshot(&cases)?);
+                    let mut surface_touched: BTreeSet<String> =
+                        differing(&surface_kept, &surface.snapshot(&tree)?)
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect();
+                    surface_touched.extend(crate::git::changed_paths(&tree)?.into_iter().filter(
+                        |path| surface.contains(path) && !surface_dirty_before.contains(path),
+                    ));
+                    Ok((touched, surface_touched.into_iter().collect()))
+                })();
+            let (touched, surface_touched) = match seen {
                 Ok(seen) => seen,
                 Err(error) => {
                     return Err(match undo() {
@@ -1785,18 +3997,152 @@ impl<'a> Run<'a> {
                 )?;
                 return Ok(Stop::StepRefused(why));
             }
-            if !store_touched.is_empty() {
+            if !surface_touched.is_empty() {
                 undo()?;
-                let why = format!(
-                    "{} wrote into the planning store, which only takt writes once a case is accepted: {}",
-                    report.action,
-                    store_touched.join(", ")
-                );
+                let why = surface_refusal(&report.action, &surface_touched);
                 record_step(self)?;
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(
                     out,
-                    "  refused: {why}; the planning store was put back and the change discarded"
+                    "  refused: {why}; the judge surface was put back and the change discarded"
+                )?;
+                return Ok(Stop::StepRefused(why));
+            }
+            // A cargo manifest anywhere in the tree decides how cargo builds and runs the
+            // tests through some of its keys ([`manifest_build_changes`]): a build script
+            // under another name, a test harness, a profile, a patch, a build dependency, a
+            // target's own entries but its dependencies. A step that adds, changes or removes
+            // one is refused, and so is one that changed a manifest the scanner cannot read
+            // with certainty, or what cargo itself reads as a build script or `links`
+            // ([`cargo_builds`]). `.cargo/` is guarded above, so cargo reads the base's
+            // configuration here.
+            // pytest's configuration in a `pyproject.toml` likewise ([`pytest_config_changes`]).
+            let manifests = (|| -> Result<Vec<String>> {
+                let mut changed_keys = Vec::new();
+                for path in changed
+                    .iter()
+                    .filter(|path| is_manifest(path) || is_pyproject(path))
+                {
+                    let before = manifest_at(&self.tree, &head_before, path)?;
+                    let full = self.tree.join(path);
+                    let after = match std::fs::symlink_metadata(&full) {
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                        Err(error) => {
+                            return Err(error).with_context(|| format!("read {}", full.display()));
+                        }
+                        Ok(meta) if meta.is_file() => String::from_utf8_lossy(
+                            &std::fs::read(&full)
+                                .with_context(|| format!("read {}", full.display()))?,
+                        )
+                        .into_owned(),
+                        Ok(_) => {
+                            changed_keys.push(format!("{path}: not a regular file"));
+                            continue;
+                        }
+                    };
+                    let compared = if is_manifest(path) {
+                        manifest_build_changes(&before, &after)
+                    } else {
+                        pytest_config_changes(&before, &after)
+                    };
+                    match compared {
+                        Ok(keys) => {
+                            changed_keys
+                                .extend(keys.into_iter().map(|key| format!("{path}: {key}")));
+                        }
+                        Err(line) => changed_keys.push(format!(
+                            "{path}: a line the manifest scanner cannot read with certainty, {line}"
+                        )),
+                    }
+                }
+                // Cargo itself as the parser, the scanner's cross-check: the build scripts and
+                // `links` it reads, before the step and after it.
+                changed_keys.extend(cargo_build_changes(
+                    &cargo_before,
+                    &cargo_builds(&self.tree),
+                ));
+                Ok(changed_keys)
+            })();
+            let manifests = match manifests {
+                Ok(manifests) => manifests,
+                Err(error) => {
+                    undo()?;
+                    record_step(self)?;
+                    return Err(error.context(format!(
+                        "step {}: the cargo manifests {} changed could not be read; the change was discarded",
+                        self.steps, report.action
+                    )));
+                }
+            };
+            if !manifests.is_empty() {
+                undo()?;
+                // Each entry starts with the path it is about: pytest's tables in a
+                // `pyproject.toml`, else cargo's manifests and what cargo reads.
+                let (pytest, cargo): (Vec<&String>, Vec<&String>) =
+                    manifests.iter().partition(|entry| {
+                        entry
+                            .split_once(": ")
+                            .is_some_and(|(path, _)| is_pyproject(path))
+                    });
+                let join = |entries: &[&String]| {
+                    entries
+                        .iter()
+                        .map(|entry| entry.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let mut parts = Vec::new();
+                if !cargo.is_empty() {
+                    parts.push(format!(
+                        "changed how cargo builds or runs the tests: {}",
+                        join(&cargo)
+                    ));
+                }
+                if !pytest.is_empty() {
+                    parts.push(format!(
+                        "changed how pytest collects or reports the tests: {}",
+                        join(&pytest)
+                    ));
+                }
+                let why = format!("{} {}", report.action, parts.join("; and "));
+                record_step(self)?;
+                self.refused(events, BY_TAKT, &why)?;
+                writeln!(out, "  refused: {why}; the change was discarded")?;
+                return Ok(Stop::StepRefused(why));
+            }
+            // What cargo and rustup read outside the tree ([`Outside`]): a step that changed it
+            // is refused, and what it created there removed, what it changed or removed put back.
+            let outside_changed = match Outside::read(&self.tree) {
+                Ok(now) => outside_before.differing(&now),
+                Err(error) => {
+                    undo()?;
+                    record_step(self)?;
+                    return Err(error.context(format!(
+                        "step {}: what cargo and rustup read outside the tree could not be read after {}; the change was discarded",
+                        self.steps, report.action
+                    )));
+                }
+            };
+            if !outside_changed.is_empty() {
+                undo()?;
+                // What is still not as it was is behind a link, never written through.
+                let left = outside_before.differing(&Outside::read(&self.tree)?);
+                let mut why = format!(
+                    "{} changed what cargo or rustup reads outside the tree: {}",
+                    report.action,
+                    outside_named(&outside_changed)
+                );
+                if !left.is_empty() {
+                    why.push_str(&format!(
+                        "; not put back, its way crosses a link: {}",
+                        outside_named(&left)
+                    ));
+                }
+                record_step(self)?;
+                self.refused(events, BY_TAKT, &why)?;
+                writeln!(
+                    out,
+                    "  refused: {why}; it was put back and the change discarded"
                 )?;
                 return Ok(Stop::StepRefused(why));
             }

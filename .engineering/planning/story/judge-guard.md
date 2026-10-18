@@ -36,7 +36,7 @@ scope:
   path: crates/takt/tests/authority_adv1.rs
 - confidence: inferred
   path: crates/takt/tests/merge_under_authority.rs
-revision: 9
+revision: 11
 ---
 # Story: judge-guard
 
@@ -68,6 +68,7 @@ story:promotion installed, so this story follows it.
 ## Domain relations
 
 - Grant → Approver: typed `human:<id>` or `agent:<role>`. Inferred from the design.
+- Grant → Approver: takt.work.Approver; delegations takt.work.DelegationRecord; allow-list takt.work.JudgeAllowList (ess/domains/takt.yaml).
 
 ## Scope
 
@@ -101,18 +102,25 @@ Typed entries: `crates/takt/src/validator.rs`, `crates/takt-cli/src/main.rs`, `c
 ## Acceptance
 
 A case whose `base..head` touches `crates/takt/src/validator.rs` is refused at the merge when its
-grant is `agent:operator` and `.engineering/delegations.yaml` at the base names no unrevoked
-delegation of `repository.merge.judge_surface` to `agent:operator`; the same case merges when such a
+grant is `agent:planner` and `.engineering/delegations.yaml` at the base names no unrevoked
+delegation of `repository.merge.judge_surface` to `agent:planner`; the same case merges when such a
 delegation is on record, and is refused again once that delegation's revocation is on record.
 
 ## Checks
 
 - The same case merges under `human:<id>`, with or without a delegation on record.
-- A case whose diff touches only `docs/` merges under `agent:operator` with no delegation.
+- A case whose diff touches only `docs/` merges under `agent:planner` with no delegation.
 - A candidate that edits `.engineering/judge-allow.yaml` or `.engineering/delegations.yaml` to admit its own paths or its own role is treated as touching a judge surface, and its own edit of the delegation file does not count: the file is read at the base.
 - A candidate branch's own `protocols/story-delivery/1.yaml` is not the protocol its case is judged by.
-- A delegation naming another role (`agent:developer`) does not admit an `agent:operator` grant.
+- A delegation naming another role (`agent:developer`) does not admit an `agent:planner` grant.
 
 ## Out of Scope
 
 Promotion (story:promotion); Substrate confinement (story:confinement-seam).
+
+## From the grant-subject review
+
+From the reviewer verdict on story:grant-binds-to-action-subject at 938cc5a (approve, granted by the owner):
+
+- `crates/takt/src/protocol.rs:195-225` finds a grant's subject by walking the raw protocol YAML for the evidence-reading forms Canon 0.6.0 has (`evidence`, `first`, `before`); a form a later Canon adds would be missed with no error. The judge should read the subject from Canon's typed predicates, or refuse a protocol whose forms it does not know.
+- `crates/takt/src/case.rs:1517`: an edit to a case's `protocol.yaml` made outside a run is not detected; no digest pins it and the IR is recompiled from it (`protocol.rs:72`). The judge pins the protocol by digest at open and refuses a case whose copy differs.

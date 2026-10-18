@@ -31,7 +31,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/confinement.rs
-revision: 8
+revision: 12
 ---
 # Story: confinement-seam
 
@@ -48,6 +48,7 @@ This story: a `Confinement` trait that every spawn goes through (program, argume
 ## Domain relations
 
 - Validator → Action and Harness step → Action are the two places a run spawns on a step. Inferred from `crates/takt/src/run.rs:174` (validator) and `run.rs:211` (harness); git spawns around them, `run.rs:223`, `run.rs:242`, `run.rs:250`; the forge (story:forge-pull-request-evidence) and the frontier (story:frontier-next-ready-story) spawn from their adapters, inferred from those stories' Context.
+- Confinement adapter: takt.work.ConfinementName.
 
 ## Scope
 
@@ -102,3 +103,19 @@ What the adversary passes of waves 04 and 05 measured about the harness's reach,
   test command and the gates' command bindings run with the run's own permissions.
 - A grant written while a run holds the case is refused by the lock; a grant written between runs
   by whoever holds the tree is trusted, which is where `takt approve` legitimately writes.
+
+## Path resolution and fail-closed profile
+
+From the wave 10 work on story:step-cannot-forge-its-validators (2026-10-18): that story refuses a guarded path whose resolution crosses a link anywhere, or leaves the tree, checked per component with `symlink_metadata` (std only). The check is not race-free: a link planted between the check and the use is not caught. This story replaces it with `openat2` and `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV` (Linux), as a sibling sandbox host already resolves paths, with an fd-based snapshot and a named refusal, not a silent downgrade, where the syscall is not available.
+
+The confinement this seam adds is fail-closed: a declared profile (writable scopes, read-only toolchain roots, process, memory, time and output limits, no egress unless a destination is named) applies to the harness child and to the test command, and a run whose backend cannot enforce the profile is refused by name, never run unconfined.
+
+## Routes only confinement closes
+
+Routes the reviewer of story:step-cannot-forge-its-validators found at 9b70c5b that guarding files cannot close, assigned here on 2026-10-18:
+
+- M8: a step replaces `cargo` in a user-writable directory early on `PATH` with a wrapper that exits 0 on `test`; the case was accepted with a forged pass. Closed by running the test command with a fixed `PATH` of read-only toolchain roots inside the profile.
+- M9: a step starts a background writer that escapes the step's process group (`setsid`) and puts `../.cargo/config.toml` in place after the run ends; the next run takes it as its baseline. Closed by confining the harness child so it cannot write outside its tree or outlive the step.
+
+step-cannot-forge-its-validators keeps an ignored test for each, naming this story.
+- M16, from the reviewer's verdict on step-cannot-forge-its-validators at 65795ea: `../.cargo` is a link before the run and a step writes `config.toml` through it; run 1 refuses and names what it could not put back, but run 2 takes the outside baseline afresh and is accepted with 1 pass. A cheap interim fix outside this story: record what a run could not put back, so the next run refuses until it is cleared.

@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-18T16:37:27Z",
+  "actor": "human:timo",
+  "artifact": "story:harness-journey-timeline",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "python3 -I docs/metrics/journey.py rerun gives identical journeys.jsonl and journey.svg; 29 lanes, 428 events, 14 labelled order only; seed-time pr.open, second CI and inspect-NoProgress marked; scan-text clean"
+  }
+}
