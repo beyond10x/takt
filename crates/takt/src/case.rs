@@ -487,17 +487,37 @@ fn story_revision_at(tree: &Path, revision: &str, story: &str) -> Result<Option<
     if crate::git::run(tree, &["cat-file", "-e", &blob]).is_err() {
         return Ok(None);
     }
-    let text = crate::git::run(tree, &["cat-file", "blob", &blob])?;
-    let Some(front) = text
-        .strip_prefix("---\n")
-        .and_then(|rest| rest.split_once("\n---").map(|(front, _)| front))
-    else {
+    let Ok(text) = String::from_utf8(crate::git::blob(tree, &blob)?) else {
         return Ok(None);
     };
-    let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(front) else {
+    let Some(front) = front_matter(&text) else {
+        return Ok(None);
+    };
+    let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&front) else {
         return Ok(None);
     };
     Ok(doc["revision"].as_u64())
+}
+
+/// The front matter of a planning document, as the store reads it: the lines between a first
+/// line `---` and the next line `---`, each line read without its line end, LF or CRLF. `None`
+/// when the text does not open with that line (whitespace or anything else before it) or the
+/// front matter is never closed.
+fn front_matter(text: &str) -> Option<String> {
+    let mut lines = text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line));
+    if lines.next()? != "---" {
+        return None;
+    }
+    let mut front = Vec::new();
+    for line in lines {
+        if line == "---" {
+            return Some(front.join("\n"));
+        }
+        front.push(line);
+    }
+    None
 }
 
 /// The actions of the case's protocol that require a capability, each with the capabilities
