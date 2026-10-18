@@ -21,7 +21,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/improvement_protocols.rs
-revision: 8
+revision: 9
 ---
 # Story: loop-scorecard
 
@@ -45,8 +45,9 @@ planner agent runs on findings filed after it, and this story stays in draft unt
 
 ## Domain relations
 
-- Loop scorecard → Improvement turn: one row per recorded turn. Inferred from the design.
-- Loop scorecard: UNMAPPED in ess/domains/takt.yaml (one row per turn, or one figure per metric).
+- Loop scorecard → Improvement turn: one row per improvement turn, holding the turn id, the finding, the baseline and candidate revisions, the verdict, whether it was promoted, and the tokens and wall time from the turn's records. Decided 2026-10-18.
+- Loop scorecard figures: turns, accepted share, promoted share and median tokens per accepted turn, computed from the rows and never stored (`ess/domains/takt.yaml`, takt.work.LoopScorecard). Decided 2026-10-18.
+- Open: the Outcome's other figures (the time from finding to verified, escaped defects as human-sourced counts) are not among the decided figures, and no row field holds them; whether they stay is the owner's.
 
 ## Scope
 
