@@ -12,6 +12,8 @@ refs:
 relations:
 - informed_by: review-result:findings-hunt-33ab42c
 - informed_by: story:validator-confinement
+- depends_on: story:forge-preflight
+- decomposes: epic:composable-agentic-work
 revision: 1
 ---
 ## Outcome

@@ -11,6 +11,8 @@ refs:
   reference: one-run-per-tree
 relations:
 - informed_by: review-result:findings-hunt-33ab42c
+- depends_on: story:signal-releases-the-case
+- decomposes: epic:composable-agentic-work
 revision: 1
 ---
 ## Outcome

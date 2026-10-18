@@ -7,6 +7,7 @@ title: The NoProgress stop line says how to resume
 relations:
 - informed_by: review-result:variety-runs-a0b8576
 - decomposes: epic:composable-agentic-work
+- informed_by: story:approve-then-run-resumes-the-case
 revision: 1
 ---
 ## Outcome
