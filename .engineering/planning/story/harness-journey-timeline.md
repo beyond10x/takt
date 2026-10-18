@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:harness-journey-timeline
 kind: story
-status: draft
+status: implemented
 title: All harness runs of a scenario overlaid on one timeline in one vocabulary
 summary: lanes per run on a shared time axis, operations normalised across takt, Claude Code and Codex, so waste is visible as shape
 relations:
@@ -18,7 +18,11 @@ scope:
   path: docs/metrics/journeys.jsonl
 - confidence: inferred
   path: docs/pitch/index.html
-revision: 3
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T16:37:27Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-18T16:37:27Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-18T16:37:27Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: harness-journey-timeline
 

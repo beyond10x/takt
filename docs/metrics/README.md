@@ -9,6 +9,8 @@ earlier one. Each file is JSON Lines: one object per line, appended to, never re
 | `improvement-turns.jsonl` | improvement turn: a finding checked before and after a fix |
 | `waves.jsonl` | wave merged into `main` |
 | `timeline.py` | (generator) draws `timeline.svg` from the three files above |
+| `journeys.jsonl` | operation of a run, in one vocabulary (generated, rewritten by `journey.py`) |
+| `journey.py` | (generator) writes `journeys.jsonl` and draws `journey.svg` from the raw records |
 
 ## The rule
 
@@ -101,3 +103,62 @@ chart marks the wave before that revision's column.
 waves and the improvement turns as markers, and the free-running medians as reference lines. If
 `docs/pitch/index.html` carries the `timeline.svg begin`/`end` markers, the script replaces the
 chart between them, so the deck needs no hand edit. Append a record and re-run it.
+
+## The journeys
+
+`python3 -I docs/metrics/journey.py` reads, for every record in `scenario-runs.jsonl`, the raw
+files the record names and the run's `steps.jsonl` and `events.jsonl` beside them, and writes one
+line per operation to `journeys.jsonl`. It draws `journey.svg`: one lane per run, grouped by arm and
+then by takt revision. If `docs/pitch/index.html` carries the `journey.svg begin`/`end` markers,
+the chart between them is replaced. A new record adds a lane with no hand edit.
+
+**No token or cost figure comes from `journeys.jsonl`.** It holds order, kind and time only; token
+and cost figures stay in `scenario-runs.jsonl`, read from raw usage.
+
+| field | meaning |
+|---|---|
+| `run`, `arm`, `revision` | the record in `scenario-runs.jsonl` the operation belongs to |
+| `seq` | position in the run, from 1 |
+| `t_start`, `t_end` | seconds from `t0`; `null` where the source states no time |
+| `t0` | the run's start: the runner's last exit note minus `wall_seconds` (to the second); `null` for lanes with no times |
+| `kind` | one of the vocabulary below |
+| `by` | `harness` (a model call, or a command the harness ran) or `deterministic` (a takt validator) |
+| `action`, `effect`, `tool_class`, `label` | takt's action name; the effect class; a Codex command's class; a pattern label |
+| `source` | the raw file the operation was read from, `~` for the home directory |
+
+| kind | takt (run log or `events.jsonl`) | Claude Code running free | Codex running free |
+|---|---|---|---|
+| `model_call` | a harness step whose only effect is the approval request | each of `num_turns` | an `agent_message` item |
+| `read` | `repository.inspect` by the harness | | a command that reads (`cat`, `rg`, `git status`, ...) |
+| `edit` | `implementation.edit`, `tests.write` | | a `file_change` item, or an editing command |
+| `test` | `tests.run` | | `./check.sh` or a test runner |
+| `gate` | `gate.run` | | |
+| `push` | `pr.open` that pushed to an open pull request | | `git push` or a push through `b10x-gates bot` |
+| `pr_open` | `pr.open`: opened a pull request, or found nothing to open (hollow) | | the pull-request `POST` through `b10x-gates api` |
+| `ci_wait` | `ci.read` that saw pending checks | | `gh pr checks --watch` |
+| `ci_pass` | `ci.read` that saw the checks pass | | |
+| `approval_wait` | the stop `ApprovalRequired` | | |
+| `refusal` | a refusal before or at a step (`takt: ...`, an error stop) | a refusal at start | |
+| `no_progress` | the stop `NoProgress` | | |
+| `resume` | the next invocation of the same case | | |
+| `other` | `ci.read` with nothing to read, a merge, a grant, `Completed` | | any other command (`gh`, `git`, `b10x-gates`, tools) |
+
+In takt's lanes every harness step is one model call; it is coloured by what it did and outlined.
+Effect classes: `pass`, `fail`, `pending`, `opened`, `pushed`, `merged`, `approval`, `changed`,
+`unchanged`, `nothing`, `refused`, `NoProgress`, `completed`, `granted`. An operation whose effect
+is `nothing` or `unchanged` is drawn hollow. Labels mark the seed-time `pr.open` (before any edit),
+the second CI pass, and an inspect step followed by `NoProgress`.
+
+Where the times come from:
+
+- takt with `events.jsonl` (97623a6 and later): every step's time at 1 s resolution; a step runs
+  from the previous event to its own.
+- takt without it: each harness step's model call from `steps.jsonl` (`recorded_at` minus
+  `duration_ms`); stops from the runner's exit notes. The validator steps have no time; they are
+  drawn dashed, spread in order between the timed operations either side ("model calls timed").
+- Claude Code running free: `agent.json` holds `num_turns` and `duration_ms` only, no per-turn
+  record, so its lane is "order only".
+- Codex: `agent.jsonl` items in order without times ("order only"). The command text is classified
+  and not copied, since it carries local paths.
+- The earlier takt trials: run logs with no times ("order only").
+- Refusals at start (`T-fetchfail-*`, `I-modefail-*`): one operation spanning `wall_seconds`.
