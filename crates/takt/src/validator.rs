@@ -68,17 +68,18 @@ pub trait Validator {
     ) -> Result<(Observation, bool)> {
         Ok((self.observe(tree, revision, seq)?, false))
     }
-    /// Observes as [`Self::observe_waiting`] does, a child it runs held to `time_left` (what is
-    /// left of the run's hour budget, `None` for a run without one) as well as its own timeout.
-    /// By default `time_left` is not read: the validator runs no child of its own.
+    /// Observes as [`Self::observe_waiting`] does, a child it runs held to `deadline` (the
+    /// instant the run's hour budget ends, the run's own; `None` for a run without one) as well
+    /// as its own timeout. By default `deadline` is not read: the validator runs no child of its
+    /// own.
     fn observe_within(
         &self,
         tree: &Path,
         revision: &str,
         seq: usize,
-        time_left: Option<std::time::Duration>,
+        deadline: Option<std::time::Instant>,
     ) -> Result<(Observation, bool)> {
-        let _ = time_left;
+        let _ = deadline;
         self.observe_waiting(tree, revision, seq)
     }
     /// The files under the case's directory the validator itself writes while it observes,
@@ -276,9 +277,8 @@ impl Validator for TestsRun {
         tree: &Path,
         revision: &str,
         seq: usize,
-        time_left: Option<std::time::Duration>,
+        deadline: Option<std::time::Instant>,
     ) -> Result<(Observation, bool)> {
-        let deadline = time_left.and_then(|left| std::time::Instant::now().checked_add(left));
         let observed = self.observe_by(tree, revision, seq, deadline);
         Ok((ended_by(deadline, self.action(), observed)?, false))
     }
@@ -554,9 +554,8 @@ impl Validator for GateRun {
         tree: &Path,
         revision: &str,
         seq: usize,
-        time_left: Option<std::time::Duration>,
+        deadline: Option<std::time::Instant>,
     ) -> Result<(Observation, bool)> {
-        let deadline = time_left.and_then(|left| std::time::Instant::now().checked_add(left));
         let observed = self.observe_by(tree, revision, seq, deadline);
         Ok((ended_by(deadline, self.action(), observed)?, false))
     }
@@ -1773,5 +1772,34 @@ impl Validator for ChangeRead {
             )],
             artifact: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn observed() -> Result<Observation> {
+        Ok(Observation {
+            summary: "observed".to_owned(),
+            records: Vec::new(),
+            artifact: None,
+        })
+    }
+
+    /// An observation that returns at the deadline it was given, the run's own, records
+    /// nothing, whatever it observed; one before it, or without one, is kept.
+    #[test]
+    fn an_observation_returning_at_the_deadline_is_not_recorded() {
+        let now = std::time::Instant::now();
+        let ended = ended_by(Some(now), "tests.run", observed());
+        let error = format!(
+            "{:#}",
+            ended.expect_err("an observation at the deadline ends")
+        );
+        assert!(error.contains("run's end"), "{error}");
+        let later = now + std::time::Duration::from_secs(60);
+        assert!(ended_by(Some(later), "tests.run", observed()).is_ok());
+        assert!(ended_by(None, "tests.run", observed()).is_ok());
     }
 }

@@ -4097,7 +4097,7 @@ impl<'a> Run<'a> {
                 let globs = self.judge_list()?.unwrap_or_default();
                 let (surface, surface_kept) = JudgeSurface::read(&self.runs(), globs, &self.tree)?;
                 let observed = validator
-                    .observe_within(&self.tree, &revision, seq, self.time_left())
+                    .observe_within(&self.tree, &revision, seq, self.deadline())
                     .with_context(|| format!("{} ({})", validator.action(), validator.name()));
                 let returned = Instant::now();
                 // What the observation left running is killed before anything is looked at;
@@ -4559,8 +4559,10 @@ impl<'a> Run<'a> {
             }
             // A step that returned when the hour budget ended, failed (killed by it) or not, is
             // discarded whole like any failed step, recorded as a refusal, and the run stops on
-            // the budget; the tokens it reported are counted. One that failed by itself before
-            // then failed as any other.
+            // the budget. One that reported keeps its step line, with its tokens and their
+            // components and a summary saying it was discarded, so the steps' tokens add up to
+            // the run's; what of the git directory could not be put back is named. One that
+            // failed by itself before then failed as any other.
             if let Some(h) = self.options.hours
                 && self.deadline().is_some_and(|deadline| returned >= deadline)
             {
@@ -4571,18 +4573,32 @@ impl<'a> Run<'a> {
                     }
                     Err(error) => format!("{error:#}"),
                 };
+                let not_put_back = if git_dir.failed.is_empty() {
+                    String::new()
+                } else {
+                    format!("; not put back: {}", git_dir.failed.join("; "))
+                };
                 if let Err(undo) = undo() {
                     return Err(anyhow::anyhow!(
-                        "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}",
+                        "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}{not_put_back}",
                         self.steps
                     ));
                 }
                 let why = format!(
-                    "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}",
+                    "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}{not_put_back}",
                     self.steps
                 );
                 // Written after the cases directory was put back, which would take a line
                 // written before it along.
+                if let Ok(report) = &stepped {
+                    self.stepped(
+                        events,
+                        SteppedBy::Harness(report.tokens, self.harness.last_usage()),
+                        self.harness.name(),
+                        &report.action,
+                        &format!("discarded at the run's end: {}", report.summary),
+                    )?;
+                }
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "{why}")?;
                 return Ok(Stop::Hours(h));
