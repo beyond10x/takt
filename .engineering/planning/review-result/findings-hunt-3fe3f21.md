@@ -134,4 +134,5 @@ Acceptance: In the predicate's run, the step that adds `unittest.py` is refused 
 
 **Outside takt:** in engineering-protocols 0.9.0, `canon-engineering-assertions` `snapshot::identity` hashes ignored files. When the gate's command first creates `__pycache__/`, `gate.run` ends with "source changed during collection" and exit 5. I saw this on scenario 1 with the default `--test-cmd`. That belongs in that repository, not this store.
 
-All runs and builds are under `~/.cache/takt-review-hunt/`: the runner is `pred.sh`, the fake harnesses are `fake-claude.sh` and `fake-claude2.sh`, each run has a `runs.*` directory, and the `git archive` build is `archive-target/debug/takt`. Nothing was written to the repository, the store or Slack.
+
+The runs, the fake harnesses and the archive build were kept in the reviewer's scratch directory outside the repository.
