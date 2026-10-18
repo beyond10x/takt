@@ -333,10 +333,16 @@ fn adv2_an_approve_commit_that_is_not_a_pure_addition_of_a_regular_file_is_no_ap
         "an executable file"
     );
 
-    // A new symlink in the story's evidence, pointing out of the store.
+    // A new symlink in the story's evidence whose target is the store's record of the grant: the
+    // blob git holds is that text, so the mode is what refuses it.
     rewind(&repo, &id, &granted);
-    std::os::unix::fs::symlink("../../../../check.txt", repo.join(&new_record)).expect("a symlink");
+    std::os::unix::fs::symlink(&record, repo.join(&new_record)).expect("a symlink");
     git(&repo, &["add", &new_record]);
+    assert_eq!(
+        git(&repo, &["cat-file", "-p", &format!(":{new_record}")]),
+        record,
+        "the symlink's blob is the record"
+    );
     let symlink = approve_commit(&repo, false);
     assert_eq!(resumed_revision(&repo, &id), symlink, "a symlink");
 

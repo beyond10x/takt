@@ -381,6 +381,47 @@ fn only_the_record_of_a_granted_capability_by_its_grantor_rides() {
             "a record of no evidence",
             case.edited(|r| r["change"]["change"] = "move".into()),
         ),
+        (
+            "another kind of artifact",
+            case.edited(|r| r["kind"] = "epic".into()),
+        ),
+        (
+            "another revision of the story",
+            case.edited(|r| {
+                r["revision"] = (r["revision"].as_u64().expect("a revision") + 1).into();
+            }),
+        ),
+        (
+            "an actor the store does not write",
+            case.edited(|r| r["actor"] = "bot:x".into()),
+        ),
+        (
+            "an actor name the store does not write",
+            case.edited(|r| r["actor"] = "human:a b".into()),
+        ),
+        (
+            "no actor",
+            case.edited(|r| {
+                r.as_object_mut().expect("an object").remove("actor");
+            }),
+        ),
+        (
+            "no reference",
+            case.edited(|r| {
+                r["change"]
+                    .as_object_mut()
+                    .expect("an object")
+                    .remove("reference");
+            }),
+        ),
+        (
+            "a field the store does not write on an approval",
+            case.edited(|r| r["note"] = "more".into()),
+        ),
+        (
+            "a field the store does not write on an approval's change",
+            case.edited(|r| r["change"]["note"] = "more".into()),
+        ),
         ("no record at all", "{}\n".to_owned()),
         ("not json", "kind: approval\n".to_owned()),
     ];
