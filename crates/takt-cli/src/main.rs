@@ -1,14 +1,14 @@
 //! `takt`: drive a repository's work through engineering protocols, every step validated.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness};
-use takt::validator::{TestsRun, Validator};
+use takt::validator::{DEFAULT_PROJECT, GateRun, TestsRun, Validator};
 use takt::{LoadedProtocol, Run, RunOptions, Stop, Unit};
 
 #[derive(Parser)]
@@ -69,6 +69,15 @@ struct RunArgs {
     /// The approval gate the harness may request to end the run.
     #[arg(long, default_value = "repository.merge")]
     gate: String,
+    /// The gates document, relative to the repository; given, it must be a file, and the gate
+    /// validator runs it. Not given, `.engineering/gates.yaml` when that is a file.
+    #[arg(long)]
+    gates: Option<PathBuf>,
+    /// The `engineering-assertions-project/1` file that admits the commands and providers the
+    /// gates bind, relative to the repository; given, it must be a file. Not given,
+    /// `.engineering/assertions-project.yaml` when that is a file.
+    #[arg(long)]
+    project: Option<PathBuf>,
 }
 
 /// A harness that performs nothing: the loop stops when only judgement steps are left.
@@ -125,6 +134,8 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 model,
                 case_id,
                 gate,
+                gates,
+                project,
             } = *args;
             let repo = repo
                 .canonicalize()
@@ -170,7 +181,16 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 "none" => &NoHarness,
                 other => return Err(anyhow!("no harness `{other}`: claude or none")),
             };
-            let validators: Vec<Box<dyn Validator>> = vec![Box::new(TestsRun::new(&test_cmd)?)];
+            let mut validators: Vec<Box<dyn Validator>> = vec![Box::new(TestsRun::new(&test_cmd)?)];
+            let gates = repository_file(&repo, "gates", gates, DEFAULT_GATES)?;
+            let project = repository_file(&repo, "project", project, DEFAULT_PROJECT)?;
+            if let Some(gates) = gates {
+                let mut gate = GateRun::new(gates);
+                if let Some(project) = project {
+                    gate = gate.with_project(project);
+                }
+                validators.push(Box::new(gate));
+            }
             // The unit: the intent given, or else the next ready story of the planning store;
             // the case is opened before the store is told, so a run that cannot open its case
             // takes nothing.
@@ -207,6 +227,66 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             })
         }
     }
+}
+
+/// The gates document a run takes when `--gates` is not given and this is a file.
+const DEFAULT_GATES: &str = ".engineering/gates.yaml";
+
+/// The file `--<flag>` names, relative to `repo`: given, it must be a file under the repository,
+/// or the run is refused in one line before any case is opened; not given, `default` when that
+/// is a file, else none.
+fn repository_file(
+    repo: &Path,
+    flag: &str,
+    given: Option<PathBuf>,
+    default: &str,
+) -> Result<Option<PathBuf>> {
+    match given {
+        Some(path) => {
+            let relative = under_repository(repo, flag, path)?;
+            if !repo.join(&relative).is_file() {
+                return Err(anyhow!("--{flag} {}: not a file", relative.display()));
+            }
+            Ok(Some(relative))
+        }
+        None => Ok(repo.join(default).is_file().then(|| PathBuf::from(default))),
+    }
+}
+
+/// `path`, given to `--<flag>` to name a file of the repository, relative to `repo`: an absolute
+/// path under the repository is made relative; a path not under it, absolute elsewhere, climbing
+/// out through `..`, or resolving outside through a symlink, is refused.
+fn under_repository(repo: &Path, flag: &str, path: PathBuf) -> Result<PathBuf> {
+    let refused = |shown: &Path| {
+        anyhow!(
+            "--{flag} {}: not under the repository {}",
+            shown.display(),
+            repo.display()
+        )
+    };
+    let relative = if path.is_absolute() {
+        let resolved = path.canonicalize().unwrap_or_else(|_| path.clone());
+        resolved
+            .strip_prefix(repo)
+            .map(Path::to_path_buf)
+            .map_err(|_| refused(&path))?
+    } else {
+        path
+    };
+    if relative
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
+        return Err(refused(&relative));
+    }
+    // A relative path may still point outside through a symlink: where it exists, what it
+    // resolves to must lie under the repository too.
+    if let Ok(resolved) = repo.join(&relative).canonicalize()
+        && !resolved.starts_with(repo)
+    {
+        return Err(refused(&relative));
+    }
+    Ok(relative)
 }
 
 fn b10x_canon_engineering_list() -> Vec<(String, u32)> {
@@ -402,5 +482,121 @@ mod tests {
         let intent = fs::read_to_string(case.join("intent.md")).expect("intent.md");
         assert_eq!(intent, "make the check pass");
         assert_eq!(status(&repo, "story:ready-one"), "proposed");
+    }
+
+    /// The fixture protocol of the library crate that declares `gate_result` and `gate.green`.
+    const GATE_PROTOCOL: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../takt/tests/fixtures/gate-only/1.yaml"
+    );
+
+    /// A committed scratch repository with a manifest and, at `gates` when given, a gates
+    /// document whose one assertion is true.
+    fn gated_repository(name: &str, gates: Option<&str>) -> Scratch {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/tmp")
+            .join(format!("takt-cli-{}-{name}", std::process::id()));
+        if dir.exists() {
+            fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
+        }
+        fs::create_dir_all(&dir).expect("a directory");
+        fs::write(dir.join("Cargo.toml"), "[package]\nname = \"scratch\"\n").expect("a file");
+        if let Some(gates) = gates {
+            let path = dir.join(gates);
+            fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
+            fs::write(
+                path,
+                "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: manifest\n    \
+                 text: The repository has its manifest.\n    assertions:\n      \
+                 - 'fs.file.exists(\"Cargo.toml\")'\n",
+            )
+            .expect("a file");
+        }
+        git(&dir, &["init", "-q", "-b", "main"]);
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-q", "-m", "start"]);
+        Scratch(dir)
+    }
+
+    /// Runs `takt <args>` in this process on a run that fails; the error it answers.
+    fn takt_error(args: &[&str]) -> String {
+        let cli = Cli::parse_from(std::iter::once("takt").chain(args.iter().copied()));
+        let mut out = Vec::new();
+        let error = run(cli, &mut out).expect_err("takt refuses");
+        format!("{error:#}")
+    }
+
+    #[test]
+    fn with_the_default_gates_document_the_gate_validator_runs_the_gate() {
+        let repo = gated_repository("gates-default", Some(".engineering/gates.yaml"));
+        let (code, out) = takt(&[
+            "run",
+            "--repo",
+            repo.to_str().expect("utf-8"),
+            "--intent",
+            "pass the gate",
+            "--case-id",
+            "gated",
+            "--harness",
+            "none",
+            "--protocol",
+            GATE_PROTOCOL,
+            "--test-cmd",
+            "true",
+        ]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("step 1: gate.run {}"), "{out}");
+        assert!(out.contains("evidence: gate_result pass"), "{out}");
+        assert!(out.contains("stopped: Completed (accepted)"), "{out}");
+    }
+
+    #[test]
+    fn the_gates_flag_names_the_document() {
+        let repo = gated_repository("gates-flag", Some("gates/repository.yaml"));
+        let (code, out) = takt(&[
+            "run",
+            "--repo",
+            repo.to_str().expect("utf-8"),
+            "--intent",
+            "pass the gate",
+            "--case-id",
+            "gated",
+            "--harness",
+            "none",
+            "--protocol",
+            GATE_PROTOCOL,
+            "--test-cmd",
+            "true",
+            "--gates",
+            "gates/repository.yaml",
+        ]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("step 1: gate.run {}"), "{out}");
+        assert!(out.contains("evidence: gate_result pass"), "{out}");
+        assert!(out.contains("stopped: Completed (accepted)"), "{out}");
+    }
+
+    #[test]
+    fn without_a_gates_document_gate_run_is_a_judgement_step() {
+        let repo = gated_repository("gates-none", None);
+        let error = takt_error(&[
+            "run",
+            "--repo",
+            repo.to_str().expect("utf-8"),
+            "--intent",
+            "pass the gate",
+            "--case-id",
+            "ungated",
+            "--harness",
+            "none",
+            "--protocol",
+            GATE_PROTOCOL,
+            "--test-cmd",
+            "true",
+        ]);
+        assert!(
+            error.contains("no harness: a judgement step among gate.run is left"),
+            "{error}"
+        );
     }
 }

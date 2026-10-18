@@ -544,6 +544,7 @@ mod adv2 {
         fn observe(&self, _: &Path, revision: &str, seq: usize) -> anyhow::Result<Observation> {
             Ok(Observation {
                 summary: "pass".to_owned(),
+                artifact: None,
                 records: vec![Record::new(
                     format!("test-result-{seq}"),
                     self.kind(),

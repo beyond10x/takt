@@ -1,0 +1,46 @@
+format: protocol/1
+
+protocol:
+  id: gate.only
+  revision: 1
+  description: >-
+    Run the repository's gate against the implementation at its current revision; accepted once
+    the gate is green. A protocol for the gate validator's tests, as small as one can be.
+
+artifacts:
+  implementation:
+    description: a revision of the code
+
+evidence_kinds:
+  gate_result:
+    description: >-
+      the result of the repository's gate against an implementation revision; its result is pass
+      or fail
+
+claims:
+  gate.green:
+    description: the repository's gate is green for the current implementation revision
+    true_when:
+      evidence:
+        kind: gate_result
+        result: pass
+        subject: implementation
+
+obligations:
+  gate.required:
+    description: the repository's gate is green for the current implementation revision
+    discharged_when:
+      claim: gate.green
+
+actions:
+  gate.run:
+    description: run the repository's gate against an implementation revision
+    effect: read
+    may_produce:
+      - evidence: gate_result
+
+outcomes:
+  accepted:
+    description: the repository's gate is green for the current implementation revision
+    requires:
+      claim: gate.green
