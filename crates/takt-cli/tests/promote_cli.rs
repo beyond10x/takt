@@ -214,6 +214,29 @@ struct World {
 }
 
 const BASELINE_REVISION: &str = "a0b8576fe56aca1304e412eb62e5622762de198a";
+const BASELINE_TREE: &str = "1111111111111111111111111111111111111111";
+
+/// What the store holds once the baseline is recorded and nothing else: its record and its
+/// scorecard copy, in name order.
+fn baseline_files() -> Vec<String> {
+    vec![
+        format!("{BASELINE_REVISION}.json"),
+        format!("{BASELINE_REVISION}.scorecard.json"),
+    ]
+}
+
+/// The sha256 of the file at `path`, lower-case hex, by `sha256sum`.
+fn sha256(path: &Path) -> String {
+    let output = Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .expect("sha256sum runs");
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .next()
+        .expect("a digest")
+        .to_owned()
+}
 
 impl World {
     fn new(name: &str, baseline_tokens: [u64; 5], baseline_stops: [&str; 5]) -> Self {
@@ -285,11 +308,18 @@ impl World {
         )
     }
 
+    /// The store and the build directory of this world, never the real ones.
     fn env(&self) -> Vec<(String, String)> {
-        vec![(
-            "XDG_STATE_HOME".to_owned(),
-            self.outer.join("state").to_str().expect("utf-8").to_owned(),
-        )]
+        vec![
+            (
+                "XDG_STATE_HOME".to_owned(),
+                self.outer.join("state").to_str().expect("utf-8").to_owned(),
+            ),
+            (
+                "XDG_CACHE_HOME".to_owned(),
+                self.outer.join("cache").to_str().expect("utf-8").to_owned(),
+            ),
+        ]
     }
 
     /// `takt promote` with the world's store and install root, `extra` arguments added.
@@ -312,11 +342,22 @@ impl World {
     /// Records the baseline: `--baseline-only` over the baseline scorecard, with the checkout
     /// standing in for the baseline revision's.
     fn record_baseline(&self) {
-        // The baseline record needs a checkout at the baseline revision; the scratch checkout
-        // is at the candidate's, so the baseline is recorded by hand in the record's own shape.
+        self.record_baseline_of(&self.baseline);
+    }
+
+    /// Records `scorecard` as the baseline of [`BASELINE_REVISION`]: the record, written by
+    /// hand in the record's own shape (the scratch checkout is at the candidate's revision, not
+    /// the baseline's), and the scorecard's copy beside it.
+    fn record_baseline_of(&self, scorecard: &Path) {
+        fs::create_dir_all(&self.store).expect("the store");
+        let copy = self
+            .store
+            .join(format!("{BASELINE_REVISION}.scorecard.json"));
+        fs::copy(scorecard, &copy).expect("the copy");
         let record = format!(
-            "{{\n  \"format\": \"takt-promotion/1\",\n  \"revision\": \"{BASELINE_REVISION}\",\n  \"promoted_at\": \"2026-10-17T12:00:00Z\",\n  \"kind\": \"baseline\",\n  \"scorecard\": \"{BASELINE_REVISION}\",\n  \"scorecard_file\": \"{}\",\n  \"against\": null,\n  \"rule\": {{\n    \"trials\": 5,\n    \"margin\": 1\n  }},\n  \"worse\": 0,\n  \"binary\": null,\n  \"binary_sha256\": null\n}}\n",
-            self.baseline.display()
+            "{{\n  \"format\": \"takt-promotion/1\",\n  \"revision\": \"{BASELINE_REVISION}\",\n  \"tree\": \"{BASELINE_TREE}\",\n  \"promoted_at\": \"2026-10-17T12:00:00Z\",\n  \"kind\": \"baseline\",\n  \"scorecard\": \"{BASELINE_REVISION}\",\n  \"scorecard_file\": \"{}\",\n  \"scorecard_sha256\": \"{}\",\n  \"against\": null,\n  \"rule\": {{\n    \"trials\": 5,\n    \"margin\": 1\n  }},\n  \"worse\": 0,\n  \"binary\": null,\n  \"binary_sha256\": null\n}}\n",
+            scorecard.display(),
+            sha256(scorecard)
         );
         write(
             &self.store.join(format!("{BASELINE_REVISION}.json")),
@@ -373,7 +414,13 @@ fn baseline_only_records_the_first_baseline_and_installs_nothing() {
     let card = world.candidate_card("base", BASELINE_TOKENS, FIVE_APPROVALS);
     let (code, out, err) = world.promote(&card, &["--baseline-only"]);
     assert_eq!(code, 0, "{out}{err}");
-    assert_eq!(world.records(), vec![format!("{}.json", world.revision)]);
+    assert_eq!(
+        world.records(),
+        vec![
+            format!("{}.json", world.revision),
+            format!("{}.scorecard.json", world.revision)
+        ]
+    );
     let record = world.record(&format!("{}.json", world.revision));
     for line in [
         "\"kind\": \"baseline\"".to_owned(),
@@ -386,7 +433,10 @@ fn baseline_only_records_the_first_baseline_and_installs_nothing() {
     assert!(!world.installed().exists(), "nothing is installed");
     let (code, out, err) = world.promote(&card, &["--baseline-only"]);
     assert_eq!(code, 1, "{out}{err}");
-    assert!(err.contains("holds a baseline already"), "{err}");
+    assert!(
+        err.contains("recorded already") && err.contains("as a baseline"),
+        "{err}"
+    );
 }
 
 /// A candidate within the rule (one case worse, tokens within the maximum) is built, installed
@@ -459,15 +509,16 @@ fn a_worse_candidate_is_refused_recorded_and_not_judged_again() {
     );
     assert!(out.contains("verdict: refused, 1 scenario worse"), "{out}");
     assert!(!world.installed().exists(), "nothing is installed");
-    let mut expected = vec![
-        format!("{BASELINE_REVISION}.json"),
-        format!("{}.refused.json", world.revision),
-    ];
+    let mut expected = baseline_files();
+    expected.push(format!("{}.refused.json", world.revision));
     expected.sort();
     assert_eq!(world.records(), expected);
     let (code, out, err) = world.promote(&two_worse, &[]);
     assert_eq!(code, 1, "{out}{err}");
-    assert!(err.contains("was refused at"), "{err}");
+    assert!(
+        err.contains("refused") && err.contains("not judged again until it changes"),
+        "{err}"
+    );
 
     let world = World::new("over-tokens", BASELINE_TOKENS, FIVE_APPROVALS);
     world.record_baseline();
@@ -498,13 +549,13 @@ fn dry_run_prints_the_verdict_and_the_record_and_writes_nothing() {
         out.contains("verdict: no scenario worse than the baseline"),
         "{out}"
     );
-    assert!(out.contains("dry run: would build"), "{out}");
+    assert!(out.contains("dry run: would clone"), "{out}");
     assert!(
         out.contains("\"kind\": \"promotion\""),
         "the record it would write: {out}"
     );
     assert!(!world.installed().exists(), "nothing is installed");
-    assert_eq!(world.records(), vec![format!("{BASELINE_REVISION}.json")]);
+    assert_eq!(world.records(), baseline_files());
     let worse = world.candidate_card(
         "worse",
         [110_000, 120_000, 125_000, 130_000, 135_000],
@@ -513,7 +564,7 @@ fn dry_run_prints_the_verdict_and_the_record_and_writes_nothing() {
     let (code, out, err) = world.promote(&worse, &["--dry-run"]);
     assert_eq!(code, 3, "{out}{err}");
     assert!(out.contains("\"kind\": \"refused\""), "{out}");
-    assert_eq!(world.records(), vec![format!("{BASELINE_REVISION}.json")]);
+    assert_eq!(world.records(), baseline_files());
 }
 
 /// Refusals before any comparison: a scorecard inside the repository, one whose revision is not
@@ -575,9 +626,9 @@ fn a_scorecard_or_checkout_the_rule_cannot_trust_is_refused() {
     );
     let (code, out, err) = world.promote(&card, &[]);
     assert_eq!(code, 1, "{out}{err}");
-    assert!(err.contains("uncommitted changes"), "{err}");
+    assert!(err.contains("uncommitted or untracked"), "{err}");
     assert!(!world.installed().exists(), "nothing is installed");
-    assert_eq!(world.records(), vec![format!("{BASELINE_REVISION}.json")]);
+    assert_eq!(world.records(), baseline_files());
 }
 
 /// `takt promote --help` lists the exit codes.
@@ -593,4 +644,247 @@ fn help_lists_the_exit_codes() {
     ] {
         assert!(out.contains(line), "{line} in {out}");
     }
+}
+
+/// A scorecard saved under another rule, or under a metric definition this takt does not know,
+/// is refused before any comparison: the rule is takt's, not the file's.
+#[test]
+fn a_scorecard_under_another_rule_or_definition_is_refused() {
+    let world = World::new("other-rule", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card("rule", BASELINE_TOKENS, FIVE_APPROVALS);
+    let text = fs::read_to_string(&card).expect("the card");
+    assert!(text.contains("\"margin\": 1"), "{text}");
+    fs::write(&card, text.replace("\"margin\": 1", "\"margin\": 2")).expect("rewritten");
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("trials 5 margin 2") && err.contains("trials 5 margin 1"),
+        "both rules named: {err}"
+    );
+    let card = world.candidate_card("metric", BASELINE_TOKENS, FIVE_APPROVALS);
+    let text = fs::read_to_string(&card).expect("the card");
+    assert!(text.contains("\"tokens\": 1"), "{text}");
+    fs::write(&card, text.replace("\"tokens\": 1", "\"tokens\": 9")).expect("rewritten");
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("metric tokens is at definition version 9"),
+        "{err}"
+    );
+    assert!(!world.installed().exists());
+    assert_eq!(
+        world.records(),
+        vec![
+            format!("{BASELINE_REVISION}.json"),
+            format!("{BASELINE_REVISION}.scorecard.json")
+        ]
+    );
+}
+
+/// The store is read fail-closed: a file takt does not read, a record whose name does not
+/// carry its revision, or a scorecard copy whose digest is not the record's refuses every
+/// promotion, naming the file.
+#[test]
+fn a_store_takt_cannot_read_refuses_every_promotion() {
+    let world = World::new("store-integrity", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card("ok", BASELINE_TOKENS, FIVE_APPROVALS);
+    let stray = world.store.join("notes.txt");
+    write(&stray, "a note\n");
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("notes.txt"), "{err}");
+    fs::remove_file(&stray).expect("removed");
+
+    let record = world.store.join(format!("{BASELINE_REVISION}.json"));
+    let misnamed = world.store.join(format!("{}.json", "b".repeat(40)));
+    fs::rename(&record, &misnamed).expect("renamed");
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains(&"b".repeat(40)) && err.contains(BASELINE_REVISION),
+        "{err}"
+    );
+    fs::rename(&misnamed, &record).expect("renamed back");
+
+    let copy = world
+        .store
+        .join(format!("{BASELINE_REVISION}.scorecard.json"));
+    let text = fs::read_to_string(&copy).expect("the copy");
+    fs::write(&copy, format!("{text}\n")).expect("rewritten");
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("digest"), "{err}");
+    fs::write(&copy, text).expect("restored");
+
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 0, "a clean store reads again: {out}{err}");
+}
+
+/// A promoted tree under another commit is recorded already: an empty commit on top of a
+/// promoted revision is no new candidate.
+#[test]
+fn the_same_tree_under_another_commit_is_recorded_already() {
+    let world = World::new("same-tree", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card("first", BASELINE_TOKENS, FIVE_APPROVALS);
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    git(
+        &world.repo,
+        &["commit", "-q", "--allow-empty", "-m", "the same tree again"],
+    );
+    let again = git(&world.repo, &["rev-parse", "HEAD"]);
+    assert_ne!(again, world.revision);
+    let cases = world.outer.join("again-cases");
+    fs::create_dir_all(&cases).expect("a directory");
+    for (n, tokens) in BASELINE_TOKENS.iter().enumerate() {
+        run(
+            &cases,
+            &format!("scenario-1-trial-{}", n + 21),
+            *tokens,
+            APPROVAL,
+        );
+    }
+    let card = World::save(&cases, &world.outer.join("again-saves"), &again);
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("the tree of") && err.contains(&world.revision),
+        "{err}"
+    );
+}
+
+/// Nothing a promotion reads or writes may lie in the repository the candidate changes: an
+/// install root inside it, and a scorecard with a second link (which may be a name inside it),
+/// are refused.
+#[test]
+fn paths_that_land_inside_the_repository_are_refused() {
+    let world = World::new("inside", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card("inside", BASELINE_TOKENS, FIVE_APPROVALS);
+    let inside = world.repo.join("root");
+    let env = world.env();
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let (code, out, err) = takt(
+        &[
+            "promote",
+            "--repo",
+            world.repo.to_str().expect("utf-8"),
+            "--scorecard",
+            card.to_str().expect("utf-8"),
+            "--install-root",
+            inside.to_str().expect("utf-8"),
+        ],
+        &env,
+    );
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("--install-root") && err.contains("inside the repository"),
+        "{err}"
+    );
+    let link = world.repo.join("scorecard-link.json");
+    fs::hard_link(&card, &link).expect("a hard link");
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("2 links"), "{err}");
+    fs::remove_file(&link).expect("removed");
+    assert!(!world.installed().exists());
+}
+
+/// A candidate that holds but does not build, or builds a binary naming another revision, is
+/// exit 5; the binary installed before stays, and nothing is recorded.
+#[test]
+fn a_failed_or_foreign_build_leaves_the_installed_binary_and_records_nothing() {
+    let world = World::new("build-fails", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let bin = world.root.join("bin");
+    fs::create_dir_all(&bin).expect("a directory");
+    write(&bin.join("takt"), "#!/bin/sh\necho old\n");
+    // A commit whose source does not compile.
+    write(
+        &world.repo.join("crates/takt-cli/src/main.rs"),
+        "fn main() { this is no rust }\n",
+    );
+    git(&world.repo, &["commit", "-q", "-am", "broken"]);
+    let broken = git(&world.repo, &["rev-parse", "HEAD"]);
+    let cases = world.outer.join("broken-cases");
+    fs::create_dir_all(&cases).expect("a directory");
+    for (n, tokens) in BASELINE_TOKENS.iter().enumerate() {
+        run(
+            &cases,
+            &format!("scenario-1-trial-{}", n + 31),
+            *tokens,
+            APPROVAL,
+        );
+    }
+    let card = World::save(&cases, &world.outer.join("broken-saves"), &broken);
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 5, "{out}{err}");
+    assert_eq!(
+        fs::read_to_string(bin.join("takt")).expect("the old binary"),
+        "#!/bin/sh\necho old\n",
+        "the installed binary is untouched"
+    );
+    // A commit whose build script embeds a revision that is not the commit's.
+    write(&world.repo.join("crates/takt-cli/src/main.rs"), TAKT_MAIN);
+    write(
+        &world.repo.join("crates/takt-cli/build.rs"),
+        "fn main() {\n    println!(\"cargo:rustc-env=TAKT_REVISION=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\");\n}\n",
+    );
+    git(&world.repo, &["commit", "-q", "-am", "foreign revision"]);
+    let foreign = git(&world.repo, &["rev-parse", "HEAD"]);
+    let cases = world.outer.join("foreign-cases");
+    fs::create_dir_all(&cases).expect("a directory");
+    for (n, tokens) in BASELINE_TOKENS.iter().enumerate() {
+        run(
+            &cases,
+            &format!("scenario-1-trial-{}", n + 41),
+            *tokens,
+            APPROVAL,
+        );
+    }
+    let card = World::save(&cases, &world.outer.join("foreign-saves"), &foreign);
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 5, "{out}{err}");
+    assert!(err.contains("deadbeef") && err.contains(&foreign), "{err}");
+    assert_eq!(
+        fs::read_to_string(bin.join("takt")).expect("the old binary"),
+        "#!/bin/sh\necho old\n"
+    );
+    assert_eq!(
+        world.records(),
+        vec![
+            format!("{BASELINE_REVISION}.json"),
+            format!("{BASELINE_REVISION}.scorecard.json")
+        ],
+        "nothing recorded"
+    );
+}
+
+/// A baseline with fewer cases than the rule's trials judges nothing.
+#[test]
+fn a_baseline_with_fewer_cases_than_the_trials_judges_nothing() {
+    let world = World::new("thin-baseline", BASELINE_TOKENS, FIVE_APPROVALS);
+    let thin_cases = world.outer.join("thin-cases");
+    fs::create_dir_all(&thin_cases).expect("a directory");
+    for n in 1..=3 {
+        run(
+            &thin_cases,
+            &format!("scenario-1-trial-{n}"),
+            120_000,
+            APPROVAL,
+        );
+    }
+    let thin = World::save(
+        &thin_cases,
+        &world.outer.join("thin-saves"),
+        BASELINE_REVISION,
+    );
+    world.record_baseline_of(&thin);
+    let card = world.candidate_card("thin", BASELINE_TOKENS, FIVE_APPROVALS);
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("the baseline has 3 cases"), "{err}");
 }

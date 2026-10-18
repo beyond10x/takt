@@ -85,10 +85,10 @@ struct PromoteArgs {
 /// What `takt promote --help` says about the exit codes.
 const PROMOTE_EXIT_CODES: &str = "Exit codes:
   0  promoted and recorded; or the baseline recorded (--baseline-only); or, with --dry-run, the candidate would be promoted or the baseline would be recorded
-  1  refused, nothing written or installed: the scorecard is inside the repository, names no full revision, is not named by it or differs from HEAD; the checkout has uncommitted changes; no baseline is recorded; the revision was refused or recorded already; a promotion was made this UTC day; a scenario has fewer cases than the rule's trials; the reason on stderr
+  1  refused, nothing written or installed: the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, was saved under another rule or metric definition; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree; no baseline is recorded; the revision or its tree was refused or recorded already; a promotion was made this UTC day; a scenario has fewer cases than the rule's trials on either side; the store holds a file takt does not read or a record that disagrees with its name, instant or scorecard copy; the reason on stderr
   2  the arguments do not parse
   3  refused on the scorecard: a scenario is worse than the baseline's; the refusal is recorded (not with --dry-run), nothing installed
-  5  the candidate held but its build, its version check or its install failed; nothing recorded";
+  5  the candidate held but its clone, its build or its install failed, or the built binary names another revision; nothing recorded, the installed binary unchanged";
 
 #[derive(clap::Args)]
 struct ScorecardArgs {
@@ -401,11 +401,13 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 Some(root) => root,
                 None => takt::promotion::install_root()?,
             };
+            let build_dir = takt::promotion::build_dir()?;
             let request = takt::promotion::Request {
                 repo: &repo,
                 scorecard: &scorecard,
                 store: &store,
                 install_root: &install_root,
+                build_dir: &build_dir,
                 baseline_only,
                 dry_run,
                 now: takt::now(),
