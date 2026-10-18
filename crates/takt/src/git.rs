@@ -46,8 +46,9 @@ const NO_CONFIGURED_CODE: [&str; 18] = [
 
 /// The variables of the caller's environment that would point git elsewhere than the tree, or
 /// change how it reads a path, its configuration or its history (`GIT_TEST_COMMIT_GRAPH`
-/// writes a commit-graph after every commit); none reaches a git takt runs.
-const REDIRECTING_ENV: [&str; 13] = [
+/// writes a commit-graph after every commit, `GIT_GRAFT_FILE` gives commits the parents a file
+/// names, `GIT_SHALLOW_FILE` cuts the history where a file says); none reaches a git takt runs.
+const REDIRECTING_ENV: [&str; 15] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_COMMON_DIR",
@@ -61,6 +62,8 @@ const REDIRECTING_ENV: [&str; 13] = [
     "GIT_ICASE_PATHSPECS",
     "GIT_LITERAL_PATHSPECS",
     "GIT_TEST_COMMIT_GRAPH",
+    "GIT_GRAFT_FILE",
+    "GIT_SHALLOW_FILE",
 ];
 
 /// Runs `git <args>` in `tree` with `input` on its standard input, with no code from
@@ -146,6 +149,24 @@ pub fn run(tree: &Path, args: &[&str]) -> Result<String> {
 /// nothing trimmed, nothing decoded.
 pub fn blob(tree: &Path, object: &str) -> Result<Vec<u8>> {
     raw(tree, &["cat-file", "blob", object], None)
+}
+
+/// The bytes of the object `id` (a full object id) of `kind` (`commit`, `tree`, `blob`),
+/// checked: git does not check a loose object's bytes against the id it is stored under, so
+/// the id is computed again from the bytes read (`hash-object --stdin`, in the repository's
+/// object format, reading nothing from the object store), and an object whose bytes hash to
+/// another id is an error naming it.
+pub fn verified_object(tree: &Path, kind: &str, id: &str) -> Result<Vec<u8>> {
+    let bytes = raw(tree, &["cat-file", kind, id], None)?;
+    let hashed = raw(tree, &["hash-object", "-t", kind, "--stdin"], Some(&bytes))
+        .with_context(|| format!("the {kind} {id} does not read as a {kind}"))?;
+    let hashed = String::from_utf8_lossy(&hashed).trim().to_owned();
+    if hashed != id {
+        bail!(
+            "the {kind} {id} reads as bytes whose id is {hashed}: the object store holds other bytes under its id; nothing was read from it"
+        );
+    }
+    Ok(bytes)
 }
 
 /// The commit `HEAD` names.

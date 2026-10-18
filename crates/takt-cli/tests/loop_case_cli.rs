@@ -231,3 +231,169 @@ fn a_loop_case_without_a_commit_for_its_baseline_is_refused_before_anything_is_w
         assert_eq!(git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
     }
 }
+
+/// The reviewer's planter: writes a loose object under an id with other bytes than the ones the
+/// id names, as any process with write access to the object directory can.
+const PLANT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../takt/tests/fixtures/plant_loose_object.py"
+);
+
+/// The definitions of [`DEFINED`] with the accepted share's target lowered to 0.25.
+fn forged() -> String {
+    DEFINED.replace("at_least: 0.75", "at_least: 0.25")
+}
+
+/// Plants, under the id of the definitions blob at `HEAD` of `repo`, a loose object holding the
+/// forged definitions; the blob's id.
+fn plant(repo: &Path) -> String {
+    let blob = git(
+        repo,
+        &["rev-parse", "HEAD:protocols/loop-improvement/metrics.yaml"],
+    );
+    let forged_file = repo.join(".git/forged.yaml");
+    fs::write(&forged_file, forged()).expect("the forged definitions");
+    let status = Command::new("python3")
+        .arg("-I")
+        .arg(PLANT)
+        .arg(repo.join(".git"))
+        .arg(&blob)
+        .arg(&forged_file)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("python3 runs");
+    assert!(status.success(), "the object is planted");
+    assert!(
+        git(repo, &["show", &blob]).contains("at_least: 0.25"),
+        "plain git reads the planted bytes under the blob's id"
+    );
+    blob
+}
+
+/// That a refusal of the loop case wrote nothing: only the recorded turns, no case branch.
+fn nothing_written(repo: &Path, what: &str) {
+    assert_eq!(
+        cases(repo),
+        ["turn-a", "turn-b", "turn-c"],
+        "{what}: nothing was written"
+    );
+    assert_eq!(
+        git(repo, &["branch", "--list", "takt/*"]),
+        "",
+        "{what}: no case branch"
+    );
+}
+
+/// The reviewer's probe 5 (plant): a loose object planted over the base's definitions blob, the
+/// real object loose or packed, as a step of an earlier case could leave it. The loop case is
+/// refused before anything is written, naming the object, instead of snapshotting the forged
+/// target.
+#[test]
+fn a_definitions_object_planted_before_the_loop_case_opens_is_refused() {
+    for packed in [false, true] {
+        let (repo, head) = repository(if packed {
+            "plant-packed"
+        } else {
+            "plant-loose"
+        });
+        if packed {
+            git(&repo, &["gc", "-q", "--prune=now"]);
+        }
+        let blob = plant(&repo);
+        let (code, out, err) = run(&repo, Some(&head));
+        assert_eq!(code, 1, "packed {packed}: {out}\n{err}");
+        assert!(
+            err.contains(&blob),
+            "packed {packed}: the object is named: {err}"
+        );
+        nothing_written(&repo, &format!("packed {packed}"));
+    }
+}
+
+/// The reviewer's probe 5 (test command): an earlier case's test command, code from the tree
+/// run by `tests.run`, plants the forged object; the loop case opened afterwards is refused.
+#[test]
+fn a_definitions_object_an_earlier_test_command_planted_is_refused() {
+    let (repo, head) = repository("test-command");
+    fs::write(repo.join(".git/forged.yaml"), forged()).expect("the forged definitions");
+    fs::write(
+        repo.join("test.sh"),
+        format!(
+            "#!/bin/sh\nblob=$(git rev-parse HEAD:protocols/loop-improvement/metrics.yaml)\npython3 -I '{PLANT}' .git \"$blob\" .git/forged.yaml\nexit 0\n"
+        ),
+    )
+    .expect("test.sh");
+    git(&repo, &["add", "test.sh"]);
+    git(&repo, &["commit", "-q", "-m", "the test command"]);
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args([
+            "run",
+            "--repo",
+            repo.to_str().expect("utf-8"),
+            "--intent",
+            "an earlier case",
+            "--case-id",
+            "earlier",
+            "--harness",
+            "none",
+            "--forge",
+            "none",
+            "--test-cmd",
+            "sh test.sh",
+            "--iterations",
+            "3",
+        ])
+        .env_remove("B10X_GATES_POLICY")
+        .output()
+        .expect("takt runs");
+    let earlier = String::from_utf8_lossy(&output.stdout).into_owned();
+    git(&repo, &["checkout", "-q", "main"]);
+    let blob = git(
+        &repo,
+        &["rev-parse", "HEAD:protocols/loop-improvement/metrics.yaml"],
+    );
+    assert!(
+        git(&repo, &["show", &blob]).contains("at_least: 0.25"),
+        "the earlier case's test command planted the object: {earlier}"
+    );
+    let (code, out, err) = run(&repo, Some(&head));
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert!(err.contains(&blob), "the object is named: {err}");
+    assert!(
+        !repo.join(".engineering/cases/loop-1").exists(),
+        "no loop case was written"
+    );
+}
+
+/// The reviewer's probe 5 (branch): a baseline that is a commit of the repository but not on
+/// the base branch the case opens from, a side branch's with a looser target or an unreachable
+/// one, is refused before anything is written.
+#[test]
+fn a_baseline_off_the_base_branch_is_refused_before_anything_is_written() {
+    let (repo, _) = repository("off-base");
+    git(&repo, &["checkout", "-q", "-b", "side"]);
+    fs::write(
+        repo.join("protocols/loop-improvement/metrics.yaml"),
+        DEFINED.replace("at_least: 0.75", "at_least: 0.1"),
+    )
+    .expect("the looser definitions");
+    git(&repo, &["commit", "-q", "-am", "loosen"]);
+    let side = git(&repo, &["rev-parse", "HEAD"]);
+    git(&repo, &["checkout", "-q", "main"]);
+    let tree = git(&repo, &["rev-parse", &format!("{side}^{{tree}}")]);
+    let dangling = git(
+        &repo,
+        &["commit-tree", &tree, "-p", &side, "-m", "dangling"],
+    );
+    for (what, value) in [("side", side.as_str()), ("unreachable", dangling.as_str())] {
+        let (code, out, err) = run(&repo, Some(value));
+        assert_eq!(code, 1, "{what}: {out}\n{err}");
+        assert!(err.contains("loop_baseline"), "{what}: {err}");
+        assert!(
+            err.contains("main"),
+            "{what}: the base branch is named: {err}"
+        );
+        nothing_written(&repo, what);
+        assert_eq!(git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
+    }
+}

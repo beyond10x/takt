@@ -181,6 +181,112 @@ fn is_commit_id(revision: &str) -> bool {
     (7..=64).contains(&revision.len()) && revision.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// The full id of the commit `revision` names in `tree`, resolved without parsing the object
+/// (its type read from its header only, so an object whose bytes do not hash to its id still
+/// resolves and is refused by the read that checks it); none when it names no commit.
+fn commit_id(tree: &Path, revision: &str) -> Option<String> {
+    if !is_commit_id(revision) {
+        return None;
+    }
+    let id = crate::git::run(tree, &["rev-parse", "--verify", "--quiet", revision]).ok()?;
+    let kind = crate::git::run(tree, &["cat-file", "-t", &id]).ok()?;
+    (kind == "commit").then_some(id)
+}
+
+/// The full id of the commit `revision` names in `tree`; an error when it names none.
+fn commit_of(tree: &Path, revision: &str) -> Result<String> {
+    commit_id(tree, revision)
+        .ok_or_else(|| anyhow!("{revision} is no commit of {}", tree.display()))
+}
+
+/// The bytes of the file at `path` in the commit `revision`, every object on the way checked
+/// ([`crate::git::verified_object`]): the commit, each tree down the path, and the blob, each
+/// read once and its id computed again from its bytes; none when the commit holds no file
+/// there. An object whose bytes do not hash to its id is an error naming it, so an object
+/// planted under another's id is never read as that one.
+pub fn verified_file(tree: &Path, revision: &str, path: &str) -> Result<Option<Vec<u8>>> {
+    let commit = commit_of(tree, revision)?;
+    let bytes = crate::git::verified_object(tree, "commit", &commit)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let mut object = text
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("tree "))
+        .ok_or_else(|| anyhow!("the commit {commit} names no tree"))?
+        .to_owned();
+    let hash = object.len() / 2;
+    let parts: Vec<&str> = path.split('/').collect();
+    for (n, part) in parts.iter().enumerate() {
+        let entries = crate::git::verified_object(tree, "tree", &object)?;
+        let mut at = 0;
+        let mut found = None;
+        while at < entries.len() {
+            let space = entries[at..]
+                .iter()
+                .position(|b| *b == b' ')
+                .ok_or_else(|| anyhow!("the tree {object} does not read"))?;
+            let mode = &entries[at..at + space];
+            let nul = entries[at + space..]
+                .iter()
+                .position(|b| *b == 0)
+                .ok_or_else(|| anyhow!("the tree {object} does not read"))?;
+            let name = &entries[at + space + 1..at + space + nul];
+            let id_at = at + space + nul + 1;
+            let id = entries
+                .get(id_at..id_at + hash)
+                .ok_or_else(|| anyhow!("the tree {object} does not read"))?;
+            if name == part.as_bytes() {
+                let id: String = id.iter().map(|b| format!("{b:02x}")).collect();
+                found = Some((mode.to_vec(), id));
+                break;
+            }
+            at = id_at + hash;
+        }
+        let Some((mode, id)) = found else {
+            return Ok(None);
+        };
+        let last = n + 1 == parts.len();
+        match (last, mode.as_slice()) {
+            (false, b"40000") => object = id,
+            (true, b"100644" | b"100755") => {
+                return crate::git::verified_object(tree, "blob", &id).map(Some);
+            }
+            _ => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
+/// Whether the commit `revision` descends from the commit `ancestor`, or is it, with every
+/// commit the answer rests on checked ([`crate::git::verified_object`]): both commits, and,
+/// when git takes `ancestor` for an ancestor, every commit on the ancestry path between them,
+/// so a commit planted under another's id with other parents is an error naming it rather
+/// than a history. A history a forged commit hides answers `false`. Never for a revision that
+/// is no commit id.
+pub fn verified_descends(tree: &Path, ancestor: &str, revision: &str) -> Result<bool> {
+    let (Some(ancestor), Some(revision)) = (commit_id(tree, ancestor), commit_id(tree, revision))
+    else {
+        return Ok(false);
+    };
+    crate::git::verified_object(tree, "commit", &ancestor)?;
+    crate::git::verified_object(tree, "commit", &revision)?;
+    if crate::git::run(tree, &["merge-base", "--is-ancestor", &ancestor, &revision]).is_err() {
+        return Ok(false);
+    }
+    let path = crate::git::run(
+        tree,
+        &[
+            "rev-list",
+            "--ancestry-path",
+            &format!("{ancestor}..{revision}"),
+        ],
+    )?;
+    for commit in path.lines().filter(|line| !line.is_empty()) {
+        crate::git::verified_object(tree, "commit", commit)?;
+    }
+    Ok(true)
+}
+
 /// Whether `revision` is a commit id ([`is_commit_id`]) of a commit `repo` holds.
 fn is_commit(repo: &Path, revision: &str) -> bool {
     is_commit_id(revision)
@@ -217,8 +323,9 @@ impl Definitions {
                         bail!("{id} v{}: a target is a finite number", definition.version);
                     }
                     // A target no figure of the metric can take is meaningless: a share is 0 to
-                    // 1, and a count, a token figure or a time is never below 0.
-                    let share = id.ends_with("_share");
+                    // 1 however its id is spelled (`ACCEPTED_SHARE`, `promoted_shares`), and a
+                    // count, a token figure or a time is never below 0.
+                    let share = id.to_ascii_lowercase().contains("share");
                     if bound < 0.0 || (share && bound > 1.0) {
                         bail!(
                             "{id} v{}: a target of {bound} is outside {}",
@@ -246,11 +353,9 @@ impl Definitions {
         {
             return Ok(Found::NoCommit);
         }
-        let object = format!("{revision}:{DEFINITIONS}");
-        if crate::git::run(tree, &["cat-file", "-e", &object]).is_err() {
+        let Some(bytes) = verified_file(tree, revision, DEFINITIONS)? else {
             return Ok(Found::Absent);
-        }
-        let bytes = crate::git::blob(tree, &object)?;
+        };
         let Ok(text) = String::from_utf8(bytes) else {
             return Ok(Found::Malformed("not UTF-8".to_owned()));
         };
@@ -733,15 +838,12 @@ pub fn snapshot_baseline(tree: &Path, case: &CaseDir) -> Result<bool> {
     ) else {
         return Ok(false);
     };
-    let object = format!("{commit}:{DEFINITIONS}");
-    let definitions = if crate::git::run(tree, &["cat-file", "-e", &object]).is_ok() {
-        Some(
-            String::from_utf8(crate::git::blob(tree, &object)?)
-                .map_err(|_| anyhow!("{DEFINITIONS} at {} is not UTF-8", short(&commit)))?,
-        )
-    } else {
-        None
-    };
+    let definitions = verified_file(tree, &commit, DEFINITIONS)?
+        .map(|bytes| {
+            String::from_utf8(bytes)
+                .map_err(|_| anyhow!("{DEFINITIONS} at {} is not UTF-8", short(&commit)))
+        })
+        .transpose()?;
     let snapshot = serde_json::json!({
         "format": BASELINE_SNAPSHOT_FORMAT,
         "revision": revision,
@@ -1132,14 +1234,6 @@ fn measured_turns(tree: &Path, base: &str) -> Result<Option<Vec<String>>> {
     }))
 }
 
-/// Whether the commit `revision` descends from the commit `ancestor`, or is it; never for a
-/// revision that is no commit id.
-fn descends(tree: &Path, ancestor: &str, revision: &str) -> bool {
-    is_commit_id(ancestor)
-        && is_commit_id(revision)
-        && crate::git::run(tree, &["merge-base", "--is-ancestor", ancestor, revision]).is_ok()
-}
-
 /// `loop.compare`: due once the case holds a `merge_observation` of the loop candidate (the
 /// protocol's precondition; nothing is recorded without one). The turns whose baseline revision
 /// descends from the merged candidate, at least [`MIN_TURNS`] of them with a verdict, against
@@ -1209,11 +1303,12 @@ impl Validator for LoopCompare {
             .iter()
             .filter(|row| measured.contains(&row.turn))
             .collect();
-        let after: Vec<&LoopScorecardRow> = card
-            .rows
-            .iter()
-            .filter(|row| descends(tree, revision, &row.baseline))
-            .collect();
+        let mut after: Vec<&LoopScorecardRow> = Vec::new();
+        for row in &card.rows {
+            if verified_descends(tree, revision, &row.baseline)? {
+                after.push(row);
+            }
+        }
         let ran = after.iter().filter(|row| row.verdict.is_some()).count();
         if ran < MIN_TURNS {
             return Ok(nothing(format!(

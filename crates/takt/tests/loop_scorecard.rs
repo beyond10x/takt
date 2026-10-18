@@ -1624,3 +1624,117 @@ fn a_finding_filed_after_the_baseline_is_read_at_the_finding_or_the_candidate() 
     assert_eq!(filed_at("turn-b").as_deref(), Some("2026-10-18T09:40:00Z"));
     assert_eq!(filed_at("turn-c"), None);
 }
+
+/// `data` as a zlib stream of stored deflate blocks, as git reads a loose object.
+fn zlib_stored(data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x78, 0x01];
+    let chunks: Vec<&[u8]> = if data.is_empty() {
+        vec![&[]]
+    } else {
+        data.chunks(65535).collect()
+    };
+    for (n, chunk) in chunks.iter().enumerate() {
+        out.push(u8::from(n + 1 == chunks.len()));
+        let len = u16::try_from(chunk.len()).expect("a stored block");
+        out.extend(len.to_le_bytes());
+        out.extend((!len).to_le_bytes());
+        out.extend(*chunk);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &byte in data {
+        a = (a + u32::from(byte)) % 65521;
+        b = (b + a) % 65521;
+    }
+    out.extend(((b << 16) | a).to_be_bytes());
+    out
+}
+
+/// Writes, under the id `oid` in `tree`'s object directory, a loose object of `kind` holding
+/// `content`: other bytes than the ones the id names.
+fn plant_object(tree: &Path, kind: &str, oid: &str, content: &[u8]) {
+    let path = tree.join(".git/objects").join(&oid[..2]).join(&oid[2..]);
+    fs::create_dir_all(path.parent().expect("a parent")).expect("the object directory");
+    if path.exists() {
+        fs::remove_file(&path).expect("the object is removed");
+    }
+    let mut raw = format!("{kind} {}\0", content.len()).into_bytes();
+    raw.extend_from_slice(content);
+    fs::write(&path, zlib_stored(&raw)).expect("the object is written");
+}
+
+/// The reviewer's H1: a loose object planted over the definitions blob under its id. Plain git
+/// reads the planted bytes; `Definitions::at` checks every object on the way from the commit and
+/// refuses, naming the object.
+#[test]
+fn definitions_read_from_a_planted_object_are_refused_naming_it() {
+    let (tree, head) = scratch("planted-definitions", DEFINED);
+    let blob = git(&tree, &["rev-parse", &format!("{head}:{DEFINITIONS}")]);
+    plant_object(
+        &tree,
+        "blob",
+        &blob,
+        DEFINED
+            .replace("at_least: 0.75", "at_least: 0.25")
+            .as_bytes(),
+    );
+    assert!(
+        git(&tree, &["show", &blob]).contains("at_least: 0.25"),
+        "plain git reads the planted bytes"
+    );
+    let error = Definitions::at(&tree, &head).expect_err("the planted object is refused");
+    assert!(format!("{error:#}").contains(&blob), "{error:#}");
+}
+
+/// The reviewer's H1 for ancestry: a commit object rewritten under its id with a parent off its
+/// history makes plain git take the side commit for an ancestor; `verified_descends` checks the
+/// commits on the way and refuses, naming the commit.
+#[test]
+fn an_ancestry_through_a_forged_commit_is_refused_naming_it() {
+    let (tree, _) = scratch("forged-commit", DEFINED);
+    git(&tree, &["checkout", "-q", "-b", "side"]);
+    let side = commit(&tree, DEFINED, "a commit off the history");
+    git(&tree, &["checkout", "-q", "main"]);
+    let target = commit(&tree, DEFINED, "the commit whose parent is forged");
+    assert!(
+        !takt::loop_scorecard::verified_descends(&tree, &side, &target).expect("reads"),
+        "side is off the history"
+    );
+    let real = git(&tree, &["cat-file", "commit", &target]);
+    let parent = real
+        .lines()
+        .find_map(|line| line.strip_prefix("parent "))
+        .expect("a parent")
+        .to_owned();
+    let forged = format!("{}\n", real.replace(&parent, &side));
+    plant_object(&tree, "commit", &target, forged.as_bytes());
+    let plain = Command::new("git")
+        .args(["merge-base", "--is-ancestor", &side, &target])
+        .current_dir(&*tree)
+        .status()
+        .expect("git runs");
+    assert!(plain.success(), "plain git takes side for an ancestor");
+    let error = takt::loop_scorecard::verified_descends(&tree, &side, &target)
+        .expect_err("the forged commit is refused");
+    assert!(format!("{error:#}").contains(&target), "{error:#}");
+}
+
+/// A share's target is 0 to 1 however the metric's id is spelled: a target of 5 is refused for
+/// each share metric.
+#[test]
+fn a_share_target_of_five_is_refused_however_the_share_is_spelled() {
+    for metric in [
+        "accepted_share",
+        "promoted_share",
+        "ACCEPTED_SHARE",
+        "promoted_shares",
+        "Promoted_Share",
+    ] {
+        let text = format!(
+            "format: takt-loop-metrics/1\nmetrics:\n  {metric}:\n    version: 1\n    definition: the share\n    target:\n      at_least: 5\n"
+        );
+        assert!(
+            Definitions::parse(&text).is_err(),
+            "{metric} at_least 5 is refused"
+        );
+    }
+}

@@ -1,13 +1,14 @@
 //! What reaches a git takt runs from the environment it inherited. One case in its own test
-//! binary, because it sets the process's `PATH` and `GIT_TEST_COMMIT_GRAPH`: a stand-in `git`
+//! binary, because it sets the process's `PATH` and git's variables: a stand-in `git`
 //! first on the `PATH` writes the environment it was started with, then runs the real git.
 
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-/// `GIT_TEST_COMMIT_GRAPH`, which makes git write a commit-graph after every commit, does not
-/// reach a git takt runs, and neither does any variable that points git elsewhere.
+/// `GIT_TEST_COMMIT_GRAPH` (a commit-graph written after every commit), `GIT_GRAFT_FILE` (parents
+/// a file names) and `GIT_SHALLOW_FILE` (history cut where a file says) do not reach a git takt
+/// runs: each would change what an ancestry or a history read answers.
 #[test]
 fn a_git_takt_runs_gets_no_commit_graph_test_variable() {
     let real = Command::new("sh")
@@ -58,6 +59,8 @@ fn a_git_takt_runs_gets_no_commit_graph_test_variable() {
     unsafe {
         std::env::set_var("PATH", path);
         std::env::set_var("GIT_TEST_COMMIT_GRAPH", "1");
+        std::env::set_var("GIT_GRAFT_FILE", "/nonexistent/grafts");
+        std::env::set_var("GIT_SHALLOW_FILE", "/nonexistent/shallow");
     }
     takt::git::run(&tree, &["rev-parse", "--git-dir"]).expect("git runs");
     // Only git's own variables are kept: the environment may hold credentials.
@@ -68,11 +71,17 @@ fn a_git_takt_runs_gets_no_commit_graph_test_variable() {
         .map(|line| format!("{line}\n"))
         .collect();
     fs::remove_dir_all(&dir).expect("the directory is removed");
-    assert!(
-        !env.lines()
-            .any(|line| line.starts_with("GIT_TEST_COMMIT_GRAPH=")),
-        "{env}"
-    );
+    for variable in [
+        "GIT_TEST_COMMIT_GRAPH",
+        "GIT_GRAFT_FILE",
+        "GIT_SHALLOW_FILE",
+    ] {
+        assert!(
+            !env.lines()
+                .any(|line| line.starts_with(&format!("{variable}="))),
+            "{variable} reached git: {env}"
+        );
+    }
     assert!(
         env.lines().any(|line| line == "GIT_NO_REPLACE_OBJECTS=1"),
         "{env}"

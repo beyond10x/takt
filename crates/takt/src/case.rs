@@ -47,11 +47,41 @@ pub const LOOP_PROTOCOL: &str = "loop.improvement/1";
 /// `--input loop_baseline=<full commit id>`, which the protocol declares as no case input.
 pub const LOOP_BASELINE: &str = "loop_baseline";
 
+/// What a case opened on `tree` now forks from: the branch the tree is on (`left`), the case's
+/// base branch (that branch, or, when the tree is on another case's branch, that case's base),
+/// and the branch its own branch is created at when that differs from `HEAD` (the other case's
+/// base). A tree on a case's branch with no base to fork from is an error.
+fn opening_base(tree: &Path) -> Result<(Option<String>, Option<String>, Option<String>)> {
+    let left = crate::git::current_branch(tree)?;
+    let (base, from) = match left
+        .as_deref()
+        .map(|name| (name, name.strip_prefix(BRANCH_PREFIX)))
+    {
+        Some((name, Some(other))) => {
+            let Some(base) = Branch::read(&tree.join(CASES_DIR).join(other))
+                .ok()
+                .and_then(|branch| branch.base)
+            else {
+                bail!(
+                    "the tree {} is on {name}, a case's branch with no base to fork from (that case was opened from a detached HEAD, or its directory is gone); check out the branch the new case is to fork from",
+                    tree.display()
+                );
+            };
+            (Some(base.clone()), Some(base))
+        }
+        Some((name, None)) => (Some(name.to_owned()), None),
+        None => (None, None),
+    };
+    Ok((left, base, from))
+}
+
 /// The commit a loop case opens with as its baseline, from `value`: a full commit id (40 or 64
-/// lower-case hexadecimal digits) of a commit `tree` holds. A missing value, or any other (a
-/// short id, a name, a tree's id, an id the repository does not hold), is refused, naming why,
-/// before anything is written. Until promotions are recorded the operator gives it; then the
-/// latest promotion's revision.
+/// lower-case hexadecimal digits) of a commit `tree` holds, on the base branch the case opens
+/// from, its metric definitions readable with every object on the way checked. A missing
+/// value, or any other (a short id, a name, a tree's id, an id the repository does not hold, a
+/// side branch's or an unreachable commit, a baseline whose objects do not hash to their ids),
+/// is refused, naming why, before anything is written. Until promotions are recorded the
+/// operator gives it; then the latest promotion's revision.
 pub fn loop_baseline(tree: &Path, value: Option<&str>) -> Result<String> {
     let Some(value) = value else {
         bail!(
@@ -82,6 +112,36 @@ pub fn loop_baseline(tree: &Path, value: Option<&str>) -> Result<String> {
             tree.display()
         );
     }
+    // The baseline is a commit of the base branch the case opens from: a side branch's commit,
+    // or one no branch reaches, is no promoted revision.
+    let (_, base, _) = opening_base(tree)?;
+    let Some(base) = base else {
+        bail!(
+            "--input {LOOP_BASELINE}={value}: the case would open from a detached HEAD, with no base branch its baseline is on; check out the base branch; nothing was written"
+        );
+    };
+    let tip = crate::git::run(
+        tree,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{base}^{{commit}}"),
+        ],
+    )
+    .with_context(|| format!("--input {LOOP_BASELINE}={value}: the base branch {base}"))?;
+    if !crate::loop_scorecard::verified_descends(tree, value, &tip)
+        .with_context(|| format!("--input {LOOP_BASELINE}={value}; nothing was written"))?
+    {
+        bail!(
+            "--input {LOOP_BASELINE}={value}: the commit is not on {base}, the branch the case opens from; nothing was written"
+        );
+    }
+    // Its metric definitions are read, every object on the way checked, before anything is
+    // written: one planted under another's id is refused here, naming it.
+    crate::loop_scorecard::Definitions::at(tree, value).with_context(|| {
+        format!("--input {LOOP_BASELINE}={value}: its metric definitions; nothing was written")
+    })?;
     Ok(value.to_owned())
 }
 
@@ -1538,26 +1598,7 @@ impl CaseDir {
         // is on another case's branch, that case's base, at its tip, so a case never forks from
         // another case's commits. `left` is the branch the tree was on, which a discarded case
         // returns to.
-        let left = crate::git::current_branch(tree)?;
-        let (base, from) = match left
-            .as_deref()
-            .map(|name| (name, name.strip_prefix(BRANCH_PREFIX)))
-        {
-            Some((name, Some(other))) => {
-                let Some(base) = Branch::read(&tree.join(CASES_DIR).join(other))
-                    .ok()
-                    .and_then(|branch| branch.base)
-                else {
-                    bail!(
-                        "the tree {} is on {name}, a case's branch with no base to fork from (that case was opened from a detached HEAD, or its directory is gone); check out the branch the new case is to fork from",
-                        tree.display()
-                    );
-                };
-                (Some(base.clone()), Some(base))
-            }
-            Some((name, None)) => (Some(name.to_owned()), None),
-            None => (None, None),
-        };
+        let (left, base, from) = opening_base(tree)?;
         let branch = Branch {
             name: Branch::name_of(id),
             base,
