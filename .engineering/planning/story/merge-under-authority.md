@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:merge-under-authority
 kind: story
-status: draft
+status: active
 title: Merge only under a recorded grant of repository.merge
 summary: authority.yaml read into every evaluation; granted merges, absent stops ApprovalRequired
 relations:
@@ -25,7 +25,10 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/merge_under_authority.rs
-revision: 11
+revision: 13
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T07:21:51Z", actor: "human:timo", revision: 12}
+- {from: "proposed", to: "active", at: "2026-10-18T07:21:51Z", actor: "human:timo", revision: 13}
 ---
 # Story: merge-under-authority
 
