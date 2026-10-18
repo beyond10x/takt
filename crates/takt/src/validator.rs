@@ -1,5 +1,5 @@
 //! Validators: programs that turn an observation into evidence: `tests.run`, `gate.run`,
-//! `pr.open` and `ci.read`.
+//! `pr.open`, `ci.read` and `repository.merge`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -350,24 +350,16 @@ fn title_of(intent: &str) -> String {
 
 /// The claims the case's latest decision holds, in id order; none before a decision.
 fn claims_held(case_dir: &Path) -> Result<Vec<String>> {
-    let decisions = case_dir.join("decisions");
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(&decisions)
-        .with_context(|| format!("read {}", decisions.display()))?
-        .map(|entry| entry.map(|e| e.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    paths.sort();
-    let Some(latest) = paths.last() else {
-        return Ok(Vec::new());
-    };
-    let json =
-        std::fs::read_to_string(latest).with_context(|| format!("read {}", latest.display()))?;
-    let decision = crate::Decision::from_json(&json)?;
-    Ok(decision
-        .claims
-        .iter()
-        .filter(|(_, value)| value.as_str() == "true")
-        .map(|(id, _)| id.clone())
-        .collect())
+    Ok(crate::case::latest_decision(case_dir)?
+        .map(|decision| {
+            decision
+                .claims
+                .iter()
+                .filter(|(_, value)| value.as_str() == "true")
+                .map(|(id, _)| id.clone())
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 /// The pull request's body: the intent, then the case, the revision and the claims that hold.
@@ -648,6 +640,147 @@ impl Validator for CiRead {
                 short(revision)
             ),
         };
+        Ok(Observation {
+            summary,
+            records,
+            artifact: None,
+        })
+    }
+}
+
+/// `repository.merge`: merges the case's pull request through the forge, the one deterministic
+/// step with a write effect, and writes one `merge_observation` record with the state the forge
+/// reports afterwards: `merged` once it is, `closed` for a pull request closed unmerged. The
+/// loop takes the step only when Canon admits the action, and Canon admits it only under a
+/// recorded grant of `repository.merge` read from the case's `authority.yaml`: a connection to
+/// the forge is never authority. Nothing is merged unless the forge reports the pull request's
+/// head as the case's branch at the revision, and the merge names that head, so a head that
+/// moved meanwhile is refused by the forge rather than merged. A pull request already merged is
+/// recorded without a second merge; one the forge still reports open after the merge writes no
+/// record, because a claim that could not be observed stays unknown.
+pub struct PrMerged {
+    /// The forge the merge goes through and the state is read from.
+    pub forge: Rc<dyn Forge>,
+}
+
+impl PrMerged {
+    /// Over `forge`.
+    #[must_use]
+    pub fn new(forge: Rc<dyn Forge>) -> Self {
+        Self { forge }
+    }
+}
+
+impl std::fmt::Debug for PrMerged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrMerged")
+            .field("forge", &self.forge.name())
+            .finish()
+    }
+}
+
+impl Validator for PrMerged {
+    fn name(&self) -> &str {
+        "takt.pr-merged"
+    }
+
+    fn action(&self) -> &str {
+        "repository.merge"
+    }
+
+    fn kind(&self) -> &str {
+        "merge_observation"
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        let dir = current(tree)?;
+        let branch = Branch::read(&dir)?;
+        // The case's branch, from the case id: not the `name` of a file a harness can write.
+        let name = branch_of(&dir)?;
+        let forge = self.forge.name();
+        let nothing = |summary: String| Observation {
+            summary,
+            records: Vec::new(),
+            artifact: None,
+        };
+        let Some(number) = branch.pull_request else {
+            return Ok(nothing(
+                "no pull request is open for the case; nothing to merge, the claim stays unknown"
+                    .to_owned(),
+            ));
+        };
+        if branch.pushed.as_deref() != Some(revision) {
+            return Ok(nothing(format!(
+                "the head of pull request #{number} is {}, not the implementation revision {}; nothing to merge, the claim stays unknown",
+                branch.pushed.as_deref().map_or("not pushed", short),
+                short(revision)
+            )));
+        }
+        let view = self
+            .forge
+            .pull_request(tree, number)
+            .with_context(|| format!("read pull request #{number} through the forge {forge}"))?;
+        if view.head.branch != name || view.head.sha != revision {
+            return Ok(nothing(format!(
+                "pull request #{number} has the head {} at {}, not {name} at {}; nothing to merge, the claim stays unknown",
+                view.head.branch,
+                short(&view.head.sha),
+                short(revision)
+            )));
+        }
+        let (state, merged_now) = match view.state {
+            PullRequestState::Open => {
+                self.forge
+                    .merge(tree, &dir.join("artifacts"), number, revision)
+                    .with_context(|| {
+                        format!("merge pull request #{number} through the forge {forge}")
+                    })?;
+                let after = self.forge.pull_request(tree, number).with_context(|| {
+                    format!("read pull request #{number} through the forge {forge} after the merge")
+                })?;
+                (after.state, true)
+            }
+            state => (state, false),
+        };
+        let result = match state {
+            PullRequestState::Merged => Some("merged"),
+            PullRequestState::Closed => Some("closed"),
+            PullRequestState::Open => None,
+        };
+        let summary = match (state, merged_now) {
+            (PullRequestState::Merged, true) => format!(
+                "merged pull request #{number} at {} through {forge}: merged",
+                short(revision)
+            ),
+            (PullRequestState::Merged, false) => format!(
+                "pull request #{number} at {} is already merged, read through {forge}: merged",
+                short(revision)
+            ),
+            (PullRequestState::Closed, _) => format!(
+                "pull request #{number} at {} is closed unmerged, read through {forge}: closed",
+                short(revision)
+            ),
+            (PullRequestState::Open, _) => format!(
+                "merged pull request #{number} at {} through {forge}, which still reports it open; no record, the claim stays unknown",
+                short(revision)
+            ),
+        };
+        let records = result
+            .map(|result| {
+                vec![Record::new(
+                    format!("merge-observation-{seq}"),
+                    self.kind(),
+                    Some(result.to_owned()),
+                    self.subject(),
+                    revision,
+                    self.name(),
+                )]
+            })
+            .unwrap_or_default();
         Ok(Observation {
             summary,
             records,

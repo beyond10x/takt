@@ -8,7 +8,10 @@
 //! taken twice. A store may refuse the move; then the story is not taken, the refusal is printed
 //! verbatim and the next ready story is tried. A run opens the case before it takes the story
 //! and removes the case again when the store refuses ([`crate::Run::open_next`]), so a story is
-//! never `active` without a case to work it.
+//! never `active` without a case to work it. A story `active` with an open case is resumed by
+//! the next run, never given a second case: the case directory records the story, and the store
+//! says which stories are being worked. The operator's grant of a capability to a case is
+//! recorded on the story as `approval` evidence through the same adapter ([`approve`]).
 
 use std::io::Write;
 use std::path::Path;
@@ -16,6 +19,8 @@ use std::process::Command;
 
 use anyhow::{Context as _, Result, anyhow};
 use serde::Deserialize;
+
+use crate::case::Approval;
 
 /// The status a story is ready at: refined and agreed enough to pick up.
 pub const READY: &str = "proposed";
@@ -64,18 +69,25 @@ pub enum Unit {
     Story(Story),
 }
 
-/// The planning store behind a trait: it names the ready stories in the order to try them,
-/// hands one over with its body, and records in the store that a story is being worked.
+/// The planning store behind a trait: it names the ready stories in the order to try them and
+/// the stories being worked, hands one over with its body, records in the store that a story is
+/// being worked, and records an approval on it.
 pub trait Frontier {
     /// The adapter's name.
     fn name(&self) -> &str;
     /// The ids of the ready stories of the store in `repo`, in the order to try them.
     fn candidates(&self, repo: &Path) -> Result<Vec<String>>;
+    /// The ids of the stories the store in `repo` lists [`TAKEN`], being worked: one with an
+    /// open case is resumed.
+    fn active(&self, repo: &Path) -> Result<Vec<String>>;
     /// The story `id`, with its body.
     fn show(&self, repo: &Path, id: &str) -> Result<Story>;
     /// Tells the store the story `id` is being worked, `proposed` → `active`, the store judging
     /// the move; its refusal, verbatim, when it would not.
     fn take(&self, repo: &Path, id: &str) -> Result<Take>;
+    /// Records `approval` on the story `story` as one `approval` evidence record, appended and
+    /// never edited: the trail of the grant written into the case.
+    fn record_approval(&self, repo: &Path, story: &str, approval: &Approval) -> Result<()>;
     /// The next ready story, taken, with no case opened for it: down the candidates, the first
     /// the store hands over; a refusal is printed on `out`, verbatim, and the next is tried;
     /// `None` when nothing is ready. A run opens the case first and takes the story last, so it
@@ -164,8 +176,36 @@ pub enum Take {
     Refused(String),
 }
 
+/// What `takt approve <case> <capability> --by <approver>` does: writes the grant into the
+/// case's `authority.yaml` ([`crate::case::grant`]) and, for a case opened for a story, records
+/// it on the story through `frontier`. The grant is written first, because it is the operator's
+/// decision and the record is its trail in the store; a record the store refuses leaves the
+/// grant written and says so. A case opened on an intent has no story, and the grant is all.
+pub fn approve(
+    tree: &Path,
+    frontier: &dyn Frontier,
+    case: &str,
+    capability: &str,
+    approver: &str,
+) -> Result<Approval> {
+    let approval = crate::case::grant(tree, case, capability, approver)?;
+    if let Some(story) = &approval.story {
+        frontier
+            .record_approval(tree, story, &approval)
+            .with_context(|| {
+                format!(
+                    "the grant is written to {}; recording it on {story} through the frontier {} failed",
+                    approval.reference(),
+                    frontier.name()
+                )
+            })?;
+    }
+    Ok(approval)
+}
+
 /// The adapter over the `aep` command line, run in the repository: `list` and `show` read the
-/// store, `move` is the one write, and the lifecycle the store enforces is the store's own.
+/// store, `move` and `evidence` are the two writes, and the lifecycle the store enforces is the
+/// store's own.
 #[derive(Debug, Clone)]
 pub struct Aep {
     /// The command, `aep` on the path by default.
@@ -253,6 +293,18 @@ impl Frontier for Aep {
         Ok(ready(&listed).into_iter().map(|a| a.id.clone()).collect())
     }
 
+    /// `list`, the stories at [`TAKEN`], id order.
+    fn active(&self, repo: &Path) -> Result<Vec<String>> {
+        let mut active: Vec<String> = self
+            .list(repo)?
+            .into_iter()
+            .filter(|a| a.kind == "story" && a.status == TAKEN)
+            .map(|a| a.id)
+            .collect();
+        active.sort();
+        Ok(active)
+    }
+
     /// `show <id> --format json`; the repository's own store only, like `list`.
     fn show(&self, repo: &Path, id: &str) -> Result<Story> {
         #[derive(Deserialize)]
@@ -274,7 +326,7 @@ impl Frontier for Aep {
         })
     }
 
-    /// `move <id> --to active`, the one write; the repository's own store only, like `list`.
+    /// `move <id> --to active`, the first write; the repository's own store only, like `list`.
     fn take(&self, repo: &Path, id: &str) -> Result<Take> {
         Self::store(repo)?;
         Ok(
@@ -286,6 +338,36 @@ impl Frontier for Aep {
                 Err(refusal) => Take::Refused(refusal),
             },
         )
+    }
+
+    /// `evidence <story> --kind approval --source "takt approve <capability> --by <approver>"
+    /// --ref <case>/authority.yaml --at <granted at>`, the second write: the source names the
+    /// command, the capability and the approver, the reference the grant, the instant the
+    /// grant's own; the repository's own store only, like `list`.
+    fn record_approval(&self, repo: &Path, story: &str, approval: &Approval) -> Result<()> {
+        Self::store(repo)?;
+        let source = format!(
+            "takt approve {} --by {}",
+            approval.capability, approval.approver
+        );
+        let reference = approval.reference();
+        self.plan(
+            repo,
+            &[
+                "evidence",
+                story,
+                "--kind",
+                "approval",
+                "--source",
+                &source,
+                "--ref",
+                &reference,
+                "--at",
+                &approval.granted_at,
+            ],
+        )?
+        .map(drop)
+        .map_err(|refusal| anyhow!("aep plan artifact evidence {story}: {refusal}"))
     }
 }
 

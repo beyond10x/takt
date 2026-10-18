@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use takt::forge::{BotRoute, Forge, repository_of};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness};
-use takt::validator::{CiRead, DEFAULT_PROJECT, GateRun, PrOpen, TestsRun, Validator};
+use takt::validator::{CiRead, DEFAULT_PROJECT, GateRun, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{LoadedProtocol, Run, RunOptions, Stop, Unit};
 
 #[derive(Parser)]
@@ -26,10 +26,27 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run on a repository: take the intent, open a case, loop until a stop.
+    /// Run on a repository: take the intent, open a case or resume one, loop until a stop.
     Run(Box<RunArgs>),
+    /// Grant a case a capability: write the grant into the case's authority.yaml and record the
+    /// approval on the case's story in the planning store. The next run resumes the case.
+    Approve(ApproveArgs),
     /// List the built-in protocols.
     Protocols,
+}
+
+#[derive(clap::Args)]
+struct ApproveArgs {
+    /// The repository worktree.
+    #[arg(long)]
+    repo: PathBuf,
+    /// The case, by id.
+    case: String,
+    /// The capability granted, `repository.merge` for the merge.
+    capability: String,
+    /// Who grants it.
+    #[arg(long)]
+    by: String,
 }
 
 #[derive(clap::Args)]
@@ -37,10 +54,14 @@ struct RunArgs {
     /// The repository worktree.
     #[arg(long)]
     repo: PathBuf,
-    /// What the run is meant to achieve; without it, the next ready story of the repository's
-    /// planning store is the unit, and the store records it taken.
+    /// What the run is meant to achieve; without it and without --case, the open case of a
+    /// story the planning store lists active is resumed, else the next ready story is the unit
+    /// and the store records it taken.
     #[arg(long)]
     intent: Option<String>,
+    /// The case to resume, by id, instead of opening one; not with --intent.
+    #[arg(long)]
+    case: Option<String>,
     /// The protocol: a built-in id or a `protocol/1` file.
     #[arg(long, default_value = "software.change/1")]
     protocol: String,
@@ -80,15 +101,19 @@ struct RunArgs {
     /// `.engineering/assertions-project.yaml` when that is a file.
     #[arg(long)]
     project: Option<PathBuf>,
-    /// The forge: `bot` (the repository's bot route: `b10x-gates` pushes the case's branch and
-    /// opens its pull request, `gh` reads the pull request's state and checks) or `none` (no
-    /// pull request is opened; `pr.open` and `ci.read` are left to the harness). Not given,
-    /// `bot` when the repository has an `origin` remote, else `none`.
+    /// The forge: `bot` (the repository's bot route: `b10x-gates` pushes the case's branch,
+    /// opens its pull request and merges it, `gh` reads the pull request's state and checks) or
+    /// `none` (no pull request is opened; `pr.open`, `ci.read` and `repository.merge` are left
+    /// to the harness). Not given, `bot` when the repository has an `origin` remote, else
+    /// `none`.
     #[arg(long)]
     forge: Option<String>,
 }
 
-/// A harness that performs nothing: the loop stops when only judgement steps are left.
+/// A harness that performs nothing. Asked while an approval is pending, it requests the gate
+/// action, changing no file, so the run stops `ApprovalRequired` and `takt approve` is the
+/// next step; asked for a judgement step with no approval pending, it ends the run with an
+/// error, because nothing performs that step.
 struct NoHarness;
 
 impl Harness for NoHarness {
@@ -97,10 +122,16 @@ impl Harness for NoHarness {
     }
 
     fn step(&self, context: &takt::StepContext<'_>) -> Result<takt::StepReport> {
+        if let Some(gate) = context.approvals.first() {
+            return Ok(takt::StepReport {
+                action: gate.clone(),
+                summary: "no harness: nothing but the approval is left; requesting it".to_owned(),
+                tokens: None,
+            });
+        }
         Err(anyhow!(
-            "no harness: a judgement step among {} is left (approvals: {})",
-            context.offered.join(", "),
-            context.approvals.join(", ")
+            "no harness: a judgement step among {} is left",
+            context.offered.join(", ")
         ))
     }
 }
@@ -118,8 +149,8 @@ fn main() -> ExitCode {
     }
 }
 
-/// Runs the command, printing to `out`; the exit code: 0 for a completed or approval-bound run
-/// and for a frontier with nothing ready, 3 for any other stop.
+/// Runs the command, printing to `out`; the exit code: 0 for a completed or approval-bound run,
+/// for a frontier with nothing ready and for an approval given, 3 for any other stop.
 fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
     match cli.command {
         Commands::Protocols => {
@@ -128,10 +159,42 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             }
             Ok(0)
         }
+        Commands::Approve(args) => {
+            let ApproveArgs {
+                repo,
+                case,
+                capability,
+                by,
+            } = args;
+            let repo = repo
+                .canonicalize()
+                .with_context(|| format!("the repository {}", repo.display()))?;
+            let approval =
+                takt::frontier::approve(&repo, &Aep::default(), &case, &capability, &by)?;
+            writeln!(
+                out,
+                "approved: {} for case {} by {}, written to {}",
+                approval.capability,
+                approval.case,
+                approval.approver,
+                approval.reference()
+            )?;
+            match &approval.story {
+                Some(story) => {
+                    writeln!(out, "recorded: approval on {story} in the planning store")?
+                }
+                None => writeln!(
+                    out,
+                    "recorded: nothing; the case was opened on an intent, not a story"
+                )?,
+            }
+            Ok(0)
+        }
         Commands::Run(args) => {
             let RunArgs {
                 repo,
                 intent,
+                case,
                 protocol,
                 inputs,
                 iterations,
@@ -207,7 +270,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             let bot = |repo: &Path| -> Result<(Option<BotRoute>, Option<String>)> {
                 let bot = BotRoute::for_tree(repo)?;
                 let line = format!(
-                    "forge: bot ({}); pr.open and ci.read go through the bot route",
+                    "forge: bot ({}); pr.open, ci.read and repository.merge go through the bot route",
                     bot.repository
                 );
                 Ok((Some(bot), Some(line)))
@@ -240,16 +303,23 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             if let Some(forge) = forge {
                 let forge: Rc<dyn Forge> = Rc::new(forge);
                 validators.push(Box::new(PrOpen::new(forge.clone())));
-                validators.push(Box::new(CiRead::new(forge)));
+                validators.push(Box::new(CiRead::new(forge.clone())));
+                validators.push(Box::new(PrMerged::new(forge)));
             }
-            // The unit: the intent given, or else the next ready story of the planning store;
-            // the case is opened before the store is told, so a run that cannot open its case
-            // takes nothing.
-            let mut run = match intent {
-                Some(intent) => {
+            // The unit: the case to resume, the intent given, or else the open case of an
+            // active story or the next ready story of the planning store; a case is opened
+            // before the store is told, so a run that cannot open its case takes nothing.
+            let mut run = match (case, intent) {
+                (Some(_), Some(_)) => {
+                    return Err(anyhow!(
+                        "--case resumes a case and --intent opens one; give one of them"
+                    ));
+                }
+                (Some(case), None) => Run::resume(&repo, options, &case, harness, &validators)?,
+                (None, Some(intent)) => {
                     Run::open_unit(&repo, options, Unit::Intent(intent), harness, &validators)?
                 }
-                None => match Run::open_next(
+                (None, None) => match Run::open_next(
                     &repo,
                     options,
                     &Aep::default(),
@@ -818,6 +888,181 @@ mod tests {
             &["--forge", "hub"],
         ));
         assert_eq!(error, "no forge `hub`: bot or none");
+        assert!(!repo.join(".engineering/cases").exists());
+    }
+
+    /// The lines of `aep plan artifact history <id>` in `repo` that record an approval.
+    fn approvals_recorded(repo: &Path, id: &str) -> Vec<String> {
+        let output = Command::new("aep")
+            .args(["plan", "artifact", "history", id])
+            .current_dir(repo)
+            .output()
+            .expect("aep runs");
+        assert!(output.status.success(), "aep plan artifact history {id}");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| line.contains("approval recorded"))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// `takt run` with no intent takes the ready story and, stopped at once by a step budget
+    /// of zero, leaves its case open; `takt approve` writes the grant into that case and
+    /// records the approval on the story; the next `takt run` with no intent resumes the case
+    /// and opens no second one, the story still active.
+    #[test]
+    fn approve_writes_the_grant_and_the_next_run_resumes_the_open_case() {
+        let repo = repository("one-ready", "approve");
+        let path = repo.to_str().expect("utf-8");
+        let (code, out) = takt(&[
+            "run",
+            "--repo",
+            path,
+            "--harness",
+            "none",
+            "--iterations",
+            "0",
+            "--test-cmd",
+            "true",
+        ]);
+        assert_eq!(code, 3, "{out}");
+        assert!(out.contains("frontier: took story:ready-one"), "{out}");
+        let case = the_case(&repo);
+        let id = case
+            .file_name()
+            .expect("a name")
+            .to_string_lossy()
+            .into_owned();
+        assert!(approvals_recorded(&repo, "story:ready-one").is_empty());
+        let (code, out) = takt(&[
+            "approve",
+            "--repo",
+            path,
+            &id,
+            "repository.merge",
+            "--by",
+            "operator",
+        ]);
+        assert_eq!(code, 0, "{out}");
+        assert!(
+            out.contains(&format!(
+                "approved: repository.merge for case {id} by operator, written to {id}/authority.yaml"
+            )),
+            "{out}"
+        );
+        assert!(
+            out.contains("recorded: approval on story:ready-one in the planning store"),
+            "{out}"
+        );
+        assert!(case.join("authority.yaml").is_file());
+        let recorded = approvals_recorded(&repo, "story:ready-one");
+        assert_eq!(recorded.len(), 1, "{recorded:?}");
+        assert!(
+            recorded[0].contains("takt approve repository.merge --by operator"),
+            "{recorded:?}"
+        );
+        assert!(
+            recorded[0].contains(&format!("({id}/authority.yaml)")),
+            "{recorded:?}"
+        );
+        let (code, out) = takt(&[
+            "run",
+            "--repo",
+            path,
+            "--harness",
+            "none",
+            "--iterations",
+            "1",
+            "--test-cmd",
+            "true",
+        ]);
+        assert_eq!(code, 3, "{out}");
+        assert!(
+            out.contains(&format!(
+                "frontier: resumed story:ready-one: Make the check pass (case {id})"
+            )),
+            "{out}"
+        );
+        assert!(out.contains("step 1: tests.run {}"), "{out}");
+        assert_eq!(the_case(&repo), case, "no second case was opened");
+        assert_eq!(status(&repo, "story:ready-one"), "active");
+    }
+
+    /// `takt run --case <id>` resumes the case given, whatever the store says: a case stopped
+    /// by a step budget of zero before its gate validator ran completes through it on resume.
+    #[test]
+    fn run_with_case_resumes_that_case_and_completes_through_its_validators() {
+        let repo = gated_repository("resume", Some(".engineering/gates.yaml"));
+        let path = repo.to_str().expect("utf-8");
+        let (code, out) = takt(&[
+            "run",
+            "--repo",
+            path,
+            "--intent",
+            "pass the gate",
+            "--case-id",
+            "gated",
+            "--harness",
+            "none",
+            "--protocol",
+            GATE_PROTOCOL,
+            "--test-cmd",
+            "true",
+            "--iterations",
+            "0",
+        ]);
+        assert_eq!(code, 3, "{out}");
+        assert!(out.contains("stopped: Iterations (0)"), "{out}");
+        let (code, out) = takt(&[
+            "run",
+            "--repo",
+            path,
+            "--case",
+            "gated",
+            "--harness",
+            "none",
+            "--test-cmd",
+            "true",
+        ]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("case gated on "), "{out}");
+        assert!(out.contains("step 1: gate.run {}"), "{out}");
+        assert!(out.contains("stopped: Completed (accepted)"), "{out}");
+        assert_eq!(the_case(&repo).file_name().expect("a name"), "gated");
+    }
+
+    #[test]
+    fn run_with_case_and_intent_is_refused_before_anything_is_opened() {
+        let repo = gated_repository("case-and-intent", None);
+        let error = takt_error(&[
+            "run",
+            "--repo",
+            repo.to_str().expect("utf-8"),
+            "--case",
+            "one",
+            "--intent",
+            "another",
+            "--harness",
+            "none",
+        ]);
+        assert!(error.contains("--case"), "{error}");
+        assert!(error.contains("--intent"), "{error}");
+        assert!(!repo.join(".engineering/cases").exists());
+    }
+
+    #[test]
+    fn approve_on_a_case_that_does_not_exist_is_refused() {
+        let repo = gated_repository("approve-absent", None);
+        let error = takt_error(&[
+            "approve",
+            "--repo",
+            repo.to_str().expect("utf-8"),
+            "absent",
+            "repository.merge",
+            "--by",
+            "operator",
+        ]);
+        assert!(error.contains("absent"), "{error}");
         assert!(!repo.join(".engineering/cases").exists());
     }
 }

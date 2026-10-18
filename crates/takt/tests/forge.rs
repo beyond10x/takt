@@ -732,6 +732,11 @@ impl Forge for AnyNumber {
         self.calls.borrow_mut().push(format!("checks #{number}"));
         Ok(Checks::Pass)
     }
+
+    fn merge(&self, _: &Path, _: &Path, number: u64, _: &str) -> anyhow::Result<()> {
+        self.calls.borrow_mut().push(format!("merge #{number}"));
+        Ok(())
+    }
 }
 
 /// `pr.open` on a case opened from a detached `HEAD` has no base to open the pull request
@@ -1360,9 +1365,22 @@ fn adv2_pr_open_pushes_the_case_branch_not_the_name_the_harness_wrote_into_branc
     let text = String::from_utf8(out).expect("utf-8");
     let calls = memory.calls.borrow().clone();
     let pushes: Vec<&String> = calls.iter().filter(|c| c.starts_with("push ")).collect();
+    // Since story:merge-under-authority (correction 1) a judgement step may not touch the case
+    // directory at all: the rewrite is refused naming the file, the file is put back, and
+    // nothing is pushed. A `branch.yaml` rewritten outside a judgement step is still set right
+    // by `pr.open` (`pr_open_sets_branch_yaml_right_when_its_name_was_rewritten`).
     assert!(
-        !pushes.is_empty(),
-        "nothing was pushed; stopped {stop}\n{text}"
+        matches!(&stop, Stop::StepRefused(why) if why.contains("branch.yaml")),
+        "the step that rewrote branch.yaml was not refused; stopped {stop}\n{text}"
+    );
+    assert!(
+        pushes.is_empty(),
+        "the forge was asked to push after the harness wrote into branch.yaml: {calls:?}; stopped {stop}\n{text}"
+    );
+    assert_eq!(
+        Branch::read(&run.case.dir).expect("the branch file").name,
+        "takt/adv2-repoint",
+        "branch.yaml was not put back"
     );
     assert!(
         pushes.iter().all(|c| *c == "push takt/adv2-repoint"),

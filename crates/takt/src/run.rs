@@ -1,8 +1,10 @@
 //! The loop: evaluate, frontier, one step, effect, observation, validator, evidence, evaluate;
 //! until an outcome is legitimate, an approval is needed, nothing is admissible, a step is
-//! refused, or the stop criteria are met.
+//! refused, or the stop criteria are met. A run opens a case, or resumes one a run before it
+//! opened: a case stopped at the gate is resumed once the operator has granted it, and the
+//! merge is then a deterministic step like any other.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -10,7 +12,7 @@ use std::time::Instant;
 use anyhow::{Context as _, Result, bail};
 
 use crate::case::{CASES_DIR, CaseDir};
-use crate::frontier::{Frontier, Take, Unit};
+use crate::frontier::{Frontier, Story, Take, Unit};
 use crate::harness::{Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
 use crate::validator::Validator;
@@ -93,6 +95,106 @@ fn is_due(
         })
 }
 
+/// One entry of a snapshot: a file with its bytes, or a symbolic link with its target. A link
+/// is an entry by itself and is never followed: what it points at may lie outside the tree,
+/// and nothing the kernel does for a case reaches outside the tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Entry {
+    File(Vec<u8>),
+    Link(PathBuf),
+}
+
+/// Every file and link under `dir`, by path relative to it: the cases directory as it is
+/// before a judgement step, which the step may not touch.
+fn snapshot(dir: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
+    fn walk(root: &Path, dir: &Path, entries: &mut BTreeMap<PathBuf, Entry>) -> Result<()> {
+        for entry in std::fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
+            let path = entry?.path();
+            let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            let kind = std::fs::symlink_metadata(&path)
+                .with_context(|| format!("read {}", path.display()))?
+                .file_type();
+            if kind.is_symlink() {
+                let target = std::fs::read_link(&path)
+                    .with_context(|| format!("read the link {}", path.display()))?;
+                entries.insert(relative, Entry::Link(target));
+            } else if kind.is_dir() {
+                walk(root, &path, entries)?;
+            } else {
+                let bytes =
+                    std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+                entries.insert(relative, Entry::File(bytes));
+            }
+        }
+        Ok(())
+    }
+    let mut entries = BTreeMap::new();
+    if std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
+        walk(dir, dir, &mut entries)?;
+    }
+    Ok(entries)
+}
+
+/// The paths at which two snapshots differ: added, removed or changed, in path order.
+fn differing(before: &BTreeMap<PathBuf, Entry>, after: &BTreeMap<PathBuf, Entry>) -> Vec<PathBuf> {
+    before
+        .keys()
+        .chain(after.keys())
+        .filter(|path| before.get(*path) != after.get(*path))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Makes the link `at` pointing at `target`.
+#[cfg(unix)]
+fn make_link(target: &Path, at: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(target, at)
+        .with_context(|| format!("put back the link {}", at.display()))
+}
+
+/// Makes the link `at` pointing at `target`: not on this platform.
+#[cfg(not(unix))]
+fn make_link(target: &Path, at: &Path) -> Result<()> {
+    bail!(
+        "the link {} to {} cannot be put back on this platform",
+        at.display(),
+        target.display()
+    )
+}
+
+/// Puts `dir` back to `before` at the paths `changed`: whatever is at the path now is removed
+/// (a link as the link itself, never what it points at), then the file is written again as it
+/// was, or the link made again; a path the step added stays removed.
+fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -> Result<()> {
+    if std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        bail!(
+            "the cases directory {} was replaced by a link; nothing is put back through it",
+            dir.display()
+        );
+    }
+    for path in changed {
+        let full = dir.join(path);
+        if std::fs::symlink_metadata(&full).is_ok() {
+            std::fs::remove_file(&full).with_context(|| format!("remove {}", full.display()))?;
+        }
+        if let Some(parent) = full.parent()
+            && before.contains_key(path)
+        {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+        match before.get(path) {
+            Some(Entry::File(bytes)) => std::fs::write(&full, bytes)
+                .with_context(|| format!("put back {}", full.display()))?,
+            Some(Entry::Link(target)) => make_link(target, &full)?,
+            None => {}
+        }
+    }
+    Ok(())
+}
+
 /// A run over one case.
 pub struct Run<'a> {
     /// The worktree.
@@ -165,6 +267,14 @@ impl<'a> Run<'a> {
                 "the case {id} has no base branch to open its pull request against: the tree is on a detached HEAD; check out the branch the pull request is against, or run without a forge"
             );
         }
+        // A case opened for a story records it: the next run on the repository finds the story
+        // `active` with this case open and resumes it, never opens a second.
+        if let Unit::Story(story) = &unit
+            && let Err(error) = case.set_story(&story.id)
+        {
+            case.discard()?;
+            return Err(error);
+        }
         Ok(Self {
             tree: tree.to_path_buf(),
             case,
@@ -178,11 +288,56 @@ impl<'a> Run<'a> {
         })
     }
 
-    /// Opens the case on the next ready story of `frontier`, the store told last: for each
-    /// candidate in order, the case is opened first (the protocol loaded, the inputs checked),
-    /// then the story is taken; a refusal removes the case just opened, is printed on `out`
-    /// verbatim, and the next candidate is tried. `None`, with no case opened, when nothing is
-    /// ready. One case directory per taken story, none for a refused one.
+    /// Prepares a run on the case `id` a run before this one opened under `tree`: the case's
+    /// files as they are, its `authority.yaml` read into every evaluation, its intent and inputs
+    /// the run's. The unit is the story the case records, or the intent it was opened on.
+    /// Nothing is opened and nothing discarded; the protocol, inputs and case id in `options`
+    /// are not read: the case's own rule.
+    pub fn resume(
+        tree: &Path,
+        mut options: RunOptions,
+        id: &str,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        let case = CaseDir::resume(tree, id)?;
+        let intent = case.intent()?;
+        let unit = match case.story()? {
+            Some(story) => {
+                // `intent.md` of a story's case is its title, a blank line, its body.
+                let (title, body) = intent.split_once("\n\n").unwrap_or((intent.as_str(), ""));
+                Unit::Story(Story {
+                    id: story,
+                    title: title.to_owned(),
+                    body: body.to_owned(),
+                })
+            }
+            None => Unit::Intent(intent.clone()),
+        };
+        options.intent = intent;
+        options.inputs = case.inputs();
+        options.case_id = Some(id.to_owned());
+        options.protocol = case.protocol.id.clone();
+        Ok(Self {
+            tree: tree.to_path_buf(),
+            case,
+            unit,
+            harness,
+            validators,
+            steps: 0,
+            tokens: 0,
+            started: Instant::now(),
+            options,
+        })
+    }
+
+    /// Resumes the open case of a story `frontier` lists `active`, if there is one; else opens
+    /// the case on the next ready story, the store told last: for each candidate in order, the
+    /// case is opened first (the protocol loaded, the inputs checked), then the story is taken;
+    /// a refusal removes the case just opened, is printed on `out` verbatim, and the next
+    /// candidate is tried. `None`, with no case opened, when nothing is open and nothing is
+    /// ready. One case directory per taken story, none for a refused one, never a second for a
+    /// story with one open.
     pub fn open_next(
         tree: &Path,
         options: RunOptions,
@@ -191,6 +346,19 @@ impl<'a> Run<'a> {
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Option<Self>> {
+        let active = frontier.active(tree)?;
+        if let Some((case_id, story_id)) = crate::case::resumable(tree, &active, out)? {
+            let run = Self::resume(tree, options, &case_id, harness, validators)?;
+            let title = match &run.unit {
+                Unit::Story(story) => story.title.clone(),
+                Unit::Intent(intent) => intent.clone(),
+            };
+            writeln!(
+                out,
+                "frontier: resumed {story_id}: {title} (case {case_id})"
+            )?;
+            return Ok(Some(run));
+        }
         for id in frontier.candidates(tree)? {
             let story = frontier.show(tree, &id)?;
             let title = story.title.clone();
@@ -239,8 +407,20 @@ impl<'a> Run<'a> {
         None
     }
 
-    /// Runs until a stop; prints one line per frontier, step and evidence to `out`.
+    /// Runs until a stop; prints one line per frontier, step and evidence to `out`. The run
+    /// holds the case while it runs (`run.lock` under the case directory), so no grant lands
+    /// and no second run starts on it meanwhile; it lets go at every stop and on error.
     pub fn run(&mut self, out: &mut dyn Write) -> Result<Stop> {
+        self.case.hold()?;
+        let outcome = self.run_held(out);
+        let released = self.case.release();
+        let stop = outcome?;
+        released?;
+        Ok(stop)
+    }
+
+    /// The loop, the case held.
+    fn run_held(&mut self, out: &mut dyn Write) -> Result<Stop> {
         let inputs: Vec<String> = self
             .options
             .inputs
@@ -259,7 +439,10 @@ impl<'a> Run<'a> {
                 inputs.join(" ")
             }
         )?;
-        let mut seq = 0usize;
+        // One sequence per case, continued across its runs: no decision file is overwritten,
+        // so the latest by name is the latest written, and a record id, numbered by the same
+        // sequence, never repeats.
+        let mut seq = self.case.evaluations()?;
         let mut last_idle: Option<String> = None;
         // The validators that observed without writing a record, each with the revision it
         // observed at: not due again there, because the next observation would end the same
@@ -380,7 +563,20 @@ impl<'a> Run<'a> {
             // What the step changed is the difference to what was already uncommitted: a
             // validator's run may leave files (a lock file) that are not the harness's doing.
             let before: Vec<String> = crate::git::changed_paths(&self.tree)?;
-            let report = self.harness.step(&context)?;
+            // The cases directory is the kernel's, every case under it: its files are what
+            // the evaluations read, and a harness that wrote into it (a grant, a record, a
+            // branch number, the protocol, for this case or a sibling waiting for its grant)
+            // would decide what only a validator or the operator decides. It is snapshotted
+            // before the step and put back after, whatever the step reported and however it
+            // ended; a step that touched it is refused.
+            let cases = self.tree.join(CASES_DIR);
+            let kept = snapshot(&cases)?;
+            let stepped = self.harness.step(&context);
+            let touched = differing(&kept, &snapshot(&cases)?);
+            if !touched.is_empty() {
+                restore(&cases, &kept, &touched)?;
+            }
+            let report = stepped?;
             if let Some(tokens) = report.tokens {
                 self.tokens += tokens;
             }
@@ -394,8 +590,25 @@ impl<'a> Run<'a> {
             writeln!(out, "  said: {}", report.summary)?;
             let changed: Vec<String> = crate::git::changed_paths(&self.tree)?
                 .into_iter()
-                .filter(|p| !p.starts_with(CASES_DIR) && !before.contains(p))
+                .filter(|p| !crate::case::is_under_cases(p) && !before.contains(p))
                 .collect();
+            if !touched.is_empty() {
+                crate::git::discard_all(&self.tree)?;
+                let paths: Vec<String> = touched
+                    .iter()
+                    .map(|p| Path::new(CASES_DIR).join(p).display().to_string())
+                    .collect();
+                let why = format!(
+                    "{} wrote into the cases directory: {}",
+                    report.action,
+                    paths.join(", ")
+                );
+                writeln!(
+                    out,
+                    "  refused: {why}; the cases directory was put back and the change discarded"
+                )?;
+                return Ok(Stop::StepRefused(why));
+            }
             if approvals.contains(&report.action) {
                 if !changed.is_empty() {
                     crate::git::discard_all(&self.tree)?;

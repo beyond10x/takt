@@ -72,9 +72,10 @@ pub fn changed_paths(tree: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Stages everything but the case directory and commits with `message`; answers the new `HEAD`.
+/// Stages everything but what is under the cases directory (the directory itself, never a
+/// path that merely starts with its name) and commits with `message`; answers the new `HEAD`.
 pub fn commit_all(tree: &Path, message: &str) -> Result<String> {
-    let exclude = format!(":(exclude){}", crate::case::CASES_DIR);
+    let exclude = format!(":(exclude){}/", crate::case::CASES_DIR);
     run(tree, &["add", "-A", "--", ".", &exclude])?;
     run(
         tree,
@@ -92,9 +93,11 @@ pub fn commit_all(tree: &Path, message: &str) -> Result<String> {
     head(tree)
 }
 
-/// Discards every uncommitted change, tracked and untracked, but the case directory.
+/// Discards every uncommitted change, tracked and untracked, but what is under the cases
+/// directory (the directory itself, never a path that merely starts with its name).
 pub fn discard_all(tree: &Path) -> Result<()> {
+    let keep = format!("{}/", crate::case::CASES_DIR);
     run(tree, &["checkout", "--", "."])?;
-    run(tree, &["clean", "-fdq", "-e", crate::case::CASES_DIR])?;
+    run(tree, &["clean", "-fdq", "-e", &keep])?;
     Ok(())
 }
