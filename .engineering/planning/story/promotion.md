@@ -10,6 +10,7 @@ relations:
 - serves: vision:safe-agentic-coding
 - depends_on: story:scorecard-reader
 - supersedes: story:pinned-judge-and-promotion
+- depends_on: story:binary-embeds-revision
 scope:
 - confidence: inferred
   path: README.md
