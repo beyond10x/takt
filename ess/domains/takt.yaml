@@ -141,19 +141,25 @@ types:
     variants: [granted, denied]
 
   # One approval the operator gave a story's case, as the planning store records it: the
-  # capability granted, who granted it and when. `takt approve <case> <capability>` writes it
-  # through `aep plan artifact evidence <story> --kind approval`, with the approver as the
-  # record's `--source` and the instant as its `--at`, and it is read back through the same store.
-  # The grant itself goes into the case (`Case.authority`); this is its record on the story.
+  # capability granted, the case it was granted to, who granted it and when. `takt approve
+  # <case> <capability>` writes it through `aep plan artifact evidence <story> --kind approval`
+  # and it is read back through the same store, with the record's source and instant as
+  # `aep plan artifact evidence` records them; which value names the approver is
+  # story:merge-under-authority's (`--by <approver>`). The grant itself goes into the case
+  # (`Case.authority`); this is its record on the story.
   # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:47-49
   - name: takt.work.Approval
     kind: struct
     fields:
       - name: capability
         type: takt.work.CapabilityId
+      # The case whose `authority.yaml` the grant was written into, what the record refers to.
+      # read from: .engineering/planning/story/merge-under-authority.md:40
+      - name: case
+        type: takt.work.CaseId
       - name: approver
         type: String
-        summary: Who granted it, as the store records the record's source.
+        summary: Who granted it; which record value names the approver is story:merge-under-authority's.
       - name: granted_at
         type: Timestamp
 
@@ -543,16 +549,19 @@ entities:
       - name: validators
         type: List<takt.work.ProducerName>
         summary: The validators, one per deterministic action; `takt.tests-run` today.
-      # The instant the run started, as `now()` writes one (`YYYY-MM-DDTHH:MM:SSZ`): the instant
-      # the case id is minted from when `--case-id` gives none. The elapsed clock the hour budget
-      # is measured against is a monotonic instant and is not stored.
-      # read from: crates/takt/src/run.rs:111
+      # The instant the run started, as `now()` writes one (`YYYY-MM-DDTHH:MM:SSZ`), set on the
+      # generated-id path only: it is the instant the case id is minted from when `--case-id`
+      # gives none, and `--case-id` skips the mint, so a run given its case id records no
+      # instant. The elapsed clock the hour budget is measured against is a monotonic instant
+      # and is not stored.
+      # read from: crates/takt/src/run.rs:108-111
+      # read from: crates/takt-cli/src/main.rs:63-65
       # read from: crates/takt/src/lib.rs:24-32
       # read from: crates/takt/src/run.rs:91
       # read from: crates/takt/src/run.rs:120
       # read from: crates/takt/src/run.rs:131-135
       - name: started_at
-        type: Timestamp
+        type: Optional<Timestamp>
       # read from: crates/takt/src/run.rs:87-88
       - name: steps
         type: Integer
@@ -641,12 +650,14 @@ entities:
   # revision performing its action, its records written to the case. A judgement step is the
   # harness performing exactly one of the actions offered (the admissible actions no validator
   # owns) in the worktree and reporting which: the gate action requested with no change ends the
-  # run with `approval_required`; an action neither offered nor the gate, a `repository.inspect`
-  # that changed a file, or a `tests.write` that changed a non-test path, is refused and the
-  # change discarded; a change is committed and `implementation` moved to the new head.
+  # run with `approval_required`; the gate action requested with a change, an action neither
+  # offered nor the gate, a `repository.inspect` that changed a file, or a `tests.write` that
+  # changed a non-test path, is refused and the change discarded; a change is committed and
+  # `implementation` moved to the new head.
   # read from: docs/design/takt.md:40-42
   # read from: crates/takt/src/run.rs:184-212
   # read from: crates/takt/src/run.rs:214-315
+  # read from: crates/takt/src/run.rs:263-274
   # read from: crates/takt/src/harness.rs:14-50
   - name: takt.work.Step
     naming:
