@@ -11,6 +11,7 @@ relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 - depends_on: story:scorecard-reader
+- depends_on: story:harness-journey-timeline
 scope:
 - confidence: inferred
   path: crates/takt/src/harness.rs
