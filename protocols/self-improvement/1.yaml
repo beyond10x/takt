@@ -161,7 +161,8 @@ actions:
       - evidence: merge_observation
   candidate.merge_judge_surface:
     description: >-
-      merge a candidate that touches a judge surface; only the owner holds this capability
+      merge a candidate that touches a judge surface; the owner holds this capability, or a role
+      the owner delegated it to by a revocable record (story:judge-guard enforces it)
     effect: write
     precondition:
       all:

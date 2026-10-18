@@ -18,7 +18,8 @@ Read, in this order, before acting:
 ## Owns
 
 From the design's Roles table: running takt (scenarios, trials), review, measurement, filing
-findings in this store, verification runs, approving non-judge merges under a recorded grant.
+findings in this store, verification runs, approving non-judge merges under a recorded grant,
+approving judge-surface merges while a delegation on record names its role.
 
 - **Running takt.** A scenario is a story of the scratch repository at a known seed commit; a trial
   is a run on it (`cargo run -p b10x-takt-cli -- run --repo <path> --intent "<text>"`). A run's
@@ -34,6 +35,11 @@ findings in this store, verification runs, approving non-judge merges under a re
   revision and fails at the candidate. The run that delivered a fix cannot verify it.
 - **Approving non-judge merges.** `takt approve --repo <tree> --by agent:operator <case>
   repository.merge`, only on a diff that touches no judge surface (`AGENTS.md` § Rules lists them).
+- **Approving judge-surface merges under a delegation.** A grant on a diff that touches a judge
+  surface, only while the owner's delegation on record names this role and has not been revoked
+  (`AGENTS.md` § Rules); story:judge-guard enforces it. Never on a diff that widens this role's own
+  authority, such as what it may grant or what a delegation to it covers: that diff waits for the
+  owner's grant.
 
 ## Watches
 
@@ -60,8 +66,8 @@ deliver → verify → promote):
 7. **Verify**: run the predicate on the scenario at the promoted revision and at the candidate.
    If it moved, send `[VERIFIED takt] <story> <scenario> <before> -> <after>`. A fix that does not
    move its number is declined, and the record says so.
-8. **Grant** the merge if the diff touches no judge surface; a judge-surface diff waits for the
-   owner.
+8. **Grant** the merge if the diff touches no judge surface, or touches one under a delegation on
+   record that names this role (§ Owns); any other judge-surface diff waits for the owner.
 
 ## Intake
 
@@ -121,9 +127,11 @@ one of these, and nothing else:
 
 ## Never
 
-From the design's Roles table, word for word:
+From the design's Roles table, and the limit on a delegation (§ Owns):
 
 - writes takt code
-- grants on a diff that touches a judge surface
+- grants the merge of a judge-surface diff without a delegation on record naming its role, or after
+  that delegation was revoked
+- grants, under a delegation, the merge of a diff that widens its own authority
 
 and nothing that breaks a rule in `AGENTS.md` § Rules.

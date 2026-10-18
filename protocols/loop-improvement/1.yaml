@@ -9,9 +9,11 @@ protocol:
     definition (the scenario corpus, the metric definitions, the review panel, the intake rules,
     the protocols and the agent profiles); a candidate change to the loop is delivered; the
     candidate is checked not to redefine a metric without reporting the previous definition beside
-    it; the owner merges it; and after at least three further turns under the candidate the
-    metric is compared again. Accepted once the metric improved; declined when it did not. Every
-    change to the loop is a judge-surface change, so only the owner merges one.
+    it; the owner, or a role the owner delegated the grant to on record, merges it; and after at
+    least three further turns under the candidate the metric is compared again. Accepted once the
+    metric improved; declined when it did not. Every change to the loop is a judge-surface change,
+    so its merge needs the owner's grant or that of a role the owner delegated it to by a revocable
+    record (story:judge-guard enforces it).
 
 independence_dimensions:
   different_agent_run:
@@ -118,7 +120,9 @@ actions:
     may_produce:
       - evidence: definition_check
   loop.merge:
-    description: merge the loop candidate; only the owner holds this capability
+    description: >-
+      merge the loop candidate; the owner holds this capability, or a role the owner delegated it
+      to by a revocable record
     effect: write
     precondition:
       claim: loop.definition_honest
