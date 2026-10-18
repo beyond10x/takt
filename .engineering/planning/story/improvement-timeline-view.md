@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:improvement-timeline-view
 kind: story
-status: draft
+status: implemented
 title: A generated timeline of takt's figures per revision, for the deck and the site
 summary: a generator draws tokens, time and resumes per revision with waves and turns marked; deck and site embed it
 relations:
@@ -16,7 +16,11 @@ scope:
   path: docs/metrics/timeline.svg
 - confidence: inferred
   path: docs/pitch/index.html
-revision: 3
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T14:33:46Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-18T14:33:46Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-18T14:34:06Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: improvement-timeline-view
 

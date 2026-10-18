@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:metrics-over-time
 kind: story
-status: draft
+status: implemented
 title: Scenario runs and improvement turns are kept as a committed time series
 summary: docs/metrics holds one record per scenario run and per improvement turn, raw usage only
 relations:
@@ -15,7 +15,11 @@ scope:
   path: docs/metrics/improvement-turns.jsonl
 - confidence: inferred
   path: docs/metrics/scenario-runs.jsonl
-revision: 3
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T14:33:46Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-18T14:33:46Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-18T14:34:06Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: metrics-over-time
 
