@@ -92,7 +92,8 @@ cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
 ## Roles
 
 From `design:recursive-self-improvement` § Roles, the owner's decision (2026-10-18). Each agent
-role's profile is `.agents/<role>-agent.md`, with a pointer stub under `.claude/agents/`.
+role's profile is `.agents/<role>-agent.md`, a frontmatter of `name` and `description` and then
+the profile; `.claude/agents/<role>-agent.md` is a relative symlink to it.
 
 | role | owns | never | runs as |
 |---|---|---|---|
@@ -108,7 +109,8 @@ doc-writer, and the developer reports to it.
 ## Messages
 
 The store carries the content; a message only announces that the store changed. Its first line is
-one of these, and nothing else:
+one of these, and nothing else. This table is the contract; each profile under `.agents/` carries
+a copy of it, and a copy that differs from it is wrong:
 
 | first line | sent by | to | after |
 |---|---|---|---|
