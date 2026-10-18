@@ -448,10 +448,22 @@ struct StoreChange {
 /// The kinds of actor the store writes a record as, each followed by `:` and a name.
 const ACTOR_KINDS: [&str; 3] = ["human", "agent", "service"];
 
+/// The kinds of actor that may grant a story's capability: a person or an agent role.
+const APPROVER_KINDS: [&str; 2] = ["human", "agent"];
+
+/// Whether `approver` may grant a story's capability: `human:<name>` or `agent:<role>`, an
+/// actor the store writes ([`is_store_actor`]). The store writes an approval's record as its
+/// approver ([`crate::frontier::Aep`] sets `AEP_ACTOR`); `system` and `service:<name>` are the
+/// store's and tools' own actors, not who grants.
+fn is_approver(approver: &str) -> bool {
+    is_store_actor(approver)
+        && approver
+            .split_once(':')
+            .is_some_and(|(kind, _)| APPROVER_KINDS.contains(&kind))
+}
+
 /// Whether `actor` is an actor the store writes: `system`, or `human`, `agent` or `service`, a
-/// `:`, and a name of ASCII letters, digits, `.`, `_`, `@` and `-`. The store writes an
-/// approval's record as its approver ([`crate::frontier::Aep`] sets `AEP_ACTOR`), so the
-/// approver of a story's grant must be one ([`prepare_grant`]).
+/// `:`, and a name of ASCII letters, digits, `.`, `_`, `@` and `-`.
 fn is_store_actor(actor: &str) -> bool {
     actor == "system"
         || actor.split_once(':').is_some_and(|(kind, name)| {
@@ -631,8 +643,8 @@ pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<
 /// never lands while a run holds the case, and no run starts until the grant is written or
 /// dropped. Refused: an id that is not a case id ([`check_id`]), a case that does not exist, a
 /// case another holds, a capability that is not an identifier, an empty approver, for a story's
-/// case an approver that is not an actor the planning store records, a capability
-/// no action of the case's protocol requires (a grant nothing asks for is a typo, told at the
+/// case an approver that is not `human:<name>` or `agent:<role>` as the store writes them, a
+/// capability no action of the case's protocol requires (a grant nothing asks for is a typo, told at the
 /// command line rather than by a run that stops at the gate again), a capability whose actions
 /// are about no single artifact ([`LoadedProtocol::grant_subject`]), a case that is not at the
 /// gate for the capability (its latest decision does not find an action requiring it
@@ -665,9 +677,10 @@ pub fn prepare_grant(
         bail!("the approver is empty; say who grants {capability}");
     }
     // A story's grant is recorded in the store as its approver, and its record rides to the
-    // base only with the approver as its actor: the approver is an actor the store writes.
+    // base only with the approver as its actor: the approver is a person or an agent role the
+    // store writes as.
     let story = story_of(&dir)?;
-    if story.is_some() && !is_store_actor(approver) {
+    if story.is_some() && !is_approver(approver) {
         bail!(
             "the approver `{}` is not an actor the planning store records; say who grants {capability} as human:<name> or agent:<role>",
             approver.escape_debug()
@@ -910,20 +923,45 @@ fn kept_path(case_dir: &Path, revision: &str, name: &str) -> Option<PathBuf> {
         .then(|| case_dir.join(RIDERS_DIR).join(revision).join(name))
 }
 
+/// The suffix of the file beside a kept record that holds the path, relative to the tree, the
+/// store's write committed it at.
+const KEPT_PATH_SUFFIX: &str = ".path";
+
+/// Whether the case at `case_dir` keeps the file `name` of a store write at `revision`
+/// ([`keep_rider`]): the record and the path it was committed at, both regular files.
+#[must_use]
+pub fn is_kept_at(case_dir: &Path, revision: &str, name: &str) -> bool {
+    let regular = |path: Option<PathBuf>| {
+        path.and_then(|path| std::fs::symlink_metadata(path).ok())
+            .is_some_and(|meta| meta.is_file())
+    };
+    regular(kept_path(case_dir, revision, name))
+        && regular(kept_path(
+            case_dir,
+            revision,
+            &format!("{name}{KEPT_PATH_SUFFIX}"),
+        ))
+}
+
 /// Keeps in the case at `case_dir`, as `name` at `revision`, the one file the store's write
 /// `commit` on the case's branch in `tree` added or changed against its one parent, read from
-/// the commit: what [`approvals_only`] lets ride above `revision`, byte for byte. A commit
+/// the commit, and beside it, as `<name>.path`, the path it was committed at: what
+/// [`approvals_only`] lets ride above `revision`, at that path and byte for byte. A commit
 /// with another number of parents, or that changes no file or more than one, keeps nothing and
-/// is the error. Answers the path kept.
+/// is the error. Answers the paths kept.
 pub fn keep_rider(
     tree: &Path,
     case_dir: &Path,
     revision: &str,
     commit: &str,
     name: &str,
-) -> Result<PathBuf> {
-    let path = kept_path(case_dir, revision, name)
-        .ok_or_else(|| anyhow!("the revision {revision} is not a commit id; nothing kept"))?;
+) -> Result<[PathBuf; 2]> {
+    let (Some(path), Some(at)) = (
+        kept_path(case_dir, revision, name),
+        kept_path(case_dir, revision, &format!("{name}{KEPT_PATH_SUFFIX}")),
+    ) else {
+        bail!("the revision {revision} is not a commit id; nothing kept");
+    };
     let read = crate::git::commit(tree, commit)?;
     let [parent] = read.parents.as_slice() else {
         bail!("the store's write {commit} has no one parent; nothing kept");
@@ -942,22 +980,37 @@ pub fn keep_rider(
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
     std::fs::write(&path, bytes).with_context(|| format!("write {}", path.display()))?;
-    Ok(path)
+    std::fs::write(&at, change.path.as_bytes())
+        .with_context(|| format!("write {}", at.display()))?;
+    Ok([path, at])
 }
 
-/// Whether the blob `blob` is byte for byte the file `name` the case at `case_dir` keeps at
-/// `revision` ([`keep_rider`]): a regular file, never followed through a link, of the blob's
-/// size; a file not kept matches nothing.
-fn is_kept(tree: &Path, case_dir: &Path, revision: &str, name: &str, blob: &str) -> Result<bool> {
-    let Some(path) = kept_path(case_dir, revision, name) else {
-        return Ok(false);
-    };
-    let Ok(meta) = std::fs::symlink_metadata(&path) else {
-        return Ok(false);
-    };
-    if !meta.is_file() {
+/// Whether `change` is, at its path and byte for byte, the file `name` the case at `case_dir`
+/// keeps at `revision` ([`keep_rider`]): the record and its path regular files, never followed
+/// through a link, the blob of the record's size; a file not kept matches nothing.
+fn is_kept(
+    tree: &Path,
+    case_dir: &Path,
+    revision: &str,
+    name: &str,
+    change: &Change,
+) -> Result<bool> {
+    if !is_kept_at(case_dir, revision, name) {
         return Ok(false);
     }
+    let (Some(path), Some(at)) = (
+        kept_path(case_dir, revision, name),
+        kept_path(case_dir, revision, &format!("{name}{KEPT_PATH_SUFFIX}")),
+    ) else {
+        return Ok(false);
+    };
+    let kept_at = std::fs::read(&at).with_context(|| format!("read {}", at.display()))?;
+    if kept_at != change.path.as_bytes() {
+        return Ok(false);
+    }
+    let blob = change.blob.as_str();
+    let meta =
+        std::fs::symlink_metadata(&path).with_context(|| format!("read {}", path.display()))?;
     let size = crate::git::run(tree, &["cat-file", "-s", blob])?;
     if size.parse::<u64>().ok() != Some(meta.len()) {
         return Ok(false);
@@ -978,18 +1031,20 @@ fn is_kept(tree: &Path, case_dir: &Path, revision: &str, name: &str, blob: &str)
 ///   grant ([`Authority::grants_at`]), by its approver as its actor ([`StoreRecord::records`]);
 ///   no grant is recorded twice, so there are no more such commits than grants;
 /// - one `test_result`, [`crate::frontier::test_result_subject`]: one change, the addition of a
-///   new regular file directly in the story's evidence directory, byte for byte the record the
-///   case keeps at `revision` as [`KEPT_TEST_RESULT`];
-/// - one move to `implemented`, [`crate::frontier::implemented_subject`], and only as the last,
-///   `head` itself: one change, the story's own file in the planning store changed, byte for
-///   byte the file the case keeps at `revision` as [`KEPT_MOVE`].
+///   new regular file directly in the story's evidence directory, at the path and byte for byte
+///   the record the case keeps at `revision` as [`KEPT_TEST_RESULT`];
+/// - one move to `implemented`, [`crate::frontier::implemented_subject`], only as the last,
+///   `head` itself, and only with the `test_result` below it: one change, the story's own file
+///   in the planning store changed, byte for byte the file the case keeps at `revision` as
+///   [`KEPT_MOVE`].
 ///
 /// The case stays at `revision`, the one the grant was given at and every claim is about;
 /// `pr.open` and `repository.merge` push `HEAD` with the riders above it and merge that head,
 /// so the store's records of the story reach the base with the pull request and nothing else
 /// rides along. A commit that does anything else, a file that is any other record or not
-/// byte-equal to the one kept, a grant recorded twice, a second `test_result`, a move that is
-/// not last or a second one, or a case with no story, rides on nothing.
+/// byte-equal to the one kept at its path, a grant recorded twice, a second `test_result`, a
+/// move that is not last, without the `test_result` below it or a second one, or a case with
+/// no story, rides on nothing.
 pub fn approvals_only(tree: &Path, revision: &str, head: &str, case_dir: &Path) -> Result<bool> {
     let Some(story) = story_of(case_dir)? else {
         return Ok(false);
@@ -1033,11 +1088,13 @@ pub fn approvals_only(tree: &Path, revision: &str, head: &str, case_dir: &Path) 
         return Ok(false);
     };
     let mut test_result_rode = false;
+    // Whether the head is the move, which rides only with the `test_result` below it.
+    let mut moved_last = false;
     let mut at = head.to_owned();
     // One approval's commit per grant, one `test_result` and one move, then `revision`.
     for depth in 0..=grants.min(APPROVALS_AT_MOST) + 2 {
         if at == revision {
-            return Ok(true);
+            return Ok(!moved_last || test_result_rode);
         }
         let commit = crate::git::commit(tree, &at)?;
         let [parent] = commit.parents.as_slice() else {
@@ -1047,6 +1104,7 @@ pub fn approvals_only(tree: &Path, revision: &str, head: &str, case_dir: &Path) 
             return Ok(false);
         };
         let rides = if commit.subject == moved {
+            moved_last = true;
             depth == 0
                 && match changes.as_slice() {
                     [change] => {
@@ -1054,7 +1112,7 @@ pub fn approvals_only(tree: &Path, revision: &str, head: &str, case_dir: &Path) 
                             && change.from_mode == "100644"
                             && change.to_mode == "100644"
                             && change.path == story_file
-                            && is_kept(tree, case_dir, revision, KEPT_MOVE, &change.blob)?
+                            && is_kept(tree, case_dir, revision, KEPT_MOVE, change)?
                     }
                     _ => false,
                 }
@@ -1063,7 +1121,7 @@ pub fn approvals_only(tree: &Path, revision: &str, head: &str, case_dir: &Path) 
                 && match changes.as_slice() {
                     [change] => {
                         change.adds_a_record_in(&evidence)
-                            && is_kept(tree, case_dir, revision, KEPT_TEST_RESULT, &change.blob)?
+                            && is_kept(tree, case_dir, revision, KEPT_TEST_RESULT, change)?
                     }
                     _ => false,
                 }

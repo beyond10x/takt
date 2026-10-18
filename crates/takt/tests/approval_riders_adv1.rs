@@ -288,11 +288,11 @@ fn adv1_a_record_that_also_answers_a_review_does_not_ride() {
     assert_eq!(case.resumed(), head);
 }
 
-/// Real approvals by grantors of every kind the store records ride: the comparison must equal
-/// what the store wrote for them, not refuse the operator's own grant. A grantor whose name the
-/// store records as no actor (runs of spaces, edge spaces, a combining mark, no kind) is refused
-/// at the approval, with nothing recorded and no grant written, rather than recorded as someone
-/// else.
+/// Real approvals by every grantor a story takes, a person or an agent role, ride: the comparison
+/// must equal what the store wrote for them, not refuse the operator's own grant. A grantor that
+/// is neither `human:<name>` nor `agent:<role>` as the store writes them (runs of spaces, edge
+/// spaces, a combining mark, no kind, the store's `system`, a `service`) is refused at the
+/// approval, with nothing recorded and no grant written, rather than recorded as someone else.
 #[test]
 fn adv1_real_approvals_by_unusual_grantors_ride() {
     for (name, approver) in [
@@ -300,6 +300,8 @@ fn adv1_real_approvals_by_unusual_grantors_ride() {
         ("edges", " lead "),
         ("combining", "Zoe\u{308} O\u{308}lm"),
         ("untyped", "operator"),
+        ("system", "system"),
+        ("service", "service:ci"),
     ] {
         let repo = repository(&format!("refused-{name}"));
         let (id, granted) = at_the_gate(&repo);
@@ -322,7 +324,7 @@ fn adv1_real_approvals_by_unusual_grantors_ride() {
     for (name, approver) in [
         ("dotted", "human:jane.doe"),
         ("agent", "agent:planner"),
-        ("service", "service:a.b@c_d-E9"),
+        ("unusual", "agent:a.b@c_d-E9"),
     ] {
         let case = approved_by(name, approver);
         assert_eq!(case.record["actor"], approver, "{approver:?}");

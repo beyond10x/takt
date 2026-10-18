@@ -919,11 +919,11 @@ impl<'a> Run<'a> {
     /// to `implemented`, which the store judges, the last; each a commit on the case's branch
     /// with what it committed kept in the case directory ([`crate::case::keep_rider`]) and its
     /// line in the case's record, written with the commit: either that cannot be written takes
-    /// the commit back ([`crate::frontier::write_on_case_branch`]). A write the case's record
-    /// names, or whose commit subject the case's branch holds, is not made again. A refusal, the
-    /// store's verbatim or takt's own, is recorded, then printed, and nothing is retried. What is
-    /// printed comes after what is recorded: an `out` that fails skips no line and no write, and
-    /// is the error once both writes were tried.
+    /// the commit back ([`crate::frontier::write_on_case_branch`]). A write kept at the case's
+    /// current revision and committed above it is not made again; one of an earlier revision
+    /// is. A refusal, the store's verbatim or takt's own, is recorded, then printed, and nothing
+    /// is retried. What is printed comes after what is recorded: an `out` that fails skips no
+    /// line and no write, and is the error once both writes were tried.
     fn record_accepted(
         &self,
         events: &Events,
@@ -934,11 +934,19 @@ impl<'a> Run<'a> {
         let recorded = events.read()?;
         let branch = &self.case.branch;
         let on_branch = format!("refs/heads/{branch}");
-        let done = |event: &str, subject: &str| -> Result<bool> {
-            Ok(recorded
-                .iter()
-                .any(|line| line["event"] == event && line["story"] == story)
-                || crate::git::has_subject(&self.tree, &on_branch, subject)?)
+        // A write is done at the case's current revision only: kept under it and committed above
+        // it. One made at an earlier revision is no record of this one and is made again.
+        let revision = self.case.revision("implementation");
+        let done = |name: &str, subject: &str| -> Result<bool> {
+            let Some(revision) = revision.as_deref() else {
+                return Ok(false);
+            };
+            Ok(crate::case::is_kept_at(&self.case.dir, revision, name)
+                && crate::git::has_subject(
+                    &self.tree,
+                    &format!("{revision}..{on_branch}"),
+                    subject,
+                )?)
         };
         let committed = |commit: &Option<String>| match commit {
             Some(commit) => format!(" (committed {} on {branch})", short(commit)),
@@ -953,7 +961,7 @@ impl<'a> Run<'a> {
             }
         };
         let evidence_subject = crate::frontier::test_result_subject(story);
-        if !done("store_evidence", &evidence_subject)? {
+        if !done(KEPT_TEST_RESULT, &evidence_subject)? {
             let written = self.observed_pass(&recorded).and_then(|observed| {
                 let Some((reference, at)) = observed else {
                     return Err(anyhow::anyhow!(
@@ -1004,7 +1012,7 @@ impl<'a> Run<'a> {
             }
         }
         let move_subject = crate::frontier::implemented_subject(story);
-        if !done("store_move", &move_subject)? {
+        if !done(KEPT_MOVE, &move_subject)? {
             match crate::frontier::write_on_case_branch(
                 &self.tree,
                 branch,
@@ -1071,7 +1079,9 @@ impl<'a> Run<'a> {
         if recorded.is_err()
             && let Some(kept) = &kept
         {
-            let _ = std::fs::remove_file(kept);
+            for kept in kept {
+                let _ = std::fs::remove_file(kept);
+            }
         }
         recorded
     }
