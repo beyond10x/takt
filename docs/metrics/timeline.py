@@ -10,6 +10,7 @@ import html
 import json
 import os
 import statistics
+import subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUNS = os.path.join(HERE, "scenario-runs.jsonl")
@@ -62,6 +63,13 @@ def build():
     slot_label = {slots[0]: f"before wave {first}"}
     for w in waves:
         slot_label[at(w)] = at(w)
+    wave_slots = {at(w) for w in waves}
+
+    def ancestor(a, b):
+        # a revision measured before a wave merged goes before that wave's column, not after it
+        p = subprocess.run(["git", "merge-base", "--is-ancestor", a, b], cwd=HERE,
+                           capture_output=True)
+        return p.returncode == 0
 
     candidate_of = {t["after"]["takt_revision"]: t for t in turns}
     takt = [r for r in runs if r["arm"] == "takt"]
@@ -74,7 +82,11 @@ def build():
             if before in slots:
                 slots.insert(slots.index(before) + 1, s)
             else:
-                slots.append(s)
+                later = [i for i, sl in enumerate(slots) if sl in wave_slots and ancestor(s, sl)]
+                if later:
+                    slots.insert(later[0], s)
+                else:
+                    slots.append(s)
             slot_label[s] = s
 
     refs = []
@@ -98,6 +110,10 @@ def build():
     wall_step = nice_step(wall_top * 1.1)
     wall_max = wall_step * (int(wall_top * 1.1 // wall_step) + 1)
 
+    # every column gets at least 96 px, so the labels under the axis keep apart as revisions are added
+    global W, PW
+    W = max(960, L + R + 96 * len(slots))
+    PW = W - L - R
     slot_w = PW / len(slots)
 
     def x_of(i):
@@ -165,14 +181,22 @@ def build():
                  f'{esc(name)}, median {thousands(int(v))} (n={n})</text>')
 
     shown = [w for w in waves if at(w) in slots]
-    for k, w in enumerate(shown):
+    rows = {T - 46: [], T - 20: [], T - 72: []}
+    for w in shown:
         x = x_of(slots.index(at(w))) - slot_w / 2
-        top = T - 46 if k % 2 == 0 else T - 20
+        label = w.get("label") or ", ".join(w["stories"][:2])
+        # about 6.2 px per character at 11 px; a label that would leave the chart is set left of its
+        # line, and each label takes the first row where it overlaps no other
+        wide = (len(label) + len(w["wave"]) + 7) * 6.2
+        tx, anchor = (x - 5, "end") if x + 5 + wide > W - 4 else (x + 5, "start")
+        span = (tx - wide, tx) if anchor == "end" else (tx, tx + wide)
+        top = next((y for y, taken in rows.items() if all(span[1] < a or span[0] > b for a, b in taken)),
+                   T - 46)
+        rows[top].append(span)
         o.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{top - 10}" y2="{T + PH}" class="acc-s" '
                  f'stroke-width="1.5" stroke-dasharray="3 3"/>')
-        o.append(f'<text x="{x + 5:.1f}" y="{top}" font-size="11" font-weight="600" class="acc-t">'
-                 f'wave {esc(w["wave"])}: <tspan font-weight="400">'
-                 f'{esc(w.get("label") or ", ".join(w["stories"][:2]))}</tspan></text>')
+        o.append(f'<text x="{tx:.1f}" y="{top}" text-anchor="{anchor}" font-size="11" font-weight="600" '
+                 f'class="acc-t">wave {esc(w["wave"])}: <tspan font-weight="400">{esc(label)}</tspan></text>')
 
     for t in turns:
         before = t["before"]["takt_revision"]

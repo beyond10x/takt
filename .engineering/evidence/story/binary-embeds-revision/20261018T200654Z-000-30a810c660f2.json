@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T20:06:54Z",
+  "actor": "human:timo",
+  "artifact": "story:binary-embeds-revision",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check",
+    "reference": "wave/2026-10-18-w11 at 75e27e9: task check exit 0; 462/462 citations; 628 passed, 0 failed, 4 ignored"
+  }
+}

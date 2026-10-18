@@ -8,7 +8,7 @@ summary: Three levels (work, takt, the loop), four agent roles, a pinned judge, 
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 10
+revision: 11
 ---
 # Design: recursive self-improvement of takt
 
@@ -124,10 +124,18 @@ surface; for one cycle after a change the previous definition's numbers are prin
 new ones, so a metric cannot be redefined to look better.
 
 
-Open question, from the first recorded improvement turn (2026-10-18): at n=3 the token default trips on run-to-run noise. On scenario 1 with an unchanged harness, six takt runs at two revisions spread from 106,003 to 167,249 tokens; the turn's candidate, which changed only help text, had a median 24 % over its baseline because two of its three runs hit the known `repository.inspect` NoProgress (story:no-inspect-for-stateless-harness). `takt scorecard --against` therefore prints n and the minimum, median and maximum per side and flags only worse outcomes (story:scorecard-reader); which token rule promotion applies (a larger n, a spread-aware rule, or tokens per accepted unit with the known waste removed) is open and decided before story:promotion lands.
+Open question, from the first recorded improvement turn (2026-10-18): at n=3 the token default trips on run-to-run noise. On scenario 1 with an unchanged harness, six takt runs at two revisions spread from 106,003 to 167,249 tokens; the turn's candidate, which changed only help text, had a median 24 % over its baseline because two of its three runs hit the known `repository.inspect` NoProgress (story:no-inspect-for-stateless-harness). `takt scorecard --against` therefore prints n and the minimum, median and maximum per side and flags only worse outcomes (story:scorecard-reader); which token rule promotion applies (a larger n, a spread-aware rule, or tokens per accepted unit with the known waste removed) is decided below.
 
 
 Outcomes are compared by dominance (story:scorecard-reader, wave 10): per scenario the candidate is worse when, for some outcome rank, its share of cases at that rank or better is below the baseline's; a median rank missed regressions in fewer than half a scenario's cases (68 of 200 seeded worse candidates passed in its adversary pass). Dominance is strict, so a re-run of unchanged code with one flaky outcome, such as the `repository.inspect` NoProgress that scenario 1 hit in 3 of 6 runs, reports worse. How many trials promotion needs, and whether it re-runs or allows a margin, is decided with the token rule above.
+
+Decided 2026-10-18 by the planner, under the owner's standing grant, before story:promotion lands:
+
+- Trials: promotion runs the candidate n=5 times per scenario; the baseline's runs are the ones saved with the promoted revision's scorecard, at least 5.
+- Tokens: the candidate is worse on tokens for a scenario when its median exceeds the baseline's maximum. The rule tolerates the spread one unchanged harness shows (106,003 to 167,249 on scenario 1) and still catches a shift of the whole distribution. Tokens are counted per case, every case; known waste is removed by fixing it, not by excluding it from the count.
+- Flaky outcomes: dominance keeps its ranks, with a margin of one case per scenario: the candidate is worse at a rank when its count of cases at that rank or better is more than one below the baseline's. At n=5 a single flaky case passes, two cases worse at any rank fail.
+- No re-run: a candidate that fails is not run again until it changes, so a promotion cannot be reached by re-rolling.
+- The rule's parameters (n, the margin) are fields of the Scorecard record, so `takt scorecard --against` prints the rule it applied and a later change to the rule is a change to a judge surface.
 
 ## What earns each claim
 

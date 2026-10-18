@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:records-reach-base
 kind: story
-status: active
+status: implemented
 title: takt's records for a story reach the base with its merge
 summary: test_result and the move to implemented ride to the base with the merge, each file byte-equal to the case's own record
 relations:
@@ -15,10 +15,11 @@ scope:
   path: crates/takt/src/case.rs
 - confidence: inferred
   path: crates/takt/src/validator.rs
-revision: 8
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T18:27:20Z", actor: "human:timo", revision: 7}
 - {from: "proposed", to: "active", at: "2026-10-18T18:27:20Z", actor: "human:timo", revision: 8}
+- {from: "active", to: "implemented", at: "2026-10-18T20:06:55Z", actor: "human:timo", revision: 10, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: records-reach-base
 
@@ -63,3 +64,30 @@ From the reviewer's verdict on story:approval-riders-are-grants at cc8a4e3 (appr
 - `crates/takt/src/case.rs:442/469`: a rider's `actor` is checked for its shape only, so a riding approval record can name any actor, `human:<id>` included, while every other field must equal the grant. No store reader or Canon gates on it today; it only misattributes the record. The rider rule here requires the record's actor to equal the grant's approver.
 - `case.rs:895` counts every `Granted` decision at the bound revision, while `Authority::grants_at` (`case.rs:341`) reads the first decision per capability; with both a denial and a grant of one capability the two would disagree. One rule, the one `grants_at` uses.
 - `case.rs:959` reads a riding record through `git::run`, which decodes lossily and trims; the rider rule reads it with `git::blob` and parses the bytes.
+
+## Landed (wave 11)
+
+Read from `git diff --stat 290c366^1 290c366` (the unit's merge into the wave branch) at the close of wave 11 (wave branch head 75e27e9). The story's test_result and its move to implemented are written just before the merge and ride above the granted revision, each byte-equal to the record kept for that revision at its path; the merge is not taken while either is missing; a story's approver is human:<name> or agent:<role>, never takt's own actor. Granted at e46d9d0 and, for the wave merges, c889e98. Low reviewer findings carried by story:wave11-review-follow-ups.
+
+- `crates/takt-cli/src/main.rs`
+- `crates/takt-cli/tests/integration_adv1.rs`
+- `crates/takt-cli/tests/merge_cli.rs`
+- `crates/takt/src/case.rs`
+- `crates/takt/src/frontier.rs`
+- `crates/takt/src/run.rs`
+- `crates/takt/src/validator.rs`
+- `crates/takt/tests/approval_record.rs`
+- `crates/takt/tests/approval_record_adv1.rs`
+- `crates/takt/tests/approval_record_adv2.rs`
+- `crates/takt/tests/approval_riders.rs`
+- `crates/takt/tests/approval_riders_adv1.rs`
+- `crates/takt/tests/approval_riders_adv2.rs`
+- `crates/takt/tests/authority.rs`
+- `crates/takt/tests/ci_pending_waits.rs`
+- `crates/takt/tests/merge_under_authority.rs`
+- `crates/takt/tests/records_reach_base.rs`
+- `crates/takt/tests/records_reach_base_adv1.rs`
+- `crates/takt/tests/records_reach_base_adv2.rs`
+- `crates/takt/tests/run_record.rs`
+- `ess/domains/takt.citations.tsv`
+- `ess/domains/takt.yaml`

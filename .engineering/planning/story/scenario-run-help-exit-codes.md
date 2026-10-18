@@ -12,6 +12,7 @@ refs:
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
+- supersedes: story:cli-small-fixes
 scope:
 - confidence: inferred
   path: crates/takt-cli/src/main.rs

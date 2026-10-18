@@ -8,8 +8,9 @@
 //! ([`crate::events`]); a line about a judgement step is written once the step's change is
 //! kept or put back, so putting the case directory back never takes a line with it. A story's
 //! run given the planning store ([`Run::record_on`]) records its test result and its move to
-//! `implemented` there once its case terminates `accepted`, after the merge when the case has a
-//! pull request, so neither write rides on the revision a grant authorises.
+//! `implemented` there: just before the step a grant authorises (the merge), so both ride to the
+//! base with it above the granted revision, the move last ([`crate::case::approvals_only`]); or
+//! once its case terminates `accepted`, when there was no such step.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -18,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::case::{CASES_DIR, CaseDir};
+use crate::case::{CASES_DIR, CaseDir, KEPT_MOVE, KEPT_TEST_RESULT};
 use crate::events::{BY_STORE, BY_TAKT, Event, Events};
 use crate::frontier::{Frontier, IMPLEMENTED, Story, TEST_RESULT, Take, Unit};
 use crate::harness::{Harness, StepContext, is_test_path};
@@ -113,6 +114,15 @@ fn short(revision: &str) -> &str {
 enum SteppedBy<'r> {
     Validator(Option<&'r str>),
     Harness(Option<u64>, Option<crate::events::TokenUsage>),
+}
+
+/// What [`Run::record_before`] found before a step: no grant authorises it, so nothing was
+/// written; the story's records for the granted revision are both written; or one is missing,
+/// with why, and the step is not taken.
+enum Before {
+    Ungranted,
+    Recorded,
+    Missing(String),
 }
 
 /// Whether `validator` is due at a decision: its action is admissible, its evidence is missing
@@ -2614,11 +2624,12 @@ impl<'a> Run<'a> {
         })
     }
 
-    /// Gives the run the planning store `store`: a story's run whose case terminates `accepted`
-    /// records there the `test_result` pass record a validator of the case wrote, at the
-    /// record's own `observed_at`, and moves the story to `implemented`, each a commit on the
-    /// case's branch ([`crate::frontier::write_on_case_branch`]); a refusal is relayed and the
-    /// stop is unchanged. A run on an intent has no story and writes nothing there.
+    /// Gives the run the planning store `store`: a story's run records there the `test_result`
+    /// pass record a validator of the case wrote, at the record's own `observed_at`, and moves
+    /// the story to `implemented`, each a commit on the case's branch
+    /// ([`crate::frontier::write_on_case_branch`]), before the step the case's grant authorises
+    /// or, without one, once the case terminates `accepted`; a refusal is relayed and the stop
+    /// is unchanged. A run on an intent has no story and writes nothing there.
     pub fn record_on(&mut self, store: &'a dyn Frontier) {
         self.store = Some(store);
     }
@@ -2978,31 +2989,28 @@ impl<'a> Run<'a> {
         )
     }
 
-    /// Records the accepted case's story in `store`: the `test_result` pass record a validator
-    /// of the case wrote ([`Run::observed_pass`]) as `test_result` evidence at its own
-    /// `observed_at`, then the move to `implemented`, which the store judges; each a commit on
-    /// the case's branch with its line in the case's record, written with the commit: a line
-    /// that cannot be written takes the commit back ([`crate::frontier::write_on_case_branch`]).
-    /// A write the case's record names, or whose commit subject the case's branch holds, is not
-    /// made again. A refusal, the store's verbatim or takt's own, is recorded, then printed, and
-    /// nothing is retried. What is printed comes after what is recorded: an `out` that fails
-    /// skips no line and no write, and is the error once both writes were tried.
+    /// Records the case's story in `store`, before the step the grant authorises or once the
+    /// case is accepted: the `test_result` pass record a validator of the case wrote
+    /// ([`Run::observed_pass`]) as `test_result` evidence at its own `observed_at`, then the move
+    /// to `implemented`, which the store judges, the last; each a commit on the case's branch
+    /// with what it committed kept in the case directory ([`crate::case::keep_rider`]) and its
+    /// line in the case's record, written with the commit: either that cannot be written takes
+    /// the commit back ([`crate::frontier::write_on_case_branch`]). A write kept at the case's
+    /// current revision and committed above it is not made again; one of an earlier revision
+    /// is ([`Run::store_done`]). A refusal, the store's verbatim or takt's own, is recorded, then
+    /// printed, and nothing is retried; the refusals are the answer. What is printed comes after
+    /// what is recorded: an `out` that fails skips no line and no write, and is the error once
+    /// both writes were tried.
     fn record_accepted(
         &self,
         events: &Events,
         store: &dyn Frontier,
         story: &str,
         out: &mut dyn Write,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
         let recorded = events.read()?;
         let branch = &self.case.branch;
-        let on_branch = format!("refs/heads/{branch}");
-        let done = |event: &str, subject: &str| -> Result<bool> {
-            Ok(recorded
-                .iter()
-                .any(|line| line["event"] == event && line["story"] == story)
-                || crate::git::has_subject(&self.tree, &on_branch, subject)?)
-        };
+        let mut refusals: Vec<String> = Vec::new();
         let committed = |commit: &Option<String>| match commit {
             Some(commit) => format!(" (committed {} on {branch})", short(commit)),
             None => String::new(),
@@ -3016,7 +3024,7 @@ impl<'a> Run<'a> {
             }
         };
         let evidence_subject = crate::frontier::test_result_subject(story);
-        if !done("store_evidence", &evidence_subject)? {
+        if !self.store_done(story, KEPT_TEST_RESULT, &evidence_subject)? {
             let written = self.observed_pass(&recorded).and_then(|observed| {
                 let Some((reference, at)) = observed else {
                     return Err(anyhow::anyhow!(
@@ -3030,16 +3038,18 @@ impl<'a> Run<'a> {
                     &evidence_subject,
                     || store.record_test_result(&self.tree, story, &reference, &at),
                     |commit| {
-                        events.emit(
-                            self.steps,
-                            &Event::StoreEvidence {
-                                story: story.to_owned(),
-                                kind: TEST_RESULT.to_owned(),
-                                reference: reference.clone(),
-                                observed_at: at.clone(),
-                                commit: commit.map(str::to_owned),
-                            },
-                        )
+                        self.kept_and_recorded(commit, KEPT_TEST_RESULT, || {
+                            events.emit(
+                                self.steps,
+                                &Event::StoreEvidence {
+                                    story: story.to_owned(),
+                                    kind: TEST_RESULT.to_owned(),
+                                    reference: reference.clone(),
+                                    observed_at: at.clone(),
+                                    commit: commit.map(str::to_owned),
+                                },
+                            )
+                        })
                     },
                 )
                 .map(|written| written.map(|commit| (reference, at, commit)))
@@ -3054,6 +3064,7 @@ impl<'a> Run<'a> {
                     say(format!(
                         "store: {TEST_RESULT} not recorded on {story}: {refusal}"
                     ));
+                    refusals.push(refusal);
                 }
                 Err(error) => {
                     let why = format!("{error:#}");
@@ -3061,11 +3072,12 @@ impl<'a> Run<'a> {
                     say(format!(
                         "store: {TEST_RESULT} not recorded on {story}: {why}"
                     ));
+                    refusals.push(why);
                 }
             }
         }
         let move_subject = crate::frontier::implemented_subject(story);
-        if !done("store_move", &move_subject)? {
+        if !self.store_done(story, KEPT_MOVE, &move_subject)? {
             match crate::frontier::write_on_case_branch(
                 &self.tree,
                 branch,
@@ -3073,14 +3085,16 @@ impl<'a> Run<'a> {
                 &move_subject,
                 || store.implemented(&self.tree, story),
                 |commit| {
-                    events.emit(
-                        self.steps,
-                        &Event::StoreMove {
-                            story: story.to_owned(),
-                            to: IMPLEMENTED.to_owned(),
-                            commit: commit.map(str::to_owned),
-                        },
-                    )
+                    self.kept_and_recorded(commit, KEPT_MOVE, || {
+                        events.emit(
+                            self.steps,
+                            &Event::StoreMove {
+                                story: story.to_owned(),
+                                to: IMPLEMENTED.to_owned(),
+                                commit: commit.map(str::to_owned),
+                            },
+                        )
+                    })
                 },
             ) {
                 Ok(Ok(commit)) => say(format!(
@@ -3092,18 +3106,126 @@ impl<'a> Run<'a> {
                     say(format!(
                         "store: {story} not moved to {IMPLEMENTED}: {refusal}"
                     ));
+                    refusals.push(refusal);
                 }
                 Err(error) => {
                     let why = format!("{error:#}");
                     self.refused(events, BY_TAKT, &why)?;
                     say(format!("store: {story} not moved to {IMPLEMENTED}: {why}"));
+                    refusals.push(why);
                 }
             }
         }
         match unprinted {
             Some(error) => Err(anyhow::Error::new(error).context("print the store's writes")),
-            None => Ok(()),
+            None => Ok(refusals),
         }
+    }
+
+    /// Whether the store write on `story` the case keeps as `name`, committed as `subject`, is
+    /// done at the case's current implementation revision: kept under it and committed above it
+    /// on the case's branch. One made at an earlier revision is no record of this one. The move
+    /// ([`KEPT_MOVE`]) is done as well when the story at the revision is already `implemented`,
+    /// moved below it at an earlier revision: the store would refuse it again, so nothing is due.
+    fn store_done(&self, story: &str, name: &str, subject: &str) -> Result<bool> {
+        let Some(revision) = self.case.revision("implementation") else {
+            return Ok(false);
+        };
+        let above = format!("{revision}..refs/heads/{}", self.case.branch);
+        if crate::case::is_kept_at(&self.case.dir, &revision, name)
+            && crate::git::has_subject(&self.tree, &above, subject)?
+        {
+            return Ok(true);
+        }
+        Ok(name == KEPT_MOVE
+            && crate::case::story_status_at(&self.tree, &revision, story)?.as_deref()
+                == Some(IMPLEMENTED))
+    }
+
+    /// Keeps in the case directory, as `name` at the implementation revision, what the store's
+    /// write `commit` committed ([`crate::case::keep_rider`]), then writes its line with
+    /// `record`: a line that cannot be written takes the kept file back. A write that changed
+    /// nothing keeps nothing.
+    fn kept_and_recorded(
+        &self,
+        commit: Option<&str>,
+        name: &str,
+        record: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        let kept = match (commit, self.case.revision("implementation")) {
+            (Some(commit), Some(revision)) => Some(crate::case::keep_rider(
+                &self.tree,
+                &self.case.dir,
+                &revision,
+                commit,
+                name,
+            )?),
+            _ => None,
+        };
+        let recorded = record();
+        if recorded.is_err()
+            && let Some(kept) = &kept
+        {
+            for kept in kept {
+                let _ = std::fs::remove_file(kept);
+            }
+        }
+        recorded
+    }
+
+    /// Before the step for `action`: when the case holds the grant that authorises it
+    /// ([`CaseDir::grants`]), a story's run given the store records the story there
+    /// ([`Run::record_accepted`]), so the `test_result` and the move, the last, ride to the base
+    /// with the step's merge. It fails closed: unless both are done at the granted revision
+    /// ([`Run::store_done`]), the step is not taken, and the answer is why, the store's
+    /// refusals relayed, for the run to stop on ([`Stop::StepRefused`]). What goes wrong
+    /// writing them is recorded as an `error` line and is such a refusal too.
+    fn record_before(&self, events: &Events, action: &str, out: &mut dyn Write) -> Result<Before> {
+        let (Unit::Story(story), Some(store)) = (&self.unit, self.store) else {
+            return Ok(Before::Ungranted);
+        };
+        if !self.case.grants(action)? {
+            return Ok(Before::Ungranted);
+        }
+        let refusals = match self.record_accepted(events, store, &story.id, out) {
+            Ok(refusals) => refusals,
+            Err(error) => {
+                let why = format!(
+                    "recording {} in the store before {action}: {error:#}",
+                    story.id
+                );
+                events.emit(self.steps, &Event::Error { error: why.clone() })?;
+                vec![why]
+            }
+        };
+        let story = story.id.as_str();
+        let test_result = self.store_done(
+            story,
+            KEPT_TEST_RESULT,
+            &crate::frontier::test_result_subject(story),
+        )?;
+        let moved = self.store_done(
+            story,
+            KEPT_MOVE,
+            &crate::frontier::implemented_subject(story),
+        )?;
+        if test_result && moved {
+            return Ok(Before::Recorded);
+        }
+        let state = |done: bool| if done { "written" } else { "missing" };
+        let mut why = format!(
+            "{action} not taken: the store's records of {story} at {} are not both written ({TEST_RESULT} {}, the move to {IMPLEMENTED} {}), so they would not reach the base with it",
+            self.case
+                .revision("implementation")
+                .as_deref()
+                .map_or("no revision", short),
+            state(test_result),
+            state(moved)
+        );
+        if !refusals.is_empty() {
+            why.push_str(&format!("; {}", refusals.join("; ")));
+        }
+        Ok(Before::Missing(why))
     }
 
     /// The latest `test_result` pass record a validator of the case wrote that is about the
@@ -3235,6 +3357,8 @@ impl<'a> Run<'a> {
         // revision)`: observed again after a pause, within the budget, and meanwhile no
         // judgement step is offered, because what is missing is not the harness's to make.
         let mut awaited: Vec<(String, String, String)> = Vec::new();
+        // Whether the story's records were written before a granted step this run.
+        let mut recorded_before = false;
         let waiting = |awaited: &[(String, String, String)], budget: Option<Stop>| {
             let mut on: Vec<String> = Vec::new();
             for (_, action, _) in awaited {
@@ -3300,6 +3424,20 @@ impl<'a> Run<'a> {
                 }
             }
             if let Some(validator) = due {
+                // The story's records in the store, once a run, just before the step its grant
+                // authorises: they ride to the base with the merge, and without both of them the
+                // step is not taken.
+                if !recorded_before {
+                    match self.record_before(events, validator.action(), out)? {
+                        Before::Ungranted => {}
+                        Before::Recorded => recorded_before = true,
+                        Before::Missing(why) => {
+                            self.refused(events, BY_TAKT, &why)?;
+                            writeln!(out, "  refused: {why}")?;
+                            return Ok(Stop::StepRefused(why));
+                        }
+                    }
+                }
                 self.steps += 1;
                 let revision = self
                     .case
