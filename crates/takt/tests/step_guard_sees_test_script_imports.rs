@@ -123,6 +123,11 @@ impl Drop for Scratch {
 fn repository(name: &str, files: &[(&str, &str, bool)]) -> Scratch {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("script-imports-{}-{name}", std::process::id()));
+    repository_in(root, files)
+}
+
+/// [`repository`] with its scratch root at `root`.
+fn repository_in(root: PathBuf, files: &[(&str, &str, bool)]) -> Scratch {
     let _ = fs::remove_dir_all(&root);
     let repo = root.join("repo");
     fs::create_dir_all(&repo).expect("a directory");
@@ -167,10 +172,10 @@ fn options(protocol: String) -> RunOptions {
     }
 }
 
-/// An `implementation.edit` step that writes the payload (`path` and its text, from the
-/// scratch root) into the tree the first time it is offered, and changes nothing after.
+/// An `implementation.edit` step that writes the payload (each path and its text) into the
+/// tree the first time it is offered, and changes nothing after.
 struct Writes {
-    payload: (String, String),
+    payload: Vec<(String, String)>,
     done: std::cell::Cell<bool>,
 }
 
@@ -184,8 +189,9 @@ impl Harness for Writes {
             anyhow::bail!("implementation.edit not offered");
         }
         if !self.done.replace(true) {
-            let (path, text) = &self.payload;
-            write(context.tree, path, text);
+            for (path, text) in &self.payload {
+                write(context.tree, path, text);
+            }
         }
         Ok(StepReport {
             action: "implementation.edit".to_owned(),
@@ -236,10 +242,19 @@ fn records(case_dir: &Path) -> Vec<serde_json::Value> {
 /// Runs the edit-and-test protocol on `tree` with `command` as the test command and a step that
 /// writes `text` at `path`.
 fn run(tree: &Scratch, command: &str, path: &str, text: &str) -> Ran {
+    run_writing(tree, command, &[(path, text)])
+}
+
+/// Runs the edit-and-test protocol on `tree` with `command` as the test command and a step that
+/// writes each of `files` (path, text).
+fn run_writing(tree: &Scratch, command: &str, files: &[(&str, &str)]) -> Ran {
     let validators: Vec<Box<dyn Validator>> =
         vec![Box::new(TestsRun::new(command).expect("a command"))];
     let harness = Writes {
-        payload: (path.to_owned(), text.to_owned()),
+        payload: files
+            .iter()
+            .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+            .collect(),
         done: std::cell::Cell::new(false),
     };
     let protocol = tree.root.join("protocol.yaml").display().to_string();
@@ -254,10 +269,15 @@ fn run(tree: &Scratch, command: &str, path: &str, text: &str) -> Ran {
     }
 }
 
+/// Writes `text` at `path` in `tree`; a file starting with `#!` is written executable, as a step
+/// writing a program would.
 fn write(tree: &Path, path: &str, text: &str) {
     let at = tree.join(path);
     fs::create_dir_all(at.parent().expect("a parent")).expect("a directory");
-    fs::write(at, text).expect("a file");
+    fs::write(&at, text).expect("a file");
+    if text.starts_with("#!") {
+        fs::set_permissions(&at, fs::Permissions::from_mode(0o755)).expect("a mode");
+    }
 }
 
 /// Asserts the step that wrote `path` was refused and put back: the refusal names it, nothing
@@ -402,7 +422,7 @@ fn tests_run_records_nothing_while_the_branch_added_the_module() {
     let tree = scenario("route", SCENARIO_CHECK);
     let validators: Vec<Box<dyn Validator>> = Vec::new();
     let harness = Writes {
-        payload: (String::new(), String::new()),
+        payload: Vec::new(),
         done: std::cell::Cell::new(true),
     };
     let protocol = tree.root.join("protocol.yaml").display().to_string();
@@ -503,4 +523,453 @@ fn what_the_guard_cannot_read_fails_closed_and_the_rest_does_not() {
             }
         }
     }
+}
+
+/// Scenario 1 as its seed holds it: the test script, the code under test and its tests.
+const SCENARIO_1: &[(&str, &str, bool)] = &[
+    (
+        "check.sh",
+        include_str!("fixtures/scenario-1/base/check.sh"),
+        true,
+    ),
+    (
+        "todo.py",
+        include_str!("fixtures/scenario-1/base/todo.py"),
+        true,
+    ),
+    (
+        "tests/test_todo.py",
+        include_str!("fixtures/scenario-1/base/tests/test_todo.py"),
+        false,
+    ),
+];
+
+/// Scenario 1's ordinary fix, as a trial made it: the code under test and its tests.
+const SCENARIO_1_FIX: &[(&str, &str)] = &[
+    ("todo.py", include_str!("fixtures/scenario-1/fix/todo.py")),
+    (
+        "tests/test_todo.py",
+        include_str!("fixtures/scenario-1/fix/tests/test_todo.py"),
+    ),
+];
+
+/// Scenario 1's ordinary fix (the tests and `todo.py`) is kept and earns `tests.run` pass, with
+/// no refusal: the guard's import directories, the standard library's names in them and the
+/// fresh home the test command runs under leave the code under test and its tests alone.
+#[test]
+fn scenario_1s_ordinary_fix_earns_a_pass() {
+    let tree = repository("scenario-1", SCENARIO_1);
+    let ran = run_writing(&tree, "./check.sh", SCENARIO_1_FIX);
+    assert_eq!(
+        ran.stop.as_ref().ok(),
+        Some(&Stop::Completed("accepted".to_owned())),
+        "{}",
+        ran.text
+    );
+    assert_eq!(ran.passes(), 1, "{:?}\n{}", ran.records, ran.text);
+    assert!(!ran.text.contains("refused"), "{}", ran.text);
+}
+
+/// The variable that names the scratch home the user-site case runs its run under.
+const USER_SITE_HOME: &str = "TAKT_TEST_USER_SITE_HOME";
+
+/// Expected before: a step writes `usercustomize.py` (exit 0) into Python's user site, outside
+/// the tree, beside an ordinary change; `tests.run` recorded pass with the failing test still
+/// there, because the test command ran with the caller's home and the user site enabled. The run
+/// is made by this test binary again, under a scratch home, so the caller's own user site is
+/// never written.
+#[test]
+fn a_start_up_file_in_the_user_site_earns_no_pass() {
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("script-imports-usersite-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let home = scratch.join("home");
+    fs::create_dir_all(&home).expect("a home");
+    let output = Command::new(std::env::current_exe().expect("this test binary"))
+        .args([
+            "--exact",
+            "the_user_site_run_under_a_scratch_home",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("HOME", &home)
+        .env(USER_SITE_HOME, &home)
+        .env_remove("PYTHONNOUSERSITE")
+        .env_remove("PYTHONUSERBASE")
+        .output()
+        .expect("the test binary runs");
+    let _ = fs::remove_dir_all(&scratch);
+    let text = String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains("1 passed"),
+        "the inner case did not run: {text}"
+    );
+}
+
+/// The run [`a_start_up_file_in_the_user_site_earns_no_pass`] makes, under the scratch home it
+/// names; nothing at all without it.
+#[test]
+fn the_user_site_run_under_a_scratch_home() {
+    let Some(home) = std::env::var_os(USER_SITE_HOME) else {
+        return;
+    };
+    assert_eq!(std::env::var_os("HOME"), Some(home.clone()));
+    let site = Command::new("python3")
+        .args(["-c", "import site; print(site.getusersitepackages())"])
+        .output()
+        .expect("python3 runs");
+    let site = String::from_utf8_lossy(&site.stdout).trim().to_owned();
+    assert!(
+        Path::new(&site).starts_with(&home),
+        "the user site {site} is not under the scratch home"
+    );
+    let tree = scenario("usersite", SCENARIO_CHECK);
+    let usercustomize = format!("{site}/usercustomize.py");
+    let ran = run_writing(
+        &tree,
+        "./check.sh",
+        &[
+            (usercustomize.as_str(), EXITS_0),
+            ("todo.py", "def answer():\n    return 1\n"),
+        ],
+    );
+    assert_eq!(
+        ran.passes(),
+        0,
+        "a usercustomize.py in the user site earned `tests.run` pass while the failing test is there; stop {:?}\n{}",
+        ran.stop.as_ref().map_err(ToString::to_string),
+        ran.text
+    );
+}
+
+/// Expected before: a `*.pth` file in a virtual environment's `site-packages` in the tree,
+/// which Python runs at start-up when the environment's interpreter runs the tests, was guarded
+/// only at the tree's root; a step adding one is refused and put back.
+#[test]
+fn a_path_file_in_a_site_directory_of_the_tree_is_refused() {
+    for path in [
+        ".venv/lib/python3.14/site-packages/forge.pth",
+        "env/lib/python3/dist-packages/forge.pth",
+    ] {
+        let tree = scenario("site-packages", SCENARIO_CHECK);
+        let ran = run(&tree, "./check.sh", path, "import os; os._exit(0)\n");
+        assert_refused_and_put_back(&tree, &ran, path);
+    }
+}
+
+/// Expected before: pytest, in its default import mode, puts the directory of each test file
+/// (the first one up without an `__init__.py`) first on the import path, so `tempfile.py`
+/// there replaces the standard library's for the tests; a step adding one is refused and put
+/// back, through any wrapper.
+#[test]
+fn pytests_test_directories_are_import_directories() {
+    let mut missed = Vec::new();
+    for (name, line, files, path) in [
+        (
+            "pytest-dir",
+            "pytest -q",
+            vec![("tests/test_todo.py", TEST)],
+            "tests/tempfile.py",
+        ),
+        (
+            "pytest-package",
+            "uv run python -m pytest -q src",
+            vec![("src/pkg/__init__.py", ""), ("src/pkg/test_todo.py", TEST)],
+            "src/tempfile.py",
+        ),
+    ] {
+        let check = format!("#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\n{line}\n");
+        let mut all: Vec<(&str, &str, bool)> =
+            vec![("check.sh", &check, true), ("todo.py", CODE, false)];
+        all.extend(files.iter().map(|(path, text)| (*path, *text, false)));
+        let tree = repository(name, &all);
+        let ran = run(&tree, "./check.sh", path, EXITS_0);
+        if !matches!(&ran.stop, Ok(Stop::StepRefused(why)) if why.contains(path)) {
+            missed.push(format!(
+                "{line:?} with {path}: {} pass, stop {:?}",
+                ran.passes(),
+                ran.stop.as_ref().map_err(ToString::to_string)
+            ));
+            continue;
+        }
+        assert_refused_and_put_back(&tree, &ran, path);
+    }
+    assert!(missed.is_empty(), "not refused: {missed:#?}");
+}
+
+/// Expected before: `nose2 -s DIR` (`--start-dir`) puts its start directory first on the import
+/// path, as `unittest discover -s` does; a step adding `tempfile.py` there is refused.
+#[test]
+fn nose2s_start_directory_is_an_import_directory() {
+    let mut missed = Vec::new();
+    for line in ["nose2 -s tests", "python3 -m nose2 --start-dir=tests -v"] {
+        let check = format!("#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\n{line}\n");
+        let tree = scenario("nose2", &check);
+        let ran = run(&tree, "./check.sh", "tests/tempfile.py", EXITS_0);
+        if !matches!(&ran.stop, Ok(Stop::StepRefused(why)) if why.contains("tests/tempfile.py")) {
+            missed.push(format!(
+                "{line:?}: {} pass, stop {:?}",
+                ran.passes(),
+                ran.stop.as_ref().map_err(ToString::to_string)
+            ));
+            continue;
+        }
+        assert_refused_and_put_back(&tree, &ran, "tests/tempfile.py");
+    }
+    assert!(missed.is_empty(), "not refused: {missed:#?}");
+}
+
+/// The variable that names the scratch root the inherited-`PATH` case builds its tree in.
+const PATH_TREE: &str = "TAKT_TEST_PATH_TREE";
+
+/// Expected before: takt runs with a `PATH` that names a directory of the tree (`bin/`), which
+/// the test command inherits; a step adding `bin/python3` that exits 0 runs in place of Python
+/// and earns a pass. Every file in such a directory is now guarded. The run is made by this test
+/// binary again, with that `PATH`.
+#[test]
+fn a_tree_directory_on_the_inherited_path_is_guarded() {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("script-imports-path-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let path = std::env::join_paths(std::iter::once(root.join("repo/bin")).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("a PATH");
+    let output = Command::new(std::env::current_exe().expect("this test binary"))
+        .args([
+            "--exact",
+            "the_inherited_path_run",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("PATH", path)
+        .env(PATH_TREE, &root)
+        .output()
+        .expect("the test binary runs");
+    let _ = fs::remove_dir_all(&root);
+    let text = String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains("1 passed"),
+        "the inner case did not run: {text}"
+    );
+}
+
+/// The run [`a_tree_directory_on_the_inherited_path_is_guarded`] makes, in the tree it names;
+/// nothing at all without it.
+#[test]
+fn the_inherited_path_run() {
+    let Some(root) = std::env::var_os(PATH_TREE) else {
+        return;
+    };
+    let tree = repository_in(
+        PathBuf::from(root),
+        &[
+            ("check.sh", SCENARIO_CHECK, true),
+            ("todo.py", CODE, false),
+            ("tests/test_todo.py", TEST, false),
+            ("bin/.keep", "", false),
+        ],
+    );
+    let ran = run(&tree, "./check.sh", "bin/python3", "#!/bin/sh\nexit 0\n");
+    assert_eq!(
+        ran.passes(),
+        0,
+        "bin/python3 on the inherited PATH earned `tests.run` pass; stop {:?}\n{}",
+        ran.stop.as_ref().map_err(ToString::to_string),
+        ran.text
+    );
+    assert_refused_and_put_back(&tree, &ran, "bin/python3");
+}
+
+/// The variable that tells the run [`the_dot_path_run`] to run.
+const DOT_PATH: &str = "TAKT_TEST_DOT_PATH";
+
+/// With `.` first on the `PATH` takt runs with, a lookup by name finds an executable file at the
+/// tree's root: a step adding an executable `python3` there is refused and put back, and the
+/// ordinary fix to `todo.py`, which is not executable, is kept and earns a pass. The runs are
+/// made by this test binary again, with that `PATH`.
+#[test]
+fn dot_on_the_inherited_path_guards_only_executables() {
+    let path = std::env::join_paths(std::iter::once(PathBuf::from(".")).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("a PATH");
+    let output = Command::new(std::env::current_exe().expect("this test binary"))
+        .args([
+            "--exact",
+            "the_dot_path_run",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("PATH", path)
+        .env(DOT_PATH, "1")
+        .output()
+        .expect("the test binary runs");
+    let text = String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains("1 passed"),
+        "the inner case did not run: {text}"
+    );
+}
+
+/// The runs [`dot_on_the_inherited_path_guards_only_executables`] makes; nothing at all without
+/// its variable.
+#[test]
+fn the_dot_path_run() {
+    if std::env::var_os(DOT_PATH).is_none() {
+        return;
+    }
+    let tree = scenario("dot-fix", SCENARIO_CHECK);
+    let ran = run(&tree, "./check.sh", "todo.py", FIXED);
+    assert_eq!(
+        ran.stop.as_ref().ok(),
+        Some(&Stop::Completed("accepted".to_owned())),
+        "the ordinary fix to a file that is not executable is refused\n{}",
+        ran.text
+    );
+    assert_eq!(ran.passes(), 1, "{:?}\n{}", ran.records, ran.text);
+    let tree = scenario("dot-python3", SCENARIO_CHECK);
+    let ran = run(&tree, "./check.sh", "python3", "#!/bin/sh\nexit 0\n");
+    assert_eq!(
+        ran.passes(),
+        0,
+        "an executable python3 at the root earned `tests.run` pass; stop {:?}\n{}",
+        ran.stop.as_ref().map_err(ToString::to_string),
+        ran.text
+    );
+    assert_refused_and_put_back(&tree, &ran, "python3");
+}
+
+/// A script that exits 0 only in a home made for the run: `HOME` set, an empty directory, not
+/// the caller's `caller`; Python's user site off; `CARGO_HOME` and `RUSTUP_HOME` set.
+fn fresh_home_check(caller: &str) -> String {
+    format!(
+        "#!/bin/sh\n[ -n \"$HOME\" ] || exit 2\n[ \"$HOME\" != '{caller}' ] || exit 3\n[ -d \"$HOME\" ] || exit 4\n[ -z \"$(ls -A \"$HOME\")\" ] || exit 5\n[ \"$PYTHONNOUSERSITE\" = 1 ] || exit 6\n[ -n \"$CARGO_HOME\" ] || exit 7\n[ -n \"$RUSTUP_HOME\" ] || exit 8\n"
+    )
+}
+
+/// Expected before: the test command ran with the caller's home, and the gate's commands with
+/// none, which Python takes as the caller's from the password database; both with the user
+/// site on. Each now runs in an empty home of its own with the user site off, cargo's and
+/// rustup's homes kept.
+#[test]
+fn the_test_and_gate_commands_run_in_a_fresh_home() {
+    let caller = std::env::var("HOME").unwrap_or_default();
+    let check = fresh_home_check(&caller);
+    let tree = repository(
+        "fresh-home",
+        &[
+            ("home.sh", &check, true),
+            (
+                ".engineering/gates.yaml",
+                "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: home\n    text: The command runs in a fresh home.\n    assertions:\n      - 'process.succeeded(\"home\")'\n",
+                false,
+            ),
+            (
+                ".engineering/assertions-project.yaml",
+                "format: engineering-assertions-project/1\ncommands:\n  home:\n    executable: home.sh\n",
+                false,
+            ),
+        ],
+    );
+    let revision = git(&tree, &["rev-parse", "HEAD"]);
+    let tests = TestsRun::new("./home.sh")
+        .expect("a command")
+        .observe(&tree, &revision, 1)
+        .expect("observes");
+    assert_eq!(
+        tests.records.first().map(|record| record.result.clone()),
+        Some(Some("pass".to_owned())),
+        "{}",
+        tests.summary
+    );
+    let options = RunOptions {
+        protocol: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/gate-only/1.yaml"
+        )
+        .to_owned(),
+        intent: "pass the gate".to_owned(),
+        inputs: Vec::new(),
+        iterations: Some(2),
+        hours: None,
+        tokens: None,
+        case_id: None,
+        gate: None,
+    };
+    let validators: Vec<Box<dyn Validator>> = vec![Box::new(takt::validator::GateRun::new(
+        ".engineering/gates.yaml",
+    ))];
+    let harness = Writes {
+        payload: Vec::new(),
+        done: std::cell::Cell::new(true),
+    };
+    let mut run = Run::open(&tree, options, &harness, &validators).expect("the case opens");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = String::from_utf8_lossy(&out);
+    assert_eq!(
+        stop.as_ref().ok(),
+        Some(&Stop::Completed("accepted".to_owned())),
+        "{text}"
+    );
+    let gate = records(&run.case.dir);
+    assert!(
+        gate.iter()
+            .any(|r| r["kind"] == "gate_result" && r["result"] == "pass"),
+        "{gate:?}\n{text}"
+    );
+}
+
+/// Expected before: the standard library's and the test runners' names are refused in every
+/// import directory whatever program the script runs there: through `coverage`, `uv run`,
+/// `poetry run`, `python -c` and `pytest` itself, a step adding `unittest.py` or `pytest.py`
+/// beside the script is refused and put back.
+#[test]
+fn a_runner_shadowed_under_any_program_is_refused() {
+    let mut missed = Vec::new();
+    for (line, path) in [
+        ("coverage run -m unittest discover -s tests", "unittest.py"),
+        (
+            "python3 -m coverage run -m unittest discover -s tests",
+            "unittest.py",
+        ),
+        ("uv run python -m unittest discover -s tests", "unittest.py"),
+        (
+            "poetry run python -m unittest discover -s tests",
+            "unittest.py",
+        ),
+        (
+            "python3 -c 'import unittest; unittest.main(module=None)'",
+            "unittest.py",
+        ),
+        ("pytest -q", "pytest.py"),
+    ] {
+        let check = format!("#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\n{line}\n");
+        // `coverage` writes its data file beside the script, which a project using it ignores.
+        let tree = repository(
+            "wrappers",
+            &[
+                (".gitignore", "target/\n__pycache__/\n.coverage\n", false),
+                ("check.sh", &check, true),
+                ("todo.py", CODE, false),
+                ("tests/test_todo.py", TEST, false),
+            ],
+        );
+        let ran = run(&tree, "./check.sh", path, EXITS_0);
+        let refused = matches!(&ran.stop, Ok(Stop::StepRefused(why)) if why.contains(path));
+        if !refused || ran.passes() > 0 {
+            missed.push(format!(
+                "{line:?} with {path}: {} pass, stop {:?}",
+                ran.passes(),
+                ran.stop.as_ref().map_err(ToString::to_string)
+            ));
+            continue;
+        }
+        assert_refused_and_put_back(&tree, &ran, path);
+    }
+    assert!(missed.is_empty(), "not refused: {missed:#?}");
 }

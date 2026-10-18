@@ -358,21 +358,431 @@ const PYTHON_FILES: &[&str] = &[
 ];
 
 /// The judge surface every run guards, as a refusal names it.
-pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini`, `setup.cfg`, `sitecustomize.py` and `usercustomize.py` at any depth, `*.pth` at the root, `[tool.pytest*]` in `pyproject.toml`, the module and package `python -m` runs and the `*.pth` files in every directory it imports from (where it runs and what `PYTHONPATH` names), the test command's own script, the scripts it runs, read one level deep (every file beside a script deeper than that), and its build tool's file, every Python file of the tree while a line of such a script cannot be read, and the repository's own `.engineering/judge-surface.yaml` list";
+pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini`, `setup.cfg`, `sitecustomize.py` and `usercustomize.py` at any depth, `*.pth` at the root and directly in a `site-packages` or `dist-packages` directory, `[tool.pytest*]` in `pyproject.toml`, the module and package `python -m` runs and the `*.pth` files in every directory it imports from (where it runs and what `PYTHONPATH` names), a module, compiled module or package named like a standard-library module or a test runner (`unittest`, `pytest`, `_pytest`, `pluggy`, `nose2`) in every directory Python imports from under any program (where it runs, each `PYTHONPATH` entry, a `unittest discover` or `nose2` start and top-level directory, a test file's directory when pytest runs, a Python script's own directory), every executable entry (at the base, before or after the step) directly in a tree directory on `PATH`, the script's or the one takt runs with, the test command's own script, the scripts it runs, read one level deep (every file beside a script deeper than that), and its build tool's file, every Python file, shell file and program of the tree while a line of such a script cannot be read or a build tool's recipe runs, and the repository's own `.engineering/judge-surface.yaml` list";
 
 /// How many scripts deep the guard reads: the test command's own script, and the scripts it
 /// runs. A script deeper than that is not read; everything in its directory, and every Python
 /// file of the tree, is guarded instead ([`script_paths`]).
 const SCRIPTS_AT_MOST: usize = 2;
 
-/// The globs a line the guard cannot read guards ([`fail_closed`]): every Python module, compiled
-/// module and path file of the tree, since what it runs, and from where, is unknown.
-const PYTHON_ANYWHERE: &[&str] = &["**/*.py", "**/*.pyc", "**/*.pth"];
+/// What a line the guard cannot read guards ([`fail_closed`]), since what it runs, and from
+/// where, is unknown: every Python module, compiled module and path file of the tree, every
+/// shell file, and every program ([`PROGRAMS`]: a file starting with `#!` or with an exec bit).
+const FAIL_CLOSED: &[&str] = &[
+    "**/*.py",
+    "**/*.pyc",
+    "**/*.pth",
+    "**/*.sh",
+    "**/*.bash",
+    PROGRAMS,
+];
 
-/// Guards what a script line the guard cannot read could load ([`PYTHON_ANYWHERE`]).
+/// Guards what a script line the guard cannot read could load or run ([`FAIL_CLOSED`]).
 fn fail_closed(named: &mut Vec<String>) {
-    named.extend(PYTHON_ANYWHERE.iter().map(|glob| (*glob).to_owned()));
+    named.extend(FAIL_CLOSED.iter().map(|glob| (*glob).to_owned()));
 }
+
+/// What [`scripts_of`] names for every program of the tree, by what the file holds rather
+/// than by its name: a file whose first line starts with `#!`, or one with an exec bit, as the
+/// tree holds it now or held it when the surface was read ([`JudgeSurface::contains`]).
+const PROGRAMS: &str = "**/(programs)";
+
+/// The last part of what [`scripts_of`] names for a directory Python imports from: in it, a
+/// module, compiled module or package with a name of the standard library or a test runner
+/// ([`shadows`]) is guarded, since Python finds it there before the installed one.
+const IMPORTS: &str = "(imports)";
+
+/// The last part of what [`scripts_of`] names for a directory of the tree on `PATH`: every
+/// entry directly in it is guarded, since a program run by its name may be found there.
+const ON_PATH: &str = "(on PATH)";
+
+/// `dir`, relative to the tree (`""` its root), marked with `mark` ([`IMPORTS`], [`ON_PATH`]).
+fn marked(dir: &str, mark: &str) -> String {
+    if dir.is_empty() {
+        mark.to_owned()
+    } else {
+        format!("{dir}/{mark}")
+    }
+}
+
+/// The test runners' packages, guarded in every import directory beside the standard library's
+/// modules ([`STDLIB_MODULES`]).
+const RUNNER_PACKAGES: &[&str] = &["unittest", "pytest", "_pytest", "pluggy", "nose2"];
+
+/// The standard library's module names: `sys.stdlib_module_names` of CPython 3.14.7. A module of
+/// this name in a directory Python imports from replaces the installed one for the test runner
+/// and for the tests alike.
+const STDLIB_MODULES: &[&str] = &[
+    "__future__",
+    "_abc",
+    "_aix_support",
+    "_android_support",
+    "_apple_support",
+    "_ast",
+    "_ast_unparse",
+    "_asyncio",
+    "_bisect",
+    "_blake2",
+    "_bz2",
+    "_codecs",
+    "_codecs_cn",
+    "_codecs_hk",
+    "_codecs_iso2022",
+    "_codecs_jp",
+    "_codecs_kr",
+    "_codecs_tw",
+    "_collections",
+    "_collections_abc",
+    "_colorize",
+    "_compat_pickle",
+    "_contextvars",
+    "_csv",
+    "_ctypes",
+    "_curses",
+    "_curses_panel",
+    "_datetime",
+    "_dbm",
+    "_decimal",
+    "_elementtree",
+    "_frozen_importlib",
+    "_frozen_importlib_external",
+    "_functools",
+    "_gdbm",
+    "_hashlib",
+    "_heapq",
+    "_hmac",
+    "_imp",
+    "_interpchannels",
+    "_interpqueues",
+    "_interpreters",
+    "_io",
+    "_ios_support",
+    "_json",
+    "_locale",
+    "_lsprof",
+    "_lzma",
+    "_markupbase",
+    "_md5",
+    "_multibytecodec",
+    "_multiprocessing",
+    "_opcode",
+    "_opcode_metadata",
+    "_operator",
+    "_osx_support",
+    "_overlapped",
+    "_pickle",
+    "_posixshmem",
+    "_posixsubprocess",
+    "_py_abc",
+    "_py_warnings",
+    "_pydatetime",
+    "_pydecimal",
+    "_pyio",
+    "_pylong",
+    "_pyrepl",
+    "_queue",
+    "_random",
+    "_remote_debugging",
+    "_scproxy",
+    "_sha1",
+    "_sha2",
+    "_sha3",
+    "_signal",
+    "_sitebuiltins",
+    "_socket",
+    "_sqlite3",
+    "_sre",
+    "_ssl",
+    "_stat",
+    "_statistics",
+    "_string",
+    "_strptime",
+    "_struct",
+    "_suggestions",
+    "_symtable",
+    "_sysconfig",
+    "_thread",
+    "_threading_local",
+    "_tkinter",
+    "_tokenize",
+    "_tracemalloc",
+    "_types",
+    "_typing",
+    "_uuid",
+    "_warnings",
+    "_weakref",
+    "_weakrefset",
+    "_winapi",
+    "_wmi",
+    "_zoneinfo",
+    "_zstd",
+    "abc",
+    "annotationlib",
+    "antigravity",
+    "argparse",
+    "array",
+    "ast",
+    "asyncio",
+    "atexit",
+    "base64",
+    "bdb",
+    "binascii",
+    "bisect",
+    "builtins",
+    "bz2",
+    "cProfile",
+    "calendar",
+    "cmath",
+    "cmd",
+    "code",
+    "codecs",
+    "codeop",
+    "collections",
+    "colorsys",
+    "compileall",
+    "compression",
+    "concurrent",
+    "configparser",
+    "contextlib",
+    "contextvars",
+    "copy",
+    "copyreg",
+    "csv",
+    "ctypes",
+    "curses",
+    "dataclasses",
+    "datetime",
+    "dbm",
+    "decimal",
+    "difflib",
+    "dis",
+    "doctest",
+    "email",
+    "encodings",
+    "ensurepip",
+    "enum",
+    "errno",
+    "faulthandler",
+    "fcntl",
+    "filecmp",
+    "fileinput",
+    "fnmatch",
+    "fractions",
+    "ftplib",
+    "functools",
+    "gc",
+    "genericpath",
+    "getopt",
+    "getpass",
+    "gettext",
+    "glob",
+    "graphlib",
+    "grp",
+    "gzip",
+    "hashlib",
+    "heapq",
+    "hmac",
+    "html",
+    "http",
+    "idlelib",
+    "imaplib",
+    "importlib",
+    "inspect",
+    "io",
+    "ipaddress",
+    "itertools",
+    "json",
+    "keyword",
+    "linecache",
+    "locale",
+    "logging",
+    "lzma",
+    "mailbox",
+    "marshal",
+    "math",
+    "mimetypes",
+    "mmap",
+    "modulefinder",
+    "msvcrt",
+    "multiprocessing",
+    "netrc",
+    "nt",
+    "ntpath",
+    "nturl2path",
+    "numbers",
+    "opcode",
+    "operator",
+    "optparse",
+    "os",
+    "pathlib",
+    "pdb",
+    "pickle",
+    "pickletools",
+    "pkgutil",
+    "platform",
+    "plistlib",
+    "poplib",
+    "posix",
+    "posixpath",
+    "pprint",
+    "profile",
+    "pstats",
+    "pty",
+    "pwd",
+    "py_compile",
+    "pyclbr",
+    "pydoc",
+    "pydoc_data",
+    "pyexpat",
+    "queue",
+    "quopri",
+    "random",
+    "re",
+    "readline",
+    "reprlib",
+    "resource",
+    "rlcompleter",
+    "runpy",
+    "sched",
+    "secrets",
+    "select",
+    "selectors",
+    "shelve",
+    "shlex",
+    "shutil",
+    "signal",
+    "site",
+    "smtplib",
+    "socket",
+    "socketserver",
+    "sqlite3",
+    "sre_compile",
+    "sre_constants",
+    "sre_parse",
+    "ssl",
+    "stat",
+    "statistics",
+    "string",
+    "stringprep",
+    "struct",
+    "subprocess",
+    "symtable",
+    "sys",
+    "sysconfig",
+    "syslog",
+    "tabnanny",
+    "tarfile",
+    "tempfile",
+    "termios",
+    "textwrap",
+    "this",
+    "threading",
+    "time",
+    "timeit",
+    "tkinter",
+    "token",
+    "tokenize",
+    "tomllib",
+    "trace",
+    "traceback",
+    "tracemalloc",
+    "tty",
+    "turtle",
+    "turtledemo",
+    "types",
+    "typing",
+    "unicodedata",
+    "unittest",
+    "urllib",
+    "uuid",
+    "venv",
+    "warnings",
+    "wave",
+    "weakref",
+    "webbrowser",
+    "winreg",
+    "winsound",
+    "wsgiref",
+    "xml",
+    "xmlrpc",
+    "zipapp",
+    "zipfile",
+    "zipimport",
+    "zlib",
+    "zoneinfo",
+];
+
+/// Whether `name`, a module's name folded ([`fold`]), is one the guard keeps in every import
+/// directory: the standard library's ([`STDLIB_MODULES`]) and the test runners'
+/// ([`RUNNER_PACKAGES`]).
+fn shadows(name: &str) -> bool {
+    STDLIB_MODULES
+        .iter()
+        .chain(RUNNER_PACKAGES)
+        .any(|module| module.eq_ignore_ascii_case(name))
+}
+
+/// The module the file `name` in an import directory loads as: `m.py`, `m.pyc`, `m.pyw`, `m.pyd`,
+/// `m.so` and `m.<tag>.so` are `m`, and a name with no suffix (a package) is itself.
+fn module_of(name: &str) -> Option<&str> {
+    let Some((stem, suffix)) = name.split_once('.') else {
+        return Some(name);
+    };
+    (["py", "pyc", "pyw", "pyd", "so"].contains(&suffix)
+        || suffix.ends_with(".so")
+        || suffix.ends_with(".pyd"))
+    .then_some(stem)
+}
+
+/// Whether the file at `full` is a program: a regular file with an exec bit, or one whose first
+/// two bytes are `#!`. A link is not followed.
+fn is_program(full: &Path) -> bool {
+    use std::io::Read as _;
+    let Ok(meta) = std::fs::symlink_metadata(full) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    if is_executable(&meta) {
+        return true;
+    }
+    let mut start = [0_u8; 2];
+    std::fs::File::open(full)
+        .and_then(|mut file| file.read_exact(&mut start))
+        .is_ok_and(|()| &start == b"#!")
+}
+
+/// The interpreter the first line of the file at `full` names (`#!/usr/bin/env python3` is
+/// `python`), folded and without its version ([`program_of`]); `None` for a file with no `#!`.
+fn shebang_of(full: &Path) -> Option<String> {
+    use std::io::Read as _;
+    let meta = std::fs::symlink_metadata(full).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let mut start = Vec::new();
+    std::fs::File::open(full)
+        .and_then(|file| file.take(256).read_to_end(&mut start))
+        .ok()?;
+    let text = String::from_utf8_lossy(&start);
+    interpreter_of(text.strip_prefix("#!")?)
+}
+
+/// The interpreter a `#!` line (after the `#!`) names, `env` and its options skipped.
+fn interpreter_of(shebang: &str) -> Option<String> {
+    let line = shebang.lines().next().unwrap_or_default();
+    let mut words = shell_words(line).into_iter().map(|word| program_of(&word));
+    let interpreter = words.next()?;
+    if interpreter == "env" {
+        return words.find(|word| !word.starts_with('-') && !word.contains('='));
+    }
+    Some(interpreter)
+}
+
+/// The build tools whose recipe the guard does not read: as the test command or a command of a
+/// script it reads, each fails closed ([`fail_closed`]) beside guarding its build file.
+const UNREAD_RECIPES: &[&str] = &["make", "gmake", "just", "task", "go-task", "tox", "nox"];
 
 /// The directory marker for a working directory the guard could not follow (`cd "$x"`): a path
 /// named from it is guarded in every directory of the tree ([`landing`]).
@@ -732,6 +1142,33 @@ const BUILD_TOOLS: &[BuildTool] = &[
         &["justfile", ".justfile"],
         &[],
     ),
+    (
+        &["tox"],
+        Spec {
+            short_arg: "e",
+            long_arg: &["env", "workdir", "installpkg"],
+            long_chdir: &["root"],
+            short_file: "c",
+            long_file: &["conf"],
+            ..PLAIN
+        },
+        &["tox.ini", "tox.toml"],
+        &[],
+    ),
+    (
+        &["nox"],
+        Spec {
+            short_arg: "spkte",
+            long_arg: &[
+                "session", "sessions", "python", "keywords", "tags", "envdir",
+            ],
+            short_file: "f",
+            long_file: &["noxfile"],
+            ..PLAIN
+        },
+        &["noxfile.py"],
+        &[],
+    ),
 ];
 
 /// How deep a command line inside a command line (`sh -c`, `env -S`) is read.
@@ -918,6 +1355,9 @@ struct Env {
     vars: BTreeMap<String, String>,
     /// The absolute directory of the script being read: what `$(dirname "$0")` stands for.
     script_dir: Option<String>,
+    /// The absolute directory of the file being read, a sourced one or the script itself: what
+    /// `$(dirname "${BASH_SOURCE[0]}")` stands for.
+    source_dir: Option<String>,
     /// How many scripts deep the guard is ([`SCRIPTS_AT_MOST`]).
     level: usize,
 }
@@ -934,7 +1374,8 @@ struct Shell {
 const SCRIPT_BYTES_AT_MOST: u64 = 1 << 20;
 
 /// The command substitutions the guard reads, each with what it stands for: the script's own
-/// directory (`\u{1}`) or the directory the shell is in (`\u{2}`). A line with any other
+/// directory (`\u{1}`), the directory the shell is in (`\u{2}`), or the directory of the file
+/// being read, a sourced one or the script (`\u{3}`, `BASH_SOURCE`). A line with any other
 /// substitution is not read.
 const SUBSTITUTIONS: &[(&str, &str)] = &[
     ("$(dirname \"$(realpath \"$0\")\")", "\u{1}"),
@@ -945,11 +1386,17 @@ const SUBSTITUTIONS: &[(&str, &str)] = &[
     ("$(dirname $0)", "\u{1}"),
     ("`dirname \"$0\"`", "\u{1}"),
     ("`dirname $0`", "\u{1}"),
-    ("$(dirname -- \"${BASH_SOURCE[0]}\")", "\u{1}"),
-    ("$(dirname \"${BASH_SOURCE[0]}\")", "\u{1}"),
-    ("$(dirname \"$BASH_SOURCE\")", "\u{1}"),
-    ("${BASH_SOURCE[0]%/*}", "\u{1}"),
-    ("${BASH_SOURCE%/*}", "\u{1}"),
+    ("$(dirname \"$(realpath \"${BASH_SOURCE[0]}\")\")", "\u{3}"),
+    (
+        "$(dirname \"$(readlink -f \"${BASH_SOURCE[0]}\")\")",
+        "\u{3}",
+    ),
+    ("$(dirname -- \"${BASH_SOURCE[0]}\")", "\u{3}"),
+    ("$(dirname \"${BASH_SOURCE[0]}\")", "\u{3}"),
+    ("$(dirname \"${BASH_SOURCE}\")", "\u{3}"),
+    ("$(dirname \"$BASH_SOURCE\")", "\u{3}"),
+    ("${BASH_SOURCE[0]%/*}", "\u{3}"),
+    ("${BASH_SOURCE%/*}", "\u{3}"),
     ("${0%/*}", "\u{1}"),
     ("$(pwd -P)", "\u{2}"),
     ("$(pwd)", "\u{2}"),
@@ -988,13 +1435,35 @@ fn substituted(line: &str) -> String {
 /// Whether `word` holds an expansion the guard could not make: a variable it does not know, a
 /// command substitution, a home directory.
 fn opaque(word: &str) -> bool {
-    word.contains(['$', '`', '\u{1}', '\u{2}'])
+    word.contains(['$', '`', '\u{1}', '\u{2}', '\u{3}'])
 }
 
 /// `word` with its expansions made, from the directory `dir` of the tree: `$PWD` and the
-/// substitutions [`substituted`] put in place, and the variables `env` knows. `None` when one is
-/// not known (`$1`, `${X:-y}`, `~`): the caller fails closed.
+/// substitutions [`substituted`] put in place, and the variables `env` knows, `${X:-y}`,
+/// `${X-y}`, `${X:=y}` and `${X=y}` among them. `None` when one is not known (`$1`, `${X:-y}` of
+/// an `X` it does not know, `~`): the caller fails closed, and may take the default
+/// ([`expand_default`]).
 fn expand(tree: &Path, word: &str, dir: Option<&str>, env: &Env) -> Option<String> {
+    expand_with(tree, word, dir, env, false)
+}
+
+/// `word` expanded as [`expand`] does, but a variable it does not know with a default
+/// (`${X:-y}`, `${X-y}`, `${X:=y}`, `${X=y}`) taken as that default: the path the line names when
+/// the variable is not set, which the guard follows and guards while the line fails closed.
+/// `None` when no default stands in for every unknown variable.
+fn expand_default(tree: &Path, word: &str, dir: Option<&str>, env: &Env) -> Option<String> {
+    expand_with(tree, word, dir, env, true)
+}
+
+/// `word` expanded, with `defaults` the default of a variable it does not know taken
+/// ([`expand`], [`expand_default`]).
+fn expand_with(
+    tree: &Path,
+    word: &str,
+    dir: Option<&str>,
+    env: &Env,
+    defaults: bool,
+) -> Option<String> {
     let here = || -> Option<String> {
         let dir = dir.filter(|dir| *dir != ANYWHERE && !dir.starts_with("**/"))?;
         Some(
@@ -1011,6 +1480,7 @@ fn expand(tree: &Path, word: &str, dir: Option<&str>, env: &Env) -> Option<Strin
         match c {
             '\u{1}' => out.push_str(env.script_dir.as_deref()?),
             '\u{2}' => out.push_str(&here()?),
+            '\u{3}' => out.push_str(env.source_dir.as_deref().or(env.script_dir.as_deref())?),
             '`' => return None,
             '~' if out.is_empty() => return None,
             '$' => {
@@ -1019,13 +1489,41 @@ fn expand(tree: &Path, word: &str, dir: Option<&str>, env: &Env) -> Option<Strin
                 while let Some(c) = chars.next_if(|c| c.is_ascii_alphanumeric() || *c == '_') {
                     name.push(c);
                 }
-                if name.is_empty() || (braced && chars.next() != Some('}')) {
+                if name.is_empty() {
                     return None;
                 }
-                if name == "PWD" {
-                    out.push_str(&here()?);
+                // `${NAME:-word}`, `${NAME-word}`, `${NAME:=word}`, `${NAME=word}`: the default
+                // runs to the first `}`, and whether an empty value takes it is the colon's.
+                let mut default = None;
+                if braced {
+                    let colon = chars.next_if_eq(&':').is_some();
+                    if chars.next_if(|c| *c == '-' || *c == '=').is_some() {
+                        let mut word = String::new();
+                        loop {
+                            match chars.next()? {
+                                '}' => break,
+                                c => word.push(c),
+                            }
+                        }
+                        default = Some((colon, word));
+                    } else if colon || chars.next() != Some('}') {
+                        return None;
+                    }
+                }
+                let value = if name == "PWD" {
+                    here()
                 } else {
-                    out.push_str(env.vars.get(&name)?);
+                    env.vars.get(&name).cloned()
+                };
+                match (value, default) {
+                    (Some(value), Some((true, word))) if value.is_empty() => {
+                        out.push_str(&expand_with(tree, &word, dir, env, defaults)?);
+                    }
+                    (Some(value), _) => out.push_str(&value),
+                    (None, Some((_, word))) if defaults => {
+                        out.push_str(&expand_with(tree, &word, dir, env, defaults)?);
+                    }
+                    (None, _) => return None,
                 }
             }
             c => out.push(c),
@@ -1045,9 +1543,26 @@ fn assignment(word: &str) -> Option<(&str, &str)> {
     .then_some((name, value))
 }
 
+/// The values `word` may take from the directory `dir`: as expanded, or, when a variable in it
+/// is not known, as its default ([`expand_default`]) after failing closed; none when there is
+/// no default either.
+fn values_of(
+    tree: &Path,
+    word: &str,
+    dir: Option<&str>,
+    env: &Env,
+    named: &mut Vec<String>,
+) -> Option<String> {
+    expand(tree, word, dir, env).or_else(|| {
+        fail_closed(named);
+        expand_default(tree, word, dir, env)
+    })
+}
+
 /// Sets `name` to `value` in `env`, made in each of `dirs`: a `PYTHONPATH` adds its entries; a
-/// variable naming where Python loads from ([`PYTHON_DIRS`]) guards what it names in the tree,
-/// whole; a value the guard cannot expand fails closed.
+/// `PATH` entry in the tree guards every entry directly in it ([`ON_PATH`]); a variable naming
+/// where Python loads from ([`PYTHON_DIRS`]) guards what it names in the tree, whole; a value the
+/// guard cannot expand fails closed, and a default it gives (`${X:-dir}`) is followed besides.
 fn assign(
     tree: &Path,
     dirs: &[Option<String>],
@@ -1060,33 +1575,39 @@ fn assign(
         .iter()
         .map(|dir| expand(tree, value, dir.as_deref(), env))
         .collect();
-    if name == "PYTHONPATH" {
+    if name == "PYTHONPATH" || name == "PATH" {
         let mut entries = Vec::new();
         for dir in dirs {
             for entry in value.split(':') {
-                if ["$PYTHONPATH", "${PYTHONPATH}"].contains(&entry) {
+                if [format!("${name}"), format!("${{{name}}}")].contains(&entry.to_owned()) {
                     continue;
                 }
-                match expand(tree, entry, dir.as_deref(), env) {
-                    Some(entry) if entry.is_empty() => entries.push(".".to_owned()),
-                    Some(entry) => entries.push(entry),
-                    None => fail_closed(named),
+                match values_of(tree, entry, dir.as_deref(), env, named) {
+                    Some(entry) if entry.is_empty() => entries.push((dir, ".".to_owned())),
+                    Some(entry) => entries.push((dir, entry)),
+                    None => {}
                 }
             }
         }
-        env.pythonpath.extend(entries);
-    } else if PYTHON_DIRS.contains(&name) {
-        for (dir, value) in dirs.iter().zip(&values) {
-            match value {
-                Some(value) => {
-                    if let Some(path) = changed_dir(tree, dir.as_deref(), value) {
-                        named.push(under(&path));
-                        if !path.is_empty() {
-                            named.push(path);
-                        }
-                    }
+        if name == "PATH" {
+            for (dir, entry) in entries {
+                if let Some(path) = changed_dir(tree, dir.as_deref(), &entry) {
+                    named.push(marked(&path, ON_PATH));
                 }
-                None => fail_closed(named),
+            }
+        } else {
+            env.pythonpath
+                .extend(entries.into_iter().map(|(_, entry)| entry));
+        }
+    } else if PYTHON_DIRS.contains(&name) {
+        for dir in dirs {
+            if let Some(value) = values_of(tree, value, dir.as_deref(), env, named)
+                && let Some(path) = changed_dir(tree, dir.as_deref(), &value)
+            {
+                named.push(under(&path));
+                if !path.is_empty() {
+                    named.push(path);
+                }
             }
         }
     }
@@ -1113,6 +1634,192 @@ fn import_dirs(tree: &Path, dir: Option<&str>, env: &Env) -> Vec<String> {
     dirs
 }
 
+/// Marks the directories Python imports from ([`IMPORTS`]) for the command `words` run from
+/// `dir` with `env`, whatever its program: `dir` and every `PYTHONPATH` entry
+/// ([`import_dirs`]), and the start and top-level directories of a `unittest discover` among
+/// the words, which unittest puts first on the import path before it imports the tests.
+fn mark_imports(
+    tree: &Path,
+    words: &[&str],
+    dir: Option<&str>,
+    env: &Env,
+    named: &mut Vec<String>,
+) {
+    for import in import_dirs(tree, dir, env) {
+        named.push(marked(&import, IMPORTS));
+    }
+    let mut pytest = false;
+    for (k, word) in words.iter().enumerate() {
+        let name = word.rsplit('/').next().unwrap_or(word);
+        // pytest, run by its name or as a module through any wrapper, puts each test file's
+        // directory first on the import path.
+        if !pytest && (["pytest", "py.test"].contains(&name) || *word == "-mpytest") {
+            pytest = true;
+            for test_dir in pytest_dirs(tree) {
+                named.push(marked(&test_dir, IMPORTS));
+            }
+        }
+        // `nose2 -s DIR` puts its start directory there, as `unittest discover -s` does.
+        if name == "nose2" || *word == "-mnose2" {
+            for start in nose2_dirs(&words[k + 1..]) {
+                if opaque(start) {
+                    fail_closed(named);
+                } else if let Some(path) = changed_dir(tree, dir, start) {
+                    named.push(marked(&path, IMPORTS));
+                }
+            }
+        }
+    }
+    for (k, word) in words.iter().enumerate() {
+        let unittest = *word == "unittest" || word.strip_prefix("-m") == Some("unittest");
+        if !unittest
+            || !words
+                .get(k + 1)
+                .is_some_and(|next| next.eq_ignore_ascii_case("discover"))
+        {
+            continue;
+        }
+        for start in discover_dirs(&words[k + 2..]) {
+            if opaque(start) {
+                fail_closed(named);
+                continue;
+            }
+            if let Some(path) = changed_dir(tree, dir, start) {
+                named.push(marked(&path, IMPORTS));
+            }
+        }
+    }
+}
+
+/// The directories pytest's default import mode (`prepend`) puts first on the import path for
+/// the tree's tests: for each test file (`test_*.py`, `*_test.py`) and `conftest.py` git tracks
+/// or would add, its directory, or the first one up from it without an `__init__.py`; `""` for
+/// the tree's root. One the step adds is not among them: what it imports is the step's own code.
+fn pytest_dirs(tree: &Path) -> BTreeSet<String> {
+    let Ok(listed) = crate::git::run(
+        tree,
+        &[
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
+    ) else {
+        return BTreeSet::new();
+    };
+    let files: BTreeSet<&str> = listed
+        .split('\0')
+        .filter(|path| !path.is_empty() && !crate::case::is_under_cases(path))
+        .collect();
+    let has_init = |dir: &str| {
+        let init = if dir.is_empty() {
+            "__init__.py".to_owned()
+        } else {
+            format!("{dir}/__init__.py")
+        };
+        files.contains(init.as_str())
+    };
+    let mut dirs = BTreeSet::new();
+    for path in &files {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let test = name == "conftest.py"
+            || (name.starts_with("test_") && name.ends_with(".py"))
+            || name.ends_with("_test.py");
+        if !test {
+            continue;
+        }
+        let mut dir = parent_of(path);
+        loop {
+            if !has_init(dir) {
+                dirs.insert(dir.to_owned());
+                break;
+            }
+            if dir.is_empty() {
+                break;
+            }
+            dir = parent_of(dir);
+        }
+    }
+    dirs
+}
+
+/// The directories `nose2` with the arguments `args` puts on the import path: its start
+/// directory (`-s`, `--start-dir`; `.` when none is given) and its top-level directory (`-t`,
+/// `--top-level-directory`).
+fn nose2_dirs<'w>(args: &[&'w str]) -> Vec<&'w str> {
+    let mut dirs = Vec::new();
+    let mut start = false;
+    let mut at = 0;
+    while let Some(&word) = args.get(at) {
+        at += 1;
+        if matches!(word, "-s" | "--start-dir" | "-t" | "--top-level-directory") {
+            start |= matches!(word, "-s" | "--start-dir");
+            dirs.extend(args.get(at).copied());
+            at += 1;
+        } else if let Some((option, value)) = word.split_once('=')
+            && ["--start-dir", "--top-level-directory"].contains(&option)
+        {
+            start |= option == "--start-dir";
+            dirs.push(value);
+        } else if let Some(value) = word.strip_prefix("-s").filter(|v| !v.is_empty()) {
+            start = true;
+            dirs.push(value);
+        } else if let Some(value) = word.strip_prefix("-t").filter(|v| !v.is_empty()) {
+            dirs.push(value);
+        }
+    }
+    if !start {
+        dirs.push(".");
+    }
+    dirs
+}
+
+/// The directories `unittest discover` with the arguments `args` puts on the import path: its
+/// start directory (`-s`, `--start-directory`, or the first operand; `.` when none is given)
+/// and its top-level directory (`-t`, `--top-level-directory`, or the third operand).
+fn discover_dirs<'w>(args: &[&'w str]) -> Vec<&'w str> {
+    let mut dirs = Vec::new();
+    let mut operands = Vec::new();
+    let mut start = false;
+    let mut at = 0;
+    while let Some(&word) = args.get(at) {
+        at += 1;
+        match word {
+            "-s" | "--start-directory" | "-t" | "--top-level-directory" => {
+                start |= matches!(word, "-s" | "--start-directory");
+                dirs.extend(args.get(at).copied());
+                at += 1;
+            }
+            "-p" | "--pattern" | "-k" | "--durations" => at += 1,
+            _ => {
+                if let Some((option, value)) = word.split_once('=')
+                    && ["--start-directory", "--top-level-directory"].contains(&option)
+                {
+                    start |= option == "--start-directory";
+                    dirs.push(value);
+                } else if let Some(value) = word.strip_prefix("-s").filter(|v| !v.is_empty()) {
+                    start = true;
+                    dirs.push(value);
+                } else if let Some(value) = word.strip_prefix("-t").filter(|v| !v.is_empty()) {
+                    dirs.push(value);
+                } else if !word.starts_with('-') {
+                    operands.push(word);
+                }
+            }
+        }
+    }
+    if let Some(first) = operands.first() {
+        start = true;
+        dirs.push(first);
+    }
+    dirs.extend(operands.get(2));
+    if !start {
+        dirs.push(".");
+    }
+    dirs
+}
+
 /// The text of the script at `full` when a shell reads it: a file whose first line names a shell
 /// (`#!/bin/sh`, `#!/usr/bin/env bash`), or names none (an `exec` hands it to `sh`), or any file
 /// when a shell named it (`sh check.sh`). `None` for anything else: a link (never followed), a
@@ -1135,16 +1842,7 @@ fn shell_text(full: &Path, by_shell: bool, named: &mut Vec<String>) -> Option<St
     }
     let text = String::from_utf8_lossy(&bytes).into_owned();
     if let Some(shebang) = text.strip_prefix("#!") {
-        let line = shebang.lines().next().unwrap_or_default();
-        let words: Vec<String> = shell_words(line)
-            .iter()
-            .map(|word| program_of(word))
-            .collect();
-        let mut words = words.into_iter();
-        let mut interpreter = words.next()?;
-        if interpreter == "env" {
-            interpreter = words.find(|word| !word.starts_with('-') && !word.contains('='))?;
-        }
+        let interpreter = interpreter_of(shebang)?;
         if !by_shell && !SHELLS.contains(&interpreter.as_str()) {
             return None;
         }
@@ -1335,21 +2033,30 @@ fn statement(
                 .iter()
                 .find(|word| !word.starts_with('-') && !word.starts_with('+'));
             for dir in &dirs {
-                let to = match target {
+                let mut to = Vec::new();
+                match target {
                     // Home, or a directory taken off the stack: home is outside the tree, and
                     // a directory on the stack is one the shell may be in already.
-                    None => None,
-                    Some(target) if target.starts_with('~') => None,
+                    None => to.push(None),
+                    Some(target) if target.starts_with('~') => to.push(None),
                     Some(target) => match expand(tree, target, dir.as_deref(), &shell.env) {
-                        Some(target) => changed_dir(tree, dir.as_deref(), &target),
+                        Some(target) => to.push(changed_dir(tree, dir.as_deref(), &target)),
                         None => {
+                            // Anywhere, and where the default (`${X:-dir}`) leads.
                             fail_closed(named);
-                            Some(ANYWHERE.to_owned())
+                            to.push(Some(ANYWHERE.to_owned()));
+                            if let Some(target) =
+                                expand_default(tree, target, dir.as_deref(), &shell.env)
+                            {
+                                to.push(changed_dir(tree, dir.as_deref(), &target));
+                            }
                         }
                     },
-                };
-                if !shell.dirs.contains(&to) {
-                    shell.dirs.push(to);
+                }
+                for to in to {
+                    if !shell.dirs.contains(&to) {
+                        shell.dirs.push(to);
+                    }
                 }
             }
         }
@@ -1363,8 +2070,10 @@ fn statement(
                 return;
             };
             for dir in &dirs {
-                let Some(target) = expand(tree, target, dir.as_deref(), &shell.env) else {
-                    fail_closed(named);
+                // A file named through a variable with a default (`${X:-file}`) fails closed
+                // and is read where the default leads.
+                let Some(target) = values_of(tree, target, dir.as_deref(), &shell.env, named)
+                else {
                     continue;
                 };
                 let Some(path) = named_from(tree, dir.as_deref(), &target) else {
@@ -1377,12 +2086,17 @@ fn statement(
                     continue;
                 }
                 // A file not in the tree to read (a link, nothing yet) is code the guard cannot
-                // see.
+                // see. In the file read, `BASH_SOURCE` is that file; `$0` stays the script.
                 match shell_text(&tree.join(&path), true, named) {
                     Some(text) => {
+                        let source_dir = std::path::absolute(tree)
+                            .ok()
+                            .map(|tree| tree.join(parent_of(&path)).display().to_string());
+                        let outer = std::mem::replace(&mut shell.env.source_dir, source_dir);
                         shell.env.level += 1;
                         read_text(tree, &text, shell, named, depth + 1);
                         shell.env.level -= 1;
+                        shell.env.source_dir = outer;
                     }
                     None => fail_closed(named),
                 }
@@ -1411,10 +2125,21 @@ fn statement(
                         named,
                     );
                 }
+                // A word with a variable it does not know but a default for (`${X:-./run}`) is
+                // taken as the default, and the line fails closed unless the default is empty
+                // outside the program's place (`"${1:-}"`); any other stays as written.
                 let expanded: Vec<String> = rest
                     .iter()
-                    .map(|word| {
+                    .enumerate()
+                    .map(|(k, word)| {
                         expand(tree, word, dir.as_deref(), &env)
+                            .or_else(|| {
+                                let default = expand_default(tree, word, dir.as_deref(), &env);
+                                if default.as_ref().is_some_and(|d| k == 0 || !d.is_empty()) {
+                                    fail_closed(named);
+                                }
+                                default
+                            })
                             .unwrap_or_else(|| (*word).to_owned())
                     })
                     .collect();
@@ -1459,6 +2184,7 @@ fn script_paths(
     let mut shell = Shell {
         dirs: vec![dir.map(str::to_owned)],
         env: Env {
+            source_dir: script_dir.clone(),
             script_dir,
             level: env.level + 1,
             ..env.clone()
@@ -1640,13 +2366,23 @@ fn command_paths(
             at += 1;
             continue;
         }
+        // Whatever the program, Python may run under it: where it runs and what `PYTHONPATH`
+        // names are import directories, and so are a `unittest discover`'s.
+        mark_imports(tree, &words[at..], dir.as_deref(), &env, named);
         // A program the guard cannot name runs what it cannot see.
         if opaque(program) {
             fail_closed(named);
         }
-        // A program in the tree that a shell reads is read line by line.
+        // A program in the tree that a shell reads is read line by line; one Python runs
+        // imports from its own directory first.
         if let Some(path) = named_from(tree, dir.as_deref(), program) {
             script_paths(tree, &path, dir.as_deref(), &env, named, depth, false);
+            if shebang_of(&tree.join(&path)).is_some_and(|interpreter| {
+                spec_of(INTERPRETERS, &interpreter)
+                    .is_some_and(|spec| !spec.short_module.is_empty())
+            }) {
+                named.push(marked(parent_of(&path), IMPORTS));
+            }
             named.push(path);
         }
         let name = program_of(program);
@@ -1801,6 +2537,17 @@ fn command_paths(
                         fail_closed(named);
                     }
                     let first = module.split('.').next().unwrap_or(module);
+                    // A build tool run as a module reads its recipe as it does by its name.
+                    if let Some((_, _, defaults, _)) = BUILD_TOOLS
+                        .iter()
+                        .find(|(names, _, _, _)| names.contains(&first))
+                        .filter(|_| UNREAD_RECIPES.contains(&first))
+                    {
+                        fail_closed(named);
+                        for file in *defaults {
+                            named.extend(named_from(tree, dir.as_deref(), file));
+                        }
+                    }
                     for import in &imports {
                         let import = Some(import.as_str());
                         named.extend(named_from(tree, import, &format!("{first}.py")));
@@ -1853,10 +2600,14 @@ fn command_paths(
                         if opaque(script) {
                             fail_closed(named);
                         }
-                        // A script a shell runs is read line by line, whatever its first line.
+                        // A script a shell runs is read line by line, whatever its first line;
+                        // one Python runs imports from its own directory first.
                         if let Some(path) = named_from(tree, dir.as_deref(), script) {
                             if SHELLS.contains(&name.as_str()) {
                                 script_paths(tree, &path, dir.as_deref(), &env, named, depth, true);
+                            }
+                            if !spec.short_module.is_empty() {
+                                named.push(marked(parent_of(&path), IMPORTS));
                             }
                             named.push(path);
                         }
@@ -1887,6 +2638,10 @@ fn command_paths(
                 files.extend(defaults);
             }
             files.extend(configs);
+            // No recipe parser reads what the target runs.
+            if UNREAD_RECIPES.contains(&name.as_str()) {
+                fail_closed(named);
+            }
             for file in files {
                 named.extend(named_from(tree, dir.as_deref(), file));
             }
@@ -1964,13 +2719,28 @@ fn command_line(
 /// A shell script among them is read line by line, by these same rules, and the scripts it runs
 /// one level further ([`script_paths`]); `NAME=VALUE` before a program, `export`, `cd` and
 /// `source` are followed. What `python -m MODULE` imports is named in the directory it runs in
-/// and in every `PYTHONPATH` entry, with the `*.pth` start-up files there. A word with an
-/// expansion the guard cannot make, a line it cannot read, and a script too deep add every Python
-/// file of the tree ([`PYTHON_ANYWHERE`]), as globs, which [`JudgeSurface`] guards whole.
+/// and in every `PYTHONPATH` entry, with the `*.pth` start-up files there. Under any program,
+/// where it runs, each `PYTHONPATH` entry, a `unittest discover`'s directories and a Python
+/// script's own directory are named as import directories ([`IMPORTS`]), and a `PATH` entry in
+/// the tree as one whose entries are programs ([`ON_PATH`]). A word with an expansion the guard
+/// cannot make, a line it cannot read, a script too deep and a build tool whose recipe it does
+/// not read ([`UNREAD_RECIPES`]) add every Python file, shell file and program of the tree
+/// ([`FAIL_CLOSED`]), which [`JudgeSurface`] guards whole.
 #[must_use]
 pub fn scripts_of(words: &[String], tree: &Path) -> Vec<String> {
     let words: Vec<&str> = words.iter().map(String::as_str).collect();
     let mut named = Vec::new();
+    // The `PATH` takt runs the command with, which it inherits: an entry that resolves inside
+    // the tree (an empty one is where the command runs, its root) holds programs it may run.
+    if let Some(path) = std::env::var_os("PATH") {
+        for entry in std::env::split_paths(&path) {
+            let entry = entry.to_string_lossy();
+            let entry = if entry.is_empty() { "." } else { &entry };
+            if let Some(dir) = landing(tree, "", entry) {
+                named.push(marked(&dir, ON_PATH));
+            }
+        }
+    }
     command_paths(
         tree,
         &words,
@@ -2000,6 +2770,79 @@ pub struct JudgeSurface {
     /// The repository's own additions ([`JUDGE_LIST`]), path globs folded, each guarding what it
     /// matches and everything under it.
     globs: Vec<String>,
+    /// The directories Python imports from ([`IMPORTS`]), folded, `**` for any: in each, the
+    /// standard library's and the test runners' names ([`shadows`]).
+    imports: BTreeSet<String>,
+    /// The tree's directories on `PATH` ([`ON_PATH`]), folded: every executable entry directly
+    /// in each, since a lookup by name finds nothing else.
+    on_path: BTreeSet<String>,
+    /// The entries directly in a directory on `PATH` that were executable when the surface was
+    /// read, folded; one executable now is guarded besides.
+    on_path_before: BTreeSet<String>,
+    /// While a line fails closed ([`PROGRAMS`]): the tree's programs as it held them when the
+    /// surface was read, folded; every file that is a program now is guarded besides.
+    programs: Option<BTreeSet<String>>,
+    /// The tree, where what a file is now is read.
+    tree: PathBuf,
+}
+
+/// The paths git tracks or would add in `tree`, the cases left out; none when git cannot list
+/// them.
+fn listed_files(tree: &Path) -> Vec<String> {
+    let Ok(listed) = crate::git::run(
+        tree,
+        &[
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
+    ) else {
+        return Vec::new();
+    };
+    listed
+        .split('\0')
+        .filter(|path| !path.is_empty() && !crate::case::is_under_cases(path))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Whether the entry at `full` is executable: a file with an exec bit, or a link (which a lookup
+/// on `PATH` follows). Nothing there is not.
+fn is_executable_entry(full: &Path) -> bool {
+    std::fs::symlink_metadata(full)
+        .is_ok_and(|meta| meta.file_type().is_symlink() || (meta.is_file() && is_executable(&meta)))
+}
+
+/// Whether a `*.pth` file at the folded path parts `parts` is read at start-up: at the tree's
+/// root, or directly in a `site-packages` or `dist-packages` directory (a virtual environment's
+/// in the tree), which Python reads as a site directory.
+fn site_dir(parts: &[&str]) -> bool {
+    match parts {
+        [_] => true,
+        [.., parent, _] => *parent == "site-packages" || *parent == "dist-packages",
+        [] => false,
+    }
+}
+
+/// Whether the directory glob `dir` (`""` the tree's root, `**` any) matches the path parts
+/// `parts` of a directory.
+fn dir_matches(dir: &str, parts: &[&str]) -> bool {
+    if dir.is_empty() {
+        return parts.is_empty();
+    }
+    glob_matches(&dir.split('/').collect::<Vec<_>>(), parts)
+}
+
+/// The programs of `tree` ([`is_program`]): the files git tracks or would add, folded, the
+/// cases left out.
+fn programs_in(tree: &Path) -> BTreeSet<String> {
+    listed_files(tree)
+        .iter()
+        .filter(|path| is_program(&tree.join(path)))
+        .map(|path| fold(path))
+        .collect()
 }
 
 /// The repository's own list of judge-surface path globs, which extends the default and never
@@ -2099,16 +2942,99 @@ impl JudgeSurface {
     /// The surface of a run whose validators run `runs` ([`Validator::runs`]) in `tree`.
     #[must_use]
     pub fn new(runs: &[String], tree: &Path) -> Self {
+        // The marks first: the programs, the import directories and the directories on `PATH`.
         // What [`scripts_of`] names with a wildcard (a module's package, `pkg/**`) is guarded
         // as a glob, everything under it with it; the rest each by itself.
-        let (globs, scripts): (Vec<String>, Vec<String>) = scripts_of(runs, tree)
-            .into_iter()
-            .partition(|path| path.contains(['*', '?']));
-        Self {
+        let mut imports = BTreeSet::new();
+        let mut on_path = BTreeSet::new();
+        let mut programs = false;
+        let mut rest = Vec::new();
+        for path in scripts_of(runs, tree) {
+            if path == PROGRAMS {
+                programs = true;
+            } else if let Some(dir) = path.strip_suffix(IMPORTS) {
+                imports.insert(fold(dir.trim_end_matches('/')));
+            } else if let Some(dir) = path.strip_suffix(ON_PATH) {
+                on_path.insert(fold(dir.trim_end_matches('/')));
+            } else {
+                rest.push(path);
+            }
+        }
+        let (globs, scripts): (Vec<String>, Vec<String>) =
+            rest.into_iter().partition(|path| path.contains(['*', '?']));
+        let mut surface = Self {
             scripts: scripts.into_iter().collect(),
             store: true,
             globs: globs.iter().map(|glob| fold(glob)).collect(),
+            imports,
+            on_path,
+            on_path_before: BTreeSet::new(),
+            programs: programs.then(|| programs_in(tree)),
+            tree: tree.to_path_buf(),
+        };
+        if !surface.on_path.is_empty() {
+            surface.on_path_before = listed_files(tree)
+                .iter()
+                .map(|path| (path, fold(path)))
+                .filter(|(_, folded)| surface.in_path_dir(&folded.split('/').collect::<Vec<_>>()))
+                .filter(|(path, _)| is_executable_entry(&tree.join(path)))
+                .map(|(_, folded)| folded)
+                .collect();
         }
+        surface
+    }
+
+    /// Whether the folded path parts `parts` name, in a directory Python imports from, a module,
+    /// compiled module or package of the standard library's or a test runner's name, or what is
+    /// under such a package.
+    fn shadowing(&self, parts: &[&str]) -> bool {
+        (0..parts.len()).any(|k| {
+            let name = if k + 1 == parts.len() {
+                module_of(parts[k])
+            } else {
+                Some(parts[k])
+            };
+            name.is_some_and(shadows)
+                && self.imports.iter().any(|dir| dir_matches(dir, &parts[..k]))
+        })
+    }
+
+    /// Whether the folded path parts `parts` name an entry directly in a directory on `PATH`.
+    fn in_path_dir(&self, parts: &[&str]) -> bool {
+        parts
+            .split_last()
+            .is_some_and(|(_, parent)| self.on_path.iter().any(|dir| dir_matches(dir, parent)))
+    }
+
+    /// Whether `path` is a program a lookup on `PATH` may find: an entry directly in a directory
+    /// on `PATH` that was executable when the surface was read or is now (a step that makes one
+    /// executable among them).
+    fn on_path(&self, path: &str, folded: &str, parts: &[&str]) -> bool {
+        self.in_path_dir(parts)
+            && (self.on_path_before.contains(folded) || is_executable_entry(&self.tree.join(path)))
+    }
+
+    /// Whether `path`, relative to the tree, is in a directory on `PATH`, where an entry a commit
+    /// held executable is on the surface: the caller reads the commit's mode.
+    #[must_use]
+    pub fn in_a_path_dir(&self, path: &str) -> bool {
+        let folded = fold(path.trim_end_matches('/'));
+        self.in_path_dir(&folded.split('/').collect::<Vec<_>>())
+    }
+
+    /// Whether `path` is a program while a line fails closed: a program when the surface was
+    /// read, or now ([`is_program`]).
+    fn program(&self, path: &str, folded: &str) -> bool {
+        self.programs
+            .as_ref()
+            .is_some_and(|before| before.contains(folded) || is_program(&self.tree.join(path)))
+    }
+
+    /// Whether every program of the tree is on the surface ([`PROGRAMS`]): a line of the test
+    /// command's script failed closed. What a commit held is the caller's to read.
+    #[must_use]
+    pub fn guards_programs(&self) -> bool {
+        self.programs.is_some()
     }
 
     /// With the repository's own globs `globs` ([`JUDGE_LIST`]) added to the default.
@@ -2154,19 +3080,23 @@ impl JudgeSurface {
             || name.starts_with("rust-toolchain")
             || name == "build.rs"
             || PYTHON_FILES.contains(&name)
-            || (parts.len() == 1 && name.ends_with(".pth"))
+            || (name.ends_with(".pth") && site_dir(&parts))
             || self.scripts.iter().any(|script| fold(script) == folded)
             || self.globs.iter().any(|glob| {
                 let glob: Vec<&str> = glob.split('/').collect();
                 (1..=parts.len()).any(|len| glob_matches(&glob, &parts[..len]))
             })
+            || self.shadowing(&parts)
+            || self.on_path(path, &folded, &parts)
+            || self.program(path, &folded)
     }
 
     /// Whether a validator or the guarded command would read through a link at `link`: the link
     /// is, or is on the way to, the cargo configuration (`.cargo/` at any depth), the CI
     /// workflows (`.github/workflows/`), the store's directories and project file (while the
     /// store is on the surface), a manifest, a build script, a toolchain file, a Python start-up
-    /// file (`sitecustomize.py`, `usercustomize.py`, a `*.pth` at the root), or the test
+    /// file (`sitecustomize.py`, `usercustomize.py`, a `*.pth` at the root or in a
+    /// `site-packages` or `dist-packages` directory), or the test
     /// command's own script, recipe or build-tool configuration. Any other link (an
     /// instructions file under `.github/`) is read by none of them.
     #[must_use]
@@ -2197,7 +3127,7 @@ impl JudgeSurface {
             || name == "build.rs"
             || name.starts_with("rust-toolchain")
             || PYTHON_FILES.contains(&name)
-            || (parts.len() == 1 && name.ends_with(".pth"))
+            || (name.ends_with(".pth") && site_dir(&parts))
             || folded == fold(JUDGE_LIST)
             || self.scripts.iter().any(|script| is_or_holds(&fold(script)))
             // A path the repository's own list (or a module's package) names: the link is on
@@ -2206,6 +3136,13 @@ impl JudgeSurface {
                 let glob: Vec<&str> = glob.split('/').collect();
                 (1..=parts.len()).any(|len| glob_matches(&glob, &parts[..len]))
                     || glob_towards(&glob, &parts)
+            })
+            // A module of a guarded name in an import directory, an entry in a directory on
+            // `PATH`, or the way to either directory.
+            || self.shadowing(&parts)
+            || self.in_path_dir(&parts)
+            || self.imports.iter().chain(&self.on_path).any(|dir| {
+                !dir.is_empty() && glob_towards(&dir.split('/').collect::<Vec<_>>(), &parts)
             })
     }
 
