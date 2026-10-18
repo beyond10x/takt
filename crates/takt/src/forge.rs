@@ -4,12 +4,20 @@
 //! files and never a token in argv, the reads go through `gh`, and a pull-request body passes
 //! `b10x-gates scan-text` before it leaves the machine. A validator turns what the forge
 //! reports into evidence; the forge itself writes no record.
+//!
+//! Every child process takt starts, the forge's and the others' (the test command, the
+//! harness, `aep`), goes through [`run_child`]: no standard input, its own process group,
+//! killed with what it started once it outlives its [`Limits`], and only a bounded tail of
+//! what it prints kept. Its environment holds no credential but the ones its adapter reads
+//! ([`without_credentials`]): the forge keeps the GitHub ones the bot route's programs read.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
@@ -159,24 +167,249 @@ pub trait Runner {
     fn run(&self, tree: &Path, argv: &[String]) -> Result<Exit>;
 }
 
-/// The runner that runs the line as a process, without a shell.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Process;
+/// What a child process takt starts is held to: killed, with what it started, once it has run
+/// for `timeout`; of each of its output streams only the last `output` bytes are kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// How long it may run.
+    pub timeout: Duration,
+    /// How many bytes of each output stream are kept, the last ones.
+    pub output: usize,
+}
+
+/// How a child process ended and the tail of what it printed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finished {
+    /// The exit code; `None` when a signal ended the process.
+    pub code: Option<i32>,
+    /// The last bytes of standard output, at most the limit.
+    pub stdout: Vec<u8>,
+    /// The last bytes of standard error, at most the limit.
+    pub stderr: Vec<u8>,
+    /// Whether standard output was longer than the limit and its beginning dropped.
+    pub stdout_cut: bool,
+}
+
+impl Finished {
+    /// Whether the process exited 0.
+    #[must_use]
+    pub fn success(&self) -> bool {
+        self.code == Some(0)
+    }
+}
+
+/// How long the rest of a process's output may take to arrive once it has ended and its group
+/// has been killed.
+const GRACE: Duration = Duration::from_secs(2);
+
+/// Whether the environment variable `name` carries a credential: a GitHub, GitLab or Anthropic
+/// token, the SSH agent's socket, or any name that ends like one (`_TOKEN`, `_API_KEY`,
+/// `_SECRET`, `_PASSWORD`, ...).
+#[must_use]
+pub fn is_credential(name: &str) -> bool {
+    const SUFFIXES: [&str; 9] = [
+        "_TOKEN",
+        "_API_KEY",
+        "_APIKEY",
+        "_SECRET",
+        "_SECRET_KEY",
+        "_ACCESS_KEY",
+        "_PASSWORD",
+        "_CREDENTIALS",
+        "_PRIVATE_KEY",
+    ];
+    let name = name.to_ascii_uppercase();
+    name.starts_with("GITLAB_")
+        || name == "SSH_AUTH_SOCK"
+        || SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+}
+
+/// The credentials the bot route's programs read: `gh`'s GitHub tokens and `b10x-gates`' own
+/// variables. Not the SSH agent: a push goes under the bot's credential, never the user's.
+#[must_use]
+pub fn bot_route_reads(name: &str) -> bool {
+    matches!(
+        name,
+        "GH_TOKEN" | "GITHUB_TOKEN" | "GH_ENTERPRISE_TOKEN" | "GITHUB_ENTERPRISE_TOKEN"
+    ) || name.starts_with("B10X_")
+}
+
+/// Removes from what `command` inherits every variable that [`is_credential`] and `keep` does
+/// not admit.
+pub fn without_credentials(command: &mut Command, keep: fn(&str) -> bool) {
+    for (name, _) in std::env::vars_os() {
+        let text = name.to_string_lossy();
+        if is_credential(&text) && !keep(&text) {
+            command.env_remove(&name);
+        }
+    }
+}
+
+/// Reads `stream` to its end on a thread of its own, keeping its last `limit` bytes; answers
+/// on the channel with them and whether anything was dropped.
+fn tail(
+    stream: Option<impl std::io::Read + Send + 'static>,
+    limit: usize,
+) -> mpsc::Receiver<(Vec<u8>, bool)> {
+    let (send, receive) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        let mut cut = false;
+        if let Some(mut stream) = stream {
+            let mut buffer = [0_u8; 8192];
+            while let Ok(n) = stream.read(&mut buffer) {
+                if n == 0 {
+                    break;
+                }
+                kept.extend_from_slice(&buffer[..n]);
+                if kept.len() > limit.saturating_mul(2).max(8192) {
+                    let drop = kept.len() - limit;
+                    kept.drain(..drop);
+                    cut = true;
+                }
+            }
+        }
+        if kept.len() > limit {
+            let drop = kept.len() - limit;
+            kept.drain(..drop);
+            cut = true;
+        }
+        let _ = send.send((kept, cut));
+    });
+    receive
+}
+
+/// Kills the process group `child` leads: what it started and what stayed in its group. A
+/// group with no process left is no error.
+fn kill_group(child: &std::process::Child) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", child.id())])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(not(unix))]
+    let _ = child;
+}
+
+/// Runs `command` held to `limits`: standard input empty, standard output and error read into
+/// a bounded tail each, in a process group of its own. Past its timeout it is killed with its
+/// group and the answer is an error naming the program and the timeout; once it has ended, what
+/// it started and left in its group is killed too, so nothing it began outlives it and writes
+/// on. An error too when its output stays held open by a process that left its group.
+pub fn run_child(command: &mut Command, limits: Limits) -> Result<Finished> {
+    let program = Path::new(command.get_program())
+        .file_name()
+        .map_or_else(
+            || command.get_program().to_string_lossy(),
+            std::ffi::OsStr::to_string_lossy,
+        )
+        .into_owned();
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(command, 0);
+    let mut busy = 0;
+    let mut child = loop {
+        match command.spawn() {
+            Ok(child) => break child,
+            // An executable written a moment ago is busy while a child another thread forked
+            // meanwhile still holds the write handle it inherited; that is over as soon as the
+            // child has exec'd, so the spawn is retried briefly before it is an error.
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && busy < 50 => {
+                busy += 1;
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("run {}", command.get_program().to_string_lossy()));
+            }
+        }
+    };
+    let stdout = tail(child.stdout.take(), limits.output);
+    let stderr = tail(child.stderr.take(), limits.output);
+    let started = Instant::now();
+    let mut pause = Duration::from_millis(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().context("wait for the child")? {
+            break Some(status);
+        }
+        if started.elapsed() >= limits.timeout {
+            kill_group(&child);
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(pause.min(limits.timeout.saturating_sub(started.elapsed())));
+        pause = (pause * 2).min(Duration::from_millis(100));
+    };
+    let Some(status) = status else {
+        bail!(
+            "{program} timed out after {:.1} s and was killed",
+            limits.timeout.as_secs_f64()
+        );
+    };
+    kill_group(&child);
+    let read = |stream: &mpsc::Receiver<(Vec<u8>, bool)>| {
+        stream.recv_timeout(GRACE).map_err(|_| {
+            anyhow!(
+                "{program} ended, but a process it started outside its process group still holds its output open"
+            )
+        })
+    };
+    let (stdout, stdout_cut) = read(&stdout)?;
+    let (stderr, _) = read(&stderr)?;
+    Ok(Finished {
+        code: status.code(),
+        stdout,
+        stderr,
+        stdout_cut,
+    })
+}
+
+/// The runner that runs the line as a process, without a shell, held to its limits, with no
+/// credential but the ones the bot route reads ([`bot_route_reads`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Process {
+    /// What the process is held to.
+    pub limits: Limits,
+}
+
+impl Process {
+    /// The limits a forge program is held to by default: five minutes, 8 MiB of output.
+    pub const LIMITS: Limits = Limits {
+        timeout: Duration::from_secs(300),
+        output: 8 << 20,
+    };
+}
+
+impl Default for Process {
+    fn default() -> Self {
+        Self {
+            limits: Self::LIMITS,
+        }
+    }
+}
 
 impl Runner for Process {
     fn run(&self, tree: &Path, argv: &[String]) -> Result<Exit> {
         let (program, args) = argv
             .split_first()
             .ok_or_else(|| anyhow!("an empty argument line"))?;
-        let output = Command::new(program)
-            .args(args)
-            .current_dir(tree)
-            .output()
+        let mut command = Command::new(program);
+        command.args(args).current_dir(tree);
+        without_credentials(&mut command, bot_route_reads);
+        let finished = run_child(&mut command, self.limits)
             .with_context(|| format!("run {} in {}", argv.join(" "), tree.display()))?;
         Ok(Exit {
-            code: output.status.code(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            code: finished.code,
+            stdout: String::from_utf8_lossy(&finished.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&finished.stderr).into_owned(),
         })
     }
 }
@@ -265,7 +498,11 @@ impl BotRoute {
             );
         }
         let policy = std::env::var_os(POLICY_VAR).map(PathBuf::from);
-        Ok(Self::new(origin.repository, policy, Box::new(Process)))
+        Ok(Self::new(
+            origin.repository,
+            policy,
+            Box::new(Process::default()),
+        ))
     }
 
     /// The line that pushes `branch`.
@@ -334,7 +571,8 @@ impl BotRoute {
         )
     }
 
-    /// The line that reads the state of pull request `number`.
+    /// The line that reads the state of pull request `number` of the repository: named, never
+    /// taken from the tree's remotes, which a step may have changed.
     #[must_use]
     pub fn view_argv(&self, number: u64) -> Vec<String> {
         vec![
@@ -344,10 +582,13 @@ impl BotRoute {
             number.to_string(),
             "--json".to_owned(),
             "state,mergedAt,headRefName,headRefOid".to_owned(),
+            "--repo".to_owned(),
+            self.repository.clone(),
         ]
     }
 
-    /// The line that reads the checks on the head of pull request `number`.
+    /// The line that reads the checks on the head of pull request `number` of the repository:
+    /// named, never taken from the tree's remotes.
     #[must_use]
     pub fn checks_argv(&self, number: u64) -> Vec<String> {
         vec![
@@ -357,6 +598,8 @@ impl BotRoute {
             number.to_string(),
             "--json".to_owned(),
             "bucket".to_owned(),
+            "--repo".to_owned(),
+            self.repository.clone(),
         ]
     }
 
@@ -381,6 +624,16 @@ impl BotRoute {
     fn read_json(&self, tree: &Path, argv: &[String]) -> Result<serde_json::Value> {
         let exit = self.runner.run(tree, argv)?;
         reading_of(argv, &exit)
+    }
+}
+
+/// `path` with nothing at it: a response file left from before is removed, so what is read
+/// after the call is what the call wrote, never a file something else put there.
+fn fresh(path: PathBuf) -> Result<PathBuf> {
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(path),
+        Err(error) => Err(error).with_context(|| format!("remove {}", path.display())),
     }
 }
 
@@ -411,7 +664,7 @@ impl Forge for BotRoute {
     fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64> {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         let input = dir.join(Self::REQUEST);
-        let output = dir.join(Self::RESPONSE);
+        let output = fresh(dir.join(Self::RESPONSE))?;
         let document = serde_json::json!({
             "title": request.title,
             "head": request.branch,
@@ -500,7 +753,7 @@ impl Forge for BotRoute {
     fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()> {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         let input = dir.join(Self::MERGE_REQUEST);
-        let output = dir.join(Self::MERGE_RESPONSE);
+        let output = fresh(dir.join(Self::MERGE_RESPONSE))?;
         // The head to match: the API refuses the merge when the pull request's head is no longer
         // this commit, so what is merged is what was read and recorded, never a later push.
         let document = serde_json::json!({ "sha": head });

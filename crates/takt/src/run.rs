@@ -488,7 +488,74 @@ impl<'a> Run<'a> {
                     .case
                     .revision(validator.subject())
                     .context("the validator's subject has a revision")?;
-                let observation = validator.observe(&self.tree, &revision, seq)?;
+                // A record is bound to the revision, `HEAD`: a tree with uncommitted changes
+                // outside the cases directory would be observed on other content than the one
+                // the record names. Nothing is observed, and the changes are left as they are.
+                let uncommitted: Vec<String> = crate::git::changed_paths(&self.tree)?
+                    .into_iter()
+                    .filter(|p| !crate::case::is_under_cases(p))
+                    .collect();
+                if !uncommitted.is_empty() {
+                    let why = format!(
+                        "{} would observe {} with uncommitted changes: {}",
+                        validator.action(),
+                        &revision[..8.min(revision.len())],
+                        uncommitted.join(", ")
+                    );
+                    writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+                    writeln!(out, "  refused: {why}; nothing observed")?;
+                    return Ok(Stop::StepRefused(why));
+                }
+                // What a validator runs may be code a model wrote (the test command, a gate's
+                // commands): the cases directory is guarded as around a judgement step, and the
+                // tree must be as clean after the observation as before it. The validator's
+                // own writes under its case are the only change admitted; anything else is put
+                // back or discarded, and the observation refused with nothing recorded.
+                let cases = self.tree.join(CASES_DIR);
+                let kept = snapshot(&cases)?;
+                let observed = validator
+                    .observe(&self.tree, &revision, seq)
+                    .with_context(|| format!("{} ({})", validator.action(), validator.name()));
+                let touched = differing(&kept, &snapshot(&cases)?);
+                let own: Vec<PathBuf> = match self.case.dir.file_name() {
+                    Some(id) => validator
+                        .writes()
+                        .iter()
+                        .map(|path| Path::new(id).join(path))
+                        .collect(),
+                    None => Vec::new(),
+                };
+                let mut foreign: Vec<String> = touched
+                    .iter()
+                    .filter(|path| !own.contains(path))
+                    .map(|path| Path::new(CASES_DIR).join(path).display().to_string())
+                    .collect();
+                let outside: Vec<String> = crate::git::changed_paths(&self.tree)?
+                    .into_iter()
+                    .filter(|p| !crate::case::is_under_cases(p))
+                    .collect();
+                if !foreign.is_empty() || !outside.is_empty() {
+                    restore(&cases, &kept, &touched)?;
+                    if !outside.is_empty() {
+                        crate::git::discard_all(&self.tree)?;
+                    }
+                    foreign.extend(outside);
+                    let mut why = format!(
+                        "{} wrote what its validator does not: {}",
+                        validator.action(),
+                        foreign.join(", ")
+                    );
+                    if let Err(error) = &observed {
+                        why.push_str(&format!("; the observation failed too: {error:#}"));
+                    }
+                    writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+                    writeln!(
+                        out,
+                        "  refused: {why}; the cases directory was put back, the change discarded and nothing recorded"
+                    )?;
+                    return Ok(Stop::StepRefused(why));
+                }
+                let observation = observed?;
                 writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
                 writeln!(out, "  effect: {}", observation.summary)?;
                 // What the validator retains lands before the records that refer to it: a

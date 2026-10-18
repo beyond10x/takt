@@ -203,6 +203,20 @@ fn the_evaluated_bundle_is_retained_under_the_case_artifacts() {
 #[test]
 fn the_bundle_source_identity_leaves_the_case_directory_out() {
     let tree = scratch("identity", r#"fs.file.exists("Cargo.toml")"#);
+    // The gate validator reads the gates document from the case's base revision: the tree is
+    // on a case's branch, as a run leaves it.
+    let options = RunOptions {
+        protocol: PROTOCOL.to_owned(),
+        intent: "pass the gate".to_owned(),
+        inputs: Vec::new(),
+        iterations: Some(0),
+        hours: None,
+        tokens: None,
+        case_id: Some("identity".to_owned()),
+        gate: None,
+    };
+    let none: Vec<Box<dyn Validator>> = Vec::new();
+    let opened = Run::open(&tree, options, &NoHarness, &none).expect("the case opens");
     let validator = GateRun::new(".engineering/gates.yaml");
     let identity = |observation: &takt::validator::Observation| -> String {
         let bytes = &observation.artifact.as_ref().expect("a bundle").bytes;
@@ -222,6 +236,7 @@ fn the_bundle_source_identity_leaves_the_case_directory_out() {
     fs::write(tree.join("README.md"), "changed\n").expect("a change to the tree");
     let third = validator.observe(&tree, "r0", 3).expect("observes");
     assert_ne!(identity(&first), identity(&third));
+    drop(opened);
 }
 
 fn claim<'a>(decision: &'a Decision, id: &str) -> &'a str {
@@ -755,6 +770,8 @@ fn a_command_bound_gate_with_its_project_file_is_evaluated() {
     );
     fs::set_permissions(tree.join("check.sh"), fs::Permissions::from_mode(0o755))
         .expect("exec bit");
+    // The mode change is committed: a validator observes only a tree with nothing uncommitted.
+    git(&tree, &["commit", "-q", "-a", "-m", "exec bit"]);
     let ran = run_with(&tree, "project", PROTOCOL, &NoHarness, 4);
     assert_eq!(
         ran.stop

@@ -291,6 +291,7 @@ fn a_refused_take_is_printed_verbatim_and_the_next_ready_story_is_taken() {
     let repo = repository("one-ready", "refused");
     let frontier = Aep {
         command: refusing_aep(&repo),
+        ..Aep::default()
     };
     let mut out = Vec::new();
     let story = frontier
@@ -453,6 +454,7 @@ fn a_refused_take_removes_the_case_it_opened_and_the_next_story_gets_one() {
     let repo = repository("one-ready", "refused-case");
     let frontier = Aep {
         command: refusing_aep(&repo),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut out = Vec::new();
@@ -595,6 +597,7 @@ fn a_store_refusing_every_candidate_leaves_no_cases_directory_behind() {
     let repo = repository("one-ready", "adv2-all-refused");
     let frontier = Aep {
         command: stub_aep(&repo, &["story:a", "story:b", "story:c"]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut out = Vec::new();
@@ -628,6 +631,7 @@ fn a_given_case_id_names_the_taken_story_case_after_a_refusal() {
     let repo = repository("one-ready", "adv2-given-id");
     let frontier = Aep {
         command: stub_aep(&repo, &["story:a"]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut options = options();
@@ -672,6 +676,7 @@ fn a_refusal_removes_only_the_case_it_opened_not_its_neighbours() {
     .expect("its snapshot");
     let frontier = Aep {
         command: stub_aep(&repo, &["story:a"]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut out = Vec::new();
@@ -699,6 +704,7 @@ fn an_open_that_fails_asks_for_no_move_and_leaves_no_case() {
     let repo = repository("one-ready", "adv2-open-fails");
     let frontier = Aep {
         command: stub_aep(&repo, &[]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut options = options();
@@ -739,6 +745,7 @@ fn an_open_refused_on_its_inputs_asks_for_no_move_and_leaves_no_case() {
     let repo = repository("one-ready", "adv2-input-refused");
     let frontier = Aep {
         command: stub_aep(&repo, &[]),
+        ..Aep::default()
     };
     let validators: Vec<Box<dyn Validator>> = vec![];
     let mut options = options();

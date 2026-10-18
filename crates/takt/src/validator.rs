@@ -9,7 +9,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 
 use crate::case::{BRANCH_FILE, Branch, current};
 use crate::evidence::Record;
-use crate::forge::{Checks, Forge, PullRequest, PullRequestState};
+use crate::forge::{BotRoute, Checks, Forge, Limits, PullRequest, PullRequestState};
 
 /// What a validator observed, and the records it wrote from it.
 #[derive(Debug)]
@@ -53,13 +53,25 @@ pub trait Validator {
     fn subject(&self) -> &str;
     /// Performs the action in `tree` about `revision`; `seq` makes record ids unique.
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation>;
+    /// The files under the case's directory the validator itself writes while it observes,
+    /// relative to it. Nothing else under the cases directory may change during an
+    /// observation: the loop puts back whatever else changed and refuses the observation,
+    /// because what a validator runs (a test command, a gate's commands) may be code a model
+    /// wrote. None by default.
+    fn writes(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
 /// `tests.run`: runs the test command without a shell; exit 0 is `pass`, anything else `fail`.
+/// The command is code from the tree: it gets no credential, no standard input, a timeout past
+/// which it is killed with what it started, and only a bounded tail of its output is kept.
 #[derive(Debug, Clone)]
 pub struct TestsRun {
     /// The command and its arguments.
     pub command: Vec<String>,
+    /// What the command is held to.
+    pub limits: Limits,
 }
 
 impl TestsRun {
@@ -69,7 +81,23 @@ impl TestsRun {
         if command.is_empty() {
             bail!("the test command is empty");
         }
-        Ok(Self { command })
+        Ok(Self {
+            command,
+            limits: Self::LIMITS,
+        })
+    }
+
+    /// The limits a test command is held to by default: thirty minutes, 64 KiB of output.
+    pub const LIMITS: Limits = Limits {
+        timeout: std::time::Duration::from_secs(1800),
+        output: 64 << 10,
+    };
+
+    /// Held to `limits`.
+    #[must_use]
+    pub fn with_limits(mut self, limits: Limits) -> Self {
+        self.limits = limits;
+        self
     }
 }
 
@@ -91,16 +119,12 @@ impl Validator for TestsRun {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
-        let output = Command::new(&self.command[0])
-            .args(&self.command[1..])
-            .current_dir(tree)
-            .output()
+        let mut command = Command::new(&self.command[0]);
+        command.args(&self.command[1..]).current_dir(tree);
+        crate::forge::without_credentials(&mut command, |_| false);
+        let output = crate::forge::run_child(&mut command, self.limits)
             .with_context(|| format!("run {}", self.command.join(" ")))?;
-        let result = if output.status.success() {
-            "pass"
-        } else {
-            "fail"
-        };
+        let result = if output.success() { "pass" } else { "fail" };
         let tail =
             String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
         let tail: String = tail
@@ -123,10 +147,7 @@ impl Validator for TestsRun {
         Ok(Observation {
             summary: format!(
                 "the test command exited {}: {result}; {}",
-                output
-                    .status
-                    .code()
-                    .map_or("signal".to_owned(), |c| c.to_string()),
+                output.code.map_or("signal".to_owned(), |c| c.to_string()),
                 tail.chars().take(300).collect::<String>()
             ),
             records: vec![record],
@@ -146,13 +167,60 @@ pub const DEFAULT_PROJECT: &str = ".engineering/assertions-project.yaml";
 /// The project file admits the commands and providers the gates bind. Every observation
 /// retains the bundle the library evaluated, `engineering-gate-evidence/1`, as
 /// `<record-id>.bundle.json`.
+///
+/// The gates document and the project file are read from the case's base revision, the tip of
+/// the branch in `branch.yaml`, never from the tree: the tree is the case's branch, which a
+/// model edits, and a gate it rewrote would decide its own verdict. What the gates observe is
+/// the tree. The two files are copied for the evaluation into the case's directory, which the
+/// tree's source identity leaves out, and removed again before the observation ends.
 #[derive(Debug, Clone)]
 pub struct GateRun {
     /// The gates document, relative to the tree.
     pub gates: PathBuf,
     /// The `engineering-assertions-project/1` file that admits the gates' commands and
-    /// providers, relative to the tree; `None` takes [`DEFAULT_PROJECT`] when the tree has it.
+    /// providers, relative to the tree; `None` takes [`DEFAULT_PROJECT`] when the base
+    /// revision has it.
     pub project: Option<PathBuf>,
+}
+
+/// The directory under the case's that holds the base revision's gate inputs while the gate
+/// validator evaluates them.
+const GATE_INPUTS: &str = "gate-inputs";
+
+/// The case's base revision: the commit the base branch in `branch.yaml` names now.
+fn base_revision(tree: &Path, case_dir: &Path) -> Result<(String, String)> {
+    let base = Branch::read(case_dir)?.base.ok_or_else(|| {
+        anyhow!(
+            "the case has no base branch: it was opened from a detached HEAD; the gates document and the project file are read from the base revision"
+        )
+    })?;
+    let at = crate::git::run(
+        tree,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &format!("{base}^{{commit}}"),
+        ],
+    )
+    .with_context(|| format!("resolve the case's base branch {base}"))?;
+    Ok((base, at))
+}
+
+/// The text of `path`, relative to the tree, at the commit `at`; `None` when it has no such
+/// file.
+fn file_at(tree: &Path, at: &str, path: &Path) -> Result<Option<String>> {
+    let relative = path
+        .to_str()
+        .filter(|path| path.split('/').all(|part| part != ".."))
+        .filter(|_| path.is_relative())
+        .ok_or_else(|| anyhow!("{} is not a path inside the tree", path.display()))?;
+    let spec = format!("{at}:./{relative}");
+    if crate::git::run(tree, &["cat-file", "-e", &spec]).is_err() {
+        return Ok(None);
+    }
+    crate::git::run(tree, &["show", &spec]).map(|text| Some(format!("{text}\n")))
 }
 
 impl GateRun {
@@ -191,31 +259,78 @@ impl Validator for GateRun {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
-        let document = self.gates.display();
-        let project = self.project.clone().or_else(|| {
-            tree.join(DEFAULT_PROJECT)
-                .is_file()
-                .then(|| PathBuf::from(DEFAULT_PROJECT))
-        });
+        let dir = current(tree)?;
+        let (base, at) = base_revision(tree, &dir)?;
+        let document = format!("{} from {base} at {}", self.gates.display(), short(&at));
+        let gates = file_at(tree, &at, &self.gates)?
+            .ok_or_else(|| anyhow!("the gates document {document} is not in the base revision"))?;
+        let project = match &self.project {
+            Some(path) => Some((
+                path.clone(),
+                file_at(tree, &at, path)?.ok_or_else(|| {
+                    anyhow!(
+                        "the project file {} is not in the base revision {base} at {}",
+                        path.display(),
+                        short(&at)
+                    )
+                })?,
+            )),
+            None => file_at(tree, &at, Path::new(DEFAULT_PROJECT))?
+                .map(|text| (PathBuf::from(DEFAULT_PROJECT), text)),
+        };
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         // The case directory, which the loop writes every pass, stays out of the bundle's
-        // source identity: that identity is the repository tree's.
+        // source identity: that identity is the repository tree's. The base revision's two
+        // files are evaluated from there, the paths relative to the tree as the library takes
+        // them, and are gone again before the observation ends.
         let cases = Path::new(crate::case::CASES_DIR);
-        let prepared = canon_engineering_assertions::prepare(
-            tree,
-            &self.gates,
-            project.as_deref(),
-            Some(cases),
-        )
-        .with_context(|| match &project {
-            Some(project) => format!(
-                "prepare the gates document {document} with the project file {}",
-                project.display()
-            ),
-            None => format!("prepare the gates document {document}"),
-        })?;
-        let bundle = canon_engineering_assertions::collect(prepared, now)
-            .with_context(|| format!("collect the observations of {document}"))?;
+        let inputs = dir.join(GATE_INPUTS);
+        let relative = inputs
+            .strip_prefix(tree)
+            .with_context(|| format!("{} is not under the tree", inputs.display()))?
+            .to_path_buf();
+        let copy = |kind: &str, path: &Path, text: &str| -> Result<PathBuf> {
+            let name = path
+                .file_name()
+                .ok_or_else(|| anyhow!("{} names no file", path.display()))?;
+            let at = inputs.join(kind);
+            std::fs::create_dir_all(&at).with_context(|| format!("create {}", at.display()))?;
+            std::fs::write(at.join(name), text)
+                .with_context(|| format!("write {}", at.join(name).display()))?;
+            Ok(relative.join(kind).join(name))
+        };
+        let clear = || match std::fs::remove_dir_all(&inputs) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                Err(error).with_context(|| format!("remove {}", inputs.display()))
+            }
+            _ => Ok(()),
+        };
+        clear()?;
+        let collected = (|| -> Result<_> {
+            let gates = copy("gates", &self.gates, &gates)?;
+            let copied = project
+                .as_ref()
+                .map(|(path, text)| copy("project", path, text))
+                .transpose()?;
+            let prepared = canon_engineering_assertions::prepare(
+                tree,
+                &gates,
+                copied.as_deref(),
+                Some(cases),
+            )
+            .with_context(|| match &project {
+                Some((project, _)) => format!(
+                    "prepare the gates document {document} with the project file {} from {base}",
+                    project.display()
+                ),
+                None => format!("prepare the gates document {document}"),
+            })?;
+            canon_engineering_assertions::collect(prepared, now)
+                .with_context(|| format!("collect the observations of {document}"))
+        })();
+        let cleared = clear();
+        let bundle = collected?;
+        cleared?;
         let report = canon_engineering_assertions::evaluate(&bundle, now, None, None)
             .with_context(|| format!("evaluate {document}"))?;
         // The report holds the gates' assertions in declaration order; the gate that decided
@@ -434,6 +549,17 @@ impl Validator for PrOpen {
 
     fn subject(&self) -> &str {
         "implementation"
+    }
+
+    /// The case's `branch.yaml`, and what the bot route keeps of the request it sent and the
+    /// response it read.
+    fn writes(&self) -> Vec<PathBuf> {
+        let artifacts = Path::new("artifacts");
+        vec![
+            PathBuf::from(BRANCH_FILE),
+            artifacts.join(BotRoute::REQUEST),
+            artifacts.join(BotRoute::RESPONSE),
+        ]
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
