@@ -11,7 +11,7 @@ refs:
   reference: test-summary-keeps-the-totals
 relations:
 - informed_by: review-result:variety-runs-a0b8576
-revision: 1
+revision: 4
 ---
 ## Outcome
 
@@ -27,6 +27,16 @@ command: printf "#!/bin/sh\necho SUITES-26-PASSED\nfor i in 1 2 3 4 5 6; do echo
 output: summary-lost
 source: .engineering/planning/review-result/variety-runs-a0b8576.md
 ```
+
+Second observation, trial 1 of 2026-10-18 (`docs/runs/2026-10-18-trial-1-worktree.md`): the
+promoted takt a0b8576 on a story-sized unit of the worktree repository with `--test-cmd "cargo
+test --locked --workspace --quiet"` recorded, at step 1 and again at step 5 after the fix landed,
+`the test command exited 0: pass;  | running 0 tests |  | test result: ok. 0 passed; 0 failed; 0
+ignored; 0 measured; 0 filtered out; finished in 0.00s | ` (the case's `events.jsonl`, lines 3 and
+15), while the same command run by hand in that tree printed 20 `test result:` lines summing to
+162 passed and 0 failed. The last five lines of a workspace run are the doc-test block of the last
+crate, so a passing run and a repository with no tests read the same, and a block that failed
+earlier in the output is hidden by a later block that passed.
 
 ## Scope
 
