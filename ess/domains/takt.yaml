@@ -899,7 +899,7 @@ types:
   # read from: .engineering/planning/design/recursive-self-improvement.md:185-187
   # read from: crates/takt/src/scorecard.rs:58-84
   # read from: crates/takt/src/loop_scorecard.rs:44-74
-  # read from: crates/takt/src/loop_scorecard.rs:622-730
+  # read from: crates/takt/src/loop_scorecard.rs:648-756
   - name: takt.work.LoopScorecardRow
     kind: struct
     fields:
@@ -963,7 +963,7 @@ types:
   # read from: .engineering/planning/story/loop-scorecard.md:54
   # read from: .engineering/planning/story/loop-scorecard.md:98
   # read from: crates/takt/src/loop_scorecard.rs:76-81
-  # read from: crates/takt/src/loop_scorecard.rs:739-765
+  # read from: crates/takt/src/loop_scorecard.rs:765-791
   - name: takt.work.LoopScorecard
     kind: struct
     fields:
@@ -979,8 +979,8 @@ types:
   # figure with a target and no value is below target: no data fails closed.
   # `loop.measure` retains the figures it computed as an
   # observation beside its record; the rows stay the source.
-  # read from: crates/takt/src/loop_scorecard.rs:369-389
-  # read from: crates/takt/src/loop_scorecard.rs:452-518
+  # read from: crates/takt/src/loop_scorecard.rs:395-415
+  # read from: crates/takt/src/loop_scorecard.rs:478-544
   - name: takt.work.LoopFigure
     kind: struct
     fields:
@@ -1045,7 +1045,7 @@ types:
   # turn, set later from the first three accepted turns with a run record.
   # read from: protocols/loop-improvement/metrics.yaml
   # read from: crates/takt/src/loop_scorecard.rs:127-163
-  # read from: crates/takt/src/loop_scorecard.rs:348-366
+  # read from: crates/takt/src/loop_scorecard.rs:372-392
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
   - name: takt.work.LoopMetric
     kind: struct
@@ -1062,7 +1062,7 @@ types:
   # Fewer than three recorded turns, no snapshot of `loop_baseline`, or no definitions in it,
   # records nothing.
   # read from: protocols/loop-improvement/1.yaml:32-36
-  # read from: crates/takt/src/loop_scorecard.rs:887-895
+  # read from: crates/takt/src/loop_scorecard.rs:913-921
   - name: takt.work.LoopMeasurementResult
     kind: enum
     variants: [below_target, at_target]
@@ -1081,19 +1081,25 @@ types:
   # never from the object store after a step ran; no snapshot of the case's current
   # `loop_baseline` records nothing. Git does not check a loose object's bytes against the id
   # it is stored under, so every read of the definitions (the snapshot's and the candidate's)
-  # and of a baseline's ancestry checks each object on the way, the commit, each tree and the
-  # blob, or each commit on the ancestry path, by computing its id again from the bytes read,
-  # and refuses one whose bytes hash to another id, naming it. The other reads at a revision
+  # and of a baseline's ancestry reads its objects through one `git cat-file --batch` and checks
+  # each in takt's own process, computing its id again from its kind and bytes in the
+  # repository's object format (SHA-1 or SHA-256, its `extensions.objectFormat`), and refuses
+  # one whose bytes hash to another id, naming it. The definitions are read commit, tree by
+  # tree, blob. An ancestry is answered by walking from the tip through the parents each
+  # commit's own checked bytes name, every commit seen once (a cycle a forged commit makes ends
+  # the walk), with no `merge-base` or `rev-list` answering any part of it; a commit on the way
+  # that cannot be read or does not check out is an error naming it, never `false`, so a forged
+  # commit can neither add an ancestor nor hide one. The other reads at a revision
   # (the step guard's judge-surface list at the base, `judge_list_at`; a row's filing) still
   # read the object store a step could write unchecked: the checkpoint guards refs, replace
   # refs, `commondir`, `gitdir`, `shallow`, `objects/info/alternates` and the commit-graph, and
   # no git takt runs reads a commit-graph, but the objects themselves are not guarded, and
   # confining the step's writes closes that (story:confinement-seam).
   # read from: protocols/loop-improvement/1.yaml:37-41
-  # read from: crates/takt/src/loop_scorecard.rs:979-992
-  # read from: crates/takt/src/loop_scorecard.rs:1006-1047
-  # read from: crates/takt/src/loop_scorecard.rs:184-288
-  # read from: crates/takt/src/git.rs:154-170
+  # read from: crates/takt/src/loop_scorecard.rs:1005-1018
+  # read from: crates/takt/src/loop_scorecard.rs:1032-1073
+  # read from: crates/takt/src/loop_scorecard.rs:184-312
+  # read from: crates/takt/src/git.rs:161-311
   - name: takt.work.DefinitionCheckResult
     kind: enum
     variants: [unchanged, dual_reported, redefined]
@@ -1108,7 +1114,7 @@ types:
   # direction, else `not_improved`; the targets are the baseline's as the case snapshotted them
   # when it opened. No measurement retained in the case, or no snapshot, records nothing.
   # read from: protocols/loop-improvement/1.yaml:44-47
-  # read from: crates/takt/src/loop_scorecard.rs:1237-1247
+  # read from: crates/takt/src/loop_scorecard.rs:1263-1273
   - name: takt.work.LoopComparisonResult
     kind: enum
     variants: [improved, not_improved]
@@ -1133,8 +1139,8 @@ types:
   # read from: crates/takt/src/case.rs:1884-1897
   # read from: crates/takt-cli/src/main.rs:416-430
   # read from: crates/takt-cli/src/main.rs:513-517
-  # read from: crates/takt/src/loop_scorecard.rs:810-860
-  # read from: crates/takt/src/loop_scorecard.rs:862-885
+  # read from: crates/takt/src/loop_scorecard.rs:836-886
+  # read from: crates/takt/src/loop_scorecard.rs:888-911
   - name: takt.work.LoopBaselineSnapshot
     kind: struct
     fields:
@@ -2038,10 +2044,10 @@ entities:
   # ancestry and history takt reads comes from the commits themselves; and no
   # `GIT_GRAFT_FILE` or `GIT_SHALLOW_FILE` it inherited, which would give commits other parents
   # or cut the history, reaches it.
-  # read from: crates/takt/src/git.rs:95-102
-  # read from: crates/takt/src/git.rs:1074-1087
+  # read from: crates/takt/src/git.rs:118-125
+  # read from: crates/takt/src/git.rs:1215-1228
   # read from: crates/takt/src/forge.rs:716-725
-  # read from: crates/takt/src/git.rs:716-733
+  # read from: crates/takt/src/git.rs:857-874
   - name: takt.work.Step
     naming:
       summary: >-
@@ -2114,7 +2120,7 @@ entities:
       # `implementation` now names; absent when nothing changed, the step was refused, or the step
       # was deterministic.
       # read from: crates/takt/src/run.rs:4933-4948
-      # read from: crates/takt/src/git.rs:466
+      # read from: crates/takt/src/git.rs:607
       - name: committed
         type: Optional<takt.work.Revision>
     relations:
@@ -2216,9 +2222,9 @@ entities:
   # read from: crates/takt/src/forge.rs:735-755
   # read from: crates/takt/src/validator.rs:112-123
   # read from: crates/takt/src/validator.rs:1684-1695
-  # read from: crates/takt/src/git.rs:1471-1475
+  # read from: crates/takt/src/git.rs:1612-1616
   # read from: crates/takt/src/validator.rs:1723-1773
-  # read from: crates/takt/src/git.rs:1502-1507
+  # read from: crates/takt/src/git.rs:1643-1648
   # read from: crates/takt/src/validator.rs:1656-1668
   - name: takt.work.EvidenceProducer
     naming:

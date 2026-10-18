@@ -397,3 +397,79 @@ fn a_baseline_off_the_base_branch_is_refused_before_anything_is_written() {
         assert_eq!(git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
     }
 }
+
+/// `data` as a zlib stream of stored deflate blocks, as git reads a loose object.
+fn zlib_stored(data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x78, 0x01];
+    let chunks: Vec<&[u8]> = if data.is_empty() {
+        vec![&[]]
+    } else {
+        data.chunks(65535).collect()
+    };
+    for (n, chunk) in chunks.iter().enumerate() {
+        out.push(u8::from(n + 1 == chunks.len()));
+        let len = u16::try_from(chunk.len()).expect("a stored block");
+        out.extend(len.to_le_bytes());
+        out.extend((!len).to_le_bytes());
+        out.extend(*chunk);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &byte in data {
+        a = (a + u32::from(byte)) % 65521;
+        b = (b + a) % 65521;
+    }
+    out.extend(((b << 16) | a).to_be_bytes());
+    out
+}
+
+/// The reviewer's probe 6 (side-made-ancestor): main is the definitions' commit, C1 and the
+/// tip; a side branch off C1 loosens the target to 0.1. C1 is rewritten under its id with the
+/// side commit as its parent, a cycle: plain git then takes the side commit for a commit of
+/// main, and the ancestry path between them is empty. The loop case with the side commit as its
+/// baseline is refused before anything is written, naming the forged commit.
+#[test]
+fn a_side_commit_a_forged_commit_makes_an_ancestor_of_the_base_is_refused() {
+    let (repo, _) = repository("side-made-ancestor");
+    fs::write(repo.join("README.md"), "c1\n").expect("a file");
+    git(&repo, &["add", "README.md"]);
+    git(&repo, &["commit", "-q", "-m", "c1"]);
+    let c1 = git(&repo, &["rev-parse", "HEAD"]);
+    git(&repo, &["checkout", "-q", "-b", "side"]);
+    fs::write(
+        repo.join("protocols/loop-improvement/metrics.yaml"),
+        DEFINED.replace("at_least: 0.75", "at_least: 0.1"),
+    )
+    .expect("the looser definitions");
+    git(&repo, &["commit", "-q", "-am", "loosen"]);
+    let side = git(&repo, &["rev-parse", "HEAD"]);
+    git(&repo, &["checkout", "-q", "main"]);
+    fs::write(repo.join("README2.md"), "tip\n").expect("a file");
+    git(&repo, &["add", "README2.md"]);
+    git(&repo, &["commit", "-q", "-m", "tip"]);
+    let real = git(&repo, &["cat-file", "commit", &c1]);
+    let parent = real
+        .lines()
+        .find_map(|line| line.strip_prefix("parent "))
+        .expect("a parent")
+        .to_owned();
+    let forged = format!("{}\n", real.replace(&parent, &side));
+    let object = repo.join(".git/objects").join(&c1[..2]).join(&c1[2..]);
+    fs::remove_file(&object).expect("the loose commit is removed");
+    let mut raw = format!("commit {}\0", forged.len()).into_bytes();
+    raw.extend_from_slice(forged.as_bytes());
+    fs::write(&object, zlib_stored(&raw)).expect("the forged commit is written");
+    let plain = Command::new("git")
+        .args(["merge-base", "--is-ancestor", &side, "main"])
+        .current_dir(&*repo)
+        .status()
+        .expect("git runs");
+    assert!(
+        plain.success(),
+        "plain git takes the side commit for a commit of main"
+    );
+    let (code, out, err) = run(&repo, Some(&side));
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert!(err.contains("loop_baseline"), "{err}");
+    assert!(err.contains(&c1), "the forged commit is named: {err}");
+    nothing_written(&repo, "side made an ancestor");
+}

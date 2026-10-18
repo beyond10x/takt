@@ -73,6 +73,29 @@ const REDIRECTING_ENV: [&str; 15] = [
 /// than find a repository further up; and for a tree without a `.git` git searches no further
 /// than the tree itself.
 fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
+    let mut child = command(tree, args)?
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        stdin
+            .write_all(input)
+            .with_context(|| format!("write to git {}", args.join(" ")))?;
+    }
+    child
+        .wait_with_output()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))
+}
+
+/// The `git <args>` [`output`] runs in `tree`, set up as every git takt runs is, its standard
+/// streams left to the caller.
+fn command(tree: &Path, args: &[&str]) -> Result<Command> {
     let tree =
         std::path::absolute(tree).with_context(|| format!("make {} absolute", tree.display()))?;
     let tree = tree.as_path();
@@ -97,28 +120,12 @@ fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
     command.env("GIT_NO_REPLACE_OBJECTS", "1");
     // Nor a commit-graph, a cache of the history a step can forge (a parent re-pointed, its
     // checksum fixed): every ancestry and history takt reads comes from the commits themselves.
-    let mut child = command
+    command
         .args(NO_CONFIGURED_CODE)
         .args(["-c", "core.commitGraph=false"])
         .args(args)
-        .current_dir(tree)
-        .stdin(if input.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
-    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
-        stdin
-            .write_all(input)
-            .with_context(|| format!("write to git {}", args.join(" ")))?;
-    }
-    child
-        .wait_with_output()
-        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))
+        .current_dir(tree);
+    Ok(command)
 }
 
 /// Runs `git <args>` in `tree`, `input` on its standard input; answers its standard output as
@@ -152,21 +159,155 @@ pub fn blob(tree: &Path, object: &str) -> Result<Vec<u8>> {
 }
 
 /// The bytes of the object `id` (a full object id) of `kind` (`commit`, `tree`, `blob`),
-/// checked: git does not check a loose object's bytes against the id it is stored under, so
-/// the id is computed again from the bytes read (`hash-object --stdin`, in the repository's
-/// object format, reading nothing from the object store), and an object whose bytes hash to
-/// another id is an error naming it.
+/// checked as [`ObjectReader::read`] checks every object; an object of another kind, or none,
+/// is an error.
 pub fn verified_object(tree: &Path, kind: &str, id: &str) -> Result<Vec<u8>> {
-    let bytes = raw(tree, &["cat-file", kind, id], None)?;
-    let hashed = raw(tree, &["hash-object", "-t", kind, "--stdin"], Some(&bytes))
-        .with_context(|| format!("the {kind} {id} does not read as a {kind}"))?;
-    let hashed = String::from_utf8_lossy(&hashed).trim().to_owned();
-    if hashed != id {
-        bail!(
-            "the {kind} {id} reads as bytes whose id is {hashed}: the object store holds other bytes under its id; nothing was read from it"
-        );
+    let mut reader = ObjectReader::open(tree)?;
+    match reader.read(id)? {
+        Some((found, bytes)) if found == kind => Ok(bytes),
+        Some((found, _)) => bail!("the object {id} is a {found}, not a {kind}"),
+        None => bail!("the repository holds no object {id}"),
     }
-    Ok(bytes)
+}
+
+/// The repository's object format, from its `extensions.objectFormat`: `sha1` or `sha256`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectFormat {
+    /// SHA-1, 40 hexadecimal digits.
+    Sha1,
+    /// SHA-256, 64 hexadecimal digits.
+    Sha256,
+}
+
+impl ObjectFormat {
+    /// The object format of the repository at `tree`, as git reports it.
+    pub fn of(tree: &Path) -> Result<Self> {
+        match run(tree, &["rev-parse", "--show-object-format"])?.as_str() {
+            "sha1" => Ok(Self::Sha1),
+            "sha256" => Ok(Self::Sha256),
+            other => bail!("the repository's object format {other} is not one takt reads"),
+        }
+    }
+
+    /// The id of an object of `kind` holding `bytes`: the hash of `<kind> <len>\0<bytes>`, in
+    /// lower-case hexadecimal.
+    #[must_use]
+    pub fn id(self, kind: &str, bytes: &[u8]) -> String {
+        use sha2::Digest as _;
+        let header = format!("{kind} {}\0", bytes.len());
+        let digest: Vec<u8> = match self {
+            Self::Sha1 => {
+                let mut hasher = sha1::Sha1::new();
+                hasher.update(header.as_bytes());
+                hasher.update(bytes);
+                hasher.finalize().to_vec()
+            }
+            Self::Sha256 => {
+                let mut hasher = sha2::Sha256::new();
+                hasher.update(header.as_bytes());
+                hasher.update(bytes);
+                hasher.finalize().to_vec()
+            }
+        };
+        digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+}
+
+/// Objects read through one `git cat-file --batch`, each checked in this process: git does not
+/// check a loose object's bytes against the id it is stored under, so the id is computed again
+/// from the kind and the bytes read, in the repository's object format, and an object whose
+/// bytes hash to another id is an error naming it. One process reads any number of objects;
+/// it ends when the reader is dropped.
+pub struct ObjectReader {
+    child: std::process::Child,
+    stdin: Option<std::process::ChildStdin>,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+    format: ObjectFormat,
+}
+
+impl ObjectReader {
+    /// A reader of the objects of the repository at `tree`.
+    pub fn open(tree: &Path) -> Result<Self> {
+        let format = ObjectFormat::of(tree)?;
+        let mut child = command(tree, &["cat-file", "--batch"])?
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("run git cat-file --batch in {}", tree.display()))?;
+        let stdin = child.stdin.take();
+        let stdout = child
+            .stdout
+            .take()
+            .map(std::io::BufReader::new)
+            .ok_or_else(|| anyhow!("git cat-file --batch has no standard output"))?;
+        Ok(Self {
+            child,
+            stdin,
+            stdout,
+            format,
+        })
+    }
+
+    /// The kind and the bytes of the object `id` (a full object id), checked; none when the
+    /// repository holds no such object. An object whose bytes do not hash to `id` is an error
+    /// naming it, and so is a reply git does not document.
+    pub fn read(&mut self, id: &str) -> Result<Option<(String, Vec<u8>)>> {
+        use std::io::{BufRead as _, Read as _};
+        let hex = id.len() == 40 || id.len() == 64;
+        if !hex
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            bail!("{id} is no full object id");
+        }
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow!("git cat-file --batch is closed"))?;
+        stdin
+            .write_all(format!("{id}\n").as_bytes())
+            .and_then(|()| stdin.flush())
+            .context("write to git cat-file --batch")?;
+        let mut header = String::new();
+        self.stdout
+            .read_line(&mut header)
+            .context("read from git cat-file --batch")?;
+        let fields: Vec<&str> = header.trim_end_matches('\n').split(' ').collect();
+        match fields.as_slice() {
+            [named, "missing"] if *named == id => Ok(None),
+            [named, kind, size] if *named == id => {
+                let size: usize = size
+                    .parse()
+                    .with_context(|| format!("git cat-file --batch replied {header:?}"))?;
+                let mut bytes = vec![0; size + 1];
+                self.stdout
+                    .read_exact(&mut bytes)
+                    .context("read from git cat-file --batch")?;
+                bytes.truncate(size);
+                let computed = self.format.id(kind, &bytes);
+                if computed != id {
+                    bail!(
+                        "the {kind} {id} reads as bytes whose id is {computed}: the object store holds other bytes under its id; nothing was read from it"
+                    );
+                }
+                Ok(Some(((*kind).to_owned(), bytes)))
+            }
+            _ => bail!("git cat-file --batch replied {header:?} for {id}"),
+        }
+    }
+}
+
+impl Drop for ObjectReader {
+    fn drop(&mut self) {
+        // Its standard input closed, git ends; it is waited for, so no process is left.
+        drop(self.stdin.take());
+        if self.child.wait().is_err() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
 }
 
 /// The commit `HEAD` names.

@@ -181,32 +181,39 @@ fn is_commit_id(revision: &str) -> bool {
     (7..=64).contains(&revision.len()) && revision.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// The full id of the commit `revision` names in `tree`, resolved without parsing the object
-/// (its type read from its header only, so an object whose bytes do not hash to its id still
-/// resolves and is refused by the read that checks it); none when it names no commit.
-fn commit_id(tree: &Path, revision: &str) -> Option<String> {
+/// The full object id `revision` names in `tree`, resolved without reading the object (an
+/// abbreviated id's prefix looked up, a full id as given); none for no commit id, or an
+/// abbreviation git does not resolve.
+fn object_id(tree: &Path, revision: &str) -> Option<String> {
     if !is_commit_id(revision) {
         return None;
     }
-    let id = crate::git::run(tree, &["rev-parse", "--verify", "--quiet", revision]).ok()?;
-    let kind = crate::git::run(tree, &["cat-file", "-t", &id]).ok()?;
-    (kind == "commit").then_some(id)
+    crate::git::run(tree, &["rev-parse", "--verify", "--quiet", revision]).ok()
 }
 
-/// The full id of the commit `revision` names in `tree`; an error when it names none.
-fn commit_of(tree: &Path, revision: &str) -> Result<String> {
-    commit_id(tree, revision)
-        .ok_or_else(|| anyhow!("{revision} is no commit of {}", tree.display()))
+/// The parents a commit's bytes name, from its header.
+fn parents(commit: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(commit)
+        .lines()
+        .take_while(|line| !line.is_empty())
+        .filter_map(|line| line.strip_prefix("parent "))
+        .map(str::to_owned)
+        .collect()
 }
 
-/// The bytes of the file at `path` in the commit `revision`, every object on the way checked
-/// ([`crate::git::verified_object`]): the commit, each tree down the path, and the blob, each
-/// read once and its id computed again from its bytes; none when the commit holds no file
-/// there. An object whose bytes do not hash to its id is an error naming it, so an object
-/// planted under another's id is never read as that one.
+/// The bytes of the file at `path` in the commit `revision`, every object on the way read
+/// through one checked reader ([`crate::git::ObjectReader`]): the commit, each tree down the
+/// path and the blob, each one's id computed again from its bytes; none when the commit holds
+/// no file there. An object whose bytes do not hash to its id is an error naming it, so an
+/// object planted under another's id is never read as that one.
 pub fn verified_file(tree: &Path, revision: &str, path: &str) -> Result<Option<Vec<u8>>> {
-    let commit = commit_of(tree, revision)?;
-    let bytes = crate::git::verified_object(tree, "commit", &commit)?;
+    let commit = object_id(tree, revision)
+        .ok_or_else(|| anyhow!("{revision} is no commit of {}", tree.display()))?;
+    let mut reader = crate::git::ObjectReader::open(tree)?;
+    let bytes = match reader.read(&commit)? {
+        Some((kind, bytes)) if kind == "commit" => bytes,
+        _ => bail!("{revision} is no commit of {}", tree.display()),
+    };
     let text = String::from_utf8_lossy(&bytes);
     let mut object = text
         .lines()
@@ -217,7 +224,10 @@ pub fn verified_file(tree: &Path, revision: &str, path: &str) -> Result<Option<V
     let hash = object.len() / 2;
     let parts: Vec<&str> = path.split('/').collect();
     for (n, part) in parts.iter().enumerate() {
-        let entries = crate::git::verified_object(tree, "tree", &object)?;
+        let entries = match reader.read(&object)? {
+            Some((kind, bytes)) if kind == "tree" => bytes,
+            _ => bail!("the tree {object} does not read as a tree"),
+        };
         let mut at = 0;
         let mut found = None;
         while at < entries.len() {
@@ -249,7 +259,10 @@ pub fn verified_file(tree: &Path, revision: &str, path: &str) -> Result<Option<V
         match (last, mode.as_slice()) {
             (false, b"40000") => object = id,
             (true, b"100644" | b"100755") => {
-                return crate::git::verified_object(tree, "blob", &id).map(Some);
+                return match reader.read(&id)? {
+                    Some((kind, bytes)) if kind == "blob" => Ok(Some(bytes)),
+                    _ => bail!("the blob {id} does not read as a blob"),
+                };
             }
             _ => return Ok(None),
         }
@@ -257,34 +270,45 @@ pub fn verified_file(tree: &Path, revision: &str, path: &str) -> Result<Option<V
     Ok(None)
 }
 
-/// Whether the commit `revision` descends from the commit `ancestor`, or is it, with every
-/// commit the answer rests on checked ([`crate::git::verified_object`]): both commits, and,
-/// when git takes `ancestor` for an ancestor, every commit on the ancestry path between them,
-/// so a commit planted under another's id with other parents is an error naming it rather
-/// than a history. A history a forged commit hides answers `false`. Never for a revision that
-/// is no commit id.
+/// Whether the commit `revision` descends from the commit `ancestor`, or is it, answered by
+/// walking the history from `revision` through the parents each commit's own bytes name, every
+/// commit read through one checked reader ([`crate::git::ObjectReader`]) and its id computed
+/// again from its bytes; neither `merge-base` nor `rev-list` answers any part of it. A commit
+/// seen once is not walked again, so a cycle a forged commit makes ends the walk. A commit on
+/// the way that cannot be read, or whose bytes hash to another id, is an error naming it, never
+/// `false`: a forged commit can neither add an ancestor nor hide one. `false` for a revision or
+/// an ancestor that is no commit of the repository.
 pub fn verified_descends(tree: &Path, ancestor: &str, revision: &str) -> Result<bool> {
-    let (Some(ancestor), Some(revision)) = (commit_id(tree, ancestor), commit_id(tree, revision))
+    let (Some(ancestor), Some(revision)) = (object_id(tree, ancestor), object_id(tree, revision))
     else {
         return Ok(false);
     };
-    crate::git::verified_object(tree, "commit", &ancestor)?;
-    crate::git::verified_object(tree, "commit", &revision)?;
-    if crate::git::run(tree, &["merge-base", "--is-ancestor", &ancestor, &revision]).is_err() {
-        return Ok(false);
+    let mut reader = crate::git::ObjectReader::open(tree)?;
+    for start in [&ancestor, &revision] {
+        match reader.read(start)? {
+            Some((kind, _)) if kind == "commit" => {}
+            _ => return Ok(false),
+        }
     }
-    let path = crate::git::run(
-        tree,
-        &[
-            "rev-list",
-            "--ancestry-path",
-            &format!("{ancestor}..{revision}"),
-        ],
-    )?;
-    for commit in path.lines().filter(|line| !line.is_empty()) {
-        crate::git::verified_object(tree, "commit", commit)?;
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut walk = vec![revision];
+    while let Some(commit) = walk.pop() {
+        if commit == ancestor {
+            return Ok(true);
+        }
+        if !seen.insert(commit.clone()) {
+            continue;
+        }
+        let bytes = match reader.read(&commit)? {
+            Some((kind, bytes)) if kind == "commit" => bytes,
+            Some((kind, _)) => bail!("{commit}, a parent on the way, is a {kind}, not a commit"),
+            None => bail!(
+                "the commit {commit} on the way is not in the repository; the history cannot be walked"
+            ),
+        };
+        walk.extend(parents(&bytes));
     }
-    Ok(true)
+    Ok(false)
 }
 
 /// Whether `revision` is a commit id ([`is_commit_id`]) of a commit `repo` holds.
@@ -347,10 +371,12 @@ impl Definitions {
 
     /// The definitions at `revision` of `tree`, read through git, never from the working tree.
     pub fn at(tree: &Path, revision: &str) -> Result<Found> {
-        if !is_commit_id(revision)
-            || crate::git::run(tree, &["cat-file", "-e", &format!("{revision}^{{commit}}")])
-                .is_err()
-        {
+        // Whether it names a commit is read from the object's header only, never by parsing it,
+        // so a commit planted under another's id reaches the checked read and is refused there.
+        let is_commit = object_id(tree, revision).is_some_and(|id| {
+            crate::git::run(tree, &["cat-file", "-t", &id]).is_ok_and(|kind| kind == "commit")
+        });
+        if !is_commit {
             return Ok(Found::NoCommit);
         }
         let Some(bytes) = verified_file(tree, revision, DEFINITIONS)? else {

@@ -1738,3 +1738,87 @@ fn a_share_target_of_five_is_refused_however_the_share_is_spelled() {
         );
     }
 }
+
+/// The reviewer's M3 (rv6_probe): a commit on the way rewritten under its id with no parent
+/// cuts the history, so plain git no longer finds the true ancestor. The walk reads that commit
+/// through the checked reader and refuses it, naming it: an error, never `false`.
+#[test]
+fn a_forged_parentless_commit_on_the_way_is_an_error_not_false() {
+    let (tree, root) = scratch("forged-parentless", DEFINED);
+    let middle = commit(&tree, DEFINED, "the commit whose parent is cut");
+    let tip = commit(&tree, DEFINED, "the tip");
+    assert!(
+        takt::loop_scorecard::verified_descends(&tree, &root, &tip).expect("reads"),
+        "the root is an ancestor of the tip"
+    );
+    let real = git(&tree, &["cat-file", "commit", &middle]);
+    let cut: String = real
+        .lines()
+        .filter(|line| !line.starts_with("parent "))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    plant_object(&tree, "commit", &middle, cut.as_bytes());
+    let plain = Command::new("git")
+        .args(["merge-base", "--is-ancestor", &root, &tip])
+        .current_dir(&*tree)
+        .status()
+        .expect("git runs");
+    assert!(
+        !plain.success(),
+        "plain git lost the root from the tip's history"
+    );
+    let error = takt::loop_scorecard::verified_descends(&tree, &root, &tip)
+        .expect_err("the forged commit is an error, not false");
+    assert!(format!("{error:#}").contains(&middle), "{error:#}");
+}
+
+/// The reviewer's L3: the walk reads a 20,000-commit history through one `git cat-file --batch`
+/// and checks each commit in this process, in a debug build under 10 s, both when the ancestor
+/// is the root (found at the end) and when it is off the history (the whole history walked).
+#[test]
+fn a_twenty_thousand_commit_history_is_walked_within_ten_seconds() {
+    let (tree, _) = scratch("long-history", DEFINED);
+    let mut stream = String::new();
+    for n in 1..=20_000 {
+        stream.push_str(&format!(
+            "commit refs/heads/long\nmark :{n}\ncommitter t <t@localhost> {} +0000\ndata 2\n{}\n\n",
+            1_700_000_000 + n,
+            n % 10
+        ));
+        if n > 1 {
+            stream.push_str(&format!("from :{}\n\n", n - 1));
+        }
+    }
+    let mut import = Command::new("git")
+        .args(["fast-import", "--quiet"])
+        .current_dir(&*tree)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("git fast-import runs");
+    {
+        use std::io::Write as _;
+        let mut stdin = import.stdin.take().expect("stdin");
+        stdin.write_all(stream.as_bytes()).expect("the stream");
+    }
+    assert!(
+        import.wait().expect("waits").success(),
+        "the history is imported"
+    );
+    let tip = git(&tree, &["rev-parse", "long"]);
+    let root = git(&tree, &["rev-list", "--max-parents=0", "long"]);
+    let main = git(&tree, &["rev-parse", "main"]);
+    let started = std::time::Instant::now();
+    assert!(
+        takt::loop_scorecard::verified_descends(&tree, &root, &tip).expect("walks"),
+        "the root is an ancestor of the tip"
+    );
+    assert!(
+        !takt::loop_scorecard::verified_descends(&tree, &main, &tip).expect("walks"),
+        "main's commit is off the long history"
+    );
+    let took = started.elapsed();
+    assert!(
+        took < std::time::Duration::from_secs(10),
+        "two walks of 20,000 commits took {took:?}"
+    );
+}
