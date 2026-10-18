@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:pr-scan-policy
 kind: story
-status: draft
+status: active
 title: pr.open scans the pull-request body under the forge's policy
 summary: scan-text before a pull request gets the forge's --policy; a refusal after the push says the branch left
 relations:
@@ -13,7 +13,10 @@ scope:
   path: crates/takt/src/forge.rs
 - confidence: inferred
   path: crates/takt/tests/forge_scan_policy.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T12:12:00Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-18T12:12:00Z", actor: "human:timo", revision: 6}
 ---
 # Story: pr-scan-policy
 

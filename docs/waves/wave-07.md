@@ -39,9 +39,10 @@ The story's first step is to establish that the bot route admits a `trial/<n>` b
 | unit | branch | worktree | build dir | scratch |
 |---|---|---|---|---|
 | integration | `wave/2026-10-18-w7` | managed tree `wave-07-integration` | its `target/` | `~/.cache/takt-wave-07/scratch/int` |
-| agent-profiles | `impl/agent-profiles` | managed tree `w7-agent-profiles` (planned) | its `target/` | `~/.cache/takt-wave-07/scratch/agent-profiles` |
-| scenario-corpus | `impl/scenario-corpus` | managed tree `w7-scenario-corpus` (planned) | its `target/` | `~/.cache/takt-wave-07/scratch/scenario-corpus` |
-| approval-record-reaches-base | `impl/approval-record-reaches-base` | managed tree `w7-approval-record` (planned) | its `target/` | `~/.cache/takt-wave-07/scratch/approval-record` |
+| agent-profiles | `impl/agent-profiles` from c1445fa, implementor dispatched | managed tree `w7-agent-profiles` | its `target/` | `~/.cache/takt-wave-07/scratch/agent-profiles` |
+| scenario-corpus | `impl/scenario-corpus` from c1445fa, implementor dispatched | managed tree `w7-scenario-corpus` | its `target/` | `~/.cache/takt-wave-07/scratch/scenario-corpus` |
+| approval-record-reaches-base | `impl/approval-record-reaches-base` from c1445fa, implementor dispatched | managed tree `w7-approval-record` | its `target/` | `~/.cache/takt-wave-07/scratch/approval-record` |
+| pr-scan-policy | `impl/pr-scan-policy` from the wave head, implementor dispatched | managed tree `w7-pr-scan-policy` | its `target/` | `~/.cache/takt-wave-07/scratch/pr-scan-policy` |
 
 ## Dispatch
 
@@ -54,3 +55,5 @@ The opening store commit (this page, the Scope sections, the stories to `active`
 ## Log
 
 - 2026-10-18: proposed; the selection sent to the operator role; opened on the standing approval; the three stories moved to active.
+- 2026-10-18: opening commit c1445fa (`ess` 0, `fmt` 0, store valid); three trees from c1445fa; `aep:implementor` dispatched to each; briefs at `<scratch>/brief.md` with shared invariants in `scratch/invariants.md`.
+- 2026-10-18: the operator role added `story:pr-scan-policy` (filed from the scenario 1 trial on 92b8cf3: `pr.open` scans with no `--policy`, exit 5) as a fourth unit; main at 7b2dd65 merged in at f096bb6; its scope (`forge.rs`, a new test) is disjoint from the three running units, and `forge.rs` was taken out of scenario-corpus's assignment.
