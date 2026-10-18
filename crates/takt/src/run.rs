@@ -196,14 +196,12 @@ impl<'a> Run<'a> {
                     return Ok(Some(run));
                 }
                 Take::Refused(refusal) => {
+                    // The case goes whole: its directory, the cases directory when it was the
+                    // last, and its branch, the tree back on the branch the case left.
                     let dir = run.case.dir.clone();
-                    std::fs::remove_dir_all(&dir).with_context(|| {
+                    run.case.discard().with_context(|| {
                         format!("remove the case {} the store would not take", dir.display())
                     })?;
-                    // The cases directory stays only while a case is in it.
-                    if let Some(cases) = dir.parent() {
-                        let _ = std::fs::remove_dir(cases);
-                    }
                     writeln!(out, "frontier: {id} not taken: {refusal}")?;
                 }
             }

@@ -1,4 +1,5 @@
-//! The few git reads and writes the kernel makes in a worktree, without a shell.
+//! The few git reads and writes the kernel makes in a worktree, without a shell. A push goes
+//! through the forge ([`crate::forge`]), under the bot route's credential, never through here.
 
 use std::path::Path;
 use std::process::Command;
@@ -29,6 +30,37 @@ pub fn run(tree: &Path, args: &[&str]) -> Result<String> {
 /// The commit `HEAD` names.
 pub fn head(tree: &Path) -> Result<String> {
     run(tree, &["rev-parse", "HEAD"])
+}
+
+/// The branch `HEAD` is on; `None` when it is detached.
+pub fn current_branch(tree: &Path) -> Result<Option<String>> {
+    let name = run(tree, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    Ok((name != "HEAD").then_some(name))
+}
+
+/// Creates `branch` at `HEAD` and checks it out. A branch that exists is an error, unless the
+/// tree is already on it: a case's branch left behind when the store would not take the case
+/// is reset to `HEAD` and used again.
+pub fn create_branch(tree: &Path, branch: &str) -> Result<()> {
+    let on_it = current_branch(tree)?.as_deref() == Some(branch);
+    let flag = if on_it { "-B" } else { "-b" };
+    run(tree, &["checkout", "-q", flag, branch])?;
+    Ok(())
+}
+
+/// Checks out `target`, a branch, and deletes `branch`; `None` detaches `HEAD` instead.
+pub fn leave_branch(tree: &Path, branch: &str, target: Option<&str>) -> Result<()> {
+    match target {
+        Some(target) => run(tree, &["checkout", "-q", target])?,
+        None => run(tree, &["checkout", "-q", "--detach"])?,
+    };
+    run(tree, &["branch", "-q", "-D", branch])?;
+    Ok(())
+}
+
+/// The URL of `remote`; an error when the tree has no such remote.
+pub fn remote_url(tree: &Path, remote: &str) -> Result<String> {
+    run(tree, &["remote", "get-url", remote])
 }
 
 /// The paths with uncommitted changes (staged, unstaged or untracked), relative to the tree.

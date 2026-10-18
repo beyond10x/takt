@@ -3,12 +3,14 @@
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
+use takt::forge::{BotRoute, Forge};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness};
-use takt::validator::{DEFAULT_PROJECT, GateRun, TestsRun, Validator};
+use takt::validator::{CiRead, DEFAULT_PROJECT, GateRun, PrOpen, TestsRun, Validator};
 use takt::{LoadedProtocol, Run, RunOptions, Stop, Unit};
 
 #[derive(Parser)]
@@ -78,6 +80,12 @@ struct RunArgs {
     /// `.engineering/assertions-project.yaml` when that is a file.
     #[arg(long)]
     project: Option<PathBuf>,
+    /// The forge: `bot` (the repository's bot route: `b10x-gates` pushes the case's branch and
+    /// opens its pull request, `gh` reads the pull request's state and checks) or `none` (no
+    /// pull request is opened; `pr.open` and `ci.read` are left to the harness). Not given,
+    /// `bot` when the repository has an `origin` remote, else `none`.
+    #[arg(long)]
+    forge: Option<String>,
 }
 
 /// A harness that performs nothing: the loop stops when only judgement steps are left.
@@ -136,6 +144,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 gate,
                 gates,
                 project,
+                forge,
             } = *args;
             let repo = repo
                 .canonicalize()
@@ -191,6 +200,24 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 }
                 validators.push(Box::new(gate));
             }
+            // The forge: the bot route when asked for, or when the repository has an origin to
+            // push to; an origin that names no <owner>/<repo> refuses the run in one line before
+            // any case is opened, unless `--forge none` says so.
+            let forge = match forge.as_deref() {
+                Some("none") => None,
+                Some("bot") => Some(BotRoute::for_tree(&repo)?),
+                None => match takt::git::remote_url(&repo, "origin") {
+                    Ok(_) => Some(BotRoute::for_tree(&repo)?),
+                    Err(_) => None,
+                },
+                Some(other) => return Err(anyhow!("no forge `{other}`: bot or none")),
+            };
+            let repository = forge.as_ref().map(|forge| forge.repository.clone());
+            if let Some(forge) = forge {
+                let forge: Rc<dyn Forge> = Rc::new(forge);
+                validators.push(Box::new(PrOpen::new(forge.clone())));
+                validators.push(Box::new(CiRead::new(forge)));
+            }
             // The unit: the intent given, or else the next ready story of the planning store;
             // the case is opened before the store is told, so a run that cannot open its case
             // takes nothing.
@@ -213,6 +240,12 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     }
                 },
             };
+            if let Some(repository) = &repository {
+                writeln!(
+                    out,
+                    "forge: bot ({repository}); pr.open and ci.read go through the bot route"
+                )?;
+            }
             let stop = run.run(out)?;
             writeln!(
                 out,
@@ -598,5 +631,123 @@ mod tests {
             error.contains("no harness: a judgement step among gate.run is left"),
             "{error}"
         );
+    }
+
+    /// The delivery protocol of this repository, which declares `pr.open` and `ci.read`.
+    const DELIVERY_PROTOCOL: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../protocols/story-delivery/1.yaml"
+    );
+
+    /// Runs `takt <args>` in this process; what the run answered and what it printed.
+    fn takt_result(args: &[&str]) -> (anyhow::Result<u8>, String) {
+        let cli = Cli::parse_from(std::iter::once("takt").chain(args.iter().copied()));
+        let mut out = Vec::new();
+        let result = run(cli, &mut out);
+        (result, String::from_utf8(out).expect("utf-8"))
+    }
+
+    /// `takt run` on the delivery protocol with no harness and a passing test command, `extra`
+    /// last.
+    fn delivery_args<'a>(repo: &'a str, case: &'a str, extra: &[&'a str]) -> Vec<&'a str> {
+        let mut args = vec![
+            "run",
+            "--repo",
+            repo,
+            "--intent",
+            "deliver the story",
+            "--case-id",
+            case,
+            "--harness",
+            "none",
+            "--protocol",
+            DELIVERY_PROTOCOL,
+            "--test-cmd",
+            "true",
+        ];
+        args.extend_from_slice(extra);
+        args
+    }
+
+    /// Without `--forge` and without an origin, neither forge validator is registered: after
+    /// `tests.run`, `ci.read` is among the judgement steps left to the harness.
+    #[test]
+    fn without_an_origin_the_forge_is_none_and_ci_read_is_a_judgement_step() {
+        let repo = gated_repository("forge-default-none", None);
+        let (result, out) = takt_result(&delivery_args(
+            repo.to_str().expect("utf-8"),
+            "default-none",
+            &[],
+        ));
+        let error = format!("{:#}", result.expect_err("a judgement step is left"));
+        assert!(!out.contains("forge:"), "{out}");
+        assert!(out.contains("step 1: tests.run {}"), "{out}");
+        assert!(
+            error.contains("a judgement step among ci.read, gate.run, implementation.edit"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn with_forge_none_the_forge_validators_are_not_registered_even_with_an_origin() {
+        let repo = gated_repository("forge-none", None);
+        git(
+            &repo,
+            &["remote", "add", "origin", "git@github.com:owner/repo.git"],
+        );
+        let (result, out) = takt_result(&delivery_args(
+            repo.to_str().expect("utf-8"),
+            "none",
+            &["--forge", "none"],
+        ));
+        let error = format!("{:#}", result.expect_err("a judgement step is left"));
+        assert!(!out.contains("forge:"), "{out}");
+        assert!(
+            error.contains("a judgement step among ci.read, gate.run, implementation.edit"),
+            "{error}"
+        );
+    }
+
+    /// With an origin and no `--forge`, the bot route is the forge, named with the repository
+    /// its origin names; the step budget stops the run before anything would be pushed.
+    #[test]
+    fn with_an_origin_the_default_forge_is_the_bot_route() {
+        let repo = gated_repository("forge-default-bot", None);
+        git(
+            &repo,
+            &["remote", "add", "origin", "git@github.com:owner/repo.git"],
+        );
+        let (code, out) = takt(&delivery_args(
+            repo.to_str().expect("utf-8"),
+            "default-bot",
+            &["--iterations", "1"],
+        ));
+        assert_eq!(code, 3, "{out}");
+        assert!(out.contains("forge: bot (owner/repo)"), "{out}");
+        assert!(out.contains("step 1: tests.run {}"), "{out}");
+    }
+
+    #[test]
+    fn forge_bot_without_an_origin_is_refused_before_the_run() {
+        let repo = gated_repository("forge-bot-no-origin", None);
+        let error = takt_error(&delivery_args(
+            repo.to_str().expect("utf-8"),
+            "bot",
+            &["--forge", "bot"],
+        ));
+        assert!(error.contains("origin"), "{error}");
+        assert!(!repo.join(".engineering/cases").exists());
+    }
+
+    #[test]
+    fn an_unknown_forge_is_refused_before_the_run() {
+        let repo = gated_repository("forge-unknown", None);
+        let error = takt_error(&delivery_args(
+            repo.to_str().expect("utf-8"),
+            "unknown",
+            &["--forge", "hub"],
+        ));
+        assert_eq!(error, "no forge `hub`: bot or none");
+        assert!(!repo.join(".engineering/cases").exists());
     }
 }
