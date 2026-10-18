@@ -241,7 +241,9 @@ fn loop_case(tree: &Path, id: &str, baseline: &str, candidate: &str) -> CaseDir 
         .expect("the candidate");
     case.set_revision("loop_finding", baseline)
         .expect("the finding");
-    CaseDir::resume(tree, id).expect("the case resumes")
+    let case = CaseDir::resume(tree, id).expect("the case resumes");
+    takt::loop_scorecard::snapshot_baseline(tree, &case).expect("the baseline is snapshotted");
+    case
 }
 
 fn merged(case: &mut CaseDir, at: &str) {

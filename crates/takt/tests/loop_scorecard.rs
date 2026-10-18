@@ -150,17 +150,19 @@ const CLAIMS: [&str; 6] = [
 ];
 const OUTCOMES: [&str; 4] = ["accepted", "declined", "unreproducible", "abandoned"];
 
-/// Writes a `self.improvement` case `id` under `tree`'s cases directory: its snapshot, the
-/// story it was opened for (`story:<finding>`), its decisions in order, and a run record whose
-/// one step reported `tokens` when given.
+/// Writes a `self.improvement` case `id` under `tree`'s cases directory: its snapshot, its
+/// `baseline` at `tree`'s `HEAD` (which holds every finding filed so far), the story it was
+/// opened for (`story:<finding>`), its decisions in order, and a run record whose one step
+/// reported `tokens` when given.
 fn turn(tree: &Path, id: &str, finding: Option<&str>, decisions: &[At<'_>], tokens: Option<u64>) {
     let dir = tree.join(".engineering/cases").join(id);
     fs::create_dir_all(dir.join("decisions")).expect("the case directory");
     fs::create_dir_all(dir.join("evidence")).expect("the evidence directory");
+    let baseline = git(tree, &["rev-parse", "HEAD"]);
     fs::write(
         dir.join("case.yaml"),
         format!(
-            "format: canon-case/1\nid: {id}\nprotocol: self.improvement\nartifacts:\n  finding:\n    revision: f-{id}\n  baseline:\n    revision: b-{id}\n  candidate:\n    revision: c-{id}\n  promotion:\n    revision: p-{id}\ninputs:\n  surface: non_judge\n"
+            "format: canon-case/1\nid: {id}\nprotocol: self.improvement\nartifacts:\n  finding:\n    revision: f-{id}\n  baseline:\n    revision: {baseline}\n  candidate:\n    revision: c-{id}\n  promotion:\n    revision: p-{id}\ninputs:\n  surface: non_judge\n"
         ),
     )
     .expect("case.yaml");
@@ -301,7 +303,9 @@ fn loop_case(tree: &Path, id: &str, baseline: &str, candidate: &str) -> CaseDir 
     }
     doc["independence"] = independence.into();
     fs::write(&snapshot, serde_yaml_ng::to_string(&doc).expect("yaml")).expect("case.yaml");
-    CaseDir::resume(tree, id).expect("the case resumes")
+    let case = CaseDir::resume(tree, id).expect("the case resumes");
+    takt::loop_scorecard::snapshot_baseline(tree, &case).expect("the baseline is snapshotted");
+    case
 }
 
 /// The evidence records under the case, in name order.
@@ -769,6 +773,25 @@ fn a_changed_definition_is_dual_reported_when_both_figures_print_and_redefined_o
         ("redefined".to_owned(), false)
     );
     assert_eq!(checked("removed", None), ("redefined".to_owned(), false));
+    // Targets are the owner's: a candidate that moves one is redefined, even under a new
+    // version with the old definition kept beside it.
+    let lowered = with_accepted_share(
+        "  accepted_share:
+    version: 2
+    definition: accepted rows over closed rows, open turns left out
+    target:
+      at_least: 0.5
+    previous:
+      - version: 1
+        definition: accepted rows over all rows, open turns included
+        target:
+          at_least: 0.75
+",
+    );
+    assert_eq!(
+        checked("lowered-target", Some(&lowered)),
+        ("redefined".to_owned(), false)
+    );
     // A metric whose figure no code computes cannot print: added, or as an uncomputed version.
     let added = format!(
         "{DEFINED}  escaped_defects:\n    version: 1\n    definition: escaped defects, human-sourced\n"
@@ -818,11 +841,10 @@ fn merged(case: &mut CaseDir, at: &str) {
 /// Moves the turn `id`'s `baseline` revision to `revision`.
 fn on_baseline(tree: &Path, id: &str, revision: &str) {
     let path = tree.join(".engineering/cases").join(id).join("case.yaml");
-    let text = fs::read_to_string(&path).expect("case.yaml").replace(
-        &format!("revision: b-{id}"),
-        &format!("revision: {revision}"),
-    );
-    fs::write(&path, text).expect("case.yaml");
+    let mut doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&fs::read_to_string(&path).expect("case.yaml")).expect("yaml");
+    doc["artifacts"]["baseline"]["revision"] = revision.into();
+    fs::write(&path, serde_yaml_ng::to_string(&doc).expect("yaml")).expect("case.yaml");
 }
 
 /// A turn closed with `verdict` on a baseline that holds everything committed so far.
@@ -1118,4 +1140,240 @@ fn a_revision_that_is_no_commit_records_nothing() {
         .observe(&tree, &head, 1)
         .expect("observes");
     assert!(observation.records.is_empty(), "{}", observation.summary);
+}
+
+/// A linked worktree of a scratch repository: the repository, the worktree, and the worktree's
+/// own git directory.
+fn linked(name: &str) -> (Scratch, Scratch, PathBuf) {
+    let (main, _) = scratch(&format!("{name}-main"), DEFINED);
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("loop-scorecard-{}-{name}-tree", std::process::id()));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
+    }
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "work",
+            dir.to_str().expect("utf-8"),
+        ],
+    );
+    let own = PathBuf::from(git(&dir, &["rev-parse", "--absolute-git-dir"]));
+    (main, Scratch(dir), own)
+}
+
+/// What a step does to `file` between a checkpoint of `tree` and its put-back and restore; the
+/// file's bytes after them, none when it is absent.
+fn after_step(tree: &Path, file: &Path, step: impl FnOnce()) -> Option<Vec<u8>> {
+    let checkpoint = takt::git::Checkpoint::take(tree).expect("a checkpoint");
+    step();
+    let put_back = checkpoint.put_back_git_dir(tree);
+    assert!(put_back.failed.is_empty(), "{put_back:?}");
+    assert!(
+        put_back
+            .touched
+            .iter()
+            .any(|path| path.ends_with(&*file.file_name().expect("a name").to_string_lossy())),
+        "the put-back names {}: {put_back:?}",
+        file.display()
+    );
+    checkpoint.restore(tree).expect("restored");
+    fs::read(file).ok()
+}
+
+/// A linked worktree's `commondir` a step points at a copy of the common git directory is put
+/// back: every later read of the worktree is the repository's again.
+#[test]
+fn the_checkpoint_puts_back_a_linked_worktrees_commondir() {
+    let (main, tree, own) = linked("guard-commondir");
+    let file = own.join("commondir");
+    let before = fs::read(&file).expect("commondir");
+    let copy = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "loop-scorecard-{}-guard-commondir-copy",
+        std::process::id()
+    ));
+    let copy = Scratch(copy);
+    let after = after_step(&tree, &file, || {
+        let status = Command::new("cp")
+            .arg("-r")
+            .arg(main.join(".git"))
+            .arg(&*copy)
+            .status()
+            .expect("cp runs");
+        assert!(status.success(), "the copy is made");
+        fs::write(&file, format!("{}\n", copy.display())).expect("commondir");
+    });
+    assert_eq!(after, Some(before));
+}
+
+/// A linked worktree's `gitdir` a step rewrites is put back.
+#[test]
+fn the_checkpoint_puts_back_a_linked_worktrees_gitdir() {
+    let (_main, tree, own) = linked("guard-gitdir");
+    let file = own.join("gitdir");
+    let before = fs::read(&file).expect("gitdir");
+    let after = after_step(&tree, &file, || {
+        fs::write(&file, "/elsewhere/.git\n").expect("gitdir");
+    });
+    assert_eq!(after, Some(before));
+}
+
+/// A `shallow` file a step writes, which would cut the history every read of a filing or an
+/// ancestry rests on, is removed.
+#[test]
+fn the_checkpoint_removes_a_shallow_file_a_step_writes() {
+    let (tree, head) = scratch("guard-shallow", DEFINED);
+    let file = tree.join(".git/shallow");
+    let after = after_step(&tree, &file, || {
+        fs::write(&file, format!("{head}\n")).expect("shallow");
+    });
+    assert_eq!(after, None);
+}
+
+/// An `objects/info/alternates` file a step writes, which would read another object directory
+/// as the repository's, is removed.
+#[test]
+fn the_checkpoint_removes_an_alternates_file_a_step_writes() {
+    let (tree, _) = scratch("guard-alternates", DEFINED);
+    let (other, _) = scratch("guard-alternates-other", DEFINED);
+    let file = tree.join(".git/objects/info/alternates");
+    let after = after_step(&tree, &file, || {
+        fs::create_dir_all(file.parent().expect("a parent")).expect("objects/info");
+        fs::write(&file, format!("{}\n", other.join(".git/objects").display()))
+            .expect("alternates");
+    });
+    assert_eq!(after, None);
+}
+
+/// A finding whose store commit comes after its verification has no filing time, never a
+/// negative time from finding to verified.
+#[test]
+fn a_filing_later_than_its_verification_is_no_filing_time() {
+    let (tree, _) = scratch("late-filing", DEFINED);
+    closed(
+        &tree,
+        "turn-a",
+        "2026-10-18T09:00:00Z",
+        "2026-10-18T10:00:00Z",
+        "accepted",
+        None,
+    );
+    file(&tree, "turn-late", "2026-10-18T19:00:00Z");
+    turn(
+        &tree,
+        "turn-late",
+        Some("turn-late"),
+        &[At {
+            at: "2026-10-18T16:00:00Z",
+            holds: &["finding.cited", "scenario.passes_after"],
+            legitimate: None,
+        }],
+        None,
+    );
+    let head = git(&tree, &["rev-parse", "HEAD"]);
+    let card = LoopScorecard::read_at(&tree, Some(&head)).expect("reads");
+    let late = card
+        .rows
+        .iter()
+        .find(|row| row.turn == "turn-late")
+        .expect("the row");
+    assert_eq!(late.verified_at.as_deref(), Some("2026-10-18T16:00:00Z"));
+    assert_eq!(late.filed_at, None);
+    let figures = card
+        .figures(&Definitions::parse(DEFINED).expect("parses"))
+        .expect("computes");
+    let time = figures
+        .iter()
+        .find(|figure| figure.metric == "finding_to_verified")
+        .expect("the figure");
+    assert_eq!(time.cases, ["turn-a"]);
+    assert_eq!(time.value, Some(3600.0));
+}
+
+/// A figure with a target and no value fails closed: no data is below target, and a
+/// measurement over turns that give none answers `below_target`.
+#[test]
+fn a_target_with_no_figure_to_hold_to_it_is_below_target() {
+    let definitions = Definitions::parse(
+        "format: takt-loop-metrics/1
+metrics:
+  finding_to_verified:
+    version: 1
+    definition: the median seconds from filed_at to verified_at over the rows with both
+    target:
+      at_most: 86400
+  turns:
+    version: 1
+    definition: the improvement turns recorded
+",
+    )
+    .expect("parses");
+    let figures = LoopScorecard::default()
+        .figures(&definitions)
+        .expect("computes");
+    let time = figures
+        .iter()
+        .find(|figure| figure.metric == "finding_to_verified")
+        .expect("the figure");
+    assert_eq!(time.value, None);
+    assert!(time.below_target, "{time:?}");
+    let turns = figures
+        .iter()
+        .find(|figure| figure.metric == "turns")
+        .expect("the figure");
+    assert!(!turns.below_target, "no target, never below it: {turns:?}");
+}
+
+/// `loop.definition.check` reads the baseline's definitions only from the snapshot taken when
+/// the case opened: none, or one of another baseline, records nothing; with one, a base whose
+/// objects a step rewrote afterwards is still judged as it was.
+#[test]
+fn the_definition_check_reads_the_baseline_only_from_the_snapshot_taken_at_open() {
+    let (tree, base) = scratch("snapshot", DEFINED);
+    let silent = with_accepted_share(
+        "  accepted_share:
+    version: 1
+    definition: accepted rows over closed rows, open turns left out
+    target:
+      at_least: 0.75
+",
+    );
+    let head = commit(&tree, &silent, "candidate");
+    let case = loop_case(&tree, "loop-snapshot", &base, &head);
+    let snapshot = case.dir.join(takt::loop_scorecard::BASELINE_SNAPSHOT);
+    let taken = fs::read(&snapshot).expect("the snapshot was taken at open");
+
+    fs::remove_file(&snapshot).expect("removed");
+    let observation = LoopDefinitionCheck
+        .observe(&tree, &head, 1)
+        .expect("observes");
+    assert!(observation.records.is_empty(), "{}", observation.summary);
+    assert!(
+        observation.summary.contains("no snapshot"),
+        "{}",
+        observation.summary
+    );
+
+    let mut other: serde_json::Value = serde_json::from_slice(&taken).expect("json");
+    other["revision"] = head.clone().into();
+    fs::write(&snapshot, serde_json::to_vec(&other).expect("json")).expect("written");
+    let observation = LoopDefinitionCheck
+        .observe(&tree, &head, 2)
+        .expect("observes");
+    assert!(observation.records.is_empty(), "{}", observation.summary);
+
+    fs::write(&snapshot, &taken).expect("written");
+    let observation = LoopDefinitionCheck
+        .observe(&tree, &head, 3)
+        .expect("observes");
+    assert_eq!(
+        observation.records[0].result.as_deref(),
+        Some("redefined"),
+        "{}",
+        observation.summary
+    );
 }

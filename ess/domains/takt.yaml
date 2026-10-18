@@ -851,8 +851,8 @@ types:
   # read from: .engineering/planning/story/loop-scorecard.md:48-50
   # read from: .engineering/planning/design/recursive-self-improvement.md:185-187
   # read from: crates/takt/src/scorecard.rs:58-84
-  # read from: crates/takt/src/loop_scorecard.rs:43-70
-  # read from: crates/takt/src/loop_scorecard.rs:489-574
+  # read from: crates/takt/src/loop_scorecard.rs:44-73
+  # read from: crates/takt/src/loop_scorecard.rs:493-593
   - name: takt.work.LoopScorecardRow
     kind: struct
     fields:
@@ -861,7 +861,7 @@ types:
       # The key of the story or decision-blocker the turn's case was opened for (its
       # `story.yaml`), filed as `<kind>:<key>` with the reference `finding:<key>`; absent when the
       # case records none.
-      # read from: crates/takt/src/loop_scorecard.rs:48-50
+      # read from: crates/takt/src/loop_scorecard.rs:49-51
       # read from: scripts/file-finding:208
       - name: finding
         type: Optional<takt.work.FindingKey>
@@ -878,21 +878,24 @@ types:
       - name: promoted
         type: Boolean
       # The tokens and the wall time of the case's runs, summed as takt.work.ScorecardCase sums
-      # them; absent when the case has no run record, and the tokens absent too when no step of
-      # it reports any (a harness that counts none), which is no count of 0 and no turn the
-      # token figure read.
-      # read from: crates/takt/src/loop_scorecard.rs:59-62
+      # them; absent when the case has no run record, and the tokens absent too unless every
+      # harness step of it (every step but a validator's) reports a count and one does: a
+      # harness that counts none, or some steps only, gives no count, never 0 or a partial sum,
+      # and no turn the token figure read.
+      # read from: crates/takt/src/loop_scorecard.rs:60-64
       - name: tokens
         type: Optional<Integer>
       - name: wall_ms
         type: Optional<Integer>
       # When the finding was filed: the committer time of the commit that added its artifact's
-      # file to the planning store, read through git at the base the validator reads at (the
-      # case's `loop_baseline`), never the case's first evaluation; absent when it cannot be read.
+      # file to the planning store, read through git at the row's own `baseline` revision (not
+      # at the loop case's `loop_baseline`), never the case's first evaluation; absent when it
+      # cannot be read, and absent when it comes after `verified_at` (a store committed after
+      # the run), so the time from finding to verified is never negative.
       # When it was verified: the instant of the first decision of the last unbroken run of
       # decisions holding `scenario.passes_after` when the latest holds it, so a verification a
       # later candidate undid is absent again.
-      # read from: crates/takt/src/loop_scorecard.rs:63-69
+      # read from: crates/takt/src/loop_scorecard.rs:65-72
       - name: filed_at
         type: Optional<Timestamp>
         summary: When the turn's finding was filed in the store; absent when that cannot be read.
@@ -909,8 +912,8 @@ types:
   # under each definition takt.work.LoopMetric holds.
   # read from: .engineering/planning/story/loop-scorecard.md:51
   # read from: .engineering/planning/story/loop-scorecard.md:95
-  # read from: crates/takt/src/loop_scorecard.rs:72-77
-  # read from: crates/takt/src/loop_scorecard.rs:583-607
+  # read from: crates/takt/src/loop_scorecard.rs:75-80
+  # read from: crates/takt/src/loop_scorecard.rs:602-628
   - name: takt.work.LoopScorecard
     kind: struct
     fields:
@@ -922,11 +925,12 @@ types:
   # the rows it names and absent when no row counts towards it; a share prints as
   # `<counted>/<all>`. A version the code does not compute is an error, so a definition cannot
   # name a figure nothing computes. The code computes version 1 of each metric, and version 2
-  # of the accepted share: accepted rows over the rows with a verdict, open turns left out.
+  # of the accepted share: accepted rows over the rows with a verdict, open turns left out. A
+  # figure with a target and no value is below target: no data fails closed.
   # `loop.measure` retains the figures it computed as an
   # observation beside its record; the rows stay the source.
-  # read from: crates/takt/src/loop_scorecard.rs:237-256
-  # read from: crates/takt/src/loop_scorecard.rs:319-385
+  # read from: crates/takt/src/loop_scorecard.rs:240-260
+  # read from: crates/takt/src/loop_scorecard.rs:323-389
   - name: takt.work.LoopFigure
     kind: struct
     fields:
@@ -950,7 +954,7 @@ types:
         summary: The turns the figure was computed from.
 
   # A loop metric's target: the figure at least, or at most, a value; exactly one of the two.
-  # read from: crates/takt/src/loop_scorecard.rs:79-108
+  # read from: crates/takt/src/loop_scorecard.rs:82-111
   - name: takt.work.LoopTarget
     kind: struct
     fields:
@@ -961,7 +965,7 @@ types:
 
   # One definition of a loop metric: the version the code computes it under, what it is in words,
   # and its target; a metric without a target is never below it.
-  # read from: crates/takt/src/loop_scorecard.rs:110-121
+  # read from: crates/takt/src/loop_scorecard.rs:113-124
   - name: takt.work.LoopMetricDefinition
     kind: struct
     fields:
@@ -976,14 +980,16 @@ types:
   # holds it by id: its current definition and the previous ones whose figures print beside it.
   # The file is read at a revision through git, never from the working tree: the baseline's at
   # the case's `loop_baseline` revision, the candidate's at its `loop_candidate` revision. It is
-  # a judge surface, as every path outside the allow-list is. A target is part of its definition,
-  # so a changed target is a changed definition and takes another version. The targets, decided
+  # a judge surface, as every path outside the allow-list is. Targets are the owner's: a
+  # candidate cannot change one through the definition check, which finds any change to a
+  # target (its value or its direction) `redefined`, whatever version or previous definitions
+  # come with it. The targets, decided
   # by the planner: accepted share and promoted share at least 0.8, the time from finding to
   # verified at most 86400 s; none for the turns, and none yet for the median tokens per accepted
   # turn, set later from the first three accepted turns with a run record.
   # read from: protocols/loop-improvement/metrics.yaml
-  # read from: crates/takt/src/loop_scorecard.rs:123-159
-  # read from: crates/takt/src/loop_scorecard.rs:214-233
+  # read from: crates/takt/src/loop_scorecard.rs:126-162
+  # read from: crates/takt/src/loop_scorecard.rs:217-236
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
   - name: takt.work.LoopMetric
     kind: struct
@@ -994,25 +1000,37 @@ types:
         type: List<takt.work.LoopMetricDefinition>
 
   # What `loop.measure` came to, the result of a `loop_measurement` record about `loop_baseline`:
-  # `below_target` when a current figure misses its target, else `at_target`. Fewer than three
-  # recorded turns, or no definitions at the baseline revision, records nothing.
+  # `below_target` when a current figure misses its target, or has a target and no value (no
+  # data fails closed, and the L2 turn files "no data" for that metric as its finding), else
+  # `at_target`. Fewer than three recorded turns, or no definitions at the baseline revision,
+  # records nothing.
   # read from: protocols/loop-improvement/1.yaml:32-36
-  # read from: crates/takt/src/loop_scorecard.rs:662-668
+  # read from: crates/takt/src/loop_scorecard.rs:763-769
   - name: takt.work.LoopMeasurementResult
     kind: enum
     variants: [below_target, at_target]
 
   # What `loop.definition.check` came to, the result of a `definition_check` record about
   # `loop_candidate`, the worst over the baseline's metrics: `unchanged` when each is the
-  # candidate's current definition; `dual_reported` when one changed, took another version and
-  # keeps the baseline's as a previous one, so the figures of both print; `redefined` when one
-  # changed and only the new figure prints (the same version, the baseline's dropped, the metric
-  # or the file gone). The figures the candidate's definitions name are then computed over the
-  # recorded turns: a metric, kept or added, any figure of which the code does not compute is
-  # `redefined`, since that figure cannot print; so is every metric when the turns do not read.
+  # candidate's current definition; `dual_reported` when one changed, took another version,
+  # kept its target, and keeps the baseline's as a previous one beside every previous one the
+  # baseline prints, so the figures of both print; `redefined` when one changed and only the new
+  # figure prints (the same version, the baseline's dropped, a previous one the baseline prints
+  # dropped or changed, the metric or the file gone), or its target changed. The figures the
+  # candidate's definitions name are then computed over the recorded turns: a metric, kept or
+  # added, any figure of which the code does not compute is `redefined`, since that figure
+  # cannot print; so is every metric when the turns do not read. The baseline's definitions are
+  # read only from the snapshot the case took when it opened (takt.work.LoopBaselineSnapshot),
+  # never from the object store after a step ran; no snapshot of the case's current
+  # `loop_baseline` records nothing. The other reads at a revision (the step guard's
+  # judge-surface list at the base, `judge_list_at`; the candidate's definitions; a row's
+  # filing and a baseline's ancestry; `loop.measure`'s definitions) still read the object
+  # store a step could write: the checkpoint guards refs, replace refs, `commondir`, `gitdir`,
+  # `shallow` and `objects/info/alternates`, not the objects themselves, and confining the
+  # step's writes closes that (story:confinement-seam).
   # read from: protocols/loop-improvement/1.yaml:37-41
-  # read from: crates/takt/src/loop_scorecard.rs:745-756
-  # read from: crates/takt/src/loop_scorecard.rs:770-799
+  # read from: crates/takt/src/loop_scorecard.rs:846-859
+  # read from: crates/takt/src/loop_scorecard.rs:873-914
   - name: takt.work.DefinitionCheckResult
     kind: enum
     variants: [unchanged, dual_reported, redefined]
@@ -1026,10 +1044,30 @@ types:
   # metrics below their target there; `improved` when each is better after in its target's
   # direction, else `not_improved`. No measurement retained in the case records nothing.
   # read from: protocols/loop-improvement/1.yaml:44-47
-  # read from: crates/takt/src/loop_scorecard.rs:989-998
+  # read from: crates/takt/src/loop_scorecard.rs:1105-1114
   - name: takt.work.LoopComparisonResult
     kind: enum
     variants: [improved, not_improved]
+
+  # The baseline's metric definitions as a loop case snapshotted them when it opened, before any
+  # step, into its directory as `loop-baseline.json` (format `takt-loop-baseline/1`): the
+  # `loop_baseline` revision as the case names it, the commit it is, and the bytes of
+  # `protocols/loop-improvement/metrics.yaml` there, absent when it holds none. The cases
+  # directory is guarded around every step, so `loop.definition.check` judges the candidate
+  # against the baseline as it stood when the case opened. Nothing is written while
+  # `loop_baseline` names no commit. Whoever sets the case's `loop_baseline` when it opens calls
+  # it; until then a loop case records no `definition_check`.
+  # read from: crates/takt/src/loop_scorecard.rs:683-736
+  # read from: crates/takt/src/loop_scorecard.rs:738-761
+  - name: takt.work.LoopBaselineSnapshot
+    kind: struct
+    fields:
+      - name: revision
+        type: takt.work.Revision
+      - name: commit
+        type: takt.work.Revision
+      - name: definitions
+        type: Optional<String>
 
   # A promotion's id. read from: .engineering/planning/design/recursive-self-improvement.md (§ The judge)
   - name: takt.work.PromotionId
@@ -1712,8 +1750,9 @@ entities:
   # what it did to the tree, against a checkpoint taken before it: `HEAD`, the index, every branch
   # and tag (but a branch another worktree has checked out, unless it is the case's own or its
   # base), every replace ref, the uncommitted and the ignored paths, and the guarded part of
-  # `.git` (hooks, `info/`, the configuration keys that run code); the whole cases directory is
-  # snapshotted beside it.
+  # `.git` (hooks, `info/`, the configuration keys that run code, a linked worktree's
+  # `commondir` and `gitdir`, `shallow` and `objects/info/alternates`); the whole cases
+  # directory is snapshotted beside it.
   # A deterministic step is the validator whose action is admissible and whose evidence is missing
   # at the current revision performing its action, its records written to the case. It is refused
   # with nothing observed on a tree with uncommitted changes, and refused with nothing recorded
@@ -1788,8 +1827,9 @@ entities:
   # the forge runs (`b10x-gates bot -- push`), nor git under it: every such child is started with
   # `GIT_NO_REPLACE_OBJECTS=1` beside its no-prompt variables.
   # read from: crates/takt/src/git.rs:90-92
-  # read from: crates/takt/src/git.rs:1033-1046
+  # read from: crates/takt/src/git.rs:1044-1057
   # read from: crates/takt/src/forge.rs:716-725
+  # read from: crates/takt/src/git.rs:690-703
   - name: takt.work.Step
     naming:
       summary: >-

@@ -2,7 +2,8 @@
 //! improvement turn, a `self.improvement` case under `.engineering/cases/`, read from the
 //! case's own records, and figures computed from the rows each time they are asked for, never
 //! kept apart from them. The metric definitions are data, [`DEFINITIONS`], read at a revision
-//! through git and never from the working tree, so a definition is judged as it stands at the
+//! through git and never from the working tree; the baseline's are snapshotted into the loop
+//! case when it opens ([`snapshot_baseline`]), so a definition is judged as it stood at the
 //! base. Three validators drive a `loop.improvement/1` case: [`LoopMeasure`]
 //! (`loop.measure`), [`LoopDefinitionCheck`] (`loop.definition.check`) and [`LoopCompare`]
 //! (`loop.compare`).
@@ -11,8 +12,8 @@
 //! when its finding was verified from the decisions Canon wrote for it; its tokens and wall
 //! time from its run record ([`crate::scorecard`]); its revisions from its snapshot; its
 //! finding from the story it was opened for, and when that was filed from the commit that
-//! added the finding to the store, read through git at the base. What a record does not hold
-//! is absent, never guessed.
+//! added the finding to the store, read through git at the row's own baseline. What a record
+//! does not hold is absent, never guessed.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -20,7 +21,7 @@ use std::path::Path;
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::case::CASES_DIR;
+use crate::case::{CASES_DIR, CaseDir};
 use crate::decision::Decision;
 use crate::evidence::Record;
 use crate::validator::{Artifact, Observation, Validator};
@@ -56,12 +57,14 @@ pub struct LoopScorecardRow {
     pub verdict: Option<String>,
     /// Whether the case's latest decision holds the claim `promoted`.
     pub promoted: bool,
-    /// The tokens of the case's runs; absent when no step of its run record reports any.
+    /// The tokens of the case's runs; absent unless every harness step of its run record
+    /// reports a count, and one does.
     pub tokens: Option<u64>,
     /// The wall time of the case's runs, in milliseconds; absent when it has no run record.
     pub wall_ms: Option<u64>,
     /// When the finding was filed: the time of the commit that added its artifact to the store,
-    /// read through git at the base; absent when that cannot be read.
+    /// read through git at the row's own `baseline` revision; absent when that cannot be read,
+    /// or when it comes after `verified_at`.
     pub filed_at: Option<String>,
     /// When the finding was verified gone: the instant of the first decision of the last
     /// unbroken run of decisions holding `scenario.passes_after`, when the latest holds it;
@@ -249,7 +252,8 @@ pub struct Figure {
     pub shown: String,
     /// The definition's target.
     pub target: Option<Target>,
-    /// Whether the figure misses the target.
+    /// Whether the figure misses the target, or has a target and no value (no data fails
+    /// closed).
     pub below_target: bool,
     /// The turns it was computed from, by case id.
     pub cases: Vec<String>,
@@ -493,9 +497,10 @@ impl LoopScorecard {
     }
 
     /// The rows of the `self.improvement` cases under `repo`'s cases directory, in name order;
-    /// none when the directory is absent. A case of another protocol is no turn. Each row's
-    /// `filed_at` is read through git at `base`. A snapshot, a decision or a run record that
-    /// does not read is an error naming it.
+    /// none when the directory is absent. A case of another protocol is no turn. With `base`
+    /// given (the revision the caller works at), each row's `filed_at` is read through git at
+    /// that row's own `baseline` revision, never at `base`; with none, no row has one. A
+    /// snapshot, a decision or a run record that does not read is an error naming it.
     pub fn read_at(repo: &Path, base: Option<&str>) -> Result<Self> {
         let cases = repo.join(CASES_DIR);
         let mut names: Vec<String> = Vec::new();
@@ -546,21 +551,35 @@ impl LoopScorecard {
                 .and_then(|(_, at)| at.clone());
             let artifact = crate::case::story_of(&dir)?;
             let stored = artifact.as_deref().and_then(store_path);
+            let baseline = revision("baseline")?;
+            // A filing later than the verification is no filing time: the store was committed
+            // after the run, and the time from finding to verified would come out negative.
             let filed_at = match (base, &stored) {
-                (Some(base), Some((_, path))) => added_at(repo, base, path),
+                (Some(_), Some((_, path))) => added_at(repo, &baseline, path),
                 _ => None,
-            };
-            // A step reports its tokens only when its harness counted them: a record none of
-            // whose steps did holds no token count, which is not a count of 0.
-            let counted = crate::events::Events::new(&dir)
-                .read()?
+            }
+            .filter(|filed| {
+                match (instant(filed), verified_at.as_deref().and_then(instant)) {
+                    (Some(filed), Some(verified)) => filed <= verified,
+                    _ => true,
+                }
+            });
+            // A step reports its tokens only when its harness counted them: the turn's tokens
+            // are known only when every harness step of its record (every step but a
+            // validator's) reported a count, and at least one did; a partial sum, or a record
+            // with no count at all, is no count.
+            let lines = crate::events::Events::new(&dir).read()?;
+            let steps: Vec<&serde_json::Value> = lines
                 .iter()
-                .any(|line| line["event"] == "step" && line["tokens"].as_u64().is_some());
+                .filter(|line| line["event"] == "step" && line["by"] != "validator")
+                .collect();
+            let counted =
+                !steps.is_empty() && steps.iter().all(|line| line["tokens"].as_u64().is_some());
             let spend = spent.get(&name);
             rows.push(LoopScorecardRow {
                 turn: name.clone(),
                 finding: stored.map(|(key, _)| key),
-                baseline: revision("baseline")?,
+                baseline,
                 candidate: revision("candidate")?,
                 verdict: latest.and_then(|decision| decision.legitimate().into_iter().next()),
                 promoted: latest.is_some_and(|decision| decision.holds("promoted")),
@@ -592,9 +611,11 @@ fn figures_of(rows: &[&LoopScorecardRow], definitions: &Definitions) -> Result<V
                 metric: id.clone(),
                 version: definition.version,
                 current: is_current,
+                // A target with no figure to hold to it fails closed: no data is below target.
                 below_target: match (value, definition.target) {
                     (Some(value), Some(target)) => target.missed_by(value),
-                    _ => false,
+                    (None, Some(_)) => true,
+                    (_, None) => false,
                 },
                 value,
                 shown,
@@ -657,6 +678,86 @@ fn case_revision(tree: &Path, artifact: &str) -> Result<String> {
     let dir = crate::case::current(tree)?;
     revision_in(&snapshot(&dir)?, artifact)
         .ok_or_else(|| anyhow!("the case at {} names no {artifact} revision", dir.display()))
+}
+
+/// The file under a loop case's directory holding the baseline's metric definitions as they
+/// were read when the case opened ([`snapshot_baseline`]).
+pub const BASELINE_SNAPSHOT: &str = "loop-baseline.json";
+
+/// The format of [`BASELINE_SNAPSHOT`].
+pub const BASELINE_SNAPSHOT_FORMAT: &str = "takt-loop-baseline/1";
+
+/// Snapshots the metric definitions at the loop case `case`'s `loop_baseline` revision into
+/// the case's directory as [`BASELINE_SNAPSHOT`]: the revision as the case names it, the
+/// commit it is, and the bytes of [`DEFINITIONS`] there (none when it holds no such file).
+/// Called when the case opens, before any step: a read of the base after a step ran trusts an
+/// object store the step could write, while the case directory is guarded around every step.
+/// Answers whether it wrote one: nothing is written while `loop_baseline` names no commit.
+pub fn snapshot_baseline(tree: &Path, case: &CaseDir) -> Result<bool> {
+    let Some(revision) = case.revision("loop_baseline") else {
+        return Ok(false);
+    };
+    if !is_commit_id(&revision) {
+        return Ok(false);
+    }
+    let Ok(commit) = crate::git::run(
+        tree,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{revision}^{{commit}}"),
+        ],
+    ) else {
+        return Ok(false);
+    };
+    let object = format!("{commit}:{DEFINITIONS}");
+    let definitions = if crate::git::run(tree, &["cat-file", "-e", &object]).is_ok() {
+        Some(
+            String::from_utf8(crate::git::blob(tree, &object)?)
+                .map_err(|_| anyhow!("{DEFINITIONS} at {} is not UTF-8", short(&commit)))?,
+        )
+    } else {
+        None
+    };
+    let snapshot = serde_json::json!({
+        "format": BASELINE_SNAPSHOT_FORMAT,
+        "revision": revision,
+        "commit": commit,
+        "definitions": definitions,
+    });
+    let path = case.dir.join(BASELINE_SNAPSHOT);
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&snapshot).context("serialize the baseline snapshot")?,
+    )
+    .with_context(|| format!("write {}", path.display()))?;
+    Ok(true)
+}
+
+/// The baseline's definitions from the snapshot in the case whose branch `tree` is on, taken
+/// when it opened ([`snapshot_baseline`]), never read from the object store again; or what to
+/// say when there is no snapshot of `base`, or no definitions in it.
+fn snapshotted(tree: &Path, base: &str) -> Result<Result<Definitions, String>> {
+    let path = crate::case::current(tree)?.join(BASELINE_SNAPSHOT);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(Err(format!(
+            "no snapshot of its definitions was taken when the case opened ({BASELINE_SNAPSHOT})"
+        )));
+    };
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    if snapshot["format"] != BASELINE_SNAPSHOT_FORMAT || snapshot["revision"] != base {
+        return Ok(Err(format!(
+            "the snapshot {BASELINE_SNAPSHOT} is not of {}",
+            short(base)
+        )));
+    }
+    let Some(definitions) = snapshot["definitions"].as_str() else {
+        return Ok(Err(format!("{} holds no {DEFINITIONS}", short(base))));
+    };
+    Ok(Definitions::parse(definitions)
+        .map_err(|error| format!("{DEFINITIONS} at {}: {error:#}", short(base))))
 }
 
 /// `loop.measure`: the loop scorecard over the recorded turns (at least [`MIN_TURNS`]), its
@@ -747,11 +848,13 @@ impl Validator for LoopMeasure {
 pub enum DefinitionCheck {
     /// Every definition of the baseline is the candidate's current one.
     Unchanged,
-    /// A definition changed, took another version, and the baseline's is kept as a previous
-    /// one, so the figures of both print.
+    /// A definition changed, took another version, kept its target, and the baseline's is kept
+    /// as a previous one beside every previous one the baseline prints, so the figures of both
+    /// print.
     DualReported,
     /// A definition changed and only the new one prints: it kept its version, dropped the
-    /// baseline's, or the metric is gone.
+    /// baseline's or a previous one the baseline prints, or the metric is gone; or its target
+    /// changed.
     Redefined,
 }
 
@@ -768,7 +871,10 @@ impl DefinitionCheck {
 }
 
 /// Each metric of `base` with how `candidate` stands against it, and the result over all: the
-/// worst of them. No candidate definitions (absent or unreadable) redefines every metric.
+/// worst of them. No candidate definitions (absent or unreadable) redefines every metric. A
+/// metric whose target changed (its value or its direction) is redefined whatever its version
+/// and its previous definitions say: targets are the owner's, and no candidate changes one
+/// through this check. So is one that drops or changes a previous definition the base prints.
 #[must_use]
 pub fn check(
     base: &Definitions,
@@ -781,6 +887,15 @@ pub fn check(
             let was = metric.current();
             let stands = match candidate.and_then(|c| c.metrics.get(id)) {
                 None => DefinitionCheck::Redefined,
+                Some(now) if now.target != was.target => DefinitionCheck::Redefined,
+                Some(now)
+                    if metric
+                        .previous
+                        .iter()
+                        .any(|printed| !now.previous.contains(printed)) =>
+                {
+                    DefinitionCheck::Redefined
+                }
                 Some(now) if now.current() == was => DefinitionCheck::Unchanged,
                 Some(now) if now.version != was.version && now.previous.contains(&was) => {
                     DefinitionCheck::DualReported
@@ -814,13 +929,14 @@ fn uncomputed(card: &LoopScorecard, definitions: &Definitions) -> Vec<(String, S
         .collect()
 }
 
-/// `loop.definition.check`: the metric definitions at the candidate revision against those at
-/// the case's `loop_baseline` revision, both read through git; writes one `definition_check`
-/// record about `loop_candidate`, its result [`DefinitionCheck`]. The figures the candidate's
+/// `loop.definition.check`: the metric definitions at the candidate revision, read through git,
+/// against the baseline's as the case snapshotted them when it opened ([`snapshot_baseline`]),
+/// never read from the object store after a step ran; writes one `definition_check` record
+/// about `loop_candidate`, its result [`DefinitionCheck`]. The figures the candidate's
 /// definitions name are then computed over the recorded turns: a metric any of whose figures
 /// the code does not compute is `redefined`, whatever [`check`] found, since its figure cannot
-/// print; so is every metric when the turns do not read. No definitions at the baseline records
-/// nothing.
+/// print; so is every metric when the turns do not read. No snapshot of the case's current
+/// `loop_baseline`, or no definitions in it, records nothing.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoopDefinitionCheck;
 
@@ -843,7 +959,7 @@ impl Validator for LoopDefinitionCheck {
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
         let base = case_revision(tree, "loop_baseline")?;
-        let base_definitions = match definitions_at(tree, &base)? {
+        let base_definitions = match snapshotted(tree, &base)? {
             Ok(definitions) => definitions,
             Err(why) => return Ok(nothing(format!("the baseline: {why}; nothing recorded"))),
         };
@@ -1076,8 +1192,11 @@ impl Validator for LoopCompare {
                 .iter()
                 .find(|f| f.current && f.metric == figure.metric)
                 .and_then(|f| f.value);
+            // A metric below target for want of data before improved once it has a figure
+            // after that meets its target.
             improved &= match (figure.value, later, figure.target) {
                 (Some(before), Some(after), Some(target)) => target.improves(before, after),
+                (None, Some(after), Some(target)) => !target.missed_by(after),
                 _ => false,
             };
         }

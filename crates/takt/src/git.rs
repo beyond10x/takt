@@ -687,10 +687,20 @@ fn make_link(target: &Path, at: &Path) -> Result<()> {
     )
 }
 
-/// The directories under a git directory whose files git runs or reads as configuration: the
-/// hooks, and `info/` (attributes, exclude, sparse-checkout). Every other file there (git's
-/// own state, other tools' files and locks, an editor's entries) is not the step's concern.
-const GUARDED_DIRS: [&str; 2] = ["hooks", "info"];
+/// The entries of a git directory whose files git runs, reads as configuration, or reads to
+/// find the repository's objects and history: the hooks, `info/` (attributes, exclude,
+/// sparse-checkout), a linked worktree's `commondir` and `gitdir` (where its common git
+/// directory is), `shallow` (which commits have no parents) and `objects/info/alternates` (other
+/// object directories read as this one's). Every other file there (git's own state, other
+/// tools' files and locks, an editor's entries) is not the step's concern.
+const GUARDED_ENTRIES: [&str; 6] = [
+    "hooks",
+    "info",
+    "commondir",
+    "gitdir",
+    "shallow",
+    "objects/info/alternates",
+];
 
 /// The configuration files of a git directory, guarded by the keys in them that run code or
 /// change what git does ([`is_guarded_key`]).
@@ -711,10 +721,10 @@ fn siblings(dir: &Path, own: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// The guarded directories of the git directory `dir`, relative to it: its hooks and `info/`,
-/// and each sibling worktree's `info/` (its sparse-checkout).
+/// The guarded entries of the git directory `dir`, relative to it ([`GUARDED_ENTRIES`]), and
+/// each sibling worktree's `info/` (its sparse-checkout).
 fn guarded_roots(dir: &Path, own: &Path) -> Vec<PathBuf> {
-    GUARDED_DIRS
+    GUARDED_ENTRIES
         .iter()
         .map(PathBuf::from)
         .chain(
@@ -896,7 +906,7 @@ fn unlock(dir: &Path, roots: &[PathBuf]) -> BTreeMap<PathBuf, u32> {
     modes
 }
 
-/// The guarded part of one git directory: its hooks and `info/` (and its sibling worktrees'
+/// The guarded part of one git directory: its [`GUARDED_ENTRIES`] (and its sibling worktrees'
 /// `info/`) file by file with every directory's mode, and its configuration files (and its
 /// sibling worktrees' `config.worktree`).
 #[derive(Debug, Clone)]
@@ -946,8 +956,9 @@ pub struct GitDirPutBack {
 /// case's base and its own branch excepted ([`Checkpoint::take_guarding`]); the index's entries
 /// and the index file itself; every uncommitted path outside the cases directory with what was
 /// at it (a validator's run may leave one); the ignored paths with what is at each a file git
-/// names; and what git runs or
-/// reads as configuration in the git directories: the hooks, `info/`, the configuration's keys.
+/// names; and what git runs, reads as configuration, or reads to find the objects and the
+/// history in the git directories: the hooks, `info/`, the configuration's keys, `commondir`,
+/// `gitdir`, `shallow` and `objects/info/alternates`.
 #[derive(Debug, Clone)]
 pub struct Checkpoint {
     head: String,
