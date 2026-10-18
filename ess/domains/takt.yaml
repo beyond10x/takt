@@ -1,0 +1,664 @@
+# Takt's nouns, declared from three sources, and every declaration says which: the kernel as it is
+# (crates/takt/src/{case,run,harness,validator,evidence,protocol}.rs and crates/takt-cli/src/main.rs),
+# the design where the kernel has nothing yet (docs/design/takt.md § 3), and the cleared decision
+# on the approval grant and the case resume
+# (.engineering/planning/decision-blocker/approval-grant-and-case-resume.md).
+# Canon's declarations (b10x-canon 0.6.0, the release Cargo.toml pins, ess/domains/protocol.yaml)
+# are named where a takt noun holds one and never redeclared: the protocol, the case snapshot, the
+# evidence record and the decision are Canon's. An identifier a protocol declares is carried here as
+# a newtype over String so that a takt field has a type, and each names the Canon type it carries.
+# Cross-repository citations name the release and the file; in-repository ones the file and lines.
+domain: takt.work
+
+summary: >-
+  One `takt run` is a Run over one Case on one Unit: the case is opened under a protocol in a
+  worktree, and the loop evaluates it, takes one Step (a deterministic one by an EvidenceProducer,
+  or a judgement one by the harness among the actions offered), records the effect and evaluates
+  again, until an outcome is legitimate, an approval is needed, nothing is admissible, a step is
+  refused or the budget is spent. A Workflow is the `workflow/1` document a run follows. A Story is
+  the planning-store unit the frontier pulls, with at most one open case, which a later run resumes
+  once the operator has granted the case its authority.
+
+naming:
+  wire: work
+  display: Work
+
+types:
+  # The case id: `--case-id`, or `takt-<instant>` from the instant the run started. Carries
+  # canon.protocol.CaseId (protocol.yaml:526), the `id` of the snapshot.
+  # read from: crates/takt/src/run.rs:108-111
+  # read from: crates/takt/src/case.rs:21
+  - name: takt.work.CaseId
+    kind: newtype
+    of: String
+
+  # A protocol as takt names it, `<name>/<major>` (`software.change/1`): a built-in of the
+  # engineering protocols, or a `protocol/1` file Canon validated and compiled. The snapshot's own
+  # `protocol` key is the name alone, canon.protocol.ProtocolId (protocol.yaml:32).
+  # read from: crates/takt/src/protocol.rs:10-16
+  # read from: crates/takt/src/case.rs:69
+  - name: takt.work.ProtocolId
+    kind: newtype
+    of: String
+
+  # A planning-store story's artifact id, `story:<slug>`, as the `aep plan artifact` verbs take it.
+  # read from: docs/design/takt.md:38
+  # read from: .engineering/planning/story/takt-domain-model.md:42
+  - name: takt.work.StoryId
+    kind: newtype
+    of: String
+
+  # The rungs of the planning store's story ladder, as takt reads them: a story is taken when
+  # `proposed` ("refined and agreed enough to pick up") and is `active` ("being worked on now")
+  # while its case is open. The store moves a story; takt reads where it stands.
+  # read from: aep 0.68.0 (the revision .engineering/project.yaml pins), artifacts/lifecycles/story.yaml:14-22
+  # read from: aep 0.68.0, artifacts/lifecycles/story.yaml:43-49
+  - name: takt.work.StoryStatus
+    kind: enum
+    variants: [draft, proposed, active, implemented, rejected, archived]
+
+  # What a run works on: an intent given on the command line, or a story the frontier pulls from
+  # the planning store. Today a run takes one intent, required, and nothing reads the store; the
+  # `story` variant is the design's `frontier(repo)`, built by story:frontier-next-ready-story.
+  # read from: docs/design/takt.md:38
+  # read from: crates/takt/src/run.rs:21-22
+  # read from: crates/takt-cli/src/main.rs:36-38
+  - name: takt.work.Unit
+    kind: union
+    tag: kind
+    variants:
+      intent: String
+      story: takt.work.StoryId
+
+  # An action the protocol declares, by id (`tests.run`, `implementation.edit`, `repository.merge`).
+  # Carries canon.protocol.ActionId (protocol.yaml:57).
+  # read from: crates/takt/src/protocol.rs:25-26
+  - name: takt.work.ActionId
+    kind: newtype
+    of: String
+
+  # An evidence kind the protocol declares, by id (`test_result`). Carries
+  # canon.protocol.EvidenceKindId (protocol.yaml:42).
+  # read from: crates/takt/src/validator.rs:25-26
+  - name: takt.work.EvidenceKindId
+    kind: newtype
+    of: String
+
+  # An artifact the protocol declares, by id (`intent`, `implementation`): what a case gives a
+  # revision for and what an evidence record is about. Carries canon.protocol.ArtifactId
+  # (protocol.yaml:37).
+  # read from: crates/takt/src/protocol.rs:21-22
+  # read from: crates/takt/src/validator.rs:27-28
+  - name: takt.work.ArtifactId
+    kind: newtype
+    of: String
+
+  # A capability an action requires (`repository.merge`): what an authority decision grants or
+  # denies. Carries canon.protocol.CapabilityId (protocol.yaml:67).
+  # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:47
+  # read from: b10x-canon 0.6.0, crates/canon/src/model/authority.rs:24
+  - name: takt.work.CapabilityId
+    kind: newtype
+    of: String
+
+  # An authority decision on one capability, as a `canon-authority/1` entry carries it: an action
+  # whose precondition holds is admissible when every capability it requires is granted, blocked
+  # when one is denied, and approval-required when none is denied and one is undecided. The same
+  # two values as canon.protocol.Grant (protocol.yaml:682).
+  # read from: b10x-canon 0.6.0, crates/canon/src/model/authority.rs:34
+  # read from: b10x-canon 0.6.0, crates/canon/src/eval/authority.rs:7-12
+  - name: takt.work.Grant
+    kind: enum
+    variants: [granted, denied]
+
+  # An outcome the protocol declares, by id: the one a run completes through. Carries
+  # canon.protocol.OutcomeId (protocol.yaml:62).
+  # read from: crates/takt/src/run.rs:42-43
+  - name: takt.work.OutcomeId
+    kind: newtype
+    of: String
+
+  # A case input the protocol declares, by id (`risk`, `change_kind`). Carries
+  # canon.protocol.InputId (protocol.yaml:293); the value given is text, `true` and `false` written
+  # into the snapshot as booleans.
+  # read from: crates/takt/src/protocol.rs:23-24
+  # read from: crates/takt/src/case.rs:71-94
+  - name: takt.work.InputId
+    kind: newtype
+    of: String
+
+  # The judgement actor's name: `claude-code` for Claude Code in print mode with file tools only,
+  # `none` for the harness that performs nothing.
+  # read from: crates/takt/src/harness.rs:46-48
+  # read from: crates/takt/src/harness.rs:149-150
+  # read from: crates/takt-cli/src/main.rs:161-163
+  - name: takt.work.HarnessName
+    kind: newtype
+    of: String
+
+  # A validator's name, the `producer` every record it writes names (`takt.tests-run`). Carries
+  # canon.protocol.Principal (protocol.yaml:241), an opaque principal Canon records as given.
+  # read from: crates/takt/src/validator.rs:21-22
+  # read from: crates/takt/src/validator.rs:52-53
+  # read from: crates/takt/src/evidence.rs:16
+  - name: takt.work.ProducerName
+    kind: newtype
+    of: String
+
+  # An evidence record's id, unique within the case (`test-result-<seq>`). Carries
+  # canon.protocol.EvidenceId (protocol.yaml:538).
+  # read from: crates/takt/src/evidence.rs:9
+  # read from: crates/takt/src/validator.rs:91
+  - name: takt.work.EvidenceId
+    kind: newtype
+    of: String
+
+  # A revision of an artifact: the commit `HEAD` names for `implementation`, the SHA-256 of the
+  # intent text for `intent`, `r0` for every other artifact at open. Carries canon.protocol.Revision
+  # (protocol.yaml:533); evidence is bound to the revision it was observed on.
+  # read from: crates/takt/src/case.rs:57-64
+  # read from: crates/takt/src/case.rs:115
+  # read from: crates/takt/src/evidence.rs:14
+  - name: takt.work.Revision
+    kind: newtype
+    of: String
+
+  # A step's number within its run, counted from 1 as the run prints it (`step 3: tests.run {}`).
+  # read from: crates/takt/src/run.rs:88
+  # read from: crates/takt/src/run.rs:195
+  # read from: crates/takt/src/run.rs:228
+  - name: takt.work.StepNumber
+    kind: newtype
+    of: Integer
+
+  # Which of the two kinds of step the loop took: a deterministic one, performed by a validator,
+  # or a judgement one, performed by the harness. A deterministic step is taken first whenever a
+  # validator's action is admissible and its evidence is missing at the current revision.
+  # read from: docs/design/takt.md:41-42
+  # read from: crates/takt/src/run.rs:185-194
+  # read from: crates/takt/src/run.rs:214-215
+  - name: takt.work.StepKind
+    kind: enum
+    variants: [deterministic, judgement]
+
+  # Why a run stopped. `completed` names the outcome that is legitimate; `approval_required` the
+  # actions that need an approval when nothing else is left, or the one gate action the harness
+  # requested with no change; `iterations`, `hours` and `tokens` the budget that was spent;
+  # `step_refused` why the harness's step was refused and its change discarded; `no_progress` says
+  # a judgement step changed no file and the decision did not move, so another would not either.
+  # read from: crates/takt/src/run.rs:39-58
+  # read from: crates/takt/src/run.rs:174-183
+  # read from: crates/takt/src/run.rs:220-227
+  # read from: crates/takt/src/run.rs:262-297
+  - name: takt.work.Stop
+    kind: union
+    tag: kind
+    variants:
+      completed: takt.work.OutcomeId
+      approval_required: List<takt.work.ActionId>
+      nothing_admissible: ~
+      iterations: Integer
+      hours: Decimal
+      tokens: Integer
+      step_refused: String
+      no_progress: ~
+
+  # Where a `workflow/1` document is: the `--workflow <file>` argument, or the repository default
+  # `.engineering/workflow.yaml`. The kernel reads neither yet (milestone M3).
+  # read from: docs/design/takt.md:35
+  # read from: docs/design/takt.md:74
+  - name: takt.work.WorkflowPath
+    kind: newtype
+    of: String
+
+  # The `protocol` block of a workflow: which protocol the case runs under, with its major in the
+  # id, and the case inputs given to it. Today the same two things reach the kernel as `--protocol`
+  # and `--input`.
+  # read from: docs/design/takt.md:55
+  # read from: crates/takt/src/run.rs:18-24
+  - name: takt.work.ProtocolBlock
+    kind: struct
+    fields:
+      - name: id
+        type: takt.work.ProtocolId
+      - name: inputs
+        type: Map<takt.work.InputId, String>
+
+  # A deterministic `step` block: one protocol action and the program that performs it. Today the
+  # one such step is the `tests.run` validator, whose argv is `--test-cmd` split at white space.
+  # read from: docs/design/takt.md:56
+  # read from: crates/takt/src/validator.rs:35-37
+  # read from: crates/takt-cli/src/main.rs:54-56
+  - name: takt.work.DeterministicStep
+    kind: struct
+    fields:
+      - name: action
+        type: takt.work.ActionId
+      - name: argv
+        type: List<String>
+
+  # A judgement `step` block: the protocol actions the harness may choose among, and the brief it
+  # is given. Today the actions offered are computed each iteration (the admissible actions no
+  # validator owns) and the brief is the intent.
+  # read from: docs/design/takt.md:57
+  # read from: crates/takt/src/run.rs:214-219
+  # read from: crates/takt/src/harness.rs:19-20
+  - name: takt.work.JudgementStep
+    kind: struct
+    fields:
+      - name: actions
+        type: List<takt.work.ActionId>
+      - name: brief
+        type: String
+
+  # A `step` block of a workflow, one of the two kinds.
+  # read from: docs/design/takt.md:56-57
+  - name: takt.work.StepBlock
+    kind: union
+    tag: kind
+    variants:
+      deterministic: takt.work.DeterministicStep
+      judgement: takt.work.JudgementStep
+
+entities:
+  # The case a run opens: the directory `<tree>/.engineering/cases/<id>/`, holding `case.yaml`, the
+  # `canon-case/1` snapshot that canon.protocol.Case declares (protocol.yaml:861) with its
+  # `protocol` relation to canon.protocol.Protocol; `protocol.yaml` and `protocol.ir.json`;
+  # `intent.md`; `evidence/*.json`, the `canon-evidence/1` records validators wrote
+  # (canon.protocol.EvidenceRecord, protocol.yaml:571); `decisions/*.json`, one `canon-decision/1`
+  # per evaluation; and, once the operator has granted it, `authority.yaml`. Every evaluation reads
+  # the files and asks Canon. Opening refuses an id that exists, and the kernel has no path that
+  # resumes a case; the decision cited on `story` and `authority` adds one.
+  # read from: crates/takt/src/case.rs:1-2
+  # read from: crates/takt/src/case.rs:15-29
+  # read from: crates/takt/src/case.rs:44-53
+  # read from: crates/takt/src/case.rs:177-200
+  - name: takt.work.Case
+    naming:
+      summary: >-
+        The Canon case on disk that one run opened: its protocol, its intent, the story it was
+        opened for, the authority the operator granted it, and the evidence written so far. The
+        snapshot, the records and the decisions it holds are Canon's documents.
+    identity:
+      name: id
+      type: takt.work.CaseId
+    fields:
+      # read from: crates/takt/src/case.rs:15
+      # read from: crates/takt/src/case.rs:23
+      - name: dir
+        type: String
+        summary: The case directory, `<tree>/.engineering/cases/<id>`.
+      # The protocol the case runs under; the `implementation` artifact opens at `HEAD`, `intent`
+      # at the SHA-256 of the intent text, every other at `r0`.
+      # read from: crates/takt/src/case.rs:25
+      # read from: crates/takt/src/case.rs:57-64
+      - name: protocol
+        type: takt.work.ProtocolId
+      # read from: crates/takt/src/case.rs:53
+      - name: intent
+        type: String
+        summary: The intent the case was opened for, written as `intent.md`.
+      # The story the case was opened for, absent for a case opened on a bare intent. At most one
+      # open case per story: the next `takt run` on the repository, or `takt run --case <id>`,
+      # resumes it rather than opening a second. Decided; today every run opens a new case.
+      # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
+      # read from: docs/design/takt.md:38-39
+      # read from: crates/takt/src/run.rs:112
+      - name: story
+        type: Optional<takt.work.StoryId>
+      # The authority the operator granted the case, read into every evaluation of it: the
+      # `canon-authority/1` list `takt approve <case> <capability>` writes as the case's
+      # `authority.yaml`, keyed here by capability because Canon refuses a capability decided twice.
+      # Empty until an approval is given; a case with none stops at the gate with
+      # `approval_required`, and an unattended run never merges without a grant. Each approval is
+      # also recorded as `approval` evidence on the story in the planning store. Today the kernel
+      # supplies no authority to an evaluation.
+      # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:46-52
+      # read from: b10x-canon 0.6.0, crates/canon/src/eval/authority.rs:7-21
+      # read from: b10x-canon 0.6.0, crates/canon/src/eval/mod.rs:359-365
+      # read from: crates/takt/src/case.rs:187-191
+      - name: authority
+        type: Map<takt.work.CapabilityId, takt.work.Grant>
+      # read from: crates/takt/src/case.rs:29
+      # read from: crates/takt/src/case.rs:133-141
+      - name: evidence_written
+        type: Integer
+        summary: How many evidence records have been written to `evidence/`, numbering the next.
+    relations:
+      # A case opened for a story references it; the story lives in the planning store and
+      # outlives the case.
+      # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
+      - name: story
+        kind: references
+        target: takt.work.Story
+        cardinality: one
+        via: story
+    # A case is open from the moment the run opens it. Closing it through the outcome it
+    # completed with is the record story's (story:run-record-and-story-evidence); nothing in the
+    # kernel moves a case, so there is no transition here.
+    # read from: crates/takt/src/run.rs:177-180
+    lifecycle:
+      initial: Open
+      states: [Open]
+      terminal: [Open]
+
+  # A planning-store story as takt sees it: the unit the frontier pulls, the rung it stands on, and
+  # the case open for it. The store owns the ladder and moves the story (`aep plan artifact
+  # move`); takt reads its status and declares no lifecycle for it here. A story is taken when
+  # `proposed` and is `active` while its case is open, so a story with an open case is never taken
+  # twice; a story has at most one open case, and a later run resumes it.
+  # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
+  # read from: .engineering/planning/story/takt-domain-model.md:42
+  # read from: aep 0.68.0, artifacts/lifecycles/story.yaml:14-22
+  # read from: aep 0.68.0, artifacts/lifecycles/story.yaml:43-49
+  - name: takt.work.Story
+    naming:
+      summary: >-
+        A story of the repository's planning store, with its status and the one case open for it,
+        if any. Nothing in the kernel reads the store yet.
+    identity:
+      name: story_id
+      type: takt.work.StoryId
+    fields:
+      # read from: aep 0.68.0, artifacts/lifecycles/story.yaml:14-22
+      - name: status
+        type: takt.work.StoryStatus
+      # The case open for the story, which the next run resumes; absent while none is open.
+      # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
+      - name: open_case
+        type: Optional<takt.work.CaseId>
+    relations:
+      # At most one open case per story. The case stands on its own on disk, so the story
+      # references it rather than owning it.
+      # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:51
+      - name: open_case
+        kind: references
+        target: takt.work.Case
+        cardinality: one
+        via: open_case
+    # The story's own ladder is the planning store's, carried in `status`.
+    lifecycle:
+      initial: Listed
+      states: [Listed]
+      terminal: [Listed]
+
+  # One `takt run`: it opens the case, then loops, evaluating the case and taking one step at a
+  # time, until a stop. The judgement actor, the validators and the budgets are what the run is
+  # given; the steps taken, the tokens spent and the stop are what it records.
+  # read from: crates/takt/src/run.rs:1-3
+  # read from: crates/takt/src/run.rs:77-93
+  # read from: crates/takt/src/run.rs:97-123
+  # read from: crates/takt/src/run.rs:145-316
+  - name: takt.work.Run
+    naming:
+      summary: >-
+        One invocation of the loop over one case: the worktree, the unit, the protocol and inputs,
+        the budgets, the harness and the validators it was given, and the steps, tokens and stop it
+        recorded.
+    identity:
+      # A run has no id of its own: one run opens one case, whose id is generated from the run's
+      # start instant when `--case-id` gives none, and the run's record is printed under that case.
+      # The decided resume (`takt run --case <id>`) gives one case several runs, and the outer loop
+      # (story:declared-loops) gives one run several cases; the story that builds either renames
+      # this identity.
+      # read from: crates/takt/src/run.rs:82
+      # read from: crates/takt/src/run.rs:108-112
+      # read from: crates/takt-cli/src/main.rs:171-176
+      name: case_id
+      type: takt.work.CaseId
+    fields:
+      # read from: crates/takt/src/run.rs:80
+      - name: tree
+        type: String
+        summary: The worktree the case is opened in and every action is performed in.
+      # read from: crates/takt/src/run.rs:21-22
+      # read from: docs/design/takt.md:38
+      - name: unit
+        type: takt.work.Unit
+      # read from: crates/takt/src/run.rs:19-20
+      - name: protocol
+        type: String
+        summary: The protocol id, `software.change/1`, or the path of a `protocol/1` file.
+      # The case inputs, `name=value` each; the software change's least demanding values are
+      # supplied for the ones left out.
+      # read from: crates/takt/src/run.rs:23-24
+      # read from: crates/takt-cli/src/main.rs:133-146
+      - name: inputs
+        type: Map<takt.work.InputId, String>
+      # The workflow the run follows, when one is given; the kernel takes none yet.
+      # read from: docs/design/takt.md:35
+      - name: workflow
+        type: Optional<takt.work.WorkflowPath>
+      # read from: crates/takt/src/run.rs:25-26
+      - name: iterations
+        type: Optional<Integer>
+        summary: Stop after this many steps.
+      # read from: crates/takt/src/run.rs:27-28
+      - name: hours
+        type: Optional<Decimal>
+        summary: Stop after this many hours, a decimal number; the kernel holds it as an `f64`.
+      # read from: crates/takt/src/run.rs:29-30
+      - name: token_budget
+        type: Optional<Integer>
+        summary: Stop once the harness has reported this many tokens.
+      # The approval gate: the one approval-required action the harness may request to end the
+      # run, `repository.merge` for a software change; other approval-required actions are not
+      # offered.
+      # read from: crates/takt/src/run.rs:33-36
+      # read from: crates/takt-cli/src/main.rs:66-68
+      - name: gate
+        type: Optional<takt.work.ActionId>
+      # read from: crates/takt/src/run.rs:83-84
+      - name: harness
+        type: takt.work.HarnessName
+        summary: The judgement actor that performs every judgement step of the run.
+      # read from: crates/takt/src/run.rs:85-86
+      # read from: crates/takt-cli/src/main.rs:166
+      - name: validators
+        type: List<takt.work.ProducerName>
+        summary: The validators, one per deterministic action; `takt.tests-run` today.
+      # read from: crates/takt/src/run.rs:91
+      # read from: crates/takt/src/run.rs:120
+      - name: started_at
+        type: Timestamp
+      # read from: crates/takt/src/run.rs:87-88
+      - name: steps
+        type: Integer
+        summary: Steps taken so far.
+      # read from: crates/takt/src/run.rs:89-90
+      # read from: crates/takt/src/run.rs:247-249
+      - name: tokens
+        type: Integer
+        summary: Tokens the harness reported, summed over its steps.
+      # read from: crates/takt/src/run.rs:39-58
+      # read from: crates/takt/src/run.rs:145
+      - name: stop
+        type: Optional<takt.work.Stop>
+        summary: Why the run stopped; absent while it runs.
+    relations:
+      # One run, one case: the run opens it and the case outlives the run on disk.
+      # read from: crates/takt/src/run.rs:82
+      # read from: crates/takt/src/run.rs:112
+      - name: case
+        kind: references
+        target: takt.work.Case
+        cardinality: one
+        via: case_id
+      # read from: docs/design/takt.md:35
+      - name: workflow
+        kind: references
+        target: takt.work.Workflow
+        cardinality: one
+        via: workflow
+      # read from: crates/takt/src/run.rs:86
+      - name: validators
+        kind: references
+        target: takt.work.EvidenceProducer
+        cardinality: many
+        via: validators
+      # The steps a run took have no meaning outside it; they are numbered within it.
+      # read from: crates/takt/src/run.rs:195
+      # read from: crates/takt/src/run.rs:228
+      - name: steps
+        kind: owns
+        target: takt.work.Step
+        cardinality: many
+        via: case_id
+    # A run is started when its case is opened and is over once `stop` is set; the stop is data,
+    # not a state, because nothing but the loop itself ends a run.
+    lifecycle:
+      initial: Started
+      states: [Started]
+      terminal: [Started]
+
+  # A `workflow/1` document: the protocol a case runs under and the blocks the loop follows. The
+  # kernel reads none yet; the loop today is fixed in code, with one deterministic step
+  # (`tests.run`) and the judgement step among the actions offered. The `loop`, `gate` and
+  # `approval` blocks of the design are declared by the stories that build them
+  # (story:declared-loops, story:gate-validator, story:merge-under-authority).
+  # read from: docs/design/takt.md:51-60
+  # read from: docs/design/takt.md:74
+  - name: takt.work.Workflow
+    naming:
+      summary: >-
+        The `workflow/1` file a run follows: its protocol block and its step blocks, as the design
+        lays them out. Declared ahead of the loader that reads it.
+    identity:
+      name: path
+      type: takt.work.WorkflowPath
+    fields:
+      # read from: docs/design/takt.md:51
+      - name: format
+        type: String
+        summary: The only accepted value is `workflow/1`.
+      # read from: docs/design/takt.md:55
+      - name: protocol
+        type: takt.work.ProtocolBlock
+      # read from: docs/design/takt.md:56-57
+      - name: steps
+        type: List<takt.work.StepBlock>
+    # A workflow is declared and stays declared; the loop reads it and never moves it.
+    lifecycle:
+      initial: Declared
+      states: [Declared]
+      terminal: [Declared]
+
+  # One step a run took: one iteration of the loop past its evaluation. A deterministic step is
+  # the validator whose action is admissible and whose evidence is missing at the current
+  # revision performing its action, its records written to the case. A judgement step is the
+  # harness performing exactly one of the actions offered (the admissible actions no validator
+  # owns) in the worktree and reporting which: an action not offered, a `repository.inspect` that
+  # changed a file, or a `tests.write` that changed a non-test path, is refused and the change
+  # discarded; the gate action requested with no change ends the run with `approval_required`;
+  # a change is committed and `implementation` moved to the new head.
+  # read from: docs/design/takt.md:40-42
+  # read from: crates/takt/src/run.rs:184-212
+  # read from: crates/takt/src/run.rs:214-315
+  # read from: crates/takt/src/harness.rs:14-50
+  - name: takt.work.Step
+    naming:
+      summary: >-
+        One step of a run, numbered within it: which kind, which action, who performed it, what it
+        said or observed, the evidence it wrote, the tokens it used and the commit it made.
+    identity:
+      name: number
+      type: takt.work.StepNumber
+    fields:
+      # read from: crates/takt/src/run.rs:82
+      - name: case_id
+        type: takt.work.CaseId
+        summary: The case of the run that took the step.
+      # read from: crates/takt/src/run.rs:185-186
+      # read from: crates/takt/src/run.rs:214
+      - name: kind
+        type: takt.work.StepKind
+      # Exactly one action: the validator's own for a deterministic step; for a judgement step the
+      # one the harness reports, which must be among those offered or the step is refused.
+      # read from: crates/takt/src/run.rs:187-189
+      # read from: crates/takt/src/run.rs:201
+      # read from: crates/takt/src/harness.rs:21-22
+      # read from: crates/takt/src/harness.rs:36-38
+      # read from: crates/takt/src/run.rs:279-280
+      - name: action
+        type: takt.work.ActionId
+      # The validator that performed a deterministic step; absent on a judgement step, which the
+      # run's harness performed.
+      # read from: crates/takt/src/run.rs:194-200
+      # read from: crates/takt/src/run.rs:246
+      - name: producer
+        type: Optional<takt.work.ProducerName>
+      # read from: crates/takt/src/validator.rs:13-14
+      # read from: crates/takt/src/harness.rs:39-40
+      # read from: crates/takt/src/run.rs:202
+      # read from: crates/takt/src/run.rs:257
+      - name: summary
+        type: String
+        summary: One line on what was observed (deterministic) or what the harness said it did.
+      # The `canon-evidence/1` records a deterministic step wrote to the case, by id; a judgement
+      # step writes none, because the model never produces evidence.
+      # read from: crates/takt/src/validator.rs:15-16
+      # read from: crates/takt/src/run.rs:203-204
+      # read from: docs/design/takt.md:47-49
+      - name: records
+        type: List<takt.work.EvidenceId>
+      # read from: crates/takt/src/harness.rs:41-42
+      # read from: crates/takt/src/run.rs:247-249
+      - name: tokens
+        type: Optional<Integer>
+        summary: Tokens the step used, when the harness reports them.
+      # The commit a judgement step's change was committed as, which `implementation` now names;
+      # absent when nothing changed, the step was refused, or the step was deterministic.
+      # read from: crates/takt/src/run.rs:298-308
+      - name: committed
+        type: Optional<takt.work.Revision>
+    relations:
+      # A deterministic step is performed by exactly one validator.
+      # read from: crates/takt/src/run.rs:194-200
+      - name: producer
+        kind: references
+        target: takt.work.EvidenceProducer
+        cardinality: one
+        via: producer
+    # A step is taken and recorded; nothing moves it afterwards.
+    lifecycle:
+      initial: Taken
+      states: [Taken]
+      terminal: [Taken]
+
+  # A validator: a program that performs one deterministic protocol action and answers evidence,
+  # turning an observation (a test run's exit status) into `canon-evidence/1` records bound to the
+  # revision it observed. Validators are the only producers of evidence; the model never produces
+  # any. Each names itself as the `producer` of its records, performs exactly one action, writes
+  # exactly one evidence kind, about exactly one artifact. The first is `takt.tests-run`: action
+  # `tests.run`, kind `test_result`, subject `implementation`, result `pass` on exit 0 and `fail`
+  # otherwise.
+  # read from: crates/takt/src/validator.rs:1
+  # read from: crates/takt/src/validator.rs:20-31
+  # read from: crates/takt/src/validator.rs:51-66
+  # read from: crates/takt/src/validator.rs:68-78
+  # read from: docs/design/takt.md:47-49
+  # read from: docs/design/takt.md:64-65
+  - name: takt.work.EvidenceProducer
+    naming:
+      summary: >-
+        A validator: the one protocol action it performs, the one evidence kind it writes, and the
+        one artifact its records are about, under the name its records carry as `producer`.
+    identity:
+      name: name
+      type: takt.work.ProducerName
+    fields:
+      # read from: crates/takt/src/validator.rs:23-24
+      - name: action
+        type: takt.work.ActionId
+      # read from: crates/takt/src/validator.rs:25-26
+      - name: kind
+        type: takt.work.EvidenceKindId
+      # read from: crates/takt/src/validator.rs:27-28
+      - name: subject
+        type: takt.work.ArtifactId
+    # A validator is registered with the run that holds it; nothing moves it.
+    # read from: crates/takt-cli/src/main.rs:166
+    lifecycle:
+      initial: Registered
+      states: [Registered]
+      terminal: [Registered]
