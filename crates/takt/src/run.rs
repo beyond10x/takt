@@ -405,6 +405,7 @@ const INTERPRETERS: &[(&[&str], Spec)] = &[
     (
         &["perl"],
         Spec {
+            short_arg: "I",
             short_stop: "eE",
             ..PLAIN
         },
@@ -420,7 +421,7 @@ const INTERPRETERS: &[(&[&str], Spec)] = &[
         },
     ),
     (
-        &["node", "nodejs", "deno", "bun"],
+        &["node", "nodejs"],
         Spec {
             short_arg: "rC",
             long_arg: &[
@@ -434,6 +435,33 @@ const INTERPRETERS: &[(&[&str], Spec)] = &[
                 "title",
             ],
             short_stop: "ep",
+            long_stop: &["eval", "print"],
+            ..PLAIN
+        },
+    ),
+    (
+        &["deno"],
+        Spec {
+            short_arg: "cL",
+            long_arg: &[
+                "config",
+                "import-map",
+                "cert",
+                "location",
+                "seed",
+                "log-level",
+            ],
+            subcommands: &["run", "test"],
+            ..PLAIN
+        },
+    ),
+    (
+        &["bun"],
+        Spec {
+            short_arg: "r",
+            long_arg: &["preload", "config"],
+            long_chdir: &["cwd"],
+            short_stop: "e",
             long_stop: &["eval", "print"],
             subcommands: &["run", "test"],
             ..PLAIN
@@ -546,8 +574,17 @@ const WRAPPERS: &[(&[&str], Spec)] = &[
 ];
 
 /// The build tools whose own file decides what their target runs: the files they read in the
-/// directory they run in, unless an option names another.
-const BUILD_TOOLS: &[(&[&str], Spec, &[&str])] = &[
+/// directory they run in, unless an option names another; and the configuration they read
+/// there beside it, which decides how they run it (`.npmrc`'s `script-shell`).
+type BuildTool = (
+    &'static [&'static str],
+    Spec,
+    &'static [&'static str],
+    &'static [&'static str],
+);
+
+/// The build tools ([`BuildTool`]).
+const BUILD_TOOLS: &[BuildTool] = &[
     (
         &["make", "gmake"],
         Spec {
@@ -568,6 +605,7 @@ const BUILD_TOOLS: &[(&[&str], Spec, &[&str])] = &[
             ..PLAIN
         },
         &["Makefile", "makefile", "GNUmakefile"],
+        &[],
     ),
     (
         &["task", "go-task"],
@@ -584,6 +622,7 @@ const BUILD_TOOLS: &[(&[&str], Spec, &[&str])] = &[
             "Taskfile.dist.yml",
             "Taskfile.dist.yaml",
         ],
+        &[],
     ),
     (
         &["npm", "yarn", "pnpm"],
@@ -593,6 +632,7 @@ const BUILD_TOOLS: &[(&[&str], Spec, &[&str])] = &[
             ..PLAIN
         },
         &["package.json"],
+        &[".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs"],
     ),
     (
         &["just"],
@@ -604,6 +644,7 @@ const BUILD_TOOLS: &[(&[&str], Spec, &[&str])] = &[
             ..PLAIN
         },
         &["justfile", ".justfile"],
+        &[],
     ),
 ];
 
@@ -639,23 +680,36 @@ fn normalise(path: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
-/// What the tree's path is to a path named relative to it or absolute: `None` outside it.
-fn in_tree(tree: &Path, word: &str) -> Option<String> {
-    let path = Path::new(word);
-    if path.is_relative() {
-        return normalise(word).filter(|path| !path.is_empty());
+/// Where `word`, named from the directory `dir` of the tree (relative to it), lands: resolved
+/// as a path from the tree's absolute path, `.` and `..` lexically, so a path that climbs above
+/// the tree and comes back (`../repo/check.sh`) lands inside it; relative to the tree, `""` for
+/// the tree itself, `None` outside it.
+fn landing(tree: &Path, dir: &str, word: &str) -> Option<String> {
+    let absolute = std::path::absolute(tree).ok()?;
+    let joined = if Path::new(word).is_absolute() {
+        PathBuf::from(word)
+    } else {
+        absolute.join(dir).join(word)
+    };
+    let mut parts: Vec<std::path::Component> = Vec::new();
+    for component in joined.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if matches!(parts.last(), Some(std::path::Component::Normal(_))) {
+                    parts.pop();
+                }
+            }
+            component => parts.push(component),
+        }
     }
-    let roots = [
-        std::path::absolute(tree).ok(),
-        std::fs::canonicalize(tree).ok(),
-    ];
-    roots
+    let resolved: PathBuf = parts.iter().collect();
+    [Some(absolute), std::fs::canonicalize(tree).ok()]
         .iter()
         .flatten()
-        .find_map(|root| path.strip_prefix(root).ok())
+        .find_map(|root| resolved.strip_prefix(root).ok())
         .and_then(|inside| inside.to_str())
         .and_then(normalise)
-        .filter(|path| !path.is_empty())
 }
 
 /// The program a word names, without its directory and its version: `python3.12` is `python`.
@@ -667,28 +721,119 @@ fn program_of(word: &str) -> String {
 /// `word` named from `dir` (relative to the tree; `None` once a directory change left it), as a
 /// path in the tree; `None` outside it.
 fn named_from(tree: &Path, dir: Option<&str>, word: &str) -> Option<String> {
-    if Path::new(word).is_absolute() {
-        return in_tree(tree, word);
+    if word.is_empty() {
+        return None;
     }
-    dir.and_then(|dir| normalise(&format!("{dir}/{word}")))
-        .filter(|path| !path.is_empty())
+    let dir = if Path::new(word).is_absolute() {
+        ""
+    } else {
+        dir?
+    };
+    landing(tree, dir, word).filter(|path| !path.is_empty())
 }
 
 /// The directory `dir` changes to by `to`: `None` outside the tree.
 fn changed_dir(tree: &Path, dir: Option<&str>, to: &str) -> Option<String> {
-    if Path::new(to).is_absolute() {
-        let roots = [
-            std::path::absolute(tree).ok(),
-            std::fs::canonicalize(tree).ok(),
-        ];
-        return roots
-            .iter()
-            .flatten()
-            .find_map(|root| Path::new(to).strip_prefix(root).ok())
-            .and_then(|inside| inside.to_str())
-            .and_then(normalise);
+    let dir = if Path::new(to).is_absolute() {
+        ""
+    } else {
+        dir?
+    };
+    landing(tree, dir, to)
+}
+
+/// `line` split into words as a POSIX shell splits a command line: white space between words,
+/// `'…'` taken as it is, `"…"` with `\` escaping `"`, `\`, `$` and a backquote, `\` outside quotes
+/// escaping the next character, and each of `;`, `&`, `|`, `(`, `)`, `<`, `>` a word by itself,
+/// so the commands of a list are told apart. Expansions are not made; an unclosed quote ends at
+/// the end of the line.
+fn shell_words(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                started = true;
+                for c in chars.by_ref() {
+                    if c == '\'' {
+                        break;
+                    }
+                    word.push(c);
+                }
+            }
+            '"' => {
+                started = true;
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' if matches!(chars.peek(), Some('"' | '\\' | '$' | '`')) => {
+                            word.extend(chars.next());
+                        }
+                        c => word.push(c),
+                    }
+                }
+            }
+            '\\' => {
+                started = true;
+                word.extend(chars.next());
+            }
+            ';' | '&' | '|' | '(' | ')' | '<' | '>' => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+                words.push(c.to_string());
+            }
+            c if c.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            c => {
+                started = true;
+                word.push(c);
+            }
+        }
     }
-    dir.and_then(|dir| normalise(&format!("{dir}/{to}")))
+    if started {
+        words.push(word);
+    }
+    words
+}
+
+/// Guards every word of `line`, a command line a shell reads, that names a path in the tree,
+/// and reads each command of it as a command line of its own.
+fn shell_line_paths(
+    tree: &Path,
+    line: &str,
+    dir: Option<&str>,
+    named: &mut Vec<String>,
+    depth: usize,
+) {
+    let words = shell_words(line);
+    for word in &words {
+        named.extend(named_from(tree, dir, word));
+    }
+    for command in words.split(|word| [";", "&", "|", "(", ")"].contains(&word.as_str())) {
+        // A redirection's target is a file the shell opens, named above; the command is the rest.
+        let mut kept: Vec<&str> = Vec::new();
+        let mut skip = false;
+        for word in command {
+            if skip {
+                skip = false;
+                continue;
+            }
+            if word == "<" || word == ">" {
+                skip = true;
+                continue;
+            }
+            kept.push(word);
+        }
+        command_paths(tree, &kept, dir.map(str::to_owned), named, depth + 1);
+    }
 }
 
 /// Where the options of a program end.
@@ -943,7 +1088,7 @@ fn command_paths(
                 match scanned.end {
                     End::Stop => return,
                     End::Command(from) => {
-                        return command_paths(tree, &words[from..], dir, named, depth + 1);
+                        return command_line(tree, words, from, dir.as_deref(), named, depth);
                     }
                     End::Operand if operands > 0 && scanned.at < words.len() => {
                         at = scanned.at + 1;
@@ -968,15 +1113,36 @@ fn command_paths(
             match scanned.end {
                 End::Stop => {}
                 End::Command(from) => {
-                    command_paths(tree, &words[from..], dir, named, depth + 1);
+                    command_line(tree, words, from, dir.as_deref(), named, depth);
                 }
                 End::Operand => {
                     let mut script = scanned.at;
+                    // A subcommand (`deno run`) has options of its own before the script.
                     if words
                         .get(script)
                         .is_some_and(|word| spec.subcommands.contains(word))
                     {
-                        script += 1;
+                        let after = scan(words, script + 1, &spec);
+                        for to in after.chdirs {
+                            dir = changed_dir(tree, dir.as_deref(), to);
+                        }
+                        for file in after.files {
+                            named.extend(named_from(tree, dir.as_deref(), file));
+                        }
+                        match after.end {
+                            End::Operand => script = after.at,
+                            End::Stop => return,
+                            End::Command(from) => {
+                                return command_line(
+                                    tree,
+                                    words,
+                                    from,
+                                    dir.as_deref(),
+                                    named,
+                                    depth,
+                                );
+                            }
+                        }
                     }
                     if let Some(script) = words.get(script) {
                         named.extend(named_from(tree, dir.as_deref(), script));
@@ -985,10 +1151,10 @@ fn command_paths(
             }
             return;
         }
-        if let Some((spec, defaults)) = BUILD_TOOLS
+        if let Some((spec, defaults, configs)) = BUILD_TOOLS
             .iter()
-            .find(|(names, _, _)| names.contains(&name.as_str()))
-            .map(|(_, spec, defaults)| (*spec, *defaults))
+            .find(|(names, _, _, _)| names.contains(&name.as_str()))
+            .map(|(_, spec, defaults, configs)| (*spec, *defaults, *configs))
         {
             // Options and targets interleave: every option up to the last word is read.
             let mut files = Vec::new();
@@ -1006,12 +1172,56 @@ fn command_paths(
             if files.is_empty() {
                 files.extend(defaults);
             }
+            files.extend(configs);
             for file in files {
                 named.extend(named_from(tree, dir.as_deref(), file));
             }
             return;
         }
+        // A program in none of the tables: what it reads is not known, so every word of the
+        // rest that names a path in the tree is guarded, as written and as a shell would unquote
+        // it, an option's value after `=` among them. Whether the path is there yet does not
+        // matter: a step could make it.
+        for word in &words[at..] {
+            let word = if word.starts_with('-') {
+                match word.split_once('=') {
+                    Some((_, value)) => value,
+                    None => continue,
+                }
+            } else {
+                word
+            };
+            named.extend(named_from(tree, dir.as_deref(), word));
+            for unquoted in shell_words(word) {
+                named.extend(named_from(tree, dir.as_deref(), &unquoted));
+            }
+        }
         return;
+    }
+}
+
+/// The command line an option such as `sh -c` or `flock -c` runs: the word at `from`, after a
+/// `--` that ends the options, read as a shell reads it ([`shell_line_paths`]).
+fn command_line(
+    tree: &Path,
+    words: &[&str],
+    mut from: usize,
+    dir: Option<&str>,
+    named: &mut Vec<String>,
+    depth: usize,
+) {
+    if words.get(from) == Some(&"--") {
+        from += 1;
+    }
+    // The command line is the one word at `from`; the words after it are its `$0` and
+    // arguments. A test command is split at white space, so a line meant to be quoted
+    // (`sh -c 'a; b'`) arrives in pieces: each piece, and the pieces joined, are read as well.
+    let rest = words.get(from..).unwrap_or_default();
+    for line in rest {
+        shell_line_paths(tree, line, dir, named, depth);
+    }
+    if rest.len() > 1 {
+        shell_line_paths(tree, &rest.join(" "), dir, named, depth);
     }
 }
 
@@ -1095,17 +1305,40 @@ impl JudgeSurface {
             || self.scripts.iter().any(|script| fold(script) == folded)
     }
 
-    /// Whether a guarded path is reached through `link`: the link is on the surface, or a
-    /// script or build file is under it.
+    /// Whether a validator or the guarded command would read through a link at `link`: the link
+    /// is, or is on the way to, the cargo configuration (`.cargo/` at any depth), the CI
+    /// workflows (`.github/workflows/`), the store's directories and project file (while the
+    /// store is on the surface), a manifest, a build script, a toolchain file, or the test
+    /// command's own script, recipe or build-tool configuration. Any other link (an
+    /// instructions file under `.github/`) is read by none of them.
     #[must_use]
-    pub fn crossed_by(&self, link: &str) -> bool {
+    pub fn reads_through(&self, link: &str) -> bool {
         let folded = fold(link.trim_end_matches('/'));
-        self.contains(link)
-            || self.scripts.iter().any(|script| {
-                fold(script)
-                    .strip_prefix(&folded)
+        let parts: Vec<&str> = folded.split('/').collect();
+        let name = parts.last().copied().unwrap_or_default();
+        let is_or_holds = |path: &str| {
+            folded == path
+                || folded
+                    .strip_prefix(path)
                     .is_some_and(|rest| rest.starts_with('/'))
-            })
+                || path
+                    .strip_prefix(folded.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+        };
+        parts.contains(&".cargo")
+            || is_or_holds(".github/workflows")
+            || (self.store
+                && [
+                    ".engineering/planning",
+                    ".engineering/evidence",
+                    ".engineering/project.yaml",
+                ]
+                .into_iter()
+                .any(is_or_holds))
+            || name == "cargo.toml"
+            || name == "build.rs"
+            || name.starts_with("rust-toolchain")
+            || self.scripts.iter().any(|script| is_or_holds(&fold(script)))
     }
 
     /// Where the surface is read in `tree`: the guarded names at its root, whatever their case,
@@ -1214,16 +1447,45 @@ impl JudgeSurface {
         Ok((surface, kept))
     }
 
-    /// The links on the surface in `kept`, each with where it leads: a guarded path reached
-    /// through one would be read wherever the link points, inside the tree or out of it, so the
-    /// step guard refuses every judgement step while there is one.
-    fn links(kept: &BTreeMap<PathBuf, Entry>) -> Vec<String> {
-        kept.iter()
+    /// The links a validator or the guarded command would read through
+    /// ([`JudgeSurface::reads_through`]), each with where it leads: on the surface as `kept`
+    /// holds it, among the links git tracks, at the root manifest, and a tracked link to a
+    /// directory that holds a manifest (a workspace member reached through it). What they guard
+    /// would be read wherever they point, inside the tree or out of it, so the step guard takes
+    /// no judgement step while there is one.
+    fn locking_links(&self, tree: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<Vec<String>> {
+        let mut links: BTreeMap<String, PathBuf> = kept
+            .iter()
             .filter_map(|(path, entry)| match entry {
-                Entry::Link(target) => Some(format!("{} -> {}", path.display(), target.display())),
+                Entry::Link(target) => Some((path.display().to_string(), target.clone())),
                 _ => None,
             })
-            .collect()
+            .filter(|(path, _)| self.reads_through(path))
+            .collect();
+        let tracked = crate::git::run(tree, &["ls-files", "-s", "-z"])?;
+        let mut candidates: Vec<String> = tracked
+            .split('\0')
+            .filter_map(|entry| {
+                let (meta, path) = entry.split_once('\t')?;
+                meta.starts_with("120000 ").then(|| path.to_owned())
+            })
+            .collect();
+        candidates.push("Cargo.toml".to_owned());
+        for path in candidates {
+            let full = tree.join(&path);
+            if !std::fs::symlink_metadata(&full).is_ok_and(|meta| meta.file_type().is_symlink()) {
+                continue;
+            }
+            if self.reads_through(&path) || full.join("Cargo.toml").exists() {
+                let target = std::fs::read_link(&full)
+                    .with_context(|| format!("read the link {}", full.display()))?;
+                links.insert(path, target);
+            }
+        }
+        Ok(links
+            .into_iter()
+            .map(|(path, target)| format!("{path} -> {}", target.display()))
+            .collect())
     }
 
     /// Puts the surface in `tree` back to `kept`, where it still differs; through the tree's
@@ -1239,96 +1501,228 @@ impl JudgeSurface {
     }
 }
 
-/// A TOML key path in a manifest, its parts unquoted: `package.build`, `target.cfg(unix).dependencies.x`.
-fn key_parts(key: &str) -> Vec<String> {
+/// A key path of a manifest read strictly: bare keys (`A-Za-z0-9_-`) and quoted keys holding no
+/// escape, joined by dots with optional white space; `None` for anything else, an escape in a
+/// key among it, which the scanner cannot read with certainty.
+fn strict_key(key: &str) -> Option<Vec<String>> {
     let mut parts = Vec::new();
-    let mut part = String::new();
-    let mut quote = None;
-    for c in key.chars() {
-        match (quote, c) {
-            (None, '"' | '\'') => quote = Some(c),
-            (Some(q), c) if c == q => quote = None,
-            (None, '.') => parts.push(std::mem::take(&mut part).trim().to_owned()),
-            (_, c) => part.push(c),
+    let mut chars = key.chars().peekable();
+    let skip = |chars: &mut std::iter::Peekable<std::str::Chars<'_>>| {
+        while chars.peek().is_some_and(|c| *c == ' ' || *c == '\t') {
+            chars.next();
         }
-    }
-    parts.push(part.trim().to_owned());
-    parts
-}
-
-/// Where a value of a manifest stands while it is read: inside a string of which kind, and how
-/// deep in arrays and inline tables.
-#[derive(Default)]
-struct Reading {
-    quote: Option<&'static str>,
-    depth: i64,
-}
-
-impl Reading {
-    /// Reads `line` of a value; whether the value is complete after it. A comment outside a
-    /// string ends the line.
-    fn line(&mut self, line: &str, value: &mut String) -> bool {
-        let mut rest = line;
-        while !rest.is_empty() {
-            if let Some(quote) = self.quote {
-                if quote.starts_with('"') && rest.starts_with('\\') {
-                    let skip = rest.chars().take(2).map(char::len_utf8).sum::<usize>();
-                    value.push_str(&rest[..skip]);
-                    rest = &rest[skip..];
-                    continue;
-                }
-                if rest.starts_with(quote) {
-                    value.push_str(quote);
-                    rest = &rest[quote.len()..];
-                    self.quote = None;
-                    continue;
-                }
-            } else {
-                if rest.starts_with('#') {
-                    break;
-                }
-                if let Some(quote) = ["\"\"\"", "'''", "\"", "'"]
-                    .into_iter()
-                    .find(|quote| rest.starts_with(quote))
-                {
-                    value.push_str(quote);
-                    rest = &rest[quote.len()..];
-                    self.quote = Some(quote);
-                    continue;
-                }
-                match rest.chars().next() {
-                    Some('[' | '{') => self.depth += 1,
-                    Some(']' | '}') => self.depth -= 1,
-                    _ => {}
+    };
+    loop {
+        skip(&mut chars);
+        let mut part = String::new();
+        match chars.peek().copied() {
+            Some(quote @ ('"' | '\'')) => {
+                chars.next();
+                loop {
+                    match chars.next()? {
+                        c if c == quote => break,
+                        '\\' | '\n' | '\r' => return None,
+                        c => part.push(c),
+                    }
                 }
             }
-            let c = rest.chars().next().map_or(1, char::len_utf8);
-            value.push_str(&rest[..c]);
-            rest = &rest[c..];
+            Some(c) if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {
+                while let Some(c) = chars.peek().copied() {
+                    if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                        part.push(c);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            _ => return None,
         }
-        if self.quote.is_some() {
-            value.push('\n');
-        } else {
-            value.push(' ');
+        parts.push(part);
+        skip(&mut chars);
+        match chars.next() {
+            None => return Some(parts),
+            Some('.') => {}
+            Some(_) => return None,
         }
-        self.quote.is_none() && self.depth <= 0
+    }
+}
+
+/// The kind of string a manifest value is inside.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Quoted {
+    Basic,
+    Literal,
+    MultiBasic,
+    MultiLiteral,
+}
+
+/// A manifest value read strictly, line by line: strings of the four kinds, arrays and inline
+/// tables, bare scalars. Anything the scanner cannot read with certainty makes it uncertain: an
+/// escape inside an array or inline table (it could spell a key), any `\` in a multi-line basic
+/// string, a multi-line string whose delimiter is followed by another quote, a basic or literal
+/// string left open at the end of a line, a bracket closed that was not open, a character a
+/// value does not hold, anything after a complete value but a comment.
+#[derive(Default)]
+struct StrictValue {
+    text: String,
+    quoted: Option<Quoted>,
+    depth: i64,
+    ended: bool,
+    uncertain: bool,
+}
+
+impl StrictValue {
+    /// Reads `line`; whether the value is complete after it.
+    fn line(&mut self, line: &str) -> bool {
+        let mut rest = line;
+        while !rest.is_empty() && !self.uncertain {
+            let c = rest.chars().next().unwrap_or_default();
+            let width = c.len_utf8();
+            match self.quoted {
+                Some(Quoted::Basic) => {
+                    if c == '\\' {
+                        if self.depth > 0 {
+                            self.uncertain = true;
+                            break;
+                        }
+                        let escaped: usize = rest.chars().take(2).map(char::len_utf8).sum();
+                        self.text.push_str(&rest[..escaped]);
+                        rest = &rest[escaped..];
+                        continue;
+                    }
+                    if c == '"' {
+                        self.close();
+                    }
+                }
+                Some(Quoted::Literal) => {
+                    if c == '\'' {
+                        self.close();
+                    }
+                }
+                Some(quoted @ (Quoted::MultiBasic | Quoted::MultiLiteral)) => {
+                    let delimiter = if quoted == Quoted::MultiBasic {
+                        "\"\"\""
+                    } else {
+                        "'''"
+                    };
+                    if quoted == Quoted::MultiBasic && c == '\\' {
+                        self.uncertain = true;
+                        break;
+                    }
+                    if rest.starts_with(delimiter) {
+                        if rest[3..].starts_with(&delimiter[..1]) {
+                            self.uncertain = true;
+                            break;
+                        }
+                        self.text.push_str(delimiter);
+                        rest = &rest[3..];
+                        self.close();
+                        continue;
+                    }
+                }
+                None => {
+                    if self.ended && !c.is_whitespace() && c != '#' {
+                        self.uncertain = true;
+                        break;
+                    }
+                    if c == '#' {
+                        if self.text.trim().is_empty() {
+                            self.uncertain = true;
+                        }
+                        break;
+                    }
+                    if let Some((quoted, opening)) = [
+                        (Quoted::MultiBasic, "\"\"\""),
+                        (Quoted::MultiLiteral, "'''"),
+                        (Quoted::Basic, "\""),
+                        (Quoted::Literal, "'"),
+                    ]
+                    .into_iter()
+                    .find(|(_, opening)| rest.starts_with(opening))
+                    {
+                        self.text.push_str(opening);
+                        rest = &rest[opening.len()..];
+                        self.quoted = Some(quoted);
+                        continue;
+                    }
+                    match c {
+                        '[' | '{' => self.depth += 1,
+                        ']' | '}' => {
+                            self.depth -= 1;
+                            if self.depth < 0 {
+                                self.uncertain = true;
+                                break;
+                            }
+                            if self.depth == 0 {
+                                self.ended = true;
+                            }
+                        }
+                        ',' | '=' if self.depth > 0 => {}
+                        c if c.is_whitespace() => {
+                            if self.depth == 0 && !self.text.trim().is_empty() {
+                                self.ended = true;
+                            }
+                        }
+                        c if c.is_ascii_alphanumeric() || "_-+.:".contains(c) => {}
+                        _ => {
+                            self.uncertain = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            self.text.push_str(&rest[..width]);
+            rest = &rest[width..];
+        }
+        match self.quoted {
+            Some(Quoted::Basic | Quoted::Literal) => {
+                self.uncertain = true;
+                true
+            }
+            Some(Quoted::MultiBasic | Quoted::MultiLiteral) => {
+                self.text.push('\n');
+                false
+            }
+            None => {
+                self.text.push(' ');
+                self.uncertain || (self.depth == 0 && !self.text.trim().is_empty())
+            }
+        }
+    }
+
+    /// A string closed: at the outermost level, the value is complete.
+    fn close(&mut self) {
+        self.quoted = None;
+        if self.depth == 0 {
+            self.ended = true;
+        }
     }
 }
 
 /// Every entry of the manifest `text`, by its full key path, its value as written with white
-/// space outside strings collapsed: a scanner of sections and keys, not a TOML parser. An entry
-/// of an array of tables (`[[bin]]`) is told apart by its index.
-fn manifest_entries(text: &str) -> BTreeMap<Vec<String>, String> {
+/// space outside strings collapsed: a strict scanner of sections and keys, not a TOML parser. An
+/// entry of an array of tables (`[[bin]]`) is told apart by its index. A line it cannot read with
+/// certainty (a header with anything after it, an escape in a key, an odd string, anything that
+/// is no header, key or comment) is the error, by its number and text: the caller refuses.
+fn manifest_entries(text: &str) -> std::result::Result<BTreeMap<Vec<String>, String>, String> {
     let mut entries = BTreeMap::new();
     let mut table: Vec<String> = Vec::new();
     let mut arrays: BTreeMap<Vec<String>, usize> = BTreeMap::new();
-    let mut pending: Option<(Vec<String>, String, Reading)> = None;
-    for line in text.lines() {
-        if let Some((key, mut value, mut reading)) = pending.take() {
-            if reading.line(line, &mut value) {
-                entries.insert(key, collapse(&value));
+    let mut pending: Option<(Vec<String>, StrictValue, usize)> = None;
+    let uncertain = |number: usize, line: &str| format!("line {number}: {}", line.trim());
+    for (index, line) in text.lines().enumerate() {
+        let number = index + 1;
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if let Some((key, mut value, from)) = pending.take() {
+            let complete = value.line(line);
+            if value.uncertain {
+                return Err(uncertain(number, line));
+            }
+            if complete {
+                entries.insert(key, collapse(&value.text));
             } else {
-                pending = Some((key, value, reading));
+                pending = Some((key, value, from));
             }
             continue;
         }
@@ -1337,8 +1731,10 @@ fn manifest_entries(text: &str) -> BTreeMap<Vec<String>, String> {
             continue;
         }
         if let Some(header) = trimmed.strip_prefix("[[") {
-            let name = header.split("]]").next().unwrap_or_default();
-            let path = key_parts(name);
+            let path = header
+                .strip_suffix("]]")
+                .and_then(strict_key)
+                .ok_or_else(|| uncertain(number, line))?;
             let index = arrays.entry(path.clone()).or_insert(0);
             table = path;
             table.push(index.to_string());
@@ -1346,8 +1742,10 @@ fn manifest_entries(text: &str) -> BTreeMap<Vec<String>, String> {
             continue;
         }
         if let Some(header) = trimmed.strip_prefix('[') {
-            let name = header.rsplit_once(']').map_or(header, |(name, _)| name);
-            table = key_parts(name);
+            table = header
+                .strip_suffix(']')
+                .and_then(strict_key)
+                .ok_or_else(|| uncertain(number, line))?;
             continue;
         }
         // `key = value`: the first `=` outside a quoted key.
@@ -1364,27 +1762,24 @@ fn manifest_entries(text: &str) -> BTreeMap<Vec<String>, String> {
             (None, '=') => true,
             _ => false,
         });
-        let Some((at, _)) = split else {
-            entries.insert(
-                table.iter().cloned().chain([trimmed.to_owned()]).collect(),
-                String::new(),
-            );
-            continue;
-        };
+        let (at, _) = split.ok_or_else(|| uncertain(number, line))?;
         let mut key = table.clone();
-        key.extend(key_parts(&trimmed[..at]));
-        let mut value = String::new();
-        let mut reading = Reading::default();
-        if reading.line(&trimmed[at + 1..], &mut value) {
-            entries.insert(key, collapse(&value));
+        key.extend(strict_key(&trimmed[..at]).ok_or_else(|| uncertain(number, line))?);
+        let mut value = StrictValue::default();
+        let complete = value.line(&trimmed[at + 1..]);
+        if value.uncertain {
+            return Err(uncertain(number, line));
+        }
+        if complete {
+            entries.insert(key, collapse(&value.text));
         } else {
-            pending = Some((key, value, reading));
+            pending = Some((key, value, number));
         }
     }
-    if let Some((key, value, _)) = pending {
-        entries.insert(key, collapse(&value));
+    if let Some((_, _, from)) = pending {
+        return Err(format!("line {from}: a value that does not end"));
     }
-    entries
+    Ok(entries)
 }
 
 /// `value` with runs of white space made one space, trimmed.
@@ -1394,15 +1789,18 @@ fn collapse(value: &str) -> String {
 
 /// Whether the manifest entry at `key`, with `value`, decides how cargo builds or runs the tests:
 /// `package.build`, `package.links`, a target's `harness`, any entry of `[profile.*]`,
-/// `[patch.*]`, `[replace]`, `[build-dependencies]` or `[target.*]`; and an inline table that
-/// could hold one of those.
+/// `[patch.*]`, `[replace]`, `[build-dependencies]`, and of `[target.*]` but a target's
+/// `dependencies` and `dev-dependencies`; and an inline table that could hold one of those.
 fn builds(key: &[String], value: &str) -> bool {
     let parts: Vec<String> = key.iter().map(|part| fold(part)).collect();
     let first = parts.first().map(String::as_str).unwrap_or_default();
     let names = |words: &[&str]| words.iter().any(|word| fold(value).contains(word));
     match first {
-        "profile" | "patch" | "replace" | "build-dependencies" | "build_dependencies"
-        | "target" => true,
+        "profile" | "patch" | "replace" | "build-dependencies" | "build_dependencies" => true,
+        "target" => !matches!(
+            parts.get(2).map(String::as_str),
+            Some("dependencies" | "dev-dependencies" | "dev_dependencies")
+        ),
         "package" => match parts.get(1).map(String::as_str) {
             Some("build" | "links") => true,
             None => names(&["build", "links"]),
@@ -1416,12 +1814,15 @@ fn builds(key: &[String], value: &str) -> bool {
 }
 
 /// The entries that decide how cargo builds or runs the tests ([`builds`]) and differ between the
-/// manifests `before` and `after`, by key path: added, changed or removed.
-#[must_use]
-pub fn manifest_build_changes(before: &str, after: &str) -> Vec<String> {
-    let before = manifest_entries(before);
-    let after = manifest_entries(after);
-    before
+/// manifests `before` and `after`, by key path: added, changed or removed. A manifest the
+/// scanner cannot read with certainty is the error, naming the line: the caller refuses.
+pub fn manifest_build_changes(
+    before: &str,
+    after: &str,
+) -> std::result::Result<Vec<String>, String> {
+    let before = manifest_entries(before).map_err(|line| format!("before, {line}"))?;
+    let after = manifest_entries(after).map_err(|line| format!("after, {line}"))?;
+    Ok(before
         .keys()
         .chain(after.keys())
         .filter(|key| {
@@ -1433,7 +1834,122 @@ pub fn manifest_build_changes(before: &str, after: &str) -> Vec<String> {
         .map(|key| key.join("."))
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .collect()
+        .collect())
+}
+
+/// The build scripts and `links` of each package cargo reads, by manifest path; `None` for a
+/// tree with no manifest at its root; the error is cargo's failure.
+type CargoBuilds =
+    std::result::Result<Option<BTreeMap<String, (Vec<String>, Option<String>)>>, String>;
+
+/// What cargo itself reads as each package's build script and `links`, by manifest path:
+/// `cargo metadata --offline --no-deps --format-version 1` run in `tree` as a confined child (no
+/// credential, no standard input, a timeout, a bounded output), packages with neither left out.
+/// `Ok(None)` when the tree has no manifest at its root; the error is cargo's failure.
+fn cargo_builds(tree: &Path) -> CargoBuilds {
+    if !std::fs::symlink_metadata(tree.join("Cargo.toml")).is_ok_and(|meta| meta.is_file()) {
+        return Ok(None);
+    }
+    let mut command = std::process::Command::new("cargo");
+    command
+        .args([
+            "metadata",
+            "--offline",
+            "--no-deps",
+            "--format-version",
+            "1",
+        ])
+        .current_dir(tree);
+    crate::forge::without_credentials(&mut command, |_| false);
+    let limits = crate::forge::Limits {
+        timeout: Duration::from_secs(120),
+        output: 64 << 20,
+    };
+    let output = crate::forge::run_child(&mut command, limits)
+        .map_err(|error| format!("cargo metadata did not run: {error:#}"))?;
+    if !output.success() {
+        let said = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "cargo metadata exited {}: {}",
+            output
+                .code
+                .map_or("on a signal".to_owned(), |code| code.to_string()),
+            said.trim().chars().take(300).collect::<String>()
+        ));
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("cargo metadata wrote what is not its JSON: {error}"))?;
+    let mut builds = BTreeMap::new();
+    for package in metadata["packages"].as_array().into_iter().flatten() {
+        let scripts: Vec<String> = package["targets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|target| {
+                target["kind"]
+                    .as_array()
+                    .is_some_and(|kinds| kinds.iter().any(|kind| kind == "custom-build"))
+            })
+            .filter_map(|target| target["src_path"].as_str().map(str::to_owned))
+            .collect();
+        let links = package["links"].as_str().map(str::to_owned);
+        if !scripts.is_empty() || links.is_some() {
+            let manifest = package["manifest_path"].as_str().unwrap_or_default();
+            builds.insert(manifest.to_owned(), (scripts, links));
+        }
+    }
+    Ok(Some(builds))
+}
+
+/// How the build scripts and `links` cargo reads changed across a step, `before` and `after`
+/// it ([`cargo_builds`]): each difference named; cargo failing after the step but not before is
+/// one.
+fn cargo_build_changes(before: &CargoBuilds, after: &CargoBuilds) -> Vec<String> {
+    match (before, after) {
+        (_, Err(failed)) if before.is_ok() => {
+            vec![format!(
+                "cargo cannot read the manifests after the step: {failed}"
+            )]
+        }
+        (Err(_), Err(_)) => Vec::new(),
+        (before, Ok(after)) => {
+            let empty = BTreeMap::new();
+            let before = before
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .unwrap_or(&empty);
+            let after = after.as_ref().unwrap_or(&empty);
+            before
+                .keys()
+                .chain(after.keys())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .filter(|manifest| before.get(*manifest) != after.get(*manifest))
+                .map(|manifest| {
+                    let shown = |builds: Option<&(Vec<String>, Option<String>)>| {
+                        builds.map_or("none".to_owned(), |(scripts, links)| {
+                            format!(
+                                "build script {}, links {}",
+                                if scripts.is_empty() {
+                                    "none".to_owned()
+                                } else {
+                                    scripts.join(" ")
+                                },
+                                links.as_deref().unwrap_or("none")
+                            )
+                        })
+                    };
+                    format!(
+                        "cargo reads {manifest}: {} before, {} after",
+                        shown(before.get(manifest)),
+                        shown(after.get(manifest))
+                    )
+                })
+                .collect()
+        }
+        (Ok(_), Err(_)) => Vec::new(),
+    }
 }
 
 /// The text of the manifest at `path`, relative to the tree, in the commit `revision`: empty
@@ -2671,10 +3187,11 @@ impl<'a> Run<'a> {
             // snapshot taken here.
             let runs = self.runs();
             let (surface, surface_kept) = JudgeSurface::read(&runs, &self.tree)?;
-            // A link is never followed: while a guarded path is reached through one (already
-            // there, or planted by a step before, outside the guard), what it guards could be
-            // anywhere, in the tree or out of it, and no judgement step is taken.
-            let links = JudgeSurface::links(&surface_kept);
+            // A link is never followed: while what a validator or the guarded command reads is
+            // reached through one, what it guards could be anywhere, in the tree or out of it,
+            // and no judgement step is taken ([`JudgeSurface::locking_links`]). Any other link
+            // on the surface is an entry by itself: changing it is refused like any change.
+            let links = surface.locking_links(&self.tree, &surface_kept)?;
             if !links.is_empty() {
                 let why = format!(
                     "the judge surface is reached through a link, which takt never follows: {}; no judgement step is taken while one is there",
@@ -2695,6 +3212,7 @@ impl<'a> Run<'a> {
             // The cargo manifests as `HEAD` has them before the step: what decides how cargo
             // builds and runs the tests is compared with them after it.
             let head_before = crate::git::head(&self.tree)?;
+            let cargo_before = cargo_builds(&self.tree);
             // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
             // base, and a sibling case's branch, which a step could otherwise move under it; a
             // branch another worktree has checked out is that session's, but never the case's
@@ -2854,7 +3372,11 @@ impl<'a> Run<'a> {
             // A cargo manifest anywhere in the tree decides how cargo builds and runs the
             // tests through some of its keys ([`manifest_build_changes`]): a build script
             // under another name, a test harness, a profile, a patch, a build dependency, a
-            // target's dependency. A step that adds, changes or removes one is refused.
+            // target's own entries but its dependencies. A step that adds, changes or removes
+            // one is refused, and so is one that changed a manifest the scanner cannot read
+            // with certainty, or what cargo itself reads as a build script or `links`
+            // ([`cargo_builds`]). `.cargo/` is guarded above, so cargo reads the base's
+            // configuration here.
             let manifests = (|| -> Result<Vec<String>> {
                 let mut changed_keys = Vec::new();
                 for path in changed.iter().filter(|path| is_manifest(path)) {
@@ -2875,12 +3397,22 @@ impl<'a> Run<'a> {
                             continue;
                         }
                     };
-                    changed_keys.extend(
-                        manifest_build_changes(&before, &after)
-                            .into_iter()
-                            .map(|key| format!("{path}: {key}")),
-                    );
+                    match manifest_build_changes(&before, &after) {
+                        Ok(keys) => {
+                            changed_keys
+                                .extend(keys.into_iter().map(|key| format!("{path}: {key}")));
+                        }
+                        Err(line) => changed_keys.push(format!(
+                            "{path}: a line the manifest scanner cannot read with certainty, {line}"
+                        )),
+                    }
                 }
+                // Cargo itself as the parser, the scanner's cross-check: the build scripts and
+                // `links` it reads, before the step and after it.
+                changed_keys.extend(cargo_build_changes(
+                    &cargo_before,
+                    &cargo_builds(&self.tree),
+                ));
                 Ok(changed_keys)
             })();
             let manifests = match manifests {

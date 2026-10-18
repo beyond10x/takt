@@ -625,6 +625,29 @@ fn the_test_command_names_its_own_files() {
         ),
         ("npm --prefix web test", &["web/package.json"]),
         ("just test", &[".justfile", "justfile"]),
+        ("bash -c -- './check.sh'", &["check.sh"]),
+        ("sh -c 'cd sub;./check.sh'", &["check.sh", "sub"]),
+        ("perl -I lib t/check.pl", &["t/check.pl"]),
+        (
+            "deno run --allow-read -c deno.json tests/check.ts",
+            &["tests/check.ts"],
+        ),
+        ("taskset -c 0 ./check.sh", &["check.sh"]),
+        ("sh ../repo/check.sh", &["check.sh"]),
+        (
+            "npm test",
+            &[
+                "package.json",
+                ".npmrc",
+                ".yarnrc",
+                ".yarnrc.yml",
+                ".pnpmfile.cjs",
+            ],
+        ),
+        (
+            "unknown --config=conf/x.toml 'quoted.sh'",
+            &["conf/x.toml", "quoted.sh"],
+        ),
     ];
     for (command, expected) in cases {
         let words: Vec<String> = command.split_whitespace().map(str::to_owned).collect();
@@ -642,6 +665,111 @@ fn the_test_command_names_its_own_files() {
             );
         }
     }
+}
+
+/// A manifest line the scanner cannot read with certainty refuses the step, and the refusal
+/// says so: a comment after a header, an escape in a key, a multi-line string ending in four
+/// quotes, a date with a time (a value the scanner does not read).
+#[test]
+fn a_manifest_the_scanner_cannot_read_is_refused() {
+    let base = "[package]\nname = \"m\"\nversion = \"0.1.0\"\n";
+    for edited in [
+        "[package] # x\nname = \"m\"\nversion = \"0.1.0\"\n",
+        "[package]\nname = \"m\"\nversion = \"0.1.0\"\n\"\\u0062uild\" = \"gen.rs\"\n",
+        "[package]\nname = \"m\"\nversion = \"0.1.0\"\ndescription = \"\"\"x\"\"\"\"\n",
+        "[package]\nname = \"m\"\nversion = \"0.1.0\"\n[package.metadata]\nat = 1979-05-27 07:32:00\n",
+    ] {
+        let tree = repository(
+            "uncertain",
+            &[
+                ("check.sh", FAILING_CHECK, true),
+                ("Cargo.toml", base, false),
+                ("src/lib.rs", "", false),
+            ],
+        );
+        fs::write(tree.root.join("edited.toml"), edited).expect("a file");
+        let ran = run(&tree, "./check.sh", |tree| {
+            let edited = tree.parent().expect("the root").join("edited.toml");
+            fs::copy(edited, tree.join("Cargo.toml")).expect("copied");
+        });
+        assert_refused_and_put_back(&tree, &ran, "Cargo.toml");
+        assert!(
+            ran.refusal().contains("cannot read with certainty"),
+            "{edited}\n{}",
+            ran.text
+        );
+    }
+}
+
+/// Cargo as the parser: a step that adds a workspace member whose build script the base holds
+/// outside the workspace changes no build key the scanner looks at, but `cargo metadata` reads a
+/// new build script; the step is refused naming it.
+#[test]
+fn a_build_script_cargo_reads_after_the_step_is_refused() {
+    let tree = repository(
+        "cargo-reads",
+        &[
+            ("check.sh", FAILING_CHECK, true),
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"crates/a\"]\nresolver = \"2\"\n",
+                false,
+            ),
+            (
+                "crates/a/Cargo.toml",
+                "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+                false,
+            ),
+            ("crates/a/src/lib.rs", "", false),
+            (
+                "extra/b/Cargo.toml",
+                "[package]\nname = \"b\"\nversion = \"0.1.0\"\nedition = \"2021\"\nbuild = \"gen.rs\"\n",
+                false,
+            ),
+            ("extra/b/gen.rs", "fn main() {}\n", false),
+            ("extra/b/src/lib.rs", "", false),
+        ],
+    );
+    let ran = run(&tree, "./check.sh", |tree| {
+        fs::write(
+            tree.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/a\", \"extra/b\"]\nresolver = \"2\"\n",
+        )
+        .expect("a file");
+    });
+    assert_refused_and_put_back(&tree, &ran, "cargo reads");
+    assert!(ran.refusal().contains("gen.rs"), "{}", ran.text);
+}
+
+/// A link under `.github/` that no validator reads does not lock the run out, but a step that
+/// changes it is refused all the same.
+#[test]
+fn a_link_nothing_reads_is_not_followed_and_a_change_to_it_is_refused() {
+    let tree = repository(
+        "unread-link",
+        &[
+            ("check.sh", FAILING_CHECK, true),
+            ("AGENTS.md", "# Agents\n", false),
+            ("OTHER.md", "# Other\n", false),
+        ],
+    );
+    fs::create_dir_all(tree.join(".github")).expect("a directory");
+    std::os::unix::fs::symlink("../AGENTS.md", tree.join(".github/copilot-instructions.md"))
+        .expect("a link");
+    git(&tree, &["add", "-A"]);
+    git(&tree, &["commit", "-q", "--amend", "-m", "start"]);
+    let ran = run(&tree, "./check.sh", |tree| {
+        let link = tree.join(".github/copilot-instructions.md");
+        fs::remove_file(&link).expect("removed");
+        std::os::unix::fs::symlink("../OTHER.md", &link).expect("a link");
+    });
+    assert_refused_and_put_back(&tree, &ran, ".github/copilot-instructions.md");
+    assert_eq!(
+        fs::read_link(tree.join(".github/copilot-instructions.md")).expect("the link"),
+        Path::new("../AGENTS.md"),
+        "{}",
+        ran.text
+    );
 }
 
 /// Opens `fifo` for writing without waiting and closes it, so a reader blocked on it sees its

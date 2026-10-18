@@ -117,7 +117,7 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
             let Some((meta, path)) = entry.split_once('\t') else {
                 continue;
             };
-            if meta.starts_with("120000 ") && surface.crossed_by(path) {
+            if meta.starts_with("120000 ") && surface.reads_through(path) {
                 let named = format!("{path} (a link)");
                 if !paths.contains(&named) {
                     paths.push(named);
@@ -144,11 +144,12 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
         } else if crate::run::is_manifest(path) {
             let before = crate::run::manifest_at(tree, &at, path)?;
             let after = crate::run::manifest_at(tree, revision, path)?;
-            paths.extend(
-                crate::run::manifest_build_changes(&before, &after)
-                    .into_iter()
-                    .map(|key| format!("{path}: {key}")),
-            );
+            match crate::run::manifest_build_changes(&before, &after) {
+                Ok(keys) => paths.extend(keys.into_iter().map(|key| format!("{path}: {key}"))),
+                Err(line) => paths.push(format!(
+                    "{path}: a line the manifest scanner cannot read with certainty, {line}"
+                )),
+            }
         }
     }
     Ok(if paths.is_empty() {
