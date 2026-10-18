@@ -3,9 +3,9 @@
 //! run on a story whose case terminates `accepted` records the `test_result` pass record a tests
 //! validator wrote as `test_result` evidence on the story, source takt, at the record's own
 //! `observed_at`, and moves the story to `implemented` through the store's verbs. Both writes are
-//! commits takt makes on the case's own branch, store paths only, after the pull request was
-//! merged when the case has one, so neither rides on a granted revision. A refusal of the store
-//! is relayed verbatim and the stop is unchanged.
+//! commits takt makes on the case's own branch, store paths only, just before the merge when the
+//! case has a pull request, so both ride to the base with it. A refusal of the store is relayed
+//! verbatim and the stop is unchanged.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -414,6 +414,53 @@ fn a_story_run_whose_tests_pass_records_a_line_per_evaluation_step_evidence_and_
     }
 }
 
+/// story:binary-embeds-revision: the revision of the binary the caller gives the run is the
+/// `opened` line's `binary`; a run given none writes no `binary`, as a line written before the
+/// field was added has none, and such a line reads as it did.
+#[test]
+fn the_opened_line_records_the_binary_revision_the_caller_gives() {
+    let given = "0123456789abcdef0123456789abcdef01234567-dirty";
+    let repo = repository("binary");
+    let validators: Vec<Box<dyn Validator>> = vec![tests_pass()];
+    let protocol = repo.join("tests-only.yaml").display().to_string();
+    let mut out = Vec::new();
+    let mut run = Run::open_next(
+        &repo,
+        options(&protocol, 4),
+        &Aep::default(),
+        &NoHarness,
+        &validators,
+        &mut out,
+    )
+    .expect("the frontier answers")
+    .expect("story:ready-one is taken");
+    run.binary = Some(given.to_owned());
+    run.run(&mut out).expect("the run stops without an error");
+    let dir = run.case.dir.clone();
+    drop(run);
+    let lines = events(&dir);
+    assert_eq!(lines[0]["event"], "opened", "{lines:#?}");
+    assert_eq!(lines[0]["binary"], given, "{lines:#?}");
+
+    let mut run = Run::resume(
+        &repo,
+        options(&protocol, 1),
+        dir.file_name().and_then(|id| id.to_str()).expect("an id"),
+        &NoHarness,
+        &validators,
+    )
+    .expect("the case resumes");
+    run.run(&mut out).expect("the run stops without an error");
+    drop(run);
+    let lines = events(&dir);
+    let opened = of(&lines, "opened");
+    assert_eq!(opened.len(), 2, "{lines:#?}");
+    assert!(
+        opened[1].get("binary").is_none(),
+        "a run given no revision writes none: {lines:#?}"
+    );
+}
+
 /// The first check: the store's history holds one `test_result` record on the story whose
 /// instant is the case's record's `observed_at`, whose source names takt and whose reference
 /// is the record's path in the repository.
@@ -536,12 +583,12 @@ fn status_on(repo: &Path, revision: &str) -> String {
         .to_owned()
 }
 
-/// With a forge, the store is written only once the case is accepted, after the merge: the pull
-/// request's head and the head merged are the granted revision with the approval's commit
-/// above it and nothing else, and the test result and the move sit above that on the case's
-/// branch. The run at the gate writes nothing to the store.
+/// With a forge, the store is written just before the merge the grant authorises, and rides
+/// with it: the pull request's head and the head merged are the granted revision with the
+/// approval's commit, the test result and the move above it, the move last, and nothing is
+/// written after the merge. The run at the gate writes nothing to the store.
 #[test]
-fn with_a_forge_the_store_is_written_after_the_merge_and_nothing_rides_on_the_grant() {
+fn with_a_forge_the_store_is_written_before_the_merge_and_rides_with_it() {
     let repo = repository("forge");
     let memory = Rc::new(Memory {
         checks: Checks::Pass,
@@ -595,7 +642,8 @@ fn with_a_forge_the_store_is_written_after_the_merge_and_nothing_rides_on_the_gr
     assert_eq!(harness["action"], "repository.merge");
     assert_eq!(harness["tokens"], 7);
 
-    approve(&repo, &store, &id, "repository.merge", "operator").expect("the approval is given");
+    approve(&repo, &store, &id, "repository.merge", "human:operator")
+        .expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
     let mut run = Run::resume(&repo, options(DELIVERY, 12), &id, &NoHarness, &validators)
         .expect("the case resumes");
@@ -610,7 +658,7 @@ fn with_a_forge_the_store_is_written_after_the_merge_and_nothing_rides_on_the_gr
     let branch = format!("takt/{id}");
     assert_eq!(
         memory.pushed.borrow().get(&branch).cloned(),
-        Some(approved.clone()),
+        Some(git(&repo, &["rev-parse", "HEAD"])),
         "{text}"
     );
     assert_eq!(

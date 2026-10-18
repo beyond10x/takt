@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:pr-opens-when-change-is-done
 kind: story
-status: draft
+status: active
 title: The pull request opens once the change is complete, so CI runs once
 summary: pr.open waits for the complete change; scenario 1 ran CI twice and probed the forge at the seed
 relations:
@@ -13,7 +13,10 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: cited
   path: protocols/story-delivery/1.yaml
-revision: 5
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T18:27:20Z", actor: "human:timo", revision: 6}
+- {from: "proposed", to: "active", at: "2026-10-18T18:27:20Z", actor: "human:timo", revision: 7}
 ---
 # Story: pr-opens-when-change-is-done
 
