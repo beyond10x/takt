@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T04:24:37Z",
+  "actor": "human:timo",
+  "artifact": "story:frontier-next-ready-story",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "cargo test -p b10x-takt --test frontier and -p b10x-takt-cli: baseline cannot run without --intent (the argument is required on the integration branch); treatment 15 + 3 + 6 cases pass, the fixture's proposed story is taken and its case opened (verify-treatment.txt)",
+    "reference": "verify-baseline.txt vs verify-treatment.txt under the unit scratch"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T04:25:50Z",
+  "actor": "human:timo",
+  "artifact": "story:frontier-next-ready-story",
+  "kind": "story",
+  "revision": 10,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --locked at e8c5e3a (wave 02 gate): frontier 15, frontier_cli 6, cli 3, loop 2, story_delivery 13, lib 14 passed, 0 failed; exit 0",
+    "reference": "docs/waves/wave-02.md"
+  }
+}
