@@ -68,6 +68,20 @@ pub trait Validator {
     ) -> Result<(Observation, bool)> {
         Ok((self.observe(tree, revision, seq)?, false))
     }
+    /// Observes as [`Self::observe_waiting`] does, a child it runs held to `deadline` (the
+    /// instant the run's hour budget ends, the run's own; `None` for a run without one) as well
+    /// as its own timeout. By default `deadline` is not read: the validator runs no child of its
+    /// own.
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        let _ = deadline;
+        self.observe_waiting(tree, revision, seq)
+    }
     /// The files under the case's directory the validator itself writes while it observes,
     /// relative to it. Nothing else under the cases directory may change during an
     /// observation: the loop puts back whatever else changed and refuses the observation,
@@ -255,6 +269,49 @@ impl Validator for TestsRun {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        self.observe_by(tree, revision, seq, None)
+    }
+
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        let observed = self.observe_by(tree, revision, seq, deadline);
+        Ok((ended_by(deadline, self.action(), observed)?, false))
+    }
+}
+
+/// What an observation held to `deadline` answers: an error once it returned at or after it,
+/// whatever it observed, so the budget that ended it records nothing; else `observed`.
+fn ended_by(
+    deadline: Option<std::time::Instant>,
+    action: &str,
+    observed: Result<Observation>,
+) -> Result<Observation> {
+    if !deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+        return observed;
+    }
+    match observed {
+        Err(error) => Err(error),
+        Ok(_) => {
+            bail!("{action} returned at or after the run's end; what it observed is not recorded")
+        }
+    }
+}
+
+impl TestsRun {
+    /// Observes, the test command held to the smaller of its own timeout and what is left
+    /// before `deadline` when it starts.
+    fn observe_by(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Observation> {
         let shown = self.command.join(" ");
         // A tree on no case's branch is no case's observation and has no base to compare with.
         if crate::git::current_branch(tree)?
@@ -280,7 +337,13 @@ impl Validator for TestsRun {
         let mut command = Command::new(&self.command[0]);
         command.args(&self.command[1..]).current_dir(tree);
         crate::forge::without_credentials(&mut command, |_| false);
-        let output = crate::forge::run_child(&mut command, self.limits)
+        let mut limits = self.limits;
+        if let Some(deadline) = deadline {
+            limits.timeout = limits
+                .timeout
+                .min(deadline.saturating_duration_since(std::time::Instant::now()));
+        }
+        let output = crate::forge::run_child(&mut command, limits)
             .with_context(|| format!("run {}", self.command.join(" ")))?;
         let result = if output.success() { "pass" } else { "fail" };
         let tail =
@@ -483,6 +546,31 @@ impl Validator for GateRun {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        self.observe_by(tree, revision, seq, None)
+    }
+
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        let observed = self.observe_by(tree, revision, seq, deadline);
+        Ok((ended_by(deadline, self.action(), observed)?, false))
+    }
+}
+
+impl GateRun {
+    /// Observes, each command the gate runs held to the smaller of the project file's timeout
+    /// and what is left before `deadline` when the gate's commands are collected.
+    fn observe_by(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Observation> {
         let dir = current(tree)?;
         let Some((base, at)) = base_revision(tree, &dir)? else {
             return Ok(Observation {
@@ -569,7 +657,7 @@ impl Validator for GateRun {
                 .as_ref()
                 .map(|(path, text)| copy("project", path, text))
                 .transpose()?;
-            let prepared = canon_engineering_assertions::prepare(
+            let mut prepared = canon_engineering_assertions::prepare(
                 tree,
                 &gates,
                 copied.as_deref(),
@@ -582,6 +670,12 @@ impl Validator for GateRun {
                 ),
                 None => format!("prepare the gates document {document}"),
             })?;
+            if let Some(deadline) = deadline {
+                prepared.context.timeout = prepared
+                    .context
+                    .timeout
+                    .min(deadline.saturating_duration_since(std::time::Instant::now()));
+            }
             canon_engineering_assertions::collect(prepared, now)
                 .with_context(|| format!("collect the observations of {document}"))
         })();
@@ -1678,5 +1772,34 @@ impl Validator for ChangeRead {
             )],
             artifact: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn observed() -> Result<Observation> {
+        Ok(Observation {
+            summary: "observed".to_owned(),
+            records: Vec::new(),
+            artifact: None,
+        })
+    }
+
+    /// An observation that returns at the deadline it was given, the run's own, records
+    /// nothing, whatever it observed; one before it, or without one, is kept.
+    #[test]
+    fn an_observation_returning_at_the_deadline_is_not_recorded() {
+        let now = std::time::Instant::now();
+        let ended = ended_by(Some(now), "tests.run", observed());
+        let error = format!(
+            "{:#}",
+            ended.expect_err("an observation at the deadline ends")
+        );
+        assert!(error.contains("run's end"), "{error}");
+        let later = now + std::time::Duration::from_secs(60);
+        assert!(ended_by(Some(later), "tests.run", observed()).is_ok());
+        assert!(ended_by(None, "tests.run", observed()).is_ok());
     }
 }
