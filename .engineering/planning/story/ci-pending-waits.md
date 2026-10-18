@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:ci-pending-waits
 kind: story
-status: draft
+status: active
 title: A story run waits for pending checks instead of stopping on NoProgress
 summary: pending CI or a lagging pull-request head is polled within the budget; a run out of budget stops as waiting, not NoProgress
 relations:
@@ -15,7 +15,10 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/ci_pending_waits.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T13:07:06Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-18T13:07:06Z", actor: "human:timo", revision: 6}
 ---
 # Story: ci-pending-waits
 

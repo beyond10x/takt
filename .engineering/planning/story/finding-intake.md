@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:finding-intake
 kind: story
-status: draft
+status: active
 title: Every finding is filed with a machine-checkable expected_before predicate
 summary: story or blocker, predicate, source path, --ref dedupe
 relations:
@@ -19,7 +19,10 @@ scope:
   path: scripts/check-finding
 - confidence: cited
   path: scripts/file-finding
-revision: 7
+revision: 9
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T13:07:06Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"review_outcome":7}}}
+- {from: "proposed", to: "active", at: "2026-10-18T13:07:06Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"review_outcome":7}}}
 ---
 # Story: finding-intake
 
