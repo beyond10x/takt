@@ -11,11 +11,11 @@ relations:
 - depends_on: story:run-record-and-story-evidence
 - depends_on: story:approval-riders-are-grants
 scope:
-- confidence: inferred
+- confidence: cited
   path: crates/takt/src/case.rs
 - confidence: inferred
   path: crates/takt/src/validator.rs
-revision: 3
+revision: 5
 ---
 # Story: records-reach-base
 
@@ -44,3 +44,11 @@ On takt after wave 09, holds; after the fix, fails:
 ## Acceptance
 
 After a story's pull request merges under a grant, the base holds the story at `implemented` with its `test_result` and approval records, each file byte-equal to the record in the case directory; a riding commit with any file that is not byte-equal to such a record, or a second move commit, makes the merge merge nothing.
+
+## Timing and resume
+
+Measured by the developer role while implementing story:run-record-and-story-evidence (wave 09), once:
+
+- story:run-record-and-story-evidence writes the commits `takt: test_result <story>` and `takt: implemented <story>` only when the case stops `accepted`, not when the tests validator writes its record: a store commit at observation time moved `HEAD` off the implementation revision, and `pr.open` then errored (`crates/takt/src/validator.rs:726`).
+- So with a forge both commits land on the case branch above the merged head, locally, after the merge. Riding with the pull request needs them written before the merge: the `test_result` record at the granted revision, and the move to `implemented` as the last rider, pushed just before the merge. This story decides that order.
+- A gap in the same rider rule: `takt run --case <an accepted case>` goes through `CaseDir::resume`, which moves the implementation revision onto those store commits because `approvals_only` does not recognise them (`crates/takt/src/case.rs:1093-1099`), so `pr.open` becomes due again. Only an explicit `--case` reaches it. The rider rule this story adds must be the one `CaseDir::resume` reads too, so an accepted case resumed by id stays at its granted revision and nothing becomes due again.
