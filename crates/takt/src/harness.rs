@@ -29,6 +29,10 @@ pub struct StepContext<'a> {
     pub protocol: &'a LoadedProtocol,
     /// The step number.
     pub step: usize,
+    /// What is left of the run's hour budget as the step starts; `None` for a run without one.
+    /// A harness ends its step by then: a child it runs is held to the smaller of this and its
+    /// own timeout, and killed past it.
+    pub time_left: Option<std::time::Duration>,
 }
 
 /// What a step reported.
@@ -218,7 +222,11 @@ impl Harness for ClaudeCode {
             }
         }
         crate::forge::without_credentials(&mut command, |_| false);
-        let output = crate::forge::run_child(&mut command, self.limits)
+        let mut limits = self.limits;
+        if let Some(left) = context.time_left {
+            limits.timeout = limits.timeout.min(left);
+        }
+        let output = crate::forge::run_child(&mut command, limits)
             .with_context(|| format!("the harness {}", self.program))?;
         if !output.success() {
             bail!(

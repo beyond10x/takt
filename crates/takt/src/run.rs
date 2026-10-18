@@ -2892,14 +2892,19 @@ impl<'a> Run<'a> {
         if self.options.iterations.is_none() && self.options.hours.is_none() {
             return None;
         }
-        Some(match self.options.hours {
-            Some(h) => {
-                let left = (h * 3600.0 - self.started.elapsed().as_secs_f64()).max(0.0);
-                self.poll
-                    .min(Duration::try_from_secs_f64(left).unwrap_or(Duration::MAX))
-            }
+        Some(match self.time_left() {
+            Some(left) => self.poll.min(left),
             None => self.poll,
         })
+    }
+
+    /// What is left of the hour budget; `None` for a run without one, zero once it is spent (a
+    /// budget that is not a number among them). What is left of one too large for a
+    /// [`Duration`], infinite among them, saturates; nothing here panics.
+    fn time_left(&self) -> Option<Duration> {
+        let h = self.options.hours?;
+        let left = (h * 3600.0 - self.started.elapsed().as_secs_f64()).max(0.0);
+        Some(Duration::try_from_secs_f64(left).unwrap_or(Duration::MAX))
     }
 
     /// Runs until a stop; prints one line per frontier, step and evidence to `out`, and appends
@@ -3766,6 +3771,7 @@ impl<'a> Run<'a> {
                 decision: &decision,
                 protocol: &self.case.protocol,
                 step: self.steps as usize,
+                time_left: self.time_left(),
             };
             // The step is judged by what it did to the tree, against a checkpoint taken just
             // before it: `HEAD`, the index, every path already uncommitted (a validator's run
@@ -3927,6 +3933,25 @@ impl<'a> Run<'a> {
             }
             let report = match stepped {
                 Ok(report) => report,
+                // A step that failed once the hour budget was spent, killed by it, is discarded
+                // whole like any failed step, and the run stops on the budget.
+                Err(error)
+                    if self.time_left() == Some(Duration::ZERO)
+                        && let Some(h) = self.options.hours =>
+                {
+                    if let Err(undo) = undo() {
+                        return Err(error.context(format!(
+                            "step {}: the hour budget ran out during the step, and the step's change could not be discarded: {undo:#}",
+                            self.steps
+                        )));
+                    }
+                    writeln!(
+                        out,
+                        "step {}: the hour budget ran out during the step; everything the step changed was discarded: {error:#}",
+                        self.steps
+                    )?;
+                    return Ok(Stop::Hours(h));
+                }
                 Err(error) => {
                     return Err(match undo() {
                         Ok(()) => error.context(format!(
