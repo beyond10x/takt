@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:protocol-viewer
 kind: story
-status: draft
+status: implemented
 title: A public viewer of the protocols, built from the protocol files
 relations:
 - decomposes: epic:composable-agentic-work
@@ -12,7 +12,11 @@ scope:
   path: docs/site/protocols
 - confidence: cited
   path: docs/site/publish-protocols.sh
-revision: 2
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T17:36:21Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-18T17:36:21Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-18T17:36:21Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: protocol-viewer
 
