@@ -10,8 +10,8 @@
 [![terminal frontend: 0/5 stories](https://img.shields.io/badge/terminal%20frontend-0%2F5%20stories-orange)](.engineering/planning/epic/terminal-frontend.md)
 [![continuous orchestration: 0/1 stories](https://img.shields.io/badge/continuous%20orchestration-0%2F1%20stories-orange)](.engineering/planning/epic/continuous-orchestration.md)
 [![improvement turns: 1 accepted, 1 promoted](https://img.shields.io/badge/improvement%20turns-1%20accepted%2C%201%20promoted-blue)](docs/metrics/improvement-turns.jsonl)
-[![scenario runs recorded: 67](https://img.shields.io/badge/scenario%20runs%20recorded-67-blue)](docs/metrics/scenario-runs.jsonl)
-[![held-out check: 53 of 55 pass](https://img.shields.io/badge/held--out%20check-53%20of%2055%20pass-brightgreen)](docs/metrics/scenario-runs.jsonl)
+[![scenario runs recorded: 68](https://img.shields.io/badge/scenario%20runs%20recorded-68-blue)](docs/metrics/scenario-runs.jsonl)
+[![held-out check: 54 of 56 pass](https://img.shields.io/badge/held--out%20check-54%20of%2056%20pass-brightgreen)](docs/metrics/scenario-runs.jsonl)
 [![ESS citations resolved: 462 of 462](https://img.shields.io/badge/ESS%20citations%20resolved-462%20of%20462-brightgreen)](ess/domains)
 <!-- badges end -->
 
