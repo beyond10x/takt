@@ -4,11 +4,11 @@ id: design:recursive-self-improvement
 kind: design
 status: draft
 title: 'Recursive self-improvement of takt: takt improves takt, the loop is a protocol, the loop improves itself'
-summary: Three levels (work, takt, the loop), two agent roles, a pinned judge, a scorecard; L1 and L2 modelled as protocol/1 documents
+summary: Three levels (work, takt, the loop), four agent roles, a pinned judge, a scorecard; L1 and L2 modelled as protocol/1 documents
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 9
+revision: 10
 ---
 # Design: recursive self-improvement of takt
 

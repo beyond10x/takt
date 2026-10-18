@@ -31,7 +31,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/confinement.rs
-revision: 9
+revision: 10
 ---
 # Story: confinement-seam
 
@@ -48,6 +48,7 @@ This story: a `Confinement` trait that every spawn goes through (program, argume
 ## Domain relations
 
 - Validator → Action and Harness step → Action are the two places a run spawns on a step. Inferred from `crates/takt/src/run.rs:174` (validator) and `run.rs:211` (harness); git spawns around them, `run.rs:223`, `run.rs:242`, `run.rs:250`; the forge (story:forge-pull-request-evidence) and the frontier (story:frontier-next-ready-story) spawn from their adapters, inferred from those stories' Context.
+- Confinement adapter: takt.work.ConfinementName.
 
 ## Scope
 
