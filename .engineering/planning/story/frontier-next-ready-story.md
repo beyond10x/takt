@@ -20,7 +20,7 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/tests/frontier.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T03:24:17Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-10-18T03:24:17Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
@@ -35,7 +35,7 @@ An operator runs `takt run --repo R` with no `--intent` and the binary takes the
 
 `docs/design/takt.md` § 3: `unit := intent | frontier(repo)`, with the note "AEP: ready stories and waves; no model"; § 4 M2: "the AEP frontier (ready rule as code, `artifact waves`)"; § 3 Seams: `Frontier` is the planning store behind a trait with one adapter. Today the unit is one required intent (`crates/takt-cli/src/main.rs:30-32`, `crates/takt/src/run.rs:21-22`) and the kernel never reads the store.
 
-The adapter reads the store the way `AGENTS.md:14` allows, through the `aep` command line: `aep plan artifact list --format json` (id, kind, status, title, path, relations, `blocked_by`), `aep plan artifact show <id>` for the body, `aep plan artifact waves --format json --status proposed` for the order, `aep plan artifact move <id> --to active` to take a story. The ready rule, as code: a story is ready when its status is `proposed`, its `blocked_by` is empty, every `depends_on` target is `implemented` or `archived`, and it comes first in the order `waves` prints. Taking a story moves it `proposed → active`; the lifecycle describes `proposed` as "refined and agreed enough to pick up" and `active` as "being worked on now", so a story with an open case is never taken twice. A store may refuse the move (a profile can require the story to serve an objective); then the story is not taken, the refusal is printed verbatim, and the run goes on to the next ready story or exits saying nothing is ready.
+The adapter reads the store the way `AGENTS.md:14` allows, through the `aep` command line: `aep plan artifact list --format json` (id, kind, status, title, path, relations, `blocked_by`), `aep plan artifact show <id>` for the body, `aep plan artifact move <id> --to active` to take a story. The ready rule, as code: a story is ready when its status is `proposed`, its `blocked_by` is empty, every `depends_on` target is `implemented` or `archived`, and, among the ready ones, it comes first in id order (`aep plan artifact waves` places only scoped stories and belongs to the outer loop, story:declared-loops; corrected after adversary pass 1, finding 4). Taking a story moves it `proposed → active`; the lifecycle describes `proposed` as "refined and agreed enough to pick up" and `active` as "being worked on now", so a story with an open case is never taken twice. A store may refuse the move (a profile can require the story to serve an objective); then the story is not taken, the refusal is printed verbatim, and the run goes on to the next ready story or exits saying nothing is ready.
 
 The case for a story: `intent.md` is the story title followed by its body; the case id is derived from the story id and the instant; the protocol is what `--protocol` or the workflow names (`protocols/story-delivery/1.yaml` once story:story-delivery-protocol exists; `software.change/1` is enough to demonstrate this story).
 
