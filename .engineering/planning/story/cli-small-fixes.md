@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cli-small-fixes
 kind: story
-status: draft
+status: archived
 title: 'Three small CLI fixes: hours bound a step, scenario exit codes, branch-safe case ids'
 summary: --hours bounds the harness step, scenario run --help drops nothing ready, check_id uses check-ref-format
 relations:
@@ -19,7 +19,9 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/tests/cli_small_fixes.rs
-revision: 4
+revision: 5
+transitions:
+- {from: "draft", to: "archived", at: "2026-10-18T18:34:14Z", actor: "human:timo", revision: 5}
 ---
 # Story: cli-small-fixes
 

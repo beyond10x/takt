@@ -11,6 +11,7 @@ refs:
   reference: case-id-is-a-valid-branch-name
 relations:
 - informed_by: story:cli-small-fixes
+- supersedes: story:cli-small-fixes
 revision: 1
 ---
 # Story: case-id-is-a-valid-branch-name
