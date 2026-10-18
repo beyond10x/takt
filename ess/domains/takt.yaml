@@ -1070,6 +1070,101 @@ types:
     kind: newtype
     of: String
 
+  # A benchmark task's id: the task's id in its pinned dataset, one of the task ids a benchmark
+  # run names so it can be repeated. Declared ahead of the code (story:bench-nouns-in-ess).
+  # read from: .engineering/planning/design/benchmark-integration.md:37
+  # read from: .engineering/planning/story/bench-subset-and-budget.md:21
+  # UNMAPPED: a task id is its dataset's, unique within one dataset version; whether takt keys a
+  # task by that id alone or by one that names the dataset and its version too is not said.
+  - name: takt.work.BenchTaskId
+    kind: newtype
+    of: String
+
+  # A benchmark run's id: the run's name in its source, as a scenario run's is. Declared ahead of
+  # the code (story:bench-nouns-in-ess).
+  # read from: docs/metrics/README.md:32
+  # read from: .engineering/planning/design/benchmark-integration.md:36
+  - name: takt.work.BenchRunId
+    kind: newtype
+    of: String
+
+  # An arm of the baseline method, the four a benchmark task runs under so that a result is a
+  # comparison and not a score: takt; Claude Code running free with the operator's full
+  # configuration; Claude Code under takt's harness isolation plus a shell; Codex running free.
+  # Spelled as the scenario records spell them.
+  # read from: docs/metrics/README.md:35
+  # read from: docs/metrics/journey.py:40
+  # read from: .engineering/planning/design/benchmark-integration.md:35
+  # Maps to bench.arm and bench.harness of the organization's benchmark instrument: an arm there is a treatment (`raw`,
+  # `plugin`, `driven`, `native`) with its framework and pin, a harness is what ran the case
+  # (`claude`, `codex`, `b10x`), and a bench run names both.
+  # read from: bench 0.1.0 at e3c44fd, docs/design/bench-entities-v0.1.md:78-95
+  # read from: bench 0.1.0 at e3c44fd, docs/design/bench-entities-v0.1.md:160-191
+  # UNMAPPED: which bench harness, treatment and framework each of the four arms is. bench's
+  # harness kinds have no `takt` while takt's design makes takt one harness among the others;
+  # whether the operator's full configuration is a `raw` or a `plugin` treatment, and whether the
+  # isolated arm is an arm of its own on the `claude` harness, is not said.
+  # read from: bench 0.1.0 at e3c44fd, catalog/definitions/harness.yaml:7
+  # read from: .engineering/planning/design/benchmark-integration.md:28
+  - name: takt.work.BenchArm
+    kind: enum
+    variants: [takt, claude-code, claude-code-isolated, codex]
+
+  # A benchmark run's verdict: what the benchmark's own held-out tests, which takt never sees,
+  # said of the finished task, `pass` or `fail` as a scenario run's held-out check does, and
+  # `unknown` when they gave no answer, such as for a task stopped at its budget. Never taken
+  # from takt's own claims.
+  # read from: docs/metrics/README.md:51
+  # read from: .engineering/planning/design/benchmark-integration.md:32
+  # read from: .engineering/planning/story/bench-subset-and-budget.md:39
+  # Maps to bench.fact of the organization's benchmark instrument with `source: hidden-test`: a hidden test that passes
+  # is `held`, one that fails `contradicted`, one that could not run `unknown`.
+  # read from: bench 0.1.0 at e3c44fd, docs/design/bench-entities-v0.1.md:274-277
+  # UNMAPPED: bench records one fact per hidden test, keyed by the test's id, and grades a run
+  # itself from its workspace; whether takt's one verdict per run is exported as a fact, and
+  # under which expectation id, or bench re-grades the run and the verdict stays takt's record,
+  # is not said.
+  # read from: bench 0.1.0 at e3c44fd, docs/design/bench-entities-v0.1.md:600-603
+  - name: takt.work.BenchVerdict
+    kind: enum
+    variants: [pass, fail, unknown]
+
+  # A benchmark run's raw usage: the figures the harness's own usage record states (Claude
+  # Code's `--output-format json` result, Codex's `turn.completed` event, or takt's stop line,
+  # which sums the same records), unchanged and as a scenario record holds them: the tokens by
+  # component and the cost the harness reported. A figure the source does not state is absent,
+  # never 0; the token sum is computed from the four parts and not held.
+  # read from: docs/metrics/README.md:19-22
+  # read from: docs/metrics/README.md:43-48
+  # read from: .engineering/planning/story/bench-run-export.md:42
+  # Maps in part to bench.run of the organization's benchmark instrument, which holds the cost alone, as integer micro-USD
+  # with its basis (`provider-reported`, `assumed`, `unknown`), and no token figure.
+  # read from: bench 0.1.0 at e3c44fd, docs/design/bench-entities-v0.1.md:217-219
+  # UNMAPPED: where the token figures go in bench, since no field of bench.run holds them; and
+  # how a dollar figure becomes micro-USD, which bench requires because it refuses a float, and
+  # which basis it carries.
+  # read from: bench 0.1.0 at e3c44fd, docs/design/bench-entities-v0.1.md:62-64
+  - name: takt.work.BenchUsage
+    kind: struct
+    fields:
+      - name: input
+        type: Optional<Integer>
+        summary: Input tokens other than those the cache served.
+      - name: output
+        type: Optional<Integer>
+        summary: Output tokens.
+      - name: cache_read
+        type: Optional<Integer>
+        summary: Input tokens the cache served.
+      - name: cache_write
+        type: Optional<Integer>
+        summary: Input tokens written to cache.
+      - name: cost_usd
+        type: Optional<Decimal>
+        summary: >-
+          The cost the harness reported in US dollars (API list price, notional), the JSON number
+          the record holds.
+
 entities:
   # The case a run opens: the directory `<tree>/.engineering/cases/<id>/`, holding `case.yaml`, the
   # `canon-case/1` snapshot that canon.protocol.Case declares (protocol.yaml:861) with its
@@ -2118,6 +2213,118 @@ entities:
     fields:
       - name: paths
         type: List<String>
+    lifecycle:
+      initial: Recorded
+      states: [Recorded]
+      terminal: [Recorded]
+
+  # A benchmark task: one task of a pinned subset of a public benchmark (Terminal-Bench 2.0,
+  # SWE-bench Verified Mini), named by its dataset, the dataset's version and its id there, so a
+  # run of it can be repeated. takt sees what the task exposes, the visible test command its
+  # `tests.pass` claim runs; the benchmark's own tests are the held-out acceptance and never
+  # enter the case, so no field holds them. The task's text is given to the run as its intent
+  # and not copied here. Declared ahead of the code (story:bench-nouns-in-ess).
+  # read from: .engineering/planning/design/benchmark-integration.md:22-24
+  # read from: .engineering/planning/design/benchmark-integration.md:32-33
+  # read from: .engineering/planning/design/benchmark-integration.md:37
+  # read from: .engineering/planning/story/bench-task-protocol.md:38
+  # Maps to bench.case of the organization's benchmark instrument, one task with its expectations and its hidden tests;
+  # and the benchmark subset it belongs to maps to bench.corpus, a set of cases pinned to where
+  # they came from: takt's design makes each benchmark a bench corpus.
+  # read from: .engineering/planning/design/benchmark-integration.md:28
+  # read from: bench 0.1.0 at e3c44fd, docs/design/bench-entities-v0.1.md:115-158
+  # UNMAPPED: how a task names its bench case and corpus. A bench case's id is
+  # `<corpus-id>/<case_id>`, and a corpus is pinned by a 40-hex `source_commit` where a
+  # benchmark names a dataset version; nothing says how one is derived from the other, so no
+  # field carries a bench id.
+  # read from: bench 0.1.0 at e3c44fd, docs/design/bench-entities-v0.1.md:132-134
+  # UNMAPPED: whether takt's own scenarios (takt.work.Scenario) are benchmark tasks too, so that
+  # a task references a scenario, and which benchmark tasks join the scenarios the scorecard
+  # judges, are not decided.
+  # read from: .engineering/planning/design/benchmark-integration.md:41
+  # read from: .engineering/planning/story/bench-run-export.md:23
+  - name: takt.work.BenchTask
+    naming:
+      summary: >-
+        One task of a pinned benchmark subset, with the visible test command takt may run; the
+        benchmark's own tests stay held out.
+    identity:
+      name: id
+      type: takt.work.BenchTaskId
+    fields:
+      - name: dataset
+        type: String
+        summary: >-
+          The benchmark's dataset as its harness takes it, such as
+          `terminal-bench/terminal-bench-2` or `MariusHobbhahn/swe-bench-verified-mini`.
+      - name: dataset_version
+        type: String
+        summary: The version of the dataset the task was pinned from.
+      - name: test_command
+        type: String
+        summary: The visible test command the run's `tests.pass` claim runs.
+    lifecycle:
+      initial: Declared
+      states: [Declared]
+      terminal: [Declared]
+
+  # A benchmark run: one benchmark task under one arm, once, recorded raw as one line of
+  # `docs/metrics/bench-runs.jsonl` as a scenario run is: the task, the arm, takt's revision
+  # (absent for a free arm and where it was not recorded), the verdict, the raw usage, the wall
+  # time with resumes included, and the directory holding the run's case and events. A line is
+  # appended and never rewritten. Declared ahead of the code (story:bench-nouns-in-ess).
+  # read from: .engineering/planning/design/benchmark-integration.md:36
+  # read from: .engineering/planning/story/bench-run-export.md:23
+  # read from: docs/metrics/README.md:4-5
+  # read from: docs/metrics/README.md:36
+  # read from: docs/metrics/README.md:38
+  # Maps to bench.run of the organization's benchmark instrument, one arm of one case on one harness, once: takt exports
+  # each run in bench's run shape, so bench's grader and fact table cover takt beside the other
+  # harnesses.
+  # read from: .engineering/planning/design/benchmark-integration.md:28
+  # read from: bench 0.1.0 at e3c44fd, docs/design/bench-entities-v0.1.md:200-233
+  # UNMAPPED: the bench run's id (bench keys a run it imports by the imported id) and the fields
+  # bench requires that no takt record holds yet: `budget_micro_usd` (story:bench-subset-and-budget),
+  # `observed_at`, `out_dir`, `provenance`, and `workspace_path`, the finished tree bench's grader
+  # reads. story:bench-run-export and bench's own store settle them.
+  # UNMAPPED: the relation to takt.work.Case and takt.work.Run. A takt-arm run is exported from
+  # one case and may span several invocations and resumes; whether a benchmark run references
+  # its case or is owned by it is not said, and a free arm's run has neither.
+  # read from: .engineering/planning/story/bench-run-export.md:42
+  # read from: docs/metrics/README.md:40
+  - name: takt.work.BenchRun
+    naming:
+      summary: >-
+        One benchmark task under one arm, once: its verdict from the held-out tests and its raw
+        usage, the record takt exports as a bench run.
+    identity:
+      name: id
+      type: takt.work.BenchRunId
+    fields:
+      - name: task
+        type: takt.work.BenchTaskId
+      - name: arm
+        type: takt.work.BenchArm
+      - name: takt_revision
+        type: Optional<takt.work.Revision>
+        summary: takt's commit; absent for a free arm and where it was not recorded.
+      - name: verdict
+        type: takt.work.BenchVerdict
+      - name: usage
+        type: takt.work.BenchUsage
+      - name: wall_seconds
+        type: Optional<Integer>
+        summary: The run's wall time, resumes included; absent for an untimed run.
+      - name: case_dir
+        type: Optional<String>
+        summary: The directory holding the run's case and events; absent where none was kept.
+    relations:
+      # A task is run many times, under each arm; it stands on its own and outlives its runs.
+      - name: task
+        kind: references
+        target: takt.work.BenchTask
+        cardinality: one
+        via: task
     lifecycle:
       initial: Recorded
       states: [Recorded]
