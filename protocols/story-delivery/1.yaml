@@ -10,12 +10,6 @@ protocol:
     abandoned on an explicit decision. Every claim is about the implementation at its current
     revision, so a new commit returns all of them to unknown.
 
-case:
-  inputs:
-    risk:
-      description: how much proof the change must carry
-      values: [trivial, standard, elevated, critical]
-
 artifacts:
   intent:
     description: what the story is meant to achieve
