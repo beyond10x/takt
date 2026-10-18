@@ -152,7 +152,7 @@ Selection path: `aep plan artifact waves --kind story --status draft --format js
 | unit | branch | worktree | build dir | scratch |
 |---|---|---|---|---|
 | integration | `wave/2026-10-18-w2` | managed tree `takt-w2-int` | its `target/` | `~/.cache/takt-waves/2026-10-18-w2/int/scratch` |
-| frontier-next-ready-story | `impl/frontier-next-ready-story` at 3a411bf, implementor green (20→36 cases; 176,196 tokens, 89 tool uses, 16.5 min), adversary pass 1 running | managed tree `takt-w2-frontier` | its `target/` | `~/.cache/takt-waves/2026-10-18-w2/frontier/scratch` |
+| frontier-next-ready-story | `impl/frontier-next-ready-story` at 366735b (correction 1), 45 cases; pass 1 recorded (1 blocker, 2 warnings, 1 note; all fixed), pass 2 running | managed tree `takt-w2-frontier` | its `target/` | `~/.cache/takt-waves/2026-10-18-w2/frontier/scratch` |
 
 ## Dispatch
 
@@ -166,3 +166,4 @@ The opening store commit (this page, the story to `active`), the unit's commits,
 
 - 2026-10-18: opened under the standing approval; `story:frontier-next-ready-story` moved to active.
 - 2026-10-18: unit green at 3a411bf; red run: unresolved module (exit 101); green: lib 14, frontier 4, loop 2, story_delivery 13, cli 3. Scope correction: the intent argument sits at main.rs:36-38, not :30-32. Adversary pass 1 dispatched (`aep:adversary`).
+- 2026-10-18: adversary pass 1 (133,737 tokens, 42 tool uses, 12 min): the story was taken before the case was opened; correction 1 at 366735b (227,833 tokens, 26 tool uses, 6 min): the case first, a refused take removes it; 45 cases. Pass 2 dispatched. Pass-1 scratch holds a 702M mutant build directory, removed at teardown.
