@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result, anyhow, bail};
 
 /// A protocol Canon validated, with its compiled IR as canonical JSON.
 #[derive(Debug, Clone)]
@@ -132,6 +132,99 @@ impl LoadedProtocol {
             inputs,
             actions: keys(&doc["actions"]),
         })
+    }
+}
+
+impl LoadedProtocol {
+    /// The artifact a grant of `capability` binds to: the subject of the evidence the
+    /// precondition of each action requiring it names, directly or through the claims it names.
+    /// Refused, naming the action, when an action's precondition names evidence about no
+    /// artifact or about more than one, or when two actions requiring it are about different
+    /// artifacts: a grant is never bound to a guess. A match (`evidence`, `first` or `before`)
+    /// that names no subject reads records about any artifact, so it is about no single one. An
+    /// action with no precondition is about no artifact, so a capability only it requires is
+    /// refused even where a grant used to bind to `implementation` (`software.change/1`'s
+    /// `release.rollback`): never binding to a guess outranks granting as before.
+    pub fn grant_subject(&self, capability: &str) -> Result<String> {
+        let doc: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&self.yaml).context("read the protocol document")?;
+        let mut bound: Option<(String, String)> = None;
+        for (name, action) in doc["actions"].as_mapping().into_iter().flatten() {
+            let Some(name) = name.as_str() else { continue };
+            let requires = action["requires"].as_sequence().is_some_and(|requires| {
+                requires
+                    .iter()
+                    .any(|requirement| requirement["capability"].as_str() == Some(capability))
+            });
+            if !requires {
+                continue;
+            }
+            let mut subjects = std::collections::BTreeSet::new();
+            subjects_of(
+                &doc["claims"],
+                &action["precondition"],
+                &mut std::collections::BTreeSet::new(),
+                &mut subjects,
+            );
+            let mut subjects = subjects.into_iter();
+            let (Some(Some(subject)), None) = (subjects.next(), subjects.next()) else {
+                bail!(
+                    "the action {name} of {} requires {capability}, and its precondition names evidence about no single artifact; a grant of {capability} binds to none",
+                    self.id
+                );
+            };
+            if let Some((other, theirs)) = &bound
+                && *theirs != subject
+            {
+                bail!(
+                    "the action {name} of {} is about {subject} and the action {other} about {theirs}, and both require {capability}; a grant of {capability} binds to neither",
+                    self.id
+                );
+            }
+            bound = Some((name.to_owned(), subject));
+        }
+        bound
+            .map(|(_, subject)| subject)
+            .ok_or_else(|| anyhow!("no action of {} requires {capability}", self.id))
+    }
+}
+
+/// Adds to `subjects` the subject of every evidence match (`evidence`, `first`, `before`) in
+/// `condition`, `None` for one that names none and so reads records about any artifact,
+/// following each claim it names into that claim's `true_when` in `claims`, each claim once.
+fn subjects_of(
+    claims: &serde_yaml_ng::Value,
+    condition: &serde_yaml_ng::Value,
+    seen: &mut std::collections::BTreeSet<String>,
+    subjects: &mut std::collections::BTreeSet<Option<String>>,
+) {
+    match condition {
+        serde_yaml_ng::Value::Mapping(map) => {
+            for (key, value) in map {
+                match (key.as_str(), value) {
+                    (Some("claim"), serde_yaml_ng::Value::String(claim)) => {
+                        if seen.insert(claim.clone()) {
+                            subjects_of(
+                                claims,
+                                &claims[claim.as_str()]["true_when"],
+                                seen,
+                                subjects,
+                            );
+                        }
+                    }
+                    (Some("evidence" | "first" | "before"), serde_yaml_ng::Value::Mapping(_)) => {
+                        subjects.insert(value["subject"].as_str().map(str::to_owned));
+                    }
+                    _ => subjects_of(claims, value, seen, subjects),
+                }
+            }
+        }
+        serde_yaml_ng::Value::Sequence(items) => {
+            for item in items {
+                subjects_of(claims, item, seen, subjects);
+            }
+        }
+        _ => {}
     }
 }
 
