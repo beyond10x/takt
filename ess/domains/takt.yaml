@@ -839,12 +839,13 @@ types:
   # its turn id (the turn is a case), its finding, its baseline and candidate revisions, its
   # verdict, whether it was promoted, and its tokens and wall time taken from the turn's records.
   # The wall time is in milliseconds, as takt.work.ScorecardRow's. Declared ahead of the code.
+  # A turn whose case never reached an outcome gets a row too, its `verdict` absent, which means
+  # open; and each row carries when its finding was filed and, once it was, verified. Decided
+  # 2026-10-18.
   # read from: .engineering/planning/story/loop-scorecard.md:30-33
-  # read from: .engineering/planning/story/loop-scorecard.md:48
+  # read from: .engineering/planning/story/loop-scorecard.md:48-50
   # read from: .engineering/planning/design/recursive-self-improvement.md:185-187
   # read from: crates/takt/src/scorecard.rs:58-84
-  # UNMAPPED: whether a turn whose case has not completed through an outcome gets a row, and so
-  # whether `verdict` may be absent. Open for the owner.
   - name: takt.work.LoopScorecardRow
     kind: struct
     fields:
@@ -857,26 +858,32 @@ types:
       - name: candidate
         type: takt.work.Revision
       # The outcome the turn's case completed through: accepted once promoted, declined when the
-      # candidate still reproduces the finding, unreproducible when the baseline never did.
+      # candidate still reproduces the finding, unreproducible when the baseline never did;
+      # absent while the turn is open.
       # read from: protocols/self-improvement/1.yaml:11-12
       - name: verdict
-        type: takt.work.OutcomeId
+        type: Optional<takt.work.OutcomeId>
       - name: promoted
         type: Boolean
       - name: tokens
         type: Integer
       - name: wall_ms
         type: Integer
+      - name: filed_at
+        type: Timestamp
+        summary: When the turn's finding was filed.
+      - name: verified_at
+        type: Optional<Timestamp>
+        summary: When the finding was verified gone; absent until it is.
 
-  # The loop scorecard: its rows, one per improvement turn. Its figures (turns, accepted share,
-  # promoted share, median tokens per accepted turn) are computed from the rows each time it is
-  # printed and never stored, so no field holds them. Decided 2026-10-18; declared ahead of the
-  # code (story:loop-scorecard).
-  # read from: .engineering/planning/story/loop-scorecard.md:49
-  # UNMAPPED: the story's Outcome also lists the time from finding to verified and escaped
-  # defects as human-sourced counts; neither is among the decided figures and no row field holds
-  # what they need (when a finding was filed, a human-sourced count). Open for the owner.
-  # read from: .engineering/planning/story/loop-scorecard.md:50
+  # The loop scorecard: its rows, one per improvement turn. Its figures (turns, accepted share as
+  # accepted rows over all rows, open ones included, promoted share, median tokens per accepted
+  # turn, and the time from finding to verified, from each row's `filed_at` and `verified_at`)
+  # are computed from the rows each time it is printed and never stored, so no field holds them.
+  # Escaped defects are not among them: a later, human-sourced figure no validator observes.
+  # Decided 2026-10-18; declared ahead of the code (story:loop-scorecard).
+  # read from: .engineering/planning/story/loop-scorecard.md:51
+  # read from: .engineering/planning/story/loop-scorecard.md:95
   - name: takt.work.LoopScorecard
     kind: struct
     fields:
@@ -910,6 +917,20 @@ types:
   - name: takt.work.FindingKey
     kind: newtype
     of: String
+
+  # The one store artifact a finding is filed as, by `scripts/file-finding --kind`: a story
+  # (`story:<key>`) or a blocker (`blocker:<key>`), never both and never neither; decided
+  # 2026-10-18. No blocker is declared in this specification, so the blocker variant carries the
+  # artifact id as text.
+  # read from: scripts/file-finding:156
+  # read from: scripts/file-finding:208
+  # read from: .engineering/planning/story/finding-intake.md:51
+  - name: takt.work.FindingArtifact
+    kind: union
+    tag: kind
+    variants:
+      story: takt.work.StoryId
+      blocker: String
 
   # What filing a finding came to, the result of a `finding_record` record.
   # read from: protocols/self-improvement/1.yaml:41-44
@@ -1900,10 +1921,13 @@ entities:
   # side with the difference of the medians, and never make a scenario worse; a metric whose
   # definition's version differs is printed with both figures. Which saved scorecard is the
   # promoted baseline is story:promotion's.
-  # UNMAPPED: whether a scorecard covers one candidate revision or a period, and so its relation
-  # to scenario runs; no relation is declared.
+  # A scorecard covers one takt revision, the one its saved file `scorecard-<revision>.json` is
+  # named by, decided 2026-10-18; its scenario runs are its rows, each naming its case, held as
+  # values (takt.work.ScorecardRow) rather than a relation, since a relation is carried by a field
+  # of the entity typed by the target's identity.
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
   # read from: .engineering/planning/story/scorecard-reader.md
+  # read from: .engineering/planning/story/scorecard-reader.md:50-52
   # read from: crates/takt/src/scorecard.rs:1-20
   # read from: crates/takt/src/scorecard.rs:32-45
   # read from: crates/takt/src/scorecard.rs:159-174
@@ -1922,7 +1946,9 @@ entities:
         summary: takt-scorecard/1.
       - name: revision
         type: Optional<takt.work.Revision>
-        summary: The revision that names the saved file; absent before it is saved.
+        summary: >-
+          The one takt revision the scorecard covers, which names the saved file; absent before it
+          is saved.
       - name: named_by
         type: Optional<takt.work.ScorecardNaming>
         summary: What named it.
@@ -2023,9 +2049,14 @@ entities:
   # gives `scenario` twice, is malformed and nothing is filed.
   # read from: scripts/file-finding:96
   # read from: scripts/file-finding:101
-  # UNMAPPED: a finding is filed as one story or one blocker (`artifact`), and no blocker is
-  # declared here, so no relation to takt.work.Story is declared; whether a filed finding's story
-  # is the Story a later case works, and so `references` it, is open for the owner.
+  # A finding is filed as exactly one store artifact, a story or a blocker, and that artifact is
+  # filed for that finding alone (its id is `<kind>:<key>`, the finding's key): one-to-one,
+  # decided 2026-10-18, held in `artifact` (takt.work.FindingArtifact). A relation entry needs a
+  # field typed by the target's identity, and the story variant sits inside a union beside a
+  # blocker this specification does not declare, so no relation to takt.work.Story is declared and
+  # the one-to-one is stated here.
+  # read from: scripts/file-finding:208
+  # read from: .engineering/planning/story/finding-intake.md:51
   - name: takt.work.Finding
     naming:
       summary: >-
@@ -2036,7 +2067,7 @@ entities:
       type: takt.work.FindingKey
     fields:
       - name: artifact
-        type: String
+        type: takt.work.FindingArtifact
         summary: The store artifact the finding is, `story:<key>` or `blocker:<key>`.
       - name: scenario
         type: takt.work.ScenarioId
