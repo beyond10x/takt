@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-18T15:28:12Z",
+  "actor": "human:timo",
+  "artifact": "story:four-agent-roles",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check in the four-roles worktree on main b670264: exit 0, 367/367 citations, 55 suites ok, 0 failed; roles exercised 2026-10-18: reviewer verdicts on cc8a4e3, 8bc49cb, f6056dd; doc-writer docs/metrics and docs/pitch (57e2440); developer waves 08 and 09; planner grants"
+  }
+}

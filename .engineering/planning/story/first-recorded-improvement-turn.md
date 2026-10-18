@@ -17,7 +17,7 @@ scope:
   path: .engineering/cases
 - confidence: inferred
   path: .engineering/evidence/story
-revision: 4
+revision: 5
 ---
 # Story: first-recorded-improvement-turn
 
@@ -46,7 +46,7 @@ Derived 2026-10-18 by `story-scoper`. Every line is **cited** (read from the sto
 - **Primary surface:** records, not code. The turn's case directory `.engineering/cases/<id>/` in the takt tree that `takt run --repo` is given. `crates/takt/src/case.rs:1` and `:21` put a case at `<tree>/.engineering/cases/<id>/` — inferred: the story names the directory but not which tree
 - **Files:** `.engineering/evidence/story/<finding-story>/`, the evidence record whose `--ref` names the case directory (story Checks). The layout is the one at `.engineering/evidence/story/cli-protocol-defaults/`, and the evidence call is like `crates/takt/src/frontier.rs:365-373` — inferred: the finding's story id does not exist yet
 - **Files:** scenario 1 of the scratch repository (`story:remove-a-todo`), run once at the baseline and once at the candidate, each on its own `trial/<n>` — cited (design § Scenario corpus; story § Scope)
-- **Symbols:** `self.improvement/1`, i.e. `protocols/self-improvement/1.yaml`. The `accepted` outcome requires `scenario.passes_after`, `scorecard.no_regression` and `promoted` (`protocols/self-improvement/1.yaml:194-202`). The story reads this file and does not change it — cited
+- **Symbols:** `self.improvement/1`, i.e. `protocols/self-improvement/1.yaml`. The `accepted` outcome requires `scenario.passes_after`, `scorecard.no_regression` and `promoted` (`protocols/self-improvement/1.yaml:196-204`). The story reads this file and does not change it — cited
 - **Symbols:** the defect site. On main it is `crates/takt-cli/src/main.rs:66` (`default_value = "software.change/1"`). On `fix/2026-10-18-review` the candidate is already merged (`316fbfc`), with `STORY_DELIVERY`/`SOFTWARE_CHANGE` at `crates/takt-cli/src/main.rs:478-480` and the doc text at `:66-70` — cited
 - **Also likely:** none in code. The fix is story:cli-protocol-defaults (Out of Scope) and the validators belong to story:self-improvement-protocol — cited (story § Out of Scope; self-improvement-protocol § Scope)
 - **Documents:** none — cited (the Acceptance is a case directory and its last decision)
