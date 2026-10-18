@@ -8,7 +8,7 @@ summary: Three levels (work, takt, the loop), two agent roles, a pinned judge, a
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 5
+revision: 6
 ---
 # Design: recursive self-improvement of takt
 
@@ -122,6 +122,9 @@ Promotion defaults, changeable by the owner: no scenario's outcome worse; the me
 most the baseline plus 10 %; at most one promotion a day. A metric's definition is a judge
 surface; for one cycle after a change the previous definition's numbers are printed beside the
 new ones, so a metric cannot be redefined to look better.
+
+
+Open question, from the first recorded improvement turn (2026-10-18): at n=3 the token default trips on run-to-run noise. On scenario 1 with an unchanged harness, six takt runs at two revisions spread from 106,003 to 167,249 tokens; the turn's candidate, which changed only help text, had a median 24 % over its baseline because two of its three runs hit the known `repository.inspect` NoProgress (story:no-inspect-for-stateless-harness). `takt scorecard --against` therefore prints n and the minimum, median and maximum per side and flags only worse outcomes (story:scorecard-reader); which token rule promotion applies (a larger n, a spread-aware rule, or tokens per accepted unit with the known waste removed) is open and decided before story:promotion lands.
 
 ## What earns each claim
 
