@@ -2,19 +2,28 @@
 """check-citations: resolve every `read from:` citation of the ESS documents under `ess/`
 against the tree, so a citation whose text no longer says what it is cited for fails the check.
 
-  check-citations [--repo <dir>] [check | dump | fix]
+  check-citations [--repo <dir>] [--require-digests] [check | dump | fix]
+  check-citations [--repo <dir>] accept <document>:<line>...
 
   check   every citation; exit 0 when each resolves and the needles tables have no unused or
           malformed row, else exit 1 naming each unresolved citation
           (`<document>:<line>: unresolved: <cited>`) with the lines it cites and where its
           needles are found
   dump    every citation with its key, its needles and its cited lines
-  fix     check, and re-point each unresolved line citation whose needles occur once in the
-          cited file: to the cited range shifted, when that resolves, else to the span the
-          needles cover when it is no longer than the cited range; a citation whose needles
-          resolve only over a longer span is left unresolved for a person. Only the cited text
-          after `read from: ` is rewritten; the rest of its line and its ending stay
+  fix     check, and re-point each unresolved line citation. One with a digest is re-pointed
+          only by a pure move: to the one span of the same length whose digest is the recorded
+          one; a changed text is never re-pointed. One without a digest is re-pointed when its
+          needles occur once in the cited file: to the cited range shifted, when that resolves,
+          else to the span the needles cover when it is no longer than the cited range. Only
+          the cited text after `read from: ` is rewritten; the rest of its line and its ending
+          stay
+  accept  record the current digest of each line citation named by its document and line, after
+          a person has read the cited lines; all or nothing, and refused for a citation that is
+          not a line citation or whose needles do not resolve. `check` and `fix` never run it;
+          there is no accept-all
   --repo  the repository's root; the current directory without it
+  --require-digests
+          fail a line citation whose row records no digest (`task check` passes it)
 
 A citation is a full comment line of a `*.yaml` document under `ess/` holding `read from: `
 and, after it, one of
@@ -30,7 +39,12 @@ comment line whose text starts with `from:` and a path, a marker wrapped across 
 are counted apart from the in-repository citations.
 
 Every in-repository citation resolves by its needles, held in `<document>.citations.tsv` beside
-the document, one row a citation: `<key><TAB><needle> && <needle> ...`. The needles occur in
+the document, one row a citation: `<key><TAB><needle> && <needle> ...[<TAB>sha256:<hex>]`.
+The third column, a line citation's only, is the digest of the cited lines: sha256 over their
+exact text, each line with its trailing white space stripped, joined by `\\n`. A line citation
+whose row has one resolves only while the cited lines have that digest, so a change to any line
+of the range, its interior included, fails it. Section and file citations carry needles only;
+a digest on their row fails them. The needles occur in
 order: for a line citation inside the cited range, the first on its first line when it is a
 range, and the last occurrence of the last within one line of its last line; for a section
 citation inside the one section whose heading text is the cited heading, from that heading to
@@ -46,6 +60,7 @@ Python 3 standard library only; run with `python3 -I`.
 """
 
 import argparse
+import hashlib
 import re
 import sys
 from collections import defaultdict
@@ -55,6 +70,7 @@ MARKER = re.compile(r"\bread\s+from", re.IGNORECASE)
 WRAPPED = re.compile(r"^\s*#\s*from:\s*\S*[/.]\S*", re.IGNORECASE)
 CITATION = re.compile(r"^\s*#(?:.*\s)?read from: (.*)$")
 DECLARATION = re.compile(r"^  - name: (\S+)")
+DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 PATH = r"[^\s:,()]+"
 LINE = re.compile(r"^(" + PATH + r"):(\d+)(?:-(\d+))?$")
 SECTION = re.compile(r"^(" + PATH + r") \(§ ([^)]+)\)$")
@@ -156,8 +172,16 @@ def in_repository(path):
     return not path.startswith("/") and ".." not in path.split("/")
 
 
+class Row:
+    def __init__(self, index, needles_text, digest):
+        self.index = index
+        self.needles_text = needles_text
+        self.needles = [part.strip() for part in needles_text.split(" && ")]
+        self.digest = digest
+
+
 def needles_table(path, name, problems):
-    """The needles of each key in the table at `path`; empty when there is none."""
+    """The row of each key in the table at `path`; empty when there is none."""
     table = {}
     try:
         raw = read_raw(path)
@@ -168,15 +192,32 @@ def needles_table(path, name, problems):
         row = body(row)
         if not row.strip() or row.startswith("#"):
             continue
-        key, tab, needle = row.partition("\t")
-        needles = [part.strip() for part in needle.split(" && ")]
-        if not tab or not key or not all(needles):
+        fields = row.split("\t")
+        key = fields[0]
+        parsed = Row(n - 1, fields[1], fields[2] if len(fields) == 3 else None) if (
+            len(fields) in (2, 3)
+        ) else None
+        if (
+            parsed is None
+            or not key
+            or not all(parsed.needles)
+            or (parsed.digest is not None and not DIGEST.match(parsed.digest))
+        ):
             problems.append(f"{name}:{n}: malformed needle row")
         elif key in table:
             problems.append(f"{name}:{n}: a second row for {key}")
         else:
-            table[key] = needles
+            table[key] = parsed
     return table
+
+
+def digest(text, a, b):
+    """The digest of lines a to b of `text`: sha256 over the lines, each with its trailing white
+    space stripped, joined by `\\n`; None when the range is not in the file."""
+    if a < 1 or b > len(text) or a > b:
+        return None
+    joined = "\n".join(line.rstrip() for line in text[a - 1 : b])
+    return "sha256:" + hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
 def in_order(text, lo, hi, needles):
@@ -283,18 +324,107 @@ def show_lines(text, a, b):
             print(f"        {r}: <past the end, {len(text)} lines>")
 
 
+
+
+def load_cited(repo, files, path):
+    """The lines of the cited file `path` and an error, one of them None; cached in `files`."""
+    if path not in files:
+        try:
+            lines = read_raw(repo / path)
+            files[path] = (None if lines is None else [body(l) for l in lines], None)
+        except Unreadable as unreadable:
+            files[path] = (None, f"{unreadable}: {path}")
+    cited, error = files[path]
+    if cited is None and error is None:
+        error = f"no such file: {path}"
+    return cited, error
+
+
+def table_path_of(document):
+    return document.with_name(document.stem + ".citations.tsv")
+
+
+def accept(repo, targets):
+    """Records the current digest of each line citation `<document>:<line>` in its table; all or
+    nothing. A citation whose needles do not resolve is refused: fix them first."""
+    files = {}
+    refusals = []
+    writes = defaultdict(dict)
+    for target in targets:
+        name, _, number = target.rpartition(":")
+        document = repo / name
+        if not name or not number.isdigit() or not document.is_file():
+            refusals.append(f"{target}: no such document line")
+            continue
+        try:
+            text = [body(line) for line in read_raw(document) or []]
+        except Unreadable as error:
+            refusals.append(f"{target}: {error}")
+            continue
+        c = next((c for c in citations(text) if c.index == int(number) - 1), None)
+        if c is None or c.kind != "line":
+            refusals.append(f"{target}: not a line citation; only a line citation has a digest")
+            continue
+        problems = []
+        table_path = table_path_of(document)
+        table = needles_table(table_path, table_path.relative_to(repo).as_posix(), problems)
+        row = table.get(c.key)
+        if problems or row is None:
+            refusals.append(f"{target}: no needle row for {c.key} {' '.join(problems)}".rstrip())
+            continue
+        cited, error = load_cited(repo, files, c.path)
+        if error:
+            refusals.append(f"{target}: {error}")
+            continue
+        if not resolves(cited, *c.lines, row.needles):
+            refusals.append(f"{target}: the needles do not resolve at {c.cited}; fix them first")
+            continue
+        current = digest(cited, *c.lines)
+        writes[table_path][row.index] = (c.key, row.needles_text, current)
+        print(f"accepted {target}: {c.cited} {current}")
+    for refusal in refusals:
+        print(f"not accepted: {refusal}")
+    if refusals:
+        print("nothing recorded")
+        sys.exit(1)
+    for table_path, rows in writes.items():
+        raw = read_raw(table_path)
+        for index, (key, needles_text, current) in rows.items():
+            line = raw[index]
+            ending = line[len(body(line)) :]
+            raw[index] = f"{key}\t{needles_text}\t{current}{ending}"
+        with open(table_path, "w", encoding="utf-8", newline="") as f:
+            f.write("".join(raw))
+    print(f"recorded {sum(len(rows) for rows in writes.values())} digests")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="check-citations",
         description="Resolve every `read from:` citation of the ESS documents under ess/.",
     )
     parser.add_argument("--repo", default=".", help="the repository's root")
-    parser.add_argument("mode", nargs="?", default="check", choices=("check", "dump", "fix"))
+    parser.add_argument(
+        "--require-digests",
+        action="store_true",
+        help="fail a line citation whose row records no digest",
+    )
+    parser.add_argument(
+        "mode", nargs="?", default="check", choices=("check", "dump", "fix", "accept")
+    )
+    parser.add_argument("targets", nargs="*", help="accept: <document>:<line> ...")
     args = parser.parse_args()
     repo = Path(args.repo)
     ess = repo / "ess"
     if not ess.is_dir():
         parser.error(f"no ess/ directory under {repo}")
+    if args.mode == "accept":
+        if not args.targets:
+            parser.error("accept needs at least one <document>:<line>")
+        accept(repo, args.targets)
+        return
+    if args.targets:
+        parser.error(f"{args.mode} takes no <document>:<line>")
 
     files = {}
     problems = []
@@ -308,7 +438,7 @@ def main():
             problems.append(f"{name}: {error}")
             continue
         text = [body(line) for line in raw]
-        table_path = document.with_name(document.stem + ".citations.tsv")
+        table_path = table_path_of(document)
         table = needles_table(table_path, table_path.relative_to(repo).as_posix(), problems)
         seen = set()
         rewrite = {}
@@ -321,19 +451,14 @@ def main():
             ok = False
             cited = None
             error = None
+            row = None
             needles = None
+            note = None
             if c.kind in ("line", "section", "file"):
                 seen.add(c.key)
-                needles = table.get(c.key)
-                if c.path not in files:
-                    try:
-                        lines = read_raw(repo / c.path)
-                        files[c.path] = (None if lines is None else [body(l) for l in lines], None)
-                    except Unreadable as unreadable:
-                        files[c.path] = (None, f"{unreadable}: {c.path}")
-                cited, error = files[c.path]
-                if cited is None and error is None:
-                    error = f"no such file: {c.path}"
+                row = table.get(c.key)
+                needles = row.needles if row else None
+                cited, error = load_cited(repo, files, c.path)
             if cited is not None and needles:
                 if c.kind == "file":
                     ok = in_order(cited, 0, len(cited), needles) is not None
@@ -342,6 +467,21 @@ def main():
                     ok = len(found) == 1 and in_order(cited, *found[0], needles) is not None
                 else:
                     ok = resolves(cited, *c.lines, needles)
+                if c.kind != "line" and row.digest:
+                    ok = False
+                    note = "a digest belongs to a line citation only; drop it from the row"
+                elif c.kind == "line" and ok and row.digest:
+                    current = digest(cited, *c.lines)
+                    if current != row.digest:
+                        ok = False
+                        note = (
+                            f"the cited text changed: {row.digest[:19]} recorded, "
+                            f"{current[:19]} now; read the lines, then "
+                            f"`accept {name}:{c.index + 1}`"
+                        )
+                elif c.kind == "line" and ok and args.require_digests:
+                    ok = False
+                    note = f"no digest recorded; read the lines, then `accept {name}:{c.index + 1}`"
             if c.kind in ("stray", "unknown"):
                 counts["not a citation"] += 1
             else:
@@ -357,6 +497,8 @@ def main():
                 continue
             print(f"      key: {c.key}")
             print(f"      needles: {' && '.join(needles) if needles else 'none'}")
+            if note:
+                print(f"      {note}")
             if error:
                 print(f"      {error}")
                 continue
@@ -375,15 +517,38 @@ def main():
                 continue
             spans = locate(cited, needles)
             print(f"      needles found at: {', '.join(span(*s) for s in spans[:6]) or 'nowhere'}")
-            if args.mode != "fix" or len(spans) != 1:
+            if args.mode != "fix":
                 continue
-            shift = spans[0][0] - a
-            na, nb = a + shift, b + shift
-            if not resolves(cited, na, nb, needles):
-                na, nb = spans[0]
-                if nb - na > b - a:
-                    print("      not re-pointed: the needles span more lines than the cited range")
+            if row.digest:
+                moves = [
+                    s
+                    for s in range(1, len(cited) - (b - a) + 1)
+                    if digest(cited, s, s + b - a) == row.digest
+                    and resolves(cited, s, s + b - a, needles)
+                ]
+                if not moves:
+                    print(
+                        "      not re-pointed: the cited text changed; read it, re-point it by "
+                        "hand, then accept it"
+                    )
                     continue
+                if len(moves) > 1 or moves[0] == a:
+                    print(f"      not re-pointed: the recorded text is at {len(moves)} places")
+                    continue
+                na, nb = moves[0], moves[0] + b - a
+            else:
+                if len(spans) != 1:
+                    continue
+                shift = spans[0][0] - a
+                na, nb = a + shift, b + shift
+                if not resolves(cited, na, nb, needles):
+                    na, nb = spans[0]
+                    if nb - na > b - a:
+                        print(
+                            "      not re-pointed: the needles span more lines than the cited "
+                            "range"
+                        )
+                        continue
             new = f"{c.path}:{span(na, nb)}"
             line = raw[c.index]
             rewrite[c.index] = line[: c.span[0]] + new + line[c.span[1] :]

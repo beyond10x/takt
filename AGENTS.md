@@ -35,7 +35,7 @@ every step validated by Canon over evidence. This file is for agents working on 
 task check                      # specification, citations, format, lint, tests
 task build
 aep plan artifact validate
-python3 -I scripts/check-citations [dump | fix]   # each ess/ `read from:` against its needles (ess/domains/<doc>.citations.tsv)
+python3 -I scripts/check-citations --require-digests [dump | fix | accept <doc>:<line>...]   # each ess/ `read from:` against its needles and digest (ess/domains/<doc>.citations.tsv); accept records a digest after a person read the lines
 git add <paths> && b10x-gates bot -- commit -F <file>   # staging is plain git; the route refuses add
 b10x-gates scan-text --policy <file> <path>...           # or B10X_GATES_POLICY; no policy found is "not scanned", never "passed"
 cargo run -p b10x-takt-cli -- run --repo <path> --intent "<text>" --iterations 1

@@ -464,3 +464,208 @@ fn fix_keeps_the_length_of_a_range_its_needles_do_not_fill() {
         "{domain}"
     );
 }
+
+// Digests: a line citation's row records the sha256 of its cited lines, so a change to any line
+// of the range, its interior included, fails the check.
+
+/// Runs the checker on `repo` with `args` after `--repo`.
+fn run(repo: &Path, args: &[&str]) -> Output {
+    Command::new("python3")
+        .arg("-I")
+        .arg(SCRIPT)
+        .arg("--repo")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("python3 runs the checker")
+}
+
+/// [`tree`] with `alpha` cited whole (lines 2-4, on `d.yaml:4`) and a digest accepted for each
+/// line citation (`d.yaml:4`, `:5`, `:6`), so it passes `--require-digests`.
+fn digested_tree(at: &Path) -> PathBuf {
+    let repo = tree(at);
+    edit(
+        &repo.join("ess/domains/d.yaml"),
+        "lib.rs:2\n",
+        "lib.rs:2-4\n",
+    );
+    edit(
+        &repo.join("ess/domains/d.citations.tsv"),
+        "\tpub fn alpha()\n",
+        "\tpub fn alpha() && }\n",
+    );
+    let output = run(
+        &repo,
+        &[
+            "accept",
+            "ess/domains/d.yaml:4",
+            "ess/domains/d.yaml:5",
+            "ess/domains/d.yaml:6",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "accept: {}", shown(&output));
+    let output = run(&repo, &["--require-digests", "check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "baseline: {}",
+        shown(&output)
+    );
+    repo
+}
+
+#[test]
+fn a_changed_interior_line_of_a_cited_range_fails_naming_the_citation_and_the_range() {
+    let outer = scratch("interior");
+    let repo = digested_tree(&outer.0);
+    edit(&repo.join("crates/x/src/lib.rs"), "    1\n", "    2\n");
+    let output = run(&repo, &["--require-digests", "check"]);
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(1), "{}", shown(&output));
+    assert!(
+        text.contains("ess/domains/d.yaml:4: unresolved: crates/x/src/lib.rs:2-4"),
+        "{}",
+        shown(&output)
+    );
+    assert!(
+        text.contains("the cited text changed"),
+        "{}",
+        shown(&output)
+    );
+    assert!(
+        text.contains("3: 2"),
+        "the changed line is shown: {}",
+        shown(&output)
+    );
+}
+
+#[test]
+fn require_digests_fails_a_line_citation_without_one_and_only_line_citations() {
+    let outer = scratch("require");
+    let repo = tree(&outer.0);
+    let output = run(&repo, &["--require-digests", "check"]);
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(1), "{}", shown(&output));
+    for line in [4, 5, 6] {
+        assert!(
+            text.contains(&format!("ess/domains/d.yaml:{line}: unresolved:")),
+            "line {line}: {}",
+            shown(&output)
+        );
+    }
+    assert!(
+        text.contains("2 resolved, 3 unresolved"),
+        "the section and file citations need no digest: {}",
+        shown(&output)
+    );
+}
+
+#[test]
+fn fix_moves_a_digested_citation_but_never_onto_a_changed_text() {
+    let outer = scratch("fix-digest");
+    let repo = digested_tree(&outer.0);
+    let lib = repo.join("crates/x/src/lib.rs");
+    let domain = repo.join("ess/domains/d.yaml");
+    edit(&lib, "// a fixture\n", "// a fixture\n// moved\n");
+    let output = run(&repo, &["fix"]);
+    assert_eq!(output.status.code(), Some(1), "{}", shown(&output));
+    assert!(read(&domain).contains("# read from: crates/x/src/lib.rs:3-5\n"));
+    let output = run(&repo, &["--require-digests", "check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a pure move: {}",
+        shown(&output)
+    );
+
+    edit(&lib, "// moved\n", "// moved\n// again\n");
+    edit(&lib, "    1\n", "    2\n");
+    let before = read(&domain);
+    let output = run(&repo, &["fix"]);
+    assert_eq!(output.status.code(), Some(1), "{}", shown(&output));
+    assert!(
+        stdout(&output).contains("not re-pointed: the cited text changed"),
+        "{}",
+        shown(&output)
+    );
+    let after = read(&domain);
+    assert_eq!(
+        after,
+        before.replace("lib.rs:6-7\n", "lib.rs:7-8\n"),
+        "alpha, whose text changed, stays at 3-5; beta, moved unchanged, is re-pointed"
+    );
+}
+
+#[test]
+fn accept_records_a_digest_that_check_then_passes() {
+    let outer = scratch("accept");
+    let repo = digested_tree(&outer.0);
+    let table = repo.join("ess/domains/d.citations.tsv");
+    edit(&repo.join("crates/x/src/lib.rs"), "    1\n", "    2\n");
+    let before = read(&table);
+    let output = run(&repo, &["--require-digests", "check"]);
+    assert_eq!(output.status.code(), Some(1), "{}", shown(&output));
+    let output = run(&repo, &["accept", "ess/domains/d.yaml:4"]);
+    assert_eq!(output.status.code(), Some(0), "{}", shown(&output));
+    let after = read(&table);
+    assert_ne!(after, before, "a new digest is recorded");
+    let changed: Vec<_> = before
+        .lines()
+        .zip(after.lines())
+        .filter(|(b, a)| b != a)
+        .collect();
+    assert_eq!(
+        changed.len(),
+        1,
+        "only the accepted row changes: {changed:?}"
+    );
+    let (_, row) = changed[0];
+    let digest = row.rsplit('\t').next().expect("a digest field");
+    assert!(
+        digest.len() == 71
+            && digest.starts_with("sha256:")
+            && digest[7..].chars().all(|c| c.is_ascii_hexdigit()),
+        "{row}"
+    );
+    let output = run(&repo, &["--require-digests", "check"]);
+    assert_eq!(output.status.code(), Some(0), "{}", shown(&output));
+}
+
+#[test]
+fn accept_refuses_what_it_cannot_record() {
+    let outer = scratch("accept-refused");
+    let repo = digested_tree(&outer.0);
+    let table = repo.join("ess/domains/d.citations.tsv");
+    let before = read(&table);
+    for target in [
+        "ess/domains/d.yaml:7",
+        "ess/domains/d.yaml:99",
+        "ess/domains/none.yaml:4",
+    ] {
+        let output = run(&repo, &["accept", target]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{target}: {}",
+            shown(&output)
+        );
+        assert!(
+            stdout(&output).contains(target),
+            "{target}: {}",
+            shown(&output)
+        );
+    }
+    edit(
+        &repo.join("crates/x/src/lib.rs"),
+        "pub fn alpha()",
+        "pub fn gamma()",
+    );
+    let output = run(&repo, &["accept", "ess/domains/d.yaml:4"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "needles that do not resolve are fixed first: {}",
+        shown(&output)
+    );
+    assert_eq!(read(&table), before, "nothing is recorded");
+}
