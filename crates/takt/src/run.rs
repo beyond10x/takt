@@ -333,10 +333,18 @@ const ENGINEERING: &str = ".engineering";
 /// The files that decide what pytest collects and how it reports, at any depth: a
 /// `conftest.py` can rewrite every outcome. `pyproject.toml`'s `[tool.pytest*]` tables are
 /// compared by the manifest scanner ([`pytest_config_changes`]).
-const PYTHON_FILES: &[&str] = &["conftest.py", "pytest.ini", "tox.ini", "setup.cfg"];
+const PYTHON_FILES: &[&str] = &[
+    "conftest.py",
+    "pytest.ini",
+    ".pytest.ini",
+    "pytest.toml",
+    ".pytest.toml",
+    "tox.ini",
+    "setup.cfg",
+];
 
 /// The judge surface every run guards, as a refusal names it.
-pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `tox.ini` and `setup.cfg` at any depth, `[tool.pytest*]` in `pyproject.toml`, the test command's own script and its build tool's file, and the repository's own `.engineering/judge-surface.yaml` list";
+pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini` and `setup.cfg` at any depth, `[tool.pytest*]` in `pyproject.toml`, the module and package `python -m` runs, the test command's own script and its build tool's file, and the repository's own `.engineering/judge-surface.yaml` list";
 
 /// How a program of a test command takes its options. A short option is a character of a
 /// cluster (`-eo`); one that takes an argument takes the rest of its cluster or, when that is
@@ -368,6 +376,9 @@ struct Spec {
     /// subcommands skipped before the script (`deno run`).
     operands: usize,
     subcommands: &'static [&'static str],
+    /// Options that name a module the program runs from the directory it runs in
+    /// (`python -m MODULE`), which a file or a package there replaces.
+    short_module: &'static str,
 }
 
 /// A program with no option of note.
@@ -387,6 +398,7 @@ const PLAIN: Spec = Spec {
     plus: false,
     operands: 0,
     subcommands: &[],
+    short_module: "",
 };
 
 /// A shell: `-o OPT`, `-O OPT`, `+o OPT`, `--rcfile FILE`; `-c` runs a command line.
@@ -410,7 +422,8 @@ const INTERPRETERS: &[(&[&str], Spec)] = &[
         Spec {
             short_arg: "WX",
             long_arg: &["check-hash-based-pycs"],
-            short_stop: "cm",
+            short_stop: "c",
+            short_module: "m",
             ..PLAIN
         },
     ),
@@ -864,17 +877,21 @@ struct Scanned<'w> {
     end: End,
     chdirs: Vec<&'w str>,
     files: Vec<&'w str>,
+    /// The modules an option names to run (`python -m MODULE`).
+    modules: Vec<&'w str>,
 }
 
 /// Reads the options of a program from `words[at..]` by `spec`, to the first operand.
 fn scan<'w>(words: &[&'w str], mut at: usize, spec: &Spec) -> Scanned<'w> {
     let mut chdirs = Vec::new();
     let mut files = Vec::new();
+    let mut modules = Vec::new();
     let done = |at, end, chdirs, files| Scanned {
         at,
         end,
         chdirs,
         files,
+        modules: Vec::new(),
     };
     while let Some(word) = words.get(at).copied() {
         if word == "--" {
@@ -944,6 +961,18 @@ fn scan<'w>(words: &[&'w str], mut at: usize, spec: &Spec) -> Scanned<'w> {
             }
             if spec.short_command.contains(c) {
                 return done(at, End::Command(at + 1), chdirs, files);
+            }
+            if spec.short_module.contains(c) {
+                let module = if rest.is_empty() {
+                    words.get(at + 1).copied()
+                } else {
+                    Some(rest)
+                };
+                modules.extend(module);
+                return Scanned {
+                    modules,
+                    ..done(at, End::Stop, chdirs, files)
+                };
             }
             let chdir = spec.short_chdir.contains(c);
             let file = spec.short_file.contains(c);
@@ -1121,6 +1150,15 @@ fn command_paths(
             }
             for file in scanned.files {
                 named.extend(named_from(tree, dir.as_deref(), file));
+            }
+            // `-m pkg.module` imports `pkg` from the directory it runs in first: `pkg.py` and
+            // the package `pkg/` there replace the installed one.
+            for module in scanned.modules {
+                let first = module.split('.').next().unwrap_or(module);
+                named.extend(named_from(tree, dir.as_deref(), &format!("{first}.py")));
+                named.extend(
+                    named_from(tree, dir.as_deref(), first).map(|package| format!("{package}/**")),
+                );
             }
             match scanned.end {
                 End::Stop => {}
@@ -1331,6 +1369,23 @@ fn part_matches(glob: &[char], name: &[char]) -> bool {
     }
 }
 
+/// Whether the path parts `path` lead towards what the glob parts `glob` can match: each part of
+/// the path matches the glob's part at its place, up to the path's end, or the glob reaches a
+/// `**` first. A link at such a path is on the way to what the glob guards.
+fn glob_towards(glob: &[&str], path: &[&str]) -> bool {
+    match (glob.split_first(), path.split_first()) {
+        (_, None) => true,
+        (None, Some(_)) => false,
+        (Some((&"**", _)), Some(_)) => true,
+        (Some((part, glob)), Some((name, path))) => {
+            part_matches(
+                &part.chars().collect::<Vec<_>>(),
+                &name.chars().collect::<Vec<_>>(),
+            ) && glob_towards(glob, path)
+        }
+    }
+}
+
 /// Whether the path parts `path` match the glob parts `glob`, `**` matching any number of parts.
 fn glob_matches(glob: &[&str], path: &[&str]) -> bool {
     match glob.split_first() {
@@ -1353,10 +1408,15 @@ impl JudgeSurface {
     /// The surface of a run whose validators run `runs` ([`Validator::runs`]) in `tree`.
     #[must_use]
     pub fn new(runs: &[String], tree: &Path) -> Self {
+        // What [`scripts_of`] names with a wildcard (a module's package, `pkg/**`) is guarded
+        // as a glob, everything under it with it; the rest each by itself.
+        let (globs, scripts): (Vec<String>, Vec<String>) = scripts_of(runs, tree)
+            .into_iter()
+            .partition(|path| path.contains(['*', '?']));
         Self {
-            scripts: scripts_of(runs, tree).into_iter().collect(),
+            scripts: scripts.into_iter().collect(),
             store: true,
-            globs: Vec::new(),
+            globs: globs.iter().map(|glob| fold(glob)).collect(),
         }
     }
 
@@ -1446,6 +1506,13 @@ impl JudgeSurface {
             || PYTHON_FILES.contains(&name)
             || folded == fold(JUDGE_LIST)
             || self.scripts.iter().any(|script| is_or_holds(&fold(script)))
+            // A path the repository's own list (or a module's package) names: the link is on
+            // it, or on the way towards it.
+            || self.globs.iter().any(|glob| {
+                let glob: Vec<&str> = glob.split('/').collect();
+                (1..=parts.len()).any(|len| glob_matches(&glob, &parts[..len]))
+                    || glob_towards(&glob, &parts)
+            })
     }
 
     /// Where the surface is read in `tree`: the guarded names at its root, whatever their case,
@@ -1624,17 +1691,23 @@ impl JudgeSurface {
 /// The files outside the tree that decide how cargo and rustup build and run the tests from it:
 /// `.cargo/config` and `.cargo/config.toml` in every directory above the tree, `rust-toolchain`
 /// and `rust-toolchain.toml` there, and every `config*` in `$CARGO_HOME` (`~/.cargo` when it is
-/// not set), each by its absolute path with what is at it, `None` for nothing. Read around each
+/// not set), each by its absolute path with its anchor (the directory it is found from) and what
+/// is at it, `None` for nothing; each part of the way between the anchor and the file (`.cargo`,
+/// `$CARGO_HOME`) is a path of its own, so a link there is seen as a link. Read around each
 /// judgement step and each observation: a step that changed one is refused and the file put
 /// back, and no validator records while one differs from what the run found when it began. A
-/// link is an entry by itself and never followed. Confining the step to the tree is not this.
+/// file behind a link is read through it, so its change is seen, but nothing is ever written or
+/// removed through a link. Confining the step to the tree is not this.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Outside(BTreeMap<PathBuf, Option<Entry>>);
+struct Outside(BTreeMap<PathBuf, (PathBuf, Option<Entry>)>);
 
 impl Outside {
-    /// The paths [`Outside`] reads for `tree`.
-    fn paths(tree: &Path) -> Vec<PathBuf> {
-        let mut paths = BTreeSet::new();
+    /// The paths [`Outside`] reads for `tree`, each with its anchor: the directory above the
+    /// tree it is in, or the parent of `$CARGO_HOME`. Every part between the anchor and the path
+    /// (`.cargo`, `$CARGO_HOME` itself) is a path of its own too, so a link made there is seen
+    /// as the link it is.
+    fn paths(tree: &Path) -> Vec<(PathBuf, PathBuf)> {
+        let mut paths = BTreeMap::new();
         let roots = [
             std::path::absolute(tree).ok(),
             std::fs::canonicalize(tree).ok(),
@@ -1642,25 +1715,31 @@ impl Outside {
         for root in roots.iter().flatten() {
             for above in root.ancestors().skip(1) {
                 for name in [
+                    ".cargo",
                     ".cargo/config",
                     ".cargo/config.toml",
                     "rust-toolchain",
                     "rust-toolchain.toml",
                 ] {
-                    paths.insert(above.join(name));
+                    paths.insert(above.join(name), above.to_path_buf());
                 }
             }
         }
         let home = std::env::var_os("CARGO_HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")));
-        if let Some(home) = home {
-            paths.insert(home.join("config"));
-            paths.insert(home.join("config.toml"));
-            if let Ok(entries) = std::fs::read_dir(&home) {
+        if let Some(home) = home
+            && let Some(anchor) = home.parent()
+        {
+            paths.insert(home.clone(), anchor.to_path_buf());
+            paths.insert(home.join("config"), anchor.to_path_buf());
+            paths.insert(home.join("config.toml"), anchor.to_path_buf());
+            if !std::fs::symlink_metadata(&home).is_ok_and(|meta| meta.file_type().is_symlink())
+                && let Ok(entries) = std::fs::read_dir(&home)
+            {
                 for entry in entries.flatten() {
                     if entry.file_name().to_string_lossy().starts_with("config") {
-                        paths.insert(entry.path());
+                        paths.insert(entry.path(), anchor.to_path_buf());
                     }
                 }
             }
@@ -1668,10 +1747,26 @@ impl Outside {
         paths.into_iter().collect()
     }
 
-    /// What is at each of the paths now.
+    /// The first part between `anchor` and `path`, the path itself left out, that is a link:
+    /// checked part by part with `symlink_metadata`, never followed.
+    fn link_on_the_way(anchor: &Path, path: &Path) -> Option<PathBuf> {
+        let below = path.strip_prefix(anchor).ok()?;
+        let mut way = anchor.to_path_buf();
+        let parts: Vec<_> = below.components().collect();
+        for part in parts.iter().take(parts.len().saturating_sub(1)) {
+            way.push(part);
+            if std::fs::symlink_metadata(&way).is_ok_and(|meta| meta.file_type().is_symlink()) {
+                return Some(way);
+            }
+        }
+        None
+    }
+
+    /// What is at each of the paths now. A path whose way crosses a link is read through it,
+    /// so a change there is seen, and is never written or removed through it ([`Self::put_back`]).
     fn read(tree: &Path) -> Result<Self> {
         let mut entries = BTreeMap::new();
-        for path in Self::paths(tree) {
+        for (path, anchor) in Self::paths(tree) {
             let entry = match std::fs::symlink_metadata(&path) {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 // A path whose way is not a directory (`.cargo` a file) holds nothing.
@@ -1695,30 +1790,43 @@ impl Outside {
                 Ok(meta) if meta.is_dir() => Some(Entry::Other("directory")),
                 Ok(meta) => Some(Entry::Other(other_kind(meta.file_type()))),
             };
-            entries.insert(path, entry);
+            entries.insert(path, (anchor, entry));
         }
         Ok(Self(entries))
     }
 
-    /// The paths at which `now` differs from this, in path order.
+    /// The paths at which `now` differs from this, in path order: a part of the way (`.cargo`)
+    /// before what is under it.
     fn differing(&self, now: &Self) -> Vec<PathBuf> {
+        let entry = |outside: &Self, path: &PathBuf| {
+            outside.0.get(path).and_then(|(_, entry)| entry.clone())
+        };
         self.0
             .keys()
             .chain(now.0.keys())
-            .filter(|path| {
-                self.0.get(*path).cloned().flatten() != now.0.get(*path).cloned().flatten()
-            })
+            .filter(|path| entry(self, path) != entry(now, path))
             .cloned()
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
     }
 
-    /// Puts each path where the tree's outside now differs from this back: what was created is
-    /// removed, what was changed or removed is written again (a link made again); what was
-    /// neither a file nor a link cannot be made again and stays removed.
-    fn put_back(&self, tree: &Path) -> Result<()> {
+    /// Puts each path where the tree's outside now differs from this back, in path order: what
+    /// was created is removed (a link as the link itself), what was changed or removed is written
+    /// again (a link made again, a directory made again empty). Nothing is ever written or
+    /// removed through a link: a path whose way crosses one, checked part by part, is left as it
+    /// is and answered, for the refusal to name.
+    fn put_back(&self, tree: &Path) -> Result<Vec<PathBuf>> {
+        let mut left = Vec::new();
         for path in self.differing(&Self::read(tree)?) {
+            let anchor = match self.0.get(&path) {
+                Some((anchor, _)) => anchor.clone(),
+                None => continue,
+            };
+            if Self::link_on_the_way(&anchor, &path).is_some() {
+                left.push(path);
+                continue;
+            }
             if let Ok(meta) = std::fs::symlink_metadata(&path) {
                 if meta.is_dir() {
                     std::fs::remove_dir_all(&path)
@@ -1727,7 +1835,7 @@ impl Outside {
                 }
                 .with_context(|| format!("remove {}", path.display()))?;
             }
-            match self.0.get(&path).cloned().flatten() {
+            match self.0.get(&path).and_then(|(_, entry)| entry.clone()) {
                 Some(Entry::File { bytes, executable }) => {
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent)
@@ -1736,10 +1844,12 @@ impl Outside {
                     put_back_file(&path, &bytes, executable)?;
                 }
                 Some(Entry::Link(target)) => make_link(&target, &path)?,
+                Some(Entry::Other("directory")) => std::fs::create_dir_all(&path)
+                    .with_context(|| format!("create {}", path.display()))?,
                 Some(Entry::Other(_)) | None => {}
             }
         }
-        Ok(())
+        Ok(left)
     }
 }
 
@@ -3257,6 +3367,9 @@ impl<'a> Run<'a> {
                 let observed = validator
                     .observe_waiting(&self.tree, &revision, seq)
                     .with_context(|| format!("{} ({})", validator.action(), validator.name()));
+                // What the observation left running is killed before anything is looked at;
+                // one that could not be killed is named with the rest of what it left.
+                let swept = crate::forge::sweep_left();
                 let git_dir = checkpoint.put_back_git_dir(&self.tree);
                 let mut planted = git_dir.touched;
                 planted.extend(
@@ -3265,6 +3378,9 @@ impl<'a> Run<'a> {
                         .into_iter()
                         .map(|path| format!("not put back: {path}")),
                 );
+                if let Err(error) = swept {
+                    planted.push(format!("processes still running: {error:#}"));
+                }
                 // What the observation left on the judge surface; a read that fails (a file
                 // the run may not read) discards everything it did before the run ends on the
                 // error.
@@ -3336,8 +3452,11 @@ impl<'a> Run<'a> {
                     restore(&cases, &kept, &touched)?;
                     undo_step(&self.tree, &checkpoint, &cases, &kept)?;
                     surface.put_back(&self.tree, &surface_kept)?;
-                    outside_kept.put_back(&self.tree)?;
+                    let left = outside_kept.put_back(&self.tree)?;
                     foreign.extend(outside);
+                    foreign.extend(left.iter().map(|path| {
+                        format!("not put back, its way crosses a link: {}", path.display())
+                    }));
                     let mut why = format!(
                         "{} wrote what its validator does not: {}",
                         validator.action(),
@@ -3589,6 +3708,9 @@ impl<'a> Run<'a> {
             let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.harness.step(&context)
             }));
+            // What the step left running (a writer in a process group of its own) is killed
+            // before anything it did is looked at, so nothing lands after the step is judged.
+            let swept = crate::forge::sweep_left();
             // What git runs or reads as configuration first: every git call after this one
             // would read what the step planted there. Nothing in it ends early; a path it could
             // not put back is named in the refusal below.
@@ -3597,7 +3719,7 @@ impl<'a> Run<'a> {
             let undo = || -> Result<()> {
                 undo_step(&tree, &checkpoint, &cases, &kept)?;
                 surface.put_back(&tree, &surface_kept)?;
-                outside_before.put_back(&tree)
+                outside_before.put_back(&tree).map(|_| ())
             };
             let stepped = match stepped {
                 Ok(stepped) => stepped,
@@ -3611,6 +3733,20 @@ impl<'a> Run<'a> {
                     std::panic::resume_unwind(panic);
                 }
             };
+            // A step whose leftovers could not all be killed is not judged: it is discarded
+            // whole and the run ends on the error.
+            if let Err(error) = swept {
+                return Err(match undo() {
+                    Ok(()) => error.context(format!(
+                        "step {}: what the step left running could not be killed; everything it changed was discarded",
+                        self.steps
+                    )),
+                    Err(undo) => error.context(format!(
+                        "step {}: what the step left running could not be killed, and its change could not be discarded: {undo:#}",
+                        self.steps
+                    )),
+                });
+            }
             // What the step left, read now; a read that fails (a file the run may not read)
             // discards the step before the run ends on the error.
             let seen =
@@ -3802,11 +3938,35 @@ impl<'a> Run<'a> {
             };
             if !manifests.is_empty() {
                 undo()?;
-                let why = format!(
-                    "{} changed how cargo builds or runs the tests: {}",
-                    report.action,
-                    manifests.join(", ")
-                );
+                // Each entry starts with the path it is about: pytest's tables in a
+                // `pyproject.toml`, else cargo's manifests and what cargo reads.
+                let (pytest, cargo): (Vec<&String>, Vec<&String>) =
+                    manifests.iter().partition(|entry| {
+                        entry
+                            .split_once(": ")
+                            .is_some_and(|(path, _)| is_pyproject(path))
+                    });
+                let join = |entries: &[&String]| {
+                    entries
+                        .iter()
+                        .map(|entry| entry.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let mut parts = Vec::new();
+                if !cargo.is_empty() {
+                    parts.push(format!(
+                        "changed how cargo builds or runs the tests: {}",
+                        join(&cargo)
+                    ));
+                }
+                if !pytest.is_empty() {
+                    parts.push(format!(
+                        "changed how pytest collects or reports the tests: {}",
+                        join(&pytest)
+                    ));
+                }
+                let why = format!("{} {}", report.action, parts.join("; and "));
                 record_step(self)?;
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "  refused: {why}; the change was discarded")?;
@@ -3827,11 +3987,19 @@ impl<'a> Run<'a> {
             };
             if !outside_changed.is_empty() {
                 undo()?;
-                let why = format!(
+                // What is still not as it was is behind a link, never written through.
+                let left = outside_before.differing(&Outside::read(&self.tree)?);
+                let mut why = format!(
                     "{} changed what cargo or rustup reads outside the tree: {}",
                     report.action,
                     outside_named(&outside_changed)
                 );
+                if !left.is_empty() {
+                    why.push_str(&format!(
+                        "; not put back, its way crosses a link: {}",
+                        outside_named(&left)
+                    ));
+                }
                 record_step(self)?;
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(

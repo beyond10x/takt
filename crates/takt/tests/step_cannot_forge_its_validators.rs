@@ -1235,3 +1235,229 @@ fn an_edit_off_the_judge_surface_is_accepted() {
     );
     assert_eq!(ran.passes().len(), 1, "{:?}\n{}", ran.records, ran.text);
 }
+
+/// Reviewer route M10: `python3 -m <module>` imports `<module>.py` or the package `<module>/`
+/// from the directory it runs in before the installed one, so a step that writes either at the
+/// tree's root replaces the module the test command runs (a `pytest.py` that exits 0). Both are
+/// refused, and so is the dotted form's first part.
+#[test]
+fn a_module_the_test_command_runs_with_python_m_is_guarded() {
+    for (command, path) in [
+        ("python3 -B -m checker", "checker.py"),
+        ("python3 -B -m checker", "checker/__main__.py"),
+        ("python3 -B -m checker.sub -q", "checker/sub.py"),
+    ] {
+        let tree = repository("python-m", &[("README.md", "a story\n", false)]);
+        fs::write(tree.root.join("payload"), path).expect("a file");
+        let ran = run(&tree, command, |tree| {
+            let path =
+                fs::read_to_string(tree.parent().expect("the root").join("payload")).expect("read");
+            write(tree, &path, "import sys\nsys.exit(0)\n");
+        });
+        assert_refused_and_put_back(&tree, &ran, path);
+    }
+}
+
+/// Reviewer routes M11a/b: pytest also reads `.pytest.ini`, `pytest.toml` and `.pytest.toml`;
+/// `addopts = --collect-only` in any of them passes every run.
+#[test]
+fn pytest_dotfile_and_toml_configuration_is_refused() {
+    for (path, text) in [
+        (".pytest.ini", "[pytest]\naddopts = --collect-only\n"),
+        ("pytest.toml", "[pytest]\naddopts = [\"--collect-only\"]\n"),
+        (".pytest.toml", "[pytest]\naddopts = [\"--collect-only\"]\n"),
+    ] {
+        let tree = repository("pytest-more", &[("check.sh", FAILING_CHECK, true)]);
+        fs::write(tree.root.join("payload"), format!("{path}\n{text}")).expect("a file");
+        let ran = run(&tree, "./check.sh", |tree| {
+            let payload =
+                fs::read_to_string(tree.parent().expect("the root").join("payload")).expect("read");
+            let (path, text) = payload.split_once('\n').expect("a payload");
+            write(tree, path, text);
+        });
+        assert_refused_and_put_back(&tree, &ran, path);
+    }
+}
+
+/// Reviewer route M12: the repository's list names `ci/**`, and the base holds `ci` as a link to
+/// `tools`: what the list guards is read through the link, so no judgement step is taken while
+/// it is there, as for a link on the default surface.
+#[test]
+fn a_link_towards_a_path_the_repository_list_names_locks_steps_out() {
+    let tree = repository(
+        "list-link",
+        &[
+            ("check.sh", FAILING_CHECK, true),
+            (".engineering/judge-surface.yaml", "- ci/**\n", false),
+            ("tools/run.sh", "#!/bin/sh\nexit 1\n", false),
+        ],
+    );
+    std::os::unix::fs::symlink("tools", tree.join("ci")).expect("a link");
+    git(&tree, &["add", "-A"]);
+    git(&tree, &["commit", "-q", "--amend", "-m", "start"]);
+    let ran = run(&tree, "./check.sh", |tree| {
+        write(tree, "tools/run.sh", "#!/bin/sh\nexit 0\n");
+    });
+    assert_refused_and_put_back(&tree, &ran, "ci -> tools");
+}
+
+/// Reviewer route M15: a step that makes `.cargo` above the tree a link to a directory that
+/// already holds a `config.toml`. The put-back removes the link it made and never removes or
+/// writes through it: the file it pointed at is still there, as it was.
+#[test]
+fn putting_back_above_the_tree_never_goes_through_a_link() {
+    let tree = repository("above-link", &[("check.sh", FAILING_CHECK, true)]);
+    let elsewhere = tree.root.join("elsewhere/config.toml");
+    fs::create_dir_all(elsewhere.parent().expect("a parent")).expect("a directory");
+    fs::write(&elsewhere, "kept = true\n").expect("a file");
+    let ran = run(&tree, "./check.sh", |tree| {
+        std::os::unix::fs::symlink("elsewhere", tree.join("../.cargo")).expect("a link");
+    });
+    assert!(ran.refusal().contains(".cargo"), "{}", ran.text);
+    assert_eq!(
+        fs::read_to_string(&elsewhere).ok().as_deref(),
+        Some("kept = true\n"),
+        "the put-back went through the link\n{}",
+        ran.text
+    );
+    assert!(
+        fs::symlink_metadata(tree.root.join(".cargo")).is_err(),
+        "the link the step made is left\n{}",
+        ran.text
+    );
+}
+
+/// The refusal of a change to pytest's tables in `pyproject.toml` names pytest, not cargo.
+#[test]
+fn a_pyproject_refusal_does_not_speak_of_cargo() {
+    let tree = repository(
+        "pyproject-wording",
+        &[
+            ("check.sh", FAILING_CHECK, true),
+            ("pyproject.toml", "[project]\nname = \"p\"\n", false),
+        ],
+    );
+    let ran = run(&tree, "./check.sh", |tree| {
+        fs::write(
+            tree.join("pyproject.toml"),
+            "[project]\nname = \"p\"\n\n[tool.pytest.ini_options]\naddopts = \"-q\"\n",
+        )
+        .expect("a file");
+    });
+    let why = ran.refusal();
+    assert!(why.contains("pyproject.toml"), "{why}");
+    assert!(!why.contains("cargo"), "{why}");
+}
+
+/// A judgement step whose harness leaves a writer running in a process group of its own: the
+/// group is killed once the step is over, so nothing it would write lands in the tree after it,
+/// between steps or after the run.
+#[test]
+fn a_writer_a_step_leaves_running_is_killed_with_its_group() {
+    use std::os::unix::process::CommandExt as _;
+    let tree = repository("late-writer", &[("check.sh", FAILING_CHECK, true)]);
+    let ran = run(&tree, "./check.sh", |tree| {
+        // Left running on purpose: the run kills and reaps it once the step is over.
+        #[allow(clippy::zombie_processes)]
+        Command::new("sh")
+            .args(["-c", "sleep 1; echo late > late.txt"])
+            .current_dir(tree)
+            .process_group(0)
+            .spawn()
+            .expect("a writer");
+    });
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    assert!(
+        !tree.join("late.txt").exists(),
+        "a writer the step left wrote into the tree after it\n{:?}\n{}",
+        ran.stop,
+        ran.text
+    );
+}
+
+/// Out of this story, recorded on story:confinement-seam (reviewer route M8): a `cargo` wrapper
+/// a step writes into a directory on the test command's `PATH` outside the tree runs instead of
+/// cargo and exits 0.
+#[test]
+#[ignore = "confinement-seam: a program in a user-writable PATH directory outside the tree (M8) is confinement, not the step guard"]
+fn a_cargo_wrapper_on_the_path_outside_the_tree_earns_no_pass() {
+    let tree = repository(
+        "path-wrapper",
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"m\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
+                false,
+            ),
+            (
+                "src/lib.rs",
+                "#[test]\nfn the_only_test() {\n    panic!(\"fails\");\n}\n",
+                false,
+            ),
+        ],
+    );
+    let locked = Command::new("cargo")
+        .args(["generate-lockfile", "--offline", "--quiet"])
+        .current_dir(&*tree)
+        .status()
+        .expect("cargo runs");
+    assert!(locked.success(), "the lock file is generated");
+    git(&tree, &["add", "Cargo.lock"]);
+    git(&tree, &["commit", "-q", "--amend", "-m", "start"]);
+    let cargo = std::env::var("CARGO").expect("cargo runs the tests");
+    let real = Path::new(&cargo)
+        .parent()
+        .expect("a directory")
+        .display()
+        .to_string();
+    let bin = tree.root.join("bin");
+    fs::create_dir_all(&bin).expect("a directory");
+    let command = format!(
+        "env PATH={}:{real}:/usr/bin:/bin cargo test --quiet --offline",
+        bin.display()
+    );
+    let ran = run(&tree, &command, |tree| {
+        let wrapper = tree.parent().expect("the root").join("bin/cargo");
+        fs::write(&wrapper, "#!/bin/sh\nexit 0\n").expect("a wrapper");
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).expect("a mode");
+        write(
+            tree,
+            "src/lib.rs",
+            "// touched\n#[test]\nfn the_only_test() {\n    panic!(\"fails\");\n}\n",
+        );
+    });
+    assert!(ran.passes().is_empty(), "{:?}\n{}", ran.records, ran.text);
+}
+
+/// Out of this story, recorded on story:confinement-seam (reviewer route M9): a test command
+/// that starts a writer which leaves its process group and outlives the observation, writing
+/// into the tree between runs. `setsid` alone is caught: takt adopts the orphan as its
+/// subreaper and kills what is in another session. Rejoining takt's own process group with the
+/// call's mark dropped from the environment is not.
+#[test]
+#[ignore = "confinement-seam: a writer escaping the process group (M9, setsid or rejoining takt's own group with the mark dropped) is confinement, not the step guard"]
+fn a_writer_escaping_the_process_group_writes_nothing_after_the_observation() {
+    let tree = repository(
+        "escaping-writer",
+        &[
+            (
+                "check.sh",
+                "#!/bin/sh\nenv -u TAKT_CHILD python3 writer.py \"$PPID\" </dev/null >/dev/null 2>&1\nexit 0\n",
+                true,
+            ),
+            (
+                "writer.py",
+                "import os, sys, time\nos.setpgid(0, os.getpgid(int(sys.argv[1])))\nif os.fork() == 0:\n    time.sleep(1)\n    open(\"late.txt\", \"w\").write(\"late\")\n    os._exit(0)\n",
+                false,
+            ),
+        ],
+    );
+    let ran = run(&tree, "./check.sh", |_| {});
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    assert!(
+        !tree.join("late.txt").exists(),
+        "a writer the test command started wrote into the tree after it\n{:?}\n{}",
+        ran.stop,
+        ran.text
+    );
+}
