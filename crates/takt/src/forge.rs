@@ -108,21 +108,17 @@ impl fmt::Display for Failed {
 
 impl std::error::Error for Failed {}
 
-/// How the forge words a required check that has not reported: expected, in progress, pending
-/// or queued.
-const CHECK_PENDING: [&str; 8] = [
-    "is expected",
-    "are expected",
-    "is in progress",
-    "are in progress",
-    "is pending",
-    "are pending",
-    "is queued",
-    "are queued",
-];
+/// How the forge words the state of a required check that has not reported, after `is` or
+/// `are`.
+const CHECK_PENDING: [&str; 4] = ["expected", "in progress", "pending", "queued"];
 
-/// How the forge words a required check that failed.
-const CHECK_FAILING: [&str; 4] = ["is failing", "are failing", "has failed", "have failed"];
+/// What `b10x-gates api` prints before the forge's own message for a refused write:
+/// `b10x-gates: GitHub operation failed (<status>): <message>`.
+const GATES_PREFIX: &str = "b10x-gates: GitHub operation failed (";
+
+/// The heading of a ruleset's refusal, which runs into its first rule once `b10x-gates` has
+/// dropped the newlines between them.
+const RULESET_HEADING: &str = "repository rule violations found";
 
 /// The forge's own words in one layer of an error: a [`Failed`] program's standard error, or,
 /// from an adapter that reports a program's failure as text, what follows its `exited <code>: `.
@@ -142,23 +138,77 @@ fn forge_words(cause: &(dyn std::error::Error + 'static)) -> Option<String> {
     })
 }
 
-/// Whether the forge's `words` refuse a merge for a required check that has not reported: the
-/// status phrase after the check, its quoted name left out (a check named `fail-fast` is a
-/// name, not a status). A failing check among them is a failure, not a wait.
+/// The forge's message in `words`, its prefix left out: what follows `b10x-gates`' own
+/// prefix and status (`None` when `b10x-gates` withheld the message), or else what follows a
+/// leading HTTP status code (`405 <message>`, as an adapter that reports text passes it on).
+fn forge_message(words: &str) -> Option<&str> {
+    let words = words.trim();
+    if let Some(rest) = words.strip_prefix(GATES_PREFIX) {
+        return rest.split_once("): ").map(|(_, message)| message);
+    }
+    let digits = words.chars().take_while(char::is_ascii_digit).count();
+    Some(
+        (digits > 0)
+            .then(|| words[digits..].strip_prefix(' '))
+            .flatten()
+            .unwrap_or(words),
+    )
+}
+
+/// Whether one clause of a refusal, lowercased and its quoted check name emptied to `""`, says
+/// a required status check has not reported: `required status check "" is <pending>`, or
+/// `<n> of <m> required status checks are <pending>`. Nothing else is.
+fn pending_check_clause(clause: &str) -> bool {
+    if let Some(state) = clause.strip_prefix("required status check \"\" is ") {
+        return CHECK_PENDING.contains(&state);
+    }
+    let mut words = clause.splitn(4, ' ');
+    let count = |word: Option<&str>| {
+        word.is_some_and(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit()))
+    };
+    count(words.next())
+        && words.next() == Some("of")
+        && count(words.next())
+        && words
+            .next()
+            .and_then(|rest| rest.strip_prefix("required status checks are "))
+            .is_some_and(|state| CHECK_PENDING.contains(&state))
+}
+
+/// Whether the forge's `words` refuse a merge only for required checks that have not reported.
+/// A positive rule: past the forge's prefix ([`forge_message`]) and a ruleset's heading, every
+/// clause (split at `.` and `;`, outside the quoted check names) must be a pending-check clause
+/// ([`pending_check_clause`]). A failing check, an approving or code-owner review, an unresolved
+/// conversation, a signed-commits rule or any clause it does not know makes the refusal an
+/// error. A check name is a name, never a state (`"fail-fast"` is pending when it is expected);
+/// words with an unbalanced quote cannot be read that way, and are an error.
 fn pending_check_refusal(words: &str) -> bool {
+    if !words.matches('"').count().is_multiple_of(2) {
+        return false;
+    }
+    let Some(message) = forge_message(words) else {
+        return false;
+    };
     let mut status = String::new();
     let mut quoted = false;
-    for c in words.chars() {
+    for c in message.chars() {
         if c == '"' {
+            if !quoted {
+                status.push_str("\"\"");
+            }
             quoted = !quoted;
         } else if !quoted {
-            status.push(c);
+            status.extend(c.to_lowercase());
         }
     }
-    let status = status.to_lowercase();
-    status.contains("required status check")
-        && !CHECK_FAILING.iter().any(|phrase| status.contains(phrase))
-        && CHECK_PENDING.iter().any(|phrase| status.contains(phrase))
+    let status = status.trim();
+    let status = status.strip_prefix(RULESET_HEADING).unwrap_or(status);
+    let mut clauses = status
+        .split(['.', ';'])
+        .map(str::trim)
+        .filter(|clause| !clause.is_empty())
+        .peekable();
+    clauses.peek().is_some() && clauses.all(pending_check_clause)
 }
 
 /// Whether `error`, the failure of a [`Forge::merge`], is the forge refusing the merge for a

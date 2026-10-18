@@ -879,6 +879,8 @@ fn only_a_refusal_for_a_check_that_has_not_reported_is_waited_on() {
         "exited 1: 405 Required status check \"task check\" is expected",
         "exited 1: 405 2 of 3 required status checks are expected.",
         "exited 1: 405 Required status check \"task check\" is in progress",
+        "exited 1: 405 Repository rule violations foundRequired status check \"a. b; c\" is expected.",
+        "exited 1: 405 Required status check \"a\" is expected.; Required status check \"b\" is queued.",
     ] {
         assert!(
             takt::forge::refused_for_a_pending_check(&refusal(waited)),
@@ -887,6 +889,13 @@ fn only_a_refusal_for_a_check_that_has_not_reported_is_waited_on() {
     }
     for refused in [
         "exited 1: 405 Required status check \"task check\" is failing",
+        "exited 1: 405 Required status check \"a\" is expected.; Required status check \"b\" is failing.",
+        "exited 1: 405 Repository rule violations foundWaiting on code owner review by @o/team.Required status check \"a\" is expected.",
+        "exited 1: 405 Repository rule violations foundRequired status check \"a\" is expected.All comments must be resolved.",
+        "exited 1: 405 Repository rule violations foundCommits must have verified signatures.Required status check \"a\" is expected.",
+        "exited 1: 405 Required status check \"a is expected",
+        "exited 1: 405 Required status check is expected",
+        "exited 1: 405 ",
         "exited 1: 405 Pull Request is not mergeable",
         "exited 1: 409 Head branch was modified. Review and try the merge again.",
         "exited 1: 422 Unprocessable Entity",
