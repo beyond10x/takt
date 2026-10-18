@@ -1,0 +1,10 @@
+{
+  "format": "canon-evidence/1",
+  "id": "e2",
+  "kind": "scenario_result",
+  "result": "reproduced",
+  "subject": "baseline",
+  "subject_revision": "0a776d2",
+  "observed_at": "2026-10-18T14:40:03Z",
+  "producer": "planner-run"
+}

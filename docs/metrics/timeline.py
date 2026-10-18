@@ -183,7 +183,10 @@ def build():
             b, c = sc["baseline"]["tokens_median"], sc["candidate"]["tokens_median"]
             lines.append(f'scorecard: {t["scorecard_result"]}, median tokens {(c - b) / b * 100:+.0f}% '
                          f'(n={len(sc["candidate"]["runs"])})')
-        lines.append(f'merged at {t["merged"]["sha"]}; promoted: {t["promoted_at"] or "not yet"}')
+        lines.append(f'merged at {t["merged"]["sha"]}; '
+                     + (f'promoted at {t["promoted_at"]}' if t.get("promoted_at") else 'not yet promoted'))
+        if t.get("outcome"):
+            lines.append(f'outcome: {t["outcome"]}')
         for k, line in enumerate(lines):
             o.append(f'<text x="{x + 7:.1f}" y="{T + 26 + 13 * k}" font-size="10" '
                      f'fill="currentColor">{esc(line)}</text>')
