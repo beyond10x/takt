@@ -1,7 +1,7 @@
 //! `takt`: drive a repository's work through engineering protocols, every step validated.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context as _, Result, anyhow};
@@ -73,6 +73,10 @@ struct RunArgs {
     /// it exists.
     #[arg(long, default_value = ".engineering/gates.yaml")]
     gates: PathBuf,
+    /// The `engineering-assertions-project/1` file that admits the commands and providers the
+    /// gates bind, relative to the repository; given to the gate validator when it exists.
+    #[arg(long, default_value = ".engineering/assertions-project.yaml")]
+    project: PathBuf,
 }
 
 /// A harness that performs nothing: the loop stops when only judgement steps are left.
@@ -130,6 +134,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 case_id,
                 gate,
                 gates,
+                project,
             } = *args;
             let repo = repo
                 .canonicalize()
@@ -176,8 +181,14 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 other => return Err(anyhow!("no harness `{other}`: claude or none")),
             };
             let mut validators: Vec<Box<dyn Validator>> = vec![Box::new(TestsRun::new(&test_cmd)?)];
+            let gates = under_repository(&repo, "gates", gates)?;
+            let project = under_repository(&repo, "project", project)?;
             if repo.join(&gates).is_file() {
-                validators.push(Box::new(GateRun::new(gates)));
+                let mut gate = GateRun::new(gates);
+                if repo.join(&project).is_file() {
+                    gate = gate.with_project(project);
+                }
+                validators.push(Box::new(gate));
             }
             // The unit: the intent given, or else the next ready story of the planning store;
             // the case is opened before the store is told, so a run that cannot open its case
@@ -215,6 +226,35 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             })
         }
     }
+}
+
+/// `path`, given to `--<flag>` to name a file of the repository, relative to `repo`: an absolute
+/// path under the repository is made relative; a path not under it, absolute elsewhere or
+/// climbing out through `..`, is refused before any case is opened.
+fn under_repository(repo: &Path, flag: &str, path: PathBuf) -> Result<PathBuf> {
+    let refused = |shown: &Path| {
+        anyhow!(
+            "--{flag} {}: not under the repository {}",
+            shown.display(),
+            repo.display()
+        )
+    };
+    let relative = if path.is_absolute() {
+        let resolved = path.canonicalize().unwrap_or_else(|_| path.clone());
+        resolved
+            .strip_prefix(repo)
+            .map(Path::to_path_buf)
+            .map_err(|_| refused(&path))?
+    } else {
+        path
+    };
+    if relative
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
+        return Err(refused(&relative));
+    }
+    Ok(relative)
 }
 
 fn b10x_canon_engineering_list() -> Vec<(String, u32)> {

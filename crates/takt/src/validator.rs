@@ -14,6 +14,27 @@ pub struct Observation {
     pub summary: String,
     /// The evidence records the observation yields.
     pub records: Vec<Record>,
+    /// What the validator retains beside its records, when it keeps something: the
+    /// observation as its provider wrote it, kept under the case as `artifacts/<name>`.
+    pub artifact: Option<Artifact>,
+}
+
+/// One file a validator retains with an observation.
+#[derive(Clone)]
+pub struct Artifact {
+    /// The file name under the case's `artifacts/`.
+    pub name: String,
+    /// The file's bytes.
+    pub bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for Artifact {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Artifact")
+            .field("name", &self.name)
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
 }
 
 /// A program that performs one deterministic action and answers evidence.
@@ -105,18 +126,29 @@ impl Validator for TestsRun {
                 tail.chars().take(300).collect::<String>()
             ),
             records: vec![record],
+            artifact: None,
         })
     }
 }
+
+/// The project file a gates document is evaluated with when the validator is given none and
+/// the tree has it: `engineering-assertions-project/1`, at the path the assertions guide names.
+pub const DEFAULT_PROJECT: &str = ".engineering/assertions-project.yaml";
 
 /// `gate.run`: evaluates the repository's `engineering-gates/1` document through the
 /// engineering assertions library, as `canon-engineering gates run` does. Every gate true is
 /// `pass`, any gate false is `fail`; an unknown evaluation writes no record, because a claim
 /// that could not be observed stays unknown; an invalid document or provider datum is an error.
+/// The project file admits the commands and providers the gates bind. Every observation
+/// retains the bundle the library evaluated, `engineering-gate-evidence/1`, as
+/// `<record-id>.bundle.json`.
 #[derive(Debug, Clone)]
 pub struct GateRun {
     /// The gates document, relative to the tree.
     pub gates: PathBuf,
+    /// The `engineering-assertions-project/1` file that admits the gates' commands and
+    /// providers, relative to the tree; `None` takes [`DEFAULT_PROJECT`] when the tree has it.
+    pub project: Option<PathBuf>,
 }
 
 impl GateRun {
@@ -125,7 +157,15 @@ impl GateRun {
     pub fn new(gates: impl Into<PathBuf>) -> Self {
         Self {
             gates: gates.into(),
+            project: None,
         }
+    }
+
+    /// With the project file at `project`, relative to the tree.
+    #[must_use]
+    pub fn with_project(mut self, project: impl Into<PathBuf>) -> Self {
+        self.project = Some(project.into());
+        self
     }
 }
 
@@ -148,9 +188,21 @@ impl Validator for GateRun {
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
         let document = self.gates.display();
+        let project = self.project.clone().or_else(|| {
+            tree.join(DEFAULT_PROJECT)
+                .is_file()
+                .then(|| PathBuf::from(DEFAULT_PROJECT))
+        });
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        let prepared = canon_engineering_assertions::prepare(tree, &self.gates, None, None)
-            .with_context(|| format!("prepare the gates document {document}"))?;
+        let prepared =
+            canon_engineering_assertions::prepare(tree, &self.gates, project.as_deref(), None)
+                .with_context(|| match &project {
+                    Some(project) => format!(
+                        "prepare the gates document {document} with the project file {}",
+                        project.display()
+                    ),
+                    None => format!("prepare the gates document {document}"),
+                })?;
         let bundle = canon_engineering_assertions::collect(prepared, now)
             .with_context(|| format!("collect the observations of {document}"))?;
         let report = canon_engineering_assertions::evaluate(&bundle, now, None, None)
@@ -181,6 +233,7 @@ impl Validator for GateRun {
             ),
             None => format!("no assertion is {truth}"),
         };
+        let artifact = format!("gate-result-{seq}.bundle.json");
         let (result, summary) = match report.truth {
             canon_expr::Truth::True => {
                 let gates: Vec<&str> = bundle
@@ -192,19 +245,22 @@ impl Validator for GateRun {
                 (
                     Some("pass"),
                     format!(
-                        "the gates document {document}: pass; every gate true: {}",
+                        "the gates document {document}: pass; every gate true: {}; retained as {artifact}",
                         gates.join(", ")
                     ),
                 )
             }
             canon_expr::Truth::False => (
                 Some("fail"),
-                format!("the gates document {document}: fail; {}", decided("false")),
+                format!(
+                    "the gates document {document}: fail; {}; retained as {artifact}",
+                    decided("false")
+                ),
             ),
             canon_expr::Truth::Unknown => (
                 None,
                 format!(
-                    "the gates document {document}: unknown; {}; no record, the claim stays unknown",
+                    "the gates document {document}: unknown; {}; no record, the claim stays unknown; retained as {artifact}",
                     decided("unknown")
                 ),
             ),
@@ -221,6 +277,14 @@ impl Validator for GateRun {
                 )]
             })
             .unwrap_or_default();
-        Ok(Observation { summary, records })
+        let bytes = serde_json::to_vec_pretty(&bundle).context("serialize the evaluated bundle")?;
+        Ok(Observation {
+            summary,
+            records,
+            artifact: Some(Artifact {
+                name: artifact,
+                bytes,
+            }),
+        })
     }
 }

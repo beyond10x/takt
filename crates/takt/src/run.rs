@@ -2,6 +2,7 @@
 //! until an outcome is legitimate, an approval is needed, nothing is admissible, a step is
 //! refused, or the stop criteria are met.
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -234,6 +235,10 @@ impl<'a> Run<'a> {
         )?;
         let mut seq = 0usize;
         let mut last_idle: Option<String> = None;
+        // The validators that observed without writing a record, each with the revision it
+        // observed at: not due again there, because the next observation would end the same
+        // way; a commit moves the revision and makes them due again.
+        let mut observed_without_record: BTreeSet<(String, String)> = BTreeSet::new();
         loop {
             seq += 1;
             let decision = self.case.evaluate(seq)?;
@@ -253,14 +258,24 @@ impl<'a> Run<'a> {
                 return Ok(stop);
             }
             let admissible = decision.admissible();
-            // A deterministic step first: a validator whose action is admissible and whose
-            // evidence is missing at the current revision.
+            // The judgement actions: the admissible ones no validator owns.
+            let offered: Vec<String> = admissible
+                .iter()
+                .filter(|a| !self.validators.iter().any(|v| v.action() == a.as_str()))
+                .cloned()
+                .collect();
+            // A deterministic step first: a validator whose action is admissible, whose
+            // evidence is missing at the current revision, and which has not already observed
+            // without a record there.
             let due = self.validators.iter().find(|v| {
                 admissible.iter().any(|a| a == v.action())
                     && !self
                         .case
                         .has_evidence(v.kind(), v.subject())
                         .unwrap_or(true)
+                    && !self.case.revision(v.subject()).is_some_and(|revision| {
+                        observed_without_record.contains(&(v.name().to_owned(), revision))
+                    })
             });
             if let Some(validator) = due {
                 self.steps += 1;
@@ -280,17 +295,32 @@ impl<'a> Run<'a> {
                         record.result.as_deref().unwrap_or("-")
                     )?;
                 }
-                // A validator that wrote no record (the gate was unknown) moved nothing: the next
-                // pass would run it again to the same end, so it counts as an idle step.
-                last_idle = observation.records.is_empty().then_some(state);
+                if let Some(artifact) = &observation.artifact {
+                    let dir = self.case.dir.join("artifacts");
+                    std::fs::create_dir_all(&dir)
+                        .with_context(|| format!("create {}", dir.display()))?;
+                    let path = dir.join(&artifact.name);
+                    std::fs::write(&path, &artifact.bytes)
+                        .with_context(|| format!("write {}", path.display()))?;
+                    writeln!(
+                        out,
+                        "  artifact: {}",
+                        path.strip_prefix(&self.tree).unwrap_or(&path).display()
+                    )?;
+                }
+                // A validator that wrote no record (the gate was unknown) is not due again at
+                // this revision. With a judgement step left, the harness gets its turn; with
+                // none, the next pass would see the same decision, so this one counts as an
+                // idle step and the run stops there as no progress.
+                if observation.records.is_empty() {
+                    observed_without_record.insert((validator.name().to_owned(), revision));
+                    last_idle = offered.is_empty().then_some(state);
+                } else {
+                    last_idle = None;
+                }
                 continue;
             }
-            // Then a judgement step among the admissible actions no validator owns.
-            let offered: Vec<String> = admissible
-                .iter()
-                .filter(|a| !self.validators.iter().any(|v| v.action() == a.as_str()))
-                .cloned()
-                .collect();
+            // Then a judgement step among the offered actions.
             if offered.is_empty() {
                 let approvals = decision.approval_required();
                 return Ok(if approvals.is_empty() {
