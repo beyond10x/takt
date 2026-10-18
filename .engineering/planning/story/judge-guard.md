@@ -3,8 +3,8 @@ format: aep.planning-md/3
 id: story:judge-guard
 kind: story
 status: draft
-title: The promoted takt judges takt's cases; a judge-surface merge needs a human grant
-summary: protocol and store from base, typed grants, allow-list guard over base..head at merge
+title: The promoted takt judges takt's cases; a judge-surface merge needs the owner's grant or a delegation on record
+summary: protocol and store from base, typed grants, allow-list and delegation record read at base, guard over base..head at merge
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
@@ -14,6 +14,8 @@ relations:
 - depends_on: story:tree-hygiene
 - depends_on: story:authority-hardening
 scope:
+- confidence: cited
+  path: .engineering/delegations.yaml
 - confidence: cited
   path: .engineering/judge-allow.yaml
 - confidence: cited
@@ -34,7 +36,7 @@ scope:
   path: crates/takt/tests/authority_adv1.rs
 - confidence: inferred
   path: crates/takt/tests/merge_under_authority.rs
-revision: 4
+revision: 9
 ---
 # Story: judge-guard
 
@@ -44,7 +46,16 @@ A case on takt itself is judged by the promoted takt, never by the candidate: th
 reads the protocol and the planning store from the promoted base revision outside the case's
 worktree; `takt approve --by` takes only `human:<id>` or `agent:<role>`; and a merge whose
 `base..head` touches any path outside the allow-list `.engineering/judge-allow.yaml`, read at the
-base revision, is refused unless its grant is `human:`.
+base revision, is refused unless its grant is the owner's (`human:`) or comes from a role that an
+unrevoked delegation on record names.
+
+The delegation record is `.engineering/delegations.yaml`, read at the base revision like the
+allow-list: each entry names the delegating owner (`human:<id>`), the role (`agent:<role>`), the
+capability (`repository.merge.judge_surface`), the instant it was given and, once revoked, the
+instant of its revocation. The file is itself a judge surface, so adding, widening or revoking a
+delegation is a change only the owner's grant merges. Until this story lands, a delegation is held
+as the owner's decision in the planning store (product-requirements:takt § 2, recorded at
+3ad0bd9).
 
 ## Context
 
@@ -90,14 +101,17 @@ Typed entries: `crates/takt/src/validator.rs`, `crates/takt-cli/src/main.rs`, `c
 ## Acceptance
 
 A case whose `base..head` touches `crates/takt/src/validator.rs` is refused at the merge when its
-grant is `agent:operator`.
+grant is `agent:operator` and `.engineering/delegations.yaml` at the base names no unrevoked
+delegation of `repository.merge.judge_surface` to `agent:operator`; the same case merges when such a
+delegation is on record, and is refused again once that delegation's revocation is on record.
 
 ## Checks
 
-- The same case merges under `human:<id>`.
-- A case whose diff touches only `docs/` merges under `agent:operator`.
-- A candidate that edits `.engineering/judge-allow.yaml` to admit its own paths is treated as touching a judge surface.
+- The same case merges under `human:<id>`, with or without a delegation on record.
+- A case whose diff touches only `docs/` merges under `agent:operator` with no delegation.
+- A candidate that edits `.engineering/judge-allow.yaml` or `.engineering/delegations.yaml` to admit its own paths or its own role is treated as touching a judge surface, and its own edit of the delegation file does not count: the file is read at the base.
 - A candidate branch's own `protocols/story-delivery/1.yaml` is not the protocol its case is judged by.
+- A delegation naming another role (`agent:developer`) does not admit an `agent:operator` grant.
 
 ## Out of Scope
 
