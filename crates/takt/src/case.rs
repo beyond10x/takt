@@ -1055,18 +1055,22 @@ impl CaseDir {
     }
 
     /// Whether a record of `kind` exists about `subject` at its current revision. Each record
-    /// is read as Canon reads it, as YAML (a JSON record is one too); a record that does not
-    /// read is an error naming its file, never an answer either way.
+    /// is read by Canon's reader, as [`CaseDir::evaluate`] reads it (YAML, of which a JSON
+    /// record is one); a record that does not read is an error naming its file, never an
+    /// answer either way.
     pub fn has_evidence(&self, kind: &str, subject: &str) -> Result<bool> {
         let Some(revision) = self.revision(subject) else {
             return Ok(false);
         };
         for (path, text) in self.evidence_texts()? {
-            let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text)
+            // Read by Canon's own reader, the one `evaluate` uses: a record Canon refuses (an
+            // empty file, a bare scalar, a missing field) is refused here too, never an answer.
+            let record = eval::read_evidence(&text)
+                .map_err(|r| anyhow!("{r}"))
                 .with_context(|| format!("read the evidence record {}", path.display()))?;
-            if doc["kind"].as_str() == Some(kind)
-                && doc["subject"].as_str() == Some(subject)
-                && doc["subject_revision"].as_str() == Some(revision.as_str())
+            if record.kind.as_str() == kind
+                && record.subject.as_str() == subject
+                && record.subject_revision.as_str() == revision
             {
                 return Ok(true);
             }
@@ -1112,7 +1116,14 @@ impl CaseDir {
                     .with_context(|| format!("read the evidence record {}", path.display()))
             })
             .collect::<Result<Vec<_>>>()?;
-        let implementation = self.revision("implementation");
+        // The revision a grant is filtered by is the one in the `case.yaml` Canon is handed,
+        // read from the same bytes: never this `CaseDir`'s in-memory copy, which another
+        // holder may have moved on since it was read.
+        let snapshot: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&case_yaml).context("read the case snapshot")?;
+        let implementation = snapshot["artifacts"]["implementation"]["revision"]
+            .as_str()
+            .map(str::to_owned);
         let authority = Authority::read(&self.dir)?
             .map(|authority| authority.canon(implementation.as_deref()))
             .transpose()?;
