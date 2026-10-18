@@ -31,7 +31,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/confinement.rs
-revision: 10
+revision: 11
 ---
 # Story: confinement-seam
 
@@ -109,3 +109,12 @@ What the adversary passes of waves 04 and 05 measured about the harness's reach,
 From the wave 10 work on story:step-cannot-forge-its-validators (2026-10-18): that story refuses a guarded path whose resolution crosses a link anywhere, or leaves the tree, checked per component with `symlink_metadata` (std only). The check is not race-free: a link planted between the check and the use is not caught. This story replaces it with `openat2` and `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV` (Linux), as a sibling sandbox host already resolves paths, with an fd-based snapshot and a named refusal, not a silent downgrade, where the syscall is not available.
 
 The confinement this seam adds is fail-closed: a declared profile (writable scopes, read-only toolchain roots, process, memory, time and output limits, no egress unless a destination is named) applies to the harness child and to the test command, and a run whose backend cannot enforce the profile is refused by name, never run unconfined.
+
+## Routes only confinement closes
+
+Routes the reviewer of story:step-cannot-forge-its-validators found at 9b70c5b that guarding files cannot close, assigned here on 2026-10-18:
+
+- M8: a step replaces `cargo` in a user-writable directory early on `PATH` with a wrapper that exits 0 on `test`; the case was accepted with a forged pass. Closed by running the test command with a fixed `PATH` of read-only toolchain roots inside the profile.
+- M9: a step starts a background writer that escapes the step's process group (`setsid`) and puts `../.cargo/config.toml` in place after the run ends; the next run takes it as its baseline. Closed by confining the harness child so it cannot write outside its tree or outlive the step.
+
+step-cannot-forge-its-validators keeps an ignored test for each, naming this story.
