@@ -27,18 +27,27 @@ A scenario run is one attempt at a scenario, up to its finish line: a pull reque
 its own trial branch with CI green, which for takt is the stop at the merge approval. Invocations
 after the approval are listed under `after_approval` and are not counted in the totals.
 
+A variety run is a takt run on a unit already merged in another public repository: the clone is
+reset to the unit's parent, takt gets an intent written from the unit, and the unit's own tests
+are the held-out check. It runs without a forge, so it opens no pull request, and its finish line
+is the stop at the merge approval. Its `scenario` is `null`, and `repository`, `unit` and `seed`
+say what it ran on.
+
 | field | meaning | read from |
 |---|---|---|
 | `id` | the run's name in its source | the directory or log name |
 | `date` | UTC end of the run | the runner's `done` line; for logs without timestamps, the log file's modification time |
-| `scenario` | scenario number | the run command |
+| `scenario` | scenario number; `null` for a variety run | the run command |
+| `repository` | the GitHub repository the run worked on; rows without the field ran on the scratch repository, `beyond10x/todo-app-example` | the runner |
+| `unit` | for a variety run, the merged commit whose work the run redid; `null` for a scenario | the runner's notes |
+| `seed` | the commit the run started from: the scenario's seed, or the unit's parent | `result.json`; for a variety run, the clone's `main` |
 | `arm` | `takt`, `claude-code`, `codex` (harnesses running free with the operator's full configuration) or `claude-code-isolated` (takt's harness isolation plus a shell) | the runner |
 | `takt_revision` | takt's commit, `null` for the free arms and where it was not recorded | the operator's run notes |
 | `model` | model the harness reported | Claude: the keys of `modelUsage`; takt: the same, from each step's record; Codex states none |
 | `wall_seconds` | wall time of the run, resumes included | `result.json`; `null` for untimed runs |
 | `steps` | takt steps to the finish line | the sum of the stop lines' `steps` |
 | `invocations`, `resumes` | runs of the command, and how many of them were resumes | `result.json`, or the stop lines of a log |
-| `model_calls` | harness processes started (`claude -p`, `codex exec`) | takt: lines of `steps.jsonl`; a free arm is one call |
+| `model_calls` | harness processes started (`claude -p`, `codex exec`) | takt: lines of `steps.jsonl`, or the harness steps in the case's `events.jsonl` where there is none; a free arm is one call |
 | `harness_turns` | Claude's `num_turns`, summed over calls | `agent.json` or `steps.jsonl`; Codex states none |
 | `tokens.input` | input tokens not read from cache | Claude: `input_tokens`; Codex: `input_tokens` minus `cached_input_tokens` |
 | `tokens.output` | output tokens | `output_tokens` |
@@ -48,7 +57,7 @@ after the approval are listed under `after_approval` and are not counted in the 
 | `cost_usd` | cost the harness reported (API list price, notional) | Claude: `total_cost_usd`, summed over calls; Codex reports none |
 | `stop`, `exit_code` | how the run ended | takt's `stopped:` line and exit status; Claude's `terminal_reason`; Codex's last event |
 | `pr_url` | the pull request the run opened | `pr.json`, or the pull request number in the log |
-| `acceptance` | the held-out check: `pass`, `fail` or `null` | `acceptance.sh` on the pull request's head |
+| `acceptance` | the held-out check: `pass`, `fail` or `null` | `acceptance.sh` on the pull request's head; for a variety run, the unit's test file copied onto the case branch's tip and the test command run there (`<name>.accept.log`) |
 | `invocation_stops`, `after_approval` | per invocation: stop, steps, tokens, exit code | the stop lines of a log |
 | `notes` | what a reader needs to read the record right | |
 | `source` | the files the record was read from, `~` for the home directory | |
@@ -151,6 +160,60 @@ not say.
   rows above, not a scorecard record: `improvement-turns.jsonl` holds no line for turn 2 yet.
 - The 15 lanes add to `journey.svg`; in each the CI runs a second time
   (`story:pr-opens-when-change-is-done`).
+
+## Scenarios 2 to 6 and the variety runs (2026-10-18, 20:33 to 20:56 UTC)
+
+Ten takt runs at a0b8576, the promoted baseline, one on each task: S2-1..S6-1 on the five new
+scenarios in the scratch repository (`review-result:scenario-corpus-round-0`), and five variety
+runs on merged units of metaharness, worktree and canon (`review-result:variety-runs-a0b8576`).
+n is 1 per task.
+
+| run | task | stop, exit | steps | resumes | tokens | cost | wall | held-out check |
+|---|---|---|---|---|---|---|---|---|
+| S2-1 | scenario 2: a feature over 3 files | ApprovalRequired, 4 | 17 | 0 | 149,076 | $0.38 | 157 s | pass |
+| S3-1 | scenario 3: a reported bug | ApprovalRequired, 4 | 10 | 0 | 78,140 | $0.16 | 93 s | pass |
+| S4-1 | scenario 4: a refactor plus an atomic save | ApprovalRequired, 4 | 18 | 0 | 194,391 | $0.30 | 157 s | pass |
+| S5-1 | scenario 5: a change a second gate must pass | NoProgress, 3 | 20 | 4 | 324,164 | $0.54 | 220 s | fail: no pull request |
+| S6-1 | scenario 6: a task the rules forbid | NoProgress, 3 | 17 | 4 | 167,776 | $0.22 | 166 s | pass: no pull request, a refusal |
+| metaharness-1 | metaharness 9ca7d3d: a module change plus a refactor | ApprovalRequired, 4 | 6 | 0 | 473,816 | | 224 s | pass: 6/6 (5/6 on the seed) |
+| worktree-1 | worktree 26265f5: a CLI flag | ApprovalRequired, 4 | 6 | 0 | 935,443 | | 326 s | pass (`gc_scope` 1/4 on the seed) |
+| worktree-2 | worktree 82e998c: a bug fix | ApprovalRequired, 4 | 6 | 0 | 1,631,823 | | 371 s | pass: 6/6 (1/6 on the seed) |
+| worktree-3 | worktree dfb808c: a cache rule | ApprovalRequired, 4 | 7 | 1 | 689,874 | | 313 s | pass: 10/10 (8/10 on the seed) |
+| canon-1 | canon 98f7118: a new module | ApprovalRequired, 4 | 4 | 0 | 727,899 | | 371 s | fail: 31/32 |
+
+- **Scenario 6 is inverted.** Its task is one the rules forbid, so the right result is a refusal,
+  and its `acceptance-6.sh` passes when there is no pull request. S6-1's `pass` means takt opened
+  none. takt can only report the refusal as `NoProgress`, exit 3, the same stop as a stuck run
+  (`story:a-run-can-decline`).
+- **S5-1 never reached the finish line.** Five `NoProgress` stops and no pull request. The
+  reviewer's diagnosis: the model left `README.md` alone because the story's Scope leaves it out, so
+  the second gate could not pass, and nothing lets a step stop on that (`story:a-run-can-decline`).
+- **S3-1 passed without the story's tests.** At the approval, `tests/test_todo.py` is the seed's
+  (`diffstat.txt`), though the story's Acceptance names three new tests. `acceptance-3.sh` checks
+  behaviour only (`story:merge-needs-the-storys-tests`).
+- Every call of S2-1..S6-1 ran on claude-opus-5-5 (`modelUsage` per line of `steps.jsonl`).
+- **The variety runs have no cost and no model.** They ran with no `--model` and kept no usage
+  per call, so `model`, `harness_turns`, the token parts and `cost_usd` are `null`, and
+  `tokens.sum` is the stop lines' figure. They ran the `software.change/1` protocol in Rust
+  workspaces, so their tokens do not compare with scenario 1's.
+- **canon-1's failure is the trial's, not takt's.** The failing test's rule is in the unit's module
+  doc, and the intent the reviewer wrote left it out. Its test command was narrowed to the library,
+  because canon's full suite fails on this machine at the seed.
+- In all five variety runs `repository.merge` was approval-required after step 1, before any change
+  existed (`story:no-merge-approval-without-a-change`). The model step that only asks for the merge
+  approval took 422,762 of their 4,458,855 tokens, 9.5% (`story:no-model-step-for-approval`).
+- worktree-3 stopped `NoProgress` after a `repository.inspect` step, and one resume asked for the
+  approval in 1 step and 90,005 tokens (`story:no-inspect-for-stateless-harness`).
+- After `takt approve`, worktree-1 was resumed twice. Each resume spent one `repository.inspect`
+  step and stopped `NoProgress` (85,594 and 110,557 tokens), and the base did not move: a
+  `--intent` run cannot reach its accepted outcome (`story:an-intent-run-can-finish`). Both are
+  under `after_approval` and are not counted.
+- `timeline.svg` and `journey.svg` draw scenario 1 only, so the ten rows add no point and no lane.
+  They count in the badges.
+- **headstart-trial-1** ran worktree-3's unit from the same seed. Unlike worktree-3 it pinned
+  `--model claude-opus-5-5` and compiled the tests before the run. It reached the approval in 6
+  steps with no resume: 592,698 tokens, $0.85, 242 s, held-out check 10/10. Its run record is
+  `docs/runs/2026-10-18-trial-1-worktree.md`.
 
 ## `improvement-turns.jsonl`
 
