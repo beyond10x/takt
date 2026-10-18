@@ -98,7 +98,9 @@ enum Judged {
 /// base at `dir` and `revision`: the run's judge surface ([`crate::run::JudgeSurface`]) but the
 /// planning store, a link on it or on the way to a script at either commit, and the entries of a
 /// cargo manifest that decide how cargo builds or runs the tests
-/// ([`crate::run::manifest_build_changes`]). A change no step
+/// ([`crate::run::manifest_build_changes`]) and of `pyproject.toml`'s pytest tables, the surface
+/// extended by the repository's own list ([`crate::run::JUDGE_LIST`]) read at the base, which
+/// records nothing when it does not parse. A change no step
 /// could make, because the step guard refuses it, but one that reached the branch by another
 /// route (a commit made outside the loop) would decide the verdict all the same. The store is
 /// guarded at the step too, but it decides no test and no check, and takt itself writes it on
@@ -107,10 +109,20 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
     let Some((base, at)) = base_revision(tree, dir)? else {
         return Ok(Judged::NoBase);
     };
-    let surface = crate::run::JudgeSurface::new(runs, tree).without_store();
+    // The repository's own list, read at the base: one that does not parse records nothing.
+    let mut paths: Vec<String> = Vec::new();
+    let globs = match crate::run::judge_list_at(tree, &at)? {
+        Ok(globs) => globs,
+        Err(why) => {
+            paths.push(why);
+            Vec::new()
+        }
+    };
+    let surface = crate::run::JudgeSurface::new(runs, tree)
+        .without_store()
+        .with_globs(globs);
     // A link is never followed: one the base or the revision holds on the surface, or on the
     // way to a script, is named, and nothing is recorded while it is there.
-    let mut paths: Vec<String> = Vec::new();
     for commit in [at.as_str(), revision] {
         let listed = crate::git::run(tree, &["ls-tree", "-r", "-z", "--full-tree", commit])?;
         for entry in listed.split('\0') {
@@ -141,10 +153,15 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
     for path in diff.split('\0').filter(|path| !path.is_empty()) {
         if surface.contains(path) {
             paths.push(path.to_owned());
-        } else if crate::run::is_manifest(path) {
+        } else if crate::run::is_manifest(path) || crate::run::is_pyproject(path) {
             let before = crate::run::manifest_at(tree, &at, path)?;
             let after = crate::run::manifest_at(tree, revision, path)?;
-            match crate::run::manifest_build_changes(&before, &after) {
+            let compared = if crate::run::is_manifest(path) {
+                crate::run::manifest_build_changes(&before, &after)
+            } else {
+                crate::run::pytest_config_changes(&before, &after)
+            };
+            match compared {
                 Ok(keys) => paths.extend(keys.into_iter().map(|key| format!("{path}: {key}"))),
                 Err(line) => paths.push(format!(
                     "{path}: a line the manifest scanner cannot read with certainty, {line}"

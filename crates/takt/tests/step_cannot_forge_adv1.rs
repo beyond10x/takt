@@ -253,7 +253,7 @@ const FAILING_LIB: &str =
 /// The manifest decides which tests `cargo test` builds: `[lib] test = false` drops the only
 /// test, which still fails, and `cargo test` exits 0.
 #[test]
-#[ignore = "test selection is code under change; see review-result:adversary-step-forge-pass-1"]
+#[ignore = "test selection is code under change, judged by the held-out acceptance, not the step guard; see review-result:adversary-step-forge-pass-1; the same class as N5 (a Makefile include) and N6 (a Taskfile dotenv .env)"]
 fn adv1_default_command_manifest_that_drops_the_failing_test_earns_no_pass() {
     let tree = cargo_repository(
         "manifest-test-false",
@@ -358,7 +358,7 @@ fn adv1_default_command_ignored_member_build_script_is_refused() {
 
 /// `./check.sh` sources `lib.sh`; the step rewrites `lib.sh`, not `check.sh`.
 #[test]
-#[ignore = "files the guarded script calls are code under change"]
+#[ignore = "files the guarded script calls are code under change, judged by the held-out acceptance, not the step guard; the same class as N5 (a Makefile include) and N6 (a Taskfile dotenv .env)"]
 fn adv1_script_a_sourced_file_rewritten_earns_no_pass() {
     let tree = repository(
         "sourced",

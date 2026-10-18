@@ -72,6 +72,9 @@ outcomes:
 /// The check every repository here starts with: it fails.
 const FAILING_CHECK: &str = "#!/bin/sh\nexit 1\n";
 
+/// A check that passes.
+const PASSING_CHECK_TEXT: &str = "#!/bin/sh\nexit 0\n";
+
 fn git(tree: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
@@ -770,6 +773,231 @@ fn a_link_nothing_reads_is_not_followed_and_a_change_to_it_is_refused() {
         "{}",
         ran.text
     );
+}
+
+/// Reviewer route N1: a step that writes a cargo runner of `true` into `.cargo/config.toml` in
+/// the directory above the tree, which cargo reads too, and touches the code: refused, and the
+/// file it created removed.
+#[test]
+fn a_cargo_configuration_above_the_tree_is_refused_and_removed() {
+    let tree = repository(
+        "above",
+        &[("check.sh", FAILING_CHECK, true), ("src/lib.rs", "", false)],
+    );
+    let above = tree.root.join(".cargo/config.toml");
+    let ran = run(&tree, "./check.sh", |tree| {
+        write(
+            tree,
+            "../.cargo/config.toml",
+            "[target.'cfg(all())']\nrunner = \"true\"\n",
+        );
+        write(tree, "src/lib.rs", "// touched\n");
+    });
+    assert_refused_and_put_back(&tree, &ran, &above.display().to_string());
+    assert!(ran.refusal().contains("outside the tree"), "{}", ran.text);
+    assert!(fs::symlink_metadata(&above).is_err(), "{}", ran.text);
+}
+
+/// A toolchain file above the tree that the step rewrites is written back as it was.
+#[test]
+fn a_toolchain_file_above_the_tree_is_put_back() {
+    let tree = repository("above-toolchain", &[("check.sh", FAILING_CHECK, true)]);
+    let toolchain = tree.root.join("rust-toolchain.toml");
+    fs::write(&toolchain, "[toolchain]\nchannel = \"stable\"\n").expect("a file");
+    let ran = run(&tree, "./check.sh", |tree| {
+        write(
+            tree,
+            "../rust-toolchain.toml",
+            "[toolchain]\nchannel = \"nightly\"\n",
+        );
+    });
+    assert!(
+        ran.refusal().contains("rust-toolchain.toml"),
+        "{}",
+        ran.text
+    );
+    assert_eq!(
+        fs::read_to_string(&toolchain).expect("the file"),
+        "[toolchain]\nchannel = \"stable\"\n",
+        "{}",
+        ran.text
+    );
+}
+
+/// A test command that writes above the tree: the observation is refused, nothing recorded,
+/// and what it wrote removed.
+#[test]
+fn a_validator_that_writes_above_the_tree_is_refused_and_put_back() {
+    let tree = repository(
+        "above-validator",
+        &[(
+            "plant.sh",
+            "#!/bin/sh\nmkdir -p ../.cargo\nprintf 'x = 1\\n' > ../.cargo/config.toml\nexit 0\n",
+            true,
+        )],
+    );
+    let ran = run(&tree, "./plant.sh", |_| {});
+    let above = tree.root.join(".cargo/config.toml");
+    assert!(
+        ran.refusal().contains(&above.display().to_string()),
+        "{}",
+        ran.text
+    );
+    assert!(ran.records.is_empty(), "{:?}\n{}", ran.records, ran.text);
+    assert!(fs::symlink_metadata(&above).is_err(), "{}", ran.text);
+}
+
+/// A cargo configuration above the tree changed by another route than a step, after the run
+/// began: `tests.run` observes nothing and records nothing while it differs.
+#[test]
+fn tests_run_records_nothing_while_a_file_above_the_tree_differs() {
+    let tree = repository("above-route", &[("check.sh", PASSING_CHECK_TEXT, true)]);
+    let validators: Vec<Box<dyn Validator>> =
+        vec![Box::new(TestsRun::new("./check.sh").expect("a command"))];
+    let harness = Acts::new(|_| {});
+    let mut run = Run::open(&tree, options(tree.protocol(), 4), &harness, &validators)
+        .expect("the case opens");
+    write(&tree, "../.cargo/config.toml", "x = 1\n");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    let Ok(Stop::StepRefused(why)) = &stop else {
+        panic!("the observation is refused, not {stop:?}\n{text}");
+    };
+    assert!(why.contains("differs from what the run found"), "{why}");
+    assert!(records(&run.case.dir).is_empty(), "{text}");
+}
+
+/// Reviewer route N7 and its siblings: what decides pytest's collection and report is on the
+/// surface, a new `conftest.py` at any depth among it, and pytest's tables in `pyproject.toml`.
+#[test]
+fn pytest_configuration_written_by_a_step_is_refused() {
+    for (path, text) in [
+        (
+            "conftest.py",
+            "def pytest_runtest_makereport(item, call):\n    pass\n",
+        ),
+        ("tests/conftest.py", "import pytest\n"),
+        ("pytest.ini", "[pytest]\naddopts = -p no:x\n"),
+        ("tox.ini", "[pytest]\n"),
+        ("setup.cfg", "[tool:pytest]\n"),
+    ] {
+        let tree = repository("pytest", &[("check.sh", FAILING_CHECK, true)]);
+        fs::write(tree.root.join("payload"), format!("{path}\n{text}")).expect("a file");
+        let ran = run(&tree, "./check.sh", |tree| {
+            let payload =
+                fs::read_to_string(tree.parent().expect("the root").join("payload")).expect("read");
+            let (path, text) = payload.split_once('\n').expect("a payload");
+            write(tree, path, text);
+        });
+        assert_refused_and_put_back(&tree, &ran, path);
+    }
+}
+
+/// `pyproject.toml`: a change to `[tool.pytest.ini_options]` is refused; one to another table
+/// is the step's to make.
+#[test]
+fn pyproject_pytest_tables_are_guarded_and_the_rest_is_not() {
+    let base = "[project]\nname = \"p\"\nversion = \"0.1.0\"\n";
+    let tree = repository(
+        "pyproject",
+        &[
+            ("check.sh", FAILING_CHECK, true),
+            ("pyproject.toml", base, false),
+        ],
+    );
+    let ran = run(&tree, "./check.sh", |tree| {
+        let text = fs::read_to_string(tree.join("pyproject.toml")).expect("read");
+        fs::write(
+            tree.join("pyproject.toml"),
+            format!("{text}\n[tool.pytest.ini_options]\naddopts = \"-p no:x\"\n"),
+        )
+        .expect("a file");
+    });
+    assert_refused_and_put_back(
+        &tree,
+        &ran,
+        "pyproject.toml: tool.pytest.ini_options.addopts",
+    );
+    let tree = repository(
+        "pyproject-other",
+        &[
+            ("check.sh", "#!/bin/sh\ngrep -q fixed check.txt\n", true),
+            ("check.txt", "broken\n", false),
+            ("pyproject.toml", base, false),
+        ],
+    );
+    let ran = run(&tree, "./check.sh", |tree| {
+        fs::write(
+            tree.join("pyproject.toml"),
+            "[project]\nname = \"p\"\nversion = \"0.2.0\"\n\n[tool.ruff]\nline-length = 100\n",
+        )
+        .expect("a file");
+        fs::write(tree.join("check.txt"), "fixed\n").expect("a file");
+    });
+    assert_eq!(
+        ran.stop.as_ref().ok(),
+        Some(&Stop::Completed("accepted".to_owned())),
+        "{}",
+        ran.text
+    );
+}
+
+/// The repository's own list, `.engineering/judge-surface.yaml` at the base, extends the
+/// surface: a step that writes a path it lists is refused, and so is one that rewrites the list
+/// itself to drop the path, in the same step.
+#[test]
+fn the_repository_judge_surface_list_extends_the_default() {
+    let tree = repository(
+        "judge-list",
+        &[
+            ("check.sh", FAILING_CHECK, true),
+            (
+                ".engineering/judge-surface.yaml",
+                "- fixtures/**\n- Makefile\n",
+                false,
+            ),
+            ("fixtures/expected.txt", "expected\n", false),
+        ],
+    );
+    let ran = run(&tree, "./check.sh", |tree| {
+        write(tree, "fixtures/expected.txt", "anything\n");
+    });
+    assert_refused_and_put_back(&tree, &ran, "fixtures/expected.txt");
+    let tree = repository(
+        "judge-list-dropped",
+        &[
+            ("check.sh", FAILING_CHECK, true),
+            (".engineering/judge-surface.yaml", "- fixtures/**\n", false),
+            ("fixtures/expected.txt", "expected\n", false),
+        ],
+    );
+    let ran = run(&tree, "./check.sh", |tree| {
+        write(tree, ".engineering/judge-surface.yaml", "[]\n");
+        write(tree, "fixtures/expected.txt", "anything\n");
+    });
+    assert_refused_and_put_back(&tree, &ran, "fixtures/expected.txt");
+    assert!(
+        ran.refusal().contains(".engineering/judge-surface.yaml"),
+        "{}",
+        ran.text
+    );
+}
+
+/// A list at the base that does not parse fails closed: no judgement step is taken, and
+/// `tests.run` records nothing.
+#[test]
+fn a_judge_surface_list_that_does_not_parse_fails_closed() {
+    let tree = repository(
+        "judge-list-broken",
+        &[
+            ("check.sh", "#!/bin/sh\nexit 0\n", true),
+            (".engineering/judge-surface.yaml", "fixtures: [\n", false),
+        ],
+    );
+    let ran = run(&tree, "./check.sh", |_| {});
+    assert!(ran.refusal().contains("does not parse"), "{}", ran.text);
+    assert!(ran.passes().is_empty(), "{:?}\n{}", ran.records, ran.text);
 }
 
 /// Opens `fifo` for writing without waiting and closes it, so a reader blocked on it sees its

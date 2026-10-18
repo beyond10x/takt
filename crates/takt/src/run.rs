@@ -330,8 +330,13 @@ fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -
 /// no judgement step writes.
 const ENGINEERING: &str = ".engineering";
 
+/// The files that decide what pytest collects and how it reports, at any depth: a
+/// `conftest.py` can rewrite every outcome. `pyproject.toml`'s `[tool.pytest*]` tables are
+/// compared by the manifest scanner ([`pytest_config_changes`]).
+const PYTHON_FILES: &[&str] = &["conftest.py", "pytest.ini", "tox.ini", "setup.cfg"];
+
 /// The judge surface every run guards, as a refusal names it.
-pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, the test command's own script and its build tool's file";
+pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `tox.ini` and `setup.cfg` at any depth, `[tool.pytest*]` in `pyproject.toml`, the test command's own script and its build tool's file, and the repository's own `.engineering/judge-surface.yaml` list";
 
 /// How a program of a test command takes its options. A short option is a character of a
 /// cluster (`-eo`); one that takes an argument takes the rest of its cluster or, when that is
@@ -1263,6 +1268,85 @@ pub struct JudgeSurface {
     /// Whether the planning store is on it: always, but for what decides a validator alone
     /// ([`JudgeSurface::without_store`]).
     store: bool,
+    /// The repository's own additions ([`JUDGE_LIST`]), path globs folded, each guarding what it
+    /// matches and everything under it.
+    globs: Vec<String>,
+}
+
+/// The repository's own list of judge-surface path globs, which extends the default and never
+/// shrinks it: read at the case's base revision, never from the tree a step edits, and itself on
+/// the surface.
+pub const JUDGE_LIST: &str = ".engineering/judge-surface.yaml";
+
+/// The globs of a judge-surface list: a YAML sequence of path globs relative to the tree
+/// (`*` and `?` within a part, `**` across parts), each matched whatever its case. Anything else
+/// (not a sequence of strings, an empty glob, an absolute one, one with `..` or a backslash) is
+/// the error: the caller fails closed.
+pub fn parse_judge_list(text: &str) -> std::result::Result<Vec<String>, String> {
+    let globs: Vec<String> = serde_yaml_ng::from_str(text)
+        .map_err(|error| format!("{JUDGE_LIST} is not a list of path globs: {error}"))?;
+    globs
+        .into_iter()
+        .map(|glob| {
+            let trimmed = glob.trim().trim_end_matches('/');
+            if trimmed.is_empty()
+                || trimmed.starts_with('/')
+                || trimmed.contains('\\')
+                || trimmed
+                    .split('/')
+                    .any(|part| part == ".." || part.is_empty())
+            {
+                return Err(format!(
+                    "{JUDGE_LIST} holds `{glob}`, which is no path glob relative to the tree"
+                ));
+            }
+            Ok(fold(trimmed))
+        })
+        .collect()
+}
+
+/// The judge-surface list at the commit `revision` ([`JUDGE_LIST`]): none when the commit has no
+/// such file; the inner error when it does not parse ([`parse_judge_list`]).
+pub fn judge_list_at(
+    tree: &Path,
+    revision: &str,
+) -> Result<std::result::Result<Vec<String>, String>> {
+    let spec = format!("{revision}:./{JUDGE_LIST}");
+    if crate::git::run(tree, &["cat-file", "-e", &spec]).is_err() {
+        return Ok(Ok(Vec::new()));
+    }
+    let text = crate::git::blob(tree, &spec)?;
+    Ok(String::from_utf8(text)
+        .map_err(|_| format!("{JUDGE_LIST} is not UTF-8"))
+        .and_then(|text| parse_judge_list(&text)))
+}
+
+/// Whether the part `name` matches the glob part `glob`: `*` any run of characters, `?` one.
+fn part_matches(glob: &[char], name: &[char]) -> bool {
+    match glob.split_first() {
+        None => name.is_empty(),
+        Some(('*', rest)) => (0..=name.len()).any(|skip| part_matches(rest, &name[skip..])),
+        Some(('?', rest)) => !name.is_empty() && part_matches(rest, &name[1..]),
+        Some((c, rest)) => name.first() == Some(c) && part_matches(rest, &name[1..]),
+    }
+}
+
+/// Whether the path parts `path` match the glob parts `glob`, `**` matching any number of parts.
+fn glob_matches(glob: &[&str], path: &[&str]) -> bool {
+    match glob.split_first() {
+        None => path.is_empty(),
+        Some((&"**", rest)) => {
+            glob_matches(rest, path) || (!path.is_empty() && glob_matches(glob, &path[1..]))
+        }
+        Some((part, rest)) => {
+            !path.is_empty()
+                && part_matches(
+                    &part.chars().collect::<Vec<_>>(),
+                    &path[0].chars().collect::<Vec<_>>(),
+                )
+                && glob_matches(rest, &path[1..])
+        }
+    }
 }
 
 impl JudgeSurface {
@@ -1272,7 +1356,15 @@ impl JudgeSurface {
         Self {
             scripts: scripts_of(runs, tree).into_iter().collect(),
             store: true,
+            globs: Vec::new(),
         }
+    }
+
+    /// With the repository's own globs `globs` ([`JUDGE_LIST`]) added to the default.
+    #[must_use]
+    pub fn with_globs(mut self, globs: Vec<String>) -> Self {
+        self.globs.extend(globs);
+        self
     }
 
     /// The surface without the planning store: what decides `tests.run` and `ci.read`. The
@@ -1304,12 +1396,18 @@ impl JudgeSurface {
         let parts: Vec<&str> = folded.split('/').collect();
         let name = parts.last().copied().unwrap_or_default();
         (self.store && Self::is_store(path))
+            || folded == fold(JUDGE_LIST)
             || folded == ".github"
             || folded.starts_with(".github/")
             || parts.contains(&".cargo")
             || name.starts_with("rust-toolchain")
             || name == "build.rs"
+            || PYTHON_FILES.contains(&name)
             || self.scripts.iter().any(|script| fold(script) == folded)
+            || self.globs.iter().any(|glob| {
+                let glob: Vec<&str> = glob.split('/').collect();
+                (1..=parts.len()).any(|len| glob_matches(&glob, &parts[..len]))
+            })
     }
 
     /// Whether a validator or the guarded command would read through a link at `link`: the link
@@ -1345,6 +1443,8 @@ impl JudgeSurface {
             || name == "cargo.toml"
             || name == "build.rs"
             || name.starts_with("rust-toolchain")
+            || PYTHON_FILES.contains(&name)
+            || folded == fold(JUDGE_LIST)
             || self.scripts.iter().any(|script| is_or_holds(&fold(script)))
     }
 
@@ -1360,6 +1460,7 @@ impl JudgeSurface {
             let folded = fold(name);
             if [ENGINEERING, ".cargo", ".github", "build.rs"].contains(&folded.as_str())
                 || folded.starts_with("rust-toolchain")
+                || PYTHON_FILES.contains(&folded.as_str())
             {
                 roots.push((PathBuf::from(name), true));
             }
@@ -1368,6 +1469,14 @@ impl JudgeSurface {
             self.scripts
                 .iter()
                 .map(|script| (PathBuf::from(script), false)),
+        );
+        // A glob naming a path outright is read like a root name; one with a wildcard is
+        // guarded through git's view of the change.
+        roots.extend(
+            self.globs
+                .iter()
+                .filter(|glob| !glob.contains(['*', '?']))
+                .map(|glob| (PathBuf::from(glob), true)),
         );
         Ok(roots)
     }
@@ -1448,8 +1557,12 @@ impl JudgeSurface {
     }
 
     /// The surface of a run whose validators run `runs`, and what is on it in `tree` now.
-    fn read(runs: &[String], tree: &Path) -> Result<(Self, BTreeMap<PathBuf, Entry>)> {
-        let surface = Self::new(runs, tree);
+    fn read(
+        runs: &[String],
+        globs: Vec<String>,
+        tree: &Path,
+    ) -> Result<(Self, BTreeMap<PathBuf, Entry>)> {
+        let surface = Self::new(runs, tree).with_globs(globs);
         let kept = surface.snapshot(tree)?;
         Ok((surface, kept))
     }
@@ -1506,6 +1619,137 @@ impl JudgeSurface {
         }
         Ok(())
     }
+}
+
+/// The files outside the tree that decide how cargo and rustup build and run the tests from it:
+/// `.cargo/config` and `.cargo/config.toml` in every directory above the tree, `rust-toolchain`
+/// and `rust-toolchain.toml` there, and every `config*` in `$CARGO_HOME` (`~/.cargo` when it is
+/// not set), each by its absolute path with what is at it, `None` for nothing. Read around each
+/// judgement step and each observation: a step that changed one is refused and the file put
+/// back, and no validator records while one differs from what the run found when it began. A
+/// link is an entry by itself and never followed. Confining the step to the tree is not this.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Outside(BTreeMap<PathBuf, Option<Entry>>);
+
+impl Outside {
+    /// The paths [`Outside`] reads for `tree`.
+    fn paths(tree: &Path) -> Vec<PathBuf> {
+        let mut paths = BTreeSet::new();
+        let roots = [
+            std::path::absolute(tree).ok(),
+            std::fs::canonicalize(tree).ok(),
+        ];
+        for root in roots.iter().flatten() {
+            for above in root.ancestors().skip(1) {
+                for name in [
+                    ".cargo/config",
+                    ".cargo/config.toml",
+                    "rust-toolchain",
+                    "rust-toolchain.toml",
+                ] {
+                    paths.insert(above.join(name));
+                }
+            }
+        }
+        let home = std::env::var_os("CARGO_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")));
+        if let Some(home) = home {
+            paths.insert(home.join("config"));
+            paths.insert(home.join("config.toml"));
+            if let Ok(entries) = std::fs::read_dir(&home) {
+                for entry in entries.flatten() {
+                    if entry.file_name().to_string_lossy().starts_with("config") {
+                        paths.insert(entry.path());
+                    }
+                }
+            }
+        }
+        paths.into_iter().collect()
+    }
+
+    /// What is at each of the paths now.
+    fn read(tree: &Path) -> Result<Self> {
+        let mut entries = BTreeMap::new();
+        for path in Self::paths(tree) {
+            let entry = match std::fs::symlink_metadata(&path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                // A path whose way is not a directory (`.cargo` a file) holds nothing.
+                Err(error) if error.raw_os_error() == Some(20) => None,
+                // One the run may not read is compared by that alone.
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    Some(Entry::Other("unreadable"))
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| format!("read {}", path.display()));
+                }
+                Ok(meta) if meta.file_type().is_symlink() => Some(Entry::Link(
+                    std::fs::read_link(&path)
+                        .with_context(|| format!("read the link {}", path.display()))?,
+                )),
+                Ok(meta) if meta.is_file() => Some(Entry::File {
+                    bytes: std::fs::read(&path)
+                        .with_context(|| format!("read {}", path.display()))?,
+                    executable: is_executable(&meta),
+                }),
+                Ok(meta) if meta.is_dir() => Some(Entry::Other("directory")),
+                Ok(meta) => Some(Entry::Other(other_kind(meta.file_type()))),
+            };
+            entries.insert(path, entry);
+        }
+        Ok(Self(entries))
+    }
+
+    /// The paths at which `now` differs from this, in path order.
+    fn differing(&self, now: &Self) -> Vec<PathBuf> {
+        self.0
+            .keys()
+            .chain(now.0.keys())
+            .filter(|path| {
+                self.0.get(*path).cloned().flatten() != now.0.get(*path).cloned().flatten()
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// Puts each path where the tree's outside now differs from this back: what was created is
+    /// removed, what was changed or removed is written again (a link made again); what was
+    /// neither a file nor a link cannot be made again and stays removed.
+    fn put_back(&self, tree: &Path) -> Result<()> {
+        for path in self.differing(&Self::read(tree)?) {
+            if let Ok(meta) = std::fs::symlink_metadata(&path) {
+                if meta.is_dir() {
+                    std::fs::remove_dir_all(&path)
+                } else {
+                    std::fs::remove_file(&path)
+                }
+                .with_context(|| format!("remove {}", path.display()))?;
+            }
+            match self.0.get(&path).cloned().flatten() {
+                Some(Entry::File { bytes, executable }) => {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)
+                            .with_context(|| format!("create {}", parent.display()))?;
+                    }
+                    put_back_file(&path, &bytes, executable)?;
+                }
+                Some(Entry::Link(target)) => make_link(&target, &path)?,
+                Some(Entry::Other(_)) | None => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+/// How a refusal names the paths outside the tree that differ.
+fn outside_named(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// A key path of a manifest read strictly: bare keys (`A-Za-z0-9_-`) and quoted keys holding no
@@ -1969,6 +2213,45 @@ pub fn manifest_at(tree: &Path, revision: &str, path: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&crate::git::blob(tree, &spec)?).into_owned())
 }
 
+/// The entries of `pyproject.toml`'s `[tool.pytest*]` tables that differ between `before` and
+/// `after`, by key path: pytest's configuration, read by the same strict scanner as a cargo
+/// manifest ([`manifest_entries`]). A file the scanner cannot read with certainty is the error,
+/// naming the line: the caller refuses.
+pub fn pytest_config_changes(
+    before: &str,
+    after: &str,
+) -> std::result::Result<Vec<String>, String> {
+    let before = manifest_entries(before).map_err(|line| format!("before, {line}"))?;
+    let after = manifest_entries(after).map_err(|line| format!("after, {line}"))?;
+    let pytest = |key: &Vec<String>, value: &String| {
+        let parts: Vec<String> = key.iter().map(|part| fold(part)).collect();
+        match (parts.first().map(String::as_str), parts.get(1)) {
+            (Some("tool"), Some(table)) => table.starts_with("pytest"),
+            (Some("tool"), None) => fold(value).contains("pytest"),
+            _ => false,
+        }
+    };
+    Ok(before
+        .keys()
+        .chain(after.keys())
+        .filter(|key| {
+            let (was, is) = (before.get(*key), after.get(*key));
+            was != is
+                && (was.is_some_and(|value| pytest(key, value))
+                    || is.is_some_and(|value| pytest(key, value)))
+        })
+        .map(|key| key.join("."))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect())
+}
+
+/// Whether `path`, relative to the tree, is a `pyproject.toml`, whatever its case.
+#[must_use]
+pub fn is_pyproject(path: &str) -> bool {
+    fold(path.rsplit('/').next().unwrap_or(path)) == "pyproject.toml"
+}
+
 /// Whether `path`, relative to the tree, is a cargo manifest, whatever its case.
 #[must_use]
 pub fn is_manifest(path: &str) -> bool {
@@ -2132,6 +2415,9 @@ pub struct Run<'a> {
     store: Option<&'a dyn Frontier>,
     started: Instant,
     options: RunOptions,
+    /// The files outside the tree that decide how cargo and rustup build and run the tests
+    /// ([`Outside`]), as the run found them when it began.
+    outside: Outside,
 }
 
 impl<'a> Run<'a> {
@@ -2208,6 +2494,7 @@ impl<'a> Run<'a> {
             poll: Self::POLL,
             store: None,
             started: Instant::now(),
+            outside: Outside::read(tree)?,
             options,
         })
     }
@@ -2262,6 +2549,7 @@ impl<'a> Run<'a> {
             poll: Self::POLL,
             store: None,
             started: Instant::now(),
+            outside: Outside::read(tree)?,
             options,
         })
     }
@@ -2436,6 +2724,16 @@ impl<'a> Run<'a> {
     /// what names the test command's own script on the judge surface.
     fn runs(&self) -> Vec<String> {
         self.validators.iter().flat_map(|v| v.runs()).collect()
+    }
+
+    /// The repository's own judge-surface globs ([`JUDGE_LIST`]) at the case's pinned base
+    /// revision, never the tree's; none for a case that pins no base. The inner error is a list
+    /// that does not parse.
+    fn judge_list(&self) -> Result<std::result::Result<Vec<String>, String>> {
+        match crate::case::Branch::read(&self.case.dir)?.base_commit {
+            Some(base) => judge_list_at(&self.tree, &base),
+            None => Ok(Ok(Vec::new())),
+        }
     }
 
     fn budget_spent(&self) -> Option<Stop> {
@@ -2924,12 +3222,38 @@ impl<'a> Run<'a> {
                 // `core.fsmonitor`). The judge surface is snapshotted as around a judgement
                 // step: what the observation left there that git does not list (a FIFO, a file
                 // in an ignored directory) or that git lists as ignored is put back and the
-                // observation refused like any other foreign write.
+                // observation refused like any other foreign write. So are the files outside
+                // the tree that decide how cargo and rustup build and run the tests
+                // ([`Outside`]): one that differs from what the run found when it began (a
+                // change no step could keep, by another route) and nothing is observed or
+                // recorded; one the observation changed is put back and the observation refused.
+                let outside_kept = Outside::read(&self.tree)?;
+                let outside_moved = self.outside.differing(&outside_kept);
+                if !outside_moved.is_empty() {
+                    let why = format!(
+                        "{} would observe {} while what cargo or rustup reads outside the tree differs from what the run found when it began: {}",
+                        validator.action(),
+                        &revision[..8.min(revision.len())],
+                        outside_named(&outside_moved)
+                    );
+                    self.stepped(
+                        events,
+                        SteppedBy::Validator(None),
+                        validator.name(),
+                        validator.action(),
+                        "nothing observed",
+                    )?;
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+                    writeln!(out, "  refused: {why}; nothing observed")?;
+                    return Ok(Stop::StepRefused(why));
+                }
                 let checkpoint =
                     crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
                 let cases = self.tree.join(CASES_DIR);
                 let kept = snapshot(&cases)?;
-                let (surface, surface_kept) = JudgeSurface::read(&self.runs(), &self.tree)?;
+                let globs = self.judge_list()?.unwrap_or_default();
+                let (surface, surface_kept) = JudgeSurface::read(&self.runs(), globs, &self.tree)?;
                 let observed = validator
                     .observe_waiting(&self.tree, &revision, seq)
                     .with_context(|| format!("{} ({})", validator.action(), validator.name()));
@@ -3002,10 +3326,17 @@ impl<'a> Run<'a> {
                         outside.push(path);
                     }
                 }
+                outside.extend(
+                    outside_kept
+                        .differing(&Outside::read(&self.tree)?)
+                        .iter()
+                        .map(|path| path.display().to_string()),
+                );
                 if !foreign.is_empty() || !outside.is_empty() {
                     restore(&cases, &kept, &touched)?;
                     undo_step(&self.tree, &checkpoint, &cases, &kept)?;
                     surface.put_back(&self.tree, &surface_kept)?;
+                    outside_kept.put_back(&self.tree)?;
                     foreign.extend(outside);
                     let mut why = format!(
                         "{} wrote what its validator does not: {}",
@@ -3193,13 +3524,31 @@ impl<'a> Run<'a> {
             // takt's own writes change once a case is accepted ([`Run::record_on`]); and what
             // decides the validators, which a step that changed it would decide its own
             // verdict with: the cargo configuration, the toolchain, build scripts, the CI
-            // workflows, the test command's own script and its build tool's file. Matched
+            // workflows, pytest's configuration, the test command's own script and its build
+            // tool's file, and what the repository's own list adds. Matched
             // whatever the case. A step whose change git sees there (a file, a link, a mode, a
             // rename), or that left anything there the snapshot sees differ (a FIFO, which git
             // does not list, a file in an ignored directory), is refused, and put back to the
             // snapshot taken here.
             let runs = self.runs();
-            let (surface, surface_kept) = JudgeSurface::read(&runs, &self.tree)?;
+            // The repository's own list extends the surface, read at the case's base: a list
+            // that does not parse takes no judgement step at all.
+            let globs = match self.judge_list()? {
+                Ok(globs) => globs,
+                Err(why) => {
+                    let why = format!(
+                        "{why}; no judgement step is taken while the repository's judge-surface list does not parse"
+                    );
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(
+                        out,
+                        "step {}: refused before the harness: {why}",
+                        self.steps
+                    )?;
+                    return Ok(Stop::StepRefused(why));
+                }
+            };
+            let (surface, surface_kept) = JudgeSurface::read(&runs, globs, &self.tree)?;
             // A link is never followed: while what a validator or the guarded command reads is
             // reached through one, what it guards could be anywhere, in the tree or out of it,
             // and no judgement step is taken ([`JudgeSurface::locking_links`]). Any other link
@@ -3226,6 +3575,9 @@ impl<'a> Run<'a> {
             // builds and runs the tests is compared with them after it.
             let head_before = crate::git::head(&self.tree)?;
             let cargo_before = cargo_builds(&self.tree);
+            // What cargo and rustup read outside the tree ([`Outside`]), put back with the rest
+            // of a step that is discarded.
+            let outside_before = Outside::read(&self.tree)?;
             // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
             // base, and a sibling case's branch, which a step could otherwise move under it; a
             // branch another worktree has checked out is that session's, but never the case's
@@ -3244,7 +3596,8 @@ impl<'a> Run<'a> {
             let tree = self.tree.clone();
             let undo = || -> Result<()> {
                 undo_step(&tree, &checkpoint, &cases, &kept)?;
-                surface.put_back(&tree, &surface_kept)
+                surface.put_back(&tree, &surface_kept)?;
+                outside_before.put_back(&tree)
             };
             let stepped = match stepped {
                 Ok(stepped) => stepped,
@@ -3389,9 +3742,13 @@ impl<'a> Run<'a> {
             // with certainty, or what cargo itself reads as a build script or `links`
             // ([`cargo_builds`]). `.cargo/` is guarded above, so cargo reads the base's
             // configuration here.
+            // pytest's configuration in a `pyproject.toml` likewise ([`pytest_config_changes`]).
             let manifests = (|| -> Result<Vec<String>> {
                 let mut changed_keys = Vec::new();
-                for path in changed.iter().filter(|path| is_manifest(path)) {
+                for path in changed
+                    .iter()
+                    .filter(|path| is_manifest(path) || is_pyproject(path))
+                {
                     let before = manifest_at(&self.tree, &head_before, path)?;
                     let full = self.tree.join(path);
                     let after = match std::fs::symlink_metadata(&full) {
@@ -3409,7 +3766,12 @@ impl<'a> Run<'a> {
                             continue;
                         }
                     };
-                    match manifest_build_changes(&before, &after) {
+                    let compared = if is_manifest(path) {
+                        manifest_build_changes(&before, &after)
+                    } else {
+                        pytest_config_changes(&before, &after)
+                    };
+                    match compared {
                         Ok(keys) => {
                             changed_keys
                                 .extend(keys.into_iter().map(|key| format!("{path}: {key}")));
@@ -3448,6 +3810,34 @@ impl<'a> Run<'a> {
                 record_step(self)?;
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "  refused: {why}; the change was discarded")?;
+                return Ok(Stop::StepRefused(why));
+            }
+            // What cargo and rustup read outside the tree ([`Outside`]): a step that changed it
+            // is refused, and what it created there removed, what it changed or removed put back.
+            let outside_changed = match Outside::read(&self.tree) {
+                Ok(now) => outside_before.differing(&now),
+                Err(error) => {
+                    undo()?;
+                    record_step(self)?;
+                    return Err(error.context(format!(
+                        "step {}: what cargo and rustup read outside the tree could not be read after {}; the change was discarded",
+                        self.steps, report.action
+                    )));
+                }
+            };
+            if !outside_changed.is_empty() {
+                undo()?;
+                let why = format!(
+                    "{} changed what cargo or rustup reads outside the tree: {}",
+                    report.action,
+                    outside_named(&outside_changed)
+                );
+                record_step(self)?;
+                self.refused(events, BY_TAKT, &why)?;
+                writeln!(
+                    out,
+                    "  refused: {why}; it was put back and the change discarded"
+                )?;
                 return Ok(Stop::StepRefused(why));
             }
             // What only takt does, or what nobody may: `.git/`, `HEAD`, the index, ignored
