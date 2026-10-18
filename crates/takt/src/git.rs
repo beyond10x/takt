@@ -187,8 +187,9 @@ pub fn refs(tree: &Path, prefixes: &[&str]) -> Result<Vec<String>> {
 pub type ConfigEntry = (String, Option<String>);
 
 /// The entries of `path`, a file in git's configuration syntax, as `revision` holds it: each
-/// `(key, value)` in file order, read with `git config --blob`, so nothing is checked out and
-/// no include is followed. A key with no `=` has no value. `None` when `revision` names no
+/// `(key, value)` in file order, read with `git config --no-includes --blob`, so nothing is
+/// checked out and no `include.path` or `includeIf` is followed: an include is listed as its
+/// own entry, never as the entries of the file it names. A key with no `=` has no value. `None` when `revision` names no
 /// commit or holds no file at `path`.
 pub fn config_at(tree: &Path, revision: &str, path: &str) -> Result<Option<Vec<ConfigEntry>>> {
     let blob = format!("{revision}:{path}");
@@ -198,7 +199,11 @@ pub fn config_at(tree: &Path, revision: &str, path: &str) -> Result<Option<Vec<C
     {
         return Ok(None);
     }
-    let listed = raw(tree, &["config", "--blob", &blob, "--list", "-z"], None)?;
+    let listed = raw(
+        tree,
+        &["config", "--no-includes", "--blob", &blob, "--list", "-z"],
+        None,
+    )?;
     listed
         .split(|byte| *byte == 0)
         .filter(|entry| !entry.is_empty())

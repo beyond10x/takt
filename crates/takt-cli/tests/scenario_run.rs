@@ -90,6 +90,9 @@ struct World {
     repo: PathBuf,
     bin: PathBuf,
     state: PathBuf,
+    /// The bare repository the bot route double fetches from and pushes into, standing in for
+    /// the scratch repository on its host.
+    remote: PathBuf,
     /// The seed commit: the fixture store with its one story `proposed`.
     seed: String,
 }
@@ -122,12 +125,15 @@ fn world(name: &str) -> World {
     let bin = outer.join("stub-bin");
     let state = outer.join("forge");
     fs::create_dir_all(&state).expect("a state directory");
-    doubles(&bin, &state);
+    let remote = outer.join("remote.git");
+    git(&outer, &["init", "-q", "--bare", "remote.git"]);
+    doubles(&bin, &state, &remote);
     World {
         _scratch: Scratch(outer),
         repo,
         bin,
         state,
+        remote,
         seed,
     }
 }
@@ -139,30 +145,53 @@ fn declare(repo: &Path, text: &str) {
     git(repo, &["commit", "-q", "-m", "declare the scenarios"]);
 }
 
-/// The doubles in `bin`, their state in `state`. `b10x-gates bot -- push <remote> <spec>` logs
-/// its line to `state/calls` and keeps the commit pushed per branch (`pushed-<branch, / as _>`),
-/// or exits 1 when `state/refuse-push` exists; `scan-text` passes; `api --method POST` keeps the
-/// request as `pr-<k>.json` and answers pull request `k`, counting from 1. `gh pr view` reports
-/// the pull request open with the head it was opened for, at the commit last pushed for it; `gh
-/// pr checks` one check, passing. `claude` appends a line to `work.txt` and answers
-/// `implementation.edit`, or, once an approval is offered, answers `repository.merge`.
-fn doubles(bin: &Path, state: &Path) {
+/// The doubles in `bin`, their state in `state`. Every `b10x-gates` line is logged to
+/// `state/calls`. `b10x-gates bot -- fetch <remote> <refspec>` runs a real `git fetch` of the
+/// refspec from the bare `remote`, or does nothing when `state/no-fetch` exists; `b10x-gates bot
+/// -- push [--porcelain] <remote> <spec>` runs a real, unforced `git push` of the spec into
+/// `remote`, its report on stdout as git prints it, keeps the commit pushed per branch
+/// (`pushed-<branch, / as _>`), or exits 1 when `state/refuse-push` exists; `scan-text` passes;
+/// `api --method POST` keeps the request as `pr-<k>.json` and answers pull request `k`,
+/// counting from 1. `gh pr view` reports the pull request open with the head it was opened
+/// for, at the commit last pushed for it; `gh pr checks` one check, passing. `claude` appends a
+/// line to `work.txt` and answers `implementation.edit`, or, once an approval is offered,
+/// answers `repository.merge`.
+fn doubles(bin: &Path, state: &Path, remote: &Path) {
     fs::create_dir_all(bin).expect("a stub directory");
     let state = state.display().to_string();
+    let remote = remote.display().to_string();
     executable(
         bin,
         "b10x-gates",
         &format!(
             r#"#!/bin/sh
 state='{state}'
+remote='{remote}'
 echo "$*" >> "$state/calls"
 case "$1" in
   bot)
-    if [ -e "$state/refuse-push" ]; then echo "refused by the double" >&2; exit 1; fi
-    spec="$5"; branch="${{spec#*:refs/heads/}}"; revision="${{spec%%:*}}"
-    if [ "$branch" = "$spec" ]; then revision="refs/heads/$spec"; fi
-    git rev-parse "$revision" > "$state/pushed-$(printf '%s' "$branch" | tr / _)" || exit 1
-    exit 0 ;;
+    shift 2
+    verb="$1"; shift
+    porcelain=''
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --porcelain) porcelain=--porcelain; shift ;;
+        -*) shift ;;
+        *) break ;;
+      esac
+    done
+    spec="$2"
+    case "$verb" in
+      fetch)
+        if [ -e "$state/no-fetch" ]; then exit 0; fi
+        git fetch -q "$remote" "$spec"; exit $? ;;
+      push)
+        if [ -e "$state/refuse-push" ]; then echo "refused by the double" >&2; exit 1; fi
+        branch="${{spec#*:refs/heads/}}"; revision="${{spec%%:*}}"
+        if [ "$branch" = "$spec" ]; then revision="refs/heads/$spec"; fi
+        git rev-parse "$revision" > "$state/pushed-$(printf '%s' "$branch" | tr / _)" || exit 1
+        git push $porcelain "$remote" "$spec" 2>/dev/null; exit $? ;;
+    esac ;;
   scan-text) exit 0 ;;
   api)
     method=''; input=''; output=''
@@ -358,10 +387,19 @@ fn two_scenario_runs_in_a_row_each_open_their_pull_request_against_their_own_tri
         Some(world.seed.as_str())
     );
     assert_eq!(
-        world.calls().first().map(String::as_str),
-        Some("bot -- push origin trial/0"),
-        "the base is pushed before anything else: {:?}",
+        world.calls().get(..2),
+        Some(
+            &[
+                FETCH_TRIALS.to_owned(),
+                "bot -- push --porcelain origin refs/heads/trial/0:refs/heads/trial/0".to_owned(),
+            ][..]
+        ),
+        "the remote's trial branches are fetched, then the base is pushed, before anything else: {:?}",
         world.calls()
+    );
+    assert_eq!(
+        git_out(&world.remote, &["rev-parse", "refs/heads/trial/0"]),
+        world.seed
     );
 
     // Nothing between the runs: the tree is clean outside the cases directory.
@@ -552,7 +590,74 @@ fn a_seed_whose_story_is_not_proposed_is_refused_before_the_push() {
     assert!(err.contains("story:ready-one"), "stderr {err}");
     assert!(err.contains("active"), "stderr {err}");
     assert!(world.trial_branches().is_empty());
-    assert!(world.calls().is_empty(), "{:?}", world.calls());
+    assert_eq!(world.calls(), [FETCH_TRIALS], "nothing but the fetch");
+    assert!(git_out(&world.remote, &["for-each-ref"]).is_empty());
     assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
     assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
+}
+
+/// The line that fetches the remote's trial branches through the bot route.
+const FETCH_TRIALS: &str = "bot -- fetch origin +refs/heads/trial/*:refs/remotes/origin/trial/*";
+
+/// The remote already holds `trial/0`, pushed by a run from another checkout that this one
+/// never fetched: the run fetches the remote's trial branches first and takes `trial/1`, its
+/// own, and its pull request targets it.
+#[test]
+fn a_trial_branch_only_the_remote_holds_is_fetched_and_not_reused() {
+    let world = world("remote-only");
+    git(
+        &world.repo,
+        &[
+            "push",
+            "-q",
+            world.remote.to_str().expect("utf-8"),
+            &format!("{}:refs/heads/trial/0", world.seed),
+        ],
+    );
+    let (code, out, err) = world.scenario_run("1", &[]);
+    assert_eq!(code, 4, "stdout {out} stderr {err}");
+    assert!(
+        out.contains("scenario 1: story:ready-one proposed on trial/1 at "),
+        "stdout {out} stderr {err}"
+    );
+    assert_eq!(world.request(1, "base"), "trial/1");
+    assert_eq!(
+        git_out(&world.repo, &["rev-parse", "refs/remotes/origin/trial/0"]),
+        world.seed
+    );
+    assert_eq!(world.trial_branches(), ["trial/1"]);
+}
+
+/// The fetch alone is not relied on: when the remote holds the trial branch the checkout chose
+/// (here the fetch brought nothing), the push reports it up to date rather than new, and the
+/// run is refused before any case opens; the branch it cut is removed, the tree back on `main`,
+/// the remote's branch as it was.
+#[test]
+fn a_push_that_finds_the_trial_branch_already_there_is_refused() {
+    let world = world("up-to-date");
+    git(
+        &world.repo,
+        &[
+            "push",
+            "-q",
+            world.remote.to_str().expect("utf-8"),
+            &format!("{}:refs/heads/trial/0", world.seed),
+        ],
+    );
+    fs::write(world.state.join("no-fetch"), "").expect("the double fetches nothing");
+    let head = git_out(&world.repo, &["rev-parse", "HEAD"]);
+
+    let (code, out, err) = world.scenario_run("1", &[]);
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(err.contains("trial/0"), "stderr {err}");
+    assert!(err.contains("not created"), "stderr {err}");
+    assert!(!out.contains("on trial/0 at"), "stdout {out}");
+    assert!(world.trial_branches().is_empty());
+    assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
+    assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
+    assert!(!world.repo.join(".engineering/cases").exists());
+    assert_eq!(
+        git_out(&world.remote, &["rev-parse", "refs/heads/trial/0"]),
+        world.seed
+    );
 }

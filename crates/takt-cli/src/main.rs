@@ -8,7 +8,7 @@ use std::rc::Rc;
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
 use takt::Frontier as _;
-use takt::forge::{BotRoute, Forge, repository_of};
+use takt::forge::{BotRoute, Forge, Process, Runner, repository_of};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness};
 use takt::validator::{CiRead, DEFAULT_PROJECT, GateRun, PrMerged, PrOpen, TestsRun, Validator};
@@ -43,13 +43,15 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum ScenarioCommands {
-    /// Run a scenario from a fresh base: on a clean tree, cut `trial/<n>` from the scenario's
-    /// seed commit (`<n>` one past the highest `trial/<n>` the checkout knows, local or
-    /// remote), check it out, refuse unless the store there shows the scenario's story
-    /// `proposed`, push it through the forge, then open a case for the story on
+    /// Run a scenario from a fresh base: on a clean tree, fetch the remote's `trial/*` branches
+    /// through the bot route, cut `trial/<n>` from the scenario's seed commit (`<n>` one past
+    /// the highest `trial/<n>` the checkout then knows, local or remote), check it out, refuse
+    /// unless the store there shows the scenario's story `proposed`, push it through the bot
+    /// route and refuse unless the push reports it created, then open a case for the story on
     /// `story.delivery/1`, whose pull request targets `trial/<n>`. The case is
-    /// `scenario-<id>-trial-<n>`; nothing of an earlier run is resumed. A refusal before the
-    /// push removes the branch and puts the tree back.
+    /// `scenario-<id>-trial-<n>`, refused before anything is cut when it or its branch exists;
+    /// nothing of an earlier run is resumed. A refusal before the push removes the branch and
+    /// puts the tree back.
     #[command(after_help = EXIT_CODES)]
     Run(Box<ScenarioRunArgs>),
 }
@@ -468,10 +470,93 @@ fn validators_of(repo: &Path, looping: &LoopArgs) -> Result<Vec<Box<dyn Validato
     Ok(validators)
 }
 
-/// The forge a run goes through, and the line that says so once its case is open.
+/// The forge a run goes through, the line that says so once its case is open, and, for the bot
+/// route, the route a scenario's trial bases are fetched and created through.
 struct Forged {
     forge: Option<Rc<dyn Forge>>,
     line: Option<String>,
+    trials: Option<TrialRoute>,
+}
+
+/// The bot route's two lines for a scenario's trial bases, beside the forge's own: a fetch of
+/// the remote's `trial/*` branches, so the next number is chosen knowing them, and a push that
+/// must create `trial/<n>`. The push reports in `--porcelain` form, and only a `*` (new ref)
+/// for the branch counts: an unforced push of a branch the remote already holds at the same
+/// commit exits 0 as "up to date", and a lease does not refuse that either.
+struct TrialRoute {
+    /// The remote the bot route pushes to.
+    remote: String,
+    runner: Box<dyn Runner>,
+}
+
+impl TrialRoute {
+    /// The line that fetches the remote's trial branches into its remote-tracking refs.
+    fn fetch_argv(&self) -> Vec<String> {
+        let refspec = format!("+refs/heads/trial/*:refs/remotes/{}/trial/*", self.remote);
+        ["b10x-gates", "bot", "--", "fetch", &self.remote, &refspec]
+            .map(str::to_owned)
+            .to_vec()
+    }
+
+    /// The line that pushes the local `trial` as the remote's, reporting each ref on stdout.
+    fn push_argv(&self, trial: &str) -> Vec<String> {
+        let refspec = format!("refs/heads/{trial}:refs/heads/{trial}");
+        [
+            "b10x-gates",
+            "bot",
+            "--",
+            "push",
+            "--porcelain",
+            &self.remote,
+            &refspec,
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    }
+
+    /// Runs `argv` in `tree`; a program that did not exit 0 is an error naming the line and
+    /// what it said.
+    fn succeed(&self, tree: &Path, argv: &[String]) -> Result<takt::forge::Exit> {
+        let exit = self.runner.run(tree, argv)?;
+        if !exit.success() {
+            return Err(anyhow!(
+                "{} exited {}: {}",
+                argv.join(" "),
+                exit.code
+                    .map_or("on a signal".to_owned(), |code| code.to_string()),
+                one_line(&exit.stderr)
+            ));
+        }
+        Ok(exit)
+    }
+
+    /// Fetches the remote's trial branches.
+    fn fetch(&self, tree: &Path) -> Result<()> {
+        self.succeed(tree, &self.fetch_argv()).map(|_| ())
+    }
+
+    /// Pushes `trial` and answers only when the push reports it created on the remote.
+    fn create(&self, tree: &Path, trial: &str) -> Result<()> {
+        let argv = self.push_argv(trial);
+        let exit = self.succeed(tree, &argv)?;
+        let target = format!(":refs/heads/{trial}");
+        let created = exit.stdout.lines().any(|line| {
+            let mut fields = line.split('\t');
+            fields.next() == Some("*") && fields.next().is_some_and(|refs| refs.ends_with(&target))
+        });
+        if !created {
+            return Err(anyhow!(
+                "{} did not report {trial} created, so it was not created: the remote holds it already (\"up to date\"), or the route reported nothing; it reported: {}",
+                argv.join(" "),
+                if exit.stdout.trim().is_empty() {
+                    "nothing".to_owned()
+                } else {
+                    one_line(&exit.stdout)
+                }
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl Forged {
@@ -497,12 +582,21 @@ fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
             "forge: bot ({}); pr.open, ci.read and repository.merge go through the bot route",
             bot.repository
         );
+        let trials = TrialRoute {
+            remote: bot.remote.clone(),
+            runner: Box::new(Process::default()),
+        };
         Ok(Forged {
             forge: Some(Rc::new(bot)),
             line: Some(line),
+            trials: Some(trials),
         })
     };
-    let none = |line: Option<String>| Forged { forge: None, line };
+    let none = |line: Option<String>| Forged {
+        forge: None,
+        line,
+        trials: None,
+    };
     Ok(match forge {
         Some("none") => none(None),
         Some("bot") => bot(repo)?,
@@ -634,22 +728,53 @@ impl Scenario {
 
 /// The trial base a scenario run cuts next: one past the highest `trial/<n>` the checkout
 /// knows, a local branch or a remote's (as last fetched), `0` when there is none. Names under
-/// `trial/` that are not a number are not trial bases.
+/// `trial/` that are not all digits are not trial bases. A number too large for `u64`, or a
+/// highest number nothing follows, is refused: never skipped, never wrapped to a number in use.
 fn next_trial(repo: &Path) -> Result<u64> {
     let known = takt::git::refs(repo, &["refs/heads/trial", "refs/remotes"])?;
-    let highest = known
-        .iter()
-        .filter_map(|name| {
-            name.strip_prefix("refs/heads/trial/").or_else(|| {
-                name.strip_prefix("refs/remotes/")
-                    .and_then(|rest| rest.split_once('/'))
-                    .and_then(|(_, branch)| branch.strip_prefix("trial/"))
-            })
-        })
-        .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-        .filter_map(|n| n.parse::<u64>().ok())
-        .max();
-    Ok(highest.map_or(0, |n| n + 1))
+    let mut highest: Option<u64> = None;
+    for name in &known {
+        let Some(n) = name.strip_prefix("refs/heads/trial/").or_else(|| {
+            name.strip_prefix("refs/remotes/")
+                .and_then(|rest| rest.split_once('/'))
+                .and_then(|(_, branch)| branch.strip_prefix("trial/"))
+        }) else {
+            continue;
+        };
+        if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let n: u64 = n.parse().map_err(|_| {
+            anyhow!("{name} numbers a trial past the largest a scenario run counts to; nothing was changed")
+        })?;
+        highest = Some(highest.map_or(n, |h| h.max(n)));
+    }
+    match highest {
+        None => Ok(0),
+        Some(n) => n.checked_add(1).ok_or_else(|| {
+            anyhow!("trial/{n} is the highest trial branch known, and no number follows it; nothing was changed")
+        }),
+    }
+}
+
+/// Refuses `n` as the run's trial number when anything the run would create for it after the
+/// push is there already: the case `scenario-<id>-trial-<n>`, as a directory or as its branch
+/// `takt/<case>`. The trial branch itself is not, as `n` is past every one known.
+fn trial_free(repo: &Path, scenario: &str, n: u64) -> Result<String> {
+    let case_id = format!("scenario-{scenario}-trial-{n}");
+    let refused = |what: String| {
+        anyhow!(
+            "scenario {scenario}: {what} exists already, though no trial/{n} branch is known: the case of trial/{n} would collide with it; nothing was pushed"
+        )
+    };
+    if repo.join(takt::case::CASES_DIR).join(&case_id).exists() {
+        return Err(refused(format!("the case {case_id}")));
+    }
+    let branch = takt::case::Branch::name_of(&case_id);
+    if !takt::git::refs(repo, &[&format!("refs/heads/{branch}")])?.is_empty() {
+        return Err(refused(format!("the case's branch {branch}")));
+    }
+    Ok(case_id)
 }
 
 /// `takt scenario run`: the scenario read, the tree found clean, `trial/<n>` cut from the seed
@@ -697,16 +822,22 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             repo.display()
         )
     })?;
-    let n = next_trial(&repo)?;
-    let trial = format!("trial/{n}");
-    let case_id = format!("scenario-{}-trial-{n}", scenario.id);
-    if repo.join(takt::case::CASES_DIR).join(&case_id).exists() {
-        return Err(anyhow!(
-            "scenario {}: the case {case_id} exists already, though no {trial} branch is known; nothing was changed",
-            scenario.id
-        ));
-    }
     let forge = forge_of(&repo, looping.forge.as_deref())?;
+    // The number is checked on what the checkout knows before the route is asked anything, and
+    // again once the remote's trial branches are fetched, on the number chosen then.
+    let mut n = next_trial(&repo)?;
+    let mut case_id = trial_free(&repo, &scenario.id, n)?;
+    if let Some(trials) = &forge.trials {
+        trials.fetch(&repo).with_context(|| {
+            format!(
+                "scenario {}: fetch the remote's trial branches; nothing was changed",
+                scenario.id
+            )
+        })?;
+        n = next_trial(&repo)?;
+        case_id = trial_free(&repo, &scenario.id, n)?;
+    }
+    let trial = format!("trial/{n}");
     let left = takt::git::current_branch(&repo)?;
     let at = takt::git::head(&repo)?;
     takt::git::create_branch(&repo, &trial, Some(&seed))?;
@@ -721,7 +852,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             )),
         }
     };
-    let prepared = (|| -> Result<Vec<Box<dyn Validator>>> {
+    let prepared = (|| -> Result<(Vec<Box<dyn Validator>>, takt::Story)> {
         let status = Aep::default()
             .list(&repo)?
             .into_iter()
@@ -747,21 +878,22 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
                 ));
             }
         }
-        // The gates and the project file are the seed's: read on the trial branch.
+        // Everything read before the push: the story's text and the gates and the project file,
+        // the seed's, read on the trial branch.
+        let story = Aep::default().show(&repo, &scenario.story)?;
         let mut validators = validators_of(&repo, &looping)?;
         forge.register(&mut validators);
-        if let Some(forge) = &forge.forge {
-            forge.push(&repo, &trial).with_context(|| {
+        if let Some(trials) = &forge.trials {
+            trials.create(&repo, &trial).with_context(|| {
                 format!(
-                    "scenario {}: push {trial} through the forge {}; nothing else was pushed",
-                    scenario.id,
-                    forge.name()
+                    "scenario {}: push {trial} through the bot route; nothing else was pushed",
+                    scenario.id
                 )
             })?;
         }
-        Ok(validators)
+        Ok((validators, story))
     })();
-    let validators = prepared.map_err(back)?;
+    let (validators, story) = prepared.map_err(back)?;
     writeln!(
         out,
         "scenario {}: {} {} on {trial} at {}, {}",
@@ -775,7 +907,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         }
     )?;
     let options = looping.options(STORY_DELIVERY.to_owned(), Vec::new(), Some(case_id));
-    let mut run = take_story(&repo, options, &scenario.story, harness, &validators, out)?;
+    let mut run = take_story(&repo, options, story, harness, &validators, out)?;
     finish(&mut run, forge.line.as_deref(), out)
 }
 
@@ -784,8 +916,8 @@ fn short(revision: &str) -> &str {
     &revision[..8.min(revision.len())]
 }
 
-/// Opens a case for the story `id` and takes it, as [`Run::take_next`] does for the next ready
-/// one: the case first, then the store told, the take committed on the case's branch as
+/// Opens a case for `story`, read from the store before the call, and takes it, as
+/// [`Run::take_next`] does for the next ready one: the case first, then the store told, the take committed on the case's branch as
 /// `takt: take <story>`, exactly the paths the store changed, and the case's implementation at
 /// that commit. A refusal or a failure removes the case. Unlike `take_next` it is not skipped
 /// for a case an earlier scenario run opened for the same story on another trial base: each
@@ -793,13 +925,14 @@ fn short(revision: &str) -> &str {
 fn take_story<'a>(
     repo: &Path,
     options: RunOptions,
-    id: &str,
+    story: takt::Story,
     harness: &'a dyn Harness,
     validators: &'a [Box<dyn Validator>],
     out: &mut dyn Write,
 ) -> Result<Run<'a>> {
     let aep = Aep::default();
-    let story = aep.show(repo, id)?;
+    let id = story.id.clone();
+    let id = id.as_str();
     let title = story.title.clone();
     let mut run = Run::open_unit(repo, options, Unit::Story(story), harness, validators)?;
     let taken = (|| -> Result<String> {
