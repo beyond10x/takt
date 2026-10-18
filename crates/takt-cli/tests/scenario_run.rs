@@ -148,9 +148,10 @@ fn declare(repo: &Path, text: &str) {
 /// The doubles in `bin`, their state in `state`. Every `b10x-gates` line is logged to
 /// `state/calls`. `b10x-gates bot -- fetch <remote> <refspec>` runs a real `git fetch` of the
 /// refspec from the bare `remote`, or does nothing when `state/no-fetch` exists; `b10x-gates bot
-/// -- push [--porcelain] <remote> <spec>` runs a real, unforced `git push` of the spec into
-/// `remote`, its report on stdout as git prints it, keeps the commit pushed per branch
-/// (`pushed-<branch, / as _>`), or exits 1 when `state/refuse-push` exists; `scan-text` passes;
+/// -- push [options] <remote> <spec>` runs a real `git push` of the spec into `remote` with every
+/// option takt gave (`--porcelain`, `--force-with-lease`), its report on stdout as git prints it,
+/// keeps the commit pushed per branch (`pushed-<branch, / as _>`), or exits 1 when
+/// `state/refuse-push` exists; `scan-text` passes;
 /// `api --method POST` keeps the request as `pr-<k>.json` and answers pull request `k`,
 /// counting from 1. `gh pr view` reports the pull request open with the head it was opened
 /// for, at the commit last pushed for it; `gh pr checks` one check, passing. `claude` appends a
@@ -172,11 +173,10 @@ case "$1" in
   bot)
     shift 2
     verb="$1"; shift
-    porcelain=''
+    options=''
     while [ $# -gt 0 ]; do
       case "$1" in
-        --porcelain) porcelain=--porcelain; shift ;;
-        -*) shift ;;
+        -*) options="$options $1"; shift ;;
         *) break ;;
       esac
     done
@@ -190,7 +190,7 @@ case "$1" in
         branch="${{spec#*:refs/heads/}}"; revision="${{spec%%:*}}"
         if [ "$branch" = "$spec" ]; then revision="refs/heads/$spec"; fi
         git rev-parse "$revision" > "$state/pushed-$(printf '%s' "$branch" | tr / _)" || exit 1
-        git push $porcelain "$remote" "$spec" 2>/dev/null; exit $? ;;
+        git push $options "$remote" "$spec" 2>/dev/null; exit $? ;;
     esac ;;
   scan-text) exit 0 ;;
   api)
@@ -391,7 +391,7 @@ fn two_scenario_runs_in_a_row_each_open_their_pull_request_against_their_own_tri
         Some(
             &[
                 FETCH_TRIALS.to_owned(),
-                "bot -- push --porcelain origin refs/heads/trial/0:refs/heads/trial/0".to_owned(),
+                "bot -- push --porcelain --force-with-lease=refs/heads/trial/0: origin refs/heads/trial/0:refs/heads/trial/0".to_owned(),
             ][..]
         ),
         "the remote's trial branches are fetched, then the base is pushed, before anything else: {:?}",
@@ -660,4 +660,73 @@ fn a_push_that_finds_the_trial_branch_already_there_is_refused() {
         git_out(&world.remote, &["rev-parse", "refs/heads/trial/0"]),
         world.seed
     );
+}
+
+/// The push may only create the trial branch. Another run's `trial/0` lands on the remote
+/// after this run's fetch (here the fetch brings nothing) at an ancestor of this run's seed: an
+/// unforced push would fast-forward it under that run's pull request. The lease
+/// (`--force-with-lease=refs/heads/trial/0:`, the branch must not exist) makes the push
+/// rejected instead; the run is refused, the remote's `trial/0` stays where the other run put
+/// it, and the refusal says so.
+#[test]
+fn a_trial_branch_at_an_ancestor_of_the_seed_is_not_moved_by_the_push() {
+    let world = world("lease");
+    let later = git_out(&world.repo, &["rev-parse", "HEAD"]);
+    declare(
+        &world.repo,
+        &format!("[scenario \"2\"]\n\tstory = story:ready-one\n\tseed = {later}\n"),
+    );
+    git(
+        &world.repo,
+        &[
+            "push",
+            "-q",
+            world.remote.to_str().expect("utf-8"),
+            &format!("{}:refs/heads/trial/0", world.seed),
+        ],
+    );
+    fs::write(world.state.join("no-fetch"), "").expect("the double fetches nothing");
+
+    let (code, out, err) = world.scenario_run("2", &["--iterations", "0"]);
+    assert_eq!(
+        git_out(&world.remote, &["rev-parse", "refs/heads/trial/0"]),
+        world.seed,
+        "the remote's trial/0 was moved: exit {code}, stdout {out} stderr {err}"
+    );
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(err.contains("not created"), "stderr {err}");
+    assert!(err.contains("rejected"), "stderr {err}");
+    assert!(world.trial_branches().is_empty());
+    assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
+    assert!(!world.repo.join(".engineering/cases").exists());
+}
+
+/// A seed whose store shows the scenario's story `proposed` but not ready, here because it
+/// depends on a story still in draft, is no known starting state either: refused before the
+/// push, naming what it waits on, as `takt run` would never take it.
+#[test]
+fn a_seed_whose_story_waits_on_a_dependency_is_refused_before_the_push() {
+    let world = world("waits");
+    declare(
+        &world.repo,
+        &format!(
+            "[scenario \"4\"]\n\tstory = story:waits-one\n\tseed = {}\n",
+            world.seed
+        ),
+    );
+    let (code, out, err) = world.scenario_run("4", &[]);
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(err.contains("story:waits-one"), "stderr {err}");
+    assert!(err.contains("story:draft-dep"), "stderr {err}");
+    assert!(world.trial_branches().is_empty());
+    assert!(
+        !world
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("bot -- push")),
+        "{:?}",
+        world.calls()
+    );
+    assert!(git_out(&world.remote, &["for-each-ref"]).is_empty());
+    assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
 }

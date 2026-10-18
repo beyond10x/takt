@@ -46,9 +46,10 @@ enum ScenarioCommands {
     /// Run a scenario from a fresh base: on a clean tree, fetch the remote's `trial/*` branches
     /// through the bot route, cut `trial/<n>` from the scenario's seed commit (`<n>` one past
     /// the highest `trial/<n>` the checkout then knows, local or remote), check it out, refuse
-    /// unless the store there shows the scenario's story `proposed`, push it through the bot
-    /// route and refuse unless the push reports it created, then open a case for the story on
-    /// `story.delivery/1`, whose pull request targets `trial/<n>`. The case is
+    /// unless the store there shows the scenario's story ready (`proposed`, nothing blocking
+    /// it, its dependencies done), push it through the bot route with a lease that only lets
+    /// it create the branch, and refuse unless the push reports it created, then open a case
+    /// for the story on `story.delivery/1`, whose pull request targets `trial/<n>`. The case is
     /// `scenario-<id>-trial-<n>`, refused before anything is cut when it or its branch exists;
     /// nothing of an earlier run is resumed. A refusal before the push removes the branch and
     /// puts the tree back.
@@ -480,9 +481,11 @@ struct Forged {
 
 /// The bot route's two lines for a scenario's trial bases, beside the forge's own: a fetch of
 /// the remote's `trial/*` branches, so the next number is chosen knowing them, and a push that
-/// must create `trial/<n>`. The push reports in `--porcelain` form, and only a `*` (new ref)
-/// for the branch counts: an unforced push of a branch the remote already holds at the same
-/// commit exits 0 as "up to date", and a lease does not refuse that either.
+/// may only create `trial/<n>`. The push carries `--force-with-lease=refs/heads/trial/<n>:`
+/// (the branch must not exist), so a `trial/<n>` another run created after the fetch is
+/// rejected, never fast-forwarded; and it reports in `--porcelain` form, where only a `*` (new
+/// ref) for the branch counts: a branch the remote already holds at the same commit is "up to
+/// date", exit 0, which the lease does not refuse.
 struct TrialRoute {
     /// The remote the bot route pushes to.
     remote: String,
@@ -498,8 +501,10 @@ impl TrialRoute {
             .to_vec()
     }
 
-    /// The line that pushes the local `trial` as the remote's, reporting each ref on stdout.
+    /// The line that creates the remote's `trial` from the local one, reporting each ref on
+    /// stdout; the lease refuses it when the remote has the branch.
     fn push_argv(&self, trial: &str) -> Vec<String> {
+        let lease = format!("--force-with-lease=refs/heads/{trial}:");
         let refspec = format!("refs/heads/{trial}:refs/heads/{trial}");
         [
             "b10x-gates",
@@ -507,6 +512,7 @@ impl TrialRoute {
             "--",
             "push",
             "--porcelain",
+            &lease,
             &self.remote,
             &refspec,
         ]
@@ -535,27 +541,49 @@ impl TrialRoute {
         self.succeed(tree, &self.fetch_argv()).map(|_| ())
     }
 
-    /// Pushes `trial` and answers only when the push reports it created on the remote.
+    /// Pushes `trial` and answers only when the push exits 0 and reports it created on the
+    /// remote. A refusal says what the push reported for the branch and what that means for
+    /// the remote's `trial`: as it was (`=` up to date, `!` rejected), moved (` ` or `+`, which
+    /// only a route that dropped the lease reports), or not known (no report for it).
     fn create(&self, tree: &Path, trial: &str) -> Result<()> {
         let argv = self.push_argv(trial);
-        let exit = self.succeed(tree, &argv)?;
+        let exit = self.runner.run(tree, &argv)?;
         let target = format!(":refs/heads/{trial}");
-        let created = exit.stdout.lines().any(|line| {
+        let reported = exit.stdout.lines().find_map(|line| {
             let mut fields = line.split('\t');
-            fields.next() == Some("*") && fields.next().is_some_and(|refs| refs.ends_with(&target))
+            let flag = fields.next()?;
+            let refs = fields.next()?;
+            refs.ends_with(&target)
+                .then(|| (flag.to_owned(), fields.next().unwrap_or("").to_owned()))
         });
-        if !created {
-            return Err(anyhow!(
-                "{} did not report {trial} created, so it was not created: the remote holds it already (\"up to date\"), or the route reported nothing; it reported: {}",
-                argv.join(" "),
-                if exit.stdout.trim().is_empty() {
-                    "nothing".to_owned()
-                } else {
-                    one_line(&exit.stdout)
-                }
-            ));
-        }
-        Ok(())
+        let exited = exit
+            .code
+            .map_or("on a signal".to_owned(), |code| format!("{code}"));
+        let (flag, summary) = match reported {
+            Some((flag, _)) if flag == "*" && exit.success() => return Ok(()),
+            Some(found) => found,
+            None => {
+                return Err(anyhow!(
+                    "{trial} was not created on the remote, as far as takt can tell: {} exited {exited} and reported nothing for it ({}); whether the remote's {trial} changed is not known",
+                    argv.join(" "),
+                    one_line(&format!("{}\n{}", exit.stdout, exit.stderr))
+                ));
+            }
+        };
+        let meaning = match flag.as_str() {
+            "=" => format!("the remote holds {trial} already, at this commit, and it is as it was"),
+            "!" => format!(
+                "the push was rejected: the remote holds {trial} already, and it is as it was"
+            ),
+            " " | "+" => format!(
+                "the remote's {trial} was there already and was moved, not created: the route did not hold the push to its lease; another run's base may have moved"
+            ),
+            _ => format!("the remote's {trial} was not created"),
+        };
+        Err(anyhow!(
+            "{trial} was not created on the remote: {} exited {exited} and reported `{flag} {summary}` for it: {meaning}",
+            argv.join(" ")
+        ))
     }
 }
 
@@ -823,10 +851,8 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         )
     })?;
     let forge = forge_of(&repo, looping.forge.as_deref())?;
-    // The number is checked on what the checkout knows before the route is asked anything, and
-    // again once the remote's trial branches are fetched, on the number chosen then.
-    let mut n = next_trial(&repo)?;
-    let mut case_id = trial_free(&repo, &scenario.id, n)?;
+    // The fetch is read-only and comes first, so the number is chosen and checked once, on
+    // everything the checkout knows after it, and before anything is cut or pushed.
     if let Some(trials) = &forge.trials {
         trials.fetch(&repo).with_context(|| {
             format!(
@@ -834,9 +860,9 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
                 scenario.id
             )
         })?;
-        n = next_trial(&repo)?;
-        case_id = trial_free(&repo, &scenario.id, n)?;
     }
+    let n = next_trial(&repo)?;
+    let case_id = trial_free(&repo, &scenario.id, n)?;
     let trial = format!("trial/{n}");
     let left = takt::git::current_branch(&repo)?;
     let at = takt::git::head(&repo)?;
@@ -853,30 +879,36 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         }
     };
     let prepared = (|| -> Result<(Vec<Box<dyn Validator>>, takt::Story)> {
-        let status = Aep::default()
-            .list(&repo)?
-            .into_iter()
-            .find(|listed| listed.id == scenario.story)
-            .map(|listed| listed.status);
-        match status.as_deref() {
-            Some(takt::frontier::READY) => {}
-            Some(other) => {
-                return Err(anyhow!(
-                    "scenario {}: the store at its seed {} gives {} {other}, not {}: no known starting state; nothing was pushed",
-                    scenario.id,
-                    short(&seed),
-                    scenario.story,
-                    takt::frontier::READY
-                ));
-            }
-            None => {
-                return Err(anyhow!(
-                    "scenario {}: the store at its seed {} lists no {}; nothing was pushed",
-                    scenario.id,
-                    short(&seed),
-                    scenario.story
-                ));
-            }
+        // The story must be ready at the seed by the frontier's own rule, as `takt run` would
+        // take it: `proposed`, nothing blocking it, every dependency done.
+        let all = Aep::default().list(&repo)?;
+        let Some(listed) = all.iter().find(|listed| listed.id == scenario.story) else {
+            return Err(anyhow!(
+                "scenario {}: the store at its seed {} lists no {}; nothing was pushed",
+                scenario.id,
+                short(&seed),
+                scenario.story
+            ));
+        };
+        if listed.status != takt::frontier::READY {
+            return Err(anyhow!(
+                "scenario {}: the store at its seed {} gives {} {}, not {}: no known starting state; nothing was pushed",
+                scenario.id,
+                short(&seed),
+                scenario.story,
+                listed.status,
+                takt::frontier::READY
+            ));
+        }
+        if !takt::frontier::is_ready(listed, &all) {
+            return Err(anyhow!(
+                "scenario {}: the store at its seed {} gives {} {} but not ready ({}): takt run would not take it, so it is no known starting state; nothing was pushed",
+                scenario.id,
+                short(&seed),
+                scenario.story,
+                listed.status,
+                not_ready(listed, &all)
+            ));
         }
         // Everything read before the push: the story's text and the gates and the project file,
         // the seed's, read on the trial branch.
@@ -886,7 +918,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         if let Some(trials) = &forge.trials {
             trials.create(&repo, &trial).with_context(|| {
                 format!(
-                    "scenario {}: push {trial} through the bot route; nothing else was pushed",
+                    "scenario {}: create {trial} through the bot route",
                     scenario.id
                 )
             })?;
@@ -909,6 +941,38 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     let options = looping.options(STORY_DELIVERY.to_owned(), Vec::new(), Some(case_id));
     let mut run = take_story(&repo, options, story, harness, &validators, out)?;
     finish(&mut run, forge.line.as_deref(), out)
+}
+
+/// Why `story`, `proposed`, is not ready among `all`, as [`takt::frontier::is_ready`] reads it:
+/// what blocks it and each dependency not done, with its status.
+fn not_ready(story: &takt::frontier::Listed, all: &[takt::frontier::Listed]) -> String {
+    let mut why: Vec<String> = story
+        .blocked_by
+        .iter()
+        .map(|blocker| format!("blocked by {}", blocker.blocker))
+        .collect();
+    for relation in story
+        .relations
+        .iter()
+        .filter(|r| r.relation == "depends_on")
+    {
+        let status = all
+            .iter()
+            .find(|listed| listed.id == relation.target)
+            .map(|listed| listed.status.as_str());
+        if !status.is_some_and(|status| takt::frontier::DONE.contains(&status)) {
+            why.push(format!(
+                "depends on {}, {}",
+                relation.target,
+                status.unwrap_or("not listed")
+            ));
+        }
+    }
+    if why.is_empty() {
+        "the frontier's ready rule does not hold".to_owned()
+    } else {
+        why.join("; ")
+    }
 }
 
 /// The first eight characters of a commit id.

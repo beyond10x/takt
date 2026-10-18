@@ -328,7 +328,10 @@ fn a_case_branch_that_collides_is_refused_before_the_trial_branch_is_pushed() {
     let (code, out, err) = world.scenario_run("1", &["--iterations", "0"]);
     assert_eq!(code, 1, "stdout {out} stderr {err}");
     assert!(
-        world.calls().is_empty(),
+        !world
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("bot -- push")),
         "trial/0 was pushed before the case's branch collided: {:?}; stderr {err}",
         world.calls()
     );
@@ -367,5 +370,12 @@ fn a_trial_number_at_the_top_of_u64_is_refused_not_a_panic() {
         "takt panicked: exit {code}, stderr {err}"
     );
     assert_eq!(code, 1, "stdout {out} stderr {err}");
-    assert!(world.calls().is_empty(), "{:?}", world.calls());
+    assert!(
+        !world
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("bot -- push")),
+        "{:?}",
+        world.calls()
+    );
 }
