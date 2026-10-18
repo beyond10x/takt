@@ -1,6 +1,6 @@
-//! Validators: programs that turn an observation into evidence. The first is `tests.run`.
+//! Validators: programs that turn an observation into evidence: `tests.run` and `gate.run`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context as _, Result, bail};
@@ -106,5 +106,121 @@ impl Validator for TestsRun {
             ),
             records: vec![record],
         })
+    }
+}
+
+/// `gate.run`: evaluates the repository's `engineering-gates/1` document through the
+/// engineering assertions library, as `canon-engineering gates run` does. Every gate true is
+/// `pass`, any gate false is `fail`; an unknown evaluation writes no record, because a claim
+/// that could not be observed stays unknown; an invalid document or provider datum is an error.
+#[derive(Debug, Clone)]
+pub struct GateRun {
+    /// The gates document, relative to the tree.
+    pub gates: PathBuf,
+}
+
+impl GateRun {
+    /// Over the gates document at `gates`, relative to the tree.
+    #[must_use]
+    pub fn new(gates: impl Into<PathBuf>) -> Self {
+        Self {
+            gates: gates.into(),
+        }
+    }
+}
+
+impl Validator for GateRun {
+    fn name(&self) -> &str {
+        "takt.gate-run"
+    }
+
+    fn action(&self) -> &str {
+        "gate.run"
+    }
+
+    fn kind(&self) -> &str {
+        "gate_result"
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        let document = self.gates.display();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let prepared = canon_engineering_assertions::prepare(tree, &self.gates, None, None)
+            .with_context(|| format!("prepare the gates document {document}"))?;
+        let bundle = canon_engineering_assertions::collect(prepared, now)
+            .with_context(|| format!("collect the observations of {document}"))?;
+        let report = canon_engineering_assertions::evaluate(&bundle, now, None, None)
+            .with_context(|| format!("evaluate {document}"))?;
+        // The report holds the gates' assertions in declaration order; the gate that decided
+        // is the first whose assertion shares the report's truth.
+        let decided = bundle
+            .document
+            .gates
+            .iter()
+            .flat_map(|gate| std::iter::repeat_n(gate.id.as_str(), gate.assertions.len()))
+            .zip(&report.assertions)
+            .find(|(_, evaluation)| evaluation.truth == report.truth)
+            .map(|(gate, evaluation)| {
+                (
+                    gate,
+                    evaluation.expression.as_str(),
+                    evaluation.reasons.join("; "),
+                )
+            });
+        let decided = |truth: &str| match &decided {
+            Some((gate, expression, reasons)) if reasons.is_empty() => {
+                format!("gate {gate} {truth}: {expression}")
+            }
+            Some((gate, expression, reasons)) => format!(
+                "gate {gate} {truth}: {expression} ({})",
+                reasons.chars().take(300).collect::<String>()
+            ),
+            None => format!("no assertion is {truth}"),
+        };
+        let (result, summary) = match report.truth {
+            canon_expr::Truth::True => {
+                let gates: Vec<&str> = bundle
+                    .document
+                    .gates
+                    .iter()
+                    .map(|gate| gate.id.as_str())
+                    .collect();
+                (
+                    Some("pass"),
+                    format!(
+                        "the gates document {document}: pass; every gate true: {}",
+                        gates.join(", ")
+                    ),
+                )
+            }
+            canon_expr::Truth::False => (
+                Some("fail"),
+                format!("the gates document {document}: fail; {}", decided("false")),
+            ),
+            canon_expr::Truth::Unknown => (
+                None,
+                format!(
+                    "the gates document {document}: unknown; {}; no record, the claim stays unknown",
+                    decided("unknown")
+                ),
+            ),
+        };
+        let records = result
+            .map(|result| {
+                vec![Record::new(
+                    format!("gate-result-{seq}"),
+                    self.kind(),
+                    Some(result.to_owned()),
+                    self.subject(),
+                    revision,
+                    self.name(),
+                )]
+            })
+            .unwrap_or_default();
+        Ok(Observation { summary, records })
     }
 }

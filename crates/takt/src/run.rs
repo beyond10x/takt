@@ -280,6 +280,9 @@ impl<'a> Run<'a> {
                         record.result.as_deref().unwrap_or("-")
                     )?;
                 }
+                // A validator that wrote no record (the gate was unknown) moved nothing: the next
+                // pass would run it again to the same end, so it counts as an idle step.
+                last_idle = observation.records.is_empty().then_some(state);
                 continue;
             }
             // Then a judgement step among the admissible actions no validator owns.

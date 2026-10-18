@@ -8,7 +8,7 @@ use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness};
-use takt::validator::{TestsRun, Validator};
+use takt::validator::{GateRun, TestsRun, Validator};
 use takt::{LoadedProtocol, Run, RunOptions, Stop, Unit};
 
 #[derive(Parser)]
@@ -69,6 +69,10 @@ struct RunArgs {
     /// The approval gate the harness may request to end the run.
     #[arg(long, default_value = "repository.merge")]
     gate: String,
+    /// The gates document, relative to the repository; the gate validator is registered when
+    /// it exists.
+    #[arg(long, default_value = ".engineering/gates.yaml")]
+    gates: PathBuf,
 }
 
 /// A harness that performs nothing: the loop stops when only judgement steps are left.
@@ -125,6 +129,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 model,
                 case_id,
                 gate,
+                gates,
             } = *args;
             let repo = repo
                 .canonicalize()
@@ -170,7 +175,10 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 "none" => &NoHarness,
                 other => return Err(anyhow!("no harness `{other}`: claude or none")),
             };
-            let validators: Vec<Box<dyn Validator>> = vec![Box::new(TestsRun::new(&test_cmd)?)];
+            let mut validators: Vec<Box<dyn Validator>> = vec![Box::new(TestsRun::new(&test_cmd)?)];
+            if repo.join(&gates).is_file() {
+                validators.push(Box::new(GateRun::new(gates)));
+            }
             // The unit: the intent given, or else the next ready story of the planning store;
             // the case is opened before the store is told, so a run that cannot open its case
             // takes nothing.
@@ -402,5 +410,121 @@ mod tests {
         let intent = fs::read_to_string(case.join("intent.md")).expect("intent.md");
         assert_eq!(intent, "make the check pass");
         assert_eq!(status(&repo, "story:ready-one"), "proposed");
+    }
+
+    /// The fixture protocol of the library crate that declares `gate_result` and `gate.green`.
+    const GATE_PROTOCOL: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../takt/tests/fixtures/gate-only/1.yaml"
+    );
+
+    /// A committed scratch repository with a manifest and, at `gates` when given, a gates
+    /// document whose one assertion is true.
+    fn gated_repository(name: &str, gates: Option<&str>) -> Scratch {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/tmp")
+            .join(format!("takt-cli-{}-{name}", std::process::id()));
+        if dir.exists() {
+            fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
+        }
+        fs::create_dir_all(&dir).expect("a directory");
+        fs::write(dir.join("Cargo.toml"), "[package]\nname = \"scratch\"\n").expect("a file");
+        if let Some(gates) = gates {
+            let path = dir.join(gates);
+            fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
+            fs::write(
+                path,
+                "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: manifest\n    \
+                 text: The repository has its manifest.\n    assertions:\n      \
+                 - 'fs.file.exists(\"Cargo.toml\")'\n",
+            )
+            .expect("a file");
+        }
+        git(&dir, &["init", "-q", "-b", "main"]);
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-q", "-m", "start"]);
+        Scratch(dir)
+    }
+
+    /// Runs `takt <args>` in this process on a run that fails; the error it answers.
+    fn takt_error(args: &[&str]) -> String {
+        let cli = Cli::parse_from(std::iter::once("takt").chain(args.iter().copied()));
+        let mut out = Vec::new();
+        let error = run(cli, &mut out).expect_err("takt refuses");
+        format!("{error:#}")
+    }
+
+    #[test]
+    fn with_the_default_gates_document_the_gate_validator_runs_the_gate() {
+        let repo = gated_repository("gates-default", Some(".engineering/gates.yaml"));
+        let (code, out) = takt(&[
+            "run",
+            "--repo",
+            repo.to_str().expect("utf-8"),
+            "--intent",
+            "pass the gate",
+            "--case-id",
+            "gated",
+            "--harness",
+            "none",
+            "--protocol",
+            GATE_PROTOCOL,
+            "--test-cmd",
+            "true",
+        ]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("step 1: gate.run {}"), "{out}");
+        assert!(out.contains("evidence: gate_result pass"), "{out}");
+        assert!(out.contains("stopped: Completed (accepted)"), "{out}");
+    }
+
+    #[test]
+    fn the_gates_flag_names_the_document() {
+        let repo = gated_repository("gates-flag", Some("gates/repository.yaml"));
+        let (code, out) = takt(&[
+            "run",
+            "--repo",
+            repo.to_str().expect("utf-8"),
+            "--intent",
+            "pass the gate",
+            "--case-id",
+            "gated",
+            "--harness",
+            "none",
+            "--protocol",
+            GATE_PROTOCOL,
+            "--test-cmd",
+            "true",
+            "--gates",
+            "gates/repository.yaml",
+        ]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("step 1: gate.run {}"), "{out}");
+        assert!(out.contains("evidence: gate_result pass"), "{out}");
+        assert!(out.contains("stopped: Completed (accepted)"), "{out}");
+    }
+
+    #[test]
+    fn without_a_gates_document_gate_run_is_a_judgement_step() {
+        let repo = gated_repository("gates-none", None);
+        let error = takt_error(&[
+            "run",
+            "--repo",
+            repo.to_str().expect("utf-8"),
+            "--intent",
+            "pass the gate",
+            "--case-id",
+            "ungated",
+            "--harness",
+            "none",
+            "--protocol",
+            GATE_PROTOCOL,
+            "--test-cmd",
+            "true",
+        ]);
+        assert!(
+            error.contains("no harness: a judgement step among gate.run is left"),
+            "{error}"
+        );
     }
 }
