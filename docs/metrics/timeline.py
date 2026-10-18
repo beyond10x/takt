@@ -24,6 +24,7 @@ W, H = 960, 620
 L, R, T, B = 86, 70, 112, 168
 PW, PH = W - L - R, H - T - B
 GREY = "#8a9a95"
+BASE_MODEL = "claude-opus-5-5"
 
 
 def load(path):
@@ -80,9 +81,13 @@ def build():
     for arm, name in (("claude-code", "Claude Code alone, operator's full config"),
                       ("codex", "Codex alone, operator's full config"),
                       ("claude-code-isolated", "Claude Code isolated like takt's harness, with a shell")):
-        vals = [r["tokens"]["sum"] for r in runs if r["arm"] == arm and r["tokens"]["sum"] is not None]
-        if vals:
-            refs.append((name, statistics.median(vals), len(vals)))
+        # one line per model the arm ran on: a median across a model change would mix two things
+        counted = [r for r in runs if r["arm"] == arm and r["tokens"]["sum"] is not None]
+        models = sorted({r["model"] for r in counted}, key=lambda m: m or "")
+        for model in models:
+            vals = [r["tokens"]["sum"] for r in counted if r["model"] == model]
+            label = name if len(models) == 1 or not model else f"{name}, {model}"
+            refs.append((label, statistics.median(vals), len(vals)))
 
     tok_vals = [r["tokens"]["sum"] for r in takt if r["tokens"]["sum"] is not None]
     wall_vals = [r["wall_seconds"] for r in takt if r["wall_seconds"] is not None]
@@ -146,11 +151,17 @@ def build():
     o.append(f'<line x1="{L}" x2="{L + PW}" y1="{T + PH}" y2="{T + PH}" stroke="currentColor" '
              f'stroke-opacity="0.6"/>')
 
-    for name, v, n in refs:
+    last_left = None
+    for name, v, n in sorted(refs, key=lambda ref: -ref[1]):
         y = y_tok(v)
         o.append(f'<line x1="{L}" x2="{L + PW}" y1="{y:.1f}" y2="{y:.1f}" stroke="currentColor" '
                  f'stroke-opacity="0.55" stroke-dasharray="6 4"/>')
-        o.append(f'<text x="{L + 6}" y="{y - 5:.1f}" font-size="11" fill="currentColor">'
+        # a label within a line's height of the last left-hand label goes to the right-hand end
+        right = last_left is not None and abs(y - last_left) < 14
+        x, anchor = (L + PW - 6, "end") if right else (L + 6, "start")
+        if not right:
+            last_left = y
+        o.append(f'<text x="{x}" y="{y - 5:.1f}" text-anchor="{anchor}" font-size="11" fill="currentColor">'
                  f'{esc(name)}, median {thousands(int(v))} (n={n})</text>')
 
     shown = [w for w in waves if at(w) in slots]
@@ -241,6 +252,10 @@ def build():
         if s in candidate_of:
             o.append(f'<text x="{cx:.1f}" y="{T + PH + 60}" text-anchor="middle" font-size="10.5" '
                      f'class="acc-t">{esc(candidate_of[s]["id"])} candidate</text>')
+        used = sorted({m for r in rs for m in (r["model"] or "").split(",") if m})
+        if any(m != BASE_MODEL for m in used):
+            o.append(f'<text x="{cx:.1f}" y="{T + PH + 60}" text-anchor="middle" font-size="10.5" '
+                     f'fill="#b8430f">model{"s" if len(used) > 1 else ""}: {esc(", ".join(m.replace("claude-", "") for m in used))}</text>')
 
     ly = H - 80
     o.append(f'<circle cx="{L + 6}" cy="{ly}" r="5" class="acc"/>')

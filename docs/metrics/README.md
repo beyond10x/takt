@@ -12,6 +12,7 @@ appended to and never rewritten; `journeys.jsonl` is generated from them.
 | `timeline.py` | (generator) draws `timeline.svg` from the three files above |
 | `journeys.jsonl` | operation of a run, in one vocabulary (generated, rewritten by `journey.py`) |
 | `journey.py` | (generator) writes `journeys.jsonl` and draws `journey.svg` from the raw records |
+| `badges.py` | (generator) rewrites the badge block at the top of `README.md` from the planning store, these files and the citation check |
 
 ## The rule
 
@@ -91,6 +92,31 @@ tokens, not tokens alone.
   `docs/runs/2026-10-18-improvement-turn-1/README.md`, lists six deviations from the protocol as
   designed, the first being that the records were written by hand (phase R0).
 
+## Round 3 (2026-10-18, 17:29 to 17:49 UTC)
+
+Three more runs of every arm: T-11..13, I-4..6, C-4..6, X-4..6. takt ran at 56d1b70, main at
+the time its binary was built; its crates are the same as at 97623a6.
+
+- **The models changed, and nobody chose it.** No arm pinned a model. takt passed no `--model`:
+  T-11 and T-13 ran every call on claude-fable-5-1, T-12 its first call on fable and the next two
+  on claude-opus-5-5 (`modelUsage` per line of `steps.jsonl`). Claude Code with the full
+  configuration ran on fable, the isolated arm on opus (`agent.json`). The cause is unknown;
+  account rotation is an inference. takt's round 3 cost ($0.47 to $0.85) is therefore not
+  comparable with rounds 1 and 2. From round 4 the runner pins `--model claude-opus-5-5` for every
+  Claude arm.
+- takt at 56d1b70: median 138,580 tokens and 142 s, no resume, 3/3 held-out pass. The isolated
+  arm in the same round: 93,003 tokens and 53 s. takt took 1.5x the tokens and 2.7x the time, the
+  same direction as round 1.
+- Pooled over rounds 1 and 3 (n=6): the isolated arm 92,772 tokens, 55.5 s, $0.14; Codex 599,555
+  tokens, 86 s. Claude Code with the full configuration is not pooled, because its model changed:
+  round 3 took 112 s and $1.38 against 65 s and $0.48 in round 1. Why is not checked; the model
+  and the operator's plugin set both changed between the rounds.
+- takt still runs CI twice in all three runs. None of the twelve runs stopped on `NoProgress`.
+- T-10 is a runner race: a free-arm run had just pushed `trial/24`, so takt refused before its
+  first step. Recorded with null figures; it does not count towards a median.
+- Every arm streamed its events with arrival times (`agent.stream.tsv`, the shim's `started_at`),
+  so all thirteen new lanes in `journey.svg` are timed.
+
 ## `improvement-turns.jsonl`
 
 | field | meaning |
@@ -140,25 +166,30 @@ and cost figures stay in `scenario-runs.jsonl`, read from raw usage.
 | `t0` | the run's start: the runner's last exit note minus `wall_seconds` (to the second); `null` for lanes with no times |
 | `kind` | one of the vocabulary below |
 | `by` | `harness` (a model call, or a command the harness ran) or `deterministic` (a takt validator) |
-| `action`, `effect`, `tool_class`, `label` | takt's action name; the effect class; a Codex command's class; a pattern label |
+| `action`, `effect`, `tool_class`, `label` | takt's action name; the effect class; the class of a free arm's command or tool; a pattern label |
 | `source` | the raw file the operation was read from, `~` for the home directory |
 
-| kind | takt (run log or `events.jsonl`) | Claude Code running free | Codex running free |
+| kind | takt (run log or `events.jsonl`) | Claude Code (free or isolated) | Codex running free |
 |---|---|---|---|
-| `model_call` | a harness step whose only effect is the approval request | each of `num_turns` | an `agent_message` item |
-| `read` | `repository.inspect` by the harness | | a command that reads (`cat`, `rg`, `git status`, ...) |
-| `edit` | `implementation.edit`, `tests.write` | | a `file_change` item, or an editing command |
-| `test` | `tests.run` | | `./check.sh` or a test runner |
+| `model_call` | a harness step whose only effect is the approval request | `agent.json`: each of `num_turns`; stream: one `assistant` message | `agent.jsonl`: an `agent_message` item; stream: also the wait before each command or file change |
+| `read` | `repository.inspect` by the harness | `Read`, `Glob`, `Grep`, or a `Bash` command that reads | a command that reads (`cat`, `rg`, `git status`, ...) |
+| `edit` | `implementation.edit`, `tests.write` | `Edit`, `Write`, `MultiEdit`, or an editing `Bash` command | a `file_change` item, or an editing command |
+| `test` | `tests.run` | `./check.sh` or a test runner through `Bash` | `./check.sh` or a test runner |
 | `gate` | `gate.run` | | |
-| `push` | `pr.open` that pushed to an open pull request | | `git push` or a push through `b10x-gates bot` |
-| `pr_open` | `pr.open`: opened a pull request, or found nothing to open (hollow) | | the pull-request `POST` through `b10x-gates api` |
-| `ci_wait` | `ci.read` that saw pending checks | | `gh pr checks --watch` |
+| `push` | `pr.open` that pushed to an open pull request | `git push` or a push through `b10x-gates bot` | the same |
+| `pr_open` | `pr.open`: opened a pull request, or found nothing to open (hollow) | the pull-request `POST` through `b10x-gates api`, or `gh pr create` | the same |
+| `ci_wait` | `ci.read` that saw pending checks | `gh pr checks --watch`, `gh run watch` | the same |
 | `ci_pass` | `ci.read` that saw the checks pass | | |
 | `approval_wait` | the stop `ApprovalRequired` | | |
 | `refusal` | a refusal before or at a step (`takt: ...`, an error stop) | a refusal at start | |
 | `no_progress` | the stop `NoProgress` | | |
 | `resume` | the next invocation of the same case | | |
-| `other` | `ci.read` with nothing to read, a merge, a grant, `Completed` | | any other command (`gh`, `git`, `b10x-gates`, tools) |
+| `other` | `ci.read` with nothing to read, a merge, a grant, `Completed` | any other tool or command; the final `result` | any other command (`gh`, `git`, `b10x-gates`, tools); `turn.completed` |
+
+A shell command takes the first class that matches, in this order: `pr_open`, `push`, `ci_wait`,
+`test`, `other` for `gh`, `b10x-gates` and a `git` command that changes the repository, then
+`edit`, then `read`. A compound command that edits a file and then runs `./check.sh` counts as
+`test`. The command text is classified and not copied, since it carries local paths.
 
 In takt's lanes every harness step is one model call; it is coloured by what it did and outlined.
 Effect classes: `pass`, `fail`, `pending`, `opened`, `pushed`, `merged`, `approval`, `changed`,
@@ -169,13 +200,22 @@ the second CI pass, and an inspect step followed by `NoProgress`.
 Where the times come from:
 
 - takt with `events.jsonl` (97623a6 and later): every step's time at 1 s resolution; a step runs
-  from the previous event to its own.
-- takt without it: each harness step's model call from `steps.jsonl` (`recorded_at` minus
-  `duration_ms`); stops from the runner's exit notes. The validator steps have no time; they are
-  drawn dashed, spread in order between the timed operations either side ("model calls timed").
-- Claude Code running free: `agent.json` holds `num_turns` and `duration_ms` only, no per-turn
-  record, so its lane is "order only".
-- Codex: `agent.jsonl` items in order without times ("order only"). The command text is classified
-  and not copied, since it carries local paths.
+  from the previous event to its own. Where the shim's `steps.jsonl` carries `started_at` and has
+  one line per harness step, each harness step runs from its `started_at` to its `recorded_at`
+  (millisecond resolution) instead.
+- takt without `events.jsonl`: each harness step's model call from `steps.jsonl` (`started_at` to
+  `recorded_at`, or `recorded_at` minus `duration_ms` where `started_at` is missing); stops from the
+  runner's exit notes. The validator steps have no time; they are drawn dashed, spread in order
+  between the timed operations either side ("model calls timed").
+- The free and isolated arms with `agent.stream.tsv` (from 2026-10-18 17:29 UTC on): the runner
+  stamps each line of the harness's JSON output with its arrival time in epoch milliseconds, and
+  `t0` is the runner's `agent exit` note minus `wall_seconds`. Claude Code: a model call runs from
+  the previous event to the last line of its `assistant` message, a tool from its `tool_use` to its
+  `tool_result`; events inside a sub-agent fall inside the `Task` tool's span and are not drawn on
+  their own. Codex: a command or file change runs from `item.started` to `item.completed`.
+- Claude Code without the stream: `agent.json` holds `num_turns` and `duration_ms` only, no
+  per-turn record, so its lane is "order only".
+- Codex without the stream: `agent.jsonl` items in order without times ("order only").
 - The earlier takt trials: run logs with no times ("order only").
-- Refusals at start (`T-fetchfail-*`, `I-modefail-*`): one operation spanning `wall_seconds`.
+- Refusals at start (`T-fetchfail-*`, `I-modefail-*`, and a takt run whose trial branch was already
+  taken): one operation spanning `wall_seconds`.

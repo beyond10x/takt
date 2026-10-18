@@ -56,7 +56,12 @@ def tilde(p):
 
 
 def iso(s):
-    return datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    fmt = "%Y-%m-%dT%H:%M:%S.%fZ" if "." in s else "%Y-%m-%dT%H:%M:%SZ"
+    return datetime.datetime.strptime(s, fmt).replace(tzinfo=datetime.timezone.utc)
+
+
+def from_ms(ms):
+    return datetime.datetime.fromtimestamp(ms / 1000, tz=datetime.timezone.utc)
 
 
 def esc(s):
@@ -187,9 +192,25 @@ def takt_events(rec, run_dir, logs):
             ev_src = found[0]
             timed_steps = [e for e in load(ev_src) if e["event"] in ("step", "stop", "opened")]
 
+    def call_span(c):
+        """A harness step's model call: the shim's started_at and recorded_at, or else
+        recorded_at minus duration_ms."""
+        if t0 is None or "recorded_at" not in c:
+            return None
+        end = rel(c["recorded_at"])
+        if c.get("started_at"):
+            return rel(c["started_at"]), end
+        if c.get("duration_ms") is not None:
+            return round((iso(c["recorded_at"]) - t0).total_seconds() - c["duration_ms"] / 1000, 1), end
+        return None
+
     out = []
-    # events.jsonl gives every step its own time: use it as the order and the clock
+    # events.jsonl gives every step its own time: use it as the order and the clock. Where the
+    # shim's steps.jsonl holds one line per harness step, its finer times replace the harness steps'.
     if timed_steps is not None:
+        n_harness = sum(1 for e in timed_steps if e["event"] == "step" and e.get("by") == "harness")
+        use_calls = len(calls) == n_harness and any(c.get("started_at") for c in calls)
+        call_i = 0
         prev = None
         n_open = 0
         for e in timed_steps:
@@ -208,8 +229,16 @@ def takt_events(rec, run_dir, logs):
                 continue
             by = "harness" if e.get("by") == "harness" else "deterministic"
             kind, eff = classify_step(e["action"], by, e.get("summary"))
-            out.append(dict(kind=kind, by=by, effect=eff, action=e["action"], t_start=prev,
-                            t_end=rel(e["at"]), source=tilde(ev_src)))
+            ev = dict(kind=kind, by=by, effect=eff, action=e["action"], t_start=prev,
+                      t_end=rel(e["at"]), source=tilde(ev_src))
+            if by == "harness":
+                span = call_span(calls[call_i]) if use_calls else None
+                if span:
+                    ev["t_start"], ev["t_end"] = span
+                    ev["source"] = tilde(steps_src)
+                    ev["num_turns"] = calls[call_i].get("num_turns")
+                call_i += 1
+            out.append(ev)
             prev = rel(e["at"])
         return out, t0, "timed"
 
@@ -220,13 +249,12 @@ def takt_events(rec, run_dir, logs):
             kind, eff = classify_step(o["action"], o["by"], o["effect"])
             ev = dict(kind=kind, by=o["by"], effect=eff, action=o["action"], t_start=None, t_end=None,
                       source=src_log[0] if len(src_log) == 1 else ", ".join(src_log))
-            if o["by"] == "harness" and call_i < len(calls) and t0 is not None:
-                c = calls[call_i]
-                end = iso(c["recorded_at"])
-                ev["t_end"] = rel(c["recorded_at"])
-                ev["t_start"] = round((end - t0).total_seconds() - c["duration_ms"] / 1000, 1)
-                ev["source"] = tilde(steps_src)
-                ev["num_turns"] = c.get("num_turns")
+            if o["by"] == "harness" and call_i < len(calls):
+                span = call_span(calls[call_i])
+                if span:
+                    ev["t_start"], ev["t_end"] = span
+                    ev["source"] = tilde(steps_src)
+                    ev["num_turns"] = calls[call_i].get("num_turns")
             if o["by"] == "harness":
                 call_i += 1
             out.append(ev)
@@ -273,12 +301,15 @@ def claude_events(rec, agent_json):
 
 
 def codex_class(cmd):
+    """The class and kind of one shell command, from Codex or from Claude Code's Bash tool."""
     c = cmd
     if "b10x-gates api" in c and "/pulls" in c and "POST" in c:
         return "b10x-gates", "pr_open"
+    if "gh pr create" in c:
+        return "gh", "pr_open"
     if "push" in c and ("b10x-gates bot" in c or "git push" in c):
         return "b10x-gates" if "b10x-gates" in c else "git", "push"
-    if "gh pr checks" in c:
+    if "gh pr checks" in c or "gh run watch" in c:
         return "gh", "ci_wait"
     if re.search(r"(^|[\s'&;])\./check\.sh|unittest|pytest", c):
         return "test", "test"
@@ -286,7 +317,7 @@ def codex_class(cmd):
         return "gh", "other"
     if "b10x-gates" in c:
         return "b10x-gates", "other"
-    if re.search(r"\bgit (commit|add|checkout|switch|branch|reset|rebase|merge)\b", c):
+    if re.search(r"\bgit (commit|add|checkout|switch|reset|rebase|merge)\b|\bgit branch(?!\s+(-a|-r|-v|-vv|--list|--show-current)\b)", c):
         return "git", "other"
     if re.search(r"sed -i|apply_patch|>\s*\S+\.(py|md)", c):
         return "edit", "edit"
@@ -329,6 +360,156 @@ def codex_events(rec, agent_jsonl):
     return out, "order only"
 
 
+AGENT_EXIT_RE = re.compile(r"^(\S+Z) agent exit=\d+$")
+CLAUDE_TOOL_KIND = {"Read": "read", "Glob": "read", "Grep": "read", "LS": "read", "Edit": "edit",
+                    "Write": "edit", "MultiEdit": "edit", "NotebookEdit": "edit"}
+
+
+def stream_lines(path):
+    """(epoch ms, event) pairs of an agent.stream.tsv: the runner's arrival stamp, a tab, the JSON."""
+    out = []
+    for line in open(path, encoding="utf-8", errors="replace"):
+        ms, _, js = line.rstrip("\n").partition("\t")
+        try:
+            out.append((int(ms), json.loads(js)))
+        except ValueError:
+            continue
+    return out
+
+
+def stream_t0(rec, run_log):
+    """The run's start, as for takt: the runner's agent exit note minus wall_seconds."""
+    if rec["wall_seconds"] is None or not os.path.exists(run_log):
+        return None
+    end = None
+    for line in open(run_log, encoding="utf-8", errors="replace"):
+        m = AGENT_EXIT_RE.match(line.strip())
+        if m:
+            end = m.group(1)
+    return iso(end) - datetime.timedelta(seconds=rec["wall_seconds"]) if end else None
+
+
+def claude_stream_events(rec, tsv, t0):
+    """Claude Code's stream-json, each line stamped on arrival. A model call runs from the
+    previous event to the last line of its assistant message; a tool runs from its tool_use to
+    its tool_result. Events inside a sub-agent (parent_tool_use_id set) fall inside the Task
+    tool's span and are not drawn on their own."""
+    src = tilde(tsv)
+
+    def rel(ms):
+        return round((from_ms(ms) - t0).total_seconds(), 1)
+
+    out, calls, tools = [], {}, {}
+    prev = None
+    for ms, e in stream_lines(tsv):
+        t = e.get("type")
+        if e.get("parent_tool_use_id"):
+            continue
+        if t == "system" and e.get("subtype") == "init":
+            prev = rel(ms)
+        elif t == "assistant":
+            mid = e.get("message", {}).get("id")
+            if mid not in calls:
+                calls[mid] = dict(kind="model_call", by="harness", effect=None, t_start=prev, t_end=rel(ms),
+                                  source=src)
+                out.append(calls[mid])
+            calls[mid]["t_end"] = rel(ms)
+            for b in e.get("message", {}).get("content", []):
+                if not isinstance(b, dict) or b.get("type") != "tool_use":
+                    continue
+                name = b.get("name") or ""
+                if name == "Bash":
+                    cls, kind = codex_class((b.get("input") or {}).get("command") or "")
+                else:
+                    cls, kind = name, CLAUDE_TOOL_KIND.get(name, "other")
+                ev = dict(kind=kind, by="harness", effect="changed" if kind == "edit" else None,
+                          tool_class=cls, t_start=rel(ms), t_end=None, source=src)
+                tools[b.get("id")] = ev
+                out.append(ev)
+            prev = rel(ms)
+        elif t == "user":
+            for b in e.get("message", {}).get("content", []):
+                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in tools:
+                    ev = tools[b["tool_use_id"]]
+                    ev["t_end"] = rel(ms)
+                    if b.get("is_error") and ev["kind"] == "test":
+                        ev["effect"] = "fail"
+            prev = rel(ms)
+        elif t == "result":
+            out.append(dict(kind="other", by=None, effect=e.get("subtype") or "result", t_start=rel(ms),
+                            t_end=rel(ms), source=src))
+    for ev in out:
+        if ev["t_start"] is None:
+            ev["t_start"] = ev["t_end"]
+    return out
+
+
+def codex_stream_events(rec, tsv, t0):
+    """Codex's --json events, each line stamped on arrival. A command or file change runs from
+    its item.started to its item.completed. A model call runs from the previous event to the
+    next thing the model emitted: an agent message, or the start of a command or file change."""
+    src = tilde(tsv)
+
+    def rel(ms):
+        return round((from_ms(ms) - t0).total_seconds(), 1)
+
+    out, items = [], {}
+    prev = None
+    for ms, e in stream_lines(tsv):
+        t = e.get("type") or ""
+        it = e.get("item")
+        if t in ("thread.started", "turn.started"):
+            prev = rel(ms) if prev is None else prev
+            continue
+        if t == "turn.completed":
+            out.append(dict(kind="other", by=None, effect="turn.completed", t_start=rel(ms), t_end=rel(ms),
+                            source=src))
+            continue
+        if not it or not t.startswith("item."):
+            continue
+        ty = it.get("type")
+        if ty in ("agent_message", "reasoning"):
+            if t == "item.completed":
+                out.append(dict(kind="model_call", by="harness", effect=ty, t_start=prev, t_end=rel(ms),
+                                source=src))
+                prev = rel(ms)
+            continue
+        if ty not in ("command_execution", "file_change"):
+            continue
+        ev = items.get(it.get("id"))
+        if ev is None:
+            out.append(dict(kind="model_call", by="harness", effect=None, t_start=prev, t_end=rel(ms),
+                            source=src))
+            if ty == "command_execution":
+                cls, kind = codex_class(it.get("command") or "")
+            else:
+                cls, kind = "edit", "edit"
+            ev = dict(kind=kind, by="harness", effect="changed" if ty == "file_change" else None,
+                      tool_class=cls, t_start=rel(ms), t_end=rel(ms), source=src)
+            items[it.get("id")] = ev
+            out.append(ev)
+        if t == "item.completed":
+            ev["t_end"] = rel(ms)
+            if ev["kind"] == "test" and it.get("exit_code") not in (0, None):
+                ev["effect"] = "fail"
+        prev = rel(ms)
+    for ev in out:
+        if ev["t_start"] is None:
+            ev["t_start"] = ev["t_end"]
+    return out
+
+
+def stream_journey(rec, tsv, run_log):
+    t0 = stream_t0(rec, run_log)
+    if t0 is None:
+        lines = stream_lines(tsv)
+        if not lines:
+            return [], None, "order only"
+        t0 = from_ms(lines[0][0]).replace(microsecond=0)
+    ev = codex_stream_events(rec, tsv, t0) if rec["arm"] == "codex" else claude_stream_events(rec, tsv, t0)
+    return ev, t0, "timed"
+
+
 def refusal_only(rec, log):
     ops = parse_takt_log(log)
     done = [o for o in ops if o["type"] == "done"]
@@ -354,6 +535,9 @@ def journey(rec):
         if rec["tokens"]["sum"] is None and rec["steps"] is None and run_dir:
             return refusal_only(rec, logs[0])
         return takt_events(rec, run_dir, logs)
+    stream = [s for s in srcs if s.endswith("agent.stream.tsv")]
+    if stream and os.path.exists(stream[0]):
+        return stream_journey(rec, stream[0], os.path.join(os.path.dirname(stream[0]), "run.log"))
     agent_json = [s for s in srcs if s.endswith("agent.json")]
     agent_jsonl = [s for s in srcs if s.endswith("agent.jsonl")]
     if agent_jsonl:
@@ -392,7 +576,7 @@ def revision_order(waves, turns, revs):
         if r in order:
             continue
         b = cand.get(r)
-        if b in order:
+        if b is not None and b in order:
             order.insert(order.index(b) + 1, r)
         else:
             order.append(r)
@@ -567,8 +751,8 @@ def draw(lanes, legend_kinds, data_dates):
              f'docs/metrics/scenario-runs.jsonl names. No token or cost figure is read from the journeys.'
              f'</text>')
     o.append(f'<text x="20" y="{yy + 42}" font-size="10.5" fill="currentColor" fill-opacity=".7">Free '
-             f'Claude Code runs record only a turn count; Codex records its items in order without times. '
-             f'First results, not a benchmark.</text>')
+             f'and isolated runs without a stream record only a turn count (Claude Code) or their items in order '
+             f'(Codex); runs with a stream are timed. First results, not a benchmark.</text>')
     o.append("</svg>")
     return "\n".join(o) + "\n"
 
