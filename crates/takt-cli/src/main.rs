@@ -517,15 +517,19 @@ struct Forged {
 ///
 /// The fetch names the remote's HTTPS URL, not `remote`: `origin` may be an SSH URL, and takt
 /// gives no child the user's SSH agent, so a fetch from it has no credential. Over HTTPS it
-/// goes under the bot route's credential (or none, for a public repository). It is held to
+/// goes under the bot route's credential (or none, for a public repository). Its child gets
+/// `GIT_ALLOW_PROTOCOL=https` ([`Self::FETCH_ENV`]), so an `insteadOf` rule in the
+/// repository's own configuration, which the bot route's git still reads, cannot turn it back
+/// into SSH: git refuses the transport and never starts `ssh`. Only the fetch gets it; a push or
+/// another bot-route line keeps whatever transport it uses. It is held to
 /// [`Self::FETCH_TIMEOUT`], and its child can wait on no prompt ([`takt::forge::NO_PROMPT`]).
 struct TrialRoute {
     /// The remote the bot route pushes to; its remote-tracking refs take the fetched branches.
     remote: String,
     /// The remote's HTTPS URL, `https://github.com/<owner>/<repo>.git`, the fetch's source.
     url: String,
-    /// What the fetch runs through, held to [`Self::FETCH_TIMEOUT`].
-    fetcher: Box<dyn Runner>,
+    /// What the fetch runs as, held to [`Self::FETCH_TIMEOUT`].
+    fetcher: Process,
     runner: Box<dyn Runner>,
 }
 
@@ -533,18 +537,22 @@ impl TrialRoute {
     /// How long the fetch may take before it is killed and the run refused.
     const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
+    /// What the fetch's child is started with beyond every forge child's: git may use HTTPS
+    /// alone, whatever URL the repository's configuration rewrites the fetch's to.
+    const FETCH_ENV: [(&str, &str); 1] = [("GIT_ALLOW_PROTOCOL", "https")];
+
     /// The trial route of `bot`: its remote, the HTTPS URL of its repository, the fetch held to
     /// [`Self::FETCH_TIMEOUT`] and the push to the forge's limits.
     fn of(bot: &BotRoute) -> Self {
         Self {
             remote: bot.remote.clone(),
             url: format!("https://{}/{}.git", BotRoute::HOST, bot.repository),
-            fetcher: Box::new(Process {
+            fetcher: Process {
                 limits: takt::forge::Limits {
                     timeout: Self::FETCH_TIMEOUT,
                     ..Process::LIMITS
                 },
-            }),
+            },
             runner: Box::new(Process::default()),
         }
     }
@@ -577,10 +585,9 @@ impl TrialRoute {
         .to_vec()
     }
 
-    /// Runs `argv` in `tree` through `runner`; a program that did not exit 0 is an error naming
-    /// the line and what it said.
-    fn succeed(runner: &dyn Runner, tree: &Path, argv: &[String]) -> Result<takt::forge::Exit> {
-        let exit = runner.run(tree, argv)?;
+    /// `exit`, how `argv` ended; a program that did not exit 0 is an error naming the line and
+    /// what it said.
+    fn succeed(argv: &[String], exit: takt::forge::Exit) -> Result<takt::forge::Exit> {
         if !exit.success() {
             return Err(anyhow!(
                 "{} exited {}: {}",
@@ -593,9 +600,12 @@ impl TrialRoute {
         Ok(exit)
     }
 
-    /// Fetches the remote's trial branches, killed past [`Self::FETCH_TIMEOUT`].
+    /// Fetches the remote's trial branches over HTTPS only ([`Self::FETCH_ENV`]), killed past
+    /// [`Self::FETCH_TIMEOUT`].
     fn fetch(&self, tree: &Path) -> Result<()> {
-        Self::succeed(self.fetcher.as_ref(), tree, &self.fetch_argv()).map(|_| ())
+        let argv = self.fetch_argv();
+        let exit = self.fetcher.run_with(tree, &argv, &Self::FETCH_ENV)?;
+        Self::succeed(&argv, exit).map(|_| ())
     }
 
     /// Pushes `trial` and answers only when the push exits 0 and reports it created on the

@@ -147,11 +147,14 @@ fn declare(repo: &Path, text: &str) {
 
 /// The doubles in `bin`, their state in `state`. Every `b10x-gates` line is logged to
 /// `state/calls`. `b10x-gates bot -- fetch <remote> <refspec>` records the prompt settings, the
-/// SSH agent socket and its standard input in `state/fetch-env`, then runs a real `git fetch` of
-/// the refspec from the bare `remote`, or does nothing when `state/no-fetch` exists, sleeps 45 s
+/// SSH agent socket, its standard input, `GIT_ASKPASS` and `GIT_ALLOW_PROTOCOL` in
+/// `state/fetch-env`, then runs a real `git fetch` of
+/// the refspec from the bare `remote` (standing in for the HTTPS server, so without the
+/// HTTPS-only transport takt sets for the route's own git), or does nothing when `state/no-fetch` exists, sleeps 45 s
 /// and fails when `state/hang-fetch` exists, standing in for a fetch waiting on a prompt, and
 /// fails at once with git's access-rights message when `state/refuse-fetch` exists; `b10x-gates bot
-/// -- push [options] <remote> <spec>` runs a real `git push` of the spec into `remote` with every
+/// -- push [options] <remote> <spec>` appends its `GIT_ALLOW_PROTOCOL` to `state/push-env`, runs
+/// a real `git push` of the spec into `remote` with every
 /// option takt gave (`--porcelain`, `--force-with-lease`), its report on stdout as git prints it,
 /// keeps the commit pushed per branch (`pushed-<branch, / as _>`), or exits 1 when
 /// `state/refuse-push` exists; `scan-text` passes;
@@ -191,6 +194,8 @@ case "$1" in
           printf 'GIT_SSH_COMMAND=%s\n' "${{GIT_SSH_COMMAND-unset}}"
           printf 'SSH_AUTH_SOCK=%s\n' "${{SSH_AUTH_SOCK-unset}}"
           printf 'stdin=%s\n' "$(readlink /proc/self/fd/0)"
+          printf 'GIT_ASKPASS=%s\n' "${{GIT_ASKPASS-unset}}"
+          printf 'GIT_ALLOW_PROTOCOL=%s\n' "${{GIT_ALLOW_PROTOCOL-unset}}"
         }} > "$state/fetch-env"
         if [ -e "$state/hang-fetch" ]; then sleep 45; exit 1; fi
         if [ -e "$state/refuse-fetch" ]; then
@@ -200,8 +205,9 @@ case "$1" in
           exit 1
         fi
         if [ -e "$state/no-fetch" ]; then exit 0; fi
-        git fetch -q "$remote" "$spec"; exit $? ;;
+        env -u GIT_ALLOW_PROTOCOL git fetch -q "$remote" "$spec"; exit $? ;;
       push)
+        printf 'GIT_ALLOW_PROTOCOL=%s\n' "${{GIT_ALLOW_PROTOCOL-unset}}" >> "$state/push-env"
         if [ -e "$state/refuse-push" ]; then echo "refused by the double" >&2; exit 1; fi
         branch="${{spec#*:refs/heads/}}"; revision="${{spec%%:*}}"
         if [ "$branch" = "$spec" ]; then revision="refs/heads/$spec"; fi
@@ -626,7 +632,9 @@ const FETCH_TRIALS: &str = "bot -- fetch https://github.com/owner/repo.git +refs
 /// The story's acceptance, the route half: in a clone whose `origin` is an SSH URL, with the
 /// user's SSH agent loaded and a prompt allowed in takt's own environment, the trial fetch
 /// names the remote's HTTPS URL, and its child gets no agent socket, no git prompt, SSH in
-/// batch mode and standard input from `/dev/null`; the run proceeds to cut `trial/0`.
+/// batch mode, standard input from `/dev/null`, an empty `GIT_ASKPASS` and HTTPS as the one
+/// transport git may use; the run proceeds to cut `trial/0`, and the push, which is not the
+/// fetch, is not held to HTTPS.
 #[test]
 fn the_trial_fetch_goes_over_https_with_no_user_credential_and_no_prompt() {
     let world = world("https-fetch");
@@ -639,7 +647,15 @@ fn the_trial_fetch_goes_over_https_with_no_user_credential_and_no_prompt() {
             ("SSH_AUTH_SOCK", agent),
             ("GIT_TERMINAL_PROMPT", "1"),
             ("GIT_SSH_COMMAND", "ssh"),
+            ("GIT_ASKPASS", "/user/askpass"),
         ],
+    );
+    let pushed = fs::read_to_string(world.state.join("push-env")).expect("a push ran");
+    assert!(
+        pushed
+            .lines()
+            .all(|line| line == "GIT_ALLOW_PROTOCOL=unset"),
+        "a push held to a transport: {pushed}"
     );
     let seen = fs::read_to_string(world.state.join("fetch-env")).expect("the fetch ran");
     assert_eq!(
@@ -654,6 +670,8 @@ fn the_trial_fetch_goes_over_https_with_no_user_credential_and_no_prompt() {
                 "GIT_SSH_COMMAND=ssh -o BatchMode=yes",
                 "SSH_AUTH_SOCK=unset",
                 "stdin=/dev/null",
+                "GIT_ASKPASS=",
+                "GIT_ALLOW_PROTOCOL=https",
             ]
         ),
         "the fetch line and what its child was started with"
