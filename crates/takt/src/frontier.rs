@@ -591,8 +591,8 @@ impl Frontier for Aep {
 
     /// `evidence <story> --kind approval --source "takt approve <capability> --by <approver> at
     /// <revision>" --ref <case>/authority.yaml --at <granted at>`, written before the grant: the
-    /// source names the command, the capability, the approver and the implementation revision
-    /// the grant authorises, the reference the grant, the instant the grant's own; the
+    /// source names the command, the capability, the approver and the revision of the grant's
+    /// subject the grant authorises, the reference the grant, the instant the grant's own; the
     /// repository's own store only, like `list`.
     fn record_approval(&self, repo: &Path, story: &str, approval: &Approval) -> Result<()> {
         Self::store(repo)?;
