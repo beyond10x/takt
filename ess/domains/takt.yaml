@@ -32,7 +32,7 @@ types:
   # cases directory: an id that is empty, `.`, holds `..` or a path separator, starts with `/`, or
   # holds a control, whitespace, separator or format character is refused before it is joined to
   # a path, wherever an id is given (`takt run --case`, `--case-id`, `takt approve`).
-  # read from: crates/takt/src/run.rs:950
+  # read from: crates/takt/src/run.rs:1656
   # read from: crates/takt/src/frontier.rs:68-72
   # read from: crates/takt/src/case.rs:1107
   # read from: crates/takt/src/case.rs:95-105
@@ -43,8 +43,8 @@ types:
   # A run's own id, minted when the run starts. The kernel gives a run no id today: one run opens
   # or resumes one case and prints its stop under the case's directory. The decided resume
   # (`takt run --case <id>`) gives a case a second run, so a run is told apart from its case here.
-  # read from: crates/takt/src/run.rs:884-898
-  # read from: crates/takt/src/run.rs:950
+  # read from: crates/takt/src/run.rs:1590-1604
+  # read from: crates/takt/src/run.rs:1656
   # read from: crates/takt-cli/src/main.rs:703-706
   # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
   - name: takt.work.RunId
@@ -73,7 +73,7 @@ types:
   # kernel loads from the file when the argument names one that exists, relative to the directory
   # `takt` runs in.
   # read from: crates/takt/src/run.rs:31
-  # read from: crates/takt/src/run.rs:942-945
+  # read from: crates/takt/src/run.rs:1648-1651
   # read from: crates/takt/src/protocol.rs:62-67
   - name: takt.work.ProtocolSource
     kind: union
@@ -110,9 +110,9 @@ types:
   # read from: docs/design/takt.md:38
   # read from: crates/takt/src/frontier.rs:171-179
   # read from: crates/takt/src/frontier.rs:187
-  # read from: crates/takt/src/run.rs:1043-1055
-  # read from: crates/takt/src/run.rs:1097-1155
-  # read from: crates/takt/src/run.rs:798-799
+  # read from: crates/takt/src/run.rs:1749-1761
+  # read from: crates/takt/src/run.rs:1803-1861
+  # read from: crates/takt/src/run.rs:1504-1505
   - name: takt.work.Unit
     kind: union
     tag: kind
@@ -234,7 +234,7 @@ types:
   # `takt.gate-run`). Carries
   # canon.protocol.Principal (protocol.yaml:241), an opaque principal Canon records as given.
   # read from: crates/takt/src/validator.rs:46-47
-  # read from: crates/takt/src/validator.rs:220
+  # read from: crates/takt/src/validator.rs:215
   # read from: crates/takt/src/evidence.rs:16
   - name: takt.work.ProducerName
     kind: newtype
@@ -243,11 +243,11 @@ types:
   # An evidence record's id, unique within the case (`test-result-<seq>`). Carries
   # canon.protocol.EvidenceId (protocol.yaml:538).
   # read from: crates/takt/src/evidence.rs:9
-  # read from: crates/takt/src/validator.rs:280
+  # read from: crates/takt/src/validator.rs:275
   # Takt's ids are `<kind>-<evaluation number>`, the number continued across the case's runs, so an
   # id is unique within a case.
   # read from: crates/takt/src/case.rs:1305
-  # read from: crates/takt/src/run.rs:1575
+  # read from: crates/takt/src/run.rs:2281
   - name: takt.work.EvidenceId
     kind: newtype
     of: String
@@ -263,8 +263,8 @@ types:
   # the case holds grants), which leaves it at the revision the grant authorises.
   # read from: crates/takt/src/case.rs:1097-1099
   # read from: crates/takt/src/case.rs:1189
-  # read from: crates/takt/src/run.rs:1139
-  # read from: crates/takt/src/run.rs:2259
+  # read from: crates/takt/src/run.rs:1845
+  # read from: crates/takt/src/run.rs:3040
   # read from: crates/takt/src/case.rs:1276-1280
   # read from: crates/takt/src/case.rs:881-883
   # read from: crates/takt/src/evidence.rs:14
@@ -273,9 +273,9 @@ types:
     of: String
 
   # A step's number within its run, counted from 1 as the run prints it (`step 3: tests.run {}`).
-  # read from: crates/takt/src/run.rs:895-896
-  # read from: crates/takt/src/run.rs:977
-  # read from: crates/takt/src/run.rs:2072
+  # read from: crates/takt/src/run.rs:1601-1602
+  # read from: crates/takt/src/run.rs:1683
+  # read from: crates/takt/src/run.rs:2798
   - name: takt.work.StepNumber
     kind: newtype
     of: Integer
@@ -284,9 +284,9 @@ types:
   # start again at 1 with every run; evaluation numbers and record ids do not: one sequence per
   # case, continued across its runs, so no decision is overwritten and no record id repeats.
   # read from: crates/takt/src/case.rs:1305
-  # read from: crates/takt/src/run.rs:1572-1575
-  # read from: crates/takt/src/run.rs:977
-  # read from: crates/takt/src/run.rs:2072
+  # read from: crates/takt/src/run.rs:2278-2281
+  # read from: crates/takt/src/run.rs:1683
+  # read from: crates/takt/src/run.rs:2798
   - name: takt.work.StepKey
     kind: struct
     fields:
@@ -303,8 +303,8 @@ types:
   # makes it due again.
   # read from: crates/takt/src/run.rs:114-127
   # read from: docs/design/takt.md:41-42
-  # read from: crates/takt/src/run.rs:1636
-  # read from: crates/takt/src/run.rs:1916
+  # read from: crates/takt/src/run.rs:2342
+  # read from: crates/takt/src/run.rs:2622
   - name: takt.work.StepKind
     kind: enum
     variants: [deterministic, judgement]
@@ -324,16 +324,16 @@ types:
   # `completed`, 4 `approval_required`, 6 `waiting`, 3 every other stop, 5 an error once the
   # case is open, 1 a refusal before the run.
   # read from: crates/takt/src/run.rs:51-69
-  # read from: crates/takt/src/run.rs:1616
-  # read from: crates/takt/src/run.rs:1918-1922
-  # read from: crates/takt/src/run.rs:2205
-  # read from: crates/takt/src/run.rs:1661
-  # read from: crates/takt/src/run.rs:1774
-  # read from: crates/takt/src/run.rs:1877-1878
+  # read from: crates/takt/src/run.rs:2322
+  # read from: crates/takt/src/run.rs:2624-2628
+  # read from: crates/takt/src/run.rs:2986
+  # read from: crates/takt/src/run.rs:2367
+  # read from: crates/takt/src/run.rs:2480
+  # read from: crates/takt/src/run.rs:2583-2584
   # read from: crates/takt-cli/src/main.rs:709-712
   # read from: crates/takt-cli/src/main.rs:207-213
   # read from: crates/takt/src/run.rs:70-79
-  # read from: crates/takt/src/run.rs:1884-1892
+  # read from: crates/takt/src/run.rs:2590-2598
   # read from: crates/takt-cli/src/main.rs:711
   # read from: crates/takt-cli/src/main.rs:214
   - name: takt.work.Stop
@@ -394,9 +394,9 @@ types:
   # Every run's lines end on its `stop`, or on an `error` when the run ends on one.
   # read from: crates/takt/src/events.rs:25-107
   # read from: crates/takt/src/run.rs:6-12
-  # read from: crates/takt/src/run.rs:1251-1306
-  # read from: crates/takt/src/run.rs:1600-1610
-  # read from: crates/takt/src/run.rs:2055-2067
+  # read from: crates/takt/src/run.rs:1957-2012
+  # read from: crates/takt/src/run.rs:2306-2316
+  # read from: crates/takt/src/run.rs:2781-2793
   - name: takt.work.RunEvent
     kind: union
     tag: event
@@ -417,7 +417,7 @@ types:
   # A run opened its case, or resumed it: the protocol, the story when the case works one, and
   # the inputs as `name=value`.
   # read from: crates/takt/src/events.rs:29-37
-  # read from: crates/takt/src/run.rs:1548-1559
+  # read from: crates/takt/src/run.rs:2254-2265
   - name: takt.work.RunOpened
     kind: struct
     fields:
@@ -433,7 +433,7 @@ types:
   # An evaluation: its number in the case's one sequence, the decision file it was written to,
   # `decisions/<seq>.json` under the case, and the frontier as printed.
   # read from: crates/takt/src/events.rs:38-44
-  # read from: crates/takt/src/run.rs:1602-1609
+  # read from: crates/takt/src/run.rs:2308-2315
   - name: takt.work.RunDecision
     kind: struct
     fields:
@@ -447,7 +447,7 @@ types:
   # A step: `by` is `validator` or `harness`; the validator's or the harness's name, the action,
   # what it reported, and the tokens the harness reported when it reported any.
   # read from: crates/takt/src/events.rs:45-54
-  # read from: crates/takt/src/run.rs:1518-1538
+  # read from: crates/takt/src/run.rs:2224-2244
   - name: takt.work.RunStep
     kind: struct
     fields:
@@ -465,8 +465,8 @@ types:
   # What a judgement step changed: the paths committed and the implementation revision they were
   # committed as; no path and no revision when it changed no file.
   # read from: crates/takt/src/events.rs:55-61
-  # read from: crates/takt/src/run.rs:2229-2236
-  # read from: crates/takt/src/run.rs:2260-2267
+  # read from: crates/takt/src/run.rs:3010-3017
+  # read from: crates/takt/src/run.rs:3041-3048
   - name: takt.work.RunEffect
     kind: struct
     fields:
@@ -478,7 +478,7 @@ types:
   # An evidence record a validator wrote under the case: its id, kind and result, and its path
   # relative to the tree.
   # read from: crates/takt/src/events.rs:62-70
-  # read from: crates/takt/src/run.rs:1826-1839
+  # read from: crates/takt/src/run.rs:2532-2545
   - name: takt.work.RunEvidence
     kind: struct
     fields:
@@ -498,8 +498,8 @@ types:
   # written takes back; a write the case's record names, or whose commit subject the case's
   # branch holds, is not made again.
   # read from: crates/takt/src/events.rs:71-81
-  # read from: crates/takt/src/run.rs:1338-1403
-  # read from: crates/takt/src/run.rs:1466-1505
+  # read from: crates/takt/src/run.rs:2044-2109
+  # read from: crates/takt/src/run.rs:2172-2211
   # read from: crates/takt/src/frontier.rs:245-249
   # read from: crates/takt/src/frontier.rs:318-330
   - name: takt.work.RunStoreEvidence
@@ -519,7 +519,7 @@ types:
   # The story moved in the planning store through `aep plan artifact move`, to `implemented`,
   # and the commit on the case's branch that holds the move, written with it as above.
   # read from: crates/takt/src/events.rs:82-89
-  # read from: crates/takt/src/run.rs:1424-1442
+  # read from: crates/takt/src/run.rs:2130-2148
   - name: takt.work.RunStoreMove
     kind: struct
     fields:
@@ -538,9 +538,9 @@ types:
   # the case reached it.
   # read from: crates/takt/src/events.rs:20-23
   # read from: crates/takt/src/events.rs:90-92
-  # read from: crates/takt/src/run.rs:1507-1516
-  # read from: crates/takt/src/run.rs:1954-1971
-  # read from: crates/takt/src/run.rs:2117-2127
+  # read from: crates/takt/src/run.rs:2213-2222
+  # read from: crates/takt/src/run.rs:2660-2694
+  # read from: crates/takt/src/run.rs:2843-2853
   - name: takt.work.RunRefusal
     kind: struct
     fields:
@@ -551,7 +551,7 @@ types:
 
   # The run pauses on the forge for `seconds`, then observes the actions `on` again.
   # read from: crates/takt/src/events.rs:93-94
-  # read from: crates/takt/src/run.rs:1897-1903
+  # read from: crates/takt/src/run.rs:2603-2609
   - name: takt.work.RunWait
     kind: struct
     fields:
@@ -564,10 +564,10 @@ types:
   # before the panic goes on and the case is let go), or one met while recording an accepted
   # case in the store (an `events.jsonl` line that does not read, an `out` that fails), after
   # which the run keeps its stop and records it next.
-  # read from: crates/takt/src/run.rs:1262-1285
+  # read from: crates/takt/src/run.rs:1968-1991
   # read from: crates/takt/src/events.rs:95-97
-  # read from: crates/takt/src/run.rs:1286-1301
-  # read from: crates/takt/src/run.rs:1308-1327
+  # read from: crates/takt/src/run.rs:1992-2007
+  # read from: crates/takt/src/run.rs:2014-2033
   - name: takt.work.RunError
     kind: struct
     fields:
@@ -588,7 +588,7 @@ types:
 
   # The run stopped: the stop as printed, the steps taken and the tokens reported.
   # read from: crates/takt/src/events.rs:101-106
-  # read from: crates/takt/src/run.rs:1328-1335
+  # read from: crates/takt/src/run.rs:2034-2041
   - name: takt.work.RunStopped
     kind: struct
     fields:
@@ -630,12 +630,12 @@ types:
   # `--test-cmd` split at white space; the `gate.run` validator over the gates document `--gates`
   # names, taken from the case's base commit; `pr.open`, `ci.read` and `repository.merge` through
   # the forge, the last admissible only under a recorded grant at the case's revision.
-  # read from: crates/takt/src/validator.rs:1194
-  # read from: crates/takt/src/validator.rs:700
-  # read from: crates/takt/src/validator.rs:994
-  # read from: crates/takt/src/validator.rs:317
+  # read from: crates/takt/src/validator.rs:1189
+  # read from: crates/takt/src/validator.rs:695
+  # read from: crates/takt/src/validator.rs:989
+  # read from: crates/takt/src/validator.rs:312
   # read from: docs/design/takt.md:56
-  # read from: crates/takt/src/validator.rs:184-186
+  # read from: crates/takt/src/validator.rs:179-181
   # read from: crates/takt-cli/src/main.rs:137-139
   - name: takt.work.DeterministicStep
     kind: struct
@@ -649,7 +649,7 @@ types:
   # is given. Not built as a block; today the actions offered are computed each iteration (the
   # admissible actions no validator owns) and the brief is the intent.
   # read from: docs/design/takt.md:57
-  # read from: crates/takt/src/run.rs:1630-1635
+  # read from: crates/takt/src/run.rs:2336-2341
   # read from: crates/takt/src/harness.rs:19-20
   - name: takt.work.JudgementStep
     kind: struct
@@ -773,7 +773,7 @@ entities:
   # read from: crates/takt/src/case.rs:21-39
   # read from: crates/takt/src/case.rs:1169
   # read from: crates/takt/src/case.rs:1384-1394
-  # read from: crates/takt/src/run.rs:1812-1816
+  # read from: crates/takt/src/run.rs:2518-2522
   # Every evaluation reads the files and asks Canon. Opening refuses an id that is not a plain name
   # or exists, a tree with uncommitted work outside the cases directory (staged, unstaged or
   # untracked; ignored files are not work), and a tree on a case's branch whose base is unknown,
@@ -789,11 +789,11 @@ entities:
   # read from: crates/takt/src/case.rs:772-803
   # read from: crates/takt/src/case.rs:820-827
   # read from: crates/takt/src/case.rs:1245-1282
-  # read from: crates/takt/src/run.rs:1068-1081
+  # read from: crates/takt/src/run.rs:1774-1787
   # read from: crates/takt/src/case.rs:1064-1194
   # read from: crates/takt/src/case.rs:1089
   # read from: crates/takt/src/case.rs:1149
-  # read from: crates/takt/src/run.rs:955-958
+  # read from: crates/takt/src/run.rs:1661-1664
   # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
   # read from: crates/takt/src/case.rs:1491-1520
   - name: takt.work.Case
@@ -835,9 +835,9 @@ entities:
       # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
       # read from: docs/design/takt.md:38-39
       # read from: crates/takt/src/case.rs:757-766
-      # read from: crates/takt/src/run.rs:1068-1081
-      # read from: crates/takt/src/run.rs:1111
-      # read from: crates/takt/src/run.rs:966
+      # read from: crates/takt/src/run.rs:1774-1787
+      # read from: crates/takt/src/run.rs:1817
+      # read from: crates/takt/src/run.rs:1672
       - name: story
         type: Optional<takt.work.StoryId>
       # The authority the operator granted the case, read into every evaluation of it: the
@@ -864,7 +864,7 @@ entities:
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/authority.rs:7-21
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/mod.rs:359-365
       # read from: crates/takt/src/case.rs:1504-1505
-      # read from: crates/takt/src/validator.rs:1309
+      # read from: crates/takt/src/validator.rs:1304
       - name: authority
         type: Map<takt.work.CapabilityId, takt.work.Grant>
       # read from: crates/takt/src/case.rs:1043-1044
@@ -957,8 +957,8 @@ entities:
   # one step at a time, until a stop. The judgement actor, the validators and the budgets are what
   # the run is given; the steps taken, the tokens spent and the stop are what it records.
   # read from: crates/takt/src/run.rs:1-5
-  # read from: crates/takt/src/run.rs:884-906
-  # read from: crates/takt/src/run.rs:1541-2259
+  # read from: crates/takt/src/run.rs:1590-1612
+  # read from: crates/takt/src/run.rs:2247-3040
   # A run holds its case for its whole duration: `run.lock`, holding the instant it took hold, is
   # created with `create_new` at start, so of two that try at once exactly one holds, and removed
   # at every stop, on error and on a panic, the panic recorded first. A resume holds the case
@@ -968,7 +968,7 @@ entities:
   # read from: crates/takt/src/case.rs:39
   # read from: crates/takt/src/case.rs:139-143
   # read from: crates/takt/src/case.rs:1254
-  # read from: crates/takt/src/run.rs:1259-1304
+  # read from: crates/takt/src/run.rs:1965-2010
   - name: takt.work.Run
     naming:
       summary: >-
@@ -980,24 +980,24 @@ entities:
       # is minted from an instant when `--case-id` gives none, and the run's stop is printed with
       # that case's directory. A run resumed on a case is a second Run of the same case, so the
       # run and the case are told apart here.
-      # read from: crates/takt/src/run.rs:887-888
-      # read from: crates/takt/src/run.rs:950
+      # read from: crates/takt/src/run.rs:1593-1594
+      # read from: crates/takt/src/run.rs:1656
       # read from: crates/takt-cli/src/main.rs:703-706
       # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
       name: run_id
       type: takt.work.RunId
     fields:
       # The case the run opened, or the one it resumed.
-      # read from: crates/takt/src/run.rs:1000-1007
-      # read from: crates/takt/src/run.rs:887-888
-      # read from: crates/takt/src/run.rs:951
+      # read from: crates/takt/src/run.rs:1706-1713
+      # read from: crates/takt/src/run.rs:1593-1594
+      # read from: crates/takt/src/run.rs:1657
       - name: case_id
         type: takt.work.CaseId
-      # read from: crates/takt/src/run.rs:885-886
+      # read from: crates/takt/src/run.rs:1591-1592
       - name: tree
         type: String
         summary: The worktree the case is opened in and every action is performed in.
-      # read from: crates/takt/src/run.rs:889-890
+      # read from: crates/takt/src/run.rs:1595-1596
       # read from: docs/design/takt.md:38
       - name: unit
         type: takt.work.Unit
@@ -1006,7 +1006,7 @@ entities:
       # a `--protocol` that names another, or another document under the same id, is refused
       # before anything is resumed.
       # read from: crates/takt/src/run.rs:31
-      # read from: crates/takt/src/run.rs:942-945
+      # read from: crates/takt/src/run.rs:1648-1651
       # read from: crates/takt-cli/src/main.rs:322-325
       # read from: crates/takt-cli/src/main.rs:1123-1137
       - name: protocol
@@ -1020,7 +1020,7 @@ entities:
       # read from: crates/takt-cli/src/main.rs:368-372
       # read from: crates/takt-cli/src/main.rs:356
       # read from: crates/takt-cli/src/main.rs:1147
-      # read from: crates/takt/src/run.rs:1022
+      # read from: crates/takt/src/run.rs:1728
       - name: inputs
         type: Map<takt.work.InputId, String>
       # The workflow the run follows, when one is given; not built, the kernel takes none yet.
@@ -1046,11 +1046,11 @@ entities:
       # read from: crates/takt-cli/src/main.rs:146-148
       - name: gate
         type: Optional<takt.work.ActionId>
-      # read from: crates/takt/src/run.rs:891-892
+      # read from: crates/takt/src/run.rs:1597-1598
       - name: harness
         type: takt.work.HarnessName
         summary: The judgement actor that performs every judgement step of the run.
-      # read from: crates/takt/src/run.rs:893-894
+      # read from: crates/takt/src/run.rs:1599-1600
       # read from: crates/takt-cli/src/main.rs:488-496
       - name: validators
         type: List<takt.work.ProducerName>
@@ -1069,21 +1069,21 @@ entities:
       # case, records no instant. `run.lock` holds the instant the run took hold of its case only
       # while it runs. The elapsed clock the hour budget is measured against is a monotonic
       # instant and is not stored.
-      # read from: crates/takt/src/run.rs:950
-      # read from: crates/takt/src/run.rs:938
+      # read from: crates/takt/src/run.rs:1656
+      # read from: crates/takt/src/run.rs:1644
       # read from: crates/takt-cli/src/main.rs:118-120
       # read from: crates/takt/src/lib.rs:30-32
       # read from: crates/takt/src/case.rs:160
-      # read from: crates/takt/src/run.rs:904
-      # read from: crates/takt/src/run.rs:1220
+      # read from: crates/takt/src/run.rs:1610
+      # read from: crates/takt/src/run.rs:1926
       - name: started_at
         type: Optional<Timestamp>
-      # read from: crates/takt/src/run.rs:895-896
+      # read from: crates/takt/src/run.rs:1601-1602
       - name: steps
         type: Integer
         summary: Steps taken so far.
-      # read from: crates/takt/src/run.rs:897-898
-      # read from: crates/takt/src/run.rs:2052-2053
+      # read from: crates/takt/src/run.rs:1603-1604
+      # read from: crates/takt/src/run.rs:2778-2779
       - name: tokens
         type: Integer
         summary: Tokens the harness reported, summed over its steps.
@@ -1098,14 +1098,14 @@ entities:
       # and ending with `stop` or `error`.
       # read from: crates/takt/src/events.rs:1-9
       # read from: crates/takt/src/events.rs:139-168
-      # read from: crates/takt/src/run.rs:1251-1306
+      # read from: crates/takt/src/run.rs:1957-2012
       - name: events
         type: List<takt.work.RunEventLine>
         summary: The lines the run appended to its case's `events.jsonl`, in order.
     relations:
       # One run, one case: the run opens it, or resumes it, and the case outlives the run on disk.
-      # read from: crates/takt/src/run.rs:887-888
-      # read from: crates/takt/src/run.rs:1000-1007
+      # read from: crates/takt/src/run.rs:1593-1594
+      # read from: crates/takt/src/run.rs:1706-1713
       # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
       - name: case
         kind: references
@@ -1119,15 +1119,15 @@ entities:
         target: takt.work.Workflow
         cardinality: one
         via: workflow
-      # read from: crates/takt/src/run.rs:893-894
+      # read from: crates/takt/src/run.rs:1599-1600
       - name: validators
         kind: references
         target: takt.work.EvidenceProducer
         cardinality: many
         via: validators
       # The steps a run took have no meaning outside it; they are numbered within it.
-      # read from: crates/takt/src/run.rs:895-896
-      # read from: crates/takt/src/run.rs:2072
+      # read from: crates/takt/src/run.rs:1601-1602
+      # read from: crates/takt/src/run.rs:2798
       - name: steps
         kind: owns
         target: takt.work.Step
@@ -1196,27 +1196,31 @@ entities:
   # on the judge surface (under `.engineering/` but the cases: the planning store, the project
   # file that says where it is kept, the gates and the assertions project file; `.cargo/**`,
   # `rust-toolchain*` and `build.rs` at any depth; `.github/**`; the test command's own script,
-  # the program it names or the script an interpreter it names runs), matched whatever the case
-  # and through a link the tree holds on it, as git sees the change or the snapshot taken before
-  # the step differs, is refused
-  # and the change discarded; a harness that fails has its change discarded and ends the run with
+  # the program it names or the script an interpreter it names runs, through `env`, wrappers
+  # and `sh -c`, and its build tool's file, a Makefile, Taskfile, `package.json` or justfile),
+  # matched whatever the case, as git sees the change or the snapshot taken before the step
+  # differs, or an entry of a cargo manifest anywhere in the tree that decides how cargo builds
+  # or runs the tests (`package.build`, `package.links`, a target's `harness`, `[profile.*]`,
+  # `[patch.*]`, `[replace]`, `[build-dependencies]`, `[target.*]`), is refused and the change
+  # discarded; no judgement step is taken while a guarded path is reached through a link,
+  # which is never followed; a harness that fails has its change discarded and ends the run with
   # an error, and one that panics has it discarded before the panic goes on. An accepted change
   # is committed, exactly the paths it changed, and `implementation` moved to the new head.
   # read from: crates/takt/src/run.rs:180-227
   # read from: docs/design/takt.md:40-42
-  # read from: crates/takt/src/run.rs:1679-1687
-  # read from: crates/takt/src/run.rs:1774
-  # read from: crates/takt/src/run.rs:1940-1951
-  # read from: crates/takt/src/run.rs:2132-2174
-  # read from: crates/takt/src/run.rs:2189-2205
-  # read from: crates/takt/src/run.rs:2207-2217
-  # read from: crates/takt/src/run.rs:2042
-  # read from: crates/takt/src/run.rs:2244-2259
+  # read from: crates/takt/src/run.rs:2385-2393
+  # read from: crates/takt/src/run.rs:2480
+  # read from: crates/takt/src/run.rs:2646-2657
+  # read from: crates/takt/src/run.rs:2913-2955
+  # read from: crates/takt/src/run.rs:2970-2986
+  # read from: crates/takt/src/run.rs:2988-2998
+  # read from: crates/takt/src/run.rs:2768
+  # read from: crates/takt/src/run.rs:3025-3040
   # read from: crates/takt/src/harness.rs:16-50
-  # read from: crates/takt/src/run.rs:1972-1975
-  # read from: crates/takt/src/run.rs:1954-1971
-  # read from: crates/takt/src/run.rs:1978-2003
-  # read from: crates/takt/src/run.rs:2117-2127
+  # read from: crates/takt/src/run.rs:2698-2701
+  # read from: crates/takt/src/run.rs:2660-2694
+  # read from: crates/takt/src/run.rs:2704-2729
+  # read from: crates/takt/src/run.rs:2843-2853
   - name: takt.work.Step
     naming:
       summary: >-
@@ -1224,49 +1228,49 @@ entities:
         said or observed, the evidence it wrote, the tokens it used and the commit it made.
     identity:
       # The pair of the run and the number within it; a number alone repeats with every run.
-      # read from: crates/takt/src/run.rs:977
-      # read from: crates/takt/src/run.rs:895-896
-      # read from: crates/takt/src/run.rs:2072
+      # read from: crates/takt/src/run.rs:1683
+      # read from: crates/takt/src/run.rs:1601-1602
+      # read from: crates/takt/src/run.rs:2798
       name: key
       type: takt.work.StepKey
     fields:
       # The run that took the step, the same as `key.run_id`, repeated as a field because a
       # relation's `via` names one.
-      # read from: crates/takt/src/run.rs:895-896
+      # read from: crates/takt/src/run.rs:1601-1602
       - name: run_id
         type: takt.work.RunId
-      # read from: crates/takt/src/run.rs:1636
-      # read from: crates/takt/src/run.rs:1916
+      # read from: crates/takt/src/run.rs:2342
+      # read from: crates/takt/src/run.rs:2622
       - name: kind
         type: takt.work.StepKind
       # Exactly one action: the validator's own for a deterministic step; for a judgement step the
       # one the harness reports, which is among those offered, or the run's gate action (never in
       # the offered set: requesting it with no change ends the run with `approval_required`), or
       # the step is refused.
-      # read from: crates/takt/src/run.rs:1649
+      # read from: crates/takt/src/run.rs:2355
       # read from: crates/takt/src/harness.rs:21-25
       # read from: crates/takt/src/harness.rs:36-38
-      # read from: crates/takt/src/run.rs:1929
-      # read from: crates/takt/src/run.rs:2208
+      # read from: crates/takt/src/run.rs:2635
+      # read from: crates/takt/src/run.rs:2989
       - name: action
         type: takt.work.ActionId
       # The validator that performed a deterministic step; absent on a judgement step, which the
       # run's harness performed.
-      # read from: crates/takt/src/run.rs:1645
-      # read from: crates/takt/src/run.rs:2072-2075
+      # read from: crates/takt/src/run.rs:2351
+      # read from: crates/takt/src/run.rs:2798-2801
       - name: producer
         type: Optional<takt.work.ProducerName>
       # read from: crates/takt/src/validator.rs:17-18
       # read from: crates/takt/src/harness.rs:39-40
-      # read from: crates/takt/src/run.rs:1809
-      # read from: crates/takt/src/run.rs:2077
+      # read from: crates/takt/src/run.rs:2515
+      # read from: crates/takt/src/run.rs:2803
       - name: summary
         type: String
         summary: One line on what was observed (deterministic) or what the harness said it did.
       # The `canon-evidence/1` records a deterministic step wrote to the case, by id; a judgement
       # step writes none, because the model never produces evidence.
       # read from: crates/takt/src/validator.rs:19-20
-      # read from: crates/takt/src/run.rs:1825-1826
+      # read from: crates/takt/src/run.rs:2531-2532
       # read from: docs/design/takt.md:47-49
       - name: records
         type: List<takt.work.EvidenceId>
@@ -1275,26 +1279,26 @@ entities:
       # before the records that refer to it. The gate validator keeps the evaluated bundle of
       # every observation, record or not.
       # read from: crates/takt/src/validator.rs:16-32
-      # read from: crates/takt/src/run.rs:1812-1825
-      # read from: crates/takt/src/validator.rs:596
+      # read from: crates/takt/src/run.rs:2518-2531
+      # read from: crates/takt/src/validator.rs:591
       - name: artifact
         type: Optional<String>
         summary: The retained file's name under the case's `artifacts/`.
       # read from: crates/takt/src/harness.rs:41-42
-      # read from: crates/takt/src/run.rs:2052-2053
+      # read from: crates/takt/src/run.rs:2778-2779
       - name: tokens
         type: Optional<Integer>
         summary: Tokens the step used, when the harness reports them.
       # The commit a judgement step's change was committed as, exactly the paths it changed, which
       # `implementation` now names; absent when nothing changed, the step was refused, or the step
       # was deterministic.
-      # read from: crates/takt/src/run.rs:2244-2259
+      # read from: crates/takt/src/run.rs:3025-3040
       # read from: crates/takt/src/git.rs:437
       - name: committed
         type: Optional<takt.work.Revision>
     relations:
       # A deterministic step is performed by exactly one validator.
-      # read from: crates/takt/src/run.rs:1645
+      # read from: crates/takt/src/run.rs:2351
       - name: producer
         kind: references
         target: takt.work.EvidenceProducer
@@ -1317,8 +1321,9 @@ entities:
   # `takt.tests-run`: action `tests.run`, kind `test_result`,
   # subject `implementation`, result `pass` on exit 0 and `fail` otherwise; in a case nothing is
   # run and no record written while the case's branch changed the judge surface but the planning
-  # store since the case's pinned base, or when the case pins none, the summary naming the
-  # paths. The second is
+  # store, or a manifest entry that decides the build, since the case's pinned base, while a
+  # link stands on that surface at either revision, or when the case pins none, the summary
+  # naming the paths. The second is
   # `takt.gate-run`: action `gate.run`, kind `gate_result`, subject `implementation`, the
   # repository's `engineering-gates/1` document evaluated through the assertions library with the
   # project file `--project` names, or `.engineering/assertions-project.yaml` when that is a file,
@@ -1334,8 +1339,9 @@ entities:
   # pushed revision. The fourth is `takt.ci-read`: action `ci.read`, kind `ci_result`, `pass` or
   # `fail` from the checks on the pull request's head; no record while they are pending, without a
   # pull request, with a head that is not the case's branch at the pushed revision, or while the
-  # case's branch changed the judge surface but the planning store since the case's pinned base
-  # (or the case pins none), the summary naming the paths. The fifth is
+  # case's branch changed the judge surface but the planning store or a manifest entry that
+  # decides the build since the case's pinned base, while a link stands on that surface (or the
+  # case pins none), the summary naming the paths. The fifth is
   # `takt.pr-merged`: action `repository.merge`, kind `merge_observation`, subject
   # `implementation`; admissible only under a recorded grant, it merges an open pull request whose
   # head the forge reports as the case's branch at the revision, or at the revision with only its
@@ -1344,20 +1350,20 @@ entities:
   # the head's checks are read first, and pending or failing merges nothing. It records the state
   # read back about the granted revision, the merged head kept beside it, `merged` making the
   # protocol's `accepted` outcome legitimate; no record while the pull request is still open.
-  # read from: crates/takt/src/validator.rs:1215-1225
-  # read from: crates/takt/src/validator.rs:804-814
-  # read from: crates/takt/src/validator.rs:1028-1038
-  # read from: crates/takt/src/validator.rs:303-315
-  # read from: crates/takt/src/validator.rs:334-338
-  # read from: crates/takt/src/validator.rs:505
+  # read from: crates/takt/src/validator.rs:1210-1220
+  # read from: crates/takt/src/validator.rs:799-809
+  # read from: crates/takt/src/validator.rs:1023-1033
+  # read from: crates/takt/src/validator.rs:298-310
+  # read from: crates/takt/src/validator.rs:329-333
+  # read from: crates/takt/src/validator.rs:500
   # read from: crates/takt/src/validator.rs:1-2
   # read from: crates/takt/src/validator.rs:45-76
-  # read from: crates/takt/src/validator.rs:218-232
-  # read from: crates/takt/src/validator.rs:175-177
-  # read from: crates/takt/src/validator.rs:265-267
+  # read from: crates/takt/src/validator.rs:213-227
+  # read from: crates/takt/src/validator.rs:170-172
+  # read from: crates/takt/src/validator.rs:260-262
   # read from: crates/takt/src/forge.rs:574-592
-  # read from: crates/takt/src/validator.rs:887
-  # read from: crates/takt/src/validator.rs:1309
+  # read from: crates/takt/src/validator.rs:882
+  # read from: crates/takt/src/validator.rs:1304
   # read from: docs/design/takt.md:47-49
   # read from: docs/design/takt.md:64-65
   # read from: crates/takt/src/forge.rs:699-707
@@ -1400,8 +1406,8 @@ entities:
   # read from: crates/takt/src/case.rs:218-219
   # read from: crates/takt/src/case.rs:185-212
   # read from: crates/takt/src/case.rs:1134-1155
-  # read from: crates/takt/src/validator.rs:773-777
-  # read from: crates/takt/src/validator.rs:866
+  # read from: crates/takt/src/validator.rs:768-772
+  # read from: crates/takt/src/validator.rs:861
   - name: takt.work.CaseBranch
     naming:
       summary: >-
@@ -1422,7 +1428,7 @@ entities:
       # the gates document and the project file from, whatever the base branch names later.
       # Absent for a case opened before it was recorded, whose gate then writes no record.
       # read from: crates/takt/src/case.rs:197-201
-      # read from: crates/takt/src/validator.rs:337-338
+      # read from: crates/takt/src/validator.rs:332-333
       - name: base_commit
         type: Optional<takt.work.Revision>
       # The branch the tree was on when the case opened, what discarding the case returns to;

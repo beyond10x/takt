@@ -96,7 +96,9 @@ enum Judged {
 
 /// Whether the case's branch changed what decides `tests.run` and `ci.read` between the case's
 /// base at `dir` and `revision`: the run's judge surface ([`crate::run::JudgeSurface`]) but the
-/// planning store, followed through the links the base revision holds on it. A change no step
+/// planning store, a link on it or on the way to a script at either commit, and the entries of a
+/// cargo manifest that decide how cargo builds or runs the tests
+/// ([`crate::run::manifest_build_changes`]). A change no step
 /// could make, because the step guard refuses it, but one that reached the branch by another
 /// route (a commit made outside the loop) would decide the verdict all the same. The store is
 /// guarded at the step too, but it decides no test and no check, and takt itself writes it on
@@ -105,37 +107,22 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
     let Some((base, at)) = base_revision(tree, dir)? else {
         return Ok(Judged::NoBase);
     };
-    let mut surface = crate::run::JudgeSurface::new(runs, tree).without_store();
-    let listed = crate::git::run(tree, &["ls-tree", "-r", "-z", "--full-tree", &at])?;
-    let links: Vec<(String, String)> = listed
-        .split('\0')
-        .filter_map(|entry| {
-            let (meta, path) = entry.split_once('\t')?;
-            let mut meta = meta.split(' ');
-            (meta.next()? == "120000")
-                .then(|| {
-                    meta.nth(1)
-                        .map(|object| (path.to_owned(), object.to_owned()))
-                })
-                .flatten()
-        })
-        .collect();
-    let mut targets = std::collections::BTreeMap::new();
-    for _ in 0..64 {
-        let mut grew = false;
-        for (path, object) in &links {
-            let target = match targets.get(object) {
-                Some(target) => target,
-                None => {
-                    let bytes = crate::git::blob(tree, object)?;
-                    targets.insert(object.clone(), String::from_utf8_lossy(&bytes).into_owned());
-                    &targets[object]
-                }
+    let surface = crate::run::JudgeSurface::new(runs, tree).without_store();
+    // A link is never followed: one the base or the revision holds on the surface, or on the
+    // way to a script, is named, and nothing is recorded while it is there.
+    let mut paths: Vec<String> = Vec::new();
+    for commit in [at.as_str(), revision] {
+        let listed = crate::git::run(tree, &["ls-tree", "-r", "-z", "--full-tree", commit])?;
+        for entry in listed.split('\0') {
+            let Some((meta, path)) = entry.split_once('\t') else {
+                continue;
             };
-            grew |= surface.follow_git_link(tree, path, target);
-        }
-        if !grew {
-            break;
+            if meta.starts_with("120000 ") && surface.crossed_by(path) {
+                let named = format!("{path} (a link)");
+                if !paths.contains(&named) {
+                    paths.push(named);
+                }
+            }
         }
     }
     let diff = crate::git::run(
@@ -151,11 +138,19 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
             "--",
         ],
     )?;
-    let paths: Vec<String> = diff
-        .split('\0')
-        .filter(|path| !path.is_empty() && surface.contains(path))
-        .map(str::to_owned)
-        .collect();
+    for path in diff.split('\0').filter(|path| !path.is_empty()) {
+        if surface.contains(path) {
+            paths.push(path.to_owned());
+        } else if crate::run::is_manifest(path) {
+            let before = crate::run::manifest_at(tree, &at, path)?;
+            let after = crate::run::manifest_at(tree, revision, path)?;
+            paths.extend(
+                crate::run::manifest_build_changes(&before, &after)
+                    .into_iter()
+                    .map(|key| format!("{path}: {key}")),
+            );
+        }
+    }
     Ok(if paths.is_empty() {
         Judged::Unchanged
     } else {

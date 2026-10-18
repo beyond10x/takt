@@ -324,38 +324,291 @@ fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -
 const ENGINEERING: &str = ".engineering";
 
 /// The judge surface every run guards, as a refusal names it.
-pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, and the test command's own script";
+pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, the test command's own script and its build tool's file";
 
-/// The programs that run a script named after them: the word after their options is the
-/// script, which is the test command's own as much as `./check.sh` is.
-const INTERPRETERS: &[&str] = &[
-    "sh",
-    "bash",
-    "dash",
-    "zsh",
-    "ksh",
-    "mksh",
-    "ash",
-    "fish",
-    "busybox",
-    "python",
-    "pypy",
-    "perl",
-    "ruby",
-    "node",
-    "nodejs",
-    "deno",
-    "bun",
-    "php",
-    "rscript",
-    "lua",
-    "tclsh",
-    "pwsh",
-    "powershell",
+/// How a program of a test command takes its options. A short option is a character of a
+/// cluster (`-eo`); one that takes an argument takes the rest of its cluster or, when that is
+/// empty, the next word. A long option (`--name`) takes `=value` or the next word.
+#[derive(Clone, Copy)]
+struct Spec {
+    /// Options that take an argument and name nothing guarded.
+    short_arg: &'static str,
+    long_arg: &'static [&'static str],
+    /// Options after which the rest is code, not a file (`python -c`, `python -m`).
+    short_stop: &'static str,
+    long_stop: &'static [&'static str],
+    /// Options whose argument is a command line of its own (`sh -c`, `flock -c`).
+    short_command: &'static str,
+    long_command: &'static [&'static str],
+    /// Options that change the directory the rest is named from (`make -C`, `env -C`).
+    short_chdir: &'static str,
+    long_chdir: &'static [&'static str],
+    /// Options that name the file the program runs (`make -f`, `pwsh -File`).
+    short_file: &'static str,
+    long_file: &'static [&'static str],
+    /// Whole words that name the file the program runs, or stop as `short_stop` does
+    /// (`pwsh -File`, `pwsh -Command`), matched whatever their case.
+    word_file: &'static [&'static str],
+    word_stop: &'static [&'static str],
+    /// Whether `+o` is an option as `-o` is (a shell's).
+    plus: bool,
+    /// Operands before the script or the command (`timeout DURATION`, `flock FILE`), or the
+    /// subcommands skipped before the script (`deno run`).
+    operands: usize,
+    subcommands: &'static [&'static str],
+}
+
+/// A program with no option of note.
+const PLAIN: Spec = Spec {
+    short_arg: "",
+    long_arg: &[],
+    short_stop: "",
+    long_stop: &[],
+    short_command: "",
+    long_command: &[],
+    short_chdir: "",
+    long_chdir: &[],
+    short_file: "",
+    long_file: &[],
+    word_file: &[],
+    word_stop: &[],
+    plus: false,
+    operands: 0,
+    subcommands: &[],
+};
+
+/// A shell: `-o OPT`, `-O OPT`, `+o OPT`, `--rcfile FILE`; `-c` runs a command line.
+const SHELL: Spec = Spec {
+    short_arg: "oO",
+    long_arg: &["rcfile", "init-file"],
+    short_command: "c",
+    plus: true,
+    ..PLAIN
+};
+
+/// The programs that run a script named after their options: the script is the test command's
+/// own as much as `./check.sh` is.
+const INTERPRETERS: &[(&[&str], Spec)] = &[
+    (
+        &["sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish"],
+        SHELL,
+    ),
+    (
+        &["python", "pypy"],
+        Spec {
+            short_arg: "WX",
+            long_arg: &["check-hash-based-pycs"],
+            short_stop: "cm",
+            ..PLAIN
+        },
+    ),
+    (
+        &["perl"],
+        Spec {
+            short_stop: "eE",
+            ..PLAIN
+        },
+    ),
+    (
+        &["ruby"],
+        Spec {
+            short_arg: "IrEF",
+            long_arg: &["encoding"],
+            short_stop: "e",
+            short_chdir: "C",
+            ..PLAIN
+        },
+    ),
+    (
+        &["node", "nodejs", "deno", "bun"],
+        Spec {
+            short_arg: "rC",
+            long_arg: &[
+                "require",
+                "import",
+                "loader",
+                "experimental-loader",
+                "conditions",
+                "env-file",
+                "input-type",
+                "title",
+            ],
+            short_stop: "ep",
+            long_stop: &["eval", "print"],
+            subcommands: &["run", "test"],
+            ..PLAIN
+        },
+    ),
+    (
+        &["php"],
+        Spec {
+            short_arg: "cdz",
+            short_stop: "rBRE",
+            ..PLAIN
+        },
+    ),
+    (
+        &["rscript"],
+        Spec {
+            short_stop: "e",
+            ..PLAIN
+        },
+    ),
+    (
+        &["lua"],
+        Spec {
+            short_arg: "l",
+            short_stop: "e",
+            ..PLAIN
+        },
+    ),
+    (&["tclsh"], PLAIN),
+    (
+        &["pwsh", "powershell"],
+        Spec {
+            word_file: &["-file", "-f"],
+            word_stop: &["-command", "-c", "-encodedcommand", "-e", "-ec"],
+            ..PLAIN
+        },
+    ),
 ];
 
-/// How many links deep the judge surface is followed through links on it.
-const LINKS_AT_MOST: usize = 64;
+/// The programs that run the command after their options and operands.
+const WRAPPERS: &[(&[&str], Spec)] = &[
+    (
+        &["timeout"],
+        Spec {
+            short_arg: "sk",
+            long_arg: &["signal", "kill-after"],
+            operands: 1,
+            ..PLAIN
+        },
+    ),
+    (
+        &["nice"],
+        Spec {
+            short_arg: "n",
+            long_arg: &["adjustment"],
+            ..PLAIN
+        },
+    ),
+    (
+        &["ionice"],
+        Spec {
+            short_arg: "cnpPu",
+            long_arg: &["class", "classdata", "pid", "pgid", "uid"],
+            ..PLAIN
+        },
+    ),
+    (
+        &["stdbuf"],
+        Spec {
+            short_arg: "ioe",
+            long_arg: &["input", "output", "error"],
+            ..PLAIN
+        },
+    ),
+    (&["nohup", "chronic", "setsid", "busybox"], PLAIN),
+    (
+        &["time"],
+        Spec {
+            short_arg: "fo",
+            long_arg: &["format", "output"],
+            ..PLAIN
+        },
+    ),
+    (
+        &["xvfb-run"],
+        Spec {
+            short_arg: "nsfepw",
+            long_arg: &[
+                "server-num",
+                "server-args",
+                "auth-file",
+                "error-file",
+                "xauth-protocol",
+                "wait",
+            ],
+            ..PLAIN
+        },
+    ),
+    (
+        &["flock"],
+        Spec {
+            short_arg: "wE",
+            long_arg: &["timeout", "wait", "conflict-exit-code"],
+            short_command: "c",
+            long_command: &["command"],
+            operands: 1,
+            ..PLAIN
+        },
+    ),
+];
+
+/// The build tools whose own file decides what their target runs: the files they read in the
+/// directory they run in, unless an option names another.
+const BUILD_TOOLS: &[(&[&str], Spec, &[&str])] = &[
+    (
+        &["make", "gmake"],
+        Spec {
+            short_arg: "IoWE",
+            long_arg: &[
+                "include-dir",
+                "old-file",
+                "assume-old",
+                "what-if",
+                "new-file",
+                "assume-new",
+                "eval",
+            ],
+            short_chdir: "C",
+            long_chdir: &["directory"],
+            short_file: "f",
+            long_file: &["file", "makefile"],
+            ..PLAIN
+        },
+        &["Makefile", "makefile", "GNUmakefile"],
+    ),
+    (
+        &["task", "go-task"],
+        Spec {
+            short_chdir: "d",
+            long_chdir: &["dir"],
+            short_file: "t",
+            long_file: &["taskfile"],
+            ..PLAIN
+        },
+        &[
+            "Taskfile.yml",
+            "Taskfile.yaml",
+            "Taskfile.dist.yml",
+            "Taskfile.dist.yaml",
+        ],
+    ),
+    (
+        &["npm", "yarn", "pnpm"],
+        Spec {
+            short_chdir: "C",
+            long_chdir: &["prefix", "dir", "cwd"],
+            ..PLAIN
+        },
+        &["package.json"],
+    ),
+    (
+        &["just"],
+        Spec {
+            short_chdir: "d",
+            long_chdir: &["working-directory"],
+            short_file: "f",
+            long_file: &["justfile"],
+            ..PLAIN
+        },
+        &["justfile", ".justfile"],
+    ),
+];
+
+/// How deep a command line inside a command line (`sh -c`, `env -S`) is read.
+const COMMANDS_AT_MOST: usize = 16;
 
 /// `path` with its case folded as a file system that ignores case folds it: lower case, and the
 /// two letters outside ASCII that fold into the ASCII letters of the guarded names.
@@ -411,39 +664,370 @@ fn program_of(word: &str) -> String {
     fold(name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.'))
 }
 
-/// The paths in `tree` the command `words` runs as its own script: the program when it names a
-/// path, and, when the program is an interpreter ([`INTERPRETERS`]), the first word after its
-/// options (the script, or what `-c` runs); `env` and the assignments it is given are skipped.
-/// A word that names nothing yet is named all the same: a step could make it.
-#[must_use]
-pub fn scripts_of(words: &[String], tree: &Path) -> Vec<String> {
-    let mut words = words.iter().map(String::as_str).peekable();
-    let mut named = Vec::new();
-    while let Some(program) = words.next() {
-        named.extend(in_tree(tree, program));
-        if program_of(program) == "env" {
-            while words
-                .peek()
-                .is_some_and(|word| word.starts_with('-') || word.contains('='))
-            {
-                words.next();
-            }
+/// `word` named from `dir` (relative to the tree; `None` once a directory change left it), as a
+/// path in the tree; `None` outside it.
+fn named_from(tree: &Path, dir: Option<&str>, word: &str) -> Option<String> {
+    if Path::new(word).is_absolute() {
+        return in_tree(tree, word);
+    }
+    dir.and_then(|dir| normalise(&format!("{dir}/{word}")))
+        .filter(|path| !path.is_empty())
+}
+
+/// The directory `dir` changes to by `to`: `None` outside the tree.
+fn changed_dir(tree: &Path, dir: Option<&str>, to: &str) -> Option<String> {
+    if Path::new(to).is_absolute() {
+        let roots = [
+            std::path::absolute(tree).ok(),
+            std::fs::canonicalize(tree).ok(),
+        ];
+        return roots
+            .iter()
+            .flatten()
+            .find_map(|root| Path::new(to).strip_prefix(root).ok())
+            .and_then(|inside| inside.to_str())
+            .and_then(normalise);
+    }
+    dir.and_then(|dir| normalise(&format!("{dir}/{to}")))
+}
+
+/// Where the options of a program end.
+enum End {
+    /// At the operand at this index, or past the last word.
+    Operand,
+    /// The rest is code, not a file.
+    Stop,
+    /// The command line of its own starting at this index.
+    Command(usize),
+}
+
+/// What a program's options said, read from the word at `at` on.
+struct Scanned<'w> {
+    at: usize,
+    end: End,
+    chdirs: Vec<&'w str>,
+    files: Vec<&'w str>,
+}
+
+/// Reads the options of a program from `words[at..]` by `spec`, to the first operand.
+fn scan<'w>(words: &[&'w str], mut at: usize, spec: &Spec) -> Scanned<'w> {
+    let mut chdirs = Vec::new();
+    let mut files = Vec::new();
+    let done = |at, end, chdirs, files| Scanned {
+        at,
+        end,
+        chdirs,
+        files,
+    };
+    while let Some(word) = words.get(at).copied() {
+        if word == "--" {
+            return done(at + 1, End::Operand, chdirs, files);
+        }
+        let folded = fold(word);
+        if spec.word_stop.contains(&folded.as_str()) {
+            return done(at, End::Stop, chdirs, files);
+        }
+        if spec.word_file.contains(&folded.as_str()) {
+            at += 1;
+            files.extend(words.get(at).copied());
+            at += 1;
             continue;
         }
-        if INTERPRETERS.contains(&program_of(program).as_str()) {
-            for word in words.by_ref() {
-                if let Some(value) = word.strip_prefix('-') {
-                    if let Some((_, value)) = value.split_once('=') {
-                        named.extend(in_tree(tree, value));
+        if let Some(long) = word.strip_prefix("--") {
+            let (name, value) = match long.split_once('=') {
+                Some((name, value)) => (name, Some(value)),
+                None => (long, None),
+            };
+            if spec.long_stop.contains(&name) {
+                return done(at, End::Stop, chdirs, files);
+            }
+            if spec.long_command.contains(&name) {
+                return done(
+                    at,
+                    if value.is_some() {
+                        End::Stop
+                    } else {
+                        End::Command(at + 1)
+                    },
+                    chdirs,
+                    files,
+                );
+            }
+            let chdir = spec.long_chdir.contains(&name);
+            let file = spec.long_file.contains(&name);
+            if chdir || file || spec.long_arg.contains(&name) {
+                let argument = match value {
+                    Some(value) => Some(value),
+                    None => {
+                        at += 1;
+                        words.get(at).copied()
                     }
-                    continue;
+                };
+                if chdir {
+                    chdirs.extend(argument);
                 }
-                named.extend(in_tree(tree, word));
+                if file {
+                    files.extend(argument);
+                }
+            }
+            at += 1;
+            continue;
+        }
+        let cluster = word
+            .strip_prefix('-')
+            .or_else(|| word.strip_prefix('+').filter(|_| spec.plus))
+            .filter(|cluster| !cluster.is_empty());
+        let Some(cluster) = cluster else {
+            return done(at, End::Operand, chdirs, files);
+        };
+        for (k, c) in cluster.char_indices() {
+            let rest = &cluster[k + c.len_utf8()..];
+            if spec.short_stop.contains(c) {
+                return done(at, End::Stop, chdirs, files);
+            }
+            if spec.short_command.contains(c) {
+                return done(at, End::Command(at + 1), chdirs, files);
+            }
+            let chdir = spec.short_chdir.contains(c);
+            let file = spec.short_file.contains(c);
+            if chdir || file || spec.short_arg.contains(c) {
+                let argument = if rest.is_empty() {
+                    at += 1;
+                    words.get(at).copied()
+                } else {
+                    Some(rest)
+                };
+                if chdir {
+                    chdirs.extend(argument);
+                }
+                if file {
+                    files.extend(argument);
+                }
                 break;
             }
         }
-        break;
+        at += 1;
     }
+    done(at, End::Operand, chdirs, files)
+}
+
+/// The spec of `name` in `table`.
+fn spec_of<T: Copy>(table: &[(&[&str], T)], name: &str) -> Option<T> {
+    table
+        .iter()
+        .find(|(names, _)| names.contains(&name))
+        .map(|(_, spec)| *spec)
+}
+
+/// The paths of `tree` the command line `words`, run from `dir`, runs as its own: added to
+/// `named`. See [`scripts_of`].
+fn command_paths(
+    tree: &Path,
+    words: &[&str],
+    mut dir: Option<String>,
+    named: &mut Vec<String>,
+    depth: usize,
+) {
+    if depth > COMMANDS_AT_MOST {
+        return;
+    }
+    let mut at = 0;
+    while let Some(program) = words.get(at).copied() {
+        named.extend(named_from(tree, dir.as_deref(), program));
+        let name = program_of(program);
+        at += 1;
+        if name == "env" {
+            // `NAME=VALUE` pairs and the options: `-u NAME`, `-C DIR`, `-S STRING`, whose
+            // words are the command, `--unset=`, `--chdir=`, `--split-string=`.
+            while let Some(word) = words.get(at).copied() {
+                if word == "--" {
+                    at += 1;
+                    break;
+                }
+                if let Some(long) = word.strip_prefix("--") {
+                    let (option, value) = match long.split_once('=') {
+                        Some((option, value)) => (option, Some(value)),
+                        None => (long, None),
+                    };
+                    let argument = |at: &mut usize| match value {
+                        Some(value) => Some(value),
+                        None => {
+                            *at += 1;
+                            words.get(*at).copied()
+                        }
+                    };
+                    match option {
+                        "unset" => {
+                            argument(&mut at);
+                        }
+                        "chdir" => {
+                            if let Some(to) = argument(&mut at) {
+                                dir = changed_dir(tree, dir.as_deref(), to);
+                            }
+                        }
+                        "split-string" => {
+                            let Some(value) = value else {
+                                at += 1;
+                                break;
+                            };
+                            let mut rest = vec![value];
+                            rest.extend(&words[at + 1..]);
+                            return command_paths(tree, &rest, dir, named, depth + 1);
+                        }
+                        _ => {}
+                    }
+                    at += 1;
+                    continue;
+                }
+                if let Some(cluster) = word.strip_prefix('-').filter(|c| !c.is_empty()) {
+                    let mut split = None;
+                    for (k, c) in cluster.char_indices() {
+                        let rest = &cluster[k + c.len_utf8()..];
+                        match c {
+                            'u' => {
+                                if rest.is_empty() {
+                                    at += 1;
+                                }
+                                break;
+                            }
+                            'C' => {
+                                let to = if rest.is_empty() {
+                                    at += 1;
+                                    words.get(at).copied()
+                                } else {
+                                    Some(rest)
+                                };
+                                if let Some(to) = to {
+                                    dir = changed_dir(tree, dir.as_deref(), to);
+                                }
+                                break;
+                            }
+                            'S' => {
+                                split = Some(rest);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    match split {
+                        Some("") => {
+                            at += 1;
+                            break;
+                        }
+                        Some(rest) => {
+                            let mut words_of = vec![rest];
+                            words_of.extend(&words[at + 1..]);
+                            return command_paths(tree, &words_of, dir, named, depth + 1);
+                        }
+                        None => {}
+                    }
+                    at += 1;
+                    continue;
+                }
+                if word.contains('=') {
+                    at += 1;
+                    continue;
+                }
+                break;
+            }
+            continue;
+        }
+        if let Some(spec) = spec_of(WRAPPERS, &name) {
+            // Options may stand before the operands and after them (`flock FILE -c CMD`).
+            let mut operands = spec.operands;
+            loop {
+                let scanned = scan(words, at, &spec);
+                for to in scanned.chdirs {
+                    dir = changed_dir(tree, dir.as_deref(), to);
+                }
+                match scanned.end {
+                    End::Stop => return,
+                    End::Command(from) => {
+                        return command_paths(tree, &words[from..], dir, named, depth + 1);
+                    }
+                    End::Operand if operands > 0 && scanned.at < words.len() => {
+                        at = scanned.at + 1;
+                        operands -= 1;
+                    }
+                    End::Operand => {
+                        at = scanned.at;
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if let Some(spec) = spec_of(INTERPRETERS, &name) {
+            let scanned = scan(words, at, &spec);
+            for to in scanned.chdirs {
+                dir = changed_dir(tree, dir.as_deref(), to);
+            }
+            for file in scanned.files {
+                named.extend(named_from(tree, dir.as_deref(), file));
+            }
+            match scanned.end {
+                End::Stop => {}
+                End::Command(from) => {
+                    command_paths(tree, &words[from..], dir, named, depth + 1);
+                }
+                End::Operand => {
+                    let mut script = scanned.at;
+                    if words
+                        .get(script)
+                        .is_some_and(|word| spec.subcommands.contains(word))
+                    {
+                        script += 1;
+                    }
+                    if let Some(script) = words.get(script) {
+                        named.extend(named_from(tree, dir.as_deref(), script));
+                    }
+                }
+            }
+            return;
+        }
+        if let Some((spec, defaults)) = BUILD_TOOLS
+            .iter()
+            .find(|(names, _, _)| names.contains(&name.as_str()))
+            .map(|(_, spec, defaults)| (*spec, *defaults))
+        {
+            // Options and targets interleave: every option up to the last word is read.
+            let mut files = Vec::new();
+            loop {
+                let scanned = scan(words, at, &spec);
+                for to in scanned.chdirs {
+                    dir = changed_dir(tree, dir.as_deref(), to);
+                }
+                files.extend(scanned.files);
+                match scanned.end {
+                    End::Operand if scanned.at < words.len() => at = scanned.at + 1,
+                    _ => break,
+                }
+            }
+            if files.is_empty() {
+                files.extend(defaults);
+            }
+            for file in files {
+                named.extend(named_from(tree, dir.as_deref(), file));
+            }
+            return;
+        }
+        return;
+    }
+}
+
+/// The paths in `tree` the command `words` runs as its own: the program when it names a path;
+/// the script an interpreter ([`INTERPRETERS`]) runs, past the options that take an argument
+/// (`sh -o OPT`), or nothing more for code given inline (`python -c`, `python -m`); what a
+/// command line given to `sh -c`, `flock -c` or `env -S` runs, read the same way; the command a
+/// wrapper ([`WRAPPERS`]: `timeout DURATION`, `nice -n N`, …) or `env` runs, past its options,
+/// their arguments, its operands and `NAME=VALUE` pairs; and the file a build tool
+/// ([`BUILD_TOOLS`]: make, task, npm, yarn, pnpm, just) reads, in the directory `-C` names or as
+/// `-f` names it. A word that names nothing yet is named all the same: a step could make it.
+#[must_use]
+pub fn scripts_of(words: &[String], tree: &Path) -> Vec<String> {
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    let mut named = Vec::new();
+    command_paths(tree, &words, Some(String::new()), &mut named, 0);
     named.sort();
     named.dedup();
     named
@@ -451,43 +1035,25 @@ pub fn scripts_of(words: &[String], tree: &Path) -> Vec<String> {
 
 /// A run's judge surface: what decides its validators, which no judgement step changes
 /// ([`JUDGE_SURFACE`]). Paths are matched whatever their case, as a file system that folds case
-/// would open them; what lies under a link on the surface, inside the tree, is on it too, since
-/// what reads the surface reads through the link. The cases directory is the kernel's and not on
-/// it.
+/// would open them. A link is never followed: a guarded path whose resolution crosses a link
+/// anywhere on the way, or leaves the tree, is not guarded through it, and the step guard refuses
+/// a step while there is one ([`JudgeSurface::links`]). The cases directory is the kernel's and
+/// not on it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JudgeSurface {
-    /// The test command's own scripts, each by itself.
+    /// The test command's own scripts and its build tool's files, each by itself.
     scripts: BTreeSet<String>,
-    /// What links on the surface lead to inside the tree, each with everything under it; `""` is
-    /// the whole tree.
-    through: BTreeSet<String>,
-    /// Where the cases directory is when a link puts it elsewhere.
-    cases: Option<String>,
     /// Whether the planning store is on it: always, but for what decides a validator alone
     /// ([`JudgeSurface::without_store`]).
     store: bool,
 }
 
 impl JudgeSurface {
-    /// The surface of a run whose validators run `runs` ([`Validator::runs`]) in `tree`, links
-    /// not followed yet.
+    /// The surface of a run whose validators run `runs` ([`Validator::runs`]) in `tree`.
     #[must_use]
     pub fn new(runs: &[String], tree: &Path) -> Self {
-        let cases = std::fs::canonicalize(tree.join(CASES_DIR))
-            .ok()
-            .zip(std::fs::canonicalize(tree).ok())
-            .and_then(|(cases, root)| {
-                cases
-                    .strip_prefix(root)
-                    .ok()
-                    .and_then(Path::to_str)
-                    .map(str::to_owned)
-            })
-            .filter(|cases| cases != CASES_DIR);
         Self {
             scripts: scripts_of(runs, tree).into_iter().collect(),
-            through: BTreeSet::new(),
-            cases,
             store: true,
         }
     }
@@ -499,17 +1065,6 @@ impl JudgeSurface {
     pub fn without_store(mut self) -> Self {
         self.store = false;
         self
-    }
-
-    /// Whether `path`, relative to the tree as git names it, is under the cases directory.
-    fn is_cases(&self, path: &str) -> bool {
-        crate::case::is_under_cases(path)
-            || self.cases.as_deref().is_some_and(|cases| {
-                path == cases
-                    || path
-                        .strip_prefix(cases)
-                        .is_some_and(|rest| rest.starts_with('/'))
-            })
     }
 
     /// Whether `path` is the store's: under `.engineering/`, whatever its case, and not a case's.
@@ -525,94 +1080,36 @@ impl JudgeSurface {
     #[must_use]
     pub fn contains(&self, path: &str) -> bool {
         let path = path.trim_end_matches('/');
-        if self.is_cases(path) {
+        if crate::case::is_under_cases(path) {
             return false;
         }
         let folded = fold(path);
-        let under = |prefix: &str| {
-            prefix.is_empty()
-                || folded == prefix
-                || folded
-                    .strip_prefix(prefix)
-                    .is_some_and(|rest| rest.starts_with('/'))
-        };
         let parts: Vec<&str> = folded.split('/').collect();
         let name = parts.last().copied().unwrap_or_default();
         (self.store && Self::is_store(path))
-            || under(".github")
+            || folded == ".github"
+            || folded.starts_with(".github/")
             || parts.contains(&".cargo")
             || name.starts_with("rust-toolchain")
             || name == "build.rs"
             || self.scripts.iter().any(|script| fold(script) == folded)
-            || self.through.iter().any(|at| under(&fold(at)))
     }
 
-    /// Whether what reads the surface reads through a link at `link`: the link is on the surface,
-    /// or a script or what another link leads to is under it.
-    fn reaches(&self, link: &str) -> bool {
+    /// Whether a guarded path is reached through `link`: the link is on the surface, or a
+    /// script or build file is under it.
+    #[must_use]
+    pub fn crossed_by(&self, link: &str) -> bool {
         let folded = fold(link.trim_end_matches('/'));
-        let below = |path: &String| {
-            fold(path)
-                .strip_prefix(&folded)
-                .is_some_and(|rest| rest.starts_with('/'))
-        };
-        self.contains(link) || self.scripts.iter().any(below) || self.through.iter().any(below)
-    }
-
-    /// Puts what the link at `link` leads to, `at` relative to the tree, on the surface, with
-    /// everything under it: whether it was not there yet. The cases directory is not put on it.
-    fn lead(&mut self, link: &str, at: String) -> bool {
-        if !self.reaches(link) || self.is_cases(&at) {
-            return false;
-        }
-        self.through.insert(at)
-    }
-
-    /// Puts on the surface what the link `link` in git's tree, to `target`, leads to, read as
-    /// git holds it: its target resolved against the link's directory, inside the tree. Whether
-    /// the surface grew.
-    pub fn follow_git_link(&mut self, tree: &Path, link: &str, target: &str) -> bool {
-        let at = if Path::new(target).is_absolute() {
-            in_tree(tree, target)
-        } else {
-            let dir = link.rsplit_once('/').map_or("", |(dir, _)| dir);
-            normalise(&format!("{dir}/{target}"))
-        };
-        at.is_some_and(|at| self.lead(link, at))
-    }
-
-    /// Puts on the surface what the link at `link` in `tree`, to `target`, leads to on the file
-    /// system: through every further link, or, for a target that is not there, as named. Whether
-    /// the surface grew.
-    fn follow_link(&mut self, tree: &Path, link: &Path, target: &Path) -> bool {
-        let Some(link_name) = link.to_str() else {
-            return false;
-        };
-        let Ok(root) = std::fs::canonicalize(tree) else {
-            return false;
-        };
-        let dir = link.parent().unwrap_or(Path::new(""));
-        let Ok(dir) = std::fs::canonicalize(tree.join(dir)) else {
-            return false;
-        };
-        let joined = dir.join(target);
-        let resolved = std::fs::canonicalize(&joined).ok().or_else(|| {
-            joined
-                .to_str()
-                .and_then(|joined| normalise(joined.trim_start_matches('/')))
-                .map(|path| PathBuf::from(format!("/{path}")))
-        });
-        let at = resolved
-            .as_deref()
-            .and_then(|path| path.strip_prefix(&root).ok())
-            .and_then(Path::to_str)
-            .and_then(normalise);
-        at.is_some_and(|at| self.lead(link_name, at))
+        self.contains(link)
+            || self.scripts.iter().any(|script| {
+                fold(script)
+                    .strip_prefix(&folded)
+                    .is_some_and(|rest| rest.starts_with('/'))
+            })
     }
 
     /// Where the surface is read in `tree`: the guarded names at its root, whatever their case,
-    /// each with what is under it; the scripts, each by itself; what links lead to, each with
-    /// what is under it, but the whole tree and `.git`, which git and the checkpoint guard.
+    /// each with what is under it; the scripts and build files, each by itself.
     fn roots(&self, tree: &Path) -> Result<Vec<(PathBuf, bool)>> {
         let mut roots = Vec::new();
         for entry in std::fs::read_dir(tree).with_context(|| format!("read {}", tree.display()))? {
@@ -632,30 +1129,20 @@ impl JudgeSurface {
                 .iter()
                 .map(|script| (PathBuf::from(script), false)),
         );
-        roots.extend(
-            self.through
-                .iter()
-                .filter(|at| {
-                    let first = fold(at.split('/').next().unwrap_or_default());
-                    !at.is_empty() && first != ".git"
-                })
-                .map(|at| (PathBuf::from(at), true)),
-        );
         Ok(roots)
     }
 
     /// Every file, link and other entry on the surface in `tree`, by path relative to it, as
-    /// [`snapshot`] takes them: a link is never followed, and a root reached through a link is
-    /// that link.
+    /// [`snapshot`] takes them: a link is never followed, and a root whose way crosses a link,
+    /// checked component by component, is that link.
     fn snapshot(&self, tree: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
         fn walk(
             tree: &Path,
             at: &Path,
-            surface: &JudgeSurface,
             entries: &mut BTreeMap<PathBuf, Entry>,
             descend: bool,
         ) -> Result<()> {
-            if at.to_str().is_some_and(|at| surface.is_cases(at)) {
+            if at.to_str().is_some_and(crate::case::is_under_cases) {
                 return Ok(());
             }
             let full = tree.join(at);
@@ -676,7 +1163,7 @@ impl JudgeSurface {
                     for entry in std::fs::read_dir(&full)
                         .with_context(|| format!("read {}", full.display()))?
                     {
-                        walk(tree, &at.join(entry?.file_name()), surface, entries, true)?;
+                        walk(tree, &at.join(entry?.file_name()), entries, true)?;
                     }
                 }
             } else if kind.is_file() {
@@ -696,41 +1183,47 @@ impl JudgeSurface {
         }
         let mut entries = BTreeMap::new();
         for (root, descend) in self.roots(tree)? {
-            // A root under a link is reached through it: the link is the entry, never followed.
-            let linked = root
-                .ancestors()
-                .skip(1)
-                .filter(|a| !a.as_os_str().is_empty())
-                .find(|ancestor| {
-                    std::fs::symlink_metadata(tree.join(ancestor))
-                        .is_ok_and(|meta| meta.file_type().is_symlink())
-                });
+            // The way to a root, component by component from the tree: the first link on it is
+            // the entry, and nothing under it is read.
+            let mut way = PathBuf::new();
+            let mut linked = None;
+            for component in root.components() {
+                way.push(component);
+                if way == root {
+                    break;
+                }
+                if std::fs::symlink_metadata(tree.join(&way))
+                    .is_ok_and(|meta| meta.file_type().is_symlink())
+                {
+                    linked = Some(way.clone());
+                    break;
+                }
+            }
             match linked {
-                Some(link) => walk(tree, link, self, &mut entries, false)?,
-                None => walk(tree, &root, self, &mut entries, descend)?,
+                Some(link) => walk(tree, &link, &mut entries, false)?,
+                None => walk(tree, &root, &mut entries, descend)?,
             }
         }
         Ok(entries)
     }
 
-    /// The surface of a run whose validators run `runs`, read in `tree` as it is now, with every
-    /// link on it followed, and what is on it now.
+    /// The surface of a run whose validators run `runs`, and what is on it in `tree` now.
     fn read(runs: &[String], tree: &Path) -> Result<(Self, BTreeMap<PathBuf, Entry>)> {
-        let mut surface = Self::new(runs, tree);
-        let mut kept = surface.snapshot(tree)?;
-        for _ in 0..LINKS_AT_MOST {
-            let mut grew = false;
-            for (path, entry) in &kept {
-                if let Entry::Link(target) = entry {
-                    grew |= surface.follow_link(tree, path, target);
-                }
-            }
-            if !grew {
-                break;
-            }
-            kept = surface.snapshot(tree)?;
-        }
+        let surface = Self::new(runs, tree);
+        let kept = surface.snapshot(tree)?;
         Ok((surface, kept))
+    }
+
+    /// The links on the surface in `kept`, each with where it leads: a guarded path reached
+    /// through one would be read wherever the link points, inside the tree or out of it, so the
+    /// step guard refuses every judgement step while there is one.
+    fn links(kept: &BTreeMap<PathBuf, Entry>) -> Vec<String> {
+        kept.iter()
+            .filter_map(|(path, entry)| match entry {
+                Entry::Link(target) => Some(format!("{} -> {}", path.display(), target.display())),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Puts the surface in `tree` back to `kept`, where it still differs; through the tree's
@@ -744,6 +1237,219 @@ impl JudgeSurface {
         }
         Ok(())
     }
+}
+
+/// A TOML key path in a manifest, its parts unquoted: `package.build`, `target.cfg(unix).dependencies.x`.
+fn key_parts(key: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut part = String::new();
+    let mut quote = None;
+    for c in key.chars() {
+        match (quote, c) {
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (None, '.') => parts.push(std::mem::take(&mut part).trim().to_owned()),
+            (_, c) => part.push(c),
+        }
+    }
+    parts.push(part.trim().to_owned());
+    parts
+}
+
+/// Where a value of a manifest stands while it is read: inside a string of which kind, and how
+/// deep in arrays and inline tables.
+#[derive(Default)]
+struct Reading {
+    quote: Option<&'static str>,
+    depth: i64,
+}
+
+impl Reading {
+    /// Reads `line` of a value; whether the value is complete after it. A comment outside a
+    /// string ends the line.
+    fn line(&mut self, line: &str, value: &mut String) -> bool {
+        let mut rest = line;
+        while !rest.is_empty() {
+            if let Some(quote) = self.quote {
+                if quote.starts_with('"') && rest.starts_with('\\') {
+                    let skip = rest.chars().take(2).map(char::len_utf8).sum::<usize>();
+                    value.push_str(&rest[..skip]);
+                    rest = &rest[skip..];
+                    continue;
+                }
+                if rest.starts_with(quote) {
+                    value.push_str(quote);
+                    rest = &rest[quote.len()..];
+                    self.quote = None;
+                    continue;
+                }
+            } else {
+                if rest.starts_with('#') {
+                    break;
+                }
+                if let Some(quote) = ["\"\"\"", "'''", "\"", "'"]
+                    .into_iter()
+                    .find(|quote| rest.starts_with(quote))
+                {
+                    value.push_str(quote);
+                    rest = &rest[quote.len()..];
+                    self.quote = Some(quote);
+                    continue;
+                }
+                match rest.chars().next() {
+                    Some('[' | '{') => self.depth += 1,
+                    Some(']' | '}') => self.depth -= 1,
+                    _ => {}
+                }
+            }
+            let c = rest.chars().next().map_or(1, char::len_utf8);
+            value.push_str(&rest[..c]);
+            rest = &rest[c..];
+        }
+        if self.quote.is_some() {
+            value.push('\n');
+        } else {
+            value.push(' ');
+        }
+        self.quote.is_none() && self.depth <= 0
+    }
+}
+
+/// Every entry of the manifest `text`, by its full key path, its value as written with white
+/// space outside strings collapsed: a scanner of sections and keys, not a TOML parser. An entry
+/// of an array of tables (`[[bin]]`) is told apart by its index.
+fn manifest_entries(text: &str) -> BTreeMap<Vec<String>, String> {
+    let mut entries = BTreeMap::new();
+    let mut table: Vec<String> = Vec::new();
+    let mut arrays: BTreeMap<Vec<String>, usize> = BTreeMap::new();
+    let mut pending: Option<(Vec<String>, String, Reading)> = None;
+    for line in text.lines() {
+        if let Some((key, mut value, mut reading)) = pending.take() {
+            if reading.line(line, &mut value) {
+                entries.insert(key, collapse(&value));
+            } else {
+                pending = Some((key, value, reading));
+            }
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(header) = trimmed.strip_prefix("[[") {
+            let name = header.split("]]").next().unwrap_or_default();
+            let path = key_parts(name);
+            let index = arrays.entry(path.clone()).or_insert(0);
+            table = path;
+            table.push(index.to_string());
+            *index += 1;
+            continue;
+        }
+        if let Some(header) = trimmed.strip_prefix('[') {
+            let name = header.rsplit_once(']').map_or(header, |(name, _)| name);
+            table = key_parts(name);
+            continue;
+        }
+        // `key = value`: the first `=` outside a quoted key.
+        let mut quote = None;
+        let split = trimmed.char_indices().find(|&(_, c)| match (quote, c) {
+            (None, '"' | '\'') => {
+                quote = Some(c);
+                false
+            }
+            (Some(q), c) if c == q => {
+                quote = None;
+                false
+            }
+            (None, '=') => true,
+            _ => false,
+        });
+        let Some((at, _)) = split else {
+            entries.insert(
+                table.iter().cloned().chain([trimmed.to_owned()]).collect(),
+                String::new(),
+            );
+            continue;
+        };
+        let mut key = table.clone();
+        key.extend(key_parts(&trimmed[..at]));
+        let mut value = String::new();
+        let mut reading = Reading::default();
+        if reading.line(&trimmed[at + 1..], &mut value) {
+            entries.insert(key, collapse(&value));
+        } else {
+            pending = Some((key, value, reading));
+        }
+    }
+    if let Some((key, value, _)) = pending {
+        entries.insert(key, collapse(&value));
+    }
+    entries
+}
+
+/// `value` with runs of white space made one space, trimmed.
+fn collapse(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Whether the manifest entry at `key`, with `value`, decides how cargo builds or runs the tests:
+/// `package.build`, `package.links`, a target's `harness`, any entry of `[profile.*]`,
+/// `[patch.*]`, `[replace]`, `[build-dependencies]` or `[target.*]`; and an inline table that
+/// could hold one of those.
+fn builds(key: &[String], value: &str) -> bool {
+    let parts: Vec<String> = key.iter().map(|part| fold(part)).collect();
+    let first = parts.first().map(String::as_str).unwrap_or_default();
+    let names = |words: &[&str]| words.iter().any(|word| fold(value).contains(word));
+    match first {
+        "profile" | "patch" | "replace" | "build-dependencies" | "build_dependencies"
+        | "target" => true,
+        "package" => match parts.get(1).map(String::as_str) {
+            Some("build" | "links") => true,
+            None => names(&["build", "links"]),
+            Some(_) => false,
+        },
+        "lib" | "bin" | "test" | "bench" | "example" => {
+            parts.iter().skip(1).any(|part| part == "harness") || names(&["harness"])
+        }
+        _ => false,
+    }
+}
+
+/// The entries that decide how cargo builds or runs the tests ([`builds`]) and differ between the
+/// manifests `before` and `after`, by key path: added, changed or removed.
+#[must_use]
+pub fn manifest_build_changes(before: &str, after: &str) -> Vec<String> {
+    let before = manifest_entries(before);
+    let after = manifest_entries(after);
+    before
+        .keys()
+        .chain(after.keys())
+        .filter(|key| {
+            let (was, is) = (before.get(*key), after.get(*key));
+            was != is
+                && (was.is_some_and(|value| builds(key, value))
+                    || is.is_some_and(|value| builds(key, value)))
+        })
+        .map(|key| key.join("."))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// The text of the manifest at `path`, relative to the tree, in the commit `revision`: empty
+/// when the commit has none there.
+pub fn manifest_at(tree: &Path, revision: &str, path: &str) -> Result<String> {
+    let spec = format!("{revision}:./{path}");
+    if crate::git::run(tree, &["cat-file", "-e", &spec]).is_err() {
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&crate::git::blob(tree, &spec)?).into_owned())
+}
+
+/// Whether `path`, relative to the tree, is a cargo manifest, whatever its case.
+#[must_use]
+pub fn is_manifest(path: &str) -> bool {
+    fold(path.rsplit('/').next().unwrap_or(path)) == "cargo.toml"
 }
 
 /// How a refusal names what a step changed on the judge surface: the store first, as the store's,
@@ -1958,17 +2664,37 @@ impl<'a> Run<'a> {
             // takt's own writes change once a case is accepted ([`Run::record_on`]); and what
             // decides the validators, which a step that changed it would decide its own
             // verdict with: the cargo configuration, the toolchain, build scripts, the CI
-            // workflows and the test command's own script. Matched whatever the case, and
-            // through every link on it the tree holds now. A step whose change git sees there
-            // (a file, a link, a mode, a rename), or that left anything there the snapshot sees
-            // differ (a FIFO, which git does not list, a file in an ignored directory), is
-            // refused, and put back to the snapshot taken here.
+            // workflows, the test command's own script and its build tool's file. Matched
+            // whatever the case. A step whose change git sees there (a file, a link, a mode, a
+            // rename), or that left anything there the snapshot sees differ (a FIFO, which git
+            // does not list, a file in an ignored directory), is refused, and put back to the
+            // snapshot taken here.
             let runs = self.runs();
             let (surface, surface_kept) = JudgeSurface::read(&runs, &self.tree)?;
+            // A link is never followed: while a guarded path is reached through one (already
+            // there, or planted by a step before, outside the guard), what it guards could be
+            // anywhere, in the tree or out of it, and no judgement step is taken.
+            let links = JudgeSurface::links(&surface_kept);
+            if !links.is_empty() {
+                let why = format!(
+                    "the judge surface is reached through a link, which takt never follows: {}; no judgement step is taken while one is there",
+                    links.join(", ")
+                );
+                self.refused(events, BY_TAKT, &why)?;
+                writeln!(
+                    out,
+                    "step {}: refused before the harness: {why}",
+                    self.steps
+                )?;
+                return Ok(Stop::StepRefused(why));
+            }
             let surface_dirty_before: BTreeSet<String> = crate::git::changed_paths(&self.tree)?
                 .into_iter()
                 .filter(|path| surface.contains(path))
                 .collect();
+            // The cargo manifests as `HEAD` has them before the step: what decides how cargo
+            // builds and runs the tests is compared with them after it.
+            let head_before = crate::git::head(&self.tree)?;
             // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
             // base, and a sibling case's branch, which a step could otherwise move under it; a
             // branch another worktree has checked out is that session's, but never the case's
@@ -2123,6 +2849,61 @@ impl<'a> Run<'a> {
                     out,
                     "  refused: {why}; the judge surface was put back and the change discarded"
                 )?;
+                return Ok(Stop::StepRefused(why));
+            }
+            // A cargo manifest anywhere in the tree decides how cargo builds and runs the
+            // tests through some of its keys ([`manifest_build_changes`]): a build script
+            // under another name, a test harness, a profile, a patch, a build dependency, a
+            // target's dependency. A step that adds, changes or removes one is refused.
+            let manifests = (|| -> Result<Vec<String>> {
+                let mut changed_keys = Vec::new();
+                for path in changed.iter().filter(|path| is_manifest(path)) {
+                    let before = manifest_at(&self.tree, &head_before, path)?;
+                    let full = self.tree.join(path);
+                    let after = match std::fs::symlink_metadata(&full) {
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                        Err(error) => {
+                            return Err(error).with_context(|| format!("read {}", full.display()));
+                        }
+                        Ok(meta) if meta.is_file() => String::from_utf8_lossy(
+                            &std::fs::read(&full)
+                                .with_context(|| format!("read {}", full.display()))?,
+                        )
+                        .into_owned(),
+                        Ok(_) => {
+                            changed_keys.push(format!("{path}: not a regular file"));
+                            continue;
+                        }
+                    };
+                    changed_keys.extend(
+                        manifest_build_changes(&before, &after)
+                            .into_iter()
+                            .map(|key| format!("{path}: {key}")),
+                    );
+                }
+                Ok(changed_keys)
+            })();
+            let manifests = match manifests {
+                Ok(manifests) => manifests,
+                Err(error) => {
+                    undo()?;
+                    record_step(self)?;
+                    return Err(error.context(format!(
+                        "step {}: the cargo manifests {} changed could not be read; the change was discarded",
+                        self.steps, report.action
+                    )));
+                }
+            };
+            if !manifests.is_empty() {
+                undo()?;
+                let why = format!(
+                    "{} changed how cargo builds or runs the tests: {}",
+                    report.action,
+                    manifests.join(", ")
+                );
+                record_step(self)?;
+                self.refused(events, BY_TAKT, &why)?;
+                writeln!(out, "  refused: {why}; the change was discarded")?;
                 return Ok(Stop::StepRefused(why));
             }
             // What only takt does, or what nobody may: `.git/`, `HEAD`, the index, ignored

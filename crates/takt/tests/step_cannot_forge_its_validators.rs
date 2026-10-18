@@ -435,8 +435,8 @@ fn a_judge_path_in_another_case_is_refused() {
     assert_refused_and_put_back(&tree, &ran, ".Engineering/planning/story/blocked-one.md");
 }
 
-/// A store directory the base holds as a link: what the step writes through it, at the link's
-/// target, is the store's.
+/// A store directory the base holds as a link: a link is never followed, so no judgement step
+/// is taken while it is there, and the refusal names the link.
 #[test]
 fn a_judge_path_reached_through_a_link_at_the_base_is_refused() {
     let tree = repository(
@@ -453,7 +453,195 @@ fn a_judge_path_reached_through_a_link_at_the_base_is_refused() {
     let ran = run(&tree, "./check.sh", |tree| {
         write(tree, "plan/story/blocked-one.md", "forged\n");
     });
-    assert_refused_and_put_back(&tree, &ran, "plan/story/blocked-one.md");
+    assert_refused_and_put_back(&tree, &ran, ".engineering/planning");
+    assert!(
+        !tree.join("plan/story/blocked-one.md").exists(),
+        "{}",
+        ran.text
+    );
+}
+
+/// A step that plants a link on the surface (`.cargo` to a directory of its own) and writes the
+/// configuration through it is refused and put back, the link with it.
+#[test]
+fn a_link_planted_on_the_surface_is_refused() {
+    let tree = repository("planted-link", &[("check.sh", FAILING_CHECK, true)]);
+    let ran = run(&tree, "./check.sh", |tree| {
+        write(
+            tree,
+            "cfg/config.toml",
+            "[target.'cfg(all())']\nrunner = \"true\"\n",
+        );
+        std::os::unix::fs::symlink("cfg", tree.join(".cargo")).expect("a link");
+    });
+    assert_refused_and_put_back(&tree, &ran, ".cargo");
+    assert!(
+        fs::symlink_metadata(tree.join(".cargo")).is_err(),
+        "{}",
+        ran.text
+    );
+}
+
+/// A step that puts a link on the way to the test command's script (`tests` to a directory of
+/// its own holding a `check.sh` that exits 0) is refused and put back.
+#[test]
+fn a_link_planted_on_the_way_to_the_script_is_refused() {
+    let tree = repository("planted-way", &[("tests/check.sh", FAILING_CHECK, false)]);
+    let ran = run(&tree, "sh tests/check.sh", |tree| {
+        write(tree, "real/check.sh", "#!/bin/sh\nexit 0\n");
+        fs::remove_dir_all(tree.join("tests")).expect("removed");
+        std::os::unix::fs::symlink("real", tree.join("tests")).expect("a link");
+    });
+    assert_refused_and_put_back(&tree, &ran, "tests/check.sh");
+    assert!(
+        fs::symlink_metadata(tree.join("tests"))
+            .is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink()),
+        "{}",
+        ran.text
+    );
+}
+
+/// A manifest anywhere in the tree decides how cargo builds the tests through some of its keys:
+/// a profile in a member's manifest, a patch at the root.
+#[test]
+fn a_manifest_entry_that_decides_the_build_is_refused() {
+    for (path, entry) in [
+        (
+            "crates/member/Cargo.toml",
+            "[profile.test]\nopt-level = 3\n",
+        ),
+        (
+            "Cargo.toml",
+            "[patch.crates-io]\nserde = { path = \"x\" }\n",
+        ),
+    ] {
+        let tree = repository(
+            "manifest",
+            &[
+                ("check.sh", FAILING_CHECK, true),
+                (
+                    "Cargo.toml",
+                    "[package]\nname = \"m\"\nversion = \"0.1.0\"\n",
+                    false,
+                ),
+                (
+                    "crates/member/Cargo.toml",
+                    "[package]\nname = \"member\"\nversion = \"0.1.0\"\n",
+                    false,
+                ),
+            ],
+        );
+        let ran = match path {
+            "Cargo.toml" => run(&tree, "./check.sh", |tree| {
+                let text = fs::read_to_string(tree.join("Cargo.toml")).expect("a manifest");
+                fs::write(
+                    tree.join("Cargo.toml"),
+                    format!("{text}[patch.crates-io]\nserde = {{ path = \"x\" }}\n"),
+                )
+                .expect("a file");
+            }),
+            _ => run(&tree, "./check.sh", |tree| {
+                let at = tree.join("crates/member/Cargo.toml");
+                let text = fs::read_to_string(&at).expect("a manifest");
+                fs::write(at, format!("{text}[profile.test]\nopt-level = 3\n")).expect("a file");
+            }),
+        };
+        let key = entry.lines().next().unwrap_or_default();
+        assert_refused_and_put_back(&tree, &ran, path);
+        assert!(
+            ran.refusal().contains(if key.starts_with("[profile") {
+                "profile.test.opt-level"
+            } else {
+                "patch.crates-io.serde"
+            }),
+            "{}",
+            ran.text
+        );
+    }
+}
+
+/// A manifest change that decides nothing of the build (a dependency, a version) is the step's
+/// to make.
+#[test]
+fn a_manifest_dependency_is_accepted() {
+    let tree = repository(
+        "manifest-dependency",
+        &[
+            ("check.sh", "#!/bin/sh\ngrep -q fixed check.txt\n", true),
+            ("check.txt", "broken\n", false),
+            (
+                "Cargo.toml",
+                "[package]\nname = \"m\"\nversion = \"0.1.0\"\n",
+                false,
+            ),
+        ],
+    );
+    let ran = run(&tree, "./check.sh", |tree| {
+        fs::write(
+            tree.join("Cargo.toml"),
+            "[package]\nname = \"m\"\nversion = \"0.2.0\"\n\n[dependencies]\nserde = \"1\"\n",
+        )
+        .expect("a file");
+        fs::write(tree.join("check.txt"), "fixed\n").expect("a file");
+    });
+    assert_eq!(
+        ran.stop.as_ref().ok(),
+        Some(&Stop::Completed("accepted".to_owned())),
+        "{}",
+        ran.text
+    );
+}
+
+/// The paths the guard reads as the test command's own, for the command lines a repository
+/// gives: through `env` and its options, wrappers, an interpreter's options, `sh -c`, and the
+/// build tools' files.
+#[test]
+fn the_test_command_names_its_own_files() {
+    let tree = repository("parse", &[("check.sh", FAILING_CHECK, true)]);
+    let cases: &[(&str, &[&str])] = &[
+        ("./check.sh", &["check.sh"]),
+        ("env -u NAME ./check.sh", &["check.sh"]),
+        ("env -i A=1 --unset=B -C sub ./check.sh", &["sub/check.sh"]),
+        ("env -S ./check.sh", &["check.sh"]),
+        ("sh -o errexit tests/run.sh", &["tests/run.sh"]),
+        ("bash -O extglob -e tests/run.sh", &["tests/run.sh"]),
+        ("bash -c ./check.sh", &["check.sh"]),
+        ("timeout 600 ./check.sh", &["check.sh"]),
+        ("timeout -s KILL 10m nice -n 5 ./check.sh", &["check.sh"]),
+        ("stdbuf -o L ionice -c 3 nohup ./check.sh", &["check.sh"]),
+        ("flock lock -c ./check.sh", &["check.sh"]),
+        ("python3 -m pytest tests", &[]),
+        ("python3 -W ignore tests/run.py", &["tests/run.py"]),
+        ("make test", &["GNUmakefile", "Makefile", "makefile"]),
+        ("make -C sub -f build.mk test", &["sub/build.mk"]),
+        (
+            "task check",
+            &[
+                "Taskfile.dist.yaml",
+                "Taskfile.dist.yml",
+                "Taskfile.yaml",
+                "Taskfile.yml",
+            ],
+        ),
+        ("npm --prefix web test", &["web/package.json"]),
+        ("just test", &[".justfile", "justfile"]),
+    ];
+    for (command, expected) in cases {
+        let words: Vec<String> = command.split_whitespace().map(str::to_owned).collect();
+        let named = takt::run::scripts_of(&words, &tree);
+        for path in *expected {
+            assert!(
+                named.iter().any(|named| named == path),
+                "`{command}` names {named:?}, not {path}"
+            );
+        }
+        for script in ["tests", "pytest", "test"] {
+            assert!(
+                !named.iter().any(|named| named == script) || expected.contains(&script),
+                "`{command}` names {named:?}"
+            );
+        }
+    }
 }
 
 /// Opens `fifo` for writing without waiting and closes it, so a reader blocked on it sees its
@@ -563,10 +751,10 @@ fn tests_run_records_nothing_while_the_branch_changed_the_cargo_configuration() 
     );
 }
 
-/// `tests.run` at a revision whose branch changed what a link on the surface, held at the base,
-/// leads to: `.cargo` is a link to `cfg`, and the branch writes `cfg/config.toml`.
+/// `tests.run` while the base holds a link on the surface, `.cargo` to `cfg`, and the branch
+/// writes `cfg/config.toml`: a link is never followed; nothing is recorded and the link named.
 #[test]
-fn tests_run_follows_a_link_the_base_holds_on_the_surface() {
+fn tests_run_records_nothing_while_the_base_holds_a_link_on_the_surface() {
     let tree = repository(
         "tests-link",
         &[
@@ -589,7 +777,40 @@ fn tests_run_follows_a_link_the_base_holds_on_the_surface() {
         .expect("observes");
     assert!(observation.records.is_empty(), "{:?}", observation.records);
     assert!(
-        observation.summary.contains("cfg/config.toml"),
+        observation.summary.contains(".cargo (a link)"),
+        "{}",
+        observation.summary
+    );
+}
+
+/// `tests.run` at a revision whose branch names a build script under another name in the
+/// manifest, by another route than a step: nothing is recorded and the key named.
+#[test]
+fn tests_run_records_nothing_while_the_branch_changed_a_manifest_build_key() {
+    let tree = repository(
+        "tests-manifest",
+        &[
+            ("check.sh", FAILING_CHECK, true),
+            (
+                "Cargo.toml",
+                "[package]\nname = \"m\"\nversion = \"0.1.0\"\n",
+                false,
+            ),
+        ],
+    );
+    let (_, revision) = case_with_commit(
+        &tree,
+        "Cargo.toml",
+        "[package]\nname = \"m\"\nversion = \"0.1.0\"\nbuild = \"gen.rs\"\n",
+        false,
+    );
+    let observation = TestsRun::new("./check.sh")
+        .expect("a command")
+        .observe(&tree, &revision, 1)
+        .expect("observes");
+    assert!(observation.records.is_empty(), "{:?}", observation.records);
+    assert!(
+        observation.summary.contains("Cargo.toml: package.build"),
         "{}",
         observation.summary
     );
