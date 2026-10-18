@@ -275,6 +275,28 @@ fn pr_open(tree: &Path, id: &str, forge: Rc<dyn Forge>, work: impl Fn(&Path)) ->
             ))
             .expect("the record is written");
     }
+    // The change handed over at the revision, as takt records a `change.handover` step.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            "handover",
+            "handover",
+            None,
+            "implementation",
+            &revision,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+    // A change to publish at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            "change-record",
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
+        .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
     Ran {
@@ -312,6 +334,16 @@ fn nothing_left(ran: &Ran, gates: &Gates) {
         ran.text
     );
     assert!(ran.stop.is_err(), "{:?}\n{}", ran.stop, ran.text);
+    // The stop is the scan's refusal, as the bot route words it, carrying the policy's words:
+    // not a run that stopped before `pr.open` ever scanned.
+    let error = ran.stop.as_ref().expect_err("the scan refused");
+    assert!(
+        error.contains("would publish did not pass scan-text"),
+        "not the scan's refusal: {error}\n{}",
+        ran.text
+    );
+    assert!(error.contains("nothing was pushed"), "{error}");
+    assert!(error.contains("private rule(s)"), "{error}");
     assert!(
         !kinds(&ran.case_dir).contains(&"pull_request".to_owned()),
         "{:?}",

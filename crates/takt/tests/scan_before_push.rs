@@ -21,7 +21,7 @@ use takt::forge::{
 };
 use takt::frontier::{Aep, approve};
 use takt::harness::{Harness, StepContext, StepReport};
-use takt::validator::{CiRead, PrMerged, PrOpen, TestsRun, Validator};
+use takt::validator::{ChangeRead, CiRead, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
 /// The protocol under test, relative to this crate.
@@ -307,6 +307,28 @@ fn pr_open(tree: &Path, id: &str, forge: Rc<dyn Forge>, work: impl Fn(&Path)) ->
             ))
             .expect("the record is written");
     }
+    // The change handed over at the revision, as takt records a `change.handover` step.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            "handover",
+            "handover",
+            None,
+            "implementation",
+            &revision,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+    // A change to publish at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            "change-record",
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
+        .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
     Ran {
@@ -840,6 +862,14 @@ impl Harness for Requester {
                 tokens: None,
             });
         }
+        // The work committed is complete: hand it over, changing nothing.
+        if context.offered.contains(&"change.handover".to_owned()) {
+            return Ok(StepReport {
+                action: "change.handover".to_owned(),
+                summary: "hand it over".to_owned(),
+                tokens: None,
+            });
+        }
         Err(anyhow!("the gate was not offered"))
     }
 }
@@ -850,6 +880,7 @@ fn delivery(forge: &Rc<Scanning>) -> Vec<Box<dyn Validator>> {
     let forge: Rc<dyn Forge> = forge.clone();
     vec![
         Box::new(TestsRun::new("true").expect("a command")),
+        Box::new(ChangeRead),
         Box::new(GatePass),
         Box::new(PrOpen::new(forge.clone())),
         Box::new(CiRead::new(forge.clone())),
@@ -1025,6 +1056,12 @@ fn a_refused_scan_of_the_rider_push_pushes_and_merges_nothing() {
     let (stop, text) = merge_run(&tree, &id, &forge);
     let error = stop.expect_err("the scan refused");
     assert!(error.contains("private rule"), "{error}\n{text}");
+    assert!(
+        error.contains(&format!(
+            "scan takt/{id} before the push through the forge scanning"
+        )),
+        "not the merge's scan refusal: {error}\n{text}"
+    );
     let log = forge.log.borrow()[before..].to_vec();
     assert!(
         !log.iter().any(|line| line.starts_with("push ")),
