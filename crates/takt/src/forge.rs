@@ -142,8 +142,9 @@ pub trait Forge {
             self.name()
         )
     }
-    /// Opens the pull request `request` describes; `dir` is where the adapter keeps what it
-    /// sent and what came back, when it keeps anything. The pull request's number.
+    /// Opens the pull request `request` describes, for a head branch already pushed (`pr.open`
+    /// pushes it first); `dir` is where the adapter keeps what it sent and what came back, when
+    /// it keeps anything. The pull request's number.
     fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64>;
     /// The state and the head of pull request `number`.
     fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView>;
@@ -571,8 +572,8 @@ impl Runner for Process {
 /// The adapter over the organization's bot route: `b10x-gates bot -- push` pushes the branch,
 /// `b10x-gates scan-text` checks the pull request before it leaves the machine, `b10x-gates
 /// api` opens it and merges it with JSON files, and read-only `gh pr view` and `gh pr checks`
-/// report its state and checks. The policy file is `--policy` when one is known; `b10x-gates`
-/// reads its own environment otherwise.
+/// report its state and checks. The scan and every API write name the repository and, when one
+/// is known, the policy file as `--policy`; `b10x-gates` reads its own environment otherwise.
 pub struct BotRoute {
     /// `<owner>/<repo>`, from the `origin` URL.
     pub repository: String,
@@ -678,14 +679,25 @@ impl BotRoute {
             .to_vec()
     }
 
-    /// The line that scans `path` before it leaves the machine.
+    /// The options every `b10x-gates` line that reads the policy carries, the scan and the API
+    /// writes alike: `--repository`, and `--policy` when the policy file is known.
+    fn scope(&self) -> Vec<String> {
+        let mut options = vec!["--repository".to_owned(), self.repository.clone()];
+        if let Some(policy) = &self.policy {
+            options.push("--policy".to_owned());
+            options.push(policy.display().to_string());
+        }
+        options
+    }
+
+    /// The line that scans `path` before it leaves the machine, under the same repository and
+    /// policy as the API write that would send it; the path comes last.
     #[must_use]
     pub fn scan_argv(&self, path: &Path) -> Vec<String> {
-        vec![
-            "b10x-gates".to_owned(),
-            "scan-text".to_owned(),
-            path.display().to_string(),
-        ]
+        let mut argv = vec!["b10x-gates".to_owned(), "scan-text".to_owned()];
+        argv.extend(self.scope());
+        argv.push(path.display().to_string());
+        argv
     }
 
     /// The line of an API write: `method` on `path`, the document read from `input`, the
@@ -702,13 +714,8 @@ impl BotRoute {
             input.display().to_string(),
             "--output".to_owned(),
             output.display().to_string(),
-            "--repository".to_owned(),
-            self.repository.clone(),
         ];
-        if let Some(policy) = &self.policy {
-            argv.push("--policy".to_owned());
-            argv.push(policy.display().to_string());
-        }
+        argv.extend(self.scope());
         argv
     }
 
@@ -847,8 +854,12 @@ impl Forge for BotRoute {
         });
         let bytes = serde_json::to_vec_pretty(&document).context("serialize the pull request")?;
         std::fs::write(&input, bytes).with_context(|| format!("write {}", input.display()))?;
-        self.succeed(tree, &self.scan_argv(&input))
-            .context("the pull request did not pass scan-text; nothing left the machine")?;
+        self.succeed(tree, &self.scan_argv(&input)).with_context(|| {
+            format!(
+                "the pull request for {branch} did not pass scan-text and was not opened; its title and body stayed on this machine, but the branch {branch} was pushed before the scan",
+                branch = request.branch
+            )
+        })?;
         self.succeed(tree, &self.open_argv(&input, &output))?;
         let text = std::fs::read_to_string(&output)
             .with_context(|| format!("read the response {}", output.display()))?;
