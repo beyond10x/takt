@@ -785,9 +785,8 @@ types:
   # read from: AGENTS.md (§ Roles)
   # read from: .engineering/planning/design/recursive-self-improvement.md:37-43
   # UNMAPPED: whether `agent:<role>` must name one of the four (an enum) or may name any role (a
-  # name, as declared); story:judge-guard's acceptance grants as `agent:operator`, the role the
-  # four replaced. Open for the owner.
-  # read from: .engineering/planning/story/judge-guard.md:103-106
+  # name, as declared); story:judge-guard's acceptance grants as `agent:planner`.
+  # read from: .engineering/planning/story/judge-guard.md:104-107
   - name: takt.work.AgentRole
     kind: newtype
     of: String
@@ -801,7 +800,7 @@ types:
   # read from: crates/takt-cli/src/main.rs:87-89
   # UNMAPPED: whether a grant or a store record written before the type, free text such as
   # `operator`, still reads once grants are typed. Open for the owner.
-  # read from: .engineering/planning/story/judge-guard.md:92
+  # read from: .engineering/planning/story/judge-guard.md:93
   - name: takt.work.Approver
     kind: union
     tag: kind
@@ -1695,13 +1694,13 @@ entities:
   # baseline's by more than 10 %, or another promotion was made the same UTC day, naming it.
   # read from: .engineering/planning/story/promotion.md:35-39
   # read from: .engineering/planning/story/promotion.md:46-48
-  # read from: .engineering/planning/story/promotion.md:90
+  # read from: .engineering/planning/story/promotion.md:91
   # UNMAPPED: where the record is kept (the story leaves it open and its review asks for a pinned
   # place outside the repository a candidate changes), the instant it carries (the one-a-UTC-day
   # rule needs one; no field is declared), and how a `--baseline-only` record tells itself apart
   # from one that installed a binary. Open for the owner.
-  # read from: .engineering/planning/story/promotion.md:74
-  # read from: .engineering/planning/story/promotion.md:101
+  # read from: .engineering/planning/story/promotion.md:75
+  # read from: .engineering/planning/story/promotion.md:102
   # UNMAPPED: the token rule promotion applies is open (median within 10 %, a larger n, a
   # spread-aware rule or tokens per accepted unit), decided before story:promotion lands.
   # read from: .engineering/planning/design/recursive-self-improvement.md:127
@@ -1851,7 +1850,7 @@ entities:
   # the owner's grant merges. Until story:judge-guard lands, a delegation is the owner's decision
   # recorded in the planning store. Declared ahead of the code (story:judge-guard).
   # read from: .engineering/planning/story/judge-guard.md:52-58
-  # read from: .engineering/planning/story/judge-guard.md:112
+  # read from: .engineering/planning/story/judge-guard.md:113
   - name: takt.work.DelegationRecord
     naming:
       summary: >-
@@ -1874,8 +1873,8 @@ entities:
   # and `CHANGELOG.md`; adding a path to it is a judge-surface change, and a candidate's own edit
   # of it counts for nothing. Declared ahead of the code (story:judge-guard).
   # read from: .engineering/planning/design/recursive-self-improvement.md:109-110
-  # read from: .engineering/planning/story/judge-guard.md:81
-  # read from: .engineering/planning/story/judge-guard.md:112
+  # read from: .engineering/planning/story/judge-guard.md:82
+  # read from: .engineering/planning/story/judge-guard.md:113
   # UNMAPPED: the file's layout and the pattern syntax its paths are matched with (`docs/**` is
   # a glob; which glob dialect is not named).
   - name: takt.work.JudgeAllowList

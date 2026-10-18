@@ -26,7 +26,7 @@ scope:
   path: crates/takt/src/promotion.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 6
+revision: 7
 ---
 # Story: promotion
 
@@ -51,6 +51,7 @@ lands, recorded by a first `takt promote --baseline-only` that installs nothing.
 
 - Promotion → Scorecard: references exactly one, by id (`ess/domains/takt.yaml`, takt.work.Promotion).
 - Promotion → Revision: names exactly one, the one the binary embeds.
+- Promotion record: takt.work.Promotion, result takt.work.PromotionResult; store, instant and token rule UNMAPPED there.
 
 ## Scope
 

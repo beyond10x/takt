@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T17:36:21Z",
+  "actor": "human:timo",
+  "artifact": "story:protocol-viewer",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "docs/site/publish-protocols.sh at 3a0b48e: collected 3 protocols, built, pushed gh-pages d649140; Pages build d649140 built; https://beyond10x.github.io/takt/protocols/ HTTP 200",
+    "reference": "https://beyond10x.github.io/takt/protocols/"
+  }
+}

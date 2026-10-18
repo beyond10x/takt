@@ -18,7 +18,7 @@ scope:
   path: docs/metrics/journeys.jsonl
 - confidence: inferred
   path: docs/pitch/index.html
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T16:37:27Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-18T16:37:27Z", actor: "human:timo", revision: 5}
@@ -58,3 +58,7 @@ On takt at main, holds; after the change, fails:
 ## Acceptance
 
 `python3 -I docs/metrics/journey.py` draws one lane per recorded scenario 1 run, grouped by arm and revision, with each operation in the shared vocabulary and its source record named; a lane whose source has no times is drawn as ordered steps and labelled "order only"; on takt's lanes the seed-time pr.open, the second CI and the inspect-then-NoProgress steps are visible; rerunning after one new run adds one lane with no hand edit; no token or cost figure on the view is taken from the normalised events.
+
+## Domain relations
+
+- Journey event: takt.work.JourneyEvent, kinds takt.work.JourneyKind.
