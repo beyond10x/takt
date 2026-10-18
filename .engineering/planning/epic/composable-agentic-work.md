@@ -5,7 +5,7 @@ kind: epic
 status: draft
 title: 'Composable agentic work: one bounded, validated run at a time'
 summary: A binary drives a repository through engineering protocols; Canon decides what is permitted, owed and earned
-revision: 2
+revision: 3
 ---
 ## Why
 
@@ -14,6 +14,8 @@ building blocks (inner, outer and validation loops); a harness such as Claude Co
 workflow through the model; every step is validated by Canon over evidence, with AEP as the
 record. One binary, pointed at a repository: it takes an intent or pulls the next unit from the
 planning store and runs one iteration, three, or three hours. The design is `docs/design/takt.md`.
+The nouns takt introduces (case, run, workflow, step, evidence producer) are declared in an ESS
+domain document before stories build on them, the organization's spec-first rule.
 
 ## Acceptance
 
