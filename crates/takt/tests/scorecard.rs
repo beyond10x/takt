@@ -58,6 +58,7 @@ fn opened(case: &str) -> Event {
         story: Some("story:scratch-one".to_owned()),
         inputs: Vec::new(),
         base: Some("0123456789abcdef0123456789abcdef01234567".to_owned()),
+        binary: None,
     }
 }
 

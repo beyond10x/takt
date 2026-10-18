@@ -94,6 +94,7 @@ fn run(repo: &Path, case: &str, tokens: u64, stop: &str) {
                 story: None,
                 inputs: Vec::new(),
                 base: None,
+                binary: None,
             },
         ),
         (
