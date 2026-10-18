@@ -49,25 +49,67 @@ pub fn is_under_cases(path: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// The Unicode format characters, general category Cf (Unicode 15.1), as inclusive ranges:
+/// invisible, or changing the direction of the text around them.
+const FORMAT_CHARACTERS: &[(u32, u32)] = &[
+    (0x00AD, 0x00AD),
+    (0x0600, 0x0605),
+    (0x061C, 0x061C),
+    (0x06DD, 0x06DD),
+    (0x070F, 0x070F),
+    (0x0890, 0x0891),
+    (0x08E2, 0x08E2),
+    (0x180E, 0x180E),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x2064),
+    (0x2066, 0x206F),
+    (0xFEFF, 0xFEFF),
+    (0xFFF9, 0xFFFB),
+    (0x110BD, 0x110BD),
+    (0x110CD, 0x110CD),
+    (0x13430, 0x1343F),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0001, 0xE0001),
+    (0xE0020, 0xE007F),
+];
+
+/// Whether `c` has no business in a name that is shown to people: a control character, a
+/// whitespace or separator character (spaces, U+2028, U+2029), or a format character.
+fn is_unshowable(c: char) -> bool {
+    let point = u32::from(c);
+    c.is_control()
+        || c.is_whitespace()
+        || FORMAT_CHARACTERS
+            .iter()
+            .any(|&(first, last)| (first..=last).contains(&point))
+}
+
 /// Refuses a case id that is not one plain name under the cases directory: empty, `.`, a `..`
-/// anywhere, a leading `/`, a path separator, a control character. Every id an operator gives
-/// (`takt approve`, `takt run --case`, `RunOptions.case_id`) passes here before it is joined to
-/// a path, so no id reaches outside `.engineering/cases` or nests a case inside another.
+/// anywhere, a leading `/`, a path separator, or a character that does not show as itself (a
+/// control, whitespace, separator or Unicode format character, named by its code point). Every
+/// id an operator gives (`takt approve`, `takt run --case`, `RunOptions.case_id`) passes here
+/// before it is joined to a path, so no id reaches outside `.engineering/cases`, nests a case
+/// inside another, or displays as another id in a message or a `takt/<id>` branch.
 pub fn check_id(id: &str) -> Result<()> {
     let why = if id.is_empty() {
-        Some("it is empty")
+        Some("it is empty".to_owned())
     } else if id == "." {
-        Some("it names the cases directory itself")
+        Some("it names the cases directory itself".to_owned())
     } else if id.contains("..") {
-        Some("it contains `..`")
+        Some("it contains `..`".to_owned())
     } else if id.starts_with('/') {
-        Some("it starts with `/`")
+        Some("it starts with `/`".to_owned())
     } else if id.contains(['/', '\\']) {
-        Some("it contains a path separator")
-    } else if id.chars().any(char::is_control) {
-        Some("it contains a control character")
+        Some("it contains a path separator".to_owned())
     } else {
-        None
+        id.chars().find(|c| is_unshowable(*c)).map(|c| {
+            format!(
+                "it contains U+{:04X}, a control, whitespace, separator or format character",
+                u32::from(c)
+            )
+        })
     };
     match why {
         Some(why) => bail!(
@@ -1057,25 +1099,32 @@ impl CaseDir {
     /// Whether a record of `kind` exists about `subject` at its current revision. Each record
     /// is read by Canon's reader, as [`CaseDir::evaluate`] reads it (YAML, of which a JSON
     /// record is one); a record that does not read is an error naming its file, never an
-    /// answer either way.
+    /// answer either way: every record is read before the answer is given.
     pub fn has_evidence(&self, kind: &str, subject: &str) -> Result<bool> {
+        let records = self.evidence_records()?;
         let Some(revision) = self.revision(subject) else {
             return Ok(false);
         };
-        for (path, text) in self.evidence_texts()? {
-            // Read by Canon's own reader, the one `evaluate` uses: a record Canon refuses (an
-            // empty file, a bare scalar, a missing field) is refused here too, never an answer.
-            let record = eval::read_evidence(&text)
-                .map_err(|r| anyhow!("{r}"))
-                .with_context(|| format!("read the evidence record {}", path.display()))?;
-            if record.kind.as_str() == kind
+        Ok(records.iter().any(|record| {
+            record.kind.as_str() == kind
                 && record.subject.as_str() == subject
                 && record.subject_revision.as_str() == revision
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        }))
+    }
+
+    /// Every evidence record under the case, read by Canon's own reader, in name order; the
+    /// first that does not read (an empty file, a bare scalar, a missing field) is an error
+    /// naming its file, and nothing is answered. What [`CaseDir::evaluate`] hands Canon and
+    /// what [`CaseDir::has_evidence`] answers from: one reader, all records or none.
+    fn evidence_records(&self) -> Result<Vec<b10x_canon::model::EvidenceRecord>> {
+        self.evidence_texts()?
+            .iter()
+            .map(|(path, text)| {
+                eval::read_evidence(text)
+                    .map_err(|r| anyhow!("{r}"))
+                    .with_context(|| format!("read the evidence record {}", path.display()))
+            })
+            .collect()
     }
 
     /// The evidence records under the case, `evidence/*.json` and `*.yaml`, in name order, each
@@ -1107,15 +1156,7 @@ impl CaseDir {
         let ir = eval::read_ir(&self.protocol.ir_json).map_err(|r| anyhow!("{r}"))?;
         let case_yaml = std::fs::read_to_string(self.dir.join("case.yaml"))?;
         let case = eval::read_case(&case_yaml).map_err(|r| anyhow!("{r}"))?;
-        let records = self
-            .evidence_texts()?
-            .iter()
-            .map(|(path, text)| {
-                eval::read_evidence(text)
-                    .map_err(|r| anyhow!("{r}"))
-                    .with_context(|| format!("read the evidence record {}", path.display()))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let records = self.evidence_records()?;
         // The revision a grant is filtered by is the one in the `case.yaml` Canon is handed,
         // read from the same bytes: never this `CaseDir`'s in-memory copy, which another
         // holder may have moved on since it was read.

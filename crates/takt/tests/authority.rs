@@ -632,6 +632,45 @@ fn case_ids_reaching_outside_the_cases_directory_are_refused() {
     assert!(refusal.contains("case id"), "{refusal}");
 }
 
+/// A case id carrying an invisible or direction-changing character (a Unicode format
+/// character, category Cf, or a whitespace or separator character) is refused, naming the
+/// character's code point: such an id displays as another one in every message and in its
+/// `takt/<id>` branch.
+#[test]
+fn case_ids_with_unicode_format_or_separator_characters_are_refused_naming_the_code_point() {
+    let ranges: &[(u32, u32)] = &[
+        (0x00AD, 0x00AD),
+        (0x061C, 0x061C),
+        (0x180E, 0x180E),
+        (0x200B, 0x200F),
+        (0x2028, 0x202E),
+        (0x2060, 0x2064),
+        (0x2066, 0x206F),
+        (0xFEFF, 0xFEFF),
+        (0xFFF9, 0xFFFB),
+        (0xE0001, 0xE0001),
+        (0xE0020, 0xE007F),
+        (0x0020, 0x0020),
+        (0x00A0, 0x00A0),
+        (0x3000, 0x3000),
+    ];
+    for &(first, last) in ranges {
+        for point in first..=last {
+            let c = char::from_u32(point).expect("a character");
+            let id = format!("case{c}id");
+            let refusal = format!("{:#}", check_id(&id).expect_err(&format!("U+{point:04X}")));
+            assert!(refusal.contains("case id"), "U+{point:04X}: {refusal}");
+            assert!(
+                refusal.contains(&format!("U+{point:04X}")),
+                "U+{point:04X} is not named: {refusal}"
+            );
+        }
+    }
+    for id in ["fix-\u{fc}ber", "caf\u{e9}", "\u{65e5}\u{672c}"] {
+        check_id(id).unwrap_or_else(|error| panic!("{id}: {error:#}"));
+    }
+}
+
 /// A frontier that is never asked anything.
 struct NoStore;
 
