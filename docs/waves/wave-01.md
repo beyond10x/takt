@@ -158,7 +158,7 @@ Selection path: `aep plan artifact waves --kind story --status draft --format js
 | unit | branch | worktree | build dir | scratch |
 |---|---|---|---|---|
 | integration | `wave/2026-10-18-w1` at 1638755 (opening commit) | managed tree `takt-w1-int` (worktree registry id takt-w1-int) | its `target/` | `~/.cache/takt-waves/2026-10-18-w1/int/scratch` |
-| story-delivery-protocol | `impl/story-delivery-protocol` at 467a6ab (correction 1), 9 cases; adversary pass 1 recorded (7 findings, all fixed), pass 2 running | managed tree `takt-w1-protocol` | its `target/` | `~/.cache/takt-waves/2026-10-18-w1/protocol/scratch` |
+| story-delivery-protocol | `impl/story-delivery-protocol` at 3afbd23, 13 cases; pass 1 (7 fixed) and pass 2 (confirmed; 1 no-op, 1 fixed) recorded; VERIFIED; merged | managed tree `takt-w1-protocol` | its `target/` | `~/.cache/takt-waves/2026-10-18-w1/protocol/scratch` |
 | takt-domain-model | `impl/takt-domain-model` at ee1adfd; adversary pass 1 recorded (2 warnings, 7 notes), correction 1 running | managed tree `takt-w1-domain` | its `target/` | `~/.cache/takt-waves/2026-10-18-w1/domain/scratch` |
 
 Managed trees live under the worktree registry's trees directory for this repository; unit briefs at `<scratch>/brief.md`; coordinator lease `takt-w1-coordinator` on the integration tree.

@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T03:17:00Z",
+  "actor": "human:timo",
+  "artifact": "story:story-delivery-protocol",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "cargo test -p b10x-takt --test story_delivery: baseline has no such test file; treatment 13 passed, 0 failed (verify-treatment.txt)",
+    "reference": "verify-baseline.txt vs verify-treatment.txt under the unit scratch"
+  }
+}
