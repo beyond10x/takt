@@ -80,19 +80,22 @@ impl std::fmt::Display for Stop {
 
 /// Whether `validator` is due at a decision: its action is admissible, its evidence is missing
 /// at its subject's current revision, and it has not already observed there without a record.
+/// An evidence record that does not read is an error naming its file, never an answer.
 fn is_due(
     case: &CaseDir,
     admissible: &[String],
     observed_without_record: &BTreeSet<(String, String)>,
     validator: &dyn Validator,
-) -> bool {
-    admissible.iter().any(|a| a == validator.action())
-        && !case
-            .has_evidence(validator.kind(), validator.subject())
-            .unwrap_or(true)
-        && !case.revision(validator.subject()).is_some_and(|revision| {
-            observed_without_record.contains(&(validator.name().to_owned(), revision))
-        })
+) -> Result<bool> {
+    if !admissible.iter().any(|a| a == validator.action()) {
+        return Ok(false);
+    }
+    if case.has_evidence(validator.kind(), validator.subject())? {
+        return Ok(false);
+    }
+    Ok(!case.revision(validator.subject()).is_some_and(|revision| {
+        observed_without_record.contains(&(validator.name().to_owned(), revision))
+    }))
 }
 
 /// One entry of a snapshot: a file with its bytes, or a symbolic link with its target. A link
@@ -268,6 +271,12 @@ fn cases_with_story(tree: &Path) -> Result<Vec<(String, String)>> {
     Ok(found)
 }
 
+/// Whether the tree is on a case's branch, `takt/<id>`: where [`to_base`] moves it, or refuses.
+fn on_a_case_branch(tree: &Path) -> Result<bool> {
+    Ok(crate::git::current_branch(tree)?
+        .is_some_and(|branch| branch.starts_with(crate::case::BRANCH_PREFIX)))
+}
+
 /// Puts the tree on the base of the case whose branch it is on, so that the store is read as
 /// the base has it, never as a case's branch, which carries a model's commits, has it. A tree
 /// on any other branch, or detached, stays where it is. Refused when the case's base is not
@@ -437,23 +446,9 @@ impl<'a> Run<'a> {
         })
     }
 
-    /// Resumes the open case of a story being worked, if there is one; else opens the case on
-    /// the next ready story, the store told last. A story is being worked when its take is
-    /// committed on its case's branch, or when the store lists it `active`. The store is read
-    /// from the base: a tree on a case's branch is put on that case's base first, so neither a
-    /// story's text nor its status ever comes from a branch a model committed on. For each
-    /// candidate in order, the case is opened first (on a clean tree, the protocol loaded, the
-    /// inputs checked), then the story is taken, and the take committed on the case's branch,
-    /// exactly the paths the store changed, as `takt: take <story>`: a refused step that
-    /// discards the tree's change keeps it, and the case's implementation revision is that
-    /// commit, the one its validators observe. A refusal removes the case just opened, is
-    /// printed on `out` verbatim, and the next candidate is tried; a take or its commit that
-    /// fails removes it too and is the error. A candidate a case already records is not taken
-    /// again, and not resumed either when its take is neither committed on the case's branch
-    /// nor listed `active` by the base (a case whose take was left uncommitted, before takes
-    /// were committed): it is skipped with a line on `out`. `None`, with no case opened, when
-    /// nothing is resumed and nothing else is ready, such a skipped case included. One case
-    /// directory per taken story, none for a refused one, never a second for a story with one.
+    /// Resumes the open case [`Run::next_to_resume`] names, if it names one; else opens the case
+    /// on the next ready story, the store told last ([`Run::take_next`]). One case directory per
+    /// taken story, none for a refused one, never a second for a story with one.
     pub fn open_next(
         tree: &Path,
         options: RunOptions,
@@ -462,17 +457,61 @@ impl<'a> Run<'a> {
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Option<Self>> {
+        if let Some((case_id, story_id)) = Self::next_to_resume(tree, frontier, out)? {
+            return Self::resumed(tree, options, &case_id, &story_id, harness, validators, out)
+                .map(Some);
+        }
+        Self::take_next(tree, options, frontier, harness, validators, out)
+    }
+
+    /// The open case [`Run::open_next`] resumes, as `(case id, story id)`, answered with nothing
+    /// changed: no checkout, no write, so a caller can refuse what was given for that case
+    /// before anything is resumed, and then resume exactly it. The case of a story being
+    /// worked: first one whose take is committed on its case's branch, whatever branch the
+    /// tree is on; then one whose story the store lists `active`, read only from a tree that is
+    /// not on a case's branch, so a status never comes from a branch a model committed on (a
+    /// tree on a case's branch is put on its base by [`Run::take_next`], and the next run reads
+    /// the base's list there). Among those, the first in case order that is not finished; a
+    /// decision that does not read is said on `out` and the case taken as open. `None` when
+    /// there is nothing to resume.
+    pub fn next_to_resume(
+        tree: &Path,
+        frontier: &dyn Frontier,
+        out: &mut dyn Write,
+    ) -> Result<Option<(String, String)>> {
         let taken = taken_on_case_branches(tree)?;
-        if let Some((case_id, story_id)) = crate::case::resumable(tree, &taken, out)? {
-            return Self::resumed(tree, options, &case_id, &story_id, harness, validators, out)
-                .map(Some);
+        if let Some(found) = crate::case::resumable(tree, &taken, out)? {
+            return Ok(Some(found));
         }
-        to_base(tree)?;
+        if on_a_case_branch(tree)? {
+            return Ok(None);
+        }
         let active = frontier.active(tree)?;
-        if let Some((case_id, story_id)) = crate::case::resumable(tree, &active, out)? {
-            return Self::resumed(tree, options, &case_id, &story_id, harness, validators, out)
-                .map(Some);
-        }
+        crate::case::resumable(tree, &active, out)
+    }
+
+    /// Opens the case on the next ready story, the store told last, and never resumes one: for
+    /// a caller that asked [`Run::next_to_resume`] first and was told there is nothing to
+    /// resume. The store is read from the base: a tree on a case's branch is put on that case's
+    /// base first, so neither a story's text nor its status ever comes from a branch a model
+    /// committed on. For each candidate in order, the case is opened first (on a clean tree,
+    /// the protocol loaded, the inputs checked), then the story is taken, and the take
+    /// committed on the case's branch, exactly the paths the store changed, as `takt: take
+    /// <story>`: a refused step that discards the tree's change keeps it, and the case's
+    /// implementation revision is that commit, the one its validators observe. A refusal
+    /// removes the case just opened, is printed on `out` verbatim, and the next candidate is
+    /// tried; a take or its commit that fails removes it too and is the error. A candidate a
+    /// case already records is not taken again: it is skipped with a line on `out`. `None`,
+    /// with no case opened, when nothing else is ready, such a skipped case included.
+    pub fn take_next(
+        tree: &Path,
+        options: RunOptions,
+        frontier: &dyn Frontier,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+        out: &mut dyn Write,
+    ) -> Result<Option<Self>> {
+        to_base(tree)?;
         let cased = cases_with_story(tree)?;
         for id in frontier.candidates(tree)? {
             if let Some((case, _)) = cased.iter().find(|(_, story)| *story == id) {
@@ -558,6 +597,19 @@ impl<'a> Run<'a> {
                 dir.display()
             )),
         }
+    }
+
+    /// The branches a checkpoint guards even when another worktree has them checked out: the
+    /// case's own branch and its base, where `take_next` reads the store from and the next case
+    /// forks from.
+    fn kept_branches(&self) -> Vec<String> {
+        let mut kept = vec![self.case.branch.clone()];
+        kept.extend(
+            crate::case::Branch::read(&self.case.dir)
+                .ok()
+                .and_then(|branch| branch.base),
+        );
+        kept
     }
 
     fn budget_spent(&self) -> Option<Stop> {
@@ -646,14 +698,18 @@ impl<'a> Run<'a> {
                 .cloned()
                 .collect();
             // A deterministic step first: a validator due at this decision.
-            let due = self.validators.iter().find(|v| {
-                is_due(
+            let mut due = None;
+            for validator in self.validators {
+                if is_due(
                     &self.case,
                     &admissible,
                     &observed_without_record,
-                    v.as_ref(),
-                )
-            });
+                    validator.as_ref(),
+                )? {
+                    due = Some(validator);
+                    break;
+                }
+            }
             if let Some(validator) = due {
                 self.steps += 1;
                 let revision = self
@@ -678,13 +734,14 @@ impl<'a> Run<'a> {
                 // What a validator runs may be code a model wrote (the test command, a gate's
                 // commands): the cases directory is guarded as around a judgement step, and the
                 // tree must be as it was before the observation: the guarded part of `.git`
-                // (hooks, config, `info/`), `HEAD`, the index and every path outside the cases
+                // (hooks, config, `info/`), `HEAD`, every branch and tag, the index and every path outside the cases
                 // directory; ignored files it made (a build's output) may stay. The validator's
                 // own writes under its case are the only change admitted; anything else is put
                 // back, and the observation refused with nothing recorded. `.git` is put back
                 // before any git runs again: git runs what was planted there (a hook,
                 // `core.fsmonitor`).
-                let checkpoint = crate::git::Checkpoint::take(&self.tree)?;
+                let checkpoint =
+                    crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
                 let cases = self.tree.join(CASES_DIR);
                 let kept = snapshot(&cases)?;
                 let observed = validator
@@ -721,6 +778,7 @@ impl<'a> Run<'a> {
                 if let Some(moved) = &change.head {
                     outside.push(format!("HEAD, moved {moved}"));
                 }
+                outside.extend(change.refs.iter().cloned());
                 if !foreign.is_empty() || !outside.is_empty() {
                     restore(&cases, &kept, &touched)?;
                     undo_step(&self.tree, &checkpoint, &cases, &kept)?;
@@ -774,14 +832,18 @@ impl<'a> Run<'a> {
                 // progress.
                 if observation.records.is_empty() {
                     observed_without_record.insert((validator.name().to_owned(), revision));
-                    let another_due = self.validators.iter().any(|v| {
-                        is_due(
+                    let mut another_due = false;
+                    for v in self.validators {
+                        if is_due(
                             &self.case,
                             &admissible,
                             &observed_without_record,
                             v.as_ref(),
-                        )
-                    });
+                        )? {
+                            another_due = true;
+                            break;
+                        }
+                    }
                     last_idle = (offered.is_empty() && !another_due).then_some(state);
                 } else {
                     last_idle = None;
@@ -826,13 +888,12 @@ impl<'a> Run<'a> {
             // ended; a step that touched it is refused.
             let cases = self.tree.join(CASES_DIR);
             let kept = snapshot(&cases)?;
-            // The case's base is guarded beside `HEAD` and the case's branch.
-            let base: Vec<String> = crate::case::Branch::read(&self.case.dir)
-                .ok()
-                .and_then(|branch| branch.base)
-                .into_iter()
-                .collect();
-            let checkpoint = crate::git::Checkpoint::take_guarding(&self.tree, &base)?;
+            // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
+            // base, and a sibling case's branch, which a step could otherwise move under it; a
+            // branch another worktree has checked out is that session's, but never the case's
+            // base or its own branch.
+            let checkpoint =
+                crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
             let stepped = self.harness.step(&context);
             // What git runs or reads as configuration first: every git call after this one
             // would read what the step planted there. Nothing in it ends early; a path it could

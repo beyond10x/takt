@@ -135,12 +135,30 @@ fn store_changing_between_lists(dir: &Path) -> PathBuf {
     bin
 }
 
+/// The one case directory under `repo`, by name.
+fn the_case(repo: &Path) -> String {
+    let names: Vec<String> = fs::read_dir(repo.join(".engineering/cases"))
+        .expect("a cases directory")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(names.len(), 1, "{names:?}");
+    names[0].clone()
+}
+
 /// The open case of an active story runs `software.change/1`; a plain run gives
 /// `--protocol story.delivery/1`. `case_to_resume` lists the store, and `Run::open_next` lists it
 /// a second time to choose what it resumes. When the story becomes active between the two
 /// lists, the check finds no case to resume and passes, `open_next` resumes the
 /// `software.change/1` case, and the `--protocol` that names another protocol goes through
-/// without a word: the check and the resume disagree about which case runs.
+/// without a word: the check and the resume disagree about which case runs. The case is found
+/// by the take committed on its branch, which no list of the store can hide, and checked before
+/// anything is resumed: the refusal names it.
 #[test]
 fn adv2_a_store_that_changes_between_the_check_and_the_resume_lets_another_protocol_through() {
     let (outer, repo) = repository("one-ready", "toctou");
@@ -150,7 +168,46 @@ fn adv2_a_store_that_changes_between_the_check_and_the_resume_lets_another_proto
     let (code, out, err) = takt(None, &args);
     assert_eq!(code, 3, "the setup run: stdout {out} stderr {err}");
     assert!(out.contains("on software.change/1"), "{out}");
+    let case = the_case(&repo);
     git(&repo, &["checkout", "-q", "main"]);
+    let bin = store_changing_between_lists(&outer.0);
+    let mut args = no_steps(path);
+    args.extend(["--protocol", "story.delivery/1"]);
+    let (code, out, err) = takt(Some(&bin), &args);
+    assert!(
+        err.contains(&format!(
+            "the case {case} runs on software.change/1, not story.delivery/1"
+        )),
+        "the check is on the case the run resumes: stdout {out} stderr {err}"
+    );
+    assert_eq!(
+        (code, out.contains("frontier: resumed")),
+        (1, false),
+        "a --protocol other than the resumed case's must be refused for the case that is \
+         resumed, not for the one a separate list found: stdout {out} stderr {err}"
+    );
+}
+
+/// The same store, changing between two lists, for a case found only through the store's list:
+/// its take is on `main`, as `git cherry-pick` and `git branch -f` leave it, and not on the
+/// case's branch, a state takt does not support (coordinator decision B); what is pinned here is
+/// only that a case no check saw never runs. The run lists the store once to choose what it
+/// resumes: the first list shows no
+/// story active, so nothing is resumed, and the later lists, which do show it, resume nothing
+/// either. A case the check did not see never runs.
+#[test]
+fn adv2_a_case_found_only_through_the_store_is_resumed_only_from_the_list_that_was_checked() {
+    let (outer, repo) = repository("one-ready", "toctou-list");
+    let path = repo.to_str().expect("utf-8");
+    let mut args = no_steps(path);
+    args.extend(["--protocol", "software.change/1"]);
+    let (code, out, err) = takt(None, &args);
+    assert_eq!(code, 3, "the setup run: stdout {out} stderr {err}");
+    let case = the_case(&repo);
+    let branch = format!("takt/{case}");
+    git(&repo, &["checkout", "-q", "main"]);
+    git(&repo, &["cherry-pick", &branch]);
+    git(&repo, &["branch", "-f", &branch, "main~1"]);
     let bin = store_changing_between_lists(&outer.0);
     let mut args = no_steps(path);
     args.extend(["--protocol", "story.delivery/1"]);
@@ -159,12 +216,13 @@ fn adv2_a_store_that_changes_between_the_check_and_the_resume_lets_another_proto
         bin.join("listed-once").exists(),
         "the stub answered the first list: stdout {out} stderr {err}"
     );
-    assert_eq!(
-        (code, out.contains("frontier: resumed")),
-        (1, false),
-        "a --protocol other than the resumed case's must be refused for the case that is \
-         resumed, not for the one a separate list found: stdout {out} stderr {err}"
+    assert!(
+        !out.contains("frontier: resumed") && !out.contains("stopped:"),
+        "a case no check saw was resumed: exit {code} stdout {out} stderr {err}"
     );
+    assert_eq!(code, 0, "stdout {out} stderr {err}");
+    assert!(out.contains("frontier: nothing ready"), "{out}");
+    assert_eq!(the_case(&repo), case, "no second case was opened");
 }
 
 /// `takt run --help` documents that a `--protocol` other than a resumed case's is refused; the

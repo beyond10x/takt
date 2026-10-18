@@ -8,9 +8,10 @@
 //! taken twice. A store may refuse the move; then the story is not taken, the refusal is printed
 //! verbatim and the next ready story is tried. A run opens the case before it takes the story
 //! and removes the case again when the store refuses ([`crate::Run::open_next`]), so a story is
-//! never `active` without a case to work it. A story `active` with an open case is resumed by
-//! the next run, never given a second case: the case directory records the story, and the store
-//! says which stories are being worked. The operator's grant of a capability to a case is
+//! never `active` without a case to work it. A story with an open case is resumed by the next
+//! run, never given a second case: the case directory records the story, its take is committed
+//! on the case's branch, and the store on the base says which stories are being worked; which
+//! case a run resumes, and from which branch, is [`crate::Run::next_to_resume`]'s. The operator's grant of a capability to a case is
 //! recorded on the story as `approval` evidence through the same adapter ([`approve`]).
 
 use std::io::Write;
@@ -176,6 +177,23 @@ pub enum Take {
     Refused(String),
 }
 
+/// The directories of the planning store a record in it may change, relative to the tree: the
+/// artifacts and their evidence.
+pub const STORE_DIRS: [&str; 2] = [".engineering/planning/", ".engineering/evidence/"];
+
+/// Whether `path`, relative to the tree, lies in the planning store ([`STORE_DIRS`]).
+#[must_use]
+pub fn is_store_path(path: &str) -> bool {
+    STORE_DIRS.iter().any(|dir| path.starts_with(dir))
+}
+
+/// The subject of the commit that holds an approval's record on the case's branch:
+/// `takt: approve <story> <capability>`.
+#[must_use]
+pub fn approve_subject(story: &str, capability: &str) -> String {
+    format!("takt: approve {story} {capability}")
+}
+
 /// What `takt approve <case> <capability> --by <approver>` does: checks the grant and holds the
 /// case ([`crate::case::prepare_grant`]), records it on the story through `frontier` for a case
 /// opened for a story, then writes the grant into the case's `authority.yaml` at the revision
@@ -183,6 +201,14 @@ pub enum Take {
 /// no grant behind and the same approval can simply be given again; the case is held
 /// throughout, so no run starts between the record and the grant. A case opened on an intent
 /// has no story, and the grant is all.
+///
+/// The record a story's case gets is committed on the case's branch, exactly the paths it
+/// changed in the planning store, as [`approve_subject`], so the run that merges observes a
+/// clean tree; that commit is the approval's own and leaves the case at the revision the grant
+/// authorises ([`crate::case::CaseDir::resume`]). So the tree must be on the case's branch and
+/// clean before anything is recorded, or the approval is refused with nothing recorded; a
+/// record that changes a path outside the store, or a commit that fails, is discarded with no
+/// grant written, and the same approval can be given again.
 pub fn approve(
     tree: &Path,
     frontier: &dyn Frontier,
@@ -192,6 +218,23 @@ pub fn approve(
 ) -> Result<Approval> {
     let pending = crate::case::prepare_grant(tree, case, capability, approver)?;
     if let Some(story) = &pending.approval().story {
+        let branch = crate::case::Branch::name_of(case);
+        let on = crate::git::current_branch(tree)?;
+        if on.as_deref() != Some(branch.as_str()) {
+            return Err(anyhow!(
+                "the tree {} is on {}, not the case's branch {branch}: the approval's record is committed there; check it out and approve again; nothing was recorded",
+                tree.display(),
+                on.as_deref().unwrap_or("a detached HEAD")
+            ));
+        }
+        let uncommitted = crate::git::uncommitted(tree)?;
+        if !uncommitted.is_empty() {
+            return Err(anyhow!(
+                "the tree {} has uncommitted work: {}; the approval's record is committed on {branch} with exactly what it changes: commit the work, or move it out of the tree, first; nothing was recorded",
+                tree.display(),
+                uncommitted.join(", ")
+            ));
+        }
         frontier
             .record_approval(tree, story, pending.approval())
             .with_context(|| {
@@ -200,6 +243,7 @@ pub fn approve(
                     frontier.name()
                 )
             })?;
+        commit_record(tree, &branch, story, capability)?;
     }
     let reference = pending.approval().reference();
     let story = pending.approval().story.clone();
@@ -209,6 +253,39 @@ pub fn approve(
         ),
         None => format!("the grant could not be written to {reference}"),
     })
+}
+
+/// Commits what the approval's record changed, on a tree that was clean before it: exactly
+/// those paths, which must all lie in the planning store, as [`approve_subject`]. Anything else,
+/// or a commit that fails, discards the record and is the error; no grant is written then.
+fn commit_record(tree: &Path, branch: &str, story: &str, capability: &str) -> Result<()> {
+    let changed = crate::git::uncommitted(tree)?;
+    if changed.is_empty() {
+        return Ok(());
+    }
+    let discard = |why: String| -> anyhow::Error {
+        match crate::git::discard_uncommitted(tree) {
+            Ok(()) => anyhow!(
+                "{why}; the record was discarded and no grant written; give the approval again"
+            ),
+            Err(error) => anyhow!(
+                "{why}; the record could not be discarded ({error:#}) and no grant was written"
+            ),
+        }
+    };
+    if let Some(outside) = changed.iter().find(|path| !is_store_path(path)) {
+        return Err(discard(format!(
+            "recording the approval on {story} changed {outside}, outside the planning store"
+        )));
+    }
+    crate::git::commit_paths(tree, &changed, &approve_subject(story, capability)).map_err(
+        |error| {
+            discard(format!(
+                "the approval's record could not be committed on {branch}: {error:#}"
+            ))
+        },
+    )?;
+    Ok(())
 }
 
 /// The adapter over the `aep` command line, run in the repository: `list` and `show` read the
@@ -344,15 +421,16 @@ impl Frontier for Aep {
         )
     }
 
-    /// `evidence <story> --kind approval --source "takt approve <capability> --by <approver>"
-    /// --ref <case>/authority.yaml --at <granted at>`, the second write: the source names the
-    /// command, the capability and the approver, the reference the grant, the instant the
-    /// grant's own; the repository's own store only, like `list`.
+    /// `evidence <story> --kind approval --source "takt approve <capability> --by <approver> at
+    /// <revision>" --ref <case>/authority.yaml --at <granted at>`, written before the grant: the
+    /// source names the command, the capability, the approver and the implementation revision
+    /// the grant authorises, the reference the grant, the instant the grant's own; the
+    /// repository's own store only, like `list`.
     fn record_approval(&self, repo: &Path, story: &str, approval: &Approval) -> Result<()> {
         Self::store(repo)?;
         let source = format!(
-            "takt approve {} --by {}",
-            approval.capability, approval.approver
+            "takt approve {} --by {} at {}",
+            approval.capability, approval.approver, approval.revision
         );
         let reference = approval.reference();
         self.plan(

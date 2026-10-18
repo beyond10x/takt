@@ -8,7 +8,7 @@ use std::rc::Rc;
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
 use takt::forge::{BotRoute, Forge, repository_of};
-use takt::frontier::{Aep, Frontier};
+use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness};
 use takt::validator::{CiRead, DEFAULT_PROJECT, GateRun, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{LoadedProtocol, Run, RunOptions, Stop, Unit};
@@ -30,7 +30,8 @@ enum Commands {
     #[command(after_help = EXIT_CODES)]
     Run(Box<RunArgs>),
     /// Grant a case a capability: write the grant into the case's authority.yaml and record the
-    /// approval on the case's story in the planning store. The next run resumes the case.
+    /// approval on the case's story in the planning store, that record committed on the case's
+    /// branch, on which the tree must be, clean. The next run resumes the case.
     Approve(ApproveArgs),
     /// List the built-in protocols.
     Protocols,
@@ -56,8 +57,10 @@ struct RunArgs {
     #[arg(long)]
     repo: PathBuf,
     /// What the run is meant to achieve; without it and without --case, the open case of a
-    /// story the planning store lists active is resumed, else the next ready story is the unit
-    /// and the store records it taken.
+    /// story being worked is resumed: one whose take is committed on its case's branch, or, from
+    /// a tree not on a case's branch, one the planning store lists active; from a tree on a
+    /// case's branch, a case the store lists active is resumed by a run from the base. Else the
+    /// next ready story is the unit and the store records it taken.
     #[arg(long)]
     intent: Option<String>,
     /// The case to resume, by id, instead of opening one; not with --intent.
@@ -421,16 +424,18 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     )?;
                     run
                 }
-                // Nothing to resume when the store was read above; should the store list a story
-                // active with an open case by the time `open_next` reads it again, that case is
-                // checked on the very list `open_next` resumes it from, before it is resumed.
+                // Nothing to resume, as found above: the next ready story is taken, and nothing
+                // is resumed whatever the store says by now, so no case runs that was not
+                // checked.
                 (None, None, None) => {
-                    let frontier = CheckedResume {
-                        store: Aep::default(),
-                        given: given_for_resume,
-                        input: first_input.as_deref(),
-                    };
-                    match Run::open_next(&repo, options, &frontier, harness, &validators, out)? {
+                    match Run::take_next(
+                        &repo,
+                        options,
+                        &Aep::default(),
+                        harness,
+                        &validators,
+                        out,
+                    )? {
                         Some(run) => run,
                         None => {
                             writeln!(out, "frontier: nothing ready")?;
@@ -491,9 +496,10 @@ struct Resuming {
 
 /// The case a run will resume, read without resuming it: the one `--case` names, when its
 /// directory holds a case; for a run with neither `--case` nor `--intent`, the open case of a
-/// story the store lists active, found as `Run::open_next` finds it, a decision that does not
-/// read said on `out`. `None` when the run opens a case, or when `--case` names none
-/// (`Run::resume` refuses that). Nothing is checked out and nothing written.
+/// story being worked, as [`Run::next_to_resume`] names it, the one case such a run resumes, a
+/// decision that does not read said on `out`. `None` when the run opens a case, or when
+/// `--case` names none (`Run::resume` refuses that). Nothing is checked out and nothing
+/// written.
 fn case_to_resume(
     repo: &Path,
     case: Option<&str>,
@@ -502,13 +508,10 @@ fn case_to_resume(
 ) -> Result<Option<Resuming>> {
     let (id, story) = match (case, intent) {
         (Some(id), false) => (id.to_owned(), None),
-        (None, false) => {
-            let active = Aep::default().active(repo)?;
-            match takt::case::resumable(repo, &active, out)? {
-                Some((id, story)) => (id, Some(story)),
-                None => return Ok(None),
-            }
-        }
+        (None, false) => match Run::next_to_resume(repo, &Aep::default(), out)? {
+            Some((id, story)) => (id, Some(story)),
+            None => return Ok(None),
+        },
         (_, true) => return Ok(None),
     };
     Ok(case_protocol(repo, &id)?.map(|protocol| Resuming {
@@ -560,55 +563,6 @@ fn refuse_for_resume(
         ));
     }
     Ok(())
-}
-
-/// The planning store as `Run::open_next` reads it when the read before found nothing to
-/// resume: the stories it lists active are read once more, and the open case `open_next` will
-/// resume from that very list, if any, is put through [`refuse_for_resume`] before the list is
-/// handed over, so a store that changed between the two reads cannot get a case resumed past
-/// what was given. Every other question goes to the store as asked.
-struct CheckedResume<'a> {
-    store: Aep,
-    given: Option<(&'a LoadedProtocol, &'a str)>,
-    input: Option<&'a str>,
-}
-
-impl Frontier for CheckedResume<'_> {
-    fn name(&self) -> &str {
-        self.store.name()
-    }
-
-    fn candidates(&self, repo: &Path) -> Result<Vec<String>> {
-        self.store.candidates(repo)
-    }
-
-    fn active(&self, repo: &Path) -> Result<Vec<String>> {
-        let active = self.store.active(repo)?;
-        // `open_next` says what it finds on its own `out`; this read only checks.
-        if let Some((id, _)) = takt::case::resumable(repo, &active, &mut std::io::sink())?
-            && let Some(own) = case_protocol(repo, &id)?
-        {
-            refuse_for_resume(&id, &own, self.given, self.input)?;
-        }
-        Ok(active)
-    }
-
-    fn show(&self, repo: &Path, id: &str) -> Result<takt::Story> {
-        self.store.show(repo, id)
-    }
-
-    fn take(&self, repo: &Path, id: &str) -> Result<takt::frontier::Take> {
-        self.store.take(repo, id)
-    }
-
-    fn record_approval(
-        &self,
-        repo: &Path,
-        story: &str,
-        approval: &takt::case::Approval,
-    ) -> Result<()> {
-        self.store.record_approval(repo, story, approval)
-    }
 }
 
 /// `text` on one line: its lines, trimmed, the empty ones left out, joined with ` | `.
@@ -989,7 +943,9 @@ mod tests {
         ]);
         assert_eq!(code, 5, "{out}");
         assert!(
-            out.contains("stopped: error: no harness: a judgement step among gate.run is left"),
+            out.contains(
+                "stopped: error: step 1: the harness failed; everything the step changed was discarded: no harness: a judgement step among gate.run is left"
+            ),
             "{out}"
         );
     }
@@ -1037,7 +993,7 @@ mod tests {
         assert!(out.contains("step 1: tests.run {}"), "{out}");
         assert!(
             out.contains(
-                "stopped: error: no harness: a judgement step among ci.read, gate.run, implementation.edit"
+                "stopped: error: step 2: the harness failed; everything the step changed was discarded: no harness: a judgement step among ci.read, gate.run, implementation.edit"
             ),
             "{out}"
         );
@@ -1059,7 +1015,7 @@ mod tests {
         assert!(!out.contains("forge:"), "{out}");
         assert!(
             out.contains(
-                "stopped: error: no harness: a judgement step among ci.read, gate.run, implementation.edit"
+                "stopped: error: step 2: the harness failed; everything the step changed was discarded: no harness: a judgement step among ci.read, gate.run, implementation.edit"
             ),
             "{out}"
         );
@@ -1172,10 +1128,15 @@ mod tests {
             .collect()
     }
 
-    /// `takt run` with no intent takes the ready story and, stopped at once by a step budget
-    /// of zero, leaves its case open; `takt approve` writes the grant into that case and
-    /// records the approval on the story; the next `takt run` with no intent resumes the case
-    /// and opens no second one, the story still active.
+    /// `takt run` with no intent takes the ready story, on `software.change/1`, whose merge
+    /// needs nothing but the tests, and, stopped at once by a step budget of zero, leaves its
+    /// case open; the next `takt run` with no intent resumes the case and opens no second one,
+    /// the story still active, and its tests bring the case to the gate, where it stops
+    /// `ApprovalRequired`. `takt approve` writes the grant into that case, records the approval
+    /// on the story and commits that record on the case's branch; the run after it resumes the
+    /// case at the revision the grant was given at, on a clean tree, and reads the grant: the
+    /// merge is no longer approval-required but admitted, a judgement step that no harness
+    /// takes here. A grant is given only to a case at the gate.
     #[test]
     fn approve_writes_the_grant_and_the_next_run_resumes_the_open_case() {
         let repo = repository("one-ready", "approve");
@@ -1186,6 +1147,8 @@ mod tests {
             path,
             "--harness",
             "none",
+            "--protocol",
+            "software.change/1",
             "--iterations",
             "0",
             "--test-cmd",
@@ -1193,13 +1156,39 @@ mod tests {
         ]);
         assert_eq!(code, 3, "{out}");
         assert!(out.contains("frontier: took story:ready-one"), "{out}");
+        assert!(out.contains(" on software.change/1 in "), "{out}");
         let case = the_case(&repo);
         let id = case
             .file_name()
             .expect("a name")
             .to_string_lossy()
             .into_owned();
+        let resume = [
+            "run",
+            "--repo",
+            path,
+            "--harness",
+            "none",
+            "--test-cmd",
+            "true",
+        ];
+        let (code, out) = takt(&resume);
+        assert_eq!(code, 4, "{out}");
+        assert!(
+            out.contains(&format!(
+                "frontier: resumed story:ready-one: Make the check pass (case {id})"
+            )),
+            "{out}"
+        );
+        assert!(out.contains("step 1: tests.run {}"), "{out}");
+        assert!(
+            out.contains("stopped: ApprovalRequired (repository.merge)"),
+            "{out}"
+        );
+        assert_eq!(the_case(&repo), case, "no second case was opened");
+        assert_eq!(status(&repo, "story:ready-one"), "active");
         assert!(approvals_recorded(&repo, "story:ready-one").is_empty());
+        let gated = git_out(&repo, &["rev-parse", "HEAD"]);
         let (code, out) = takt(&[
             "approve",
             "--repo",
@@ -1231,27 +1220,55 @@ mod tests {
             recorded[0].contains(&format!("({id}/authority.yaml)")),
             "{recorded:?}"
         );
-        let (code, out) = takt(&[
-            "run",
-            "--repo",
-            path,
-            "--harness",
-            "none",
-            "--iterations",
-            "1",
-            "--test-cmd",
-            "true",
-        ]);
-        assert_eq!(code, 3, "{out}");
+        // The record is committed on the case's branch, alone, and nothing is left uncommitted.
+        assert_eq!(
+            git_out(&repo, &["log", "-1", "--format=%s"]),
+            "takt: approve story:ready-one repository.merge"
+        );
+        assert_eq!(git_out(&repo, &["rev-parse", "HEAD^"]), gated);
+        let committed = git_out(&repo, &["show", "--name-only", "--format=", "HEAD"]);
+        assert!(
+            committed
+                .lines()
+                .all(|path| path.starts_with(".engineering/evidence/story/ready-one/")),
+            "{committed}"
+        );
+        assert_eq!(
+            git_out(
+                &repo,
+                &["status", "--porcelain", "--", ".", ":!.engineering/cases"]
+            ),
+            ""
+        );
+        let (code, out) = takt(&resume);
+        assert_eq!(code, 5, "{out}");
         assert!(
             out.contains(&format!(
                 "frontier: resumed story:ready-one: Make the check pass (case {id})"
             )),
             "{out}"
         );
-        assert!(out.contains("step 1: tests.run {}"), "{out}");
+        assert!(!out.contains("refused"), "{out}");
+        assert!(!out.contains("ApprovalRequired"), "{out}");
+        assert!(out.contains("repository.merge (admissible)"), "{out}");
+        assert!(
+            out.contains(
+                "no harness: a judgement step among implementation.edit, repository.inspect, repository.merge, tests.write is left"
+            ),
+            "{out}"
+        );
         assert_eq!(the_case(&repo), case, "no second case was opened");
-        assert_eq!(status(&repo, "story:ready-one"), "active");
+    }
+
+    /// `git <args>` in `tree`; its standard output, trimmed.
+    fn git_out(tree: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(tree)
+            .output()
+            .expect("git runs");
+        assert!(output.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
 
     /// `takt run --case <id>` resumes the case given, whatever the store says: a case stopped
