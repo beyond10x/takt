@@ -10,6 +10,9 @@ relations:
 - serves: vision:safe-agentic-coding
 - depends_on: story:promotion
 - supersedes: story:pinned-judge-and-promotion
+- depends_on: story:validator-confinement
+- depends_on: story:tree-hygiene
+- depends_on: story:authority-hardening
 revision: 1
 ---
 # Story: judge-guard

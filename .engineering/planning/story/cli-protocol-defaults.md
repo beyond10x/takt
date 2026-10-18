@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cli-protocol-defaults
 kind: story
-status: active
+status: implemented
 title: A plain takt run on a store story delivers it through a pull request
 summary: Store stories default to story.delivery/1, forge refusals stop, distinct exit codes
 tags:
@@ -17,10 +17,11 @@ scope:
   path: crates/takt/src/protocol.rs
 - confidence: inferred
   path: crates/takt/src/run.rs
-revision: 6
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T09:49:59Z", actor: "human:timo", revision: 5}
 - {from: "proposed", to: "active", at: "2026-10-18T09:49:59Z", actor: "human:timo", revision: 6}
+- {from: "active", to: "implemented", at: "2026-10-18T12:01:23Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":2,"verification":1}}}
 ---
 # Story: cli-protocol-defaults
 
@@ -52,3 +53,15 @@ The story-delivery protocol ships in this repository (`protocols/story-delivery/
 ## Acceptance
 
 `takt run --repo R` with no `--protocol` on a repository whose planning store has a ready story opens the case on `story.delivery/1`; with `--intent` it stays `software.change/1`; `--protocol P` on a resumed case whose protocol differs exits non-zero naming both protocols and touching nothing; a forge that refuses `open_pull_request` ends the run with a `stopped:` line naming the refusal and a documented exit code; `ApprovalRequired` exits with a code different from `Completed`; `takt run --help` describes `--forge`'s default as the code chooses it.
+
+## Landed (wave 06)
+
+Read from `git diff --stat ae94ccb impl/cli-protocol-defaults` at the close of wave 06 (fix branch head 95995b4). `run.rs` `Run::resume` was not needed: the protocol check lives in `main.rs`.
+
+- `crates/takt-cli/src/main.rs`
+- `crates/takt-cli/tests/frontier_cli.rs`
+- `crates/takt-cli/tests/merge_cli.rs`
+- `crates/takt-cli/tests/protocol_defaults_adv1.rs`
+- `crates/takt-cli/tests/protocol_defaults_adv2.rs`
+- `crates/takt-cli/tests/protocol_defaults_cli.rs`
+- `crates/takt/src/protocol.rs`

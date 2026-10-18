@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:docs-and-spec-true
 kind: story
-status: active
+status: implemented
 title: Docs and the ESS domain document say what the code does
 summary: Fix 66 stale citations, design status, README, AGENTS.md
 tags:
@@ -24,10 +24,11 @@ scope:
   path: docs/design/takt.md
 - confidence: cited
   path: ess/domains/takt.yaml
-revision: 7
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T09:49:59Z", actor: "human:timo", revision: 6}
 - {from: "proposed", to: "active", at: "2026-10-18T09:49:59Z", actor: "human:timo", revision: 7}
+- {from: "active", to: "implemented", at: "2026-10-18T12:01:24Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: docs-and-spec-true
 
@@ -56,3 +57,12 @@ This story runs after the code units of its wave have merged, so the citations a
 ## Acceptance
 
 `ess specify validate --path ess` exits 0; a script that resolves every `read from:` citation in `ess/domains/takt.yaml` finds each cited line containing the cited symbol or text; the design status line and README name what is built per milestone and mark unbuilt features as unbuilt; `AGENTS.md` names only modules that exist.
+
+## Landed (wave 06)
+
+Read from `git diff --stat 38eba58 cfd03d4` at the close of wave 06 (fix branch head 95995b4).
+
+- `AGENTS.md`
+- `README.md`
+- `docs/design/takt.md`
+- `ess/domains/takt.yaml`

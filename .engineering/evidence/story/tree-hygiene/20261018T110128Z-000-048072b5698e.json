@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T11:01:28Z",
+  "actor": "human:timo",
+  "artifact": "story:tree-hygiene",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "cargo test -p b10x-takt --locked --test tree_hygiene",
+    "reference": "baseline: the 14 cases on ae94ccb behaviour, 0 passed (scratch logs/red.log); treatment 9ecd2b6: tree_hygiene 18, adv1 6, adv2 5 passed (int/vc-th-test.log)"
+  }
+}

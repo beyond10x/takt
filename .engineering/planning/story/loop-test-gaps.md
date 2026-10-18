@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:loop-test-gaps
 kind: story
-status: active
+status: implemented
 title: The loop's refusals and budgets are held by tests
 summary: Kill the four surviving loop mutants; frontier tests through open_next
 tags:
@@ -17,10 +17,11 @@ scope:
   path: crates/takt/tests/frontier.rs
 - confidence: inferred
   path: crates/takt/tests/loop_gaps.rs
-revision: 6
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T09:49:59Z", actor: "human:timo", revision: 5}
 - {from: "proposed", to: "active", at: "2026-10-18T09:49:59Z", actor: "human:timo", revision: 6}
+- {from: "active", to: "implemented", at: "2026-10-18T12:01:23Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":1,"verification":1}}}
 ---
 # Story: loop-test-gaps
 
@@ -51,3 +52,12 @@ Findings of the 2026-10-18 code review, confirmed by an independent re-read of t
 ## Acceptance
 
 Each of mutants A–D, applied by hand to the integration branch, turns at least one test red; the "nothing ready on a second ask" behaviour is asserted through `Run::open_next`; `Frontier::next` is either used by production code or gone.
+
+## Landed (wave 06)
+
+Read from `git diff --stat e48695d impl/loop-test-gaps` at the close of wave 06 (fix branch head 95995b4). `Frontier::next` removed from `frontier.rs`.
+
+- `crates/takt/src/frontier.rs`
+- `crates/takt/tests/frontier.rs`
+- `crates/takt/tests/loop_gaps.rs`
+- `crates/takt/tests/loop_gaps_adv1.rs`

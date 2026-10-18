@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:tree-hygiene
 kind: story
-status: active
+status: implemented
 title: A run never destroys or commits work it did not make
 summary: Clean-tree open, exact step commits, index-aware discard, porcelain -z parsing
 tags:
@@ -21,10 +21,11 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/tests/tree_hygiene.rs
-revision: 8
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T09:49:58Z", actor: "human:timo", revision: 7}
 - {from: "proposed", to: "active", at: "2026-10-18T09:49:59Z", actor: "human:timo", revision: 8}
+- {from: "active", to: "implemented", at: "2026-10-18T12:01:23Z", actor: "human:timo", revision: 10, decided_on: {"recorded":{"test_result":1,"review_outcome":2,"verification":1}}}
 ---
 # Story: tree-hygiene
 
@@ -63,3 +64,18 @@ Findings of the 2026-10-18 code review, each confirmed by an independent probe (
 ## Acceptance
 
 On a scratch repository: opening a case on a tree with an uncommitted or untracked file is refused and leaves the tree and branch unchanged; a step that edits an already-dirty path, stages with `git add`, writes an ignored file, writes under `.git/`, or replaces a case file with a directory is refused and leaves no trace of its change; an accepted step's commit contains exactly the paths the step changed; porcelain paths with a leading space, spaces, non-ASCII characters and renames are parsed exactly; a refused or failed open leaves no case directory, no `takt/<id>` branch and the tree on its original branch; a take is committed on the case branch, so a refusal does not return the story to `proposed` and the next `open_next` does not open a second case for it; `open_next` reads the store from the base branch.
+
+## Landed (wave 06)
+
+Read from `git diff --stat ae94ccb impl/tree-hygiene` at the close of wave 06 (fix branch head 95995b4). The implementor's scope check found `harness.rs` `is_test_path` was not the fix site (only its test changed); the defect was the parsing in `git.rs`.
+
+- `crates/takt/src/case.rs`
+- `crates/takt/src/git.rs`
+- `crates/takt/src/harness.rs`
+- `crates/takt/src/run.rs`
+- `crates/takt/tests/frontier.rs`
+- `crates/takt/tests/gate_validator.rs`
+- `crates/takt/tests/merge_under_authority.rs`
+- `crates/takt/tests/tree_hygiene.rs`
+- `crates/takt/tests/tree_hygiene_adv1.rs`
+- `crates/takt/tests/tree_hygiene_adv2.rs`

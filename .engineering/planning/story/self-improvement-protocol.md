@@ -11,6 +11,7 @@ relations:
 - depends_on: story:finding-intake
 - depends_on: story:scorecard-reader
 - depends_on: story:judge-guard
+- depends_on: story:validator-confinement
 revision: 2
 ---
 # Story: self-improvement-protocol

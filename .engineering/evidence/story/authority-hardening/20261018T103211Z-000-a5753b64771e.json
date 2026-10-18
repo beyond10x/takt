@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T10:32:11Z",
+  "actor": "human:timo",
+  "artifact": "story:authority-hardening",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "cargo test -p b10x-takt --locked --test authority",
+    "reference": "baseline (new cases on ae94ccb behaviour): two holders 51/300 exclusive, 264 grants written while held (scratch red.log); treatment d829903: authority 12 passed incl. 300/300 (gate-c2.log)"
+  }
+}

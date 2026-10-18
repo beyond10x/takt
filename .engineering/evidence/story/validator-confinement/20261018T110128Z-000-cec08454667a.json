@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T11:01:28Z",
+  "actor": "human:timo",
+  "artifact": "story:validator-confinement",
+  "kind": "story",
+  "revision": 9,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "cargo test -p b10x-takt --locked --test validator_confinement --test validator_confinement_adv1",
+    "reference": "baseline: original findings 1 and 2 reproduced (review probes); treatment 9ecd2b6: validator_confinement 17, adv1 8, adv2 2 passed incl. original_finding_1/2 (int/vc-th-test.log)"
+  }
+}

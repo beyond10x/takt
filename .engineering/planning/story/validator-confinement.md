@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:validator-confinement
 kind: story
-status: active
+status: implemented
 title: Nothing a model writes becomes evidence, a grant or a gate definition
 summary: Validators guarded, gates read from base, minimal child env, timeouts
 tags:
@@ -23,10 +23,11 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/validator_confinement.rs
-revision: 9
+revision: 11
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T09:49:59Z", actor: "human:timo", revision: 8}
 - {from: "proposed", to: "active", at: "2026-10-18T09:49:59Z", actor: "human:timo", revision: 9}
+- {from: "active", to: "implemented", at: "2026-10-18T12:01:23Z", actor: "human:timo", revision: 11, decided_on: {"recorded":{"test_result":1,"review_outcome":2,"verification":1}}}
 ---
 # Story: validator-confinement
 
@@ -61,3 +62,24 @@ Findings of the 2026-10-18 code review, confirmed by independent probes:
 ## Acceptance
 
 With a test command that writes a grant, an evidence record and a changed gates file into the tree: the run refuses the observation, removes what the command wrote, writes no record and merges nothing; a gate run reads `.engineering/gates.yaml` and the project file from the case's base revision, so a gate rewritten on the case branch does not change the verdict; the test command, the harness child, the forge and the frontier receive an environment without `GH_TOKEN`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY` and `GITLAB_*` tokens unless the adapter needs it (the forge keeps the bot route's), are killed after a timeout with the run stopping and naming it, and keep at most a bounded tail of their output; the harness child does not load project or user hooks; `gh pr view`/`checks` name `--repo`; a test kills the `CiRead` pushed-revision mutant.
+
+## Landed (wave 06)
+
+Read from `git diff --stat 9618c80 c0e8f4e` at the close of wave 06 (fix branch head 95995b4). The widened assignment of correction 1 added `git.rs` (`git::run` hardening), `case.rs` (`Branch.base_commit`) and `Cargo.toml`/`Cargo.lock` (`libc`).
+
+- `Cargo.lock`
+- `crates/takt/Cargo.toml`
+- `crates/takt/src/case.rs`
+- `crates/takt/src/forge.rs`
+- `crates/takt/src/frontier.rs`
+- `crates/takt/src/git.rs`
+- `crates/takt/src/harness.rs`
+- `crates/takt/src/run.rs`
+- `crates/takt/src/validator.rs`
+- `crates/takt/tests/forge.rs`
+- `crates/takt/tests/frontier.rs`
+- `crates/takt/tests/gate_validator.rs`
+- `crates/takt/tests/tree_hygiene.rs`
+- `crates/takt/tests/validator_confinement.rs`
+- `crates/takt/tests/validator_confinement_adv1.rs`
+- `crates/takt/tests/validator_confinement_adv2.rs`

@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T12:01:23Z",
+  "actor": "human:timo",
+  "artifact": "story:loop-test-gaps",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --locked --no-fail-fast",
+    "reference": "fix/2026-10-18-review at 95995b4: 30 binaries, 282 passed, 0 failed; ess, fmt, clippy exit 0 (scratch/int/close-*.log)"
+  }
+}
