@@ -1,0 +1,16 @@
+[package]
+name = "b10x-takt-cli"
+description = "takt: drive a repository's work through engineering protocols, every step validated"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "takt"
+path = "src/main.rs"
+
+[dependencies]
+b10x-takt = { path = "../takt" }
+anyhow = { workspace = true }
+clap = { workspace = true }

@@ -1,0 +1,18 @@
+version: '3'
+
+tasks:
+  default:
+    cmds:
+      - task: check
+
+  check:
+    desc: Format, lint and test the workspace.
+    cmds:
+      - cargo fmt --all --check
+      - cargo clippy --workspace --all-targets --locked -- -D warnings
+      - cargo test --workspace --locked
+
+  build:
+    desc: Build the takt binary.
+    cmds:
+      - cargo build --locked -p b10x-takt-cli
