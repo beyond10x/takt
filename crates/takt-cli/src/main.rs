@@ -50,11 +50,17 @@ enum Commands {
     #[command(after_help = SCORECARD_EXIT_CODES)]
     Scorecard(ScorecardArgs),
     /// Promote a takt revision: compare its saved scorecard with the promoted baseline's under
-    /// the scorecard's rule and, when no scenario is worse, build the clean checkout at that
-    /// revision, install the binary with `cargo install --locked --path crates/takt-cli` and
-    /// record the promotion under `$XDG_STATE_HOME/takt/promotions/` (`~/.local/state/takt/
-    /// promotions/`), where the latest record is the next baseline. One promotion a UTC day; a
-    /// refused candidate is recorded and not judged again until it changes.
+    /// the scorecard's rule and, when no scenario is worse, build a fresh clone of that
+    /// revision confined in bubblewrap (`bwrap`: only the clone, rustup's default toolchain
+    /// as its settings file names it, never one on PATH, the host's registry cache read-only
+    /// and the system directories visible, the environment cleared, `cargo build --locked
+    /// --offline`), install the binary with
+    /// `cargo install --locked --path crates/takt-cli`, record the promotion under
+    /// `$XDG_STATE_HOME/takt/promotions/` (`~/.local/state/takt/promotions/`), where the latest
+    /// record is the next baseline, and then move the binary into place. One promotion a UTC
+    /// day, one at a time under the store's lock; a refused candidate is recorded and not
+    /// judged again until it changes; the installed binary must name the latest record's
+    /// revision before anything is judged.
     #[command(after_help = PROMOTE_EXIT_CODES)]
     Promote(PromoteArgs),
 }
@@ -85,10 +91,10 @@ struct PromoteArgs {
 /// What `takt promote --help` says about the exit codes.
 const PROMOTE_EXIT_CODES: &str = "Exit codes:
   0  promoted and recorded; or the baseline recorded (--baseline-only); or, with --dry-run, the candidate would be promoted or the baseline would be recorded
-  1  refused, nothing written or installed: the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, was saved under another rule or metric definition; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree; no baseline is recorded; the revision or its tree was refused or recorded already; a promotion was made this UTC day; a scenario has fewer cases than the rule's trials on either side; the store holds a file takt does not read or a record that disagrees with its name, instant or scorecard copy; the reason on stderr
+  1  refused, nothing written or installed: the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, was saved under another rule or metric definition; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree, or commits a rust-toolchain.toml with a `path`; bubblewrap (`bwrap`) or a toolchain is not found; another promotion holds the store's lock; no baseline is recorded; the installed binary does not name the latest record's revision (with --baseline-only, the revision recorded); the revision or its tree was refused or recorded already; a promotion was made this UTC day; a scenario has fewer cases than the rule's trials on either side; the store holds a file takt does not read, a record that disagrees with its name, instant or scorecard copy, or a chain of records with a gap; the record could not be written; the reason on stderr
   2  the arguments do not parse
   3  refused on the scorecard: a scenario is worse than the baseline's; the refusal is recorded (not with --dry-run), nothing installed
-  5  the candidate held but its clone, its build or its install failed, or the built binary names another revision; nothing recorded, the installed binary unchanged";
+  5  the candidate held but its clone, its confined build or its install failed, the built binary names another revision, or the binary names another revision or hashes differently once in place (then the binary before it is back in place and the record removed); nothing recorded, the installed binary unchanged";
 
 #[derive(clap::Args)]
 struct ScorecardArgs {
@@ -410,7 +416,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 build_dir: &build_dir,
                 baseline_only,
                 dry_run,
-                now: takt::now(),
+                clock: takt::now,
             };
             match takt::promotion::promote(&request, out) {
                 Ok(takt::promotion::Outcome::Regression(_))

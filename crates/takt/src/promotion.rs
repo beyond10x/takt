@@ -5,7 +5,11 @@
 //! `XDG_STATE_HOME`), outside every repository a candidate changes, beside a copy of the
 //! scorecard it read and its digest; the latest record by `promoted_at` that is no refusal
 //! names the baseline the next candidate is compared with. The first record is a `baseline`
-//! one, written by `takt promote --baseline-only`, which installs nothing.
+//! one, written by `takt promote --baseline-only`, which installs nothing and requires the
+//! installed binary to name the revision it records. Each record carries the digest of the
+//! record before it (`previous_sha256`), so a record removed from between two is noticed, and
+//! before anything is judged the installed binary's `--version` must name the latest baseline
+//! or promotion, so a record removed from the end is noticed too.
 //!
 //! `takt promote` reads the candidate's saved scorecard (a file outside the candidate's
 //! repository with one link, whose `revision` field equals its name and the checkout's `HEAD`,
@@ -13,22 +17,31 @@
 //! compares it with the baseline's copy in the store under takt's [`Rule`], and refuses a
 //! candidate that is worse, writing a `refused` record so the same revision, or the same tree
 //! under another commit, is not judged again; a candidate that holds is built from a fresh
-//! clone of the exact commit in an empty build directory outside every repository, with the
-//! build's environment stripped of what could change what is compiled, its binary's `--version`
-//! checked to name the revision, installed with `cargo install --locked --path crates/takt-cli`
-//! into a fresh root and moved into place in one rename, checked again and recorded with the
-//! installed file's sha256. One promotion a UTC day. The store is read fail-closed: a file that
-//! is no record, a record whose name, kind or instant disagrees with its content, or a scorecard
-//! copy whose digest differs from its record, refuses every promotion until someone looks.
-//! `--dry-run` prints the verdict and the record it would write and writes nothing.
+//! clone of the exact commit, confined in bubblewrap ([`Confinement`]): only the clone, a
+//! scratch `CARGO_HOME` with the host's registry cache bound read-only, the toolchain takt
+//! resolves and the system directories are visible, the environment is cleared, the process and
+//! network namespaces are the build's own, and `cargo build --locked --offline` is the
+//! toolchain's own binary, never a rustup proxy; the store, the install root and the real home
+//! are not mounted, so nothing the commit runs reads a setting outside it, writes outside the
+//! build or outlives it. Every run of the candidate's binary during a promotion (`--version`)
+//! is confined the same way. The binary is installed with `cargo install --locked --path
+//! crates/takt-cli` into a fresh root, hashed, recorded first and then moved into place in one
+//! rename, and checked again in place against the revision and the digest; a failure after the
+//! move puts the binary before it back and removes the record. One promotion a UTC day; one at
+//! a time, under an exclusive lock on the store's [`LOCK`] from its reading to its writing. The
+//! store is read fail-closed: a file that is no record, a record whose name, kind or instant
+//! disagrees with its content, a scorecard copy whose digest differs from its record, or a chain
+//! of records with a gap, refuses every promotion until someone looks. `--dry-run` prints the
+//! verdict and the record it would write and writes nothing.
 
 use std::collections::BTreeSet;
 use std::io::Write;
+use std::os::fd::AsRawFd as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
@@ -40,18 +53,46 @@ pub const FORMAT: &str = "takt-promotion/1";
 /// The store's path below the state directory.
 pub const STORE: &str = "takt/promotions";
 
-/// The build's environment variables that change what is compiled or where, removed before
-/// cargo runs so the promoted binary is the revision's and nothing else; a prefix ends in `_`
-/// and removes every variable that starts with it.
-pub const UNTRUSTED_BUILD_ENV: [&str; 8] = [
-    "RUSTC_WRAPPER",
-    "RUSTC_WORKSPACE_WRAPPER",
-    "RUSTFLAGS",
-    "RUSTDOCFLAGS",
-    "CARGO_TARGET_DIR",
-    "CARGO_BUILD_TARGET_DIR",
-    "CARGO_BUILD_",
-    "CARGO_TARGET_",
+/// The lock file in the store, held exclusively (`flock`) from the store's reading to its
+/// writing so that two promotions at once record one; the only file in the store that is no
+/// record and no scorecard copy.
+pub const LOCK: &str = ".lock";
+
+/// The sandbox the candidate is built in and its binary run under: bubblewrap, found on `PATH`.
+pub const BWRAP: &str = "bwrap";
+
+/// Where the confined build sees the clone: writable, at a path no ancestor of which holds a
+/// `.cargo` directory, so cargo reads configuration from the commit and nowhere else.
+pub const INSIDE_WORK: &str = "/work";
+
+/// Where the confined build sees its target directory.
+pub const INSIDE_TARGET: &str = "/target";
+
+/// Where the confined build sees the toolchain, read-only; its `bin/cargo` and `bin/rustc` are
+/// the ones called.
+pub const INSIDE_TOOLCHAIN: &str = "/toolchain";
+
+/// Where the confined build sees its scratch `CARGO_HOME`: writable, holding no `config.toml`,
+/// with the host's [`CACHED`] directories bound read-only under it.
+pub const INSIDE_CARGO_HOME: &str = "/cargo-home";
+
+/// Where the confined build sees the fresh install root `cargo install --root` fills.
+pub const INSIDE_INSTALL: &str = "/install";
+
+/// Where the binary moved into place is seen when it is run confined after the move.
+pub const INSIDE_INSTALLED: &str = "/installed";
+
+/// The home directory inside the sandbox, an empty tmpfs.
+pub const INSIDE_HOME: &str = "/build-home";
+
+/// The host `CARGO_HOME` directories bound read-only into the scratch one: the registry's cache
+/// and index, and git dependencies' databases and checkouts. Nothing is fetched (`--offline`),
+/// so a crate missing from them fails the build.
+pub const CACHED: [&str; 4] = [
+    "registry/cache",
+    "registry/index",
+    "git/db",
+    "git/checkouts",
 ];
 
 /// What a record is: the first baseline (`takt promote --baseline-only`, nothing installed), a
@@ -76,7 +117,8 @@ pub struct Promotion {
     pub revision: String,
     /// The tree of that commit, so the same tree under another commit is known.
     pub tree: String,
-    /// When the record was written, `YYYY-MM-DDTHH:MM:SSZ`; the one-a-UTC-day rule reads it.
+    /// When the record was written, `YYYY-MM-DDTHH:MM:SSZ`, read after the build; the
+    /// one-a-UTC-day rule reads it, and no record carries one before the record before it.
     pub promoted_at: String,
     /// What the record is.
     pub kind: Kind,
@@ -96,10 +138,14 @@ pub struct Promotion {
     pub binary: Option<PathBuf>,
     /// The installed binary's sha256, lower-case hex; none unless the record is a promotion.
     pub binary_sha256: Option<String>,
+    /// The sha256 of the record file written before this one, lower-case hex, so a record
+    /// removed from between two is noticed; none on the first record only.
+    pub previous_sha256: Option<String>,
 }
 
 /// The build or the install of a candidate that held failed, or built something that is not the
-/// candidate: the CLI tells this apart from a refusal.
+/// candidate, or the candidate changed once in place and was rolled back: the CLI tells this
+/// apart from a refusal. Nothing is recorded and the binary installed before is in place.
 #[derive(Debug)]
 pub struct BuildFailed(pub String);
 
@@ -127,8 +173,9 @@ pub struct Request<'a> {
     pub baseline_only: bool,
     /// Print the verdict and the record that would be written; write and install nothing.
     pub dry_run: bool,
-    /// The instant the record carries.
-    pub now: String,
+    /// The clock: read once when the store is read, and again, after the build, for the instant
+    /// the record carries.
+    pub clock: fn() -> String,
 }
 
 /// How a request ended.
@@ -185,6 +232,17 @@ pub fn install_root() -> Result<PathBuf> {
     Ok(home()?.join(".cargo"))
 }
 
+/// The host's `CARGO_HOME`, whose [`CACHED`] directories the confined build reads:
+/// `CARGO_HOME`, else `~/.cargo`; none when the directory does not exist. Its `config.toml` is
+/// never read.
+fn cargo_home() -> Option<PathBuf> {
+    let dir = match std::env::var_os("CARGO_HOME").filter(|dir| !dir.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => home().ok()?.join(".cargo"),
+    };
+    dir.is_dir().then_some(dir)
+}
+
 /// The record's file in `store`.
 fn record_path(store: &Path, revision: &str, kind: Kind) -> PathBuf {
     match kind {
@@ -206,11 +264,12 @@ fn is_full_revision(candidate: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// Every record in `store`, oldest first by `promoted_at`, then by revision; none when the
-/// store does not exist. Read fail-closed: a file that is no record or no scorecard copy, a
-/// record whose name does not carry its revision and kind, one whose instant does not parse or
-/// lies after `now`, or a scorecard copy without its record or with a digest other than the
-/// record's, is an error naming it.
+/// Every record in `store`, oldest first in the order of their chain ([`chained`]); none when the
+/// store does not exist. Read fail-closed: a file that is no record or no scorecard copy (the
+/// [`LOCK`] aside), a record whose name does not carry its revision and kind, one whose instant
+/// does not parse or lies after `now`, a scorecard copy without its record or with a digest
+/// other than the record's, or a record whose `previous_sha256` is not the digest of the record
+/// before it, is an error naming it.
 pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
     let mut records = Vec::new();
     let mut copies: BTreeSet<String> = BTreeSet::new();
@@ -229,6 +288,9 @@ pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
                 "{}: not a regular file; the store holds records and scorecard copies only, so it is not read past this",
                 path.display()
             );
+        }
+        if name == LOCK {
+            continue;
         }
         if let Some(revision) = name.strip_suffix(".scorecard.json") {
             if !is_full_revision(revision) {
@@ -322,7 +384,70 @@ pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
             .cmp(&b.promoted_at)
             .then_with(|| a.revision.cmp(&b.revision))
     });
-    Ok(records)
+    chained(store, records)
+}
+
+/// `records` in the order of their chain: the one record that carries no `previous_sha256`
+/// first, then each record whose `previous_sha256` is the digest of the record file before it,
+/// so two records of the same second keep the order they were written in. A second first
+/// record, two records naming the same one before them, a record whose `previous_sha256` is the
+/// digest of no record in the store, or a record whose instant lies before the one before it, is
+/// an error naming it.
+fn chained(store: &Path, records: Vec<Promotion>) -> Result<Vec<Promotion>> {
+    let total = records.len();
+    let mut first: Option<Promotion> = None;
+    let mut after: std::collections::BTreeMap<String, Promotion> =
+        std::collections::BTreeMap::new();
+    for record in records {
+        let path = record_path(store, &record.revision, record.kind);
+        match record.previous_sha256.clone() {
+            None => {
+                if let Some(other) = &first {
+                    bail!(
+                        "{}: carries no previous_sha256, but {} is the first record already; the chain of records is broken, and the store is not read past this",
+                        path.display(),
+                        record_path(store, &other.revision, other.kind).display()
+                    );
+                }
+                first = Some(record);
+            }
+            Some(previous) => {
+                if let Some(other) = after.get(&previous) {
+                    bail!(
+                        "{}: its previous_sha256 {previous} is the one {} carries too; two records follow one, and the store is not read past this",
+                        path.display(),
+                        record_path(store, &other.revision, other.kind).display()
+                    );
+                }
+                after.insert(previous, record);
+            }
+        }
+    }
+    let mut ordered = Vec::with_capacity(total);
+    let mut cursor = first;
+    while let Some(record) = cursor {
+        let path = record_path(store, &record.revision, record.kind);
+        if let Some(before) = ordered
+            .last()
+            .map(|earlier: &Promotion| earlier.promoted_at.clone())
+            && record.promoted_at < before
+        {
+            bail!(
+                "{}: promoted_at {} lies before the record before it ({before}); the store is not read past this",
+                path.display(),
+                record.promoted_at
+            );
+        }
+        cursor = after.remove(&sha256_of(&path)?);
+        ordered.push(record);
+    }
+    if let Some((previous, record)) = after.into_iter().next() {
+        bail!(
+            "{}: its previous_sha256 {previous} is the digest of no record in the chain; the record before it is missing or changed, and the store is not read past this",
+            record_path(store, &record.revision, record.kind).display()
+        );
+    }
+    Ok(ordered)
 }
 
 /// Whether `text` is `YYYY-MM-DDTHH:MM:SSZ`.
@@ -427,8 +552,16 @@ fn git(repo: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-/// The revision `takt --version` prints: the text in the parentheses of `takt <version>
-/// (<revision>)`.
+/// The revision in the parentheses of a `takt <version> (<revision>)` line.
+fn parse_version(line: &str) -> Option<String> {
+    line.rsplit_once(" (")
+        .and_then(|(_, rest)| rest.strip_suffix(')'))
+        .map(str::to_owned)
+}
+
+/// The revision `takt --version` prints, the binary run as it is: for the binary installed
+/// before a promotion, which is the one runs use anyway; a candidate's binary is run confined
+/// ([`Confinement::printed_revision`]) instead.
 fn printed_revision(binary: &Path) -> Result<String> {
     let output = Command::new(binary)
         .arg("--version")
@@ -436,12 +569,8 @@ fn printed_revision(binary: &Path) -> Result<String> {
         .with_context(|| format!("run {} --version", binary.display()))?;
     let text = String::from_utf8_lossy(&output.stdout);
     let line = text.lines().next().unwrap_or("");
-    let revision = line
-        .rsplit_once(" (")
-        .and_then(|(_, rest)| rest.strip_suffix(')'))
-        .map(str::to_owned);
-    revision.ok_or_else(|| {
-        anyhow::anyhow!(
+    parse_version(line).ok_or_else(|| {
+        anyhow!(
             "{} --version printed {line:?}, not `takt <version> (<revision>)`",
             binary.display()
         )
@@ -454,86 +583,436 @@ fn sha256_of(path: &Path) -> Result<String> {
     Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
 
-/// Writes `text` to `path`; a file there already is not overwritten.
-fn write_new(path: &Path, text: &[u8]) -> Result<()> {
-    let mut file = match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            bail!("{} exists: a store file is not overwritten", path.display());
-        }
-        Err(error) => return Err(error).with_context(|| format!("write {}", path.display())),
-    };
-    file.write_all(text)
-        .with_context(|| format!("write {}", path.display()))
+/// The last five lines of `bytes`, joined by ` | `.
+fn last_lines(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let from = lines.len().saturating_sub(5);
+    lines[from..].join(" | ")
+}
+
+/// Whether a regular file at `path` has an execute bit.
+fn is_executable(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.mode() & 0o111 != 0)
+}
+
+/// Publishes `text` at `path` in the store: written and synced to a temporary file beside it,
+/// then linked into place, so a reader sees the whole file or none; a file there already is not
+/// overwritten.
+fn publish(path: &Path, text: &[u8]) -> Result<()> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no directory", path.display()))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow!("{} has no UTF-8 name", path.display()))?;
+    let temporary = dir.join(format!(".{name}.tmp-{}", std::process::id()));
+    let written = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(text)?;
+        file.sync_all()
+    })()
+    .with_context(|| format!("write {}", temporary.display()));
+    let linked = written.and_then(|()| match std::fs::hard_link(&temporary, path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Err(anyhow!(
+            "{} exists: a store file is not overwritten",
+            path.display()
+        )),
+        Err(error) => Err(error).with_context(|| format!("write {}", path.display())),
+    });
+    let _ = std::fs::remove_file(&temporary);
+    linked
 }
 
 /// Writes `record` to the store, with the scorecard it read copied beside it unless it is a
-/// refusal; the record's path.
+/// refusal, the copy first; a record that cannot be written leaves no copy. The record's path.
 fn write(store: &Path, record: &Promotion, scorecard_text: &[u8]) -> Result<PathBuf> {
     std::fs::create_dir_all(store).with_context(|| format!("create {}", store.display()))?;
-    if record.kind != Kind::Refused {
-        write_new(&copy_path(store, &record.revision), scorecard_text)?;
-    }
     let path = record_path(store, &record.revision, record.kind);
     let mut text = serde_json::to_string_pretty(record).context("write the record")?;
     text.push('\n');
-    write_new(&path, text.as_bytes())?;
+    if record.kind == Kind::Refused {
+        publish(&path, text.as_bytes())?;
+        return Ok(path);
+    }
+    let copy = copy_path(store, &record.revision);
+    publish(&copy, scorecard_text)?;
+    if let Err(error) = publish(&path, text.as_bytes()) {
+        let _ = std::fs::remove_file(&copy);
+        return Err(error);
+    }
     Ok(path)
 }
 
-/// Runs `cargo <args>` in `dir` with the build's untrusted environment removed, the command
-/// shown on `out`; a failure is a [`BuildFailed`].
-fn cargo(dir: &Path, args: &[&str], out: &mut dyn Write) -> Result<()> {
-    writeln!(out, "cargo {}", args.join(" "))?;
-    let mut command = Command::new("cargo");
-    command.args(args).current_dir(dir);
-    for (name, _) in std::env::vars_os() {
-        let name_text = name.to_string_lossy();
-        let untrusted = UNTRUSTED_BUILD_ENV.iter().any(|pattern| {
-            if let Some(prefix) = pattern.strip_suffix('_') {
-                name_text.starts_with(prefix) && name_text.len() > prefix.len()
-            } else {
-                name_text == *pattern
-            }
-        });
-        if untrusted {
-            command.env_remove(&name);
+/// Removes `record` and its scorecard copy from the store, after the install that followed the
+/// record failed; what could not be removed is the error.
+fn unwrite(store: &Path, record: &Promotion) -> Result<()> {
+    let mut paths = vec![record_path(store, &record.revision, record.kind)];
+    if record.kind != Kind::Refused {
+        paths.push(copy_path(store, &record.revision));
+    }
+    let mut failed = Vec::new();
+    for path in paths {
+        if let Err(error) = std::fs::remove_file(&path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            failed.push(format!("{}: {error}", path.display()));
         }
     }
-    let output = command
-        .output()
-        .with_context(|| format!("run cargo {} in {}", args.join(" "), dir.display()))?;
-    if !output.status.success() {
-        return Err(BuildFailed(format!(
-            "cargo {} in {} exited {}: {}",
-            args.join(" "),
-            dir.display(),
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-                .lines()
-                .rev()
-                .take(5)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<_>>()
-                .join(" | ")
-        ))
-        .into());
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        bail!("remove the record: {}", failed.join("; "))
     }
-    Ok(())
+}
+
+/// `error` with `note` appended, a [`BuildFailed`] staying one.
+fn with_note(error: anyhow::Error, note: &str) -> anyhow::Error {
+    match error.downcast::<BuildFailed>() {
+        Ok(BuildFailed(text)) => BuildFailed(format!("{text}; {note}")).into(),
+        Err(error) => anyhow!("{error:#}; {note}"),
+    }
+}
+
+/// The store's lock, held while the store is read and written; released when dropped.
+struct StoreLock(#[allow(dead_code)] std::fs::File);
+
+/// Takes the store's exclusive lock ([`LOCK`], `flock(LOCK_EX)`), creating the store; one held
+/// by another promotion is a refusal naming it, not a wait.
+fn lock(store: &Path) -> Result<StoreLock> {
+    std::fs::create_dir_all(store).with_context(|| format!("create {}", store.display()))?;
+    let path = store.join(LOCK);
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("open the store lock {}", path.display()))?;
+    // SAFETY: `flock` on a descriptor this process owns and keeps open for as long as the lock.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::WouldBlock {
+            bail!(
+                "another promotion holds the store lock {}; one promotion at a time",
+                path.display()
+            );
+        }
+        return Err(error).with_context(|| format!("lock {}", path.display()));
+    }
+    Ok(StoreLock(file))
+}
+
+/// Where the candidate is built and its binary run: bubblewrap, the toolchain and the host's
+/// cargo caches, resolved by takt before the candidate is judged, never from the commit.
+#[derive(Debug, Clone)]
+pub struct Confinement {
+    /// The `bwrap` binary, found on `PATH`.
+    pub bwrap: PathBuf,
+    /// The toolchain's directory: rustup's default toolchain, read from its settings file
+    /// ([`Confinement::toolchain`]), whose `bin/cargo` and sibling `bin/rustc` are the ones
+    /// called; never one found on `PATH`, a `rust-toolchain.toml` or `RUSTUP_TOOLCHAIN` picks.
+    pub toolchain: PathBuf,
+    /// The host's `CARGO_HOME`, whose [`CACHED`] directories are bound read-only; none when it
+    /// does not exist.
+    pub cargo_home: Option<PathBuf>,
+}
+
+impl Confinement {
+    /// Finds `bwrap` on `PATH` and the toolchain; either missing is an error naming it, and a
+    /// candidate is never built unconfined.
+    pub fn resolve() -> Result<Self> {
+        let bwrap = std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join(BWRAP))
+                .find(|candidate| is_executable(candidate))
+        });
+        let Some(bwrap) = bwrap else {
+            bail!(
+                "bubblewrap (`{BWRAP}`) is not on PATH; a promotion builds the candidate confined in it and never unconfined, so install bubblewrap first"
+            );
+        };
+        Ok(Self {
+            bwrap,
+            toolchain: Self::toolchain()?,
+            cargo_home: cargo_home(),
+        })
+    }
+
+    /// The toolchain a promotion builds with, resolved once and without running anything or
+    /// searching `PATH`: rustup's home (`RUSTUP_HOME`, else `~/.rustup`), the
+    /// `default_toolchain` its `settings.toml` names, and that toolchain's directory under
+    /// `toolchains/` (by its name, or the one directory named by it and a target triple). Its
+    /// `bin/cargo` and the sibling `bin/rustc` must be executable files and `lib/rustlib` must
+    /// exist; anything missing is an error naming it.
+    pub fn toolchain() -> Result<PathBuf> {
+        let rustup_home = match std::env::var_os("RUSTUP_HOME").filter(|dir| !dir.is_empty()) {
+            Some(dir) if Path::new(&dir).is_absolute() => PathBuf::from(dir),
+            _ => home()?.join(".rustup"),
+        };
+        let settings = rustup_home.join("settings.toml");
+        let text = std::fs::read_to_string(&settings).with_context(|| {
+            format!(
+                "read {}, rustup's settings, which name the toolchain a promotion builds with; a promotion finds no toolchain on PATH",
+                settings.display()
+            )
+        })?;
+        let name = text
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("default_toolchain"))
+            .filter_map(|rest| rest.trim_start().strip_prefix('='))
+            .map(|value| value.trim().trim_matches('"').to_owned())
+            .find(|value| !value.is_empty());
+        let Some(name) = name else {
+            bail!(
+                "{} names no default_toolchain; a promotion builds with rustup's default toolchain and finds none on PATH",
+                settings.display()
+            );
+        };
+        if name.contains('/') || name.starts_with('.') {
+            bail!(
+                "{}: default_toolchain {name:?} is no toolchain name",
+                settings.display()
+            );
+        }
+        let toolchains = rustup_home.join("toolchains");
+        let exact = toolchains.join(&name);
+        let toolchain = if exact.is_dir() {
+            exact
+        } else {
+            let prefix = format!("{name}-");
+            let mut found: Vec<PathBuf> = std::fs::read_dir(&toolchains)
+                .with_context(|| format!("read {}", toolchains.display()))?
+                .flatten()
+                .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .collect();
+            match found.len() {
+                1 => found.remove(0),
+                0 => bail!(
+                    "rustup's default toolchain {name} ({}) is not installed under {}",
+                    settings.display(),
+                    toolchains.display()
+                ),
+                n => bail!(
+                    "rustup's default toolchain {name} ({}) matches {n} directories under {}; name it in full",
+                    settings.display(),
+                    toolchains.display()
+                ),
+            }
+        };
+        for binary in ["bin/cargo", "bin/rustc"] {
+            if !is_executable(&toolchain.join(binary)) {
+                bail!(
+                    "the toolchain {} (rustup's default, {}) has no executable {binary}; a promotion calls the toolchain's own cargo and its sibling rustc, never a rustc on PATH",
+                    toolchain.display(),
+                    settings.display()
+                );
+            }
+        }
+        if !toolchain.join("lib/rustlib").is_dir() {
+            bail!(
+                "the toolchain {} (rustup's default, {}) has no lib/rustlib",
+                toolchain.display(),
+                settings.display()
+            );
+        }
+        Ok(toolchain)
+    }
+
+    /// A bwrap command with the system directories read-only, its own process and network
+    /// namespaces, dying with takt, the environment cleared but for `HOME` and `TMPDIR`, and an
+    /// empty `/tmp` and home directory; the caller binds what else is seen and sets `PATH`.
+    fn sandbox(&self) -> Command {
+        let mut command = Command::new(&self.bwrap);
+        command.env_clear();
+        command.args([
+            "--unshare-pid",
+            "--unshare-net",
+            "--die-with-parent",
+            "--clearenv",
+            "--setenv",
+            "HOME",
+            INSIDE_HOME,
+            "--setenv",
+            "TMPDIR",
+            "/tmp",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+        ]);
+        for dir in ["/lib", "/lib64", "/bin", "/sbin"] {
+            match std::fs::read_link(dir) {
+                Ok(target) => {
+                    command.arg("--symlink").arg(target).arg(dir);
+                }
+                Err(_) if Path::new(dir).is_dir() => {
+                    command.args(["--ro-bind", dir, dir]);
+                }
+                Err(_) => {}
+            }
+        }
+        command.args([
+            "--ro-bind",
+            "/etc",
+            "/etc",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--tmpfs",
+            "/tmp",
+            "--tmpfs",
+            INSIDE_HOME,
+        ]);
+        command
+    }
+
+    /// Runs the toolchain's `cargo <args>` confined, in the clone at [`INSIDE_WORK`], with the
+    /// target directory, the scratch `CARGO_HOME` (the host's [`CACHED`] directories read-only
+    /// under it) and the fresh install root bound, the command shown on `out`; a failure is a
+    /// [`BuildFailed`].
+    fn cargo(&self, work: &Work, args: &[&str], out: &mut dyn Write) -> Result<()> {
+        writeln!(out, "cargo {} (confined in {BWRAP})", args.join(" "))?;
+        let mut command = self.sandbox();
+        command.args([
+            "--setenv",
+            "PATH",
+            &format!("{INSIDE_TOOLCHAIN}/bin:/usr/bin:/bin"),
+            "--setenv",
+            "CARGO_HOME",
+            INSIDE_CARGO_HOME,
+            "--setenv",
+            "RUSTC",
+            &format!("{INSIDE_TOOLCHAIN}/bin/rustc"),
+        ]);
+        command
+            .arg("--ro-bind")
+            .arg(&self.toolchain)
+            .arg(INSIDE_TOOLCHAIN);
+        command.arg("--bind").arg(&work.source).arg(INSIDE_WORK);
+        command.arg("--bind").arg(&work.target).arg(INSIDE_TARGET);
+        command
+            .arg("--bind")
+            .arg(&work.cargo_home)
+            .arg(INSIDE_CARGO_HOME);
+        if let Some(host) = &self.cargo_home {
+            for sub in CACHED {
+                let dir = host.join(sub);
+                if dir.is_dir() {
+                    command
+                        .arg("--ro-bind")
+                        .arg(&dir)
+                        .arg(format!("{INSIDE_CARGO_HOME}/{sub}"));
+                }
+            }
+        }
+        command.arg("--bind").arg(&work.install).arg(INSIDE_INSTALL);
+        command.args([
+            "--chdir",
+            INSIDE_WORK,
+            "--",
+            &format!("{INSIDE_TOOLCHAIN}/bin/cargo"),
+        ]);
+        command.args(args);
+        let output = command
+            .output()
+            .with_context(|| format!("run {BWRAP} for cargo {}", args.join(" ")))?;
+        if !output.status.success() {
+            return Err(BuildFailed(format!(
+                "cargo {} confined in {BWRAP} exited {}: {}",
+                args.join(" "),
+                output.status,
+                last_lines(&output.stderr)
+            ))
+            .into());
+        }
+        Ok(())
+    }
+
+    /// The revision the binary at `binary` prints for `--version`, run confined with its
+    /// directory bound read-only at `at` and nothing of the host visible but the system
+    /// directories.
+    fn printed_revision(&self, binary: &Path, at: &str) -> Result<String> {
+        let dir = binary
+            .parent()
+            .ok_or_else(|| anyhow!("{} has no directory", binary.display()))?;
+        let name = binary
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| anyhow!("{} has no UTF-8 name", binary.display()))?;
+        let mut command = self.sandbox();
+        command.args(["--setenv", "PATH", "/usr/bin:/bin"]);
+        command.arg("--ro-bind").arg(dir).arg(at);
+        command.args([
+            "--chdir",
+            INSIDE_HOME,
+            "--",
+            &format!("{at}/{name}"),
+            "--version",
+        ]);
+        let output = command
+            .output()
+            .with_context(|| format!("run {} --version confined in {BWRAP}", binary.display()))?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let line = text.lines().next().unwrap_or("");
+        parse_version(line).ok_or_else(|| {
+            let stderr = last_lines(&output.stderr);
+            anyhow!(
+                "{} --version, confined at {at}, printed {line:?}, not `takt <version> (<revision>)`{}",
+                binary.display(),
+                if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!("; stderr: {stderr}")
+                }
+            )
+        })
+    }
+}
+
+/// The build's directories on the host: under the build directory, the clone, its target
+/// directory and the scratch `CARGO_HOME`; and the fresh install root beside the real one, on
+/// its file system, so the binary moves into place in one rename. All removed when dropped.
+struct Work {
+    dir: PathBuf,
+    source: PathBuf,
+    target: PathBuf,
+    cargo_home: PathBuf,
+    install: PathBuf,
+}
+
+impl Drop for Work {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+        let _ = std::fs::remove_dir_all(&self.install);
+    }
+}
+
+/// A candidate built and installed into the fresh root, not yet in place.
+struct Staged {
+    /// The directories the build used, kept until the binary is in place.
+    #[allow(dead_code)]
+    work: Work,
+    /// The binary in the fresh root.
+    binary: PathBuf,
+    /// Its sha256, lower-case hex.
+    digest: String,
 }
 
 /// Checks the candidate scorecard and the checkout agree: the scorecard, the store, the install
 /// root and the build directory lie outside the repository, the scorecard has one link, its
 /// `revision` is a full commit id equal to its file name and to `HEAD`, its rule is takt's and
-/// its metric definitions are the ones takt knows, and the checkout is clean: no tracked file
-/// differs from `HEAD`, no untracked file, no entry marked assume-unchanged or skip-worktree.
-/// The scorecard, its text, the revision and its tree.
+/// its metric definitions are the ones takt knows, the checkout is clean (no tracked file
+/// differs from `HEAD`, no untracked file, no entry marked assume-unchanged or skip-worktree),
+/// and the commit names no toolchain of its own (a `rust-toolchain.toml` with a `path`). The
+/// scorecard, its text, the revision and its tree.
 fn candidate(request: &Request<'_>) -> Result<(Scorecard, Vec<u8>, String, String)> {
     let Request {
         repo, scorecard, ..
@@ -635,7 +1114,35 @@ fn candidate(request: &Request<'_>) -> Result<(Scorecard, Vec<u8>, String, Strin
             marked.join("\n")
         );
     }
+    no_own_toolchain(repo)?;
     Ok((card, text, revision, tree))
+}
+
+/// The commit at `HEAD` of `repo` carries no `rust-toolchain.toml` with a `path`: a promotion
+/// builds with the toolchain takt resolves ([`Confinement::resolve`]), never one the commit
+/// names, and a commit that names one is refused rather than built with another.
+fn no_own_toolchain(repo: &Path) -> Result<()> {
+    const FILE: &str = "rust-toolchain.toml";
+    let listed = git(repo, &["ls-tree", "--name-only", "HEAD", "--", FILE])?;
+    if listed.is_empty() {
+        return Ok(());
+    }
+    let text = git(repo, &["show", &format!("HEAD:{FILE}")])?;
+    let names_path = text.lines().any(|line| {
+        let key = line.trim_start().trim_start_matches(['"', '\'']);
+        key.strip_prefix("path").is_some_and(|rest| {
+            rest.trim_start_matches(['"', '\''])
+                .trim_start()
+                .starts_with('=')
+        })
+    });
+    if names_path {
+        bail!(
+            "{}: HEAD commits {FILE} with a toolchain `path`, naming a compiler outside the commit; a promotion builds with the toolchain takt resolves (rustup's default, from its settings file), never one the commit names, so the candidate is refused",
+            repo.display()
+        );
+    }
+    Ok(())
 }
 
 /// Every metric definition of `card` is one this takt knows, at the version it knows; another
@@ -665,42 +1172,102 @@ fn known_metrics(card: &Scorecard, shown: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The binary at `installed` names `latest.revision`, the latest baseline or promotion in the
+/// store: a candidate is compared with the revision that is installed, so a record removed from
+/// the end of the store, or a binary replaced by hand, is a refusal naming both.
+fn installed_names_latest(installed: &Path, store: &Path, latest: &Promotion) -> Result<()> {
+    let path = record_path(store, &latest.revision, latest.kind);
+    if !installed.exists() {
+        bail!(
+            "{}: no binary is installed, but the store records {} as the latest baseline or promotion ({}); a candidate is compared with the revision that is installed, so nothing is judged until they agree",
+            installed.display(),
+            latest.revision,
+            path.display()
+        );
+    }
+    let printed = printed_revision(installed)?;
+    if printed != latest.revision {
+        bail!(
+            "{} names {printed}, but the latest baseline or promotion recorded is {} ({}); a record is missing or the binary was replaced, and nothing is judged until they agree",
+            installed.display(),
+            latest.revision,
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// The binary at `installed` names `revision`: `--baseline-only` records the scorecard of the
+/// installed revision and no other.
+fn installed_names_revision(installed: &Path, revision: &str) -> Result<()> {
+    if !installed.exists() {
+        bail!(
+            "{}: no binary is installed; --baseline-only records the scorecard of the installed revision, so install {revision} there first",
+            installed.display()
+        );
+    }
+    let printed = printed_revision(installed)?;
+    if printed != revision {
+        bail!(
+            "{} names {printed}, not {revision}; --baseline-only records the scorecard of the installed revision",
+            installed.display()
+        );
+    }
+    Ok(())
+}
+
+/// The instant a record written now carries: the clock read again, after the build, which must
+/// not lie before the latest record's instant; a clock set back writes nothing.
+fn write_instant(clock: fn() -> String, existing: &[Promotion]) -> Result<String> {
+    let now = clock();
+    if let Some(latest) = existing.last()
+        && now.as_str() < latest.promoted_at.as_str()
+    {
+        bail!(
+            "the clock reads {now}, before the latest record's {} ({}); a record carries no instant before a record before it, so nothing is written",
+            latest.promoted_at,
+            latest.revision
+        );
+    }
+    Ok(now)
+}
+
 /// Builds the candidate from a fresh clone of `repo` at `revision` in an empty directory under
-/// `build_dir`, checks the built binary names `revision`, installs it into a fresh root beside
-/// `root`, checks the installed one, and moves it into `root/bin/takt` in one rename; a failure
-/// before the rename leaves what was installed before. The installed binary's path and sha256.
-fn install(
+/// `build_dir`, confined, checks the built binary names `revision`, installs it into a fresh
+/// root beside `root`, checks that one, and hashes it: the staged binary, nothing yet in place.
+fn stage(
+    confinement: &Confinement,
     repo: &Path,
     revision: &str,
     root: &Path,
     build_dir: &Path,
     out: &mut dyn Write,
-) -> Result<(PathBuf, String)> {
-    let work = build_dir.join(format!("{revision}-{}", std::process::id()));
-    if work.exists() {
-        std::fs::remove_dir_all(&work).with_context(|| format!("clear {}", work.display()))?;
+) -> Result<Staged> {
+    let dir = build_dir.join(format!("{revision}-{}", std::process::id()));
+    let install = root.join(format!(".takt-promote-{}", std::process::id()));
+    for stale in [&dir, &install] {
+        if stale.exists() {
+            std::fs::remove_dir_all(stale).with_context(|| format!("clear {}", stale.display()))?;
+        }
     }
-    std::fs::create_dir_all(&work).with_context(|| format!("create {}", work.display()))?;
-    let result = install_in(repo, revision, root, &work, out);
-    let _ = std::fs::remove_dir_all(&work);
-    result
-}
-
-fn install_in(
-    repo: &Path,
-    revision: &str,
-    root: &Path,
-    work: &Path,
-    out: &mut dyn Write,
-) -> Result<(PathBuf, String)> {
-    let clone = work.join("source");
+    let work = Work {
+        source: dir.join("source"),
+        target: dir.join("target"),
+        cargo_home: dir.join("cargo-home"),
+        dir,
+        install,
+    };
+    for made in [&work.target, &work.cargo_home, &work.install] {
+        std::fs::create_dir_all(made).with_context(|| format!("create {}", made.display()))?;
+    }
     let repo_text = repo
         .to_str()
-        .ok_or_else(|| anyhow::anyhow!("{} is not UTF-8", repo.display()))?;
-    let clone_text = clone
+        .ok_or_else(|| anyhow!("{} is not UTF-8", repo.display()))?;
+    let clone_text = work
+        .source
         .to_str()
-        .ok_or_else(|| anyhow::anyhow!("{} is not UTF-8", clone.display()))?;
-    writeln!(out, "cloning {revision} into {}", clone.display())?;
+        .ok_or_else(|| anyhow!("{} is not UTF-8", work.source.display()))?;
+    writeln!(out, "cloning {revision} into {}", work.source.display())?;
     let output = Command::new("git")
         .args([
             "clone",
@@ -722,101 +1289,151 @@ fn install_in(
         ))
         .into());
     }
-    git(&clone, &["checkout", "--quiet", "--detach", revision])
+    git(&work.source, &["checkout", "--quiet", "--detach", revision])
         .map_err(|error| BuildFailed(format!("check out {revision}: {error:#}")))?;
-    let target = work.join("target");
-    let target_text = target
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("{} is not UTF-8", target.display()))?
-        .to_owned();
-    cargo(
-        &clone,
+    confinement.cargo(
+        &work,
         &[
             "build",
             "--locked",
+            "--offline",
             "--release",
             "-p",
             "b10x-takt-cli",
             "--bin",
             "takt",
             "--target-dir",
-            &target_text,
+            INSIDE_TARGET,
         ],
         out,
     )?;
-    let built = target.join("release/takt");
-    let printed = printed_revision(&built).map_err(|error| BuildFailed(format!("{error:#}")))?;
+    let built = work.target.join("release/takt");
+    let printed = confinement
+        .printed_revision(&built, &format!("{INSIDE_TARGET}/release"))
+        .map_err(|error| BuildFailed(format!("{error:#}")))?;
     if printed != revision {
         return Err(BuildFailed(format!(
             "the built binary names {printed}, not {revision}: a promotion installs a clean build of the exact revision"
         ))
         .into());
     }
-    let fresh_root = root.join(format!(".takt-promote-{}", std::process::id()));
-    if fresh_root.exists() {
-        std::fs::remove_dir_all(&fresh_root)
-            .with_context(|| format!("clear {}", fresh_root.display()))?;
-    }
-    std::fs::create_dir_all(root).with_context(|| format!("create {}", root.display()))?;
-    let installed = install_into(&clone, revision, &target_text, root, &fresh_root, out);
-    let _ = std::fs::remove_dir_all(&fresh_root);
-    installed
-}
-
-fn install_into(
-    clone: &Path,
-    revision: &str,
-    target_text: &str,
-    root: &Path,
-    fresh_root: &Path,
-    out: &mut dyn Write,
-) -> Result<(PathBuf, String)> {
-    let fresh_text = fresh_root
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("{} is not UTF-8", fresh_root.display()))?;
-    let path_text = clone
-        .join("crates/takt-cli")
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("{} is not UTF-8", clone.display()))?
-        .to_owned();
-    cargo(
-        clone,
+    confinement.cargo(
+        &work,
         &[
             "install",
             "--locked",
+            "--offline",
             "--force",
             "--path",
-            &path_text,
+            &format!("{INSIDE_WORK}/crates/takt-cli"),
             "--root",
-            fresh_text,
+            INSIDE_INSTALL,
             "--target-dir",
-            target_text,
+            INSIDE_TARGET,
         ],
         out,
     )?;
-    let staged = fresh_root.join("bin/takt");
-    let printed = printed_revision(&staged).map_err(|error| BuildFailed(format!("{error:#}")))?;
+    let binary = work.install.join("bin/takt");
+    let printed = confinement
+        .printed_revision(&binary, &format!("{INSIDE_INSTALL}/bin"))
+        .map_err(|error| BuildFailed(format!("{error:#}")))?;
     if printed != revision {
         return Err(BuildFailed(format!(
             "the installed binary {} names {printed}, not {revision}",
-            staged.display()
+            binary.display()
         ))
         .into());
     }
-    let digest = sha256_of(&staged)?;
-    let bin = root.join("bin");
-    std::fs::create_dir_all(&bin).with_context(|| format!("create {}", bin.display()))?;
-    let installed = bin.join("takt");
-    std::fs::rename(&staged, &installed)
-        .with_context(|| format!("move {} into {}", staged.display(), installed.display()))?;
-    let printed = printed_revision(&installed)?;
-    if printed != revision {
-        bail!(
-            "{} names {printed} after the move, not {revision}",
+    let digest = sha256_of(&binary)?;
+    Ok(Staged {
+        work,
+        binary,
+        digest,
+    })
+}
+
+/// Moves the staged binary into `installed` in one rename, keeping the binary before it as a
+/// hard link beside it until the one in place, run confined, names `revision` and hashes to the
+/// staged digest; on any failure after the move the binary before it is back in place, or none,
+/// as before.
+fn install(
+    confinement: &Confinement,
+    staged: &Staged,
+    installed: &Path,
+    revision: &str,
+) -> Result<()> {
+    let bin = installed
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no directory", installed.display()))?;
+    std::fs::create_dir_all(bin).with_context(|| format!("create {}", bin.display()))?;
+    let before = bin.join(format!(".takt-before-{}", std::process::id()));
+    let _ = std::fs::remove_file(&before);
+    let had = match std::fs::hard_link(installed, &before) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("keep {} as {}", installed.display(), before.display()));
+        }
+    };
+    let moved = std::fs::rename(&staged.binary, installed).with_context(|| {
+        format!(
+            "move {} into {}",
+            staged.binary.display(),
             installed.display()
-        );
+        )
+    });
+    let checked = moved.and_then(|()| {
+        let printed = confinement
+            .printed_revision(installed, INSIDE_INSTALLED)
+            .map_err(|error| BuildFailed(format!("{error:#}")))?;
+        if printed != revision {
+            return Err(BuildFailed(format!(
+                "{} names {printed} once in place, not {revision}",
+                installed.display()
+            ))
+            .into());
+        }
+        let digest = sha256_of(installed)?;
+        if digest != staged.digest {
+            return Err(BuildFailed(format!(
+                "{} hashes to {digest} once in place, not to the staged {}",
+                installed.display(),
+                staged.digest
+            ))
+            .into());
+        }
+        Ok(())
+    });
+    match checked {
+        Ok(()) => {
+            if had {
+                let _ = std::fs::remove_file(&before);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            let restored = if had {
+                std::fs::rename(&before, installed)
+            } else {
+                match std::fs::remove_file(installed) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+                    _ => Ok(()),
+                }
+            };
+            Err(match restored {
+                Ok(()) if had => with_note(
+                    error,
+                    &format!("the binary before it is back at {}", installed.display()),
+                ),
+                Ok(()) => with_note(error, "nothing is installed, as before"),
+                Err(failure) => with_note(
+                    error,
+                    &format!("and putting the binary before it back failed: {failure}"),
+                ),
+            })
+        }
     }
-    Ok((installed, digest))
 }
 
 /// `takt promote`: see the module's documentation. Prints the comparison and the verdict on
@@ -824,12 +1441,32 @@ fn install_into(
 pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     let (card, text, revision, tree) = candidate(request)?;
     let store = request.store;
-    let now = request.now.as_str();
+    let installed = request.install_root.join("bin/takt");
+    let confinement = if request.dry_run || request.baseline_only {
+        None
+    } else {
+        Some(Confinement::resolve()?)
+    };
+    let _lock = if request.dry_run {
+        None
+    } else {
+        Some(lock(store)?)
+    };
+    let now = (request.clock)();
+    let existing = records(store, &now)?;
+    let previous_sha256 = match existing.last() {
+        Some(latest) => Some(sha256_of(&record_path(
+            store,
+            &latest.revision,
+            latest.kind,
+        ))?),
+        None => None,
+    };
     let mut record = Promotion {
         format: FORMAT.to_owned(),
         revision: revision.clone(),
         tree: tree.clone(),
-        promoted_at: request.now.clone(),
+        promoted_at: now.clone(),
         kind: Kind::Baseline,
         scorecard: revision.clone(),
         scorecard_file: resolved(request.scorecard),
@@ -839,8 +1476,8 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         worse: 0,
         binary: None,
         binary_sha256: None,
+        previous_sha256,
     };
-    let existing = records(store, now)?;
     for earlier in &existing {
         let same = if earlier.revision == revision {
             format!("{revision} is recorded already")
@@ -873,6 +1510,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
                 record_path(store, &base.revision, base.kind).display()
             );
         }
+        installed_names_revision(&installed, &revision)?;
         enough_trials(&card, &card, request.scorecard)?;
         writeln!(
             out,
@@ -888,6 +1526,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
             writeln!(out, "{}", serde_json::to_string_pretty(&record)?)?;
             return Ok(Outcome::WouldWrite(record));
         }
+        record.promoted_at = write_instant(request.clock, &existing)?;
         let path = write(store, &record, &text)?;
         writeln!(out, "recorded: {}", path.display())?;
         return Ok(Outcome::BaselineRecorded(record));
@@ -902,6 +1541,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
             store.display()
         );
     };
+    installed_names_latest(&installed, store, &base)?;
     let today = now.get(..10).unwrap_or("");
     if let Some(earlier) = existing.iter().find(|record| {
         record.kind == Kind::Promotion && record.promoted_at.get(..10) == Some(today)
@@ -959,6 +1599,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
             writeln!(out, "{}", serde_json::to_string_pretty(&record)?)?;
             return Ok(Outcome::WouldRefuse(record));
         }
+        record.promoted_at = write_instant(request.clock, &existing)?;
         let path = write(store, &record, &text)?;
         writeln!(out, "recorded: {}", path.display())?;
         return Ok(Outcome::Regression(record));
@@ -968,7 +1609,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     if request.dry_run {
         writeln!(
             out,
-            "dry run: would clone {} at {revision} under {}, build it there, install under {} and write {} and {}",
+            "dry run: would clone {} at {revision} under {}, build it there confined in {BWRAP}, install under {} and write {} and {}",
             request.repo.display(),
             request.build_dir.display(),
             request.install_root.display(),
@@ -978,20 +1619,35 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         writeln!(out, "{}", serde_json::to_string_pretty(&record)?)?;
         return Ok(Outcome::WouldWrite(record));
     }
-    let (binary, digest) = install(
+    let confinement = confinement
+        .as_ref()
+        .ok_or_else(|| anyhow!("the confinement is resolved before a build"))?;
+    let staged = stage(
+        confinement,
         request.repo,
         &revision,
         request.install_root,
         request.build_dir,
         out,
     )?;
-    record.binary = Some(binary.clone());
-    record.binary_sha256 = Some(digest.clone());
+    record.promoted_at = write_instant(request.clock, &existing)?;
+    record.binary = Some(installed.clone());
+    record.binary_sha256 = Some(staged.digest.clone());
     let path = write(store, &record, &text)?;
+    if let Err(error) = install(confinement, &staged, &installed, &revision) {
+        return Err(match unwrite(store, &record) {
+            Ok(()) => with_note(error, "nothing recorded"),
+            Err(removal) => with_note(
+                error,
+                &format!("and removing the record failed: {removal:#}"),
+            ),
+        });
+    }
     writeln!(
         out,
-        "promoted: {} at {revision}, sha256 {digest}; recorded: {}",
-        binary.display(),
+        "promoted: {} at {revision}, sha256 {}; recorded: {}",
+        installed.display(),
+        staged.digest,
         path.display()
     )?;
     Ok(Outcome::Promoted(record))

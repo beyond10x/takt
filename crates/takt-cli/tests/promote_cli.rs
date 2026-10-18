@@ -5,17 +5,25 @@
 //! `$XDG_STATE_HOME/takt/promotions/` naming the revision the installed `takt --version`
 //! prints; a worse candidate is refused, recorded and not judged again; `--baseline-only`
 //! records the first baseline and installs nothing; `--dry-run` writes and installs nothing.
+//! The build runs confined in bubblewrap, so nothing the commit runs reads a setting outside
+//! it, reaches the store or outlives the build; the record is written before the binary moves
+//! into place and a failure after the move puts the binary before it back; the store is locked
+//! while read and written; each record carries the digest of the one before it; and the
+//! installed binary must name the latest record before anything is judged.
 //!
 //! The candidate is a scratch takt workspace with no dependencies, whose `build.rs` embeds the
 //! checkout's revision as the real one does, so a build takes seconds; its scorecards are made
-//! with the real binary's `takt scorecard --save` over scratch case records.
+//! with the real binary's `takt scorecard --save` over scratch case records. The binary
+//! installed before a promotion is a stand-in script printing what `takt --version` would.
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use takt::case::CASES_DIR;
 use takt::events::{Event, Events, TokenUsage};
+use takt::promotion::{INSIDE_INSTALL, INSIDE_TARGET, LOCK};
 
 /// A scratch directory under this crate's build directory, removed on drop.
 struct Scratch(PathBuf);
@@ -74,6 +82,17 @@ fn write(path: &Path, text: &str) {
     fs::write(path, text).expect("a file");
 }
 
+/// Writes an executable script.
+fn script(path: &Path, text: &str) {
+    write(path, text);
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("executable");
+}
+
+/// A stand-in for the installed takt of `revision`: prints what `takt --version` would.
+fn stand_in(revision: &str) -> String {
+    format!("#!/bin/sh\necho \"takt 0.1.0 ({revision})\"\n")
+}
+
 /// The scratch takt's `build.rs`: the checkout's revision into `TAKT_REVISION`, `-dirty` when
 /// a tracked file differs, `unknown revision` outside a checkout.
 const TAKT_BUILD: &str = r#"use std::process::Command;
@@ -103,12 +122,54 @@ fn main() {
 }
 "#;
 
-/// The scratch takt's `main.rs`: `--version` prints `takt 0.1.0 (<revision>)`.
+/// The scratch takt's `main.rs`: `--version` prints `takt 0.1.0 (<revision>)`; `--probe`
+/// prints whether debug assertions were compiled in.
 const TAKT_MAIN: &str = r#"fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|arg| arg == "--version") {
         println!("takt 0.1.0 ({})", env!("TAKT_REVISION"));
     }
+    if args.iter().any(|arg| arg == "--probe") {
+        println!("debug_assertions={}", cfg!(debug_assertions));
+    }
+}
+"#;
+
+/// A `main.rs` that names its revision while it runs from the build's or the fresh root's
+/// directory and another once it sits anywhere else, the install root included.
+const FLIPPING_MAIN: &str = r#"fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--version") {
+        let exe = std::env::current_exe()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        if exe.starts_with("__TARGET__/") || exe.starts_with("__INSTALL__/") {
+            println!("takt 0.1.0 ({})", env!("TAKT_REVISION"));
+        } else {
+            println!("takt 0.1.0 (something-else)");
+        }
+    }
+}
+"#;
+
+/// What a planting candidate does whenever its code runs during a promotion (its `build.rs`,
+/// its `--version`): writes a record into the store by its host path and leaves a sleeper that
+/// would write there later, every error ignored so the build itself succeeds.
+const PLANT: &str = r#"
+fn plant() {
+    let store = std::path::Path::new("__STORE__");
+    let _ = std::fs::create_dir_all(store);
+    let _ = std::fs::write(
+        store.join("ffffffffffffffffffffffffffffffffffffffff.json"),
+        "planted by the candidate\n",
+    );
+    let _ = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("sleep 20; echo late > '__STORE__/late.txt' # __MARKER__")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 "#;
 
@@ -238,6 +299,34 @@ fn sha256(path: &Path) -> String {
         .to_owned()
 }
 
+/// The string value of `field` in a pretty-printed record.
+fn field(record: &str, field: &str) -> String {
+    let prefix = format!("\"{field}\": \"");
+    record
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(prefix.as_str()))
+        .and_then(|rest| rest.strip_suffix('"').or_else(|| rest.strip_suffix("\",")))
+        .unwrap_or_else(|| panic!("{field} in {record}"))
+        .to_owned()
+}
+
+/// The process ids whose command line holds `marker`.
+fn processes_holding(marker: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir("/proc").expect("/proc").flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        if let Ok(bytes) = fs::read(entry.path().join("cmdline"))
+            && String::from_utf8_lossy(&bytes).contains(marker)
+        {
+            found.push(name);
+        }
+    }
+    found
+}
+
 impl World {
     fn new(name: &str, baseline_tokens: [u64; 5], baseline_stops: [&str; 5]) -> Self {
         let outer = scratch(name);
@@ -287,11 +376,10 @@ impl World {
         saves.join(format!("scorecard-{revision}.json"))
     }
 
-    /// The candidate's scorecard: five scenario 1 cases with these tokens and stops, saved
-    /// under the candidate revision in a directory of its own named by `label`, since a saved
-    /// scorecard is never overwritten.
-    fn candidate_card(&self, label: &str, tokens: [u64; 5], stops: [&str; 5]) -> PathBuf {
-        let cases = self.outer.join(format!("candidate-cases-{label}"));
+    /// A scorecard of five scenario 1 cases with these tokens and stops, saved under `revision`
+    /// in a directory of its own named by `label`, since a saved scorecard is never overwritten.
+    fn card_for(&self, label: &str, revision: &str, tokens: [u64; 5], stops: [&str; 5]) -> PathBuf {
+        let cases = self.outer.join(format!("cases-{label}"));
         fs::create_dir_all(&cases).expect("a directory");
         for (n, (tokens, stop)) in tokens.iter().zip(stops).enumerate() {
             run(
@@ -301,11 +389,25 @@ impl World {
                 stop,
             );
         }
-        Self::save(
-            &cases,
-            &self.outer.join(format!("saves-{label}")),
-            &self.revision,
-        )
+        Self::save(&cases, &self.outer.join(format!("saves-{label}")), revision)
+    }
+
+    /// The candidate's scorecard: five scenario 1 cases with these tokens and stops, saved
+    /// under the candidate revision.
+    fn candidate_card(&self, label: &str, tokens: [u64; 5], stops: [&str; 5]) -> PathBuf {
+        self.card_for(label, &self.revision, tokens, stops)
+    }
+
+    /// A scorecard the rule passes, saved under `revision`.
+    fn passing_card(&self, label: &str, revision: &str) -> PathBuf {
+        self.card_for(label, revision, BASELINE_TOKENS, FIVE_APPROVALS)
+    }
+
+    /// Commits everything in the checkout; the new HEAD.
+    fn commit(&self, message: &str) -> String {
+        git(&self.repo, &["add", "-A"]);
+        git(&self.repo, &["commit", "-q", "-m", message]);
+        git(&self.repo, &["rev-parse", "HEAD"])
     }
 
     /// The store and the build directory of this world, never the real ones.
@@ -322,21 +424,44 @@ impl World {
         ]
     }
 
-    /// `takt promote` with the world's store and install root, `extra` arguments added.
-    fn promote(&self, scorecard: &Path, extra: &[&str]) -> (i32, String, String) {
-        let env = self.env();
-        let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        let mut args = vec![
+    /// The arguments of `takt promote` for `repo` and `scorecard` in this world.
+    fn args<'a>(&'a self, repo: &'a Path, scorecard: &'a Path) -> Vec<&'a str> {
+        vec![
             "promote",
             "--repo",
-            self.repo.to_str().expect("utf-8"),
+            repo.to_str().expect("utf-8"),
             "--scorecard",
             scorecard.to_str().expect("utf-8"),
             "--install-root",
             self.root.to_str().expect("utf-8"),
-        ];
+        ]
+    }
+
+    /// `takt promote` with the world's store and install root, `extra` arguments and
+    /// environment added.
+    fn promote_with(
+        &self,
+        scorecard: &Path,
+        extra: &[&str],
+        env: &[(&str, &str)],
+    ) -> (i32, String, String) {
+        let own = self.env();
+        let mut full: Vec<(&str, &str)> =
+            own.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        full.extend_from_slice(env);
+        let mut args = self.args(&self.repo, scorecard);
         args.extend_from_slice(extra);
-        takt(&args, &env)
+        takt(&args, &full)
+    }
+
+    /// `takt promote` with the world's store and install root, `extra` arguments added.
+    fn promote(&self, scorecard: &Path, extra: &[&str]) -> (i32, String, String) {
+        self.promote_with(scorecard, extra, &[])
+    }
+
+    /// Installs the stand-in for the takt of `revision` at `<root>/bin/takt`.
+    fn install_stand_in(&self, revision: &str) {
+        script(&self.installed(), &stand_in(revision));
     }
 
     /// Records the baseline: `--baseline-only` over the baseline scorecard, with the checkout
@@ -347,7 +472,8 @@ impl World {
 
     /// Records `scorecard` as the baseline of [`BASELINE_REVISION`]: the record, written by
     /// hand in the record's own shape (the scratch checkout is at the candidate's revision, not
-    /// the baseline's), and the scorecard's copy beside it.
+    /// the baseline's), the scorecard's copy beside it, and the stand-in for that revision's
+    /// binary installed, as a promotion requires.
     fn record_baseline_of(&self, scorecard: &Path) {
         fs::create_dir_all(&self.store).expect("the store");
         let copy = self
@@ -355,7 +481,7 @@ impl World {
             .join(format!("{BASELINE_REVISION}.scorecard.json"));
         fs::copy(scorecard, &copy).expect("the copy");
         let record = format!(
-            "{{\n  \"format\": \"takt-promotion/1\",\n  \"revision\": \"{BASELINE_REVISION}\",\n  \"tree\": \"{BASELINE_TREE}\",\n  \"promoted_at\": \"2026-10-17T12:00:00Z\",\n  \"kind\": \"baseline\",\n  \"scorecard\": \"{BASELINE_REVISION}\",\n  \"scorecard_file\": \"{}\",\n  \"scorecard_sha256\": \"{}\",\n  \"against\": null,\n  \"rule\": {{\n    \"trials\": 5,\n    \"margin\": 1\n  }},\n  \"worse\": 0,\n  \"binary\": null,\n  \"binary_sha256\": null\n}}\n",
+            "{{\n  \"format\": \"takt-promotion/1\",\n  \"revision\": \"{BASELINE_REVISION}\",\n  \"tree\": \"{BASELINE_TREE}\",\n  \"promoted_at\": \"2026-10-17T12:00:00Z\",\n  \"kind\": \"baseline\",\n  \"scorecard\": \"{BASELINE_REVISION}\",\n  \"scorecard_file\": \"{}\",\n  \"scorecard_sha256\": \"{}\",\n  \"against\": null,\n  \"rule\": {{\n    \"trials\": 5,\n    \"margin\": 1\n  }},\n  \"worse\": 0,\n  \"binary\": null,\n  \"binary_sha256\": null,\n  \"previous_sha256\": null\n}}\n",
             scorecard.display(),
             sha256(scorecard)
         );
@@ -363,6 +489,7 @@ impl World {
             &self.store.join(format!("{BASELINE_REVISION}.json")),
             &record,
         );
+        self.install_stand_in(BASELINE_REVISION);
     }
 
     /// The record of `revision` in the store, as text.
@@ -370,6 +497,7 @@ impl World {
         fs::read_to_string(self.store.join(name)).expect("the record")
     }
 
+    /// The store's files in name order, the lock aside.
     fn records(&self) -> Vec<String> {
         let mut names: Vec<String> = fs::read_dir(&self.store)
             .map(|entries| {
@@ -381,6 +509,7 @@ impl World {
                             .to_string_lossy()
                             .into_owned()
                     })
+                    .filter(|name| name != LOCK)
                     .collect()
             })
             .unwrap_or_default();
@@ -399,10 +528,21 @@ impl World {
             .expect("the installed takt runs");
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
+
+    /// The installed binary is the baseline's stand-in, byte for byte.
+    fn assert_untouched(&self) {
+        assert_eq!(
+            fs::read_to_string(self.installed()).expect("the installed binary"),
+            stand_in(BASELINE_REVISION),
+            "the installed binary is untouched"
+        );
+    }
 }
 
 const FIVE_APPROVALS: [&str; 5] = [APPROVAL; 5];
 const BASELINE_TOKENS: [u64; 5] = [107_205, 122_192, 122_361, 122_811, 138_160];
+const WITHIN_TOKENS: [u64; 5] = [110_000, 120_000, 125_000, 130_000, 135_000];
+const TWO_WORSE: [&str; 5] = [APPROVAL, APPROVAL, APPROVAL, ERROR, ERROR];
 
 /// `--baseline-only` writes a baseline record naming the scorecard and installs nothing; a
 /// second one is refused.
@@ -410,7 +550,8 @@ const BASELINE_TOKENS: [u64; 5] = [107_205, 122_192, 122_361, 122_811, 138_160];
 fn baseline_only_records_the_first_baseline_and_installs_nothing() {
     let world = World::new("baseline", BASELINE_TOKENS, FIVE_APPROVALS);
     // The candidate checkout is the "installed revision" here: its own scorecard is the
-    // baseline's content under its own revision.
+    // baseline's content under its own revision, and its stand-in is installed.
+    world.install_stand_in(&world.revision);
     let card = world.candidate_card("base", BASELINE_TOKENS, FIVE_APPROVALS);
     let (code, out, err) = world.promote(&card, &["--baseline-only"]);
     assert_eq!(code, 0, "{out}{err}");
@@ -427,10 +568,15 @@ fn baseline_only_records_the_first_baseline_and_installs_nothing() {
         format!("\"revision\": \"{}\"", world.revision),
         format!("\"scorecard\": \"{}\"", world.revision),
         "\"binary\": null".to_owned(),
+        "\"previous_sha256\": null".to_owned(),
     ] {
         assert!(record.contains(&line), "{line} in {record}");
     }
-    assert!(!world.installed().exists(), "nothing is installed");
+    assert_eq!(
+        fs::read_to_string(world.installed()).expect("the stand-in"),
+        stand_in(&world.revision),
+        "nothing is installed"
+    );
     let (code, out, err) = world.promote(&card, &["--baseline-only"]);
     assert_eq!(code, 1, "{out}{err}");
     assert!(
@@ -439,15 +585,46 @@ fn baseline_only_records_the_first_baseline_and_installs_nothing() {
     );
 }
 
+/// `--baseline-only` records the scorecard of the installed revision: with no binary at
+/// `<root>/bin/takt`, or one naming another revision, it is refused naming them (probe N14).
+#[test]
+fn baseline_only_requires_the_installed_binary_to_name_the_revision() {
+    let world = World::new("baseline-binary", BASELINE_TOKENS, FIVE_APPROVALS);
+    let card = world.candidate_card("base", BASELINE_TOKENS, FIVE_APPROVALS);
+    let (code, out, err) = world.promote(&card, &["--baseline-only"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("no binary is installed") && err.contains("bin/takt"),
+        "{err}"
+    );
+    assert_eq!(world.records(), Vec::<String>::new());
+    world.install_stand_in(BASELINE_REVISION);
+    let (code, out, err) = world.promote(&card, &["--baseline-only"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains(&format!(
+            "names {BASELINE_REVISION}, not {}",
+            world.revision
+        )),
+        "{err}"
+    );
+    assert_eq!(world.records(), Vec::<String>::new());
+    world.install_stand_in(&world.revision);
+    let (code, out, err) = world.promote(&card, &["--baseline-only"]);
+    assert_eq!(code, 0, "{out}{err}");
+}
+
 /// A candidate within the rule (one case worse, tokens within the maximum) is built, installed
-/// and recorded; the record's revision is the one the installed binary prints.
+/// and recorded; the record's revision is the one the installed binary prints, and it carries
+/// the baseline record's digest.
 #[test]
 fn a_candidate_within_the_rule_is_installed_and_recorded() {
     let world = World::new("promoted", BASELINE_TOKENS, FIVE_APPROVALS);
     world.record_baseline();
+    let baseline_digest = sha256(&world.store.join(format!("{BASELINE_REVISION}.json")));
     let card = world.candidate_card(
         "within",
-        [110_000, 120_000, 125_000, 130_000, 135_000],
+        WITHIN_TOKENS,
         [APPROVAL, APPROVAL, APPROVAL, APPROVAL, ERROR],
     );
     let (code, out, err) = world.promote(&card, &[]);
@@ -460,6 +637,7 @@ fn a_candidate_within_the_rule_is_installed_and_recorded() {
         out.contains("verdict: no scenario worse than the baseline"),
         "{out}"
     );
+    assert!(out.contains("confined in bwrap"), "{out}");
     assert_eq!(
         world.version(),
         format!("takt 0.1.0 ({})", world.revision),
@@ -472,15 +650,29 @@ fn a_candidate_within_the_rule_is_installed_and_recorded() {
         format!("\"against\": \"{BASELINE_REVISION}\""),
         "\"worse\": 0".to_owned(),
         format!("\"binary\": \"{}\"", world.installed().display()),
+        format!("\"previous_sha256\": \"{baseline_digest}\""),
     ] {
         assert!(record.contains(&line), "{line} in {record}");
     }
-    let digest = record
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("\"binary_sha256\": \""))
-        .and_then(|rest| rest.strip_suffix('"'))
-        .expect("a digest");
-    assert_eq!(digest.len(), 64, "{digest}");
+    assert_eq!(
+        field(&record, "binary_sha256"),
+        sha256(&world.installed()),
+        "the record's digest is the installed file's"
+    );
+    assert!(
+        fs::read_dir(&world.root)
+            .expect("the root")
+            .flatten()
+            .all(|entry| entry.file_name() == "bin"),
+        "the fresh root is removed"
+    );
+    assert!(
+        fs::read_dir(world.root.join("bin"))
+            .expect("bin")
+            .flatten()
+            .all(|entry| entry.file_name() == "takt"),
+        "the binary before it is not kept beside the new one"
+    );
     // A second promotion the same UTC day is refused, naming the first.
     let (code, out, err) = world.promote(&card, &[]);
     assert_eq!(code, 1, "{out}{err}");
@@ -496,11 +688,7 @@ fn a_candidate_within_the_rule_is_installed_and_recorded() {
 fn a_worse_candidate_is_refused_recorded_and_not_judged_again() {
     let world = World::new("refused", BASELINE_TOKENS, FIVE_APPROVALS);
     world.record_baseline();
-    let two_worse = world.candidate_card(
-        "two-worse",
-        [110_000, 120_000, 125_000, 130_000, 135_000],
-        [APPROVAL, APPROVAL, APPROVAL, ERROR, ERROR],
-    );
+    let two_worse = world.candidate_card("two-worse", WITHIN_TOKENS, TWO_WORSE);
     let (code, out, err) = world.promote(&two_worse, &[]);
     assert_eq!(code, 3, "{out}{err}");
     assert!(
@@ -508,7 +696,7 @@ fn a_worse_candidate_is_refused_recorded_and_not_judged_again() {
         "{out}"
     );
     assert!(out.contains("verdict: refused, 1 scenario worse"), "{out}");
-    assert!(!world.installed().exists(), "nothing is installed");
+    world.assert_untouched();
     let mut expected = baseline_files();
     expected.push(format!("{}.refused.json", world.revision));
     expected.sort();
@@ -533,7 +721,7 @@ fn a_worse_candidate_is_refused_recorded_and_not_judged_again() {
         out.contains("median tokens 140000 exceeds the saved maximum 138160"),
         "{out}"
     );
-    assert!(!world.installed().exists(), "nothing is installed");
+    world.assert_untouched();
 }
 
 /// `--dry-run` prints the verdict and the record it would write, and writes and installs
@@ -554,11 +742,12 @@ fn dry_run_prints_the_verdict_and_the_record_and_writes_nothing() {
         out.contains("\"kind\": \"promotion\""),
         "the record it would write: {out}"
     );
-    assert!(!world.installed().exists(), "nothing is installed");
+    world.assert_untouched();
     assert_eq!(world.records(), baseline_files());
+    assert!(!world.store.join(LOCK).exists(), "a dry run takes no lock");
     let worse = world.candidate_card(
         "worse",
-        [110_000, 120_000, 125_000, 130_000, 135_000],
+        WITHIN_TOKENS,
         [ERROR, ERROR, APPROVAL, APPROVAL, APPROVAL],
     );
     let (code, out, err) = world.promote(&worse, &["--dry-run"]);
@@ -627,7 +816,7 @@ fn a_scorecard_or_checkout_the_rule_cannot_trust_is_refused() {
     let (code, out, err) = world.promote(&card, &[]);
     assert_eq!(code, 1, "{out}{err}");
     assert!(err.contains("uncommitted or untracked"), "{err}");
-    assert!(!world.installed().exists(), "nothing is installed");
+    world.assert_untouched();
     assert_eq!(world.records(), baseline_files());
 }
 
@@ -641,6 +830,7 @@ fn help_lists_the_exit_codes() {
         "  0  promoted",
         "  3  refused on the scorecard",
         "  5  ",
+        "bubblewrap",
     ] {
         assert!(out.contains(line), "{line} in {out}");
     }
@@ -672,14 +862,8 @@ fn a_scorecard_under_another_rule_or_definition_is_refused() {
         err.contains("metric tokens is at definition version 9"),
         "{err}"
     );
-    assert!(!world.installed().exists());
-    assert_eq!(
-        world.records(),
-        vec![
-            format!("{BASELINE_REVISION}.json"),
-            format!("{BASELINE_REVISION}.scorecard.json")
-        ]
-    );
+    world.assert_untouched();
+    assert_eq!(world.records(), baseline_files());
 }
 
 /// The store is read fail-closed: a file takt does not read, a record whose name does not
@@ -737,17 +921,7 @@ fn the_same_tree_under_another_commit_is_recorded_already() {
     );
     let again = git(&world.repo, &["rev-parse", "HEAD"]);
     assert_ne!(again, world.revision);
-    let cases = world.outer.join("again-cases");
-    fs::create_dir_all(&cases).expect("a directory");
-    for (n, tokens) in BASELINE_TOKENS.iter().enumerate() {
-        run(
-            &cases,
-            &format!("scenario-1-trial-{}", n + 21),
-            *tokens,
-            APPROVAL,
-        );
-    }
-    let card = World::save(&cases, &world.outer.join("again-saves"), &again);
+    let card = world.passing_card("again", &again);
     let (code, out, err) = world.promote(&card, &[]);
     assert_eq!(code, 1, "{out}{err}");
     assert!(
@@ -790,7 +964,7 @@ fn paths_that_land_inside_the_repository_are_refused() {
     assert_eq!(code, 1, "{out}{err}");
     assert!(err.contains("2 links"), "{err}");
     fs::remove_file(&link).expect("removed");
-    assert!(!world.installed().exists());
+    world.assert_untouched();
 }
 
 /// A candidate that holds but does not build, or builds a binary naming another revision, is
@@ -799,67 +973,35 @@ fn paths_that_land_inside_the_repository_are_refused() {
 fn a_failed_or_foreign_build_leaves_the_installed_binary_and_records_nothing() {
     let world = World::new("build-fails", BASELINE_TOKENS, FIVE_APPROVALS);
     world.record_baseline();
-    let bin = world.root.join("bin");
-    fs::create_dir_all(&bin).expect("a directory");
-    write(&bin.join("takt"), "#!/bin/sh\necho old\n");
     // A commit whose source does not compile.
     write(
         &world.repo.join("crates/takt-cli/src/main.rs"),
         "fn main() { this is no rust }\n",
     );
-    git(&world.repo, &["commit", "-q", "-am", "broken"]);
-    let broken = git(&world.repo, &["rev-parse", "HEAD"]);
-    let cases = world.outer.join("broken-cases");
-    fs::create_dir_all(&cases).expect("a directory");
-    for (n, tokens) in BASELINE_TOKENS.iter().enumerate() {
-        run(
-            &cases,
-            &format!("scenario-1-trial-{}", n + 31),
-            *tokens,
-            APPROVAL,
-        );
-    }
-    let card = World::save(&cases, &world.outer.join("broken-saves"), &broken);
+    let broken = world.commit("broken");
+    let card = world.passing_card("broken", &broken);
     let (code, out, err) = world.promote(&card, &[]);
     assert_eq!(code, 5, "{out}{err}");
-    assert_eq!(
-        fs::read_to_string(bin.join("takt")).expect("the old binary"),
-        "#!/bin/sh\necho old\n",
-        "the installed binary is untouched"
-    );
+    world.assert_untouched();
     // A commit whose build script embeds a revision that is not the commit's.
     write(&world.repo.join("crates/takt-cli/src/main.rs"), TAKT_MAIN);
     write(
         &world.repo.join("crates/takt-cli/build.rs"),
         "fn main() {\n    println!(\"cargo:rustc-env=TAKT_REVISION=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\");\n}\n",
     );
-    git(&world.repo, &["commit", "-q", "-am", "foreign revision"]);
-    let foreign = git(&world.repo, &["rev-parse", "HEAD"]);
-    let cases = world.outer.join("foreign-cases");
-    fs::create_dir_all(&cases).expect("a directory");
-    for (n, tokens) in BASELINE_TOKENS.iter().enumerate() {
-        run(
-            &cases,
-            &format!("scenario-1-trial-{}", n + 41),
-            *tokens,
-            APPROVAL,
-        );
-    }
-    let card = World::save(&cases, &world.outer.join("foreign-saves"), &foreign);
+    let foreign = world.commit("foreign revision");
+    let card = world.passing_card("foreign", &foreign);
     let (code, out, err) = world.promote(&card, &[]);
     assert_eq!(code, 5, "{out}{err}");
     assert!(err.contains("deadbeef") && err.contains(&foreign), "{err}");
-    assert_eq!(
-        fs::read_to_string(bin.join("takt")).expect("the old binary"),
-        "#!/bin/sh\necho old\n"
-    );
-    assert_eq!(
-        world.records(),
-        vec![
-            format!("{BASELINE_REVISION}.json"),
-            format!("{BASELINE_REVISION}.scorecard.json")
-        ],
-        "nothing recorded"
+    world.assert_untouched();
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+    assert!(
+        fs::read_dir(&world.root)
+            .expect("the root")
+            .flatten()
+            .all(|entry| entry.file_name() == "bin"),
+        "no fresh root is left"
     );
 }
 
@@ -887,4 +1029,421 @@ fn a_baseline_with_fewer_cases_than_the_trials_judges_nothing() {
     let (code, out, err) = world.promote(&card, &["--dry-run"]);
     assert_eq!(code, 1, "{out}{err}");
     assert!(err.contains("the baseline has 3 cases"), "{err}");
+}
+
+/// The build reads nothing outside the commit (probes N1, N2, N3, N4, N6, N7, N9 and V2a): a
+/// `RUSTC`, `RUSTC_WRAPPER`, `CARGO_ENCODED_RUSTFLAGS`, `CARGO_PROFILE_*` or `RUSTUP_TOOLCHAIN`
+/// in the caller's environment, a `.cargo/config.toml` in an ancestor of the build directory or
+/// in the caller's `CARGO_HOME`, and a `cargo` earlier on `PATH` change nothing: the wrapper and
+/// the planted cargo never run, no linker map is written, debug assertions stay off, and the
+/// build succeeds.
+#[test]
+fn the_build_reads_nothing_outside_the_commit() {
+    let world = World::new("outside", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card("outside", BASELINE_TOKENS, FIVE_APPROVALS);
+    let log = world.outer.join("wrap.log");
+    let wrapper = world.outer.join("wrap.sh");
+    script(
+        &wrapper,
+        &format!(
+            "#!/bin/sh\necho \"INJECTED $0 $*\" >> '{}'\nexit 1\n",
+            log.display()
+        ),
+    );
+    let config = format!("[build]\nrustc-wrapper = \"{}\"\n", wrapper.display());
+    write(&world.outer.join("cache/.cargo/config.toml"), &config);
+    let cargo_home = world.outer.join("cargo-home-with-config");
+    write(&cargo_home.join("config.toml"), &config);
+    let planted = world.outer.join("planted");
+    script(
+        &planted.join("cargo"),
+        &format!(
+            "#!/bin/sh\necho \"INJECTED planted cargo $*\" >> '{}'\nexit 1\n",
+            log.display()
+        ),
+    );
+    let path = format!(
+        "{}:{}",
+        planted.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let encoded = format!(
+        "-Clink-args=-Wl,-Map={}",
+        world.outer.join("encoded.map").display()
+    );
+    let rustflags = format!(
+        "-Clink-args=-Wl,-Map={}",
+        world.outer.join("rustflags.map").display()
+    );
+    let target_dir = world.outer.join("tdir");
+    let wrapper_text = wrapper.to_str().expect("utf-8");
+    let (code, out, err) = world.promote_with(
+        &card,
+        &[],
+        &[
+            ("PATH", path.as_str()),
+            ("RUSTC", wrapper_text),
+            ("RUSTC_WRAPPER", wrapper_text),
+            ("RUSTC_WORKSPACE_WRAPPER", wrapper_text),
+            ("CARGO_BUILD_RUSTC_WRAPPER", wrapper_text),
+            ("CARGO_ENCODED_RUSTFLAGS", encoded.as_str()),
+            ("RUSTFLAGS", rustflags.as_str()),
+            ("CARGO_TARGET_DIR", target_dir.to_str().expect("utf-8")),
+            ("CARGO_HOME", cargo_home.to_str().expect("utf-8")),
+            ("CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS", "true"),
+            ("RUSTUP_TOOLCHAIN", "no-such-toolchain-for-takt"),
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(world.version(), format!("takt 0.1.0 ({})", world.revision));
+    assert!(
+        !log.exists(),
+        "neither the wrapper nor the planted cargo ran"
+    );
+    assert!(
+        !world.outer.join("encoded.map").exists() && !world.outer.join("rustflags.map").exists(),
+        "no linker map is written"
+    );
+    assert!(!target_dir.exists(), "CARGO_TARGET_DIR is not used");
+    let probe = Command::new(world.installed())
+        .arg("--probe")
+        .output()
+        .expect("the installed takt runs");
+    assert_eq!(
+        String::from_utf8_lossy(&probe.stdout).trim(),
+        "debug_assertions=false",
+        "the release profile is the commit's"
+    );
+}
+
+/// A `rustc` first on `PATH` that prints a false sysroot, whose `bin/cargo` and `bin/rustc`
+/// would inject, changes nothing: the toolchain is rustup's default as its settings file names
+/// it, so neither the planted rustc nor anything under the false sysroot runs, and the
+/// candidate is built and installed.
+#[test]
+fn a_planted_rustc_on_path_is_ignored() {
+    let world = World::new("planted-rustc", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card("planted-rustc", BASELINE_TOKENS, FIVE_APPROVALS);
+    let log = world.outer.join("planted.log");
+    let sysroot = world.outer.join("false-sysroot");
+    fs::create_dir_all(sysroot.join("lib/rustlib")).expect("a directory");
+    for binary in ["cargo", "rustc"] {
+        script(
+            &sysroot.join("bin").join(binary),
+            &format!(
+                "#!/bin/sh\necho \"INJECTED false sysroot {binary} $*\" >> '{}'\nexit 1\n",
+                log.display()
+            ),
+        );
+    }
+    let planted = world.outer.join("planted-bin");
+    script(
+        &planted.join("rustc"),
+        &format!(
+            "#!/bin/sh\necho \"INJECTED planted rustc $*\" >> '{}'\nif [ \"$1 $2\" = \"--print sysroot\" ]; then echo '{}'; exit 0; fi\nexit 1\n",
+            log.display(),
+            sysroot.display()
+        ),
+    );
+    let path = format!(
+        "{}:{}",
+        planted.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let (code, out, err) = world.promote_with(&card, &[], &[("PATH", path.as_str())]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        !log.exists(),
+        "neither the planted rustc nor the false sysroot ran: {}",
+        fs::read_to_string(&log).unwrap_or_default()
+    );
+    assert_eq!(world.version(), format!("takt 0.1.0 ({})", world.revision));
+}
+
+/// A committed `.cargo/config.toml` naming a wrapper outside the repository fails the build
+/// (probe N5): the path does not exist inside the confinement, so exit 5, the wrapper never
+/// runs, the old binary is untouched and nothing is recorded.
+#[test]
+fn a_committed_cargo_config_naming_an_outside_wrapper_fails_the_build() {
+    let world = World::new("committed-config", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let log = world.outer.join("wrap.log");
+    let wrapper = world.outer.join("wrap.sh");
+    script(
+        &wrapper,
+        &format!(
+            "#!/bin/sh\necho \"INJECTED $*\" >> '{}'\nshift\nexec \"$@\"\n",
+            log.display()
+        ),
+    );
+    write(
+        &world.repo.join(".cargo/config.toml"),
+        &format!("[build]\nrustc-wrapper = \"{}\"\n", wrapper.display()),
+    );
+    let revision = world.commit("a wrapper outside the repository");
+    let card = world.passing_card("committed-config", &revision);
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 5, "{out}{err}");
+    assert!(!log.exists(), "the wrapper never ran: {err}");
+    world.assert_untouched();
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// A committed `rust-toolchain.toml` with a `path` is refused by name before anything is
+/// judged (probe N8): exit 1, nothing written, the old binary untouched.
+#[test]
+fn a_committed_rust_toolchain_path_is_refused() {
+    let world = World::new("toolchain-path", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let toolchain = world.outer.join("toolchain");
+    fs::create_dir_all(toolchain.join("bin")).expect("a directory");
+    write(
+        &world.repo.join("rust-toolchain.toml"),
+        &format!("[toolchain]\npath = \"{}\"\n", toolchain.display()),
+    );
+    let revision = world.commit("a toolchain outside the repository");
+    let card = world.passing_card("toolchain-path", &revision);
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("rust-toolchain.toml") && err.contains("`path`"),
+        "{err}"
+    );
+    world.assert_untouched();
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// The candidate's code, run during the promotion (its `build.rs`, its `--version`), cannot
+/// reach the store and cannot outlive the build (probe N15): the record it plants is not in the
+/// store, and the sleeper it leaves is gone when `takt promote` returns.
+#[test]
+fn the_candidate_cannot_reach_the_store_or_outlive_its_build() {
+    let world = World::new("plant", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let marker = format!("takt-promote-n15-{}", std::process::id());
+    let plant = PLANT
+        .replace("__STORE__", world.store.to_str().expect("utf-8"))
+        .replace("__MARKER__", &marker);
+    write(
+        &world.repo.join("crates/takt-cli/build.rs"),
+        &format!(
+            "{}{plant}",
+            TAKT_BUILD.replacen("fn main() {\n", "fn main() {\n    plant();\n", 1)
+        ),
+    );
+    write(
+        &world.repo.join("crates/takt-cli/src/main.rs"),
+        &format!(
+            "{}{plant}",
+            TAKT_MAIN.replacen("fn main() {\n", "fn main() {\n    plant();\n", 1)
+        ),
+    );
+    let revision = world.commit("plant");
+    let card = world.passing_card("plant", &revision);
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(
+        processes_holding(&marker),
+        Vec::<String>::new(),
+        "the sleeper died with the build"
+    );
+    let mut expected = baseline_files();
+    expected.push(format!("{revision}.json"));
+    expected.push(format!("{revision}.scorecard.json"));
+    expected.sort();
+    assert_eq!(world.records(), expected, "the store holds what takt wrote");
+    let record = world.record(&format!("{revision}.json"));
+    assert!(record.contains("\"kind\": \"promotion\""), "{record}");
+    // The planting binary is not run on the host here: its `--version` would plant from
+    // outside the confinement. The record's digest is the installed file's instead.
+    assert_eq!(field(&record, "revision"), revision);
+    assert_eq!(field(&record, "binary_sha256"), sha256(&world.installed()));
+}
+
+/// A record that cannot be written leaves the installed binary untouched (probe N10): the
+/// record is written before the binary moves into place, so a store that refuses the write is
+/// exit 1 with nothing installed and nothing recorded.
+#[test]
+fn a_record_that_cannot_be_written_leaves_the_binary_untouched() {
+    let world = World::new("readonly-store", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card("readonly", BASELINE_TOKENS, FIVE_APPROVALS);
+    write(&world.store.join(LOCK), "");
+    fs::set_permissions(&world.store, fs::Permissions::from_mode(0o555)).expect("read-only");
+    let (code, out, err) = world.promote(&card, &[]);
+    fs::set_permissions(&world.store, fs::Permissions::from_mode(0o755)).expect("writable");
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("Permission denied"), "{err}");
+    world.assert_untouched();
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// A binary that names another revision once it sits at `<root>/bin/takt` is rolled back
+/// (probe N11): exit 5, the binary before it back in place, the record removed.
+#[test]
+fn a_binary_that_changes_once_installed_is_rolled_back() {
+    let world = World::new("flip", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    write(
+        &world.repo.join("crates/takt-cli/src/main.rs"),
+        &FLIPPING_MAIN
+            .replace("__TARGET__", INSIDE_TARGET)
+            .replace("__INSTALL__", INSIDE_INSTALL),
+    );
+    let revision = world.commit("flip");
+    let card = world.passing_card("flip", &revision);
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 5, "{out}{err}");
+    assert!(
+        err.contains("something-else") && err.contains("back at"),
+        "{err}"
+    );
+    world.assert_untouched();
+    assert_eq!(world.records(), baseline_files(), "the record is removed");
+    assert!(
+        fs::read_dir(world.root.join("bin"))
+            .expect("bin")
+            .flatten()
+            .all(|entry| entry.file_name() == "takt"),
+        "no backup is left beside the binary"
+    );
+}
+
+/// Two promotions started together record and install exactly one (probe N12): the other
+/// refuses naming the store's lock, or sees the first's record.
+#[test]
+fn two_promotions_at_once_record_and_install_exactly_one() {
+    let world = World::new("two-at-once", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card("one", BASELINE_TOKENS, FIVE_APPROVALS);
+    let second = world.outer.join("candidate-two");
+    git(
+        &world.outer,
+        &[
+            "clone",
+            "-q",
+            "--no-hardlinks",
+            world.repo.to_str().expect("utf-8"),
+            second.to_str().expect("utf-8"),
+        ],
+    );
+    write(&second.join("two.txt"), "two\n");
+    git(&second, &["add", "-A"]);
+    git(&second, &["commit", "-q", "-m", "two"]);
+    let other = git(&second, &["rev-parse", "HEAD"]);
+    let other_card = world.passing_card("two", &other);
+    let env = world.env();
+    let spawn = |repo: &Path, scorecard: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_takt"))
+            .args(world.args(repo, scorecard))
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("takt starts")
+    };
+    let first = spawn(&world.repo, &card);
+    let second_run = spawn(&second, &other_card);
+    let outputs: Vec<(i32, String, String)> = [first, second_run]
+        .into_iter()
+        .map(|child| {
+            let output = child.wait_with_output().expect("takt ends");
+            (
+                output.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&output.stdout).into_owned(),
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            )
+        })
+        .collect();
+    let promoted: Vec<&(i32, String, String)> =
+        outputs.iter().filter(|(code, _, _)| *code == 0).collect();
+    assert_eq!(promoted.len(), 1, "exactly one promotes: {outputs:?}");
+    let refused: Vec<&(i32, String, String)> =
+        outputs.iter().filter(|(code, _, _)| *code != 0).collect();
+    assert_eq!(refused.len(), 1, "{outputs:?}");
+    let (code, _, err) = refused[0];
+    assert_eq!(*code, 1, "{err}");
+    assert!(
+        err.contains("holds the store lock")
+            || err.contains("this UTC day already")
+            || err.contains("recorded already"),
+        "{err}"
+    );
+    let records = world.records();
+    assert_eq!(records.len(), 4, "one promotion recorded: {records:?}");
+    let recorded = records
+        .iter()
+        .find(|name| {
+            name.ends_with(".json")
+                && !name.ends_with(".scorecard.json")
+                && !name.starts_with(BASELINE_REVISION)
+        })
+        .expect("the promotion's record");
+    let record = world.record(recorded);
+    let revision = field(&record, "revision");
+    assert_eq!(
+        world.version(),
+        format!("takt 0.1.0 ({revision})"),
+        "the installed binary is the recorded one"
+    );
+    assert_eq!(field(&record, "binary_sha256"), sha256(&world.installed()));
+}
+
+/// A record removed from the store is noticed (probe N13): the installed binary must name the
+/// latest record, so a promotion whose record was removed refuses naming both; and a record
+/// removed from between two breaks the chain of digests, refusing and naming the gap.
+#[test]
+fn a_removed_record_is_noticed() {
+    let world = World::new("removed-end", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card("first", BASELINE_TOKENS, FIVE_APPROVALS);
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    let promoted = world.revision.clone();
+    fs::remove_file(world.store.join(format!("{promoted}.json"))).expect("removed");
+    fs::remove_file(world.store.join(format!("{promoted}.scorecard.json"))).expect("removed");
+    write(&world.repo.join("c.txt"), "c\n");
+    let next = world.commit("c");
+    let card = world.passing_card("next", &next);
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains(&format!("names {promoted}"))
+            && err.contains(BASELINE_REVISION)
+            && err.contains("a record is missing"),
+        "{err}"
+    );
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+
+    let world = World::new("removed-between", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let worse = world.candidate_card("worse", WITHIN_TOKENS, TWO_WORSE);
+    let (code, out, err) = world.promote(&worse, &[]);
+    assert_eq!(code, 3, "{out}{err}");
+    let refused = world.store.join(format!("{}.refused.json", world.revision));
+    write(&world.repo.join("d.txt"), "d\n");
+    let good = world.commit("d");
+    let card = world.passing_card("good", &good);
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    let record = world.record(&format!("{good}.json"));
+    assert_eq!(
+        field(&record, "previous_sha256"),
+        sha256(&refused),
+        "the promotion chains to the refusal before it"
+    );
+    fs::remove_file(&refused).expect("removed");
+    write(&world.repo.join("e.txt"), "e\n");
+    let later = world.commit("e");
+    let card = world.passing_card("later", &later);
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("previous_sha256")
+            && err.contains(&format!("{good}.json"))
+            && err.contains("missing"),
+        "the gap is named: {err}"
+    );
 }

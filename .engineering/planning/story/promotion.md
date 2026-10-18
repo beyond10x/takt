@@ -26,7 +26,7 @@ scope:
   path: crates/takt/src/promotion.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 13
+revision: 14
 ---
 # Story: promotion
 
@@ -59,6 +59,27 @@ store must lie outside the candidate's repository; a refused candidate is record
 (`<revision>.refused.json`) and not judged again until it changes; the `promoted` validator stays
 with story:self-improvement-protocol; `--dry-run` prints the verdict and the record it would write
 and writes nothing, so R0 turns can use the verdict before the install path is trusted.
+
+Confinement, decided 2026-10-19 after the second review (the planner, under the owner's standing
+grant): the candidate's build, and every run of its binary during a promotion, is confined in
+bubblewrap (`bwrap`, its own process and network namespaces, dying with takt) where only the
+fresh clone, a scratch `CARGO_HOME` holding read-only binds of the host's registry cache and
+index, the toolchain takt resolves itself (rustup's default toolchain as its settings file
+names it, its cargo and the sibling rustc called directly, never a binary found on PATH, never a
+rustup proxy) and the system
+directories are visible, the environment cleared, `cargo build --locked --offline`; the store,
+the install root and the real home are not mounted, so nothing the commit runs reads a setting
+outside it, writes into the store or outlives the build. A committed `rust-toolchain.toml` with
+a `path` is refused by name, and so is a missing `bwrap`; a candidate is never built unconfined.
+The store holds an exclusive lock (`.lock`, `flock`) from its reading to its writing, so two
+promotions at once record one. The record is written before the binary moves into place, and a
+failure after the move puts the binary before it back and removes the record, so exit 1 and exit
+5 both leave nothing recorded and the installed binary unchanged; the binary is hashed in place
+and must match the staged digest. Each record carries the digest of the record before it
+(`previous_sha256`, null on the first), a chain with a gap refuses naming it, the installed
+binary's `--version` must name the latest baseline or promotion before anything is judged,
+`--baseline-only` requires it to name the revision it records, and `promoted_at` is read after
+the build.
 
 ## Domain relations
 
