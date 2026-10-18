@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:judge-surface-delegation-text
 kind: story
-status: draft
+status: active
 title: Agent rules and protocols state the owner's delegation of judge-surface grants
 summary: AGENTS.md, the operator profile and both improvement protocols carry the delegation-on-record rule of the owner decision at 3ad0bd9
 relations:
@@ -17,7 +17,10 @@ scope:
   path: protocols/loop-improvement/1.yaml
 - confidence: cited
   path: protocols/self-improvement/1.yaml
-revision: 3
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 5}
 ---
 # Story: judge-surface-delegation-text
 

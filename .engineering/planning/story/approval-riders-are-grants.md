@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:approval-riders-are-grants
 kind: story
-status: draft
+status: active
 title: Only approval records of granted capabilities ride on a granted revision
 summary: approvals_only reads each riding evidence file and accepts only approval records matching a grant in authority.yaml
 relations:
@@ -13,7 +13,10 @@ scope:
   path: crates/takt/src/case.rs
 - confidence: inferred
   path: crates/takt/tests/approval_riders.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 6}
 ---
 # Story: approval-riders-are-grants
 

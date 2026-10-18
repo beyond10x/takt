@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:citation-check-in-task-check
 kind: story
-status: draft
+status: active
 title: task check fails on a stale read-from citation in ess/
 summary: the citation checker is committed and runs in task check
 relations:
@@ -15,7 +15,10 @@ scope:
   path: Taskfile.yml
 - confidence: inferred
   path: scripts/check-citations
-revision: 3
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-18T14:01:47Z", actor: "human:timo", revision: 5}
 ---
 # Story: citation-check-in-task-check
 

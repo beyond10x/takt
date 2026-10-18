@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scenario-run-help-exit-codes
 kind: story
-status: draft
+status: active
 title: takt scenario run --help lists only the exit codes that verb gives
 tags:
 - finding
@@ -15,7 +15,10 @@ relations:
 scope:
 - confidence: inferred
   path: crates/takt-cli/src/main.rs
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T14:01:47Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-18T14:01:47Z", actor: "human:timo", revision: 4}
 ---
 # Story: scenario-run-help-exit-codes
 

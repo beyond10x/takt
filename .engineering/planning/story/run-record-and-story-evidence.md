@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-record-and-story-evidence
 kind: story
-status: draft
+status: active
 title: Record each run as events and as evidence on the story in the planning store
 summary: events.jsonl per case; test_result evidence on the story; implemented on a record
 relations:
@@ -21,7 +21,10 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/tests/run_record.rs
-revision: 6
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":2}}}
+- {from: "proposed", to: "active", at: "2026-10-18T14:01:46Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"review_outcome":2}}}
 ---
 # Story: run-record-and-story-evidence
 
