@@ -87,11 +87,13 @@ types:
     variants: [draft, proposed, active, implemented, rejected, archived]
 
   # What a run works on: an intent given on the command line, or a story the frontier pulls from
-  # the planning store. Today a run takes one intent, required, and nothing reads the store; the
-  # `story` variant is the design's `frontier(repo)`, built by story:frontier-next-ready-story.
+  # the planning store. Since wave 02 a run given no `--intent` asks the frontier: the next ready
+  # story (`proposed`, no blocker, every `depends_on` terminal, first in id order) becomes the
+  # unit and is moved `active` through the store's own verb once its case is open; the `story`
+  # variant is the design's `frontier(repo)`.
   # read from: docs/design/takt.md:38
-  # read from: crates/takt/src/run.rs:21-22
-  # read from: crates/takt-cli/src/main.rs:36-38
+  # read from: crates/takt/src/frontier.rs:152
+  # read from: crates/takt/src/run.rs:157
   - name: takt.work.Unit
     kind: union
     tag: kind
