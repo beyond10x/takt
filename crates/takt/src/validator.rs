@@ -678,11 +678,13 @@ impl Validator for CiRead {
 /// reports afterwards: `merged` once it is, `closed` for a pull request closed unmerged. The
 /// loop takes the step only when Canon admits the action, and Canon admits it only under a
 /// recorded grant of `repository.merge` read from the case's `authority.yaml`: a connection to
-/// the forge is never authority. Nothing is merged unless the forge reports the pull request's
-/// head as the case's branch at the revision, and the merge names that head, so a head that
-/// moved meanwhile is refused by the forge rather than merged. A pull request already merged is
-/// recorded without a second merge; one the forge still reports open after the merge writes no
-/// record, because a claim that could not be observed stays unknown.
+/// the forge is never authority. The grant authorises the implementation revision it was given
+/// at and no other, and the step checks that again itself: an open pull request at a revision
+/// the case holds no grant for is not merged. Nothing is merged unless the forge reports the
+/// pull request's head as the case's branch at the revision, and the merge names that head, so
+/// a head that moved meanwhile is refused by the forge rather than merged. A pull request
+/// already merged is recorded without a second merge; one the forge still reports open after
+/// the merge writes no record, because a claim that could not be observed stays unknown.
 pub struct PrMerged {
     /// The forge the merge goes through and the state is read from.
     pub forge: Rc<dyn Forge>,
@@ -759,6 +761,28 @@ impl Validator for PrMerged {
         }
         let (state, merged_now) = match view.state {
             PullRequestState::Open => {
+                // The grant authorises the revision the case reached the gate at and no other:
+                // checked here as well as in the evaluation that admitted the step.
+                let authority = crate::case::Authority::read(&dir)?.unwrap_or_default();
+                if !authority.grants_at(self.action(), revision) {
+                    let granted = authority
+                        .decision(self.action())
+                        .filter(|decision| decision.decision == crate::case::Grant::Granted)
+                        .map_or_else(
+                            || "the case holds no grant of it".to_owned(),
+                            |decision| {
+                                format!(
+                                    "the case's grant is for {}",
+                                    decision.revision.as_deref().map_or("no revision", short)
+                                )
+                            },
+                        );
+                    return Ok(nothing(format!(
+                        "pull request #{number} at {} is open, and {} is not granted at that revision ({granted}); nothing merged, the claim stays unknown",
+                        short(revision),
+                        self.action()
+                    )));
+                }
                 self.forge
                     .merge(tree, &dir.join("artifacts"), number, revision)
                     .with_context(|| {
