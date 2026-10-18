@@ -110,7 +110,10 @@ struct RunArgs {
     forge: Option<String>,
 }
 
-/// A harness that performs nothing: the loop stops when only judgement steps are left.
+/// A harness that performs nothing. Asked while an approval is pending, it requests the gate
+/// action, changing no file, so the run stops `ApprovalRequired` and `takt approve` is the
+/// next step; asked for a judgement step with no approval pending, it ends the run with an
+/// error, because nothing performs that step.
 struct NoHarness;
 
 impl Harness for NoHarness {
@@ -119,10 +122,16 @@ impl Harness for NoHarness {
     }
 
     fn step(&self, context: &takt::StepContext<'_>) -> Result<takt::StepReport> {
+        if let Some(gate) = context.approvals.first() {
+            return Ok(takt::StepReport {
+                action: gate.clone(),
+                summary: "no harness: nothing but the approval is left; requesting it".to_owned(),
+                tokens: None,
+            });
+        }
         Err(anyhow!(
-            "no harness: a judgement step among {} is left (approvals: {})",
-            context.offered.join(", "),
-            context.approvals.join(", ")
+            "no harness: a judgement step among {} is left",
+            context.offered.join(", ")
         ))
     }
 }

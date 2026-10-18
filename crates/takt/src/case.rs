@@ -206,11 +206,43 @@ impl Approval {
     }
 }
 
+/// The capabilities the actions of the case's protocol require, read from the case's own
+/// `protocol.yaml` (each action's `requires` list of `capability` entries), sorted, with the
+/// protocol's id: what a grant may name.
+fn required_capabilities(case_dir: &Path) -> Result<(String, Vec<String>)> {
+    let path = case_dir.join("protocol.yaml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    let id = format!(
+        "{}/{}",
+        doc["protocol"]["id"].as_str().unwrap_or("?"),
+        doc["protocol"]["revision"].as_u64().unwrap_or(0)
+    );
+    let mut capabilities: Vec<String> = doc["actions"]
+        .as_mapping()
+        .map(|actions| {
+            actions
+                .values()
+                .filter_map(|action| action["requires"].as_sequence())
+                .flatten()
+                .filter_map(|requirement| requirement["capability"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    capabilities.sort();
+    capabilities.dedup();
+    Ok((id, capabilities))
+}
+
 /// Grants `capability` to the case `id` under `tree`, decided by `approver` now: the decision
 /// is appended to the case's `authority.yaml`, and what was granted is answered for the store
 /// to record. Refused with nothing written: a case that does not exist, a capability that is
-/// not an identifier, a capability the case already decides (Canon refuses a capability
-/// decided twice, so a second grant would break every later evaluation), an empty approver.
+/// not an identifier, a capability no action of the case's protocol requires (a grant nothing
+/// asks for is a typo, told at the command line rather than by a run that stops at the gate
+/// again), a capability the case already decides (Canon refuses a capability decided twice,
+/// so a second grant would break every later evaluation), an empty approver.
 pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<Approval> {
     let dir = tree.join(CASES_DIR).join(id);
     if !dir.join("case.yaml").is_file() {
@@ -225,6 +257,18 @@ pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<
     }
     if approver.trim().is_empty() {
         bail!("the approver is empty; say who grants {capability}");
+    }
+    let (protocol, required) = required_capabilities(&dir)?;
+    if !required.iter().any(|required| required == capability) {
+        if required.is_empty() {
+            bail!(
+                "no action of {protocol} requires a capability; {capability} grants the case {id} nothing"
+            );
+        }
+        bail!(
+            "no action of {protocol} requires {capability}; the capabilities its actions require: {}",
+            required.join(", ")
+        );
     }
     let mut authority = Authority::read(&dir)?.unwrap_or_default();
     if let Some(decided) = authority.decision(capability) {
@@ -271,9 +315,38 @@ pub fn story_of(case_dir: &Path) -> Result<Option<String>> {
     Ok(Some(story.id))
 }
 
+/// The latest decision written under the case, the `decisions/*.json` with the highest name;
+/// `None` before the first evaluation.
+pub fn latest_decision(case_dir: &Path) -> Result<Option<Decision>> {
+    let decisions = case_dir.join("decisions");
+    if !decisions.is_dir() {
+        return Ok(None);
+    }
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(&decisions)
+        .with_context(|| format!("read {}", decisions.display()))?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    paths.sort();
+    let Some(latest) = paths.last() else {
+        return Ok(None);
+    };
+    let json =
+        std::fs::read_to_string(latest).with_context(|| format!("read {}", latest.display()))?;
+    Decision::from_json(&json).map(Some)
+}
+
+/// Whether the case at `case_dir` is finished: its latest decision has a legitimate outcome.
+/// A finished case is not an open case; it stays on disk, and `takt run --case <id>` still
+/// resumes it, but the frontier does not.
+pub fn is_finished(case_dir: &Path) -> Result<bool> {
+    Ok(latest_decision(case_dir)?.is_some_and(|decision| !decision.legitimate().is_empty()))
+}
+
 /// The open case to resume for one of the stories `active`: the first case directory under
-/// `tree`, in name order, that records a story among them, as `(case id, story id)`. A story
-/// has at most one open case, so the first found is the one.
+/// `tree`, in name order, that records a story among them and is not finished, as `(case id,
+/// story id)`. A story has at most one open case, so the first found is the one; a finished
+/// case is skipped, so a story whose case completed and which the store still lists `active`
+/// (until the record story moves it) holds up no other story.
 pub fn resumable(tree: &Path, active: &[String]) -> Result<Option<(String, String)>> {
     let cases = tree.join(CASES_DIR);
     if active.is_empty() || !cases.is_dir() {
@@ -290,6 +363,7 @@ pub fn resumable(tree: &Path, active: &[String]) -> Result<Option<(String, Strin
         }
         if let Some(story) = story_of(&dir)?
             && active.contains(&story)
+            && !is_finished(&dir)?
         {
             let id = dir
                 .file_name()
@@ -474,8 +548,11 @@ impl CaseDir {
     /// Opens the case `id` that exists under `tree` again, for a run that resumes it: its files
     /// as they are, the records written so far counted so the next is numbered after them, the
     /// protocol from the case's own `protocol.yaml`, and the tree put on the case's branch,
-    /// which the validators resolve the case from. Nothing is written. A directory without a
-    /// `case.yaml` is no case.
+    /// which the validators resolve the case from. The implementation revision is the branch's
+    /// `HEAD`: a commit made on the branch between two runs moves it, and with it every claim
+    /// returns to unknown and the validators run again, so nothing goes through on records
+    /// about the commit before. Nothing else is written. A directory without a `case.yaml` is
+    /// no case.
     pub fn resume(tree: &Path, id: &str) -> Result<Self> {
         let dir = tree.join(CASES_DIR).join(id);
         let snapshot = dir.join("case.yaml");
@@ -502,6 +579,13 @@ impl CaseDir {
             written: 0,
         };
         case.written = case.evidence_texts()?.len();
+        let head = crate::git::head(tree)?;
+        if case
+            .revision("implementation")
+            .is_some_and(|revision| revision != head)
+        {
+            case.set_revision("implementation", &head)?;
+        }
         Ok(case)
     }
 

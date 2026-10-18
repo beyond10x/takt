@@ -350,24 +350,16 @@ fn title_of(intent: &str) -> String {
 
 /// The claims the case's latest decision holds, in id order; none before a decision.
 fn claims_held(case_dir: &Path) -> Result<Vec<String>> {
-    let decisions = case_dir.join("decisions");
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(&decisions)
-        .with_context(|| format!("read {}", decisions.display()))?
-        .map(|entry| entry.map(|e| e.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    paths.sort();
-    let Some(latest) = paths.last() else {
-        return Ok(Vec::new());
-    };
-    let json =
-        std::fs::read_to_string(latest).with_context(|| format!("read {}", latest.display()))?;
-    let decision = crate::Decision::from_json(&json)?;
-    Ok(decision
-        .claims
-        .iter()
-        .filter(|(_, value)| value.as_str() == "true")
-        .map(|(id, _)| id.clone())
-        .collect())
+    Ok(crate::case::latest_decision(case_dir)?
+        .map(|decision| {
+            decision
+                .claims
+                .iter()
+                .filter(|(_, value)| value.as_str() == "true")
+                .map(|(id, _)| id.clone())
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 /// The pull request's body: the intent, then the case, the revision and the claims that hold.

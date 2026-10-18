@@ -4,7 +4,7 @@
 //! opened: a case stopped at the gate is resumed once the operator has granted it, and the
 //! merge is then a deterministic step like any other.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -93,6 +93,69 @@ fn is_due(
         && !case.revision(validator.subject()).is_some_and(|revision| {
             observed_without_record.contains(&(validator.name().to_owned(), revision))
         })
+}
+
+/// Every file under `dir`, by path relative to it, with its bytes: the case directory as it is
+/// before a judgement step, which the step may not touch.
+fn snapshot(dir: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
+    fn walk(root: &Path, dir: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) -> Result<()> {
+        for entry in std::fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
+            let path = entry?.path();
+            if path.is_dir() {
+                walk(root, &path, files)?;
+            } else {
+                let bytes =
+                    std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+                files.insert(
+                    path.strip_prefix(root).unwrap_or(&path).to_path_buf(),
+                    bytes,
+                );
+            }
+        }
+        Ok(())
+    }
+    let mut files = BTreeMap::new();
+    if dir.is_dir() {
+        walk(dir, dir, &mut files)?;
+    }
+    Ok(files)
+}
+
+/// The paths at which two snapshots differ: added, removed or changed, in path order.
+fn differing(
+    before: &BTreeMap<PathBuf, Vec<u8>>,
+    after: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Vec<PathBuf> {
+    before
+        .keys()
+        .chain(after.keys())
+        .filter(|path| before.get(*path) != after.get(*path))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Puts `dir` back to `before` at the paths `changed`: a file changed or removed is written
+/// again as it was, one added is removed.
+fn restore(dir: &Path, before: &BTreeMap<PathBuf, Vec<u8>>, changed: &[PathBuf]) -> Result<()> {
+    for path in changed {
+        let full = dir.join(path);
+        match before.get(path) {
+            Some(bytes) => {
+                if let Some(parent) = full.parent() {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("create {}", parent.display()))?;
+                }
+                std::fs::write(&full, bytes)
+                    .with_context(|| format!("put back {}", full.display()))?;
+            }
+            None => {
+                std::fs::remove_file(&full).with_context(|| format!("remove {}", full.display()))?
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A run over one case.
@@ -448,7 +511,18 @@ impl<'a> Run<'a> {
             // What the step changed is the difference to what was already uncommitted: a
             // validator's run may leave files (a lock file) that are not the harness's doing.
             let before: Vec<String> = crate::git::changed_paths(&self.tree)?;
-            let report = self.harness.step(&context)?;
+            // The case directory is the kernel's: its files are what the next evaluation
+            // reads, and a harness that wrote into it (a grant, a record, a branch number, the
+            // protocol) would decide what only a validator or the operator decides. It is
+            // snapshotted before the step and put back after, whatever the step reported and
+            // however it ended; a step that touched it is refused.
+            let kept = snapshot(&self.case.dir)?;
+            let stepped = self.harness.step(&context);
+            let touched = differing(&kept, &snapshot(&self.case.dir)?);
+            if !touched.is_empty() {
+                restore(&self.case.dir, &kept, &touched)?;
+            }
+            let report = stepped?;
             if let Some(tokens) = report.tokens {
                 self.tokens += tokens;
             }
@@ -464,6 +538,20 @@ impl<'a> Run<'a> {
                 .into_iter()
                 .filter(|p| !p.starts_with(CASES_DIR) && !before.contains(p))
                 .collect();
+            if !touched.is_empty() {
+                crate::git::discard_all(&self.tree)?;
+                let paths: Vec<String> = touched.iter().map(|p| p.display().to_string()).collect();
+                let why = format!(
+                    "{} wrote into the case directory: {}",
+                    report.action,
+                    paths.join(", ")
+                );
+                writeln!(
+                    out,
+                    "  refused: {why}; the case directory was put back and the change discarded"
+                )?;
+                return Ok(Stop::StepRefused(why));
+            }
             if approvals.contains(&report.action) {
                 if !changed.is_empty() {
                     crate::git::discard_all(&self.tree)?;
