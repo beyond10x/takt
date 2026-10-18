@@ -263,8 +263,8 @@ impl std::fmt::Display for Grant {
 }
 
 /// One entry of the case's `authority.yaml`: the `capability` and `decision` a
-/// `canon-authority/1` entry has, and beside them who decided it, when, and at which
-/// implementation revision. Canon is handed the two keys it declares ([`Authority::canon`])
+/// `canon-authority/1` entry has, and beside them who decided it, when, and at which revision
+/// of the artifact the capability's action is about. Canon is handed the two keys it declares ([`Authority::canon`])
 /// and would refuse the others, which are the case's own record of the operator's decision;
 /// the revision is enforced by takt, not by Canon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -277,15 +277,17 @@ pub struct AuthorityDecision {
     pub approver: String,
     /// When, as [`crate::now`] writes an instant.
     pub granted_at: String,
-    /// The implementation revision the case was at the gate at when the grant was given: the
-    /// one revision it authorises. A grant without one (written before grants were bound to a
+    /// The revision of the artifact the capability's action is about
+    /// ([`LoadedProtocol::grant_subject`]: `implementation` for a delivery, `candidate` for an
+    /// improvement turn) the case was at the gate at when the grant was given: the one revision
+    /// it authorises. A grant without one (written before grants were bound to a
     /// revision) authorises none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
 }
 
 impl AuthorityDecision {
-    /// Whether the decision applies at the implementation revision `at`: a denial everywhere,
+    /// Whether the decision applies at the revision `at`: a denial everywhere,
     /// a grant only at the revision it was given at.
     #[must_use]
     pub fn applies_at(&self, at: Option<&str>) -> bool {
@@ -337,8 +339,8 @@ impl Authority {
             .find(|decision| decision.capability == capability)
     }
 
-    /// Whether the case holds a grant of `capability` at the implementation revision
-    /// `revision`.
+    /// Whether the case holds a grant of `capability` at `revision`, a revision of the artifact
+    /// the capability's action is about.
     #[must_use]
     pub fn grants_at(&self, capability: &str, revision: &str) -> bool {
         self.decision(capability).is_some_and(|decision| {
@@ -352,6 +354,14 @@ impl Authority {
     /// another revision is left out, so Canon finds the capability undecided and the action it
     /// guards approval-required again: a new commit needs a new grant.
     pub fn canon(&self, at: Option<&str>) -> Result<String> {
+        self.canon_by(|_| at.map(str::to_owned))
+    }
+
+    /// [`Authority::canon`], each decision read at the revision `revision_of` answers for its
+    /// capability: the case's revision of the artifact the capability's action is about
+    /// ([`LoadedProtocol::grant_subject`]); a grant whose capability has none authorises
+    /// nothing.
+    pub fn canon_by(&self, revision_of: impl Fn(&str) -> Option<String>) -> Result<String> {
         #[derive(Serialize)]
         struct Entry<'a> {
             capability: &'a str,
@@ -360,7 +370,7 @@ impl Authority {
         let entries: Vec<Entry<'_>> = self
             .decisions
             .iter()
-            .filter(|decision| decision.applies_at(at))
+            .filter(|decision| decision.applies_at(revision_of(&decision.capability).as_deref()))
             .map(|decision| Entry {
                 capability: &decision.capability,
                 decision: decision.decision,
@@ -385,7 +395,8 @@ pub struct Approval {
     pub approver: String,
     /// When, as [`crate::now`] writes an instant.
     pub granted_at: String,
-    /// The implementation revision the grant authorises: the one the case reached the gate at.
+    /// The revision the grant authorises: the one of the artifact its action is about that the
+    /// case reached the gate at.
     pub revision: String,
 }
 
@@ -557,23 +568,23 @@ fn required_capabilities(case_dir: &Path) -> Result<(String, BTreeMap<String, Ve
     Ok((id, actions))
 }
 
-/// The implementation revision a decision was computed at, from what its explanation says it
+/// The revision of `artifact` a decision was computed at, from what its explanation says it
 /// was computed from; `None` when it does not say.
-fn decided_at(decision: &Decision) -> Option<String> {
+fn decided_at(decision: &Decision, artifact: &str) -> Option<String> {
     let doc: serde_json::Value = serde_json::from_str(&decision.json).ok()?;
-    doc["explanation"]["computed_from"]["case"]["artifacts"]["implementation"]["revision"]
+    doc["explanation"]["computed_from"]["case"]["artifacts"][artifact]["revision"]
         .as_str()
         .map(str::to_owned)
 }
 
-/// The implementation revision the case at `case_dir` is at, from its `case.yaml`.
-fn implementation_of(case_dir: &Path) -> Result<Option<String>> {
+/// The revision of `artifact` the case at `case_dir` is at, from its `case.yaml`.
+fn revision_of(case_dir: &Path, artifact: &str) -> Result<Option<String>> {
     let path = case_dir.join("case.yaml");
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     let doc: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
-    Ok(doc["artifacts"]["implementation"]["revision"]
+    Ok(doc["artifacts"][artifact]["revision"]
         .as_str()
         .map(str::to_owned))
 }
@@ -605,7 +616,7 @@ impl PendingGrant {
 }
 
 /// Grants `capability` to the case `id` under `tree`, decided by `approver` now, at the
-/// implementation revision the case reached the gate at: the decision goes into the case's
+/// revision of the artifact its action is about that the case reached the gate at: the decision goes into the case's
 /// `authority.yaml`, and what was granted is answered for the store to record. Shorthand for
 /// [`prepare_grant`] and [`PendingGrant::write`].
 pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<Approval> {
@@ -618,9 +629,10 @@ pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<
 /// dropped. Refused: an id that is not a case id ([`check_id`]), a case that does not exist, a
 /// case another holds, a capability that is not an identifier, an empty approver, a capability
 /// no action of the case's protocol requires (a grant nothing asks for is a typo, told at the
-/// command line rather than by a run that stops at the gate again), a case that is not at the
+/// command line rather than by a run that stops at the gate again), a capability whose actions
+/// are about no single artifact ([`LoadedProtocol::grant_subject`]), a case that is not at the
 /// gate for the capability (its latest decision does not find an action requiring it
-/// approval-required, or was computed at another implementation revision than the case is at
+/// approval-required, or was computed at another revision of that artifact than the case is at
 /// now), and a capability the case already decides at that revision. A grant given at another
 /// revision is replaced: it authorises nothing here, and Canon refuses a capability decided
 /// twice.
@@ -669,9 +681,13 @@ pub fn prepare_grant(
             required.join(", ")
         );
     }
+    // The artifact the gated action is about, read from the protocol: the grant binds to its
+    // revision, `implementation` for a delivery, `candidate` for an improvement turn.
+    let subject =
+        LoadedProtocol::from_file(&dir.join("protocol.yaml"))?.grant_subject(capability)?;
     // At the gate: the latest decision finds an action requiring the capability
-    // approval-required, and was computed at the revision the case is at now. That revision is
-    // the one the grant authorises.
+    // approval-required, and was computed at the revision of that artifact the case is at now.
+    // That revision is the one the grant authorises.
     let Some(latest) = latest_decision(&dir)? else {
         bail!(
             "the case {id} is not at the gate for {capability}: it has not been evaluated yet; run it until it stops ApprovalRequired"
@@ -695,12 +711,10 @@ pub fn prepare_grant(
             statuses.join(", ")
         );
     }
-    let Some(revision) = implementation_of(&dir)? else {
-        bail!(
-            "the case {id} has no implementation revision for a grant of {capability} to authorise"
-        );
+    let Some(revision) = revision_of(&dir, &subject)? else {
+        bail!("the case {id} has no {subject} revision for a grant of {capability} to authorise");
     };
-    let gate = decided_at(&latest);
+    let gate = decided_at(&latest, &subject);
     if gate.as_deref() != Some(revision.as_str()) {
         bail!(
             "the case {id} is not at the gate for {capability}: its latest decision was computed at {}, and the case is at {revision} now; run it until it stops ApprovalRequired at {revision}",
@@ -1485,7 +1499,8 @@ impl CaseDir {
 
     /// Asks Canon for the decision over the case, its evidence and the authority the operator
     /// granted it (`authority.yaml`, read now, so a grant written since the last evaluation is
-    /// seen; a grant only at the implementation revision it was given at), now; writes it
+    /// seen; a grant only at the revision it was given at of the artifact its action is about),
+    /// now; writes it
     /// under `decisions/` and answers it. An evidence record that does not read is an error
     /// naming its file.
     pub fn evaluate(&self, seq: usize) -> Result<Decision> {
@@ -1498,11 +1513,14 @@ impl CaseDir {
         // holder may have moved on since it was read.
         let snapshot: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(&case_yaml).context("read the case snapshot")?;
-        let implementation = snapshot["artifacts"]["implementation"]["revision"]
-            .as_str()
-            .map(str::to_owned);
+        let revision_of = |capability: &str| {
+            let subject = self.protocol.grant_subject(capability).ok()?;
+            snapshot["artifacts"][subject.as_str()]["revision"]
+                .as_str()
+                .map(str::to_owned)
+        };
         let authority = Authority::read(&self.dir)?
-            .map(|authority| authority.canon(implementation.as_deref()))
+            .map(|authority| authority.canon_by(revision_of))
             .transpose()?;
         let now = crate::now();
         let supplied = eval::Supplied {
