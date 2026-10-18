@@ -28,15 +28,17 @@ evidence_kinds:
       or fail
   pull_request:
     description: >-
-      a pull request whose head is an implementation revision; its result is open
+      a pull request whose head is an implementation revision, or that revision with only the
+      commits that record its approval above it; its result is open
   ci_result:
     description: >-
       the result of continuous integration on an implementation revision; its result is pass or
       fail
   merge_observation:
     description: >-
-      the observation that the pull request whose head is an implementation revision was merged;
-      its result is merged
+      the observation that the pull request whose head is an implementation revision, or that
+      revision with only the commits that record its approval above it, was merged; its result
+      is merged
 
 claims:
   tests.pass:
@@ -115,8 +117,9 @@ actions:
       - evidence: gate_result
   pr.open:
     description: >-
-      push the implementation revision and open its pull request through the repository's bot
-      route; needs the tests and the gate green
+      push the implementation revision, with the commits that record its approval above it when
+      there are any, and open its pull request through the repository's bot route; needs the
+      tests and the gate green
     effect: write
     precondition:
       all:

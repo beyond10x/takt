@@ -13,9 +13,9 @@ use std::process::Command;
 use std::rc::Rc;
 
 use anyhow::anyhow;
-use takt::case::{BRANCH_FILE, Branch, CASES_DIR};
+use takt::case::{BRANCH_FILE, Branch, CASES_DIR, CaseDir};
 use takt::evidence::Record;
-use takt::forge::{Checks, Forge, Memory};
+use takt::forge::{Checks, Forge, Memory, PullRequest, PullRequestView};
 use takt::frontier::{Aep, approve};
 use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{CiRead, PrMerged, PrOpen, Validator};
@@ -125,6 +125,24 @@ impl Harness for Requester {
             "the gate was not offered; a judgement step among {} is left",
             context.offered.join(", ")
         ))
+    }
+}
+
+/// A harness that inspects and changes nothing, so a run with nothing left for a validator
+/// stops without an error.
+struct Idle;
+
+impl Harness for Idle {
+    fn name(&self) -> &str {
+        "idle"
+    }
+
+    fn step(&self, _: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
+        Ok(StepReport {
+            action: "repository.inspect".to_owned(),
+            summary: "nothing to change".to_owned(),
+            tokens: None,
+        })
     }
 }
 
@@ -464,4 +482,168 @@ fn pr_open_pushes_the_approvals_commits_with_the_revision() {
     assert_eq!(read.records[0].subject_revision, granted);
     assert_eq!(read.records[0].result.as_deref(), Some("pass"));
     assert!(dir.join(BRANCH_FILE).is_file());
+}
+
+/// The implementation revision a resumed case is at: the granted one while `HEAD` reaches it
+/// only through approvals' own commits, `HEAD` otherwise.
+fn resumed_revision(repo: &Path, id: &str) -> String {
+    CaseDir::resume(repo, id)
+        .expect("the case resumes")
+        .revision("implementation")
+        .expect("a revision")
+}
+
+/// Commits `path` with `text` under the approval's subject.
+fn approve_shaped_commit(repo: &Path, path: &str, text: &str) -> String {
+    let file = repo.join(path);
+    fs::create_dir_all(file.parent().expect("a parent")).expect("a directory");
+    fs::write(&file, text).expect("a file");
+    git(repo, &["add", path]);
+    git(
+        repo,
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "takt: approve story:ready-one repository.merge",
+        ],
+    );
+    git(repo, &["rev-parse", "HEAD"])
+}
+
+/// An approval's own commit adds new records to its story's evidence and nothing else, one
+/// commit per grant the case holds. A second approve-shaped commit beyond the one grant, even
+/// one that only adds a record to the story's evidence, is no approval's: the case moves to it,
+/// and the grant authorises nothing there.
+#[test]
+fn approve_shaped_commits_beyond_the_grants_the_case_holds_are_no_approvals() {
+    let repo = repository("count");
+    let memory = double();
+    let (id, granted) = at_the_gate(&repo, &memory);
+    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
+        .expect("the approval is given");
+    assert_eq!(resumed_revision(&repo, &id), granted);
+
+    let second = approve_shaped_commit(&repo, &format!("{EVIDENCE}/second.json"), "{\"a\": 1}\n");
+    assert_eq!(resumed_revision(&repo, &id), second);
+}
+
+/// An approve-shaped commit, the one the case's grant counts, that adds a record anywhere but
+/// its own story's evidence (here another story's, or a directory below its own) is no
+/// approval's.
+#[test]
+fn an_approve_shaped_commit_adding_anything_but_a_record_of_its_story_is_no_approval() {
+    let repo = repository("paths");
+    let memory = double();
+    let (id, granted) = at_the_gate(&repo, &memory);
+    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
+        .expect("the approval is given");
+    let approved = git(&repo, &["rev-parse", "HEAD"]);
+    let record = git(&repo, &["show", "--name-only", "--format=", "HEAD"]);
+    assert!(record.starts_with(EVIDENCE), "{record}");
+
+    // A resume moves the case to a `HEAD` that is no approval's and keeps it there: each
+    // variant starts from the case back at the granted revision, the branch reset to it.
+    let rewind = || {
+        git(&repo, &["reset", "-q", "--hard", &granted]);
+        assert_eq!(resumed_revision(&repo, &id), granted);
+    };
+
+    // The same subject and one commit for the one grant, adding a record to another story.
+    rewind();
+    let elsewhere = approve_shaped_commit(
+        &repo,
+        ".engineering/evidence/story/blocked-one/record.json",
+        "{\"a\": 1}\n",
+    );
+    assert_eq!(resumed_revision(&repo, &id), elsewhere);
+
+    // A record nested deeper under the story's evidence is not one the store writes.
+    rewind();
+    let nested = approve_shaped_commit(&repo, &format!("{EVIDENCE}/deeper/record.json"), "{}\n");
+    assert_eq!(resumed_revision(&repo, &id), nested);
+
+    // The approval's own commit is one.
+    rewind();
+    git(&repo, &["reset", "-q", "--hard", &approved]);
+    assert_eq!(resumed_revision(&repo, &id), granted);
+}
+
+/// The forge double, answering `fail` for the checks on `failing` and as the double does on
+/// every other head.
+struct FailingOn {
+    memory: Rc<Memory>,
+    failing: String,
+}
+
+impl Forge for FailingOn {
+    fn name(&self) -> &str {
+        "failing-on"
+    }
+
+    fn push(&self, tree: &Path, branch: &str) -> anyhow::Result<()> {
+        self.memory.push(tree, branch)
+    }
+
+    fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> anyhow::Result<()> {
+        self.memory.push_revision(tree, branch, revision)
+    }
+
+    fn open_pull_request(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        request: &PullRequest,
+    ) -> anyhow::Result<u64> {
+        self.memory.open_pull_request(tree, dir, request)
+    }
+
+    fn pull_request(&self, tree: &Path, number: u64) -> anyhow::Result<PullRequestView> {
+        self.memory.pull_request(tree, number)
+    }
+
+    fn checks(&self, tree: &Path, number: u64) -> anyhow::Result<Checks> {
+        let answer = self.memory.checks(tree, number)?;
+        let head = self.memory.pull_request(tree, number)?.head.sha;
+        Ok(if head == self.failing {
+            Checks::Fail
+        } else {
+            answer
+        })
+    }
+
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> anyhow::Result<()> {
+        self.memory.merge(tree, dir, number, head)
+    }
+}
+
+/// Checks failing on the head that carries the approval's commits, read after the push and
+/// before the merge, merge nothing and write no record, with no error: the run says the checks
+/// on that head fail.
+#[test]
+fn failing_checks_on_the_approval_head_merge_nothing_and_say_so() {
+    let repo = repository("failing");
+    let memory = double();
+    let (id, _) = at_the_gate(&repo, &memory);
+    let dir = repo.join(CASES_DIR).join(&id);
+    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
+        .expect("the approval is given");
+    let approved = git(&repo, &["rev-parse", "HEAD"]);
+    let forge: Rc<dyn Forge> = Rc::new(FailingOn {
+        memory: memory.clone(),
+        failing: approved.clone(),
+    });
+    let validators = validators(forge);
+    let mut run = Run::resume(&repo, options(), &id, &Idle, &validators).expect("the case resumes");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    drop(run);
+    assert!(stop.is_ok(), "{stop:?}\n{text}");
+    assert!(memory.merged.borrow().is_empty(), "{text}");
+    assert!(case_records(&dir, "merge_observation").is_empty(), "{text}");
+    assert!(
+        text.contains(&approved[..8]) && text.contains("fail"),
+        "{text}"
+    );
 }
