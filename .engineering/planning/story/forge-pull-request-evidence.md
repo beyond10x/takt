@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:forge-pull-request-evidence
 kind: story
-status: draft
+status: implemented
 title: Open the pull request through the bot route and read its state as evidence
 summary: The Forge seam over b10x-gates; pr.opened and ci.green only from what the forge reports
 relations:
@@ -14,6 +14,8 @@ scope:
 - confidence: cited
   path: crates/takt-cli/src/main.rs
 - confidence: cited
+  path: crates/takt-cli/tests/forge_cli.rs
+- confidence: cited
   path: crates/takt/src/case.rs
 - confidence: inferred
   path: crates/takt/src/forge.rs
@@ -22,10 +24,16 @@ scope:
 - confidence: inferred
   path: crates/takt/src/lib.rs
 - confidence: cited
+  path: crates/takt/src/run.rs
+- confidence: cited
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/forge.rs
-revision: 5
+revision: 11
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T05:47:50Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-18T05:47:50Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-10-18T07:20:05Z", actor: "human:timo", revision: 11, decided_on: {"recorded":{"test_result":1,"review_outcome":3}}}
 ---
 # Story: forge-pull-request-evidence
 
@@ -73,3 +81,28 @@ The merge (story:merge-under-authority); releases and tags; a second forge; read
 - Branch name and pull-request title: `inferable` as recorded here, the case id and the intent title; nothing in the design constrains them.
 - One pull request per case: `inferable` as a consequence of binding the claims to `implementation` (story:story-delivery-protocol); a case with two pull requests would have two heads for one revision line.
 - The real adapter is proven on a scratch repository the bot route can reach; the test double proves the loop.
+
+## ## Scope
+
+## Scope
+
+Confirmed by the implementor (wave 04), each line as the unit landed:
+
+- `crates/takt/src/forge.rs` (inferred → confirmed): created; the `Forge` trait, the `BotRoute`
+  adapter over `b10x-gates` and `gh` through a `Runner` seam, `Origin` from the remote URL, the
+  `Memory` double.
+- `crates/takt/src/lib.rs` (inferred → confirmed): the module and its re-exports.
+- `crates/takt/src/git.rs` (cited): confirmed; `current_branch`, `create_branch` from a given
+  revision, `leave_branch`, `remote_url`.
+- `crates/takt/src/validator.rs` (cited, corrected: `TestsRun` sat at :54-132 in the base, not
+  :19-31): `PrOpen` and `CiRead`.
+- `crates/takt/src/case.rs` (cited): confirmed; `Branch` in `branch.yaml` (name, base, left,
+  pushed, pull_request), the case branch forked from its base at open, `current`, `discard`.
+- `crates/takt-cli/src/main.rs` (cited): confirmed; `--forge bot|none`, the bot route by default
+  only for an origin on github.com.
+- `crates/takt/tests/forge.rs` (inferred → confirmed): created; 123 cases, 21 of them the
+  adversary's.
+- `crates/takt/src/run.rs` (added by the coordinator's patch): a refused frontier candidate is
+  discarded whole.
+- `crates/takt-cli/tests/forge_cli.rs` (added by the adversary, adopted by the unit): the binary
+  end to end on scratch repositories.

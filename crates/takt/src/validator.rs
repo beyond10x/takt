@@ -1,11 +1,15 @@
-//! Validators: programs that turn an observation into evidence: `tests.run` and `gate.run`.
+//! Validators: programs that turn an observation into evidence: `tests.run`, `gate.run`,
+//! `pr.open` and `ci.read`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::rc::Rc;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 
+use crate::case::{BRANCH_FILE, Branch, current};
 use crate::evidence::Record;
+use crate::forge::{Checks, Forge, PullRequest, PullRequestState};
 
 /// What a validator observed, and the records it wrote from it.
 #[derive(Debug)]
@@ -292,6 +296,362 @@ impl Validator for GateRun {
                 name: artifact,
                 bytes,
             }),
+        })
+    }
+}
+
+/// The first eight characters of a revision, as the loop prints one.
+fn short(revision: &str) -> &str {
+    revision.get(..8).unwrap_or(revision)
+}
+
+/// `pr.open`: pushes the case's branch through the forge and opens its one pull request, the
+/// head at the implementation revision; writes one `pull_request` record with the state the
+/// forge reports, `open` for a pull request just opened. At a later revision the branch is
+/// pushed again and the pull request's state read: one pull request per case. The tree's
+/// `HEAD` must be the revision, or the pull request's head would not be what the claim is
+/// about; and a number the case directory carries is trusted only once the forge reports the
+/// pull request's head as the case's branch at the revision, else no record is written. A case
+/// with no base is refused before anything is pushed. The title is the intent's first line,
+/// the body the intent and the claims that hold; the forge passes both through `scan-text`
+/// before they leave the machine.
+pub struct PrOpen {
+    /// The forge the push and the pull request go through.
+    pub forge: Rc<dyn Forge>,
+}
+
+impl PrOpen {
+    /// Over `forge`.
+    #[must_use]
+    pub fn new(forge: Rc<dyn Forge>) -> Self {
+        Self { forge }
+    }
+}
+
+impl std::fmt::Debug for PrOpen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrOpen")
+            .field("forge", &self.forge.name())
+            .finish()
+    }
+}
+
+/// The pull request's title: the intent's first line.
+fn title_of(intent: &str) -> String {
+    intent
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("takt")
+        .chars()
+        .take(120)
+        .collect()
+}
+
+/// The claims the case's latest decision holds, in id order; none before a decision.
+fn claims_held(case_dir: &Path) -> Result<Vec<String>> {
+    let decisions = case_dir.join("decisions");
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(&decisions)
+        .with_context(|| format!("read {}", decisions.display()))?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    paths.sort();
+    let Some(latest) = paths.last() else {
+        return Ok(Vec::new());
+    };
+    let json =
+        std::fs::read_to_string(latest).with_context(|| format!("read {}", latest.display()))?;
+    let decision = crate::Decision::from_json(&json)?;
+    Ok(decision
+        .claims
+        .iter()
+        .filter(|(_, value)| value.as_str() == "true")
+        .map(|(id, _)| id.clone())
+        .collect())
+}
+
+/// The pull request's body: the intent, then the case, the revision and the claims that hold.
+fn body_of(case_dir: &Path, intent: &str, revision: &str) -> Result<String> {
+    let case = case_dir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let claims = claims_held(case_dir)?;
+    let claims = if claims.is_empty() {
+        "none yet".to_owned()
+    } else {
+        claims.join(", ")
+    };
+    Ok(format!(
+        "{}\n\n---\n\nOpened by takt for the case `{case}` at `{revision}`. Claims that hold: {claims}.\n",
+        intent.trim()
+    ))
+}
+
+/// What `pr.open` does after the push: opens the case's pull request, or reads the one it has.
+enum Next {
+    Open(PullRequest),
+    Read(u64),
+}
+
+/// The case's branch, from the case directory's name: what the validators push and open for,
+/// never the `name` a file under the case directory carries, which a harness can write.
+fn branch_of(case_dir: &Path) -> Result<String> {
+    let id = case_dir
+        .file_name()
+        .ok_or_else(|| anyhow!("the case directory {} has no name", case_dir.display()))?;
+    Ok(Branch::name_of(&id.to_string_lossy()))
+}
+
+/// The pull request a case opens: `name` against `base`, the intent's first line as the
+/// title, the intent and the claims that hold as the body. A case with no base is refused.
+fn request_of(
+    case_dir: &Path,
+    name: &str,
+    base: Option<&str>,
+    revision: &str,
+) -> Result<PullRequest> {
+    let base = base.ok_or_else(|| {
+        anyhow!(
+            "the case has no base branch: it was opened from a detached HEAD; open it from the branch its pull request is against"
+        )
+    })?;
+    let intent = case_dir.join("intent.md");
+    let intent =
+        std::fs::read_to_string(&intent).with_context(|| format!("read {}", intent.display()))?;
+    Ok(PullRequest {
+        branch: name.to_owned(),
+        base: base.to_owned(),
+        title: title_of(&intent),
+        body: body_of(case_dir, &intent, revision)?,
+    })
+}
+
+impl Validator for PrOpen {
+    fn name(&self) -> &str {
+        "takt.pr-open"
+    }
+
+    fn action(&self) -> &str {
+        "pr.open"
+    }
+
+    fn kind(&self) -> &str {
+        "pull_request"
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        let head = crate::git::head(tree)?;
+        if head != revision {
+            bail!(
+                "the tree's HEAD {head} is not the implementation revision {revision}; the pull request's head would not be the revision the claim is about"
+            );
+        }
+        let dir = current(tree)?;
+        let mut branch = Branch::read(&dir)?;
+        let forge = self.forge.name();
+        // The branch pushed and opened for is the case's, from the case id: the `name` in
+        // `branch.yaml` is in a file a harness can write, and a refspec there must never reach
+        // the forge. A `name` that differs is set right, and the summary says so.
+        let name = branch_of(&dir)?;
+        let repaired = if branch.name == name {
+            String::new()
+        } else {
+            let was = std::mem::replace(&mut branch.name, name.clone());
+            format!("{BRANCH_FILE} named {was}, not the case's branch; set right; ")
+        };
+        // What follows the push is settled before it: a case with no pull request yet needs its
+        // base and its request, and one without a base is refused with nothing pushed.
+        let next = match branch.pull_request {
+            Some(number) => Next::Read(number),
+            None => Next::Open(request_of(&dir, &name, branch.base.as_deref(), revision)?),
+        };
+        self.forge
+            .push(tree, &name)
+            .with_context(|| format!("push {name} through the forge {forge}"))?;
+        branch.pushed = Some(revision.to_owned());
+        let (state, summary) = match next {
+            Next::Read(number) => {
+                let view = self.forge.pull_request(tree, number).with_context(|| {
+                    format!("read pull request #{number} through the forge {forge}")
+                })?;
+                if view.head.branch == name && view.head.sha == revision {
+                    (
+                        Some(view.state),
+                        format!(
+                            "{repaired}pushed {name} at {} through {forge}; pull request #{number} is {}",
+                            short(revision),
+                            view.state
+                        ),
+                    )
+                } else {
+                    (
+                        None,
+                        format!(
+                            "{repaired}pushed {name} at {} through {forge}; pull request #{number} has the head {} at {}, not the case's branch at the revision; no record, the claim stays unknown",
+                            short(revision),
+                            view.head.branch,
+                            short(&view.head.sha)
+                        ),
+                    )
+                }
+            }
+            Next::Open(request) => {
+                let number = self
+                    .forge
+                    .open_pull_request(tree, &dir.join("artifacts"), &request)
+                    .with_context(|| {
+                        format!("open the pull request for {name} through the forge {forge}")
+                    })?;
+                branch.pull_request = Some(number);
+                (
+                    Some(PullRequestState::Open),
+                    format!(
+                        "{repaired}pushed {name} at {} through {forge} and opened pull request #{number}: open",
+                        short(revision)
+                    ),
+                )
+            }
+        };
+        branch.write(&dir)?;
+        let records = state
+            .map(|state| {
+                vec![Record::new(
+                    format!("pull-request-{seq}"),
+                    self.kind(),
+                    Some(state.as_str().to_owned()),
+                    self.subject(),
+                    revision,
+                    self.name(),
+                )]
+            })
+            .unwrap_or_default();
+        Ok(Observation {
+            summary,
+            records,
+            artifact: None,
+        })
+    }
+}
+
+/// `ci.read`: reads the checks on the head of the case's pull request through the forge and
+/// writes one `ci_result` record, `pass` or `fail`. Pending checks write no record, because a
+/// claim that could not be observed stays unknown; so does a case with no pull request yet, or
+/// one whose pull request the forge does not report as the case's branch at the revision: a
+/// number the case directory carries is not trusted on its own. Nothing but the pull request
+/// head is read.
+pub struct CiRead {
+    /// The forge the checks are read through.
+    pub forge: Rc<dyn Forge>,
+}
+
+impl CiRead {
+    /// Over `forge`.
+    #[must_use]
+    pub fn new(forge: Rc<dyn Forge>) -> Self {
+        Self { forge }
+    }
+}
+
+impl std::fmt::Debug for CiRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CiRead")
+            .field("forge", &self.forge.name())
+            .finish()
+    }
+}
+
+impl Validator for CiRead {
+    fn name(&self) -> &str {
+        "takt.ci-read"
+    }
+
+    fn action(&self) -> &str {
+        "ci.read"
+    }
+
+    fn kind(&self) -> &str {
+        "ci_result"
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        let dir = current(tree)?;
+        let branch = Branch::read(&dir)?;
+        // The case's branch, from the case id: not the `name` of a file a harness can write.
+        let name = branch_of(&dir)?;
+        let nothing = |summary: String| Observation {
+            summary,
+            records: Vec::new(),
+            artifact: None,
+        };
+        let Some(number) = branch.pull_request else {
+            return Ok(nothing(
+                "no pull request is open for the case; nothing to read, the claim stays unknown"
+                    .to_owned(),
+            ));
+        };
+        if branch.pushed.as_deref() != Some(revision) {
+            return Ok(nothing(format!(
+                "the head of pull request #{number} is {}, not the implementation revision {}; nothing to read, the claim stays unknown",
+                branch.pushed.as_deref().map_or("not pushed", short),
+                short(revision)
+            )));
+        }
+        let forge = self.forge.name();
+        let view = self
+            .forge
+            .pull_request(tree, number)
+            .with_context(|| format!("read pull request #{number} through the forge {forge}"))?;
+        if view.head.branch != name || view.head.sha != revision {
+            return Ok(nothing(format!(
+                "pull request #{number} has the head {} at {}, not {name} at {}; nothing to read, the claim stays unknown",
+                view.head.branch,
+                short(&view.head.sha),
+                short(revision)
+            )));
+        }
+        let checks = self.forge.checks(tree, number).with_context(|| {
+            format!("read the checks on pull request #{number} through the forge {forge}")
+        })?;
+        let result = match checks {
+            Checks::Pass => Some("pass"),
+            Checks::Fail => Some("fail"),
+            Checks::Pending => None,
+        };
+        let records = result
+            .map(|result| {
+                vec![Record::new(
+                    format!("ci-result-{seq}"),
+                    self.kind(),
+                    Some(result.to_owned()),
+                    self.subject(),
+                    revision,
+                    self.name(),
+                )]
+            })
+            .unwrap_or_default();
+        let summary = match result {
+            Some(result) => format!(
+                "checks on pull request #{number} at {} through {forge}: {result}",
+                short(revision)
+            ),
+            None => format!(
+                "checks on pull request #{number} at {} through {forge}: pending; no record, the claim stays unknown",
+                short(revision)
+            ),
+        };
+        Ok(Observation {
+            summary,
+            records,
+            artifact: None,
         })
     }
 }

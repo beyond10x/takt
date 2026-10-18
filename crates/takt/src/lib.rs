@@ -8,6 +8,7 @@
 pub mod case;
 pub mod decision;
 pub mod evidence;
+pub mod forge;
 pub mod frontier;
 pub mod git;
 pub mod harness;
@@ -17,6 +18,7 @@ pub mod validator;
 
 pub use case::CaseDir;
 pub use decision::Decision;
+pub use forge::Forge;
 pub use frontier::{Frontier, Story, Unit};
 pub use harness::{Harness, StepContext, StepReport};
 pub use protocol::LoadedProtocol;
