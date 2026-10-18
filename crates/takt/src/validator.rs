@@ -947,6 +947,15 @@ impl Validator for PrMerged {
         "implementation"
     }
 
+    /// What the bot route keeps of the merge request it sent and the response it read.
+    fn writes(&self) -> Vec<PathBuf> {
+        let artifacts = Path::new("artifacts");
+        vec![
+            artifacts.join(BotRoute::MERGE_REQUEST),
+            artifacts.join(BotRoute::MERGE_RESPONSE),
+        ]
+    }
+
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
         let dir = current(tree)?;
         let branch = Branch::read(&dir)?;

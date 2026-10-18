@@ -2386,3 +2386,179 @@ fn a_commit_by_a_judgement_step_takes_nothing_under_the_cases_directory() {
     assert!(run.case.dir.join("case.yaml").is_file());
     assert!(!run.case.dir.join(LOCK_FILE).exists(), "{text}");
 }
+
+/// The open case of `story:ready-one`, taken from the store, at the gate on `software.change/1`
+/// with the tree on its branch: the repository and the case id.
+fn store_case_at_the_gate(name: &str) -> (Scratch, String) {
+    let repo = repository("one-ready", name);
+    let none: Vec<Box<dyn Validator>> = vec![];
+    let mut out = Vec::new();
+    let run = Run::open_next(
+        &repo,
+        store_options(),
+        &Aep::default(),
+        &NoHarness,
+        &none,
+        &mut out,
+    )
+    .expect("the frontier answers")
+    .expect("story:ready-one is taken");
+    let case_id = run.case.id.clone();
+    drop(run);
+    let mut case = CaseDir::resume(&repo, &case_id).expect("the case reads back");
+    to_the_gate(&mut case, 1);
+    (repo, case_id)
+}
+
+/// What Canon reads as the case's authority when the case is resumed now.
+fn authority_read(repo: &Path, case_id: &str) -> serde_json::Value {
+    let case = CaseDir::resume(repo, case_id).expect("the case reads back");
+    let decision = case
+        .evaluate(case.evaluations().expect("counts") + 1)
+        .expect("evaluates");
+    let document: serde_json::Value = serde_json::from_str(&decision.json).expect("json");
+    document["explanation"]["computed_from"]["authority"].clone()
+}
+
+/// `takt approve` on a story's case commits the record it made in the planning store on the
+/// case's branch, exactly the paths the record changed, as `takt: approve <story>
+/// <capability>`, and leaves nothing uncommitted. That commit is the approval's own, not the
+/// implementation's: the resumed case stays at the revision the grant was given at, and the
+/// grant is read. Any other commit moves the case, the grant then authorising nothing, and so
+/// does a commit that carries the approval's subject over a path outside the store.
+#[test]
+fn the_approvals_own_commit_keeps_the_revision_the_grant_authorises() {
+    let (repo, case_id) = store_case_at_the_gate("approval-commit");
+    let gated = git(&repo, &["rev-parse", "HEAD"]);
+    let approval = approve(
+        &repo,
+        &Aep::default(),
+        &case_id,
+        "repository.merge",
+        "operator",
+    )
+    .expect("the approval is given");
+    assert_eq!(approval.revision, gated);
+    assert_eq!(
+        git(&repo, &["log", "-1", "--format=%s"]),
+        "takt: approve story:ready-one repository.merge"
+    );
+    assert_eq!(git(&repo, &["rev-parse", "HEAD^"]), gated);
+    let committed = git(&repo, &["show", "--name-only", "--format=", "HEAD"]);
+    assert!(
+        !committed.is_empty()
+            && committed
+                .lines()
+                .all(|path| path.starts_with(".engineering/evidence/story/ready-one/")),
+        "{committed}"
+    );
+    assert_eq!(
+        git(&repo, &["status", "--porcelain", "--untracked-files=all"])
+            .lines()
+            .filter(|line| !line.contains(CASES_DIR))
+            .count(),
+        0
+    );
+    let granted = serde_json::json!([{"capability": "repository.merge", "decision": "granted"}]);
+    assert_eq!(authority_read(&repo, &case_id), granted);
+    let case = CaseDir::resume(&repo, &case_id).expect("the case reads back");
+    assert_eq!(
+        case.revision("implementation").as_deref(),
+        Some(gated.as_str())
+    );
+    drop(case);
+
+    // An operator's commit on top moves the case; the grant authorises nothing there.
+    fs::write(repo.join("check.txt"), "fixed\n").expect("a file");
+    git(&repo, &["commit", "-q", "-am", "a later commit"]);
+    let later = git(&repo, &["rev-parse", "HEAD"]);
+    assert_eq!(authority_read(&repo, &case_id), serde_json::json!([]));
+    let case = CaseDir::resume(&repo, &case_id).expect("the case reads back");
+    assert_eq!(
+        case.revision("implementation").as_deref(),
+        Some(later.as_str())
+    );
+    drop(case);
+
+    // A commit under the approval's subject that changes a path outside the store is no
+    // approval's own: it moves the case too.
+    fs::write(repo.join("check.txt"), "changed again\n").expect("a file");
+    git(
+        &repo,
+        &[
+            "commit",
+            "-q",
+            "-am",
+            "takt: approve story:ready-one repository.merge",
+        ],
+    );
+    let forged = git(&repo, &["rev-parse", "HEAD"]);
+    let case = CaseDir::resume(&repo, &case_id).expect("the case reads back");
+    assert_eq!(
+        case.revision("implementation").as_deref(),
+        Some(forged.as_str())
+    );
+}
+
+/// `takt approve` on a story's case commits its record on the case's branch, so it is refused,
+/// before anything is recorded or granted, on a tree that is not on that branch or that holds
+/// uncommitted work: the commit would land on another branch, or could not be told from the
+/// work. The same approval goes through once the tree is back on the branch and clean.
+#[test]
+fn an_approval_off_the_case_branch_or_on_a_dirty_tree_is_refused_recording_nothing() {
+    let (repo, case_id) = store_case_at_the_gate("approval-refused");
+    let dir = repo.join(CASES_DIR).join(&case_id);
+    git(&repo, &["checkout", "-q", "main"]);
+    let error = format!(
+        "{:#}",
+        approve(
+            &repo,
+            &Aep::default(),
+            &case_id,
+            "repository.merge",
+            "operator"
+        )
+        .expect_err("off the case's branch")
+    );
+    assert!(error.contains(&format!("takt/{case_id}")), "{error}");
+    assert!(error.contains("nothing was recorded"), "{error}");
+    assert!(evidence_history(&repo, "story:ready-one").is_empty());
+    assert!(!dir.join(AUTHORITY_FILE).exists());
+    assert!(!dir.join(LOCK_FILE).exists());
+    assert_eq!(git(&repo, &["branch", "--show-current"]), "main");
+
+    git(&repo, &["checkout", "-q", &format!("takt/{case_id}")]);
+    fs::write(repo.join("check.txt"), "work in progress\n").expect("a file");
+    let error = format!(
+        "{:#}",
+        approve(
+            &repo,
+            &Aep::default(),
+            &case_id,
+            "repository.merge",
+            "operator"
+        )
+        .expect_err("on a dirty tree")
+    );
+    assert!(error.contains("check.txt"), "{error}");
+    assert!(error.contains("nothing was recorded"), "{error}");
+    assert!(evidence_history(&repo, "story:ready-one").is_empty());
+    assert!(!dir.join(AUTHORITY_FILE).exists());
+    assert_eq!(read_file(&repo.join("check.txt")), "work in progress\n");
+
+    git(&repo, &["checkout", "-q", "--", "check.txt"]);
+    approve(
+        &repo,
+        &Aep::default(),
+        &case_id,
+        "repository.merge",
+        "operator",
+    )
+    .expect("the approval is given");
+    assert_eq!(evidence_history(&repo, "story:ready-one").len(), 1);
+    assert!(dir.join(AUTHORITY_FILE).is_file());
+}
+
+fn read_file(path: &Path) -> String {
+    fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+}

@@ -733,6 +733,49 @@ pub fn resumable(
     Ok(None)
 }
 
+/// The most approval commits [`approvals_only`] walks back through.
+const APPROVALS_AT_MOST: usize = 64;
+
+/// Whether `head` reaches `revision` only through commits that hold an approval's record for
+/// the case's `story` and nothing else: each with one parent, the subject
+/// [`crate::frontier::approve_subject`] of `story` and one capability, and every path it changes
+/// in the planning store ([`crate::frontier::is_store_path`]). Such a commit is the approval's
+/// own: it records the grant and changes nothing a validator observes or a gate reads. A
+/// commit that does anything else, or a case with no story, is no approval's.
+fn approvals_only(tree: &Path, revision: &str, head: &str, story: Option<&str>) -> Result<bool> {
+    let Some(story) = story else {
+        return Ok(false);
+    };
+    let prefix = crate::frontier::approve_subject(story, "");
+    let mut at = head.to_owned();
+    for _ in 0..APPROVALS_AT_MOST {
+        if at == revision {
+            return Ok(true);
+        }
+        let commit = crate::git::commit(tree, &at)?;
+        let approval = commit
+            .subject
+            .strip_prefix(&prefix)
+            .is_some_and(|capability| {
+                !capability.is_empty() && !capability.contains(char::is_whitespace)
+            });
+        let [parent] = commit.parents.as_slice() else {
+            return Ok(false);
+        };
+        if !approval
+            || commit.paths.is_empty()
+            || !commit
+                .paths
+                .iter()
+                .all(|path| crate::frontier::is_store_path(path))
+        {
+            return Ok(false);
+        }
+        at.clone_from(parent);
+    }
+    Ok(false)
+}
+
 /// The directory of the case whose branch `tree` is on: `takt/<id>` names the case `<id>`.
 pub fn current(tree: &Path) -> Result<PathBuf> {
     let branch = crate::git::current_branch(tree)?
@@ -959,7 +1002,10 @@ impl CaseDir {
     /// which the validators resolve the case from. The implementation revision is the branch's
     /// `HEAD`: a commit made on the branch between two runs moves it, and with it every claim
     /// returns to unknown and the validators run again, so nothing goes through on records
-    /// about the commit before. Nothing else is written. A directory without a `case.yaml` is
+    /// about the commit before. The one exception is the approval's own commit
+    /// ([`crate::frontier::approve`]): a `HEAD` that reaches the implementation revision only
+    /// through commits holding an approval's record ([`approvals_only`]) leaves it where it is,
+    /// the revision the grant authorises. Nothing else is written. A directory without a `case.yaml` is
     /// no case, and an id that is not a case id ([`check_id`]) is refused before it is joined
     /// to a path. The case is held (`run.lock`, taken atomically) before the checkout and the
     /// revision are written and let go once they are: a case another holds is refused with
@@ -996,9 +1042,9 @@ impl CaseDir {
         };
         case.written = case.evidence_texts()?.len();
         let head = crate::git::head(tree)?;
-        if case
-            .revision("implementation")
-            .is_some_and(|revision| revision != head)
+        if let Some(revision) = case.revision("implementation")
+            && revision != head
+            && !approvals_only(tree, &revision, &head, case.story()?.as_deref())?
         {
             case.set_revision("implementation", &head)?;
         }

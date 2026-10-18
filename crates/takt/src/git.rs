@@ -195,6 +195,61 @@ pub fn has_subject(tree: &Path, revision: &str, subject: &str) -> Result<bool> {
         .any(|line| line == subject.as_bytes()))
 }
 
+/// One commit as takt reads it: its subject, its parents, and the paths it changes against its
+/// first parent, both sides of a rename, read byte for byte with `-z`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Commit {
+    /// The first line of the message.
+    pub subject: String,
+    /// The parents, in order.
+    pub parents: Vec<String>,
+    /// The paths changed against the first parent; none for a commit without a parent.
+    pub paths: Vec<String>,
+}
+
+/// Reads the commit `revision` names.
+pub fn commit(tree: &Path, revision: &str) -> Result<Commit> {
+    let subject = run(tree, &["log", "-1", "--format=%s", revision, "--"])?;
+    let line = run(tree, &["rev-list", "--parents", "-n", "1", revision, "--"])?;
+    let parents: Vec<String> = line.split_whitespace().skip(1).map(str::to_owned).collect();
+    let paths = match parents.first() {
+        Some(parent) => {
+            let listed = raw(
+                tree,
+                &[
+                    "diff-tree",
+                    "-r",
+                    "-z",
+                    "--no-renames",
+                    "--name-only",
+                    parent,
+                    revision,
+                    "--",
+                ],
+                None,
+            )?;
+            listed
+                .split(|byte| *byte == 0)
+                .filter(|path| !path.is_empty())
+                .map(|path| {
+                    String::from_utf8(path.to_vec()).map_err(|_| {
+                        anyhow!(
+                            "git diff-tree named a path that is not UTF-8: {}",
+                            String::from_utf8_lossy(path)
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
+        }
+        None => Vec::new(),
+    };
+    Ok(Commit {
+        subject,
+        parents,
+        paths,
+    })
+}
+
 /// One entry of `git status --porcelain=v1 -z`: the two-letter code, the path, and for a rename
 /// or a copy the path it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]

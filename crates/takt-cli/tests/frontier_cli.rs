@@ -254,6 +254,11 @@ esac
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable");
     }
+    // A case opens only on a clean tree: the stub is the test's, not work in progress.
+    let exclude = dir.join(".git/info/exclude");
+    let mut text = fs::read_to_string(&exclude).unwrap_or_default();
+    text.push_str("stub-bin/\n");
+    fs::write(&exclude, text).expect("the stub is ignored");
     bin
 }
 

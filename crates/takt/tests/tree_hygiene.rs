@@ -879,3 +879,62 @@ fn a_sibling_worktrees_sparse_checkout_is_guarded() {
     assert!(!sparse.exists(), "{text}");
     assert_eq!(read(&tree.join("src/lib.rs")), "a\n", "{text}");
 }
+
+/// What `Run::next_to_resume` names is the case `Run::open_next` resumes, and naming it changes
+/// nothing. The tree is back on `main`, where the store still lists the story `proposed`: the
+/// case is found by the take committed on its branch. `HEAD`, the branch, the status, the
+/// branches and the case's files are as they were before it was named.
+#[test]
+fn the_case_to_resume_is_named_without_a_change_and_is_the_one_resumed() {
+    let tree = store("one-ready", "next-to-resume");
+    let validators: Vec<Box<dyn Validator>> = Vec::new();
+    let harness = acting("repository.inspect", |_| {});
+    let mut out = Vec::new();
+    let first = Run::open_next(
+        &tree,
+        store_options(),
+        &Aep::default(),
+        &harness,
+        &validators,
+        &mut out,
+    )
+    .expect("the frontier answers")
+    .expect("story:ready-one is taken");
+    let case_id = first.case.id.clone();
+    drop(first);
+    git(&tree, &["checkout", "-q", "main"]);
+    assert_eq!(status(&tree, "story:ready-one"), "proposed");
+    let snapshot = tree.join(CASES_DIR).join(&case_id).join("case.yaml");
+    let everything = || {
+        (
+            git(&tree, &["rev-parse", "HEAD"]),
+            git(&tree, &["branch", "--show-current"]),
+            git(&tree, &["status", "--porcelain", "--untracked-files=all"]),
+            branches(&tree),
+            read(&snapshot),
+            case_names(&tree),
+        )
+    };
+    let before = everything();
+    let mut out = Vec::new();
+    let named = Run::next_to_resume(&tree, &Aep::default(), &mut out).expect("it answers");
+    assert_eq!(everything(), before, "naming the case changed the tree");
+    assert_eq!(
+        named,
+        Some((case_id.clone(), "story:ready-one".to_owned())),
+        "{}",
+        String::from_utf8_lossy(&out)
+    );
+    let mut out = Vec::new();
+    let resumed = Run::open_next(
+        &tree,
+        store_options(),
+        &Aep::default(),
+        &harness,
+        &validators,
+        &mut out,
+    )
+    .expect("the frontier answers")
+    .expect("the case is resumed");
+    assert_eq!(resumed.case.id, case_id);
+}
