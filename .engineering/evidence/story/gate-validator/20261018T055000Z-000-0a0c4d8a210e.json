@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-18T05:50:00Z",
+  "actor": "human:timo",
+  "artifact": "story:gate-validator",
+  "kind": "story",
+  "revision": 12,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test -p b10x-takt; cargo test -p b10x-takt-cli; cargo clippy --workspace --all-targets -- -D warnings; cargo fmt --check; ess specify validate, on impl/gate-validator at 0c2a484: 80 passed, 0 failed, every exit 0"
+  }
+}

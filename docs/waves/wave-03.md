@@ -1,6 +1,6 @@
 # Wave 03: A gate validator turns an engineering-gates run into gate_result evidence
 
-Skill: `aep:implementing` 0.23.1, wave mode. Stage: **2, dispatched** (updated as the unit moves). Approval: the operator's standing approval for the waves of `epic:composable-agentic-work` (same commit boundary each wave; no push).
+Skill: `aep:implementing` 0.23.1, wave mode. Stage: **closed** (unit merged, gate green, story implemented). Approval: the operator's standing approval for the waves of `epic:composable-agentic-work` (same commit boundary each wave; no push).
 
 ## Unit
 
@@ -128,7 +128,7 @@ Selection path: `aep plan artifact waves --kind story --status draft --format js
 | unit | branch | worktree | build dir | scratch |
 |---|---|---|---|---|
 | integration | `wave/2026-10-18-w3` | managed tree `takt-w3-int` | its `target/` | `~/.cache/takt-waves/2026-10-18-w3/int/scratch` |
-| gate-validator | `impl/gate-validator` at 77beec1, implementor green (53→59 cases; 161,650 tokens, 58 tool uses, 14 min), adversary pass 1 running | managed tree `takt-w3-gate` | its `target/` | `~/.cache/takt-waves/2026-10-18-w3/gate/scratch` |
+| gate-validator | `impl/gate-validator` at 0c2a484 (77beec1 unit, 66f3b3a correction 1, 0c2a484 correction 2), two adversary passes, merged into `wave/2026-10-18-w3` at 15db718 | managed tree `takt-w3-gate` | its `target/` | `~/.cache/takt-waves/2026-10-18-w3/gate/scratch` |
 
 ## Dispatch
 
@@ -142,3 +142,6 @@ The opening store commit (this page, the story to `active`), the unit's commits,
 
 - 2026-10-18: opened under the standing approval; `story:gate-validator` moved to active.
 - 2026-10-18: unit green at 77beec1 (red run: unresolved GateRun, exit 101; green: gate_validator 3, cli unittests 6, the rest unchanged); the implementor's loop patch (an empty observation is an idle step) applied by the coordinator on the unit branch before the adversary. Scope: the gate-block route dropped (the loader story's), b10x-canon-expr added for Truth. Adversary pass 1 dispatched. The domain document's producer lines (553, 193/748) and a main.rs citation (776) are stale: fixed at close.
+- 2026-10-18: adversary pass 1 CONFIRMED (26 cases, 3 red; 10 findings: 1–4 routed, 5–6 covered by its own cases, 7–10 no-op), recorded as `review-result:adversary-gate-pass-1`; correction 1 green at 66f3b3a (73 cases, 0 red; 241,987 tokens, 45 tool uses, 10 min per the harness notification).
+- 2026-10-18: adversary pass 2 CONFIRMED (78 cases, 4 red; 8 findings: 1, 2, 3, 4/5/7, 8 routed, 6 its own case; 196,716 tokens, 44 tool uses, 17 min), recorded as `review-result:adversary-gate-pass-2`; every pass-1 finding re-tested closed; correction 2 green at 0c2a484 (80 cases, 0 red; 311,240 tokens, 35 tool uses, 6 min).
+- 2026-10-18: coordinator verification on 0c2a484 (`~/.cache/takt-waves/2026-10-18-w3/int/scratch/verify-treatment.txt`): 80 cases (takt 60, takt-cli 20), clippy, fmt, `ess specify validate`, every exit 0; baseline on the base: no `gate_validator` or `gate_cli` test target. Merged into `wave/2026-10-18-w3` at 15db718. Domain document: 89 citations re-pointed by text, 9 ranges by hand, `takt.gate-run` as the second producer, the due rule, `no_progress`, `Step.artifact`. Story scope rewritten, five typed paths added, `test_result` recorded, moved to implemented. Closed.
