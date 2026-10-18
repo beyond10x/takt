@@ -33,17 +33,24 @@
 # is made in a checkout, never from an export, so the binary's `--version` and its runs' `opened`
 # records name the revision; a kept binary with no `revision` file beside it predates that and is
 # built again. The scenario repository, or the predicate's repository (the checkout `--checkout`
-# gives for its URL, else the URL itself), is cloned
-# (`GIT_TERMINAL_PROMPT=0`: a repository that wants a credential fails, it does not ask), the
-# clone's `trial/0` set to the seed (whatever branch the checkout was on) and checked out, its
-# remote removed, and the predicate's command runs there through `sh -c`, with `$TAKT` the
-# binary, `$SCENARIO` the clone and, when the predicate gives one, `$TEST` the task's test
-# command. Its environment holds only PATH, LANG, TAKT, SCENARIO, TEST and HOME, and HOME is a
-# fresh directory of the check's own, never the caller's, so no credential of the caller reaches
-# it, neither from the environment nor from a file a tool reads under HOME (git's credential
-# store, a CLI's login). Its one link out is `.cache/aep/protocol-sources`, the caller's cache of
-# the public protocol sources `aep` reads, so `aep` needs no network there. The command still
-# runs as the caller's user: this is no sandbox against a path it names outright.
+# gives for its URL, else the URL itself), is cloned by a git that runs as the predicate will,
+# not as the caller: its environment replaced (`env -i`) by PATH, LANG and the fresh HOME below,
+# so no `GIT_CONFIG_*`, `GIT_CONFIG_PARAMETERS`, `GIT_DIR`, `GIT_ASKPASS`, `GIT_SSH_COMMAND` or
+# agent socket of the caller reaches it, with no system or global configuration, no credential
+# helper, no ssh command, no askpass and no prompt (`GIT_TERMINAL_PROMPT=0`: a repository that
+# wants a credential fails, it does not ask), without hardlinks, and dissociated from any
+# repository its source borrows objects from. The clone's `trial/0` is set to the seed (whatever
+# branch the checkout was on) and checked out and its remote removed, by that same git; then the
+# predicate's command runs there through `sh -c`, with `$TAKT` the binary, `$SCENARIO` the clone
+# and, when the predicate gives one, `$TEST` the task's test command. Its environment holds only
+# PATH, LANG, TAKT, SCENARIO, TEST and HOME, and HOME is a fresh directory of the check's own,
+# never the caller's, so no credential of the caller reaches it, neither from the environment
+# nor from a file a tool reads under HOME (git's credential store, a CLI's login). Its one link
+# out is `.cache/aep/protocol-sources`, the caller's cache of the public protocol sources `aep`
+# reads, so `aep` needs no network there. The command still runs as the caller's user: this is
+# no sandbox against a path it names outright. The script's own git reads and writes name their
+# repository by path, so a `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE` of the caller (a
+# hook's environment) is unset before any of them.
 # The cache is `$XDG_CACHE_HOME/takt/check-finding`, `~/.cache/takt/check-finding` without it:
 # `builds/<sha>/takt` and `builds/<sha>/revision`, and one directory per check under `runs/`
 # holding the finding, the clone, the predicate's home, the command's output and the result,
@@ -58,6 +65,11 @@
 # on standard output and exits 1; a usage error, a CHECK_FINDING_TIMEOUT that is no whole number
 # of seconds among them, exits 64.
 set -euo pipefail
+
+# The repositories this script reads and writes are the ones it names by path; a GIT_DIR,
+# GIT_WORK_TREE or GIT_INDEX_FILE of the caller (a hook's environment) would send every `git -C`
+# to another repository, or a checkout into the caller's index.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 say() { printf 'check-finding: %s\n' "$*" >&2; }
 usage() {
@@ -240,26 +252,33 @@ sources=$sources/aep/protocol-sources
 
 # The starting state: a clone of the scenario repository, or of the predicate's repository, on
 # `trial/0` at the seed, with no remote, so nothing the predicate does reaches the repository
-# it was cloned from. The clone runs as the predicate will, not as the caller: in the fresh
-# HOME, with no system or global git configuration (a caller's `insteadOf` could send a public
-# URL to a private repository over the caller's ssh key), no credential helper, no ssh command
-# and no prompt, so a repository that wants a credential fails rather than being read with the
-# caller's; and without hardlinks, so a predicate that damages an object in its clone damages
-# nothing in the repository it was cloned from.
+# it was cloned from. The clone, and every git call that sets it up, runs as the predicate will,
+# not as the caller: with the environment replaced (`env -i`; `env VAR=… git` would add to the
+# caller's, whose `GIT_CONFIG_*` or `GIT_CONFIG_PARAMETERS` `insteadOf` could send a public URL
+# to a private repository, whose `GIT_ASKPASS` or `GIT_SSH_COMMAND` would run with its secrets,
+# and whose `GIT_DIR` would redirect every `git -C`), in the fresh HOME, with no system or
+# global git configuration, no credential helper, no ssh command, no askpass and no prompt, so
+# a repository that wants a credential fails rather than being read with the caller's; without
+# hardlinks, so a predicate that damages an object in its clone damages nothing in the
+# repository it was cloned from; and dissociated, so a source that borrows its objects (a
+# `--checkout` that is itself a `--shared` clone) lends the clone no `objects/info/alternates`.
+clone_git() {
+    env -i PATH="$PATH" HOME="$home" LANG="${LANG:-C.UTF-8}" \
+        GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
+        git -c credential.helper= -c core.sshCommand=false -c core.askPass= "$@"
+}
 clone=$run/scenario
-env HOME="$home" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
-    git -c credential.helper= -c core.sshCommand=false -c core.askPass= \
-    clone --quiet --no-checkout --no-hardlinks -- "$source" "$clone" >&2 ||
+clone_git clone --quiet --no-checkout --no-hardlinks --dissociate -- "$source" "$clone" >&2 ||
     fail "clone $source"
-resolved=$(git -C "$clone" rev-parse --verify --quiet "$seed^{commit}") ||
+resolved=$(clone_git -C "$clone" rev-parse --verify --quiet "$seed^{commit}") ||
     fail "$where: the seed ${seed:0:12} is reachable from no branch of $source"
 seed=$resolved
 # `-B`: the clone's one local branch is the one the checkout was on, `trial/0` when a scenario
 # run left it there; it is set to the seed whatever it held.
-git -C "$clone" checkout --quiet -B trial/0 "$seed" >&2 || fail "check out the seed ${seed:0:12}"
-git -C "$clone" remote remove origin
-git -C "$clone" config user.name check-finding
-git -C "$clone" config user.email check-finding@example.invalid
+clone_git -C "$clone" checkout --quiet -B trial/0 "$seed" >&2 || fail "check out the seed ${seed:0:12}"
+clone_git -C "$clone" remote remove origin
+clone_git -C "$clone" config user.name check-finding
+clone_git -C "$clone" config user.email check-finding@example.invalid
 
 say "$finding: $where, takt at ${sha:0:12}: $command"
 environment=(PATH="$PATH" HOME="$home" LANG="${LANG:-C.UTF-8}" TAKT="$takt" SCENARIO="$clone")

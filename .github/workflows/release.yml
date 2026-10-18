@@ -63,6 +63,8 @@ jobs:
     name: Gate the tagged commit
     needs: provenance
     uses: ./.github/workflows/check.yml
+    with:
+      ref: ${{ needs.provenance.outputs.commit }}
 
   build:
     name: Build ${{ matrix.target }}
@@ -164,8 +166,17 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
-            # A backfill adds what is missing; an asset already published is never replaced.
-            gh release upload "$TAG" dist/*
+            # A backfill uploads only the assets the release does not hold yet, by name: an
+            # asset already published is never replaced, and `gh release upload` without
+            # `--clobber` stops at the first published name it meets, which SHA256SUMS always is.
+            gh release view "$TAG" --json assets --jq '.assets[].name' > "$RUNNER_TEMP/published"
+            missing=()
+            for asset in dist/*; do
+              grep -qxF -- "$(basename "$asset")" "$RUNNER_TEMP/published" || missing+=("$asset")
+            done
+            if ((${#missing[@]})); then
+              gh release upload "$TAG" "${missing[@]}"
+            fi
           else
             gh release create "$TAG" dist/* --title "$TAG" --notes-file notes.md --verify-tag
           fi

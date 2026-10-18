@@ -22,9 +22,11 @@
 #   scenario    the scenario's id, as `.engineering/scenarios.conf` of the scenario repository
 #               declares it (letters, digits, `-` and `_`)
 #   repository  instead of a scenario: the repository the defect was seen on, an `https://` URL
-#               and nothing else (a predicate is committed to a public repository, and a path is
-#               one machine's), cloned by `scripts/check-finding` at `seed`; a local checkout
-#               stands in for the URL only through that script's `--checkout` option
+#               and nothing else, to a host every machine reaches: not localhost, a loopback, a
+#               link-local or a private address (a predicate is committed to a public
+#               repository, and a path is one machine's), cloned by `scripts/check-finding` at
+#               `seed`; a local checkout stands in for the URL only through that script's
+#               `--checkout` option
 #   seed        with `repository`: the commit the task starts from, a commit id of 7 to 64 hex
 #               digits
 #   test        with `repository`, optional: the task's test command, handed to the command as
@@ -131,6 +133,27 @@ read_predicate() {
         https://?*) ;;
         *) malformed "repository \`${PREDICATE[repository]}\`: a repository is an \`https://\` URL, which the check clones with no credential of its own and which holds on every machine; a local checkout stands in for it through check-finding's \`--checkout <url>=<path>\`" ;;
         esac
+        # The host, between `https://` and the next `/`, less a port; an IPv6 literal is the
+        # text inside its brackets. A host one machine or one network reaches (localhost, a
+        # loopback, link-local or RFC 1918 address) is a path by another name.
+        local host=${PREDICATE[repository]#https://} local_host=
+        host=${host%%/*}
+        if [[ $host == \[* ]]; then
+            host=${host#\[}
+            host=${host%%\]*}
+        else
+            host=${host%%:*}
+        fi
+        case ${host,,} in
+        localhost | ::1 | fe[89ab][0-9a-f]:*) local_host=1 ;;
+        esac
+        if [[ $host =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            case $host in
+            127.* | 10.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].* | 192.168.* | 169.254.*) local_host=1 ;;
+            esac
+        fi
+        [[ -z $local_host ]] ||
+            malformed "repository \`${PREDICATE[repository]}\`: its host \`$host\` is localhost, a loopback, a link-local or a private address, which one machine or one network reaches; a repository is one every machine reaches, a local checkout standing in for it through check-finding's \`--checkout <url>=<path>\`"
         [[ -v PREDICATE[seed] ]] || malformed "the expected_before block gives \`repository\` but no \`seed\`: the commit the task starts from"
         [[ ${PREDICATE[seed]} =~ ^[0-9a-f]{7,64}$ ]] ||
             malformed "seed \`${PREDICATE[seed]}\`: a seed is a commit id, 7 to 64 hex digits, so the check starts from the same tree every time"

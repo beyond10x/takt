@@ -935,8 +935,8 @@ types:
   # lower-case letters and digits in words joined by `-`. One key is one finding: a filing of a
   # key the store holds already, under whatever kind, is refused.
   # read from: .engineering/planning/design/recursive-self-improvement.md:84-85
-  # read from: scripts/file-finding:198
-  # read from: scripts/file-finding:214-237
+  # read from: scripts/file-finding:221
+  # read from: scripts/file-finding:237-260
   - name: takt.work.FindingKey
     kind: newtype
     of: String
@@ -945,8 +945,8 @@ types:
   # (`story:<key>`) or a blocker (`blocker:<key>`), never both and never neither; decided
   # 2026-10-18. No blocker is declared in this specification, so the blocker variant carries the
   # artifact id as text.
-  # read from: scripts/file-finding:187
-  # read from: scripts/file-finding:239
+  # read from: scripts/file-finding:210
+  # read from: scripts/file-finding:262
   # read from: .engineering/planning/story/finding-intake.md:51
   - name: takt.work.FindingArtifact
     kind: union
@@ -957,8 +957,8 @@ types:
 
   # What filing a finding came to, the result of a `finding_record` record.
   # read from: protocols/self-improvement/1.yaml:41-44
-  # read from: scripts/file-finding:65
-  # read from: scripts/file-finding:244
+  # read from: scripts/file-finding:67
+  # read from: scripts/file-finding:267
   - name: takt.work.FilingResult
     kind: enum
     variants: [filed, malformed]
@@ -966,7 +966,7 @@ types:
   # What a finding's predicate came to on its scenario with a takt built from one revision, the
   # result of a `scenario_result` record.
   # read from: protocols/self-improvement/1.yaml:45-48
-  # read from: scripts/check-finding:274-280
+  # read from: scripts/check-finding:293-299
   - name: takt.work.ScenarioResult
     kind: enum
     variants: [reproduced, not_reproduced]
@@ -2081,28 +2081,29 @@ entities:
   # read from: .engineering/planning/story/finding-intake.md (§ Domain relations)
   # read from: .engineering/planning/story/finding-on-any-repository.md (§ Outcome)
   # read from: .engineering/planning/story/check-finding-builds-name-their-revision.md (§ Outcome)
-  # read from: scripts/file-finding:11-42
-  # read from: scripts/file-finding:103
-  # read from: scripts/file-finding:187
-  # read from: scripts/check-finding:149-255
+  # read from: scripts/file-finding:11-44
+  # read from: scripts/file-finding:105
+  # read from: scripts/file-finding:210
+  # read from: scripts/check-finding:161-274
   # One predicate on one scenario or one repository: a body with a second `expected_before`
   # block, a block that gives a key twice, or one that gives both `scenario` and `repository`, or
   # neither, is malformed and nothing is filed. `seed` and `test` go with `repository` only: a
   # scenario's seed is the scenario repository's to declare. A repository is an `https://` URL
-  # and nothing else (a predicate is committed to a public repository and must hold on every
+  # and nothing else, to a host every machine reaches, so not localhost, a loopback, a link-local
+  # or a private address (a predicate is committed to a public repository and must hold on every
   # machine; the check clones it with no credential of its own), a local checkout standing in
   # for it only through `check-finding --checkout <url>=<path>` at check time; a seed is a commit
   # id.
-  # read from: scripts/file-finding:106
-  # read from: scripts/file-finding:111
-  # read from: scripts/file-finding:117-138
+  # read from: scripts/file-finding:108
+  # read from: scripts/file-finding:113
+  # read from: scripts/file-finding:119-161
   # A finding is filed as exactly one store artifact, a story or a blocker, and that artifact is
   # filed for that finding alone (its id is `<kind>:<key>`, the finding's key): one-to-one,
   # decided 2026-10-18, held in `artifact` (takt.work.FindingArtifact). A relation entry needs a
   # field typed by the target's identity, and the story variant sits inside a union beside a
   # blocker this specification does not declare, so no relation to takt.work.Story is declared and
   # the one-to-one is stated here.
-  # read from: scripts/file-finding:239
+  # read from: scripts/file-finding:262
   # read from: .engineering/planning/story/finding-intake.md:51
   - name: takt.work.Finding
     naming:

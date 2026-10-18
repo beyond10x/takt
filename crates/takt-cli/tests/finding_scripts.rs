@@ -1038,6 +1038,38 @@ fn a_predicate_mixing_or_missing_the_scenario_and_repository_forms_is_refused() 
             replaced(&repository_form, "seed", "abc"),
         ),
         ("an empty test", format!("{repository_form}test:\n")),
+        (
+            "a repository on a loopback address, with a port",
+            replaced(&repository_form, "repository", "https://127.0.0.1:1/x"),
+        ),
+        (
+            "a repository on localhost",
+            replaced(&repository_form, "repository", "https://localhost/x"),
+        ),
+        (
+            "a repository on a 10/8 address",
+            replaced(&repository_form, "repository", "https://10.1.2.3/x"),
+        ),
+        (
+            "a repository on a 192.168/16 address",
+            replaced(&repository_form, "repository", "https://192.168.1.1/x"),
+        ),
+        (
+            "a repository on a 172.16/12 address",
+            replaced(&repository_form, "repository", "https://172.16.0.1/x"),
+        ),
+        (
+            "a repository on a link-local address",
+            replaced(&repository_form, "repository", "https://169.254.1.1/x"),
+        ),
+        (
+            "a repository on the IPv6 loopback",
+            replaced(&repository_form, "repository", "https://[::1]/x"),
+        ),
+        (
+            "a repository on an IPv6 link-local address",
+            replaced(&repository_form, "repository", "https://[fe80::1]/x"),
+        ),
     ];
     for (what, text) in &cases {
         let output = file(&repo, "forms", &body(Some(text)), &[]);
@@ -1188,6 +1220,84 @@ fn the_predicates_clone_reads_no_git_configuration_or_credential_of_the_caller()
         shown(&output)
     );
     assert!(!log.exists(), "the caller's credential helper was called");
+}
+
+/// Nothing the caller's environment carries reaches the clone or the git calls that set it up:
+/// a `GIT_CONFIG_*` and a `GIT_CONFIG_PARAMETERS` `insteadOf` sending the predicate's URL to a
+/// local repository, an askpass and an ssh command that log their calls, an agent socket, and a
+/// `GIT_DIR` naming another repository.
+#[test]
+fn the_predicates_clone_reads_no_environment_of_the_caller() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let world = world("callers-environment");
+    let filed = file(
+        &world.takt,
+        "repo-form",
+        &body(Some(&world.repository_predicate())),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let log = world.outer.0.join("calls.log");
+    let logger = |name: &str| {
+        let path = world.outer.0.join(name);
+        write(
+            &path,
+            &format!("#!/bin/sh\necho {name} >> {}\nexit 0\n", log.display()),
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable");
+        path.to_str().expect("UTF-8").to_owned()
+    };
+    let askpass = logger("askpass.sh");
+    let ssh = logger("ssh.sh");
+    let instead_of = format!("url.{}.insteadOf", world.scenarios.display());
+    let parameters = format!("'{instead_of}={REPOSITORY_URL}'");
+    let other = store(&world.outer.0.join("other"));
+    let git_dir = other.join(".git");
+    let environment = [
+        ("GIT_CONFIG_COUNT", "1"),
+        ("GIT_CONFIG_KEY_0", instead_of.as_str()),
+        ("GIT_CONFIG_VALUE_0", REPOSITORY_URL),
+        ("GIT_CONFIG_PARAMETERS", parameters.as_str()),
+        ("GIT_ASKPASS", askpass.as_str()),
+        ("GIT_SSH_COMMAND", ssh.as_str()),
+        ("SSH_AUTH_SOCK", "/nonexistent"),
+        ("GIT_DIR", git_dir.to_str().expect("UTF-8")),
+    ];
+    let cache = world.cache();
+    let mut all = vec![("XDG_CACHE_HOME", cache.to_str().expect("UTF-8"))];
+    all.extend_from_slice(&environment);
+    let output = script(
+        "check-finding",
+        &world.takt,
+        &["story:repo-form", &world.defect],
+        &all,
+    );
+    assert!(
+        !output.status.success(),
+        "the caller's environment sent the predicate's URL to a local repository: {}",
+        shown(&output)
+    );
+    assert!(output.stdout.is_empty(), "{}", shown(&output));
+    assert!(
+        !log.exists(),
+        "the caller's askpass or ssh command was called: {}",
+        fs::read_to_string(&log).unwrap_or_default()
+    );
+    // With `--checkout`, the same environment still gives the result: the check's own git
+    // calls read the repositories the script names, not the caller's `GIT_DIR`.
+    let output = world.check_repository("story:repo-form", &world.defect, &environment);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&output)
+    );
+    assert!(
+        !log.exists(),
+        "the caller's askpass or ssh command was called: {}",
+        fs::read_to_string(&log).unwrap_or_default()
+    );
 }
 
 /// A local clone shares no object file with the repository it was cloned from: a predicate
