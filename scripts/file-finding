@@ -22,11 +22,14 @@
 #   scenario    the scenario's id, as `.engineering/scenarios.conf` of the scenario repository
 #               declares it (letters, digits, `-` and `_`)
 #   repository  instead of a scenario: the repository the defect was seen on, an `https://` URL
-#               and nothing else, to a host every machine reaches: not localhost, a loopback, a
-#               link-local or a private address (a predicate is committed to a public
-#               repository, and a path is one machine's), cloned by `scripts/check-finding` at
-#               `seed`; a local checkout stands in for the URL only through that script's
-#               `--checkout` option
+#               and nothing else (a predicate is committed to a public repository, and a path is
+#               one machine's), cloned by `scripts/check-finding` at `seed`; a local checkout
+#               stands in for the URL only through that script's `--checkout` option. A filed
+#               repository names a public host: a dotted DNS name (labels of letters, digits and
+#               `-`, at least one dot, no trailing dot, not `localhost` or a name under it) or a
+#               dotted-decimal IPv4 address (four decimal octets, 0 to 255, no leading zero, no
+#               hex, no shorthand) outside the zero, loopback, private, link-local and shared
+#               ranges; no IPv6 literal. The check is a lint on the URL's text, not a boundary
 #   seed        with `repository`: the commit the task starts from, a commit id of 7 to 64 hex
 #               digits
 #   test        with `repository`, optional: the task's test command, handed to the command as
@@ -133,27 +136,45 @@ read_predicate() {
         https://?*) ;;
         *) malformed "repository \`${PREDICATE[repository]}\`: a repository is an \`https://\` URL, which the check clones with no credential of its own and which holds on every machine; a local checkout stands in for it through check-finding's \`--checkout <url>=<path>\`" ;;
         esac
-        # The host, between `https://` and the next `/`, less a port; an IPv6 literal is the
-        # text inside its brackets. A host one machine or one network reaches (localhost, a
-        # loopback, link-local or RFC 1918 address) is a path by another name.
-        local host=${PREDICATE[repository]#https://} local_host=
+        # The host, between `https://` and the next `/`, less a port. A filed repository names
+        # a public host: a dotted DNS name (labels of letters, digits and `-`, at least one dot,
+        # no trailing dot, not `localhost` or a name under it) or a dotted-decimal IPv4 address
+        # (four decimal octets, 0 to 255, no leading zero, no hex, no shorthand) outside the
+        # zero, loopback, private, link-local and shared ranges; no IPv6 literal. A host whose
+        # last label is a number is read as an address, as a browser reads it, so no hex, octal
+        # or shorthand spelling of a loopback passes as a name. This is a lint on the URL's
+        # text, not a boundary: the predicate's own command reaches whatever it names.
+        local host=${PREDICATE[repository]#https://} why= last
+        local octet='(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])'
         host=${host%%/*}
-        if [[ $host == \[* ]]; then
-            host=${host#\[}
-            host=${host%%\]*}
-        else
-            host=${host%%:*}
-        fi
-        case ${host,,} in
-        localhost | ::1 | fe[89ab][0-9a-f]:*) local_host=1 ;;
+        case $host in
+        *[?#\\]*) why="a host holds no \`?\`, \`#\` or \`\\\`" ;;
+        \[*) why="an IPv6 literal is no host every machine reaches by that text" ;;
+        *) host=${host%%:*} ;;
         esac
-        if [[ $host =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            case $host in
-            127.* | 10.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].* | 192.168.* | 169.254.*) local_host=1 ;;
-            esac
+        last=${host##*.}
+        if [[ -n $why ]]; then
+            :
+        elif [[ -z $host ]]; then
+            why="the URL names no host"
+        elif [[ $host == *. ]]; then
+            why="a host ends in no dot"
+        elif [[ ${host,,} == localhost || ${host,,} == *.localhost ]]; then
+            why="\`localhost\` and the names under it are one machine's"
+        elif [[ ${last,,} =~ ^(0x[0-9a-f]*|[0-9]+)$ ]]; then
+            if [[ ! $host =~ ^$octet(\.$octet){3}$ ]]; then
+                why="an address is dotted decimal: four octets, 0 to 255, no leading zero, no hex, no shorthand"
+            else
+                case $host in
+                0.* | 10.* | 127.* | 169.254.* | 192.168.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].* | 100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*)
+                    why="the zero, loopback, private, link-local and shared address ranges are one machine's or one network's" ;;
+                esac
+            fi
+        elif [[ ! $host =~ ^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ ]]; then
+            why="a name is labels of letters, digits and \`-\`, with at least one dot"
         fi
-        [[ -z $local_host ]] ||
-            malformed "repository \`${PREDICATE[repository]}\`: its host \`$host\` is localhost, a loopback, a link-local or a private address, which one machine or one network reaches; a repository is one every machine reaches, a local checkout standing in for it through check-finding's \`--checkout <url>=<path>\`"
+        [[ -z $why ]] ||
+            malformed "repository \`${PREDICATE[repository]}\`: its host \`$host\` names no public repository ($why); a repository is one every machine reaches, a local checkout standing in for it through check-finding's \`--checkout <url>=<path>\`"
         [[ -v PREDICATE[seed] ]] || malformed "the expected_before block gives \`repository\` but no \`seed\`: the commit the task starts from"
         [[ ${PREDICATE[seed]} =~ ^[0-9a-f]{7,64}$ ]] ||
             malformed "seed \`${PREDICATE[seed]}\`: a seed is a commit id, 7 to 64 hex digits, so the check starts from the same tree every time"

@@ -957,7 +957,7 @@ fn a_predicate_mixing_or_missing_the_scenario_and_repository_forms_is_refused() 
             .map(|line| format!("{line}\n"))
             .collect::<String>()
     };
-    let cases: Vec<(&str, String)> = vec![
+    let mut cases: Vec<(&str, String)> = vec![
         (
             "both a scenario and a repository",
             format!(
@@ -1038,39 +1038,113 @@ fn a_predicate_mixing_or_missing_the_scenario_and_repository_forms_is_refused() 
             replaced(&repository_form, "seed", "abc"),
         ),
         ("an empty test", format!("{repository_form}test:\n")),
+    ];
+    // The host is a lint on the URL's text, not a boundary: a filed repository names a dotted
+    // DNS name or a dotted-decimal IPv4 address outside the local ranges, and nothing else.
+    let hosts = [
+        ("localhost", "https://localhost/x"),
+        ("localhost in capitals", "https://LOCALHOST/x"),
+        ("localhost in mixed case", "https://LocalHost/x"),
+        ("localhost with a trailing dot", "https://localhost./x"),
+        ("localhost with a port", "https://localhost:8443/x"),
+        ("a name under localhost", "https://foo.localhost/x"),
+        ("the loopback address", "https://127.0.0.1/x"),
         (
-            "a repository on a loopback address, with a port",
-            replaced(&repository_form, "repository", "https://127.0.0.1:1/x"),
+            "the loopback address with a trailing dot",
+            "https://127.0.0.1./x",
+        ),
+        ("the loopback address in two parts", "https://127.1/x"),
+        ("the loopback address in three parts", "https://127.0.1/x"),
+        (
+            "the loopback address as one decimal",
+            "https://2130706433/x",
         ),
         (
-            "a repository on localhost",
-            replaced(&repository_form, "repository", "https://localhost/x"),
+            "the loopback address as one hex number",
+            "https://0x7f000001/x",
         ),
         (
-            "a repository on a 10/8 address",
-            replaced(&repository_form, "repository", "https://10.1.2.3/x"),
+            "the loopback address with a hex octet",
+            "https://0x7f.0.0.1/x",
         ),
         (
-            "a repository on a 192.168/16 address",
-            replaced(&repository_form, "repository", "https://192.168.1.1/x"),
+            "the loopback address with an octal octet",
+            "https://0177.0.0.1/x",
         ),
         (
-            "a repository on a 172.16/12 address",
-            replaced(&repository_form, "repository", "https://172.16.0.1/x"),
+            "the loopback address as one octal number",
+            "https://017700000001/x",
+        ),
+        ("the zero address", "https://0.0.0.0/x"),
+        ("the zero address as one digit", "https://0/x"),
+        ("a 10/8 address", "https://10.0.0.1/x"),
+        ("a 10/8 address with an octal octet", "https://012.0.0.1/x"),
+        ("a 10/8 address as one decimal", "https://167772161/x"),
+        ("the first 172.16/12 address", "https://172.16.0.1/x"),
+        ("the last 172.16/12 address", "https://172.31.255.255/x"),
+        ("a 192.168/16 address", "https://192.168.1.1/x"),
+        (
+            "the link-local metadata address",
+            "https://169.254.169.254/x",
         ),
         (
-            "a repository on a link-local address",
-            replaced(&repository_form, "repository", "https://169.254.1.1/x"),
+            "the link-local metadata address as one decimal",
+            "https://2852039166/x",
+        ),
+        ("a 100.64/10 address", "https://100.64.0.1/x"),
+        ("the IPv6 loopback", "https://[::1]/x"),
+        (
+            "the IPv6 loopback written out",
+            "https://[0:0:0:0:0:0:0:1]/x",
         ),
         (
-            "a repository on the IPv6 loopback",
-            replaced(&repository_form, "repository", "https://[::1]/x"),
+            "the loopback address mapped into IPv6",
+            "https://[::ffff:127.0.0.1]/x",
         ),
         (
-            "a repository on an IPv6 link-local address",
-            replaced(&repository_form, "repository", "https://[fe80::1]/x"),
+            "the loopback address mapped into IPv6 in hex",
+            "https://[::ffff:7f00:1]/x",
+        ),
+        ("the IPv6 zero address", "https://[::]/x"),
+        ("an IPv6 link-local address", "https://[fe80::1]/x"),
+        (
+            "an IPv6 link-local address in capitals",
+            "https://[FE80::1]/x",
+        ),
+        (
+            "an IPv6 link-local address with a zone",
+            "https://[fe80::1%25eth0]/x",
+        ),
+        ("an IPv6 unique local address", "https://[fc00::1]/x"),
+        (
+            "another IPv6 unique local address",
+            "https://[fd12:3456::1]/x",
+        ),
+        (
+            "an IPv6-compatible loopback address",
+            "https://[::127.0.0.1]/x",
+        ),
+        (
+            "the loopback address before an encoded slash and a user",
+            "https://127.0.0.1%2f@x/x",
+        ),
+        ("the loopback address before a query", "https://127.0.0.1?x"),
+        (
+            "the loopback address before a fragment",
+            "https://127.0.0.1#x",
+        ),
+        (
+            "the loopback address before a backslash",
+            "https://127.0.0.1\\x",
+        ),
+        (
+            "the loopback address with a port",
+            "https://127.0.0.1:443/x",
         ),
     ];
+    for (what, url) in hosts {
+        cases.push((what, replaced(&repository_form, "repository", url)));
+    }
     for (what, text) in &cases {
         let output = file(&repo, "forms", &body(Some(text)), &[]);
         assert!(!output.status.success(), "{what}: {}", shown(&output));
@@ -1082,6 +1156,29 @@ fn a_predicate_mixing_or_missing_the_scenario_and_repository_forms_is_refused() 
         );
         assert!(listed(&repo, "forms").is_empty(), "{what}");
         assert_eq!(status(&repo), before, "{what}: nothing was written");
+    }
+    // A public host passes the lint by its text alone, whatever it resolves to: filing reads
+    // nothing from it.
+    let accepted = [
+        (
+            "a public repository",
+            "https://github.com/beyond10x/todo-app-example",
+        ),
+        ("a public address", "https://172.32.0.1/x"),
+        (
+            "a name that resolves to the loopback address",
+            "https://localtest.me/x",
+        ),
+        (
+            "a name spelling the loopback address under a public domain",
+            "https://127.0.0.1.nip.io/x",
+        ),
+    ];
+    for (index, (what, url)) in accepted.into_iter().enumerate() {
+        let text = replaced(&repository_form, "repository", url);
+        let key = format!("forms-{index}");
+        let output = file(&repo, &key, &body(Some(&text)), &[]);
+        assert!(output.status.success(), "{what}: {}", shown(&output));
     }
     // An https repository with a seed is well formed, whatever the host; filing reads nothing
     // from it.
@@ -1297,6 +1394,74 @@ fn the_predicates_clone_reads_no_environment_of_the_caller() {
         !log.exists(),
         "the caller's askpass or ssh command was called: {}",
         fs::read_to_string(&log).unwrap_or_default()
+    );
+}
+
+/// A `--checkout` that is itself a `--shared` clone lends the predicate's clone no
+/// `objects/info/alternates`: the clone is dissociated, holding every object it needs itself,
+/// and the predicate still answers.
+#[test]
+fn the_predicates_clone_borrows_no_object_from_its_sources_source() {
+    let world = world("dissociate");
+    let filed = file(
+        &world.takt,
+        "repo-form",
+        &body(Some(&world.repository_predicate())),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let shared = world.outer.0.join("shared");
+    git(
+        &world.outer.0,
+        &[
+            "clone",
+            "-q",
+            "--shared",
+            "--no-checkout",
+            "scenarios",
+            "shared",
+        ],
+    );
+    assert!(
+        shared.join(".git/objects/info/alternates").is_file(),
+        "the --checkout borrows its objects"
+    );
+    let checkout = format!("{REPOSITORY_URL}={}", shared.display());
+    let cache = world.cache();
+    let output = script(
+        "check-finding",
+        &world.takt,
+        &["--checkout", &checkout, "story:repo-form", &world.defect],
+        &[("XDG_CACHE_HOME", cache.to_str().expect("UTF-8"))],
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&output)
+    );
+    let clones: Vec<PathBuf> = fs::read_dir(cache.join("takt/check-finding/runs"))
+        .expect("the runs directory")
+        .map(|entry| entry.expect("an entry").path().join("scenario"))
+        .filter(|clone| clone.is_dir())
+        .collect();
+    assert_eq!(clones.len(), 1, "{clones:?}");
+    let alternates = clones[0].join(".git/objects/info/alternates");
+    let borrowed = fs::read_to_string(&alternates).unwrap_or_default();
+    assert!(
+        borrowed.trim().is_empty(),
+        "{} borrows objects from {borrowed}",
+        alternates.display()
+    );
+    let fsck = Command::new("git")
+        .args(["fsck", "--strict"])
+        .current_dir(&clones[0])
+        .output()
+        .expect("git runs");
+    assert!(
+        fsck.status.success(),
+        "the clone misses objects of its own: {}",
+        String::from_utf8_lossy(&fsck.stderr)
     );
 }
 
