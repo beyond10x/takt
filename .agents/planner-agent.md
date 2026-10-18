@@ -117,6 +117,12 @@ Cadence, until takt drives the loop itself:
 The planner dispatches every run: the reviewer and the doc-writer as agents started from their
 profiles, the developer by message.
 
+No idle slots. The owner allows three agents at once on the planner's side; while the developer
+works, those three run work that waits on nobody: a code review that hunts findings for the next
+turns, a scope pass on the next wave's stories, a docs or site refresh, a scheduled run. A watch on
+a ref is not work. The developer runs three implementors at once on stories whose scopes do not
+overlap, the improvement turn always one of them.
+
 A turn counts on the loop scorecard only as a `self.improvement` case under `.engineering/cases/`;
 a turn recorded elsewhere, such as an R0 case under `docs/runs/`, is copied there unchanged.
 
