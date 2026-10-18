@@ -862,7 +862,7 @@ types:
   # takt lane, its effect, the tool's class or a label, and the source record. No token or cost
   # figure is taken from it. Docs tooling, not the kernel: no takt binary writes or reads it.
   # read from: docs/metrics/journey.py:1-10
-  # read from: docs/metrics/journey.py:598-605
+  # read from: docs/metrics/journey.py:782-789
   - name: takt.work.JourneyEvent
     kind: struct
     fields:
