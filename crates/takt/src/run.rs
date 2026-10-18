@@ -2530,6 +2530,10 @@ pub struct Run<'a> {
     pub tokens: u64,
     /// How long the run waits on the forge before it observes again: [`Run::POLL`] unless set.
     pub poll: Duration,
+    /// The revision the running binary was built from, as its `--version` prints it, recorded
+    /// on the `opened` line; none unless the caller sets it, since this library does not know
+    /// the build it is linked into.
+    pub binary: Option<String>,
     /// The planning store a story's run records its test result and its move in; none until
     /// [`Run::record_on`] gives one, and only a story's run writes to it.
     store: Option<&'a dyn Frontier>,
@@ -2612,6 +2616,7 @@ impl<'a> Run<'a> {
             steps: 0,
             tokens: 0,
             poll: Self::POLL,
+            binary: None,
             store: None,
             started: Instant::now(),
             outside: Outside::read(tree)?,
@@ -2668,6 +2673,7 @@ impl<'a> Run<'a> {
             steps: 0,
             tokens: 0,
             poll: Self::POLL,
+            binary: None,
             store: None,
             started: Instant::now(),
             outside: Outside::read(tree)?,
@@ -3323,6 +3329,7 @@ impl<'a> Run<'a> {
                 base: crate::case::Branch::read(&self.case.dir)
                     .ok()
                     .and_then(|branch| branch.base_commit),
+                binary: self.binary.clone(),
             },
         )?;
         writeln!(
