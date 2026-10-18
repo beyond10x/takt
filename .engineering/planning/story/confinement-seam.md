@@ -31,7 +31,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/confinement.rs
-revision: 11
+revision: 12
 ---
 # Story: confinement-seam
 
@@ -118,3 +118,4 @@ Routes the reviewer of story:step-cannot-forge-its-validators found at 9b70c5b t
 - M9: a step starts a background writer that escapes the step's process group (`setsid`) and puts `../.cargo/config.toml` in place after the run ends; the next run takes it as its baseline. Closed by confining the harness child so it cannot write outside its tree or outlive the step.
 
 step-cannot-forge-its-validators keeps an ignored test for each, naming this story.
+- M16, from the reviewer's verdict on step-cannot-forge-its-validators at 65795ea: `../.cargo` is a link before the run and a step writes `config.toml` through it; run 1 refuses and names what it could not put back, but run 2 takes the outside baseline afresh and is accepted with 1 pass. A cheap interim fix outside this story: record what a run could not put back, so the next run refuses until it is cleared.
