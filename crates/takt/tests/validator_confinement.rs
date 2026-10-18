@@ -286,14 +286,27 @@ fn a_gates_document_rewritten_on_the_case_branch_does_not_change_the_verdict() {
         Box::new(GateRun::new(".engineering/gates.yaml")),
     ];
     let rewritten = gates(r#"fs.file.exists("README.md")"#);
-    let harness = Writes::new(&[(".engineering/gates.yaml", &rewritten)]);
+    // A judgement step may not write under `.engineering/` at all; the rewrite reaches the
+    // case's branch as a commit of its own, and the step's commit puts it under the revision
+    // the gate observes.
+    let harness = Writes::new(&[("notes.txt", "edited\n")]);
     let mut run =
         Run::open(&tree, options("gate-base", 8), &harness, &validators).expect("the case opens");
+    fs::write(tree.join(".engineering/gates.yaml"), &rewritten).expect("the rewrite");
+    git(
+        &tree,
+        &["commit", "-qam", "rewrite the gates on the case branch"],
+    );
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8(out).expect("utf-8");
     assert_eq!(harness.calls.get(), 2, "{stop:?}\n{text}");
     let head = git(&tree, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        git(&tree, &["show", "HEAD:.engineering/gates.yaml"]),
+        rewritten.trim_end(),
+        "the gated revision carries the rewrite\n{text}"
+    );
     let gate: Vec<_> = records(&run.case.dir)
         .into_iter()
         .filter(|r| r["kind"] == "gate_result")
@@ -332,14 +345,32 @@ fn a_project_file_rewritten_on_the_case_branch_does_not_change_the_verdict() {
         Box::new(GateRun::new(".engineering/gates.yaml")),
     ];
     let rewritten = project("passes.sh");
-    let harness = Writes::new(&[(".engineering/assertions-project.yaml", &rewritten)]);
+    // As for the gates document: the rewrite is a commit of its own on the case's branch.
+    let harness = Writes::new(&[("notes.txt", "edited\n")]);
     let mut run = Run::open(&tree, options("project-base", 8), &harness, &validators)
         .expect("the case opens");
+    fs::write(
+        tree.join(".engineering/assertions-project.yaml"),
+        &rewritten,
+    )
+    .expect("the rewrite");
+    git(
+        &tree,
+        &["commit", "-qam", "rewrite the project on the case branch"],
+    );
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8(out).expect("utf-8");
     assert_eq!(harness.calls.get(), 2, "{stop:?}\n{text}");
     let head = git(&tree, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        git(
+            &tree,
+            &["show", "HEAD:.engineering/assertions-project.yaml"]
+        ),
+        rewritten.trim_end(),
+        "the gated revision carries the rewrite\n{text}"
+    );
     let gate: Vec<_> = records(&run.case.dir)
         .into_iter()
         .filter(|r| r["kind"] == "gate_result")
