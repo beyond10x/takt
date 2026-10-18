@@ -396,6 +396,30 @@ types:
     kind: newtype
     of: String
 
+  # A scenario's id in the scratch repository's scenario list. Declared ahead of the code that
+  # reads it.
+  # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scenario corpus)
+  - name: takt.work.ScenarioId
+    kind: newtype
+    of: String
+
+  # A scorecard's id: the revision its runs were taken at and the instant it was computed.
+  # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
+  - name: takt.work.ScorecardId
+    kind: newtype
+    of: String
+
+  # A promotion's id. read from: .engineering/planning/design/recursive-self-improvement.md (§ The judge)
+  - name: takt.work.PromotionId
+    kind: newtype
+    of: String
+
+  # How a scenario run compares with the promoted baseline's run of the same scenario.
+  # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
+  - name: takt.work.Comparison
+    kind: enum
+    variants: [no_regression, regression]
+
 entities:
   # The case a run opens: the directory `<tree>/.engineering/cases/<id>/`, holding `case.yaml`, the
   # `canon-case/1` snapshot that canon.protocol.Case declares (protocol.yaml:861) with its
@@ -973,3 +997,95 @@ entities:
       initial: Created
       states: [Created]
       terminal: [Created]
+
+  # A scenario: one story of the scratch repository at a known seed commit, run from a fresh base
+  # branch `trial/<n>` cut from that commit, with the predicates findings name against it.
+  # Declared ahead of the code (story:scenario-corpus).
+  # UNMAPPED: whether a scenario may later name several stories; one is declared.
+  # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scenario corpus)
+  # read from: .engineering/planning/story/scenario-corpus.md
+  - name: takt.work.Scenario
+    naming:
+      summary: >-
+        A story of the scratch repository at a seed commit, run from a fresh trial base each time,
+        so every run of it starts from the same state.
+    identity:
+      name: id
+      type: takt.work.ScenarioId
+    fields:
+      - name: seed
+        type: takt.work.Revision
+        summary: The commit each run's `trial/<n>` base is cut from.
+      - name: story
+        type: takt.work.StoryId
+        summary: The scratch repository's story the scenario runs.
+    relations:
+      - name: story
+        kind: references
+        target: takt.work.Story
+        cardinality: one
+        via: story
+    lifecycle:
+      initial: Declared
+      states: [Declared]
+      terminal: [Declared]
+
+  # A scorecard: per scenario run, outcome, steps, tokens, refusals, NoProgress and errors and
+  # wall time, read from the runs' events under `.engineering/cases/` only, each compared with the
+  # promoted baseline's run of the same scenario. Declared ahead of the code (story:scorecard-reader).
+  # UNMAPPED: whether a scorecard covers one candidate revision or a period, and so its relation
+  # to scenario runs; no relation is declared.
+  # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
+  # read from: .engineering/planning/story/scorecard-reader.md
+  - name: takt.work.Scorecard
+    naming:
+      summary: >-
+        The figures of a set of scenario runs at one takt revision, each compared with the
+        promoted baseline; a promotion reads it.
+    identity:
+      name: id
+      type: takt.work.ScorecardId
+    fields:
+      - name: revision
+        type: takt.work.Revision
+        summary: The takt revision the runs were taken with.
+      - name: baseline
+        type: takt.work.Revision
+        summary: The promoted revision the runs are compared with.
+      - name: comparison
+        type: takt.work.Comparison
+        summary: no_regression when no scenario run is worse than the baseline's.
+    lifecycle:
+      initial: Computed
+      states: [Computed]
+      terminal: [Computed]
+
+  # A promotion: the takt binary installed for runs, built from a named revision whose scorecard
+  # showed no regression. Declared ahead of the code (story:promotion).
+  # UNMAPPED: whether one scorecard may back more than one promotion.
+  # read from: .engineering/planning/design/recursive-self-improvement.md (§ The judge)
+  # read from: .engineering/planning/story/promotion.md
+  - name: takt.work.Promotion
+    naming:
+      summary: >-
+        The takt binary installed for runs, the revision it was built from and the scorecard that
+        allowed it.
+    identity:
+      name: id
+      type: takt.work.PromotionId
+    fields:
+      - name: revision
+        type: takt.work.Revision
+        summary: The revision the installed binary embeds in `--version`.
+      - name: scorecard
+        type: takt.work.ScorecardId
+    relations:
+      - name: scorecard
+        kind: references
+        target: takt.work.Scorecard
+        cardinality: one
+        via: scorecard
+    lifecycle:
+      initial: Promoted
+      states: [Promoted]
+      terminal: [Promoted]

@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-18T10:04:06Z",
+  "actor": "human:timo",
+  "artifact": "story:pinned-judge-and-promotion",
+  "kind": "story",
+  "revision": 2,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:rsi-scope-round-1",
+    "review": "review-result:rsi-scope-round-1",
+    "outcome": "fixed"
+  }
+}
