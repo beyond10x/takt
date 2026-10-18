@@ -312,8 +312,14 @@ fn approved_case(name: &str) -> (Scratch, String, String, String) {
     let repo = repository(name, true);
     let memory = double();
     let (id, granted) = at_the_gate(&repo, &memory);
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     assert_eq!(resumed_revision(&repo, &id), granted);
     let added = git(&repo, &["show", "--name-only", "--format=", "HEAD"]);
     assert!(
@@ -515,8 +521,14 @@ fn adv2_a_push_that_never_reached_the_forge_is_pushed_again_and_merged_by_the_ne
     let memory = double();
     let (id, granted) = at_the_gate(&repo, &memory);
     let branch = format!("takt/{id}");
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
     let forge = Rc::new(NeverReaches {
         memory: memory.clone(),
@@ -635,8 +647,14 @@ fn adv2_checks_failing_then_passing_on_the_approval_head_merge_on_the_next_run()
     let memory = double();
     let (id, granted) = at_the_gate(&repo, &memory);
     let dir = repo.join(CASES_DIR).join(&id);
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
     let forge = Rc::new(PerHead::new(memory.clone()));
     forge
@@ -682,8 +700,14 @@ fn adv2_checks_answering_for_the_head_before_the_push_do_not_end_the_run_in_an_e
     let repo = repository("stale-checks", false);
     let memory = double();
     let (id, granted) = at_the_gate(&repo, &memory);
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
     let mut forge = PerHead::new(memory.clone());
     forge.require_checks = true;

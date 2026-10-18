@@ -12,7 +12,7 @@ relations:
 - depends_on: story:agent-profiles
 scope:
 - confidence: cited
-  path: .agents/operator-agent.md
+  path: .agents/planner-agent.md
 - confidence: inferred
   path: crates/takt-cli/src/main.rs
 - confidence: inferred
@@ -21,7 +21,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/improvement_protocols.rs
-revision: 6
+revision: 8
 ---
 # Story: loop-scorecard
 
@@ -31,7 +31,7 @@ A `loop.improvement/1` case is driven by validators: `loop.measure` prints the l
 the recorded `self.improvement/1` cases (the share of findings that became fixes, the share of
 fixes verified against declined, the time from finding to verified, tokens per verified fix, and
 escaped defects as human-sourced counts, labelled so); `loop.definition.check` compares metric
-definitions; `loop.compare` compares the metric after the candidate; and the operator profile
+definitions; `loop.compare` compares the metric after the candidate; and the planner profile
 carries the L2 turn: once three L1 turns are recorded, then weekly.
 
 ## Context
@@ -41,11 +41,12 @@ design:recursive-self-improvement § Improving the loop, § The loops as protoco
 drives it with hand-written records. A metric's definition is a judge surface: a candidate that
 changes one without printing the previous figures beside it is `redefined` and cannot be merged.
 Turn 1 is story:first-recorded-improvement-turn; turns 2 and 3 are ordinary improvement turns the
-operator agent runs on findings filed after it, and this story stays in draft until they exist.
+planner agent runs on findings filed after it, and this story stays in draft until they exist.
 
 ## Domain relations
 
 - Loop scorecard → Improvement turn: one row per recorded turn. Inferred from the design.
+- Loop scorecard: UNMAPPED in ess/domains/takt.yaml (one row per turn, or one figure per metric).
 
 ## Scope
 
@@ -58,14 +59,14 @@ Derived 2026-10-18 by `story-scoper`. Every line is **cited** (read from the sto
 - **Symbols:** actions `loop.measure`, `loop.definition.check`, `loop.compare`; evidence kinds `loop_measurement`, `definition_check`, `loop_comparison`; results `below_target`/`at_target`, `unchanged`/`dual_reported`/`redefined`, `improved`/`not_improved` — cited, `protocols/loop-improvement/1.yaml:29-50,109-153`
 - **Also likely:** `crates/takt-cli/src/main.rs:342-393` (every validator is registered here, unconditionally, into `validators`) — inferred
 - **Also likely:** `crates/takt/tests/improvement_protocols.rs:393-500` (the loop cases it drives today with hand-written `loop_measurement`/`definition_check`/`loop_comparison` records) — inferred, the story's Context names this file but its Acceptance does not say whether the test changes or a new test is added
-- **Documents:** `.agents/operator-agent.md` (the L2 turn: after three recorded L1 turns, then weekly; it names the lowest metric as the finding to file; the file does not exist yet and story:agent-profiles creates it) — cited, story Outcome and Ordering
+- **Documents:** `.agents/planner-agent.md` (the L2 turn: after three recorded L1 turns, then weekly; it names the lowest metric as the finding to file; the file does not exist yet and story:agent-profiles creates it) — cited, story Outcome and Ordering
 - **Confidence:** medium — the design names `validator.rs` and the protocol names every action and result, but `scorecard.rs` and the profile do not exist yet, and nothing places the stored metric definitions that `loop.definition.check` compares
-- **Would collide with:** any unit adding or changing validators in `crates/takt/src/validator.rs` (story:self-improvement-protocol's L1 validators; any judge-guard or confinement change at `validator.rs:193-216`), any unit on `crates/takt/src/scorecard.rs`, and any unit editing `.agents/operator-agent.md` (story:finding-intake's intake procedure)
+- **Would collide with:** any unit adding or changing validators in `crates/takt/src/validator.rs` (story:self-improvement-protocol's L1 validators; any judge-guard or confinement change at `validator.rs:193-216`), any unit on `crates/takt/src/scorecard.rs`, and any unit editing `.agents/planner-agent.md` (story:finding-intake's intake procedure)
 - **Safety fact:** a new validator only runs when its action is admissible in the case's protocol (`crates/takt/src/run.rs:89` `is_due`, picked by action at `run.rs:473-477`), and `loop.*` actions exist only in `protocols/loop-improvement/1.yaml`, so registering the three validators changes nothing for `story.delivery/1` or `self.improvement/1` cases — step 2, unproven
 
 Not established: where metric definitions live; the full depends_on chain to this story (taken from a review, not walked); the L2 turn's place in the not-yet-existing profile; whether `loop.measure` may read sibling case directories; the gate of three recorded L1 turns has no producer, so the story stays draft and this scope may be stale when picked up.
 
-Typed entries: `crates/takt/src/validator.rs` (cited), `crates/takt/src/scorecard.rs` (inferred), `crates/takt-cli/src/main.rs` (inferred), `crates/takt/tests/improvement_protocols.rs` (inferred), `.agents/operator-agent.md` (cited).
+Typed entries: `crates/takt/src/validator.rs` (cited), `crates/takt/src/scorecard.rs` (inferred), `crates/takt-cli/src/main.rs` (inferred), `crates/takt/tests/improvement_protocols.rs` (inferred), `.agents/planner-agent.md` (cited).
 
 ## Ordering
 

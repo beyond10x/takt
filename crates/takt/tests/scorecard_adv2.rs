@@ -44,6 +44,7 @@ fn opened(case: &str) -> Event {
         story: Some("story:scratch-one".to_owned()),
         inputs: Vec::new(),
         base: None,
+        binary: None,
     }
 }
 

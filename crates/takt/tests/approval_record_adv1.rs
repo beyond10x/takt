@@ -341,8 +341,14 @@ fn adv1_an_approve_subject_commit_rewriting_the_story_does_not_reach_the_base() 
     let memory = double();
     let (id, granted) = at_the_gate(&repo, &memory);
     let branch = format!("takt/{id}");
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
     let original = git(&repo, &["show", &format!("HEAD:{STORY}")]);
 
@@ -395,8 +401,14 @@ fn adv1_a_push_the_forge_applied_but_reported_failed_leaves_the_case_mergeable()
     let repo = repository("partial-push");
     let memory = double();
     let (id, _) = at_the_gate(&repo, &memory);
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
     let real = Rc::new(Real {
         memory: memory.clone(),
@@ -441,8 +453,14 @@ fn adv1_required_checks_on_the_pushed_approval_commit_hold_the_merge_without_an_
     let repo = repository("required-checks");
     let memory = double();
     let (id, granted) = at_the_gate(&repo, &memory);
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
     let real = Rc::new(Real {
         memory: memory.clone(),
@@ -491,8 +509,14 @@ fn adv1_a_stored_and_reported_head_with_a_foreign_commit_is_refused_by_carries()
     let (id, _) = at_the_gate(&repo, &memory);
     let branch = format!("takt/{id}");
     let dir = repo.join(CASES_DIR).join(&id);
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
 
     git(&repo, &["checkout", "-q", "-b", "elsewhere"]);
     fs::write(repo.join("check.txt"), "changed after the grant\n").expect("a file");

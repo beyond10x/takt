@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T18:21:48Z",
+  "actor": "human:timo",
+  "artifact": "story:grant-binds-to-action-subject",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check",
+    "reference": "wave/2026-10-18-w10 at 8858b49: task check exit 0; 443/443 citations; 596 passed, 0 failed, 4 ignored"
+  }
+}

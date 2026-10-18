@@ -72,6 +72,7 @@ fn scenario_one_with_its_grant(repo: &Path, case: &str) {
         story: Some("story:remove-a-todo".to_owned()),
         inputs: Vec::new(),
         base: None,
+        binary: None,
     };
     let step = |tokens: u64| Event::Step {
         by: "harness".to_owned(),

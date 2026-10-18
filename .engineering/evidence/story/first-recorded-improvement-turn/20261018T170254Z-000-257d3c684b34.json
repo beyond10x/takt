@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-18T17:02:54Z",
+  "actor": "human:timo",
+  "artifact": "story:first-recorded-improvement-turn",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "docs/runs/2026-10-18-improvement-turn-1/case/decisions/0008.json: outcome accepted legitimate, claim promoted true, protocol self.improvement (main 8b07da3)"
+  }
+}

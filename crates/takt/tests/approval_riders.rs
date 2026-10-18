@@ -254,8 +254,14 @@ struct Approved {
 fn approved(name: &str, memory: &Rc<Memory>) -> Approved {
     let repo = repository(name);
     let (id, granted) = at_the_gate(&repo, memory);
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
     let added = git(&repo, &["show", "--name-only", "--format=", "HEAD"]);
     assert!(
@@ -373,7 +379,9 @@ fn only_the_record_of_a_granted_capability_by_its_grantor_rides() {
         (
             "another grantor",
             case.edited(|r| {
-                r["change"]["source"] = source.replace("--by operator", "--by intruder").into();
+                r["change"]["source"] = source
+                    .replace("--by human:operator", "--by intruder")
+                    .into();
             }),
         ),
         (

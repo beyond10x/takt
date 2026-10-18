@@ -76,11 +76,123 @@ pub trait Validator {
     fn writes(&self) -> Vec<PathBuf> {
         Vec::new()
     }
+    /// The words of the command the validator runs from the tree, the test command's: what
+    /// names the command's own script on the run's judge surface
+    /// ([`crate::run::JudgeSurface`]), which no judgement step changes. None by default.
+    fn runs(&self) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+/// What the case's branch did to the judge surface between its base and a revision.
+enum Judged {
+    /// Nothing on it differs.
+    Unchanged,
+    /// These paths differ from the case's base, shown as the summary names it.
+    Changed { base: String, paths: Vec<String> },
+    /// The case pins no base commit to compare with.
+    NoBase,
+}
+
+/// Whether the case's branch changed what decides `tests.run` and `ci.read` between the case's
+/// base at `dir` and `revision`: the run's judge surface ([`crate::run::JudgeSurface`]) but the
+/// planning store, a link on it or on the way to a script at either commit, and the entries of a
+/// cargo manifest that decide how cargo builds or runs the tests
+/// ([`crate::run::manifest_build_changes`]) and of `pyproject.toml`'s pytest tables, the surface
+/// extended by the repository's own list ([`crate::run::JUDGE_LIST`]) read at the base, which
+/// records nothing when it does not parse. A change no step
+/// could make, because the step guard refuses it, but one that reached the branch by another
+/// route (a commit made outside the loop) would decide the verdict all the same. The store is
+/// guarded at the step too, but it decides no test and no check, and takt itself writes it on
+/// the case's branch (the take, an accepted case's test result and move): it is not compared.
+fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Judged> {
+    let Some((base, at)) = base_revision(tree, dir)? else {
+        return Ok(Judged::NoBase);
+    };
+    // The repository's own list, read at the base: one that does not parse records nothing.
+    let mut paths: Vec<String> = Vec::new();
+    let globs = match crate::run::judge_list_at(tree, &at)? {
+        Ok(globs) => globs,
+        Err(why) => {
+            paths.push(why);
+            Vec::new()
+        }
+    };
+    let surface = crate::run::JudgeSurface::new(runs, tree)
+        .without_store()
+        .with_globs(globs);
+    // A link is never followed: one the base or the revision holds on the surface, or on the
+    // way to a script, is named, and nothing is recorded while it is there.
+    for commit in [at.as_str(), revision] {
+        let listed = crate::git::run(tree, &["ls-tree", "-r", "-z", "--full-tree", commit])?;
+        for entry in listed.split('\0') {
+            let Some((meta, path)) = entry.split_once('\t') else {
+                continue;
+            };
+            if meta.starts_with("120000 ") && surface.reads_through(path) {
+                let named = format!("{path} (a link)");
+                if !paths.contains(&named) {
+                    paths.push(named);
+                }
+            }
+        }
+    }
+    let diff = crate::git::run(
+        tree,
+        &[
+            "diff-tree",
+            "-r",
+            "-z",
+            "--no-renames",
+            "--name-only",
+            &at,
+            revision,
+            "--",
+        ],
+    )?;
+    for path in diff.split('\0').filter(|path| !path.is_empty()) {
+        if surface.contains(path) {
+            paths.push(path.to_owned());
+        } else if crate::run::is_manifest(path) || crate::run::is_pyproject(path) {
+            let before = crate::run::manifest_at(tree, &at, path)?;
+            let after = crate::run::manifest_at(tree, revision, path)?;
+            let compared = if crate::run::is_manifest(path) {
+                crate::run::manifest_build_changes(&before, &after)
+            } else {
+                crate::run::pytest_config_changes(&before, &after)
+            };
+            match compared {
+                Ok(keys) => paths.extend(keys.into_iter().map(|key| format!("{path}: {key}"))),
+                Err(line) => paths.push(format!(
+                    "{path}: a line the manifest scanner cannot read with certainty, {line}"
+                )),
+            }
+        }
+    }
+    Ok(if paths.is_empty() {
+        Judged::Unchanged
+    } else {
+        Judged::Changed { base, paths }
+    })
+}
+
+/// An observation that recorded nothing, its summary `summary`.
+fn nothing_recorded(summary: String) -> Observation {
+    Observation {
+        summary,
+        records: Vec::new(),
+        artifact: None,
+    }
 }
 
 /// `tests.run`: runs the test command without a shell; exit 0 is `pass`, anything else `fail`.
 /// The command is code from the tree: it gets no credential, no standard input, a timeout past
 /// which it is killed with what it started, and only a bounded tail of its output is kept.
+/// What decides it besides the code under test is on the run's judge surface, which no step
+/// changes: the cargo configuration, the toolchain, build scripts and the command's own script
+/// ([`crate::run::JudgeSurface`]). In a case, nothing is run and no record written while the
+/// case's branch changed one of those since its base, or when the case pins no base to compare
+/// with; the summary names the paths.
 #[derive(Debug, Clone)]
 pub struct TestsRun {
     /// The command and its arguments.
@@ -138,7 +250,33 @@ impl Validator for TestsRun {
         "implementation"
     }
 
+    fn runs(&self) -> Vec<String> {
+        self.command.clone()
+    }
+
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        let shown = self.command.join(" ");
+        // A tree on no case's branch is no case's observation and has no base to compare with.
+        if crate::git::current_branch(tree)?
+            .is_some_and(|branch| branch.starts_with(crate::case::BRANCH_PREFIX))
+        {
+            let dir = current(tree)?;
+            match judged(tree, &dir, revision, &self.command)? {
+                Judged::Unchanged => {}
+                Judged::NoBase => {
+                    return Ok(nothing_recorded(format!(
+                        "the test command `{shown}`: not run; the case pins no base commit ({BRANCH_FILE} has no base_commit) to compare its judge surface with; no record, the claim stays unknown; abandon the case and open it again"
+                    )));
+                }
+                Judged::Changed { base, paths } => {
+                    return Ok(nothing_recorded(format!(
+                        "the test command `{shown}`: not run; the case's branch at {} changed the judge surface since {base}: {}; no record, the claim stays unknown",
+                        short(revision),
+                        paths.join(", ")
+                    )));
+                }
+            }
+        }
         let mut command = Command::new(&self.command[0]);
         command.args(&self.command[1..]).current_dir(tree);
         crate::forge::without_credentials(&mut command, |_| false);
@@ -540,10 +678,11 @@ fn short(revision: &str) -> &str {
 }
 
 /// Whether the pull request head `head` carries the implementation revision `revision` of the
-/// case at `case_dir`: it is the revision, or it reaches the revision only through the
-/// approval's own commits ([`crate::case::approvals_only`]), which add the approval's records
-/// to the story's evidence and nothing else, and are how they reach the base with the pull
-/// request. A head that is not a commit of the repository carries nothing.
+/// case at `case_dir`: it is the revision, or it reaches the revision only through takt's
+/// riders for the story ([`crate::case::approvals_only`]: the approval's commits, the
+/// `test_result` and the move to `implemented`, each file byte-equal to the record the case
+/// keeps), which are how those records reach the base with the pull request. A head that is
+/// not a commit of the repository carries nothing.
 fn carries(tree: &Path, case_dir: &Path, revision: &str, head: &str) -> Result<bool> {
     if head == revision {
         return Ok(true);
@@ -557,16 +696,13 @@ fn carries(tree: &Path, case_dir: &Path, revision: &str, head: &str) -> Result<b
     crate::case::approvals_only(tree, revision, head, case_dir)
 }
 
-/// How a summary names a head that carries the approval's commits above the revision; nothing
+/// How a summary names a head that carries takt's riders above the revision; nothing
 /// for a head that is the revision.
 fn above(revision: &str, head: &str) -> String {
     if head == revision {
         String::new()
     } else {
-        format!(
-            "; its head {} carries the approval's record above it",
-            short(head)
-        )
+        format!("; its head {} carries takt's records above it", short(head))
     }
 }
 
@@ -574,10 +710,10 @@ fn above(revision: &str, head: &str) -> String {
 /// head at the implementation revision; writes one `pull_request` record with the state the
 /// forge reports, `open` for a pull request just opened. At a later revision the branch is
 /// pushed again and the pull request's state read: one pull request per case. The tree's
-/// `HEAD` must be the revision, or the revision with only the approval's own commits above it
-/// ([`crate::case::approvals_only`]), which are pushed with it so the record of the grant
-/// reaches the base with the pull request; anything else would not be what the claim is
-/// about. A number the case directory carries is trusted only once the forge reports the pull
+/// `HEAD` must be the revision, or the revision with only takt's riders for the story above it
+/// ([`crate::case::approvals_only`]), which are pushed with it so the store's records reach the
+/// base with the pull request; anything else would not be what the claim is about, and nothing
+/// is pushed. A number the case directory carries is trusted only once the forge reports the pull
 /// request's head as the case's branch at the head pushed, else no record is written. A case
 /// with no base is refused before anything is pushed. The title is the intent's first line,
 /// the body the intent and the claims that hold; the forge passes both through `scan-text`
@@ -734,9 +870,9 @@ impl Validator for PrOpen {
         seq: usize,
     ) -> Result<(Observation, bool)> {
         let dir = current(tree)?;
-        // `HEAD` is the implementation revision, or the approval's own commits on top of it
+        // `HEAD` is the implementation revision, or takt's riders on top of it
         // (`approvals_only`); `HEAD` is what is pushed, so the pull request carries the
-        // approval's record to the base, and the record written is about the revision.
+        // store's records to the base, and the record written is about the revision.
         let head = crate::git::head(tree)?;
         if head != revision && !crate::case::approvals_only(tree, revision, &head, &dir)? {
             bail!(
@@ -873,13 +1009,20 @@ impl Validator for PrOpen {
 /// writes one `ci_result` record, `pass` or `fail`. Pending checks write no record, because a
 /// claim that could not be observed stays unknown; so does a case with no pull request yet, or
 /// one whose pull request the forge does not report as the case's branch at the head pushed,
-/// the revision or the revision with only the approval's own commits above it: a number the
+/// the revision or the revision with only takt's riders above it: a number the
 /// case directory carries is not trusted on its own. Nothing but the pull request head is read.
 /// Pending checks, and a pull request whose head on the case's branch is not yet at the head
-/// pushed, wait on the forge.
+/// pushed, wait on the forge. What the checks run is decided by the run's judge surface (the CI
+/// workflows under `.github/`, the cargo configuration, the toolchain, build scripts, the test
+/// command's own script; [`crate::run::JudgeSurface`]), which no step changes: nothing is read
+/// and no record written while the case's branch changed it since its base, or when the case
+/// pins no base to compare with; the summary names the paths.
 pub struct CiRead {
     /// The forge the checks are read through.
     pub forge: Rc<dyn Forge>,
+    /// The words of the commands the run's validators run from the tree ([`Validator::runs`]):
+    /// what names the test command's own script on the judge surface.
+    pub runs: Vec<String>,
 }
 
 impl CiRead {
@@ -891,7 +1034,17 @@ impl CiRead {
     /// Over `forge`.
     #[must_use]
     pub fn new(forge: Rc<dyn Forge>) -> Self {
-        Self { forge }
+        Self {
+            forge,
+            runs: Vec::new(),
+        }
+    }
+
+    /// With the run's validators running `runs` from the tree ([`Validator::runs`]).
+    #[must_use]
+    pub fn with_runs(mut self, runs: Vec<String>) -> Self {
+        self.runs = runs;
+        self
     }
 }
 
@@ -945,6 +1098,27 @@ impl Validator for CiRead {
                 waits,
             )
         };
+        match judged(tree, &dir, revision, &self.runs)? {
+            Judged::Unchanged => {}
+            Judged::NoBase => {
+                return Ok(nothing(
+                    format!(
+                        "the case pins no base commit ({BRANCH_FILE} has no base_commit) to compare its judge surface with; nothing read, the claim stays unknown; abandon the case and open it again"
+                    ),
+                    false,
+                ));
+            }
+            Judged::Changed { base, paths } => {
+                return Ok(nothing(
+                    format!(
+                        "the case's branch at {} changed the judge surface since {base}: {}; nothing read, the claim stays unknown",
+                        short(revision),
+                        paths.join(", ")
+                    ),
+                    false,
+                ));
+            }
+        }
         let Some(number) = branch.pull_request else {
             return Ok(nothing(
                 "no pull request is open for the case; nothing to read, the claim stays unknown"
@@ -1031,14 +1205,14 @@ impl Validator for CiRead {
 /// at and no other, and the step checks that again itself: an open pull request at a revision
 /// the case holds no grant for is not merged. Nothing is merged unless the forge reports the
 /// pull request's head as the case's branch at the head last pushed, or at the revision, and
-/// that head carries the revision: it is the revision, or the revision with only the approval's
-/// own commits above it ([`crate::case::approvals_only`]), the record of the grant in the
-/// planning store, which so reaches the base with the merge. Any other head is not merged and
-/// not replaced. When the pull request's head is the revision and the case's branch holds the
-/// approval's commits above it, the branch is pushed first, named in `branch.yaml` before the
-/// push, so the head merged carries the record and a push the forge took but reported failed
-/// is merged by the next run. A head carrying the approval's commits is one CI was not read
-/// on: its checks are read before the merge, and pending or failing checks merge nothing and
+/// that head carries the revision: it is the revision, or the revision with only takt's riders
+/// for the story above it ([`crate::case::approvals_only`]), the store's records of the grant,
+/// the test result and the move to `implemented`, which so reach the base with the merge. Any
+/// other head is not merged and not replaced. When the case's branch holds riders above the
+/// pull request's head that it descends from and that carry the revision, the branch is pushed
+/// first, named in `branch.yaml` before the push, so the head merged carries the records and a
+/// push the forge took but reported failed is merged by the next run. A head carrying riders
+/// is one CI was not read on: its checks are read before the merge, and pending or failing checks merge nothing and
 /// write no record, the summary saying which; a later run merges it. Pending checks, a head
 /// pushed that the pull request does not show yet, and a merge the forge refuses for a required
 /// check that has not reported ([`crate::forge::refused_for_a_pending_check`]) merge nothing,
@@ -1091,7 +1265,7 @@ impl Validator for PrMerged {
         "implementation"
     }
 
-    /// The case's `branch.yaml`, when the approval's commits are pushed before the merge, and
+    /// The case's `branch.yaml`, when takt's riders are pushed before the merge, and
     /// what the bot route keeps of the merge request it sent and the response it read.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
@@ -1190,13 +1364,17 @@ impl Validator for PrMerged {
                         false,
                     ));
                 }
-                // The approval's own commits above the revision go with the pull request, so the
-                // record of the grant reaches the base with the merge: a head still at the
-                // revision is brought up to the branch's `HEAD` when that carries the revision.
+                // takt's riders above the revision go with the pull request, so the store's
+                // records reach the base with the merge: the head is brought up to the
+                // branch's `HEAD` when that carries the revision and descends from the head.
                 let local = crate::git::head(tree)?;
-                if view.head.sha == revision
-                    && local != revision
+                if local != view.head.sha
                     && carries(tree, &dir, revision, &local)?
+                    && crate::git::run(
+                        tree,
+                        &["merge-base", "--is-ancestor", &view.head.sha, &local],
+                    )
+                    .is_ok()
                 {
                     // Named before the push: a push the forge took but reported failed leaves
                     // the head it took recorded, and the next run merges it.
@@ -1222,7 +1400,7 @@ impl Validator for PrMerged {
                         ));
                     }
                 }
-                // CI was read on the revision; a head carrying the approval's commits above it
+                // CI was read on the revision; a head carrying takt's riders above it
                 // is a new head, and a forge that requires checks merges it only once they
                 // pass. Its checks are read first: pending or failing, nothing is merged and no
                 // record written; pending checks are waited on, and a later run merges once
@@ -1236,7 +1414,7 @@ impl Validator for PrMerged {
                     if checks != Checks::Pass {
                         return Ok((
                             nothing(format!(
-                                "checks on pull request #{number} at its head {}, the approval's commits above {}, through {forge}: {checks}; nothing merged, the claim stays unknown",
+                                "checks on pull request #{number} at its head {}, takt's riders above {}, through {forge}: {checks}; nothing merged, the claim stays unknown",
                                 short(&view.head.sha),
                                 short(revision)
                             )),
@@ -1311,7 +1489,7 @@ impl Validator for PrMerged {
             })
             .unwrap_or_default();
         // The record is about the revision the grant authorises; which head was merged, the
-        // revision or the revision with the approval's commits above it, is kept beside it.
+        // revision or the revision with takt's riders above it, is kept beside it.
         let artifact = if state == PullRequestState::Merged {
             let kept = serde_json::json!({
                 "pull_request": number,

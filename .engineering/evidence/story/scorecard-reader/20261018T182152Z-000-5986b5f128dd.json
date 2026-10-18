@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T18:21:52Z",
+  "actor": "human:timo",
+  "artifact": "story:scorecard-reader",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check",
+    "reference": "wave/2026-10-18-w10 at 8858b49: task check exit 0; 443/443 citations; 596 passed, 0 failed, 4 ignored"
+  }
+}

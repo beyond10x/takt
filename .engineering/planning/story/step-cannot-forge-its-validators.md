@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:step-cannot-forge-its-validators
 kind: story
-status: active
+status: implemented
 title: A judgement step cannot forge the validators that judge it
 summary: tests.run and ci.read run their inputs from the base or refuse; a judge-surface edit is refused or flagged
 relations:
@@ -17,10 +17,11 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/step_cannot_forge_its_validators.rs
-revision: 7
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 6}
 - {from: "proposed", to: "active", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 7}
+- {from: "active", to: "implemented", at: "2026-10-18T18:21:54Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # Story: step-cannot-forge-its-validators
 
@@ -57,3 +58,21 @@ On takt at 2ec88d4, holds; after the fix, fails:
 ## Acceptance
 
 A step that changes `.cargo/config.toml`, the test command's script or a file under `.github/workflows/` earns no `pass` or `ci.green` record at its revision: either the validator ran those inputs from the base revision and recorded the real result, or it refused to record and named the changed paths; and a step touching a path in the repository's judge-surface list (default `.cargo/**`, `.github/**`, `.engineering/**`, `rust-toolchain*`, `build.rs`) is refused or listed in the pull-request body and in `takt approve`.
+
+## Landed (wave 10)
+
+Read from `git diff --stat 22ad614^1 22ad614` (the unit's merge into the wave branch) at the close of wave 10 (wave branch head 8858b49). A judgement step that changes the judge surface (default list plus .engineering/judge-surface.yaml at the base; cargo manifests by a fail-closed scanner and cargo metadata; pytest configuration; cargo config and toolchain files above the tree) is refused and put back; links on the way to it lock steps out; processes a step leaves are killed. Four correction rounds; the last granted on the reviewer's approve. Routes only confinement closes (a PATH wrapper, a writer rejoining takt's process group, a link above the tree across runs) are carried by story:confinement-seam.
+
+- `crates/takt-cli/src/main.rs`
+- `crates/takt/src/forge.rs`
+- `crates/takt/src/run.rs`
+- `crates/takt/src/validator.rs`
+- `crates/takt/tests/step_cannot_forge_adv1.rs`
+- `crates/takt/tests/step_cannot_forge_adv2.rs`
+- `.../takt/tests/step_cannot_forge_its_validators.rs`
+- `crates/takt/tests/step_forge_reviewer_routes.rs`
+- `crates/takt/tests/validator_confinement.rs`
+- `crates/takt/tests/validator_confinement_adv1.rs`
+- `crates/takt/tests/validator_confinement_adv2.rs`
+- `ess/domains/takt.citations.tsv`
+- `ess/domains/takt.yaml`

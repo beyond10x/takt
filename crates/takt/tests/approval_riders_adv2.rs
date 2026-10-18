@@ -256,8 +256,14 @@ struct Approved {
 fn approved_with(name: &str, memory: &Rc<Memory>, story: impl FnOnce(&str) -> String) -> Approved {
     let repo = repository(name);
     let (id, granted) = at_the_gate(&repo, memory, story);
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the store accepts the story and the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the store accepts the story and the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
     assert_eq!(git(&repo, &["rev-parse", "HEAD^"]), granted);
     let added = git(&repo, &["show", "--name-only", "--format=", "HEAD"]);
@@ -646,12 +652,22 @@ fn adv2_the_revision_itself_rides_with_or_without_grants_or_a_story() {
     );
 }
 
-/// Actors the store writes (`aep` accepts exactly `-._@` beside ASCII letters and digits, any
-/// length, and sanitises `$USER` into them) ride; actors it never writes do not.
+/// The record rides only with its approver as its actor: actors the store writes (`aep` accepts
+/// exactly `-._@` beside ASCII letters and digits, any length, and sanitises `$USER` into them)
+/// that are not the approver do not ride, and neither do actors it never writes.
 #[test]
 fn adv2_actors_ride_by_the_store_shape() {
     let memory = double();
     let case = approved("actors", &memory);
+    let head = case.rider_on(
+        &case.granted,
+        &[(
+            "x.json",
+            case.edited(|r| r["actor"] = "human:operator".into()),
+        )],
+        None,
+    );
+    assert!(case.rides(&head), "the approver is refused");
     let long = format!("human:{}", "a".repeat(300));
     for actor in [
         "system",
@@ -660,16 +676,9 @@ fn adv2_actors_ride_by_the_store_shape() {
         "human:first-last-x",
         "agent:a.b@c_d-E9",
         "human:-a",
+        "agent:operator",
+        "human:operator ",
         long.as_str(),
-    ] {
-        let head = case.rider_on(
-            &case.granted,
-            &[("x.json", case.edited(|r| r["actor"] = actor.into()))],
-            None,
-        );
-        assert!(case.rides(&head), "{actor} is refused");
-    }
-    for actor in [
         "human:a+b",
         "human:a/b",
         "human:a:b",

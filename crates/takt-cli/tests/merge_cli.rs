@@ -336,7 +336,7 @@ fn approve_then_the_resumed_run_merges() {
             &id,
             "repository.merge",
             "--by",
-            "operator",
+            "human:operator",
         ],
     );
     assert_eq!(code, 0, "stdout {out} stderr {err}");

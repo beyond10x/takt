@@ -1000,15 +1000,21 @@ fn the_open_case_of_an_active_story_is_resumed_and_its_approval_recorded_on_the_
         to_the_gate(&mut case, 1);
     }
     assert!(evidence_history(&repo, "story:ready-one").is_empty());
-    let approval = approve(&repo, &frontier, &case_id, "repository.merge", "operator")
-        .expect("the approval is given");
+    let approval = approve(
+        &repo,
+        &frontier,
+        &case_id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     assert_eq!(approval.story.as_deref(), Some("story:ready-one"));
     assert_eq!(approval.case, case_id);
     let authority = Authority::read(&repo.join(takt::case::CASES_DIR).join(&case_id))
         .expect("reads")
         .expect("the file is there");
     assert_eq!(authority.decisions[0].capability, "repository.merge");
-    assert_eq!(authority.decisions[0].approver, "operator");
+    assert_eq!(authority.decisions[0].approver, "human:operator");
     let recorded = evidence_history(&repo, "story:ready-one");
     assert_eq!(recorded.len(), 1, "{recorded:?}");
     let change = &recorded[0]["change"];
@@ -1765,7 +1771,8 @@ fn adv2_a_case_finished_by_a_resumed_run_is_not_resumed_by_the_next_run() {
         "{text}"
     );
 
-    grant(&repo, "adv2-finished", "repository.merge", "operator").expect("the grant is written");
+    grant(&repo, "adv2-finished", "repository.merge", "human:operator")
+        .expect("the grant is written");
     let mut out = Vec::new();
     let mut second = Run::open_next(
         &repo,
@@ -2618,7 +2625,7 @@ fn the_approvals_own_commit_keeps_the_revision_the_grant_authorises() {
         &Aep::default(),
         &case_id,
         "repository.merge",
-        "operator",
+        "human:operator",
     )
     .expect("the approval is given");
     assert_eq!(approval.revision, gated);
@@ -2699,7 +2706,7 @@ fn an_approval_off_the_case_branch_or_on_a_dirty_tree_is_refused_recording_nothi
             &Aep::default(),
             &case_id,
             "repository.merge",
-            "operator"
+            "human:operator"
         )
         .expect_err("off the case's branch")
     );
@@ -2719,7 +2726,7 @@ fn an_approval_off_the_case_branch_or_on_a_dirty_tree_is_refused_recording_nothi
             &Aep::default(),
             &case_id,
             "repository.merge",
-            "operator"
+            "human:operator"
         )
         .expect_err("on a dirty tree")
     );
@@ -2735,7 +2742,7 @@ fn an_approval_off_the_case_branch_or_on_a_dirty_tree_is_refused_recording_nothi
         &Aep::default(),
         &case_id,
         "repository.merge",
-        "operator",
+        "human:operator",
     )
     .expect("the approval is given");
     assert_eq!(evidence_history(&repo, "story:ready-one").len(), 1);

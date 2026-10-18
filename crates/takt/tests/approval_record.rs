@@ -340,8 +340,14 @@ fn a_case_approved_and_merged_brings_its_approval_record_to_the_base() {
     let dir = repo.join(CASES_DIR).join(&id);
     assert!(evidence_in(&repo, &base_after_merging(&repo, &granted)).is_empty());
 
-    let approval = approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    let approval = approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     assert_eq!(approval.revision, granted);
     let approved = git(&repo, &["rev-parse", "HEAD"]);
     assert_eq!(git(&repo, &["rev-parse", "HEAD^"]), granted);
@@ -386,7 +392,7 @@ fn a_case_approved_and_merged_brings_its_approval_record_to_the_base() {
     assert_eq!(recorded["change"]["kind"], "approval", "{recorded}");
     assert_eq!(
         recorded["change"]["source"],
-        format!("takt approve repository.merge --by operator at {granted}").as_str(),
+        format!("takt approve repository.merge --by human:operator at {granted}").as_str(),
         "{recorded}"
     );
 
@@ -430,8 +436,14 @@ fn a_head_carrying_a_commit_that_is_no_approvals_is_refused_with_nothing_merged(
     let (id, _) = at_the_gate(&repo, &memory);
     let branch = format!("takt/{id}");
     let dir = repo.join(CASES_DIR).join(&id);
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
 
     // A commit beyond the approval's on another branch, and the forge's head moved to it, as a
     // push to the pull request's branch by someone else leaves it.
@@ -482,8 +494,14 @@ fn pr_open_pushes_the_approvals_commits_with_the_revision() {
     let (id, granted) = at_the_gate(&repo, &memory);
     let branch = format!("takt/{id}");
     let dir = repo.join(CASES_DIR).join(&id);
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
 
     let forge: Rc<dyn Forge> = memory.clone();
@@ -557,8 +575,14 @@ fn approve_shaped_commits_beyond_the_grants_the_case_holds_are_no_approvals() {
     let repo = repository("count");
     let memory = double();
     let (id, granted) = at_the_gate(&repo, &memory);
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     assert_eq!(resumed_revision(&repo, &id), granted);
     let record = head_record(&repo);
 
@@ -574,8 +598,14 @@ fn an_approve_shaped_commit_adding_anything_but_a_record_of_its_story_is_no_appr
     let repo = repository("paths");
     let memory = double();
     let (id, granted) = at_the_gate(&repo, &memory);
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
     let record = head_record(&repo);
 
@@ -663,8 +693,14 @@ fn failing_checks_on_the_approval_head_merge_nothing_and_say_so() {
     let memory = double();
     let (id, _) = at_the_gate(&repo, &memory);
     let dir = repo.join(CASES_DIR).join(&id);
-    approve(&repo, &Aep::default(), &id, "repository.merge", "operator")
-        .expect("the approval is given");
+    approve(
+        &repo,
+        &Aep::default(),
+        &id,
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);
     let forge: Rc<dyn Forge> = Rc::new(FailingOn {
         memory: memory.clone(),
