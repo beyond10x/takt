@@ -13,7 +13,6 @@
 //! says which stories are being worked. The operator's grant of a capability to a case is
 //! recorded on the story as `approval` evidence through the same adapter ([`approve`]).
 
-use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
@@ -88,22 +87,6 @@ pub trait Frontier {
     /// Records `approval` on the story `story` as one `approval` evidence record, appended and
     /// never edited: the trail of the grant written into the case.
     fn record_approval(&self, repo: &Path, story: &str, approval: &Approval) -> Result<()>;
-    /// The next ready story, taken, with no case opened for it: down the candidates, the first
-    /// the store hands over; a refusal is printed on `out`, verbatim, and the next is tried;
-    /// `None` when nothing is ready. A run opens the case first and takes the story last, so it
-    /// uses [`crate::Run::open_next`] instead.
-    fn next(&self, repo: &Path, out: &mut dyn Write) -> Result<Option<Story>> {
-        for id in self.candidates(repo)? {
-            let story = self.show(repo, &id)?;
-            match self.take(repo, &id)? {
-                Take::Taken => return Ok(Some(story)),
-                Take::Refused(refusal) => {
-                    writeln!(out, "frontier: {id} not taken: {refusal}")?;
-                }
-            }
-        }
-        Ok(None)
-    }
 }
 
 /// An artifact as `aep plan artifact list --format json` lists it: the fields the rule reads.
