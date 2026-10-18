@@ -1,6 +1,6 @@
 # Wave 05: Merge only under a recorded grant of repository.merge
 
-Skill: `aep:implementing` 0.23.1, wave mode. Stage: **2, dispatched** (updated as the unit moves). Approval: the operator's standing approval for the waves of `epic:composable-agentic-work` (same commit boundary each wave; no push).
+Skill: `aep:implementing` 0.23.1, wave mode. Stage: **closed** (unit merged, gate green, story implemented). Approval: the operator's standing approval for the waves of `epic:composable-agentic-work` (same commit boundary each wave; no push).
 
 ## Unit
 
@@ -97,7 +97,7 @@ Selection path: `aep plan artifact waves --kind story --status draft --format js
 | unit | branch | worktree | build dir | scratch |
 |---|---|---|---|---|
 | integration | `wave/2026-10-18-w5` | managed tree `takt-w5-int` | its `target/` | `~/.cache/takt-waves/2026-10-18-w5/int/scratch` |
-| merge-under-authority | `impl/merge-under-authority` | managed tree `takt-w5-merge` | its `target/` | `~/.cache/takt-waves/2026-10-18-w5/merge/scratch` |
+| merge-under-authority | `impl/merge-under-authority` at b1d7fca, two adversary passes, merged into `wave/2026-10-18-w5` at 06c20f9 | managed tree `takt-w5-merge` | its `target/` | `~/.cache/takt-waves/2026-10-18-w5/merge/scratch` |
 
 ## Dispatch
 
@@ -110,3 +110,7 @@ The opening store commit (this page, the story to `active`), the unit's commits,
 ## Log
 
 - 2026-10-18: opened under the standing approval; `story:merge-under-authority` moved to active.
+- 2026-10-18: unit green at 8953dff (red run: 19 unresolved imports in the new merge lane; green: merge_under_authority 10, cli unittests 13→17; 123→137 cases; 361,159 tokens, 93 tool uses, 24 min per the harness notification). Deviations recorded: `authority.yaml` carries approver and instant beside the grant and Canon is handed the two keys `canon-authority/1` declares (Canon refuses unknown fields); the story's Ambiguities line on `denied` corrected on the story body.
+- 2026-10-18: adversary pass 1 NEEDS-CHANGE (145 cases, 6 red; 10 findings, 2 blockers: a harness could grant itself the merge by writing `authority.yaml`; a completed case was resumed by every later run; 240,810 tokens, 74 tool uses, 21 min), recorded as `review-result:adversary-merge-pass-1`; correction 1 green at 95e86ae (147 cases): the case directory is the kernel's (a judgement step that touches it is refused and the files restored), a finished case is not open, a resumed case moves to the branch's HEAD, `takt approve` refuses an unknown capability, `--harness none` stops `ApprovalRequired`.
+- 2026-10-18: adversary pass 2 NEEDS-CHANGE (157 cases, 8 red; 9 findings, 2 blockers with one cause: a resumed run restarted its sequence at 1, overwriting decisions and repeating record ids; 260,978 tokens, 49 tool uses, 21 min), recorded as `review-result:adversary-merge-pass-2`; correction 2 green at b1d7fca (159 cases): one sequence per case across runs, the whole `.engineering/cases` guarded, a run holds its case (`run.lock`; `takt approve` and a second run refuse while held), symbolic links never followed, an unreadable decision leaves the case open, the cases exemption names the directory only. One pass-2 case rewritten to the lock rule.
+- 2026-10-18: coordinator verification on b1d7fca (`~/.cache/takt-waves/2026-10-18-w5/int/scratch/verify-treatment.txt`): 159 cases (takt 123, takt-cli 36), clippy, fmt, `ess specify validate`, every exit 0; baseline on the base: no `merge_under_authority` test target. Merged into `wave/2026-10-18-w5`. Domain document: the grant and its record, the resume and the open-case meaning, the fifth producer `takt.pr-merged`, the lock, one sequence per case, the cases-directory refusal; citations re-pointed. Story scope rewritten, `test_result` recorded, moved to implemented. Follow-ups: a kernel-side stop at the gate without a judgement step (today the harness requests it); validator-owned actions offered to the harness when no validator is registered; the merge not yet proven against a live repository. Closed.

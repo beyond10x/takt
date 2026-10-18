@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:merge-under-authority
 kind: story
-status: active
+status: implemented
 title: Merge only under a recorded grant of repository.merge
 summary: authority.yaml read into every evaluation; granted merges, absent stops ApprovalRequired
 relations:
@@ -23,12 +23,15 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: cited
   path: crates/takt/src/validator.rs
+- confidence: cited
+  path: crates/takt/tests/forge.rs
 - confidence: inferred
   path: crates/takt/tests/merge_under_authority.rs
-revision: 13
+revision: 17
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T07:21:51Z", actor: "human:timo", revision: 12}
 - {from: "proposed", to: "active", at: "2026-10-18T07:21:51Z", actor: "human:timo", revision: 13}
+- {from: "active", to: "implemented", at: "2026-10-18T08:56:25Z", actor: "human:timo", revision: 17, decided_on: {"recorded":{"test_result":1,"review_outcome":3}}}
 ---
 # Story: merge-under-authority
 
@@ -93,3 +96,34 @@ Whether the approver named in an `approval` block may approve (Mandate's); denyi
 ## Correction (wave 01)
 
 Canon 0.6.0 reads a kind whose records disagree at one revision as unknown (`website/docs/reference/evaluation.md:39-42`), so `pr.merged` is established by a `merge_observation` record with result `merged`, not by a second `pull_request` result; `protocols/story-delivery/1.yaml` declares it so.
+
+## ## Correction (wave 05)
+
+## Correction (wave 05)
+
+The Ambiguities line on a `denied` decision is wrong by Canon's own rule: Canon 0.6.0 marks an action whose required capability is denied as `blocked` (`crates/canon/src/eval/authority.rs:29-31`), not `approval_required`, so the run does not stop `ApprovalRequired` but asks the harness for a judgement step. Nothing in takt writes `denied` (`takt approve` grants only); denial stays out of scope and is recorded here as the adversary measured it (review-result:adversary-merge-pass-1, F6).
+
+A case directory opened before this story has no `story.yaml`: the frontier never resumes it and `takt approve` on it records nothing on a story. No such case exists outside test scratch (F10).
+
+## ## Scope
+
+## Scope
+
+Confirmed by the implementor (wave 05), each line as the unit landed:
+
+- `crates/takt/src/case.rs` (cited): confirmed; `authority.yaml` (`Authority`, `AuthorityDecision`
+  with approver and instant, `grant`, the two Canon keys handed to the evaluation), `story.yaml`,
+  `CaseDir::resume`, `story_of`, `resumable`.
+- `crates/takt/src/run.rs` (cited, corrected): `Run::resume`, the open case of an `active` story
+  resumed before a new one is taken, the merge as a write-effect deterministic step; "the gate
+  taken from a workflow's `approval` block" dropped, no workflow loader exists yet.
+- `crates/takt/src/forge.rs` (inferred → confirmed): `Forge::merge`, the bot route's
+  `PUT /repos/<o>/<r>/pulls/<n>/merge` with the head sha, the double's refusal of a moved head.
+- `crates/takt/src/validator.rs` (cited): confirmed; `PrMerged` (`takt.pr-merged`).
+- `crates/takt/src/frontier.rs` (inferred → confirmed): `Frontier::active`, `record_approval`
+  through `aep plan artifact evidence --kind approval`, `approve`.
+- `crates/takt-cli/src/main.rs` (cited): confirmed; `takt approve <case> <capability> --by
+  <approver>`, `takt run --case <id>`.
+- `crates/takt/tests/merge_under_authority.rs` (inferred → confirmed): created; 30 cases in
+  the lane.
+- `crates/takt/tests/forge.rs` (added): the adversary's `AnyNumber` double gained `merge`.
