@@ -128,7 +128,7 @@ Selection path: `aep plan artifact waves --kind story --status draft --format js
 | unit | branch | worktree | build dir | scratch |
 |---|---|---|---|---|
 | integration | `wave/2026-10-18-w3` | managed tree `takt-w3-int` | its `target/` | `~/.cache/takt-waves/2026-10-18-w3/int/scratch` |
-| gate-validator | `impl/gate-validator` | managed tree `takt-w3-gate` | its `target/` | `~/.cache/takt-waves/2026-10-18-w3/gate/scratch` |
+| gate-validator | `impl/gate-validator` at 77beec1, implementor green (53→59 cases; 161,650 tokens, 58 tool uses, 14 min), adversary pass 1 running | managed tree `takt-w3-gate` | its `target/` | `~/.cache/takt-waves/2026-10-18-w3/gate/scratch` |
 
 ## Dispatch
 
@@ -141,3 +141,4 @@ The opening store commit (this page, the story to `active`), the unit's commits,
 ## Log
 
 - 2026-10-18: opened under the standing approval; `story:gate-validator` moved to active.
+- 2026-10-18: unit green at 77beec1 (red run: unresolved GateRun, exit 101; green: gate_validator 3, cli unittests 6, the rest unchanged); the implementor's loop patch (an empty observation is an idle step) applied by the coordinator on the unit branch before the adversary. Scope: the gate-block route dropped (the loader story's), b10x-canon-expr added for Truth. Adversary pass 1 dispatched. The domain document's producer lines (553, 193/748) and a main.rs citation (776) are stale: fixed at close.
