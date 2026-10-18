@@ -148,6 +148,9 @@ once at least three turns have been filed since the merge.
 - A message that puts a choice names its options, each with its cost, then a recommendation and
   a default.
 - In Slack, never `#` followed by a digit; a pull request or an issue is a full GitHub URL.
+- `b10x-gates scan-text` gates the commit: run it unpiped in a chain that stops on its exit
+  status (`set -eo pipefail`). A `| tail` after it hid a refusal on 2026-10-18 and a personal path
+  reached local main.
 
 ## Intake
 
