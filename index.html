@@ -8,33 +8,47 @@
 <style>
 :root {
   --canvas: #f6f8f5; --panel: #fff; --heading: #0f1b1c; --text: #26332f; --muted: #4f625d;
-  --accent: #17684a; --hairline: #d6dfda; --code: #eaf0ec;
+  --accent: #17684a; --hairline: #d6dfda; --code: #eaf0ec; --warn: #8a4b12;
   --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --canvas: #101a1b; --panel: #172324; --heading: #f1f6f3; --text: #d5dfdb; --muted: #a8b8b3;
-    --accent: #b6e5ce; --hairline: #314244; --code: #101b1c;
+    --accent: #b6e5ce; --hairline: #314244; --code: #101b1c; --warn: #f0c38e;
   }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--canvas); color: var(--text); font: 1rem/1.7 var(--sans); }
 main { max-width: 46rem; margin: 0 auto; padding: 5rem 1.5rem 4rem; }
 h1 { color: var(--heading); font-size: clamp(2.6rem, 6vw, 3.6rem); font-weight: 620; letter-spacing: -.05em; line-height: 1.08; margin: 0 0 1.2rem; }
-h2 { color: var(--heading); font-size: 1.35rem; font-weight: 620; letter-spacing: -.02em; margin: 3rem 0 .8rem; }
+h2 { color: var(--heading); font-size: 1.35rem; font-weight: 620; letter-spacing: -.02em; margin: 3.2rem 0 .8rem; }
+h3 { color: var(--heading); font-size: 1.05rem; font-weight: 620; margin: 1.6rem 0 .4rem; }
 .lede { color: var(--muted); font-size: 1.1rem; margin: 0 0 1rem; }
+.muted { color: var(--muted); }
+.small { font-size: .9rem; }
 .rule { border-left: 3px solid var(--accent); background: var(--panel); padding: 1rem 1.25rem; margin: 2rem 0 0; color: var(--heading); font-weight: 560; }
+.caveat { border-left: 3px solid var(--warn); background: var(--panel); padding: .9rem 1.2rem; margin: 1.2rem 0 0; }
+.caveat strong { color: var(--warn); }
+nav { margin: 2rem 0 0; font-size: .9rem; }
+nav a { margin-right: .9rem; white-space: nowrap; }
 a { color: var(--accent); }
 code, pre { font-family: var(--mono); font-size: .9rem; }
 :not(pre) > code { background: var(--code); padding: .1em .35em; border-radius: 4px; }
 pre { background: var(--code); border: 1px solid var(--hairline); border-radius: 8px; padding: 1rem 1.25rem; overflow-x: auto; line-height: 1.6; }
-ul { padding-left: 1.2rem; }
+ul, ol { padding-left: 1.2rem; }
 li { margin: .35rem 0; }
 table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--hairline); border-radius: 8px; }
 th, td { text-align: left; vertical-align: top; padding: .6rem .9rem; border-bottom: 1px solid var(--hairline); }
-th { color: var(--heading); font-weight: 600; white-space: nowrap; }
+th { color: var(--heading); font-weight: 600; }
+thead th { background: var(--code); }
 tr:last-child td, tr:last-child th { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.dense { font-size: .88rem; }
+.scroll { overflow-x: auto; }
+figure.wide { width: min(62rem, calc(100vw - 2rem)); margin: 1.2rem 0 0 50%; transform: translateX(-50%); }
+figure.wide svg { display: block; width: 100%; height: auto; }
+figcaption { color: var(--muted); font-size: .9rem; max-width: 46rem; margin: .6rem auto 0; padding: 0 1.5rem; }
 footer { margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--hairline); color: var(--muted); font-size: .9rem; }
 </style>
 </head>
@@ -48,34 +62,218 @@ and lets a harness such as Claude Code take one admissible step at a time.</p>
 <a href="https://github.com/beyond10x/canon">Canon</a> decides which claims hold and whether an
 outcome was earned; the model never does.</p>
 <p class="rule">Agents choose how to do the work. The protocol defines what must be true before the work counts.</p>
+<nav><a href="#problem">Problem</a><a href="#how">How a run works</a><a href="#status">Status</a><a href="#measurements">Measurements</a><a href="#timeline">Timeline</a><a href="#why">Why takt</a><a href="#roadmap">Roadmap</a><a href="#start">Getting started</a><a href="#links">Links</a></nav>
 
-<h2>How it works</h2>
-<ul>
+<h2 id="problem">The problem: a free-running harness grades its own work</h2>
+<p>A coding agent running free decides when it is done and says so in text. Nothing ties that
+claim to the commit that gets merged, and the same agent usually holds the rights to push and merge.</p>
+<div class="scroll">
+<table class="dense">
+<thead><tr><th>question</th><th>harness running free</th><th>takt</th></tr></thead>
+<tbody>
+<tr><td>When is it done?</td><td>The agent decides and says so in text</td><td>Computed from validator records</td></tr>
+<tr><td>Did tests pass on the merged commit?</td><td>Nothing binds the two</td><td>Evidence is bound to a revision</td></tr>
+<tr><td>Who may merge?</td><td>The agent holds push and merge rights</td><td>Only under a recorded grant</td></tr>
+<tr><td>Promised versus observed?</td><td>Not recorded</td><td>A case record in the repository</td></tr>
+<tr><td>When does it stop?</td><td>Ad hoc budgets and stops</td><td>Budgets, named stops, exit codes</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="how">How a run works</h2>
+<ol>
 <li><strong>Protocol.</strong> A Canon document declares the claims, the actions, the evidence that
 establishes each claim, and the actions that wait for a grant, for example <code>software.change/1</code> or <code>story.delivery/1</code>.</li>
 <li><strong>Case.</strong> Each unit of work (an intent or a story from the planning store) opens a case on a protocol, held as files in the repository.</li>
 <li><strong>One step at a time.</strong> Canon evaluates the case and names the admissible actions; the harness performs one of them in a worktree and reports. What it says is a trace, not evidence.</li>
-<li><strong>Validators make evidence.</strong> A program turns an observation (a test run's exit status, a commit, a merged pull request) into an evidence record bound to the revision it observed.</li>
-<li><strong>Grant before merge.</strong> A merge through the repository's bot route happens only under a recorded grant (<code>takt approve</code>).</li>
-</ul>
+<li><strong>Validators make evidence.</strong> A program turns an observation (a test run's exit status, a gate result, a pull request's CI, a merged pull request) into an evidence record bound to the revision it observed.</li>
+<li><strong>Grant before merge.</strong> A merge through the repository's bot route happens only under a recorded grant (<code>takt approve</code>). The run stops with exit code 4 and waits; the next run resumes the case.</li>
+<li><strong>A named stop.</strong> Every run ends on a budget (iterations, hours, tokens), a named stop or completion, each with its own exit code, so an orchestrator can drive it.</li>
+</ol>
 
-<h2>Status</h2>
-<table>
-<tr><th>M1</th><td>Done: one step validated on a scratch crate.</td></tr>
-<tr><th>M2</th><td>A planning-store story went end to end on a scratch repository: pull request merged, case <code>accepted</code>. Not yet unattended.</td></tr>
-<tr><th>In progress</th><td>Self-improvement (takt improving takt), and a measured comparison against harnesses running free, without takt.</td></tr>
+<h2 id="status">Status by milestone</h2>
+<div class="scroll">
+<table class="dense">
+<thead><tr><th>milestone</th><th>date</th><th>state</th></tr></thead>
+<tbody>
+<tr><th>M1 one step validated</th><td>2026-10-18</td><td>Done: one step validated on a scratch crate.</td></tr>
+<tr><th>M2 a story end to end</th><td>2026-10-18</td><td>Built: the planning-store frontier, <code>story.delivery/1</code>, the gate validator, the pull request and CI through the bot route, the merge under a recorded grant. Scenario 1 reached <code>accepted</code> (pull request merged), but with more invocations than M2 allows. Not yet proven: a story from ready to merged with the grant as the only manual step.</td></tr>
+<tr><th>Self-improvement</th><td>2026-10-18</td><td>In progress: a scenario corpus, the intake of findings, and the first improvement turn (a finding reproduced at <code>0a776d2</code> and not reproduced after its fix).</td></tr>
+<tr><th>M3 to M5</th><td>&ndash;</td><td>Not built: workflows as files, a second harness and the confinement seam, a week of daily runs.</td></tr>
+<tr><th>Continuous runs</th><td>&ndash;</td><td>Designed, not built: a run that plans its next stories and works a wave with parallel workers.</td></tr>
+</tbody>
 </table>
+</div>
+<p class="small muted">Waves 06 to 08 merged on 2026-10-18 at <code>92b8cf3</code>, <code>7b5aca3</code> and <code>0a776d2</code>. The design and its milestone table are in the <a href="https://github.com/beyond10x/takt#readme">README</a>.</p>
 
-<h2>Use</h2>
+<h2 id="measurements">What the first measurements show</h2>
+<p>Scenario 1: one story, "remove a todo by its number", on
+<a href="https://github.com/beyond10x/todo-app-example">beyond10x/todo-app-example</a>. Finish line:
+a pull request open against its own trial branch with CI green; for takt, the stop at the merge
+approval. Held-out check: a script no agent saw. Tokens = input + output + cache read + cache
+write, as each harness reported them. Runs of 2026-10-18 (UTC), n = 3 per arm.</p>
+<div class="scroll">
+<table class="dense">
+<thead><tr><th>arm</th><th class="num">n</th><th class="num">median wall time</th><th class="num">median tokens</th><th class="num">median cost</th><th>held-out check</th></tr></thead>
+<tbody>
+<tr><td>Claude Code, isolated like takt's harness, with a shell</td><td class="num">3</td><td class="num">64 s<br><span class="muted">51&ndash;74</span></td><td class="num">92,541<br><span class="muted">90,890&ndash;106,367</span></td><td class="num">$0.14</td><td>3/3 pass</td></tr>
+<tr><td>takt at <code>0a776d2</code></td><td class="num">3</td><td class="num">133 s<br><span class="muted">127&ndash;137</span></td><td class="num">122,438<br><span class="muted">106,003&ndash;136,180</span></td><td class="num">$0.25</td><td>3/3 pass</td></tr>
+<tr><td>Claude Code, full user configuration</td><td class="num">3</td><td class="num">65 s<br><span class="muted">64&ndash;71</span></td><td class="num">581,024<br><span class="muted">580,761&ndash;639,254</span></td><td class="num">$0.48</td><td>3/3 pass</td></tr>
+<tr><td>Codex, full user configuration</td><td class="num">3</td><td class="num">96 s<br><span class="muted">84&ndash;101</span></td><td class="num">535,085<br><span class="muted">525,048&ndash;642,099</span></td><td class="num">not reported</td><td>3/3 pass</td></tr>
+</tbody>
+</table>
+</div>
+<div class="caveat">
+<p><strong>The honest result.</strong> On scenario 1 the isolated free agent was cheaper and faster:
+takt cost about 1.7&times; as much ($0.25 against $0.14), used 1.3&times; the tokens and took
+2.1&times; the wall time (133 s against 64 s). Against the free agents with their full
+configuration takt used 4.7&times; fewer tokens at 1.9&times; lower cost, and nearly all of that gap
+is the isolation, not the protocol. The hypothesis "cheaper per accepted unit" is not supported on
+this scenario.</p>
+</div>
+<ul class="small">
+<li>One scenario: a 31-line change to a toy CLI. All arms passed 3/3, so the held-out check does not tell them apart.</li>
+<li>Token totals include cache reads, billed at about 1/20 of input. Cost is the API list price the harness reports: notional. Codex reports no cost; its model was read from its configuration, not from the run.</li>
+<li>takt at <code>0a776d2</code> needed an https-origin workaround for a bug in its trial fetch; without it, 0/3 runs got past the fetch.</li>
+<li>Two known overheads are filed: a model step spent only on asking for the merge approval (about 30k tokens per run), and CI running twice because the pull request opens before the tests are written.</li>
+<li>Source: <code>docs/metrics/scenario-runs.jsonl</code> in the takt repository at <code>d634ace</code>, one record per run, each naming the raw usage record it was read from. A figure the source does not state is null.</li>
+</ul>
+<p class="rule">First results, not a benchmark.</p>
+
+<h2 id="timeline">The improvement timeline</h2>
+<p>takt's own runs of scenario 1 per takt revision, with the waves that changed it, the first
+improvement turn and the free-running medians as reference lines. Generated by
+<code>docs/metrics/timeline.py</code> from the series above (<code>d634ace</code>).</p>
+<figure class="wide">
+<!-- timeline.svg begin -->
+<svg class="takt-timeline" viewBox="0 0 960 560" role="img" aria-labelledby="takt-timeline-title" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="12">
+<title id="takt-timeline-title">takt on scenario 1: tokens and wall time per takt revision, with waves, the improvement turn and the free-running medians</title>
+<style>.takt-timeline{color:#26332f}.takt-timeline .acc{fill:#17684a;stroke:#17684a}.takt-timeline .acc-s{fill:none;stroke:#17684a}.takt-timeline .acc-t{fill:#17684a}@media (prefers-color-scheme: dark){.takt-timeline{color:#d5dfdb}.takt-timeline .acc{fill:#b6e5ce;stroke:#b6e5ce}.takt-timeline .acc-s{stroke:#b6e5ce}.takt-timeline .acc-t{fill:#b6e5ce}}@media print{.takt-timeline{color:#26332f}.takt-timeline .acc{fill:#17684a;stroke:#17684a}.takt-timeline .acc-s{stroke:#17684a}.takt-timeline .acc-t{fill:#17684a}}</style>
+<text x="86" y="24" font-size="15" font-weight="600" fill="currentColor">Scenario 1: takt runs to the merge approval, by takt revision</text>
+<line x1="86" x2="890" y1="432.0" y2="432.0" stroke="#8a9a95" stroke-opacity="0.25"/>
+<text x="78" y="436.0" text-anchor="end" fill="currentColor">0</text>
+<line x1="86" x2="890" y1="347.0" y2="347.0" stroke="#8a9a95" stroke-opacity="0.25"/>
+<text x="78" y="351.0" text-anchor="end" fill="currentColor">200k</text>
+<line x1="86" x2="890" y1="262.0" y2="262.0" stroke="#8a9a95" stroke-opacity="0.25"/>
+<text x="78" y="266.0" text-anchor="end" fill="currentColor">400k</text>
+<line x1="86" x2="890" y1="177.0" y2="177.0" stroke="#8a9a95" stroke-opacity="0.25"/>
+<text x="78" y="181.0" text-anchor="end" fill="currentColor">600k</text>
+<line x1="86" x2="890" y1="92.0" y2="92.0" stroke="#8a9a95" stroke-opacity="0.25"/>
+<text x="78" y="96.0" text-anchor="end" fill="currentColor">800k</text>
+<text x="898" y="436.0" fill="#8a9a95">0 s</text>
+<text x="898" y="351.0" fill="#8a9a95">100 s</text>
+<text x="898" y="266.0" fill="#8a9a95">200 s</text>
+<text x="898" y="181.0" fill="#8a9a95">300 s</text>
+<text x="898" y="96.0" fill="#8a9a95">400 s</text>
+<text transform="translate(20 262) rotate(-90)" text-anchor="middle" fill="currentColor">tokens per run (input + output + cache read + cache write)</text>
+<text transform="translate(946 262) rotate(90)" text-anchor="middle" fill="#8a9a95">wall time per run</text>
+<line x1="86" x2="890" y1="432" y2="432" stroke="currentColor" stroke-opacity="0.6"/>
+<line x1="86" x2="890" y1="185.1" y2="185.1" stroke="currentColor" stroke-opacity="0.55" stroke-dasharray="6 4"/>
+<text x="92" y="180.1" font-size="11" fill="currentColor">Claude Code alone, operator&#x27;s full config, median 581,024 (n=3)</text>
+<line x1="86" x2="890" y1="204.6" y2="204.6" stroke="currentColor" stroke-opacity="0.55" stroke-dasharray="6 4"/>
+<text x="92" y="199.6" font-size="11" fill="currentColor">Codex alone, operator&#x27;s full config, median 535,085 (n=3)</text>
+<line x1="86" x2="890" y1="392.7" y2="392.7" stroke="currentColor" stroke-opacity="0.55" stroke-dasharray="6 4"/>
+<text x="92" y="387.7" font-size="11" fill="currentColor">Claude Code isolated like takt&#x27;s harness, with a shell, median 92,541 (n=3)</text>
+<line x1="287.0" x2="287.0" y1="62" y2="432" class="acc-s" stroke-width="1.5" stroke-dasharray="3 3"/>
+<text x="292.0" y="72" font-size="11" font-weight="600" class="acc-t">wave 06</text>
+<text x="292.0" y="85" font-size="11" class="acc-t">review fixes</text>
+<line x1="488.0" x2="488.0" y1="62" y2="432" class="acc-s" stroke-width="1.5" stroke-dasharray="3 3"/>
+<text x="493.0" y="72" font-size="11" font-weight="600" class="acc-t">wave 07</text>
+<text x="493.0" y="85" font-size="11" class="acc-t">scenario corpus, PR scan policy</text>
+<line x1="689.0" x2="689.0" y1="62" y2="432" class="acc-s" stroke-width="1.5" stroke-dasharray="3 3"/>
+<text x="694.0" y="72" font-size="11" font-weight="600" class="acc-t">wave 08</text>
+<text x="694.0" y="85" font-size="11" class="acc-t">CI pending waits, finding intake</text>
+<line x1="869.9" x2="869.9" y1="100" y2="432" class="acc-s" stroke-width="2.5"/>
+<circle cx="869.9" cy="100" r="4" class="acc"/>
+<text x="862.9" y="104" text-anchor="end" font-size="10.5" fill="currentColor">turn-1: scenario-run-help-exit-codes</text>
+<text x="862.9" y="117" text-anchor="end" font-size="10.5" fill="currentColor">reproduced at 0a776d2</text>
+<text x="862.9" y="130" text-anchor="end" font-size="10.5" fill="currentColor">not_reproduced at 447423c</text>
+<text x="862.9" y="143" text-anchor="end" font-size="10.5" fill="currentColor">merged at 67ab6ce; promoted: not yet</text>
+<circle cx="178.5" cy="249.6" r="5" class="acc"><title>trial-run1: tokens 429,262, wall not timed, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="178.5" y="240.6" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<circle cx="194.5" cy="432.0" r="4" fill="none" stroke="#8a9a95" stroke-width="1.5"><title>trial-run2: tokens not stated, wall not timed, resumes 0, stop error: pr.open: the forge refused the pull request (422, no commits between base and head)</title></circle>
+<line x1="166.5" x2="206.5" y1="249.6" y2="249.6" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
+<text x="186.5" y="450" text-anchor="middle" font-weight="600" fill="currentColor">before wave 06</text>
+<text x="186.5" y="465" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 2; tokens n=1; timed n=0</text>
+<circle cx="387.5" cy="367.5" r="5" class="acc"><title>trial-run3-6: tokens 151,764, wall not timed, resumes 2, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="387.5" y="358.5" text-anchor="middle" font-size="9.5" fill="currentColor">r2</text>
+<line x1="373.5" x2="401.5" y1="367.5" y2="367.5" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
+<text x="387.5" y="450" text-anchor="middle" font-weight="600" fill="currentColor">92b8cf3</text>
+<text x="387.5" y="465" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 1; tokens n=1; timed n=0</text>
+<circle cx="580.5" cy="374.4" r="5" class="acc"><title>trial-scenario-a: tokens 135,463, wall not timed, resumes 2, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="580.5" y="365.4" text-anchor="middle" font-size="9.5" fill="currentColor">r2</text>
+<circle cx="596.5" cy="367.5" r="5" class="acc"><title>trial-scenario-b: tokens 151,880, wall not timed, resumes 1, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="596.5" y="358.5" text-anchor="middle" font-size="9.5" fill="currentColor">r1</text>
+<line x1="568.5" x2="608.5" y1="370.9" y2="370.9" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
+<text x="588.5" y="450" text-anchor="middle" font-weight="600" fill="currentColor">7b5aca3</text>
+<text x="588.5" y="465" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 2; tokens n=2; timed n=0</text>
+<path d="M745.5,173.0L753.5,181.0M745.5,181.0L753.5,173.0" stroke="#8a9a95" stroke-width="1.8"><title>T-fetchfail-1: tokens not stated, wall 300 s, resumes 0, stop refused: the fetch of the remote&#x27;s trial branches timed out after 300 s; nothing was changed</title></path>
+<path d="M761.5,172.2L769.5,180.2M761.5,180.2L769.5,172.2" stroke="#8a9a95" stroke-width="1.8"><title>T-fetchfail-2: tokens not stated, wall 301 s, resumes 0, stop refused: the fetch of the remote&#x27;s trial branches timed out after 300 s; nothing was changed</title></path>
+<path d="M777.5,173.0L785.5,181.0M777.5,181.0L785.5,173.0" stroke="#8a9a95" stroke-width="1.8"><title>T-fetchfail-3: tokens not stated, wall 300 s, resumes 0, stop refused: the fetch of the remote&#x27;s trial branches timed out after 300 s; nothing was changed</title></path>
+<circle cx="797.5" cy="386.9" r="5" class="acc"><title>T-1: tokens 106,003, wall 127 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="797.5" y="377.9" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<rect x="793.5" y="320.1" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-1: tokens 106,003, wall 127 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
+<circle cx="813.5" cy="380.0" r="5" class="acc"><title>T-2: tokens 122,438, wall 137 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="813.5" y="371.0" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<rect x="809.5" y="311.6" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-2: tokens 122,438, wall 137 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
+<circle cx="829.5" cy="374.1" r="5" class="acc"><title>T-3: tokens 136,180, wall 133 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="829.5" y="365.1" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<rect x="825.5" y="314.9" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-3: tokens 136,180, wall 133 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
+<line x1="737.5" x2="841.5" y1="380.0" y2="380.0" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
+<text x="789.5" y="450" text-anchor="middle" font-weight="600" fill="currentColor">0a776d2</text>
+<text x="789.5" y="465" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 6; tokens n=3; timed n=6</text>
+<circle cx="92" cy="498" r="5" class="acc"/>
+<text x="102" y="502" font-size="11" fill="currentColor">tokens, one run (rN = resumes; bar = median)</text>
+<rect x="348" y="494" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"/>
+<text x="362" y="502" font-size="11" fill="currentColor">wall time, one run (right axis)</text>
+<path d="M524,494L532,502M524,502L532,494" stroke="#8a9a95" stroke-width="1.8"/>
+<text x="538" y="502" font-size="11" fill="currentColor">refused before the first step, no tokens</text>
+<circle cx="754" cy="498" r="4" fill="none" stroke="#8a9a95" stroke-width="1.5"/>
+<text x="764" y="502" font-size="11" fill="currentColor">no figure stated</text>
+<text x="86" y="526" font-size="11" fill="#8a9a95">Data: 2026-10-18 (UTC), docs/metrics/scenario-runs.jsonl, 23 runs. One scenario, n per revision under its label: first results, not a benchmark.</text>
+<text x="86" y="542" font-size="11" fill="#8a9a95">Untimed revisions have no wall time; tokens are summed over the invocations that reached the merge approval, resumes included.</text>
+</svg>
+<!-- timeline.svg end -->
+<figcaption>Before wave 08 takt needed one or two resumes and was not timed; at <code>0a776d2</code> it reached the merge approval in one invocation. n per revision is under each label.</figcaption>
+</figure>
+
+<h2 id="why">Why takt anyway</h2>
+<p>takt's case is not efficiency. It is what the free runs did not give. The price on this toy
+scenario is about 1.7&times; the cost and 2&times; the wall time of the isolated free agent.</p>
+<ul>
+<li><strong>Evidence, not claims.</strong> Done is computed from validator records bound to a revision, never from the model's text.</li>
+<li><strong>Authority.</strong> A merge happens only under a grant recorded for the exact revision; without one it is refused.</li>
+<li><strong>The record.</strong> Every case is files in the repository: each decision, step and evidence record. A later run resumes from it, and a reviewer can replay it.</li>
+<li><strong>Named stops.</strong> Budgets for iterations, hours and tokens, and a stop with a reason and an exit code.</li>
+<li><strong>Self-improvement under a pinned judge.</strong> takt improves takt in measured turns. A fix counts only when a predicate held before and fails after, on the same scenario, and a release is promoted only if no scenario regresses.</li>
+</ul>
+<p class="small muted">What is still to be shown: that accepted means verified (escaped defects per accepted unit), less supervision (touches from outside the run), and safety (no forged evidence or merge without a grant, under scenarios that try).</p>
+
+<h2 id="roadmap">Roadmap</h2>
+<ol>
+<li>Scenario 1 accepted unattended (one invocation plus one grant), daily for a week.</li>
+<li>The first takt release promoted by its own scorecard.</li>
+<li>A gh-login forge for repositories outside the organization.</li>
+<li>Then continuous runs: planning as a unit, a tree of cases, one deterministic dispatcher.</li>
+</ol>
+
+<h2 id="start">Getting started</h2>
+<h3>Build</h3>
+<pre>cargo install --locked --path crates/takt-cli
+takt --version</pre>
+<p class="small">Needs a harness (Claude Code, <code>claude</code> on the <code>PATH</code>, or <code>--harness none</code> for validators only); for story runs, <code>aep</code> and its planning store in the repository; for pull requests, an <code>origin</code> on github.com with <code>b10x-gates</code> and <code>gh</code> on the <code>PATH</code>.</p>
+<h3>Run</h3>
 <pre>takt run --repo &lt;path&gt; --intent "make the failing test pass" --iterations 1
-takt run --repo &lt;path&gt; --hours 1
-takt approve --repo &lt;path&gt; &lt;case&gt; repository.merge --by &lt;who&gt;
-takt scenario run --repo &lt;path&gt; &lt;id&gt; --hours 1
-takt protocols</pre>
-<p>Build with <code>cargo install --locked --path crates/takt-cli</code>. The
-<a href="https://github.com/beyond10x/takt#readme">README</a> lists the requirements, defaults and exit codes.</p>
+takt run --repo &lt;path&gt; --hours 1</pre>
+<p class="small">The first opens a case on <code>software.change/1</code>. The second resumes the open case of a story, or takes the next ready story and opens its case on <code>story.delivery/1</code>.</p>
+<h3>Approve</h3>
+<pre>takt approve --repo &lt;path&gt; &lt;case&gt; repository.merge --by &lt;who&gt;</pre>
+<p class="small">A run that waits for the merge exits 4. The grant is recorded in the case; the next <code>takt run</code> merges under it.</p>
+<h3>Scenario run</h3>
+<pre>takt scenario run --repo &lt;path&gt; &lt;id&gt; --hours 1</pre>
+<p class="small">Replays a declared scenario on a fresh <code>trial/&lt;n&gt;</code> branch cut from its seed commit, so its pull request targets that branch. <code>takt run --help</code> lists every default and the exit codes; the <a href="https://github.com/beyond10x/takt#readme">README</a> has the details.</p>
 
-<h2>Links</h2>
+<h2 id="links">Links</h2>
 <ul>
 <li><a href="https://github.com/beyond10x/takt">takt on GitHub</a></li>
 <li><a href="https://github.com/beyond10x/canon">Canon</a>: the protocol language and its evaluator</li>
@@ -83,7 +281,7 @@ takt protocols</pre>
 <li><a href="https://github.com/beyond10x/takt/blob/main/LICENSE">Licence: Apache-2.0</a></li>
 </ul>
 
-<footer>takt is a beyond10x project, licensed Apache-2.0. Early software.</footer>
+<footer>takt is a beyond10x project, licensed Apache-2.0. Early software; the thesis is being tested.</footer>
 </main>
 </body>
 </html>
