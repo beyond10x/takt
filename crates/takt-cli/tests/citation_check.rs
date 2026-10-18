@@ -266,6 +266,23 @@ fn a_section_citation_resolves_by_its_needles_inside_the_section_only() {
 }
 
 #[test]
+fn front_matter_holds_no_heading() {
+    let outer = scratch("front-matter");
+    let repo = tree(&outer.0);
+    write(
+        &repo.join("docs/notes.md"),
+        "---\nSection one\n---\n# Notes\n\n## Section one\n\nText.\n",
+    );
+    let output = check(&repo, "check");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the front matter's `Section one` above its closing `---` is no setext heading: {}",
+        shown(&output)
+    );
+}
+
+#[test]
 fn a_file_citation_resolves_by_its_needles() {
     let outer = scratch("file-needles");
     let repo = tree(&outer.0);
@@ -280,7 +297,7 @@ fn a_file_citation_resolves_by_its_needles() {
 }
 
 #[test]
-fn prose_read_from_the_on_a_comment_line_is_not_a_citation_but_any_other_is_named() {
+fn any_read_from_that_is_no_citation_fails_named_and_counted_apart() {
     let outer = scratch("prose");
     let repo = tree(&outer.0);
     edit(
@@ -289,7 +306,21 @@ fn prose_read_from_the_on_a_comment_line_is_not_a_citation_but_any_other_is_name
         "  # A noun, read from the directory.\n",
     );
     let output = check(&repo, "check");
-    assert_eq!(output.status.code(), Some(0), "{}", shown(&output));
+    assert_eq!(output.status.code(), Some(1), "{}", shown(&output));
+    assert!(
+        stdout(&output)
+            .contains("ess/domains/d.yaml:3: unresolved: # A noun, read from the directory."),
+        "{}",
+        shown(&output)
+    );
+    assert!(
+        stdout(&output).contains(
+            "citations: 5 in-repository, 5 resolved, 0 unresolved; 1 external, not resolved \
+             here; 0 unused needles; 1 `read from` lines in no citation form"
+        ),
+        "{}",
+        shown(&output)
+    );
     edit(
         &repo.join("ess/domains/d.yaml"),
         "  # A noun, read from the directory.\n",
