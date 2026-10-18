@@ -8,7 +8,7 @@ summary: Now (waves 10-11), Next (12-13), Later; outcomes in PRD order; the read
 relations:
 - derived_from: product-requirements:takt
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 ---
 # Release plan: takt roadmap, from 2026-10-18
 
@@ -69,4 +69,4 @@ Done on 2026-10-18: the first improvement turn, `self.improvement/1`, recorded b
 ## Open decisions held by the owner
 
 - The token rule and flaky-outcome tolerance for promotion (design:recursive-self-improvement § Scorecard).
-- The tool-calling candidates from the 2026-10-18 brainstorm (an environment allowlist, tools and write scopes per action, an in-call guard, secrets by type and a redactor, fenced forge dispatches): filed as stories once the owner says so.
+- The order of the tool-calling stories from the 2026-10-18 brainstorm, filed as drafts on 2026-10-18: story:environment-allowlist, story:tool-scope-per-action, story:in-call-tool-guard (after tool-scope-per-action), story:secret-redaction, story:fenced-forge-dispatch.

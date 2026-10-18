@@ -21,16 +21,16 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/improvement_protocols.rs
-revision: 8
+revision: 10
 ---
 # Story: loop-scorecard
 
 ## Outcome
 
 A `loop.improvement/1` case is driven by validators: `loop.measure` prints the loop scorecard over
-the recorded `self.improvement/1` cases (the share of findings that became fixes, the share of
-fixes verified against declined, the time from finding to verified, tokens per verified fix, and
-escaped defects as human-sourced counts, labelled so); `loop.definition.check` compares metric
+the recorded `self.improvement/1` cases, one row per improvement turn, and the figures computed
+from those rows (turns, accepted share, promoted share, median tokens per accepted turn, and the
+time from finding to verified); `loop.definition.check` compares metric
 definitions; `loop.compare` compares the metric after the candidate; and the planner profile
 carries the L2 turn: once three L1 turns are recorded, then weekly.
 
@@ -45,8 +45,10 @@ planner agent runs on findings filed after it, and this story stays in draft unt
 
 ## Domain relations
 
-- Loop scorecard → Improvement turn: one row per recorded turn. Inferred from the design.
-- Loop scorecard: UNMAPPED in ess/domains/takt.yaml (one row per turn, or one figure per metric).
+- Loop scorecard → Improvement turn: one row per improvement turn, holding the turn id, the finding, the baseline and candidate revisions, the verdict, whether it was promoted, and the tokens and wall time from the turn's records. Decided 2026-10-18.
+- A turn whose case never reached an outcome gets a row too: its `verdict` is absent, which means open. Decided 2026-10-18.
+- Each row carries `filed_at` and `verified_at` (`verified_at` absent until the finding is verified). Decided 2026-10-18.
+- Loop scorecard figures: turns, accepted share (accepted rows / all rows), promoted share, median tokens per accepted turn, and the time from finding to verified (from `filed_at` and `verified_at`), computed from the rows and never stored (`ess/domains/takt.yaml`, takt.work.LoopScorecard). Decided 2026-10-18.
 
 ## Scope
 
@@ -82,9 +84,12 @@ the case ids they were computed from.
 ## Checks
 
 - A changed metric definition makes `loop.definition.check` write `dual_reported` when both figures print, and `redefined` when only the new one does.
-- Escaped defects are marked human-sourced in the output.
+- With one turn open, its row has no verdict and the accepted share is accepted rows / all rows.
+- The time from finding to verified is computed from each row's `filed_at` and `verified_at`.
 - The operator profile's L2 turn names the lowest metric as the finding to file.
 
 ## Out of Scope
 
 Automating the L2 turn and phase R3 (takt proposing stories from its scorecards).
+
+Escaped defects as human-sourced counts: a later, human-sourced figure, since no validator observes it (decided 2026-10-18).

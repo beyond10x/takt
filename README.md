@@ -3,16 +3,16 @@
 **Agentic coding that counts nothing as done until a validator has recorded the evidence.**
 
 <!-- badges begin -->
-[![stories implemented: 30 of 75](https://img.shields.io/badge/stories%20implemented-30%20of%2075-yellowgreen)](.engineering/planning)
-[![composable agentic work: 21/40 stories](https://img.shields.io/badge/composable%20agentic%20work-21%2F40%20stories-yellowgreen)](.engineering/planning/epic/composable-agentic-work.md)
-[![recursive self improvement: 9/19 stories](https://img.shields.io/badge/recursive%20self%20improvement-9%2F19%20stories-yellowgreen)](.engineering/planning/epic/recursive-self-improvement.md)
+[![stories implemented: 34 of 77](https://img.shields.io/badge/stories%20implemented-34%20of%2077-yellowgreen)](.engineering/planning)
+[![composable agentic work: 22/39 stories](https://img.shields.io/badge/composable%20agentic%20work-22%2F39%20stories-yellowgreen)](.engineering/planning/epic/composable-agentic-work.md)
+[![recursive self improvement: 12/19 stories](https://img.shields.io/badge/recursive%20self%20improvement-12%2F19%20stories-green)](.engineering/planning/epic/recursive-self-improvement.md)
 [![benchmark integration: 0/11 stories](https://img.shields.io/badge/benchmark%20integration-0%2F11%20stories-orange)](.engineering/planning/epic/benchmark-integration.md)
 [![terminal frontend: 0/5 stories](https://img.shields.io/badge/terminal%20frontend-0%2F5%20stories-orange)](.engineering/planning/epic/terminal-frontend.md)
 [![continuous orchestration: 0/1 stories](https://img.shields.io/badge/continuous%20orchestration-0%2F1%20stories-orange)](.engineering/planning/epic/continuous-orchestration.md)
 [![improvement turns: 1 accepted, 1 promoted](https://img.shields.io/badge/improvement%20turns-1%20accepted%2C%201%20promoted-blue)](docs/metrics/improvement-turns.jsonl)
-[![scenario runs recorded: 42](https://img.shields.io/badge/scenario%20runs%20recorded-42-blue)](docs/metrics/scenario-runs.jsonl)
-[![held-out check: 30 of 30 pass](https://img.shields.io/badge/held--out%20check-30%20of%2030%20pass-brightgreen)](docs/metrics/scenario-runs.jsonl)
-[![ESS citations resolved: 421 of 421](https://img.shields.io/badge/ESS%20citations%20resolved-421%20of%20421-brightgreen)](ess/domains)
+[![scenario runs recorded: 47](https://img.shields.io/badge/scenario%20runs%20recorded-47-blue)](docs/metrics/scenario-runs.jsonl)
+[![held-out check: 35 of 35 pass](https://img.shields.io/badge/held--out%20check-35%20of%2035%20pass-brightgreen)](docs/metrics/scenario-runs.jsonl)
+[![ESS citations resolved: 458 of 458](https://img.shields.io/badge/ESS%20citations%20resolved-458%20of%20458-brightgreen)](ess/domains)
 <!-- badges end -->
 
 Point `takt` at a repository and say "work on this". It takes an intent, or the next ready story
