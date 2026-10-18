@@ -159,6 +159,8 @@ dependencies = [
  "anyhow",
  "b10x-canon",
  "b10x-canon-engineering",
+ "b10x-canon-engineering-assertions",
+ "b10x-canon-expr",
  "serde",
  "serde_json",
  "serde_yaml_ng",

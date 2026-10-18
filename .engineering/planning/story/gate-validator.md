@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:gate-validator
 kind: story
-status: draft
+status: implemented
 title: A gate validator turns an engineering-gates run into gate_result evidence
 summary: gate.green from a typed engineering-gates/1 document, pass or fail, nothing on unknown
 relations:
@@ -11,16 +11,30 @@ relations:
 - serves: vision:safe-agentic-coding
 scope:
 - confidence: cited
+  path: Cargo.lock
+- confidence: cited
   path: Cargo.toml
 - confidence: cited
   path: crates/takt-cli/src/main.rs
 - confidence: cited
+  path: crates/takt-cli/tests/gate_cli.rs
+- confidence: cited
   path: crates/takt/Cargo.toml
 - confidence: cited
+  path: crates/takt/src/run.rs
+- confidence: cited
   path: crates/takt/src/validator.rs
+- confidence: cited
+  path: crates/takt/tests/fixtures/gate-only/1.yaml
 - confidence: inferred
   path: crates/takt/tests/gate_validator.rs
-revision: 4
+- confidence: cited
+  path: crates/takt/tests/story_delivery.rs
+revision: 13
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T04:27:09Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-18T04:27:09Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-10-18T05:45:12Z", actor: "human:timo", revision: 13, decided_on: {"recorded":{"test_result":1,"review_outcome":4}}}
 ---
 # Story: gate-validator
 
@@ -61,3 +75,25 @@ The loader that reads a `gate` block out of a `workflow/1` file (story:workflow-
 ## Ambiguities
 
 - Library versus child process: `inferable`, both exist in b10x-canon-engineering 0.9.0 (`crates/canon-engineering-assertions/src/lib.rs`, `src/cli.rs`); the implementer chooses, and the record is the same either way.
+
+## ## Scope
+
+## Scope
+
+Confirmed by the implementor (wave 03), each line as the unit landed:
+
+- `crates/takt/src/validator.rs` (cited): confirmed; `GateRun` over the gates document through the
+  assertions library, `Observation.artifact`, the project file with its default.
+- `crates/takt/Cargo.toml` and `Cargo.toml` (cited): confirmed; `b10x-canon-engineering-assertions`
+  and `b10x-canon-expr` as workspace dependencies; `Cargo.lock` gained their two entries.
+- `crates/takt-cli/src/main.rs` (cited): confirmed; `--gates` and `--project` optional, resolved
+  under the repository or refused before any case is opened, the validator registered when the
+  document is a file.
+- `crates/takt/tests/gate_validator.rs` and `crates/takt/tests/fixtures/gate-only/1.yaml`
+  (inferred → confirmed): created; 16 cases, 11 of them the adversary's.
+- `crates/takt/src/run.rs` (added in correction 1): the due rule for a validator that observed
+  without a record, the retained artifact written before the records, idle only when nothing
+  is due.
+- `crates/takt-cli/tests/gate_cli.rs` (added by the adversary, adopted by the unit): the binary
+  end to end on scratch repositories; 8 cases.
+- `crates/takt/tests/story_delivery.rs` (added in correction 1): one field in a literal.

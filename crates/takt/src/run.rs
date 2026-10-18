@@ -2,6 +2,7 @@
 //! until an outcome is legitimate, an approval is needed, nothing is admissible, a step is
 //! refused, or the stop criteria are met.
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -73,6 +74,23 @@ impl std::fmt::Display for Stop {
             Stop::NoProgress => write!(f, "NoProgress"),
         }
     }
+}
+
+/// Whether `validator` is due at a decision: its action is admissible, its evidence is missing
+/// at its subject's current revision, and it has not already observed there without a record.
+fn is_due(
+    case: &CaseDir,
+    admissible: &[String],
+    observed_without_record: &BTreeSet<(String, String)>,
+    validator: &dyn Validator,
+) -> bool {
+    admissible.iter().any(|a| a == validator.action())
+        && !case
+            .has_evidence(validator.kind(), validator.subject())
+            .unwrap_or(true)
+        && !case.revision(validator.subject()).is_some_and(|revision| {
+            observed_without_record.contains(&(validator.name().to_owned(), revision))
+        })
 }
 
 /// A run over one case.
@@ -234,6 +252,10 @@ impl<'a> Run<'a> {
         )?;
         let mut seq = 0usize;
         let mut last_idle: Option<String> = None;
+        // The validators that observed without writing a record, each with the revision it
+        // observed at: not due again there, because the next observation would end the same
+        // way; a commit moves the revision and makes them due again.
+        let mut observed_without_record: BTreeSet<(String, String)> = BTreeSet::new();
         loop {
             seq += 1;
             let decision = self.case.evaluate(seq)?;
@@ -253,14 +275,20 @@ impl<'a> Run<'a> {
                 return Ok(stop);
             }
             let admissible = decision.admissible();
-            // A deterministic step first: a validator whose action is admissible and whose
-            // evidence is missing at the current revision.
+            // The judgement actions: the admissible ones no validator owns.
+            let offered: Vec<String> = admissible
+                .iter()
+                .filter(|a| !self.validators.iter().any(|v| v.action() == a.as_str()))
+                .cloned()
+                .collect();
+            // A deterministic step first: a validator due at this decision.
             let due = self.validators.iter().find(|v| {
-                admissible.iter().any(|a| a == v.action())
-                    && !self
-                        .case
-                        .has_evidence(v.kind(), v.subject())
-                        .unwrap_or(true)
+                is_due(
+                    &self.case,
+                    &admissible,
+                    &observed_without_record,
+                    v.as_ref(),
+                )
             });
             if let Some(validator) = due {
                 self.steps += 1;
@@ -271,6 +299,21 @@ impl<'a> Run<'a> {
                 let observation = validator.observe(&self.tree, &revision, seq)?;
                 writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
                 writeln!(out, "  effect: {}", observation.summary)?;
+                // What the validator retains lands before the records that refer to it: a
+                // retention that fails ends the run with nothing written for the step.
+                if let Some(artifact) = &observation.artifact {
+                    let dir = self.case.dir.join("artifacts");
+                    std::fs::create_dir_all(&dir)
+                        .with_context(|| format!("create {}", dir.display()))?;
+                    let path = dir.join(&artifact.name);
+                    std::fs::write(&path, &artifact.bytes)
+                        .with_context(|| format!("write {}", path.display()))?;
+                    writeln!(
+                        out,
+                        "  artifact: {}",
+                        path.strip_prefix(&self.tree).unwrap_or(&path).display()
+                    )?;
+                }
                 for record in &observation.records {
                     self.case.add_evidence(record)?;
                     writeln!(
@@ -280,14 +323,28 @@ impl<'a> Run<'a> {
                         record.result.as_deref().unwrap_or("-")
                     )?;
                 }
+                // A validator that wrote no record (the gate was unknown) is not due again at
+                // this revision. The pass counts as idle only when nothing else can move the
+                // decision, no judgement step offered and no other validator due: then the
+                // next pass would see the same decision, and the run stops there as no
+                // progress.
+                if observation.records.is_empty() {
+                    observed_without_record.insert((validator.name().to_owned(), revision));
+                    let another_due = self.validators.iter().any(|v| {
+                        is_due(
+                            &self.case,
+                            &admissible,
+                            &observed_without_record,
+                            v.as_ref(),
+                        )
+                    });
+                    last_idle = (offered.is_empty() && !another_due).then_some(state);
+                } else {
+                    last_idle = None;
+                }
                 continue;
             }
-            // Then a judgement step among the admissible actions no validator owns.
-            let offered: Vec<String> = admissible
-                .iter()
-                .filter(|a| !self.validators.iter().any(|v| v.action() == a.as_str()))
-                .cloned()
-                .collect();
+            // Then a judgement step among the offered actions.
             if offered.is_empty() {
                 let approvals = decision.approval_required();
                 return Ok(if approvals.is_empty() {
