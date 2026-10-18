@@ -2,12 +2,16 @@
 format: aep.planning-md/3
 id: story:ci-wait-watches-the-check
 kind: story
-status: draft
+status: active
 title: takt waits for CI by watching the check, not by fixed 30 s sleeps
 relations:
 - decomposes: epic:composable-agentic-work
 - informed_by: story:ci-pending-waits
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T23:34:16Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-18T23:34:16Z", actor: "human:timo", revision: 3}
 ---
 ## Outcome
 
