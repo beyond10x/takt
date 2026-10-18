@@ -56,7 +56,8 @@ pub enum Stop {
     Completed(String),
     /// Only actions that need an approval are left.
     ApprovalRequired(Vec<String>),
-    /// No action is admissible and none needs an approval.
+    /// No action is left to take and none needs an approval: none is admissible, or the only
+    /// admissible ones read and the harness keeps no state between steps.
     NothingAdmissible,
     /// The step budget is spent.
     Iterations(u64),
@@ -104,6 +105,18 @@ impl std::fmt::Display for Stop {
 /// The outcome of a case whose story is recorded and moved to `implemented` in the store.
 pub const ACCEPTED: &str = "accepted";
 
+/// The producer of a record takt writes from a judgement step that records a choice: the
+/// record attests the harness's choice, not an observation's outcome.
+pub const CHOICE_PRODUCER: &str = "takt.choice";
+
+/// `text` on one line: every run of white space, line breaks among them, as one space. A
+/// judgement step's commit message is `<action>: <summary>`, the summary the harness reported;
+/// a line of its own there could read as one of takt's (`takt: take`, `takt: approve`) to what
+/// reads commit messages.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// The first eight characters of a revision, as the loop prints one.
 fn short(revision: &str) -> &str {
     revision.get(..8).unwrap_or(revision)
@@ -143,6 +156,558 @@ fn is_due(
     Ok(!case.revision(validator.subject()).is_some_and(|revision| {
         observed_without_record.contains(&(validator.name().to_owned(), revision))
     }))
+}
+
+/// What the step choice reads of the case's protocol, as the protocol declares it: each
+/// action's effect, the evidence kinds each action may produce, the kinds each claim is decided
+/// from (through the claims it reads), and the kinds that record a choice.
+///
+/// A kind records a choice when no built-in validator writes it, every action that may produce
+/// it declares `effect: read` and none of them is an action a built-in validator performs
+/// ([`crate::validator::BUILT_IN`], whether or not the run has that validator), and every
+/// predicate that reads it (a claim's, an obligation's, a precondition, an outcome's) reads it
+/// without a `result`: what it attests is that the harness took the action, not an
+/// observation's outcome. Such a record is written by takt from the step itself ([`Run::run`]);
+/// every other kind only a validator writes. Refused when the protocol is read, before any case
+/// is opened on it: a kind that records a choice and that the protocol reads about no artifact
+/// (its record could be bound to no revision); a kind a built-in validator writes that an
+/// action no built-in validator performs may produce with `effect: read` (it would pass for a
+/// choice); a protocol whose outcome or obligation reads a choice kind through a form that is
+/// not monotone in it (`not`, a claim tested `is: false` or `is: unknown`, an order form naming
+/// it), directly or through the claims it tests ([`non_monotone_choice`]); and, with only
+/// monotone forms left, a protocol where an outcome or an obligation holds with every claim
+/// choice records decide true and every other claim unknown ([`under_choices`]), the most
+/// choice records alone can make of it. A choice record may gate an action, never an outcome or
+/// an obligation alone.
+struct Shape {
+    effects: BTreeMap<String, String>,
+    produces: BTreeMap<String, BTreeSet<String>>,
+    reads: BTreeMap<String, BTreeSet<String>>,
+    /// The kinds that record a choice, each with the artifacts the predicates reading it name.
+    choices: BTreeMap<String, BTreeSet<String>>,
+    /// The actions whose precondition the case's inputs make false for good: false whatever any
+    /// claim or evidence becomes.
+    blocked_for_good: BTreeSet<String>,
+}
+
+/// The value of `predicate` from the case's `inputs` alone, every claim and every evidence
+/// match unknown: `Some(false)` only when no claim or evidence could make it true.
+fn by_inputs(
+    predicate: &b10x_canon::model::Predicate,
+    inputs: &[(String, String)],
+) -> Option<bool> {
+    use b10x_canon::model::{InputValue, Predicate};
+    match predicate {
+        Predicate::All(members) => {
+            let values: Vec<Option<bool>> = members.iter().map(|m| by_inputs(m, inputs)).collect();
+            if values.contains(&Some(false)) {
+                Some(false)
+            } else if values.iter().all(|v| *v == Some(true)) {
+                Some(true)
+            } else {
+                None
+            }
+        }
+        Predicate::Any(members) => {
+            let values: Vec<Option<bool>> = members.iter().map(|m| by_inputs(m, inputs)).collect();
+            if values.contains(&Some(true)) {
+                Some(true)
+            } else if values.iter().all(|v| *v == Some(false)) {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        Predicate::Not(inner) => by_inputs(inner, inputs).map(|value| !value),
+        Predicate::Input(test) => inputs
+            .iter()
+            .find(|(name, _)| name == test.input.as_str())
+            .map(|(_, value)| test.holds_for(&InputValue::new(value.clone()))),
+        _ => None,
+    }
+}
+
+/// The value of `predicate` when every kind in `choices` has its record, every other evidence
+/// match and every order form is unknown, and every claim has the value its own predicate takes
+/// so ([`claim_under_choices`]): `Some(true)` when choice records alone would make it hold.
+/// Inputs are the case's.
+fn under_choices(
+    predicate: &b10x_canon::model::Predicate,
+    model: &b10x_canon::model::Protocol,
+    choices: &BTreeMap<String, BTreeSet<String>>,
+    inputs: &[(String, String)],
+    values: &mut BTreeMap<String, Option<Option<bool>>>,
+) -> Option<bool> {
+    use b10x_canon::model::{Predicate, Truth};
+    match predicate {
+        Predicate::All(members) => {
+            let found: Vec<Option<bool>> = members
+                .iter()
+                .map(|m| under_choices(m, model, choices, inputs, values))
+                .collect();
+            if found.contains(&Some(false)) {
+                Some(false)
+            } else if found.iter().all(|v| *v == Some(true)) {
+                Some(true)
+            } else {
+                None
+            }
+        }
+        Predicate::Any(members) => {
+            let found: Vec<Option<bool>> = members
+                .iter()
+                .map(|m| under_choices(m, model, choices, inputs, values))
+                .collect();
+            if found.contains(&Some(true)) {
+                Some(true)
+            } else if found.iter().all(|v| *v == Some(false)) {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        Predicate::Not(inner) => {
+            under_choices(inner, model, choices, inputs, values).map(|value| !value)
+        }
+        Predicate::Evidence(matched) => choices.contains_key(matched.kind.as_str()).then_some(true),
+        Predicate::Input(_) => by_inputs(predicate, inputs),
+        Predicate::Claim(test) => {
+            let value = claim_under_choices(test.claim.as_str(), model, choices, inputs, values);
+            match test.is {
+                Truth::True => value,
+                Truth::False => value.map(|value| !value),
+                Truth::Unknown => Some(value.is_none()),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The value claim `id` takes under [`under_choices`], kept in `values`; a claim that reads
+/// itself, through others, is unknown.
+fn claim_under_choices(
+    id: &str,
+    model: &b10x_canon::model::Protocol,
+    choices: &BTreeMap<String, BTreeSet<String>>,
+    inputs: &[(String, String)],
+    values: &mut BTreeMap<String, Option<Option<bool>>>,
+) -> Option<bool> {
+    match values.get(id) {
+        Some(Some(value)) => return *value,
+        Some(None) => return None,
+        None => {}
+    }
+    values.insert(id.to_owned(), None);
+    let value = model
+        .claims
+        .iter()
+        .find(|(claim, _)| claim.as_str() == id)
+        .and_then(|(_, claim)| under_choices(&claim.true_when, model, choices, inputs, values));
+    values.insert(id.to_owned(), Some(value));
+    value
+}
+
+/// The kinds `predicate` reads, directly or through the claims it tests (`reads`: each claim's
+/// kinds through the claims it reads).
+fn kinds_read(
+    predicate: &b10x_canon::model::Predicate,
+    reads: &BTreeMap<String, BTreeSet<String>>,
+) -> BTreeSet<String> {
+    use b10x_canon::model::Predicate;
+    let mut kinds = BTreeSet::new();
+    predicate.visit(&mut |inner| match inner {
+        Predicate::Evidence(matched) => {
+            kinds.insert(matched.kind.as_str().to_owned());
+        }
+        Predicate::First(first) => {
+            kinds.insert(first.kind.as_str().to_owned());
+        }
+        Predicate::Before(order) => {
+            kinds.insert(order.first.as_str().to_owned());
+            kinds.insert(order.then.as_str().to_owned());
+        }
+        Predicate::Claim(test) => {
+            if let Some(through) = reads.get(test.claim.as_str()) {
+                kinds.extend(through.iter().cloned());
+            }
+        }
+        _ => {}
+    });
+    kinds
+}
+
+/// The first form in `predicate`, or in a claim it tests `is: true`, that is not monotone in a
+/// choice kind: `not` over a predicate that reads one, a claim that reads one tested `is: false`
+/// or `is: unknown`, or an order form (`first`, `before`) that names one. With none, a choice
+/// record can only make the predicate truer, and its value with every choice record present
+/// ([`under_choices`]) is the most choice records alone can make of it.
+fn non_monotone_choice(
+    predicate: &b10x_canon::model::Predicate,
+    model: &b10x_canon::model::Protocol,
+    choices: &BTreeMap<String, BTreeSet<String>>,
+    reads: &BTreeMap<String, BTreeSet<String>>,
+    seen: &mut BTreeSet<String>,
+) -> Option<String> {
+    use b10x_canon::model::{Predicate, Truth};
+    let choice_in =
+        |kinds: &BTreeSet<String>| kinds.iter().find(|k| choices.contains_key(*k)).cloned();
+    match predicate {
+        Predicate::All(members) | Predicate::Any(members) => members
+            .iter()
+            .find_map(|member| non_monotone_choice(member, model, choices, reads, seen)),
+        Predicate::Not(inner) => choice_in(&kinds_read(inner, reads))
+            .map(|kind| format!("`not` over a predicate that reads {kind}")),
+        Predicate::First(first) => choices
+            .contains_key(first.kind.as_str())
+            .then(|| format!("an order form naming {}", first.kind.as_str())),
+        Predicate::Before(order) => [&order.first, &order.then]
+            .into_iter()
+            .find(|kind| choices.contains_key(kind.as_str()))
+            .map(|kind| format!("an order form naming {}", kind.as_str())),
+        Predicate::Claim(test) => {
+            let claim = test.claim.as_str();
+            if test.is != Truth::True {
+                let empty = BTreeSet::new();
+                return choice_in(reads.get(claim).unwrap_or(&empty)).map(|kind| {
+                    format!(
+                        "the claim {claim}, which reads {kind}, tested is: {}",
+                        if test.is == Truth::False {
+                            "false"
+                        } else {
+                            "unknown"
+                        }
+                    )
+                });
+            }
+            if !seen.insert(claim.to_owned()) {
+                return None;
+            }
+            model
+                .claims
+                .iter()
+                .find(|(id, _)| id.as_str() == claim)
+                .and_then(|(_, found)| {
+                    non_monotone_choice(&found.true_when, model, choices, reads, seen)
+                })
+        }
+        _ => None,
+    }
+}
+
+impl Shape {
+    fn of(protocol: &LoadedProtocol, inputs: &[(String, String)]) -> Result<Self> {
+        use b10x_canon::model::Predicate;
+        let model = b10x_canon::model::parse(&protocol.yaml)
+            .map_err(|error| anyhow::anyhow!("read the protocol {}: {error}", protocol.id))?;
+        let mut effects = BTreeMap::new();
+        let mut produces: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (id, action) in model.actions.iter() {
+            let id = id.as_str().to_owned();
+            if let Some(effect) = &action.effect {
+                effects.insert(id.clone(), effect.as_str().to_owned());
+            }
+            produces.insert(
+                id,
+                action
+                    .may_produce
+                    .iter()
+                    .map(|production| production.evidence.as_str().to_owned())
+                    .collect(),
+            );
+        }
+        // How each kind is read anywhere: whether with a result, and about which artifacts.
+        let mut with_result: BTreeMap<String, bool> = BTreeMap::new();
+        let mut subjects: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut note = |predicate: &Predicate| match predicate {
+            Predicate::Evidence(matched) => {
+                let kind = matched.kind.as_str().to_owned();
+                *with_result.entry(kind.clone()).or_default() |= matched.result.is_some();
+                if let Some(subject) = &matched.subject {
+                    subjects
+                        .entry(kind)
+                        .or_default()
+                        .insert(subject.as_str().to_owned());
+                }
+            }
+            Predicate::First(first) => {
+                with_result.insert(first.kind.as_str().to_owned(), true);
+            }
+            Predicate::Before(order) => {
+                for kind in [&order.first, &order.then] {
+                    with_result.entry(kind.as_str().to_owned()).or_default();
+                    if let Some(subject) = &order.subject {
+                        subjects
+                            .entry(kind.as_str().to_owned())
+                            .or_default()
+                            .insert(subject.as_str().to_owned());
+                    }
+                }
+            }
+            _ => {}
+        };
+        for (_, claim) in model.claims.iter() {
+            claim.true_when.visit(&mut note);
+        }
+        for (_, obligation) in model.obligations.iter() {
+            obligation.discharged_when.visit(&mut note);
+            if let Some(applicable) = &obligation.applicable_when {
+                applicable.visit(&mut note);
+            }
+        }
+        for (_, action) in model.actions.iter() {
+            if let Some(precondition) = &action.precondition {
+                precondition.visit(&mut note);
+            }
+        }
+        for (_, outcome) in model.outcomes.iter() {
+            if let Some(predicate) = outcome.requires.predicate() {
+                predicate.visit(&mut note);
+            }
+        }
+        // A kind a built-in validator writes is an observation whatever action a protocol names
+        // as its producer: one a read action outside the built-in validators may produce would
+        // pass for a choice, and the protocol is refused.
+        for (action, produced) in &produces {
+            if crate::validator::is_built_in_action(action)
+                || effects.get(action).is_none_or(|effect| effect != "read")
+            {
+                continue;
+            }
+            if let Some(kind) = produced
+                .iter()
+                .find(|kind| crate::validator::is_built_in_kind(kind))
+            {
+                bail!(
+                    "the protocol {} has {action}, an action no built-in validator performs, produce {kind}, which only a built-in validator writes: a record of it from that action would pass for an observation",
+                    protocol.id
+                );
+            }
+        }
+        let mut choices = BTreeMap::new();
+        for (kind, read_with_result) in &with_result {
+            let producers: Vec<&String> = produces
+                .iter()
+                .filter(|(_, produced)| produced.contains(kind))
+                .map(|(action, _)| action)
+                .collect();
+            if !*read_with_result
+                && !crate::validator::is_built_in_kind(kind)
+                && !producers.is_empty()
+                && producers
+                    .iter()
+                    .all(|action| effects.get(*action).is_some_and(|e| e == "read"))
+                && !producers
+                    .iter()
+                    .any(|action| crate::validator::is_built_in_action(action))
+            {
+                let about = subjects.get(kind).cloned().unwrap_or_default();
+                if about.is_empty() {
+                    bail!(
+                        "the protocol {} reads {kind}, a kind that records a choice ({} may produce it), about no artifact: its record could be bound to no revision; name the artifact (subject) where it is read",
+                        protocol.id,
+                        producers
+                            .iter()
+                            .map(|action| action.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                choices.insert(kind.clone(), about);
+            }
+        }
+        // No outcome and no obligation may hold on choice records alone.
+        let mut values = BTreeMap::new();
+        for (id, _) in model.claims.iter() {
+            claim_under_choices(id.as_str(), &model, &choices, inputs, &mut values);
+        }
+        for (id, outcome) in model.outcomes.iter() {
+            if let Some(predicate) = outcome.requires.predicate()
+                && under_choices(predicate, &model, &choices, inputs, &mut values) == Some(true)
+            {
+                bail!(
+                    "the protocol {} lets its outcome {} hold with every claim a choice record decides true and every other claim unknown: a choice record may gate an action, never an outcome alone",
+                    protocol.id,
+                    id.as_str()
+                );
+            }
+        }
+        for (id, obligation) in model.obligations.iter() {
+            if under_choices(
+                &obligation.discharged_when,
+                &model,
+                &choices,
+                inputs,
+                &mut values,
+            ) == Some(true)
+            {
+                bail!(
+                    "the protocol {} discharges its obligation {} with every claim a choice record decides true and every other claim unknown: a choice record may gate an action, never an obligation alone",
+                    protocol.id,
+                    id.as_str()
+                );
+            }
+        }
+        let blocked_for_good = model
+            .actions
+            .iter()
+            .filter(|(_, action)| {
+                action
+                    .precondition
+                    .as_ref()
+                    .is_some_and(|precondition| by_inputs(precondition, inputs) == Some(false))
+            })
+            .map(|(id, _)| id.as_str().to_owned())
+            .collect();
+        let mut direct: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> = BTreeMap::new();
+        for (id, claim) in model.claims.iter() {
+            let mut kinds = BTreeSet::new();
+            let mut claims = BTreeSet::new();
+            claim.true_when.visit(&mut |predicate| match predicate {
+                Predicate::Evidence(matched) => {
+                    kinds.insert(matched.kind.as_str().to_owned());
+                }
+                Predicate::First(first) => {
+                    kinds.insert(first.kind.as_str().to_owned());
+                }
+                Predicate::Before(order) => {
+                    kinds.insert(order.first.as_str().to_owned());
+                    kinds.insert(order.then.as_str().to_owned());
+                }
+                Predicate::Claim(test) => {
+                    claims.insert(test.claim.as_str().to_owned());
+                }
+                _ => {}
+            });
+            direct.insert(id.as_str().to_owned(), (kinds, claims));
+        }
+        let mut reads = BTreeMap::new();
+        for id in direct.keys() {
+            let mut kinds = BTreeSet::new();
+            let mut seen = BTreeSet::new();
+            let mut todo = vec![id.clone()];
+            while let Some(claim) = todo.pop() {
+                if !seen.insert(claim.clone()) {
+                    continue;
+                }
+                if let Some((own, through)) = direct.get(&claim) {
+                    kinds.extend(own.iter().cloned());
+                    todo.extend(through.iter().cloned());
+                }
+            }
+            reads.insert(id.clone(), kinds);
+        }
+        // No outcome and no obligation may read a choice kind through a form a choice record
+        // could make falser: with only monotone forms left, the check above is the worst case.
+        let mut checked: Vec<(String, &Predicate)> = Vec::new();
+        for (id, outcome) in model.outcomes.iter() {
+            if let Some(predicate) = outcome.requires.predicate() {
+                checked.push((format!("outcome {}", id.as_str()), predicate));
+            }
+        }
+        for (id, obligation) in model.obligations.iter() {
+            checked.push((
+                format!("obligation {}", id.as_str()),
+                &obligation.discharged_when,
+            ));
+            if let Some(applicable) = &obligation.applicable_when {
+                checked.push((format!("obligation {}", id.as_str()), applicable));
+            }
+        }
+        for (what, predicate) in checked {
+            if let Some(form) =
+                non_monotone_choice(predicate, &model, &choices, &reads, &mut BTreeSet::new())
+            {
+                bail!(
+                    "the protocol {} reads a choice kind in its {what} through {form}: a choice record could then make it truer by its absence or its order, and a choice may gate an action, never an outcome or an obligation",
+                    protocol.id
+                );
+            }
+        }
+        Ok(Self {
+            effects,
+            produces,
+            reads,
+            choices,
+            blocked_for_good,
+        })
+    }
+
+    /// Whether `action`'s declared effect is `effect`.
+    fn is(&self, action: &str, effect: &str) -> bool {
+        self.effects.get(action).is_some_and(|e| e == effect)
+    }
+
+    /// The kinds `action` may produce that record a choice, each with the artifacts the
+    /// protocol reads it about.
+    fn choices_of(&self, action: &str) -> Vec<(&String, &BTreeSet<String>)> {
+        self.produces
+            .get(action)
+            .map(|produced| {
+                self.choices
+                    .iter()
+                    .filter(|(kind, _)| produced.contains(*kind))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Whether a harness that keeps no state between steps may be offered `action`: one that
+    /// only reads is offered only when it records a choice, so that taking it moves the
+    /// decision; any other read would be gone at the next step, and the step, changing nothing,
+    /// would end the run.
+    fn for_stateless(&self, action: &str) -> bool {
+        !self.is(action, "read") || !self.choices_of(action).is_empty()
+    }
+
+    /// Whether `action` may be offered to the harness at all: never one that may produce a kind
+    /// a built-in validator writes (`change.read` among them), whether or not the run has that
+    /// validator. Only a validator writes such a kind, so the action is the run loop's to take,
+    /// and a harness that took it could move nothing.
+    fn for_harness(&self, action: &str) -> bool {
+        self.produces.get(action).is_none_or(|produced| {
+            !produced
+                .iter()
+                .any(|kind| crate::validator::is_built_in_kind(kind))
+        })
+    }
+
+    /// The actions that may produce evidence `claim` is decided from, but those the case's
+    /// inputs block for good.
+    fn producers(&self, claim: &str) -> BTreeSet<String> {
+        let Some(kinds) = self.reads.get(claim) else {
+            return BTreeSet::new();
+        };
+        self.produces
+            .iter()
+            .filter(|(action, produced)| {
+                !produced.is_disjoint(kinds) && !self.blocked_for_good.contains(*action)
+            })
+            .map(|(action, _)| action.clone())
+            .collect()
+    }
+
+    /// The actions that stand between `decision` and its outcome when nothing else does: every
+    /// claim that does not hold, and that some action can decide, is decided only by evidence
+    /// an action needing an approval (`approvals`) produces. No judgement step brings the
+    /// outcome nearer then: an edit only moves the revision and returns every claim to
+    /// unknown. `None` when some such claim can still be decided another way.
+    fn only_behind(&self, decision: &crate::Decision, approvals: &[String]) -> Option<Vec<String>> {
+        let mut behind = BTreeSet::new();
+        for (claim, value) in &decision.claims {
+            if value == "true" {
+                continue;
+            }
+            let producers = self.producers(claim);
+            if producers.is_empty() {
+                continue;
+            }
+            if !producers.iter().all(|action| approvals.contains(action)) {
+                return None;
+            }
+            behind.extend(producers);
+        }
+        (!behind.is_empty()).then(|| behind.into_iter().collect())
+    }
 }
 
 /// One entry of a snapshot: a regular file with its bytes and whether it is executable, a
@@ -2583,6 +3148,9 @@ impl<'a> Run<'a> {
         } else {
             LoadedProtocol::builtin(&options.protocol)?
         };
+        // What the step choice will refuse is refused here, before a case directory or a
+        // branch exists for it.
+        Shape::of(&protocol, &options.inputs)?;
         let id = options
             .case_id
             .clone()
@@ -3349,6 +3917,8 @@ impl<'a> Run<'a> {
         // sequence, never repeats.
         let mut seq = self.case.evaluations()?;
         let mut last_idle: Option<String> = None;
+        let shape = Shape::of(&self.case.protocol, &self.options.inputs)?;
+        let keeps_state = self.harness.keeps_state();
         // The validators that observed without writing a record, each with the revision it
         // observed at: not due again there, because the next observation would end the same
         // way; a commit moves the revision and makes them due again.
@@ -3404,10 +3974,15 @@ impl<'a> Run<'a> {
                 });
             }
             let admissible = decision.admissible();
-            // The judgement actions: the admissible ones no validator owns.
+            // The judgement actions: the admissible ones no validator owns, but none whose evidence
+            // only a validator writes ([`Shape::for_harness`]). A harness that keeps nothing
+            // between steps is offered an action that only reads only when the action records a
+            // choice ([`Shape::for_stateless`]).
             let offered: Vec<String> = admissible
                 .iter()
                 .filter(|a| !self.validators.iter().any(|v| v.action() == a.as_str()))
+                .filter(|a| shape.for_harness(a))
+                .filter(|a| keeps_state || shape.for_stateless(a))
                 .cloned()
                 .collect();
             // A deterministic step first: a validator due at this decision.
@@ -3743,6 +4318,15 @@ impl<'a> Run<'a> {
                 }
                 continue;
             }
+            // No judgement step when only a grant stands between the case and its outcome:
+            // every claim still open is decided by evidence only an action waiting for an
+            // approval produces. The run stops there at once and spends nothing on asking.
+            let waiting_for_grant = decision.approval_required();
+            if !waiting_for_grant.is_empty()
+                && let Some(behind) = shape.only_behind(&decision, &waiting_for_grant)
+            {
+                return Ok(Stop::ApprovalRequired(behind));
+            }
             // Then a judgement step among the offered actions.
             if offered.is_empty() {
                 let approvals = decision.approval_required();
@@ -3758,11 +4342,17 @@ impl<'a> Run<'a> {
                 .into_iter()
                 .filter(|a| self.options.gate.as_deref() == Some(a.as_str()))
                 .collect();
+            let choices: Vec<String> = offered
+                .iter()
+                .filter(|a| !shape.choices_of(a).is_empty())
+                .cloned()
+                .collect();
             let context = StepContext {
                 tree: &self.tree,
                 intent: &self.options.intent,
                 offered: &offered,
                 approvals: &approvals,
+                choices: &choices,
                 decision: &decision,
                 protocol: &self.case.protocol,
                 step: self.steps as usize,
@@ -4253,6 +4843,77 @@ impl<'a> Run<'a> {
                 writeln!(out, "  refused: {why}; the change was discarded")?;
                 return Ok(Stop::StepRefused(why));
             }
+            // An action whose evidence records a choice ([`Shape`]): takt writes that record,
+            // with no result, bound to the revision of each artifact the protocol reads it about,
+            // for a step that changed no file. A step that changed one is refused, as a request
+            // for an approval with changes is. Taken again where its record is already written,
+            // it moves nothing, and the run sees no progress.
+            let choices = shape.choices_of(&report.action);
+            if !choices.is_empty() {
+                if !changed.is_empty() {
+                    undo()?;
+                    let why = format!(
+                        "{} records a choice and changed {} path(s)",
+                        report.action,
+                        changed.len()
+                    );
+                    record_step(self)?;
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(out, "  refused: {why}; the change was discarded")?;
+                    return Ok(Stop::StepRefused(why));
+                }
+                record_step(self)?;
+                events.emit(
+                    self.steps,
+                    &Event::Effect {
+                        paths: Vec::new(),
+                        revision: None,
+                    },
+                )?;
+                writeln!(out, "  effect: no file changed")?;
+                let mut recorded = false;
+                for (kind, subjects) in choices {
+                    for subject in subjects {
+                        if self.case.has_evidence(kind, subject)? {
+                            continue;
+                        }
+                        let revision = self.case.revision(subject).with_context(|| {
+                            format!("{kind} is read about {subject}, which has no revision")
+                        })?;
+                        let id = if subjects.len() == 1 {
+                            format!("{}-{seq}", kind.replace('_', "-"))
+                        } else {
+                            format!("{}-{subject}-{seq}", kind.replace('_', "-"))
+                        };
+                        let record = crate::evidence::Record::new(
+                            id,
+                            kind,
+                            None,
+                            subject,
+                            &revision,
+                            CHOICE_PRODUCER,
+                        );
+                        let written = self.case.add_evidence(&record)?;
+                        events.emit(
+                            self.steps,
+                            &Event::Evidence {
+                                id: record.id.clone(),
+                                kind: record.kind.clone(),
+                                result: None,
+                                path: written
+                                    .strip_prefix(&self.tree)
+                                    .unwrap_or(&written)
+                                    .display()
+                                    .to_string(),
+                            },
+                        )?;
+                        writeln!(out, "  evidence: {kind} -")?;
+                        recorded = true;
+                    }
+                }
+                last_idle = (!recorded).then_some(state);
+                continue;
+            }
             if changed.is_empty() {
                 record_step(self)?;
                 events.emit(
@@ -4272,7 +4933,7 @@ impl<'a> Run<'a> {
             let head = match crate::git::commit_paths(
                 &self.tree,
                 changed,
-                &format!("{}: {}", report.action, report.summary),
+                &format!("{}: {}", report.action, one_line(&report.summary)),
             ) {
                 Ok(head) => head,
                 Err(error) => {

@@ -769,17 +769,24 @@ fn snapshotted(tree: &Path, base: &str) -> Result<Result<Definitions, String>> {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoopMeasure;
 
+impl LoopMeasure {
+    /// The action it performs.
+    pub const ACTION: &str = "loop.measure";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "loop_measurement";
+}
+
 impl Validator for LoopMeasure {
     fn name(&self) -> &str {
         "takt.loop-measure"
     }
 
     fn action(&self) -> &str {
-        "loop.measure"
+        Self::ACTION
     }
 
     fn kind(&self) -> &str {
-        "loop_measurement"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {
@@ -941,17 +948,24 @@ fn uncomputed(card: &LoopScorecard, definitions: &Definitions) -> Vec<(String, S
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoopDefinitionCheck;
 
+impl LoopDefinitionCheck {
+    /// The action it performs.
+    pub const ACTION: &str = "loop.definition.check";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "definition_check";
+}
+
 impl Validator for LoopDefinitionCheck {
     fn name(&self) -> &str {
         "takt.loop-definition-check"
     }
 
     fn action(&self) -> &str {
-        "loop.definition.check"
+        Self::ACTION
     }
 
     fn kind(&self) -> &str {
-        "definition_check"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {
@@ -1074,7 +1088,7 @@ fn measured_turns(tree: &Path, base: &str) -> Result<Option<Vec<String>>> {
     let Some(id) = case_records(tree)?
         .iter()
         .rev()
-        .find(|record| is_record(record, "loop_measurement", None, "loop_baseline", base))
+        .find(|record| is_record(record, LoopMeasure::KIND, None, "loop_baseline", base))
         .and_then(|record| record["id"].as_str().map(str::to_owned))
     else {
         return Ok(None);
@@ -1115,17 +1129,24 @@ fn descends(tree: &Path, ancestor: &str, revision: &str) -> bool {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoopCompare;
 
+impl LoopCompare {
+    /// The action it performs.
+    pub const ACTION: &str = "loop.compare";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "loop_comparison";
+}
+
 impl Validator for LoopCompare {
     fn name(&self) -> &str {
         "takt.loop-compare"
     }
 
     fn action(&self) -> &str {
-        "loop.compare"
+        Self::ACTION
     }
 
     fn kind(&self) -> &str {
-        "loop_comparison"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {

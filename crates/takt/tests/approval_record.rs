@@ -137,6 +137,12 @@ impl Harness for Idle {
         "idle"
     }
 
+    /// It answers `repository.inspect`, which only a harness that keeps state is offered
+    /// (story:no-inspect-for-stateless-harness).
+    fn keeps_state(&self) -> bool {
+        true
+    }
+
     fn step(&self, _: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
         Ok(StepReport {
             action: "repository.inspect".to_owned(),
@@ -238,6 +244,27 @@ fn at_the_gate(repo: &Path, memory: &Rc<Memory>) -> (String, String) {
         .expect("the record is written");
     run.case
         .add_evidence(&record(2, "gate_result", &worked))
+        .expect("the record is written");
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("handover-{}", &worked[..8]),
+            "handover",
+            None,
+            "implementation",
+            &worked,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+    // A change to publish at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &worked[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &worked,
+            "takt.change-read",
+        ))
         .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
