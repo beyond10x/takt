@@ -7,6 +7,7 @@ title: A judgement step can decline or abandon a case, recorded as an outcome
 relations:
 - informed_by: review-result:scenario-corpus-round-0
 - decomposes: epic:composable-agentic-work
+- depends_on: story:abandon-a-case
 revision: 1
 ---
 ## Outcome
