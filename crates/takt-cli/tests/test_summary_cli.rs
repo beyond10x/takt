@@ -163,3 +163,87 @@ fn short_output_is_kept_whole() {
         "every line, in order: {effect}"
     );
 }
+
+/// Counts a test command prints are summed without trusting them to fit: a count near
+/// `u64::MAX` saturates instead of panicking (debug) or wrapping a failure away (release).
+#[test]
+fn counts_are_summed_saturating() {
+    let output = "test result: ok. 18446744073709551614 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\ntest result: ok. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s";
+    let (_outer, repo) = repository("saturating", output, 101);
+    let effect = effect_line(&repo);
+    assert!(
+        effect.contains("18446744073709551615 passed, 2 failed, 0 ignored over 2 result lines"),
+        "the sum saturates and the failures stay counted: {effect}"
+    );
+}
+
+/// A test binary killed by a signal after a passing block: the result lines show no failure,
+/// the exit does, so the last line is kept beside the counts.
+#[test]
+fn a_failure_the_result_lines_do_not_show_keeps_the_last_line() {
+    let output = "\nrunning 5 tests\n.....\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\nerror: process didn't exit successfully: `target/debug/deps/cache-1a2b` (signal: 11, SIGSEGV: invalid memory reference)";
+    let (_outer, repo) = repository("signal", output, 101);
+    let effect = effect_line(&repo);
+    assert!(
+        effect.contains("5 passed, 0 failed, 0 ignored over 1 result line"),
+        "{effect}"
+    );
+    assert!(
+        effect.contains("(signal: 11, SIGSEGV: invalid memory reference)"),
+        "the line the counts cannot show is kept: {effect}"
+    );
+}
+
+/// A runner whose `test result:` line carries no counts (not cargo's), failing: the last line,
+/// which holds its own totals, is kept.
+#[test]
+fn a_runner_with_a_countless_result_line_keeps_its_own_totals() {
+    let output = "test result: see below\n............F\n1 failed, 12 passed in 0.53s";
+    let (_outer, repo) = repository("pytest-like", output, 1);
+    let effect = effect_line(&repo);
+    assert!(
+        effect.contains("1 failed, 12 passed in 0.53s"),
+        "the runner's own totals are kept: {effect}"
+    );
+}
+
+/// Under `cargo test --quiet` no `test <name> ... FAILED` lines are printed; the failed tests
+/// are named from the `failures:` list.
+#[test]
+fn quiet_cargo_output_names_the_failed_tests_from_the_failures_list() {
+    let output = "\nrunning 3 tests\n.FF\nfailures:\n\n---- cache::tmp_is_cache stdout ----\nassertion failed\n\n\nfailures:\n    cache::record_is_kept\n    cache::tmp_is_cache\n\ntest result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s";
+    let (_outer, repo) = repository("quiet", output, 101);
+    let effect = effect_line(&repo);
+    assert!(
+        effect.contains("failed: cache::record_is_kept, cache::tmp_is_cache"),
+        "{effect}"
+    );
+}
+
+/// A summary longer than 300 characters is cut, and the cut is marked.
+#[test]
+fn a_long_summary_is_cut_and_the_cut_is_marked() {
+    let mut output = String::from("\nrunning 40 tests\n");
+    for n in 0..40 {
+        output.push_str(&format!(
+            "test module::a_rather_long_test_name_{n:02} ... FAILED\n"
+        ));
+    }
+    output.push_str("\ntest result: FAILED. 0 passed; 40 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s");
+    let (_outer, repo) = repository("long", &output, 101);
+    let effect = effect_line(&repo);
+    let summary = effect
+        .split_once("; ")
+        .map(|(_, rest)| rest)
+        .unwrap_or(&effect);
+    assert!(summary.ends_with('…'), "the cut is marked: {effect}");
+    assert!(
+        summary.chars().count() <= 300,
+        "{} characters: {effect}",
+        summary.chars().count()
+    );
+    assert!(
+        effect.contains("0 passed, 40 failed, 0 ignored over 1 result line"),
+        "{effect}"
+    );
+}

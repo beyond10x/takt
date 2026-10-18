@@ -237,8 +237,13 @@ impl TestsRun {
 /// is not hidden by a later one that passed. Without one: the first non-empty line beside the
 /// last four when the output has more than five, so a summary a command prints first is kept,
 /// else every non-empty line; lines joined by ` | `.
-fn summarise_tests(printed: &str) -> String {
+fn summarise_tests(printed: &str, success: bool) -> String {
     let lines: Vec<&str> = printed.lines().collect();
+    let kept: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
     let (mut passed, mut failed, mut ignored, mut results) = (0u64, 0u64, 0u64, 0usize);
     for line in &lines {
         let Some(rest) = line.trim_start().strip_prefix("test result:") else {
@@ -250,10 +255,12 @@ fn summarise_tests(printed: &str) -> String {
             let Some(count) = words.by_ref().find_map(|word| word.parse::<u64>().ok()) else {
                 continue;
             };
+            // Saturating: a count a test command prints is not trusted to fit, and a sum that
+            // wraps would read a failure as none.
             match words.next() {
-                Some("passed") => passed += count,
-                Some("failed") => failed += count,
-                Some("ignored") => ignored += count,
+                Some("passed") => passed = passed.saturating_add(count),
+                Some("failed") => failed = failed.saturating_add(count),
+                Some("ignored") => ignored = ignored.saturating_add(count),
                 _ => {}
             }
         }
@@ -264,7 +271,9 @@ fn summarise_tests(printed: &str) -> String {
             "{passed} passed, {failed} failed, {ignored} ignored over {results} result line{plural}"
         );
         if failed > 0 {
-            let names: Vec<&str> = lines
+            // `test <name> ... FAILED` lines, or, under `cargo test --quiet`, which prints none,
+            // the names listed under the last `failures:` heading, one indented a line.
+            let mut names: Vec<&str> = lines
                 .iter()
                 .filter_map(|line| {
                     line.trim()
@@ -272,24 +281,49 @@ fn summarise_tests(printed: &str) -> String {
                         .strip_suffix(" ... FAILED")
                 })
                 .collect();
+            if names.is_empty()
+                && let Some(heading) = lines.iter().rposition(|line| line.trim() == "failures:")
+            {
+                names = lines[heading + 1..]
+                    .iter()
+                    .take_while(|line| line.starts_with("    ") || line.trim().is_empty())
+                    .map(|line| line.trim())
+                    .filter(|line| !line.is_empty())
+                    .collect();
+            }
             if !names.is_empty() {
                 summary.push_str("; failed: ");
                 summary.push_str(&names.join(", "));
             }
         }
+        // A failure the result lines do not show (a binary killed by a signal, a runner whose
+        // `test result:` line carries no counts): the last line says what the counts cannot.
+        if !success
+            && failed == 0
+            && let Some(last) = kept.last()
+        {
+            summary.push_str(" | ");
+            summary.push_str(last.trim());
+        }
         return summary;
     }
-    let kept: Vec<&str> = lines
-        .iter()
-        .copied()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
     if kept.len() <= 5 {
         return kept.join(" | ");
     }
     let mut shown = vec![kept[0], "…"];
     shown.extend_from_slice(&kept[kept.len() - 4..]);
     shown.join(" | ")
+}
+
+/// `text` within `limit` characters: the whole of it, or its first `limit - 1` characters and
+/// `…`, so a cut summary says it was cut.
+fn bounded(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_owned();
+    }
+    let mut cut: String = text.chars().take(limit.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
 }
 
 impl Validator for TestsRun {
@@ -344,7 +378,7 @@ impl Validator for TestsRun {
         let result = if output.success() { "pass" } else { "fail" };
         let printed =
             String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
-        let tail = summarise_tests(&printed);
+        let tail = summarise_tests(&printed, output.success());
         let record = Record::new(
             format!("test-result-{seq}"),
             self.kind(),
@@ -357,7 +391,7 @@ impl Validator for TestsRun {
             summary: format!(
                 "the test command exited {}: {result}; {}",
                 output.code.map_or("signal".to_owned(), |c| c.to_string()),
-                tail.chars().take(300).collect::<String>()
+                bounded(&tail, 300)
             ),
             records: vec![record],
             artifact: None,
