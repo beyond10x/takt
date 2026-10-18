@@ -15,7 +15,7 @@ scope:
   path: crates/takt/src/case.rs
 - confidence: inferred
   path: crates/takt/src/validator.rs
-revision: 5
+revision: 6
 ---
 # Story: records-reach-base
 
@@ -52,3 +52,11 @@ Measured by the developer role while implementing story:run-record-and-story-evi
 - story:run-record-and-story-evidence writes the commits `takt: test_result <story>` and `takt: implemented <story>` only when the case stops `accepted`, not when the tests validator writes its record: a store commit at observation time moved `HEAD` off the implementation revision, and `pr.open` then errored (`crates/takt/src/validator.rs:726`).
 - So with a forge both commits land on the case branch above the merged head, locally, after the merge. Riding with the pull request needs them written before the merge: the `test_result` record at the granted revision, and the move to `implemented` as the last rider, pushed just before the merge. This story decides that order.
 - A gap in the same rider rule: `takt run --case <an accepted case>` goes through `CaseDir::resume`, which moves the implementation revision onto those store commits because `approvals_only` does not recognise them (`crates/takt/src/case.rs:1093-1099`), so `pr.open` becomes due again. Only an explicit `--case` reaches it. The rider rule this story adds must be the one `CaseDir::resume` reads too, so an accepted case resumed by id stays at its granted revision and nothing becomes due again.
+
+## From the riders review
+
+From the reviewer's verdict on story:approval-riders-are-grants at cc8a4e3 (approve, three low findings, carried here because this story changes the same rider rule):
+
+- `crates/takt/src/case.rs:442/469`: a rider's `actor` is checked for its shape only, so a riding approval record can name any actor, `human:<id>` included, while every other field must equal the grant. No store reader or Canon gates on it today; it only misattributes the record. The rider rule here requires the record's actor to equal the grant's approver.
+- `case.rs:895` counts every `Granted` decision at the bound revision, while `Authority::grants_at` (`case.rs:341`) reads the first decision per capability; with both a denial and a grant of one capability the two would disagree. One rule, the one `grants_at` uses.
+- `case.rs:959` reads a riding record through `git::run`, which decodes lossily and trims; the rider rule reads it with `git::blob` and parses the bytes.
