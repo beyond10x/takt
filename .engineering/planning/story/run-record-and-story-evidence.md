@@ -21,7 +21,7 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/tests/run_record.rs
-revision: 5
+revision: 6
 ---
 # Story: run-record-and-story-evidence
 
@@ -70,3 +70,14 @@ Aggregating many runs into numbers (story:week-of-daily-runs); evidence kinds ot
 ## Ambiguities
 
 - Whether takt or a person makes the move to `implemented`: `inferable`, the planning skill § 4 says a move is made when the store holds what the rung requires, and the lifecycle (`artifacts/lifecycles/story.yaml`) names the record; the operator can revert a move.
+
+## ## Note (2026-10-18)
+
+## Note (2026-10-18)
+
+A live trial of `takt run` on this repository took this story as its unit and the harness drafted
+an implementation (`events.rs`, `tests/run_record.rs` with three cases, the store adapter's
+`test_result` evidence and move to `implemented`) in one judgement step; the loop committed it on
+the case branch `takt/story-run-record-and-story-evidence-20261018T090034Z`, kept locally, outside
+the wave process and without an adversary pass. It is reading material for the wave that delivers
+this story, not a unit.

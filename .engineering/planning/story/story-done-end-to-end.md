@@ -19,7 +19,7 @@ scope:
   path: crates/takt/src/case.rs
 - confidence: inferred
   path: crates/takt/src/run.rs
-revision: 4
+revision: 5
 ---
 # Story: story-done-end-to-end
 
@@ -72,3 +72,14 @@ Several units in one run (story:declared-loops); the run from a `workflow/1` fil
 
 - Which repository: `inferable`, a small public repository with a planning store and one ready story that the bot route can reach; the operator picks it when the story is run, and no private name enters this repository.
 - Whether a fix found here belongs here or in a sibling: `inferable`, a fix in how the pieces are joined (`run.rs`, `case.rs`, `main.rs`) stays here; a fix inside an adapter goes to the sibling that owns it.
+
+## ## Correction (2026-10-18)
+
+## Correction (2026-10-18)
+
+The waves delivered every part of the chain against doubles: the frontier take, the case branch,
+the validators, the pull request through the forge, the gate stop, `takt approve`, the resume and
+the merge. The end-to-end proof this story names needs a repository the bot route may push to, and
+none of the enrolled repositories is a scratch one; `decision-blocker:live-trial-repository`
+records that the choice is the operator's. Once decided, the proof is one run to the gate, one
+approval and one resumed run, on a one-story planning store seeded into the repository.

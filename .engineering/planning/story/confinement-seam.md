@@ -31,7 +31,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/confinement.rs
-revision: 7
+revision: 8
 ---
 # Story: confinement-seam
 
@@ -83,3 +83,22 @@ Any actual confinement (a Substrate adapter); network policy; resource limits. S
 ## Ambiguities
 
 - Whether git belongs behind the seam: `inferable` as recorded here, yes, because a confining adapter that lets git out of the sandbox would let the harness commit; the design names the harness and validators only.
+
+## ## Evidence (2026-10-18)
+
+## Evidence (2026-10-18)
+
+What the adversary passes of waves 04 and 05 measured about the harness's reach, each a case in
+`crates/takt/tests/{forge,merge_under_authority}.rs`:
+
+- A harness step could write `<case>/authority.yaml` and grant itself `repository.merge`; a
+  planted pull-request number or branch name in `branch.yaml` steered the forge. Closed in wave 05
+  for every path under `.engineering/cases` (snapshot before the step, refusal and restore after,
+  links never followed) and by the forge verifying the pull request's head.
+- Still open: `.git/config` (the remote URL the forge reads), the planning store under
+  `.engineering/planning`, and any file outside the cases directory are writable by a judgement
+  step; `tests.write` refuses non-test paths, `implementation.edit` admits everything.
+- Still open: the harness child inherits the environment except the keys the adapter removes; the
+  test command and the gates' command bindings run with the run's own permissions.
+- A grant written while a run holds the case is refused by the lock; a grant written between runs
+  by whoever holds the tree is trusted, which is where `takt approve` legitimately writes.
