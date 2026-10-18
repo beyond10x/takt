@@ -872,8 +872,8 @@ types:
   # A turn whose case never reached an outcome gets a row too, its `verdict` absent, which means
   # open; and each row carries when its finding was filed and, once it was, verified. Decided
   # 2026-10-18.
-  # read from: .engineering/planning/story/loop-scorecard.md:30-33
-  # read from: .engineering/planning/story/loop-scorecard.md:48-50
+  # read from: .engineering/planning/story/loop-scorecard.md:33-36
+  # read from: .engineering/planning/story/loop-scorecard.md:51-53
   # read from: .engineering/planning/design/recursive-self-improvement.md:185-187
   # read from: crates/takt/src/scorecard.rs:58-84
   - name: takt.work.LoopScorecardRow
@@ -912,8 +912,8 @@ types:
   # are computed from the rows each time it is printed and never stored, so no field holds them.
   # Escaped defects are not among them: a later, human-sourced figure no validator observes.
   # Decided 2026-10-18; declared ahead of the code (story:loop-scorecard).
-  # read from: .engineering/planning/story/loop-scorecard.md:51
-  # read from: .engineering/planning/story/loop-scorecard.md:95
+  # read from: .engineering/planning/story/loop-scorecard.md:54
+  # read from: .engineering/planning/story/loop-scorecard.md:98
   - name: takt.work.LoopScorecard
     kind: struct
     fields:
