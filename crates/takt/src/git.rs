@@ -169,6 +169,60 @@ pub fn remote_url(tree: &Path, remote: &str) -> Result<String> {
     run(tree, &["remote", "get-url", remote])
 }
 
+/// The full names of the refs under each prefix of `prefixes` (`refs/heads/trial/`), in ref
+/// order; none when nothing is there.
+pub fn refs(tree: &Path, prefixes: &[&str]) -> Result<Vec<String>> {
+    let mut args = vec!["for-each-ref", "--format=%(refname)"];
+    args.extend(prefixes);
+    let listed = raw(tree, &args, None)?;
+    Ok(String::from_utf8_lossy(&listed)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
+/// One entry of a file in git's configuration syntax: its key and, unless it has no `=`, its
+/// value.
+pub type ConfigEntry = (String, Option<String>);
+
+/// The entries of `path`, a file in git's configuration syntax, as `revision` holds it: each
+/// `(key, value)` in file order, read with `git config --no-includes --blob`, so nothing is
+/// checked out and no `include.path` or `includeIf` is followed: an include is listed as its
+/// own entry, never as the entries of the file it names. A key with no `=` has no value. `None` when `revision` names no
+/// commit or holds no file at `path`.
+pub fn config_at(tree: &Path, revision: &str, path: &str) -> Result<Option<Vec<ConfigEntry>>> {
+    let blob = format!("{revision}:{path}");
+    if !output(tree, &["cat-file", "-e", &blob], None)?
+        .status
+        .success()
+    {
+        return Ok(None);
+    }
+    let listed = raw(
+        tree,
+        &["config", "--no-includes", "--blob", &blob, "--list", "-z"],
+        None,
+    )?;
+    listed
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let text = String::from_utf8(entry.to_vec()).map_err(|_| {
+                anyhow!(
+                    "{blob} holds an entry that is not UTF-8: {}",
+                    String::from_utf8_lossy(entry)
+                )
+            })?;
+            Ok(match text.split_once('\n') {
+                Some((key, value)) => (key.to_owned(), Some(value.to_owned())),
+                None => (text, None),
+            })
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
+}
+
 /// Whether the history of `revision` holds a commit whose subject is `subject`, exactly; false
 /// when `revision` names nothing.
 pub fn has_subject(tree: &Path, revision: &str, subject: &str) -> Result<bool> {
