@@ -42,6 +42,20 @@ pub struct StepReport {
     pub tokens: Option<u64>,
 }
 
+/// What a harness reported about one call besides its tokens, each field absent when it did
+/// not state it, never 0: the model, the cost in dollars, the call's duration and its time in
+/// the API in milliseconds, the turns, and the instant the call started (stamped by takt, as
+/// [`crate::events::instant`] writes one).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CallReport {
+    pub model: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub duration_ms: Option<u64>,
+    pub api_ms: Option<u64>,
+    pub turns: Option<u64>,
+    pub started_at: Option<String>,
+}
+
 /// A judgement actor.
 pub trait Harness {
     /// The adapter's name.
@@ -51,6 +65,11 @@ pub trait Harness {
     /// The tokens of the last step by component, when the harness reported them; none by
     /// default.
     fn last_usage(&self) -> Option<crate::events::TokenUsage> {
+        None
+    }
+    /// What the harness reported about the last step's call besides its tokens; none by
+    /// default.
+    fn last_call(&self) -> Option<CallReport> {
         None
     }
 }
@@ -69,6 +88,9 @@ pub struct ClaudeCode {
     /// The tokens by component the last step reported, set by each step; none before the
     /// first and after a step that reported none.
     pub reported: std::cell::Cell<Option<crate::events::TokenUsage>>,
+    /// What the last step reported about its call besides its tokens, set by each step; none
+    /// before the first and after a step that reported nothing of it.
+    pub call: std::cell::RefCell<Option<CallReport>>,
 }
 
 impl Default for ClaudeCode {
@@ -82,6 +104,7 @@ impl Default for ClaudeCode {
                 output: 8 << 20,
             },
             reported: std::cell::Cell::new(None),
+            call: std::cell::RefCell::new(None),
         }
     }
 }
@@ -183,8 +206,14 @@ impl Harness for ClaudeCode {
         self.reported.get()
     }
 
+    fn last_call(&self) -> Option<CallReport> {
+        self.call.borrow().clone()
+    }
+
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport> {
         self.reported.set(None);
+        *self.call.borrow_mut() = None;
+        let started_at = crate::events::instant();
         let prompt = Self::prompt(context);
         let mut command = Command::new(&self.program);
         command
@@ -259,13 +288,36 @@ impl Harness for ClaudeCode {
         });
         let usage = usage.filter(|usage| usage.total() > 0);
         let tokens = usage.map(|usage| usage.total());
+        let call = Self::call(&doc, started_at);
         let (action, summary) = Self::parse(result)?;
         self.reported.set(usage);
+        *self.call.borrow_mut() = Some(call);
         Ok(StepReport {
             action,
             summary,
             tokens,
         })
+    }
+}
+
+impl ClaudeCode {
+    /// What `claude --output-format json` stated about the call, each field absent when the
+    /// result does not state it: `modelUsage`'s keys as the model (several joined with `+`),
+    /// `total_cost_usd`, `duration_ms`, `duration_api_ms` and `num_turns`; `started_at` is the
+    /// instant takt started the child.
+    fn call(doc: &serde_json::Value, started_at: String) -> CallReport {
+        let model = doc["modelUsage"].as_object().and_then(|models| {
+            let names: Vec<&str> = models.keys().map(String::as_str).collect();
+            (!names.is_empty()).then(|| names.join("+"))
+        });
+        CallReport {
+            model,
+            cost_usd: doc["total_cost_usd"].as_f64(),
+            duration_ms: doc["duration_ms"].as_u64(),
+            api_ms: doc["duration_api_ms"].as_u64(),
+            turns: doc["num_turns"].as_u64(),
+            started_at: Some(started_at),
+        }
     }
 }
 

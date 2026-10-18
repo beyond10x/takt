@@ -84,7 +84,11 @@ pub enum Event {
     },
     /// A step: by a `validator` or the `harness`, which one, the action, what it reported, the
     /// tokens the harness reported when it reported any, and their four components when it
-    /// reported those; a validator's, the revision it observed.
+    /// reported those; a validator's, the revision it observed. A harness step's also carries
+    /// what the harness reported about the call, each absent when it did not state it, never
+    /// 0: the model, the cost in dollars, the call's duration and its time in the API in
+    /// milliseconds, the turns, and the instant the call started, which precedes the line's
+    /// `at`.
     Step {
         by: String,
         name: String,
@@ -96,6 +100,18 @@ pub enum Event {
         usage: Option<TokenUsage>,
         #[serde(skip_serializing_if = "Option::is_none")]
         revision: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cost_usd: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        api_ms: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turns: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        started_at: Option<String>,
     },
     /// What a judgement step changed: the paths committed and the implementation revision they
     /// were committed as; no path and no revision when it changed no file.

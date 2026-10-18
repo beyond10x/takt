@@ -107,6 +107,12 @@ fn run(repo: &Path, case: &str, tokens: u64, stop: &str) {
                 tokens: Some(usage.total()),
                 usage: Some(usage),
                 revision: None,
+                model: None,
+                cost_usd: None,
+                duration_ms: None,
+                api_ms: None,
+                turns: None,
+                started_at: None,
             },
         ),
         (
