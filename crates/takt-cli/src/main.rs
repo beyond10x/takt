@@ -39,7 +39,37 @@ enum Commands {
     /// The repository's scenarios: a story at a known seed commit, run from a fresh base.
     #[command(subcommand)]
     Scenario(ScenarioCommands),
+    /// Print, per run of a case under `.engineering/cases/`, its outcome, steps, tokens,
+    /// refusals, `NoProgress`, errors and wall time, read from the case's `events.jsonl` only;
+    /// a case without one is listed as `no record`.
+    #[command(after_help = SCORECARD_EXIT_CODES)]
+    Scorecard(ScorecardArgs),
 }
+
+#[derive(clap::Args)]
+struct ScorecardArgs {
+    /// The repository worktree whose cases are read.
+    #[arg(long)]
+    repo: PathBuf,
+    /// Save the scorecard as `<dir>/scorecard-<revision>.json`, named by the revision takt was
+    /// built from when the binary knows it, else by `HEAD` of the repository; which one is
+    /// printed.
+    #[arg(long, value_name = "DIR")]
+    save: Option<PathBuf>,
+    /// Compare each run with the same scenario in a saved scorecard: worse when its outcome
+    /// ranks below the best saved run's (accepted, then ApprovalRequired or Waiting, then a
+    /// budget stop, then NoProgress and every other stop, then an error); tokens as n, min,
+    /// median and max per scenario and side, and the difference of the medians, never worse.
+    #[arg(long, value_name = "FILE")]
+    against: Option<PathBuf>,
+}
+
+/// What `takt scorecard --help` says about the exit codes.
+const SCORECARD_EXIT_CODES: &str = "Exit codes:
+  0  printed (and saved); with --against, no run is worse than its scenario's best saved run
+  1  refused: the repository, a case's events.jsonl, the saved scorecard or the save directory does not read or write; the reason on stderr
+  2  the arguments do not parse
+  3  with --against: a run's outcome ranks below its scenario's best saved run (tokens never make a run worse)";
 
 #[derive(Subcommand)]
 enum ScenarioCommands {
@@ -289,6 +319,14 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             Ok(EXIT_DONE)
         }
         Commands::Scenario(ScenarioCommands::Run(args)) => scenario_run(*args, out),
+        Commands::Scorecard(ScorecardArgs {
+            repo,
+            save,
+            against,
+        }) => {
+            let worse = takt::scorecard::report(&repo, save.as_deref(), against.as_deref(), out)?;
+            Ok(if worse > 0 { 3 } else { EXIT_DONE })
+        }
         Commands::Run(args) => {
             let RunArgs {
                 repo,
