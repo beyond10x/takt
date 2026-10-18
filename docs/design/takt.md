@@ -1,6 +1,6 @@
 # Takt: composable agentic work
 
-Status: initial design, 2026-10-18. Milestone M1 is done (`docs/runs/2026-10-18-m1-scratch.md`); nothing below M1 is built.
+Status: design of 2026-10-18, built through wave 06 (`docs/waves/`). M1 is done (`docs/runs/2026-10-18-m1-scratch.md`); M2 is built but not yet proven; M3 to M5 are not built. § 4 says what each milestone has; a feature marked *not built* below is design only.
 
 ## 1. The target
 
@@ -32,8 +32,8 @@ request merging is not completion; completion is earned when the protocol's cond
 ## 3. Shape
 
 ```
-takt run --repo <path> [--intent "<text>"] [--workflow <file>]
-         [--iterations N | --hours H | --tokens T | --until <outcome>]
+takt run --repo <path> [--intent "<text>" | --case <id>] [--workflow <file>]   --workflow: not built (M3)
+         [--iterations N | --hours H | --tokens T | --until <outcome>]   --until: not built
 
   unit     := intent | frontier(repo)              AEP: ready stories and waves; no model
   case     := open(protocol, unit, worktree)       Canon case files under .engineering/cases/<id>/
@@ -41,14 +41,14 @@ takt run --repo <path> [--intent "<text>"] [--workflow <file>]
                 judgement step: the harness performs ONE admissible action in the worktree and reports
                 deterministic step: a command (a gate, a pull request, a CI read, a merge on approval)
              until an outcome is legitimate | an approval is needed | the stop criteria | nothing admissible
-  record   := run events (JSONL), every Canon decision, AEP evidence on the unit
+  record   := every Canon decision; AEP evidence on the unit (built: the approval only); run events (JSONL): not built
 ```
 
 The hard rule: the model never produces evidence. A validator, a program, turns an observation
 (a test run's exit status, a commit, a merged pull request) into a `canon-evidence/1` record bound
 to the revision it observed. What the harness says is a trace.
 
-### Building blocks of `workflow/1`
+### Building blocks of `workflow/1` (not built, M3: today the protocol and inputs are flags and the steps are code)
 
 | block | fields | example |
 |---|---|---|
@@ -61,19 +61,19 @@ to the revision it observed. What the harness says is a trace.
 
 ### Seams
 
-Traits in the library, one adapter each at first: `Harness` (the judgement actor), `Frontier` (the
-planning store), `Validator` (an evidence producer), `Forge` (pull request, merge, release through
-the repository's bot route), `Confinement` (none first; Substrate later).
+Traits in the library, one adapter each at first: `Harness` (the judgement actor; built: Claude Code), `Frontier` (the
+planning store; built: AEP), `Validator` (an evidence producer; five built), `Forge` (pull request, merge, release through
+the repository's bot route; built: all but release), `Confinement` (not built; none first, Substrate later).
 
 ## 4. Milestones
 
-| m | deliverable | proof |
-|---|---|---|
-| M1 one step validated | the kernel (case files, Canon evaluation), `takt run --repo R --intent "…" --iterations 1` on `software.change/1`, the Claude Code adapter (one action per step in a worktree), a `tests.run` validator, the decision document printed | a scratch crate with one failing test: `tests.pass` TRUE, `repository.merge` approval-required, 0 evidence from the model |
-| M2 a story end to end | the AEP frontier (ready rule as code, `artifact waves`); a protocol for a story with claims `tests.pass`, `gate.green`, `pr.opened`, `ci.green`, `pr.merged` and outcome `accepted`; `approval` for the merge; `--hours`, `--tokens`; AEP evidence written | one ready story of a small repository done with no manual step but the merge approval |
-| M3 workflows | the `workflow/1` schema and loader; inner, validation and outer loops as declared blocks; a repository default in `.engineering/workflow.yaml` | the same story from a YAML file, and a three-iteration outer loop |
-| M4 pluggable | the five traits; a second harness adapter proves the seam; validators from the engineering assertion providers; Substrate optional | the M2 story runs under both adapters with the same decision documents |
-| M5 prove | three repositories, each a daily `run --hours 2` for a week; units accepted, tokens, human interventions, defects escaped | the numbers |
+| m | deliverable | proof | state |
+|---|---|---|---|
+| M1 one step validated | the kernel (case files, Canon evaluation), `takt run --repo R --intent "…" --iterations 1` on `software.change/1`, the Claude Code adapter (one action per step in a worktree), a `tests.run` validator, the decision document printed | a scratch crate with one failing test: `tests.pass` TRUE, `repository.merge` approval-required, 0 evidence from the model | done 2026-10-18 (`docs/runs/2026-10-18-m1-scratch.md`) |
+| M2 a story end to end | the AEP frontier (ready rule as code, `artifact waves`); a protocol for a story with claims `tests.pass`, `gate.green`, `pr.opened`, `ci.green`, `pr.merged` and outcome `accepted`; `approval` for the merge; `--hours`, `--tokens`; AEP evidence written | one ready story of a small repository done with no manual step but the merge approval | built: the frontier (the ready rule over `artifact list`; `artifact waves` is not used), `story.delivery/1` (embedded, the default for a store story), the merge under a grant `takt approve` gives, `--hours`, `--tokens`, the approval recorded on the story; not built: the run recorded on the story (story:run-record-and-story-evidence); proof: no recorded run yet (story:story-done-end-to-end, draft) |
+| M3 workflows | the `workflow/1` schema and loader; inner, validation and outer loops as declared blocks; a repository default in `.engineering/workflow.yaml` | the same story from a YAML file, and a three-iteration outer loop | not built (story:workflow-schema-and-loader, story:declared-loops) |
+| M4 pluggable | the five traits; a second harness adapter proves the seam; validators from the engineering assertion providers; Substrate optional | the M2 story runs under both adapters with the same decision documents | four traits built, one adapter each (five validators), the gate validator through the assertions library; not built: `Confinement`, a second harness (story:confinement-seam, story:second-harness-adapter) |
+| M5 prove | three repositories, each a daily `run --hours 2` for a week; units accepted, tokens, human interventions, defects escaped | the numbers | not started (story:week-of-daily-runs) |
 
 ## 5. Not in this design
 
