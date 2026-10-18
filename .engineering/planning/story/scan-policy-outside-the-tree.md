@@ -6,6 +6,7 @@ status: draft
 title: The bot route's scan policy cannot be written by a step
 tags:
 - finding
+- priority:high
 refs:
 - provider: finding
   reference: scan-policy-outside-the-tree
@@ -14,7 +15,7 @@ relations:
 - informed_by: story:validator-confinement
 - depends_on: story:forge-preflight
 - decomposes: epic:composable-agentic-work
-revision: 1
+revision: 2
 ---
 ## Outcome
 
