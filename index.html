@@ -62,7 +62,7 @@ and lets a harness such as Claude Code take one admissible step at a time.</p>
 <a href="https://github.com/beyond10x/canon">Canon</a> decides which claims hold and whether an
 outcome was earned; the model never does.</p>
 <p class="rule">Agents choose how to do the work. The protocol defines what must be true before the work counts.</p>
-<nav><a href="#problem">Problem</a><a href="#how">How a run works</a><a href="#status">Status</a><a href="#measurements">Measurements</a><a href="#timeline">Timeline</a><a href="#turn">First improvement turn</a><a href="#waste">Waste</a><a href="#why">Why takt</a><a href="#roadmap">Roadmap</a><a href="#start">Getting started</a><a href="#links">Links</a></nav>
+<nav><a href="#problem">Problem</a><a href="#how">How a run works</a><a href="#status">Status</a><a href="#measurements">Measurements</a><a href="#timeline">Timeline</a><a href="#turn">First improvement turn</a><a href="#waste">Waste</a><a href="#why">Why takt</a><a href="#roadmap">Roadmap</a><a href="#start">Getting started</a><a href="protocols/">Protocols</a><a href="#links">Links</a></nav>
 
 <h2 id="problem">The problem: a free-running harness grades its own work</h2>
 <p>A coding agent running free decides when it is done and says so in text. Nothing ties that
@@ -98,7 +98,7 @@ establishes each claim, and the actions that wait for a grant, for example <code
 <tbody>
 <tr><th>M1 one step validated</th><td>2026-10-18</td><td>Done: one step validated on a scratch crate.</td></tr>
 <tr><th>M2 a story end to end</th><td>2026-10-18</td><td>Built: the planning-store frontier, <code>story.delivery/1</code>, the gate validator, the pull request and CI through the bot route, the merge under a recorded grant, waits on pending checks, the run recorded on the story. Scenario 1 reached <code>accepted</code> (pull request merged), but with more invocations than M2 allows. Not yet proven: a story from ready to merged with the grant as the only manual step.</td></tr>
-<tr><th>Unattended scenario 1</th><td>next</td><td>Accepted with one invocation plus one grant, daily for a week. So far 6 of 9 timed runs reached the merge approval in one invocation.</td></tr>
+<tr><th>Unattended scenario 1</th><td>next</td><td>Accepted with one invocation plus one grant, daily for a week. So far 9 of 12 timed runs reached the merge approval in one invocation; the 3 of round 3 all did.</td></tr>
 <tr><th>Self-improvement</th><td>2026-10-18</td><td>Phase R0: the first improvement turn was accepted, from records written by hand (<a href="#turn">below</a>). Not built: the scorecard reader, promotion, the judge guard, validators for <code>self.improvement/1</code>.</td></tr>
 <tr><th>M3 to M5</th><td>&ndash;</td><td>Not built: workflows as files, a second harness and the confinement seam, a week of daily runs.</td></tr>
 <tr><th>Continuous runs</th><td>&ndash;</td><td>Designed, not built: a run that plans its next stories and works a wave with parallel workers.</td></tr>
@@ -112,40 +112,49 @@ establishes each claim, and the actions that wait for a grant, for example <code
 <a href="https://github.com/beyond10x/todo-app-example">beyond10x/todo-app-example</a>. Finish line:
 a pull request open against its own trial branch with CI green; for takt, the stop at the merge
 approval. Held-out check: a script no agent saw. Tokens = input + output + cache read + cache
-write, as each harness reported them. Runs of 2026-10-18 (UTC), n = 3 per row.</p>
+write, as each harness reported them. Three rounds of runs on 2026-10-18 (UTC); round 3 added 3
+runs of every arm, so the isolated arm and Codex now have n = 6. The model is read from each run's
+usage record: claude-opus-5-5 unless the row names another.</p>
 <div class="scroll">
 <table class="dense">
 <thead><tr><th>arm</th><th class="num">n</th><th class="num">median wall time</th><th class="num">median tokens</th><th class="num">median cost</th><th>held-out check</th></tr></thead>
 <tbody>
-<tr><td>Claude Code, isolated like takt's harness, with a shell</td><td class="num">3</td><td class="num">64 s<br><span class="muted">51&ndash;74</span></td><td class="num">92,541<br><span class="muted">90,890&ndash;106,367</span></td><td class="num">$0.14</td><td>3/3 pass</td></tr>
+<tr><td>Claude Code, isolated like takt's harness, with a shell; rounds 1 and 3</td><td class="num">6</td><td class="num">55.5 s<br><span class="muted">51&ndash;74</span></td><td class="num">92,772<br><span class="muted">79,006&ndash;106,367</span></td><td class="num">$0.14</td><td>6/6 pass</td></tr>
 <tr><td>takt at <code>0a776d2</code> (wave 08)</td><td class="num">3</td><td class="num">133 s<br><span class="muted">127&ndash;137</span></td><td class="num">122,438<br><span class="muted">106,003&ndash;136,180</span></td><td class="num">$0.25</td><td>3/3 pass</td></tr>
 <tr><td>takt at <code>97623a6</code> (wave 09)</td><td class="num">3</td><td class="num">132 s<br><span class="muted">130&ndash;165</span></td><td class="num">142,454<br><span class="muted">122,207&ndash;167,249</span></td><td class="num">$0.31</td><td>3/3 pass</td></tr>
 <tr><td>takt at <code>447423c</code> (turn-1 candidate)</td><td class="num">3</td><td class="num">159 s<br><span class="muted">128&ndash;162</span></td><td class="num">151,626<br><span class="muted">105,753&ndash;167,613</span></td><td class="num">$0.32</td><td>3/3 pass</td></tr>
-<tr><td>Claude Code, full user configuration</td><td class="num">3</td><td class="num">65 s<br><span class="muted">64&ndash;71</span></td><td class="num">581,024<br><span class="muted">580,761&ndash;639,254</span></td><td class="num">$0.48</td><td>3/3 pass</td></tr>
-<tr><td>Codex, full user configuration</td><td class="num">3</td><td class="num">96 s<br><span class="muted">84&ndash;101</span></td><td class="num">535,085<br><span class="muted">525,048&ndash;642,099</span></td><td class="num">not reported</td><td>3/3 pass</td></tr>
+<tr><td>takt at <code>56d1b70</code> (round 3, same code as <code>97623a6</code>). <strong>Model not pinned:</strong> claude-fable-5-1 in 7 of 9 calls, claude-opus-5-5 in 2</td><td class="num">3</td><td class="num">142 s<br><span class="muted">140&ndash;148</span></td><td class="num">138,580<br><span class="muted">138,482&ndash;176,435</span></td><td class="num">$0.57<br><span class="muted">not comparable</span></td><td>3/3 pass</td></tr>
+<tr><td>Claude Code, full user configuration; round 1</td><td class="num">3</td><td class="num">65 s<br><span class="muted">64&ndash;71</span></td><td class="num">581,024<br><span class="muted">580,761&ndash;639,254</span></td><td class="num">$0.48</td><td>3/3 pass</td></tr>
+<tr><td>The same, round 3; model claude-fable-5-1, not pinned</td><td class="num">3</td><td class="num">112 s<br><span class="muted">111&ndash;118</span></td><td class="num">790,770<br><span class="muted">500,640&ndash;855,069</span></td><td class="num">$1.38</td><td>3/3 pass</td></tr>
+<tr><td>Codex, full user configuration; rounds 1 and 3</td><td class="num">6</td><td class="num">86 s<br><span class="muted">76&ndash;101</span></td><td class="num">599,555<br><span class="muted">525,048&ndash;675,867</span></td><td class="num">not reported</td><td>6/6 pass</td></tr>
 </tbody>
 </table>
 </div>
 <div class="caveat">
 <p><strong>The honest result.</strong> On scenario 1 the isolated free agent was cheaper and faster:
 takt cost about 1.7&times; as much ($0.25 against $0.14), used 1.3&times; the tokens and took
-2.1&times; the wall time (133 s against 64 s), and the two later revisions were not cheaper.
+2.1&times; the wall time (133 s against 64 s), and the later revisions were not cheaper. Round 3
+pointed the same way: 1.5&times; the tokens and 2.7&times; the wall time of the isolated arm (138,580
+against 93,003; 142 s against 53 s, n = 3 each).
 Against Claude Code with its full configuration takt used 4.7&times; fewer tokens at 1.9&times; lower
 cost, and nearly all of that gap is the isolation, not the protocol. The hypothesis "cheaper per
 accepted unit" is not supported on this scenario.</p>
 </div>
 <ul class="small">
-<li>One toy scenario: a 31-line change to a CLI. All arms passed 3/3, so the held-out check does not tell them apart.</li>
+<li>One toy scenario: a 31-line change to a CLI. Every counted run passed, so the held-out check does not tell the arms apart.</li>
+<li><strong>Round 3's models.</strong> takt passed no <code>--model</code>, and its model changed under it: two runs used claude-fable-5-1 for every call, the third for its first call only. The cause is unknown; account rotation is an inference. takt's round 3 cost ($0.47&ndash;0.85) can't be compared with rounds 1 and 2. The isolated arm ran on opus, Claude Code with the full configuration on fable. From round 4 every Claude arm is pinned to claude-opus-5-5.</li>
+<li>Claude Code with the full configuration was slower and dearer in round 3 (112 s and $1.38 against 65 s and $0.48). Nobody has checked why; its model and the plugin set both changed between the rounds.</li>
+<li>One more takt run, T-10, refused before its first step because a concurrent free-arm run had taken its trial branch. It is a runner race, recorded and not counted.</li>
 <li>Token totals include cache reads, billed at about 1/20 of input. Cost is the API list price the harness reports: notional. Codex is another vendor: it reports no cost, and its model was read from its configuration, not from the run.</li>
 <li>takt at <code>0a776d2</code> needed an https-origin workaround for a bug in its trial fetch; without it, 0/3 runs got past the fetch.</li>
-<li>Source: <code>docs/metrics/scenario-runs.jsonl</code> in the takt repository at <code>2f4f213</code> (not yet on GitHub), 29 runs, one record each, naming the raw usage record it was read from. A figure the source does not state is null.</li>
+<li>Source: <code>docs/metrics/scenario-runs.jsonl</code> in the takt repository (not yet on GitHub), 42 runs, one record each, naming the raw usage record it was read from. A figure the source does not state is null.</li>
 </ul>
 <p class="rule">First results, not a benchmark.</p>
 
 <h2 id="timeline">The improvement timeline</h2>
 <p>takt's own runs of scenario 1 per takt revision, with the waves that changed it, the first
 improvement turn and the free-running medians as reference lines. Generated by
-<code>docs/metrics/timeline.py</code> from the series above (<code>2f4f213</code>).</p>
+<code>docs/metrics/timeline.py</code> from the series above. The free arms' lines are split by model.</p>
 <figure class="wide">
 <!-- timeline.svg begin -->
 <svg class="takt-timeline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 620" role="img" aria-labelledby="takt-timeline-title" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="12">
@@ -154,14 +163,16 @@ improvement turn and the free-running medians as reference lines. Generated by
 <text x="86" y="24" font-size="15" font-weight="600" fill="currentColor">Scenario 1: takt runs to the merge approval, by takt revision</text>
 <line x1="86" x2="890" y1="452.0" y2="452.0" stroke="#8a9a95" stroke-opacity="0.25"/>
 <text x="78" y="456.0" text-anchor="end" fill="currentColor">0</text>
-<line x1="86" x2="890" y1="367.0" y2="367.0" stroke="#8a9a95" stroke-opacity="0.25"/>
-<text x="78" y="371.0" text-anchor="end" fill="currentColor">200k</text>
-<line x1="86" x2="890" y1="282.0" y2="282.0" stroke="#8a9a95" stroke-opacity="0.25"/>
-<text x="78" y="286.0" text-anchor="end" fill="currentColor">400k</text>
-<line x1="86" x2="890" y1="197.0" y2="197.0" stroke="#8a9a95" stroke-opacity="0.25"/>
-<text x="78" y="201.0" text-anchor="end" fill="currentColor">600k</text>
+<line x1="86" x2="890" y1="384.0" y2="384.0" stroke="#8a9a95" stroke-opacity="0.25"/>
+<text x="78" y="388.0" text-anchor="end" fill="currentColor">200k</text>
+<line x1="86" x2="890" y1="316.0" y2="316.0" stroke="#8a9a95" stroke-opacity="0.25"/>
+<text x="78" y="320.0" text-anchor="end" fill="currentColor">400k</text>
+<line x1="86" x2="890" y1="248.0" y2="248.0" stroke="#8a9a95" stroke-opacity="0.25"/>
+<text x="78" y="252.0" text-anchor="end" fill="currentColor">600k</text>
+<line x1="86" x2="890" y1="180.0" y2="180.0" stroke="#8a9a95" stroke-opacity="0.25"/>
+<text x="78" y="184.0" text-anchor="end" fill="currentColor">800k</text>
 <line x1="86" x2="890" y1="112.0" y2="112.0" stroke="#8a9a95" stroke-opacity="0.25"/>
-<text x="78" y="116.0" text-anchor="end" fill="currentColor">800k</text>
+<text x="78" y="116.0" text-anchor="end" fill="currentColor">1,000k</text>
 <text x="898" y="456.0" fill="#8a9a95">0 s</text>
 <text x="898" y="371.0" fill="#8a9a95">100 s</text>
 <text x="898" y="286.0" fill="#8a9a95">200 s</text>
@@ -170,92 +181,109 @@ improvement turn and the free-running medians as reference lines. Generated by
 <text transform="translate(20 282) rotate(-90)" text-anchor="middle" fill="currentColor">tokens per run (input + output + cache read + cache write)</text>
 <text transform="translate(946 282) rotate(90)" text-anchor="middle" fill="#8a9a95">wall time per run</text>
 <line x1="86" x2="890" y1="452" y2="452" stroke="currentColor" stroke-opacity="0.6"/>
-<line x1="86" x2="890" y1="205.1" y2="205.1" stroke="currentColor" stroke-opacity="0.55" stroke-dasharray="6 4"/>
-<text x="92" y="200.1" font-size="11" fill="currentColor">Claude Code alone, operator&#x27;s full config, median 581,024 (n=3)</text>
-<line x1="86" x2="890" y1="224.6" y2="224.6" stroke="currentColor" stroke-opacity="0.55" stroke-dasharray="6 4"/>
-<text x="92" y="219.6" font-size="11" fill="currentColor">Codex alone, operator&#x27;s full config, median 535,085 (n=3)</text>
-<line x1="86" x2="890" y1="412.7" y2="412.7" stroke="currentColor" stroke-opacity="0.55" stroke-dasharray="6 4"/>
-<text x="92" y="407.7" font-size="11" fill="currentColor">Claude Code isolated like takt&#x27;s harness, with a shell, median 92,541 (n=3)</text>
-<line x1="220.0" x2="220.0" y1="56" y2="452" class="acc-s" stroke-width="1.5" stroke-dasharray="3 3"/>
-<text x="225.0" y="66" font-size="11" font-weight="600" class="acc-t">wave 06: <tspan font-weight="400">review fixes</tspan></text>
-<line x1="354.0" x2="354.0" y1="82" y2="452" class="acc-s" stroke-width="1.5" stroke-dasharray="3 3"/>
-<text x="359.0" y="92" font-size="11" font-weight="600" class="acc-t">wave 07: <tspan font-weight="400">scenario corpus, PR scan policy</tspan></text>
-<line x1="488.0" x2="488.0" y1="56" y2="452" class="acc-s" stroke-width="1.5" stroke-dasharray="3 3"/>
-<text x="493.0" y="66" font-size="11" font-weight="600" class="acc-t">wave 08: <tspan font-weight="400">CI pending waits, finding intake</tspan></text>
-<line x1="756.0" x2="756.0" y1="82" y2="452" class="acc-s" stroke-width="1.5" stroke-dasharray="3 3"/>
-<text x="761.0" y="92" font-size="11" font-weight="600" class="acc-t">wave 09: <tspan font-weight="400">run record, riding grants</tspan></text>
-<line x1="622.0" x2="622.0" y1="120" y2="452" class="acc-s" stroke-width="2.5"/>
-<circle cx="622.0" cy="120" r="4" class="acc"/>
-<text x="629.0" y="138" font-size="10" fill="currentColor">turn-1: scenario-run-help-exit-codes</text>
-<text x="629.0" y="151" font-size="10" fill="currentColor">reproduced at 0a776d2</text>
-<text x="629.0" y="164" font-size="10" fill="currentColor">not_reproduced at 447423c</text>
-<text x="629.0" y="177" font-size="10" fill="currentColor">scorecard: no_regression, median tokens +24% (n=3)</text>
-<text x="629.0" y="190" font-size="10" fill="currentColor">merged at 67ab6ce; promoted at a0b8576</text>
-<text x="629.0" y="203" font-size="10" fill="currentColor">outcome: accepted</text>
-<circle cx="145.0" cy="269.6" r="5" class="acc"><title>trial-run1: tokens 429,262, wall not timed, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
-<text x="145.0" y="260.6" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
-<circle cx="161.0" cy="452.0" r="4" fill="none" stroke="#8a9a95" stroke-width="1.5"><title>trial-run2: tokens not stated, wall not timed, resumes 0, stop error: pr.open: the forge refused the pull request (422, no commits between base and head)</title></circle>
-<line x1="133.0" x2="173.0" y1="269.6" y2="269.6" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
-<text x="153.0" y="470" text-anchor="middle" font-weight="600" fill="currentColor">before wave 06</text>
-<text x="153.0" y="485" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 2, timed 0</text>
-<text x="153.0" y="498" text-anchor="middle" font-size="10.5" fill="#8a9a95">with tokens 1</text>
-<circle cx="287.0" cy="387.5" r="5" class="acc"><title>trial-run3-6: tokens 151,764, wall not timed, resumes 2, stop ApprovalRequired (repository.merge)</title></circle>
-<text x="287.0" y="378.5" text-anchor="middle" font-size="9.5" fill="currentColor">r2</text>
-<line x1="273.0" x2="301.0" y1="387.5" y2="387.5" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
-<text x="287.0" y="470" text-anchor="middle" font-weight="600" fill="currentColor">92b8cf3</text>
-<text x="287.0" y="485" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 1, timed 0</text>
-<text x="287.0" y="498" text-anchor="middle" font-size="10.5" fill="#8a9a95">with tokens 1</text>
-<circle cx="413.0" cy="394.4" r="5" class="acc"><title>trial-scenario-a: tokens 135,463, wall not timed, resumes 2, stop ApprovalRequired (repository.merge)</title></circle>
-<text x="413.0" y="385.4" text-anchor="middle" font-size="9.5" fill="currentColor">r2</text>
-<circle cx="429.0" cy="387.5" r="5" class="acc"><title>trial-scenario-b: tokens 151,880, wall not timed, resumes 1, stop ApprovalRequired (repository.merge)</title></circle>
-<text x="429.0" y="378.5" text-anchor="middle" font-size="9.5" fill="currentColor">r1</text>
-<line x1="401.0" x2="441.0" y1="390.9" y2="390.9" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
-<text x="421.0" y="470" text-anchor="middle" font-weight="600" fill="currentColor">7b5aca3</text>
-<text x="421.0" y="485" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 2, timed 0</text>
-<text x="421.0" y="498" text-anchor="middle" font-size="10.5" fill="#8a9a95">with tokens 2</text>
-<path d="M511.0,193.0L519.0,201.0M511.0,201.0L519.0,193.0" stroke="#8a9a95" stroke-width="1.8"><title>T-fetchfail-1: tokens not stated, wall 300 s, resumes 0, stop refused: the fetch of the remote&#x27;s trial branches timed out after 300 s; nothing was changed</title></path>
-<path d="M527.0,192.2L535.0,200.2M527.0,200.2L535.0,192.2" stroke="#8a9a95" stroke-width="1.8"><title>T-fetchfail-2: tokens not stated, wall 301 s, resumes 0, stop refused: the fetch of the remote&#x27;s trial branches timed out after 300 s; nothing was changed</title></path>
-<path d="M543.0,193.0L551.0,201.0M543.0,201.0L551.0,193.0" stroke="#8a9a95" stroke-width="1.8"><title>T-fetchfail-3: tokens not stated, wall 300 s, resumes 0, stop refused: the fetch of the remote&#x27;s trial branches timed out after 300 s; nothing was changed</title></path>
-<circle cx="563.0" cy="406.9" r="5" class="acc"><title>T-1: tokens 106,003, wall 127 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
-<text x="563.0" y="397.9" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
-<rect x="559.0" y="340.1" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-1: tokens 106,003, wall 127 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
-<circle cx="579.0" cy="400.0" r="5" class="acc"><title>T-2: tokens 122,438, wall 137 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
-<text x="579.0" y="391.0" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
-<rect x="575.0" y="331.6" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-2: tokens 122,438, wall 137 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
-<circle cx="595.0" cy="394.1" r="5" class="acc"><title>T-3: tokens 136,180, wall 133 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
-<text x="595.0" y="385.1" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
-<rect x="591.0" y="334.9" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-3: tokens 136,180, wall 133 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
-<line x1="503.0" x2="607.0" y1="400.0" y2="400.0" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
-<text x="555.0" y="470" text-anchor="middle" font-weight="600" fill="currentColor">0a776d2</text>
-<text x="555.0" y="485" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 6, timed 6</text>
-<text x="555.0" y="498" text-anchor="middle" font-size="10.5" fill="#8a9a95">with tokens 3</text>
-<path d="M673.0,374.8L679.0,380.8L673.0,386.8L667.0,380.8Z" class="acc" fill-opacity="0.25" stroke-width="1.8"><title>T-7: tokens 167,613, wall 162 s, resumes 1, stop ApprovalRequired (repository.merge)</title></path>
-<text x="673.0" y="371.8" text-anchor="middle" font-size="9.5" fill="currentColor">r1</text>
-<rect x="669.0" y="310.3" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-7: tokens 167,613, wall 162 s, resumes 1, stop ApprovalRequired (repository.merge)</title></rect>
-<path d="M689.0,401.1L695.0,407.1L689.0,413.1L683.0,407.1Z" class="acc" fill-opacity="0.25" stroke-width="1.8"><title>T-8: tokens 105,753, wall 128 s, resumes 0, stop ApprovalRequired (repository.merge)</title></path>
-<text x="689.0" y="398.1" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
-<rect x="685.0" y="339.2" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-8: tokens 105,753, wall 128 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
-<path d="M705.0,381.6L711.0,387.6L705.0,393.6L699.0,387.6Z" class="acc" fill-opacity="0.25" stroke-width="1.8"><title>T-9: tokens 151,626, wall 159 s, resumes 1, stop ApprovalRequired (repository.merge)</title></path>
-<text x="705.0" y="378.6" text-anchor="middle" font-size="9.5" fill="currentColor">r1</text>
-<rect x="701.0" y="312.9" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-9: tokens 151,626, wall 159 s, resumes 1, stop ApprovalRequired (repository.merge)</title></rect>
-<line x1="661.0" x2="717.0" y1="387.6" y2="387.6" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
-<text x="689.0" y="470" text-anchor="middle" font-weight="600" fill="currentColor">447423c</text>
-<text x="689.0" y="485" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 3, timed 3</text>
-<text x="689.0" y="498" text-anchor="middle" font-size="10.5" fill="#8a9a95">with tokens 3</text>
-<text x="689.0" y="512" text-anchor="middle" font-size="10.5" class="acc-t">turn-1 candidate</text>
-<circle cx="807.0" cy="400.1" r="5" class="acc"><title>T-4: tokens 122,207, wall 130 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
-<text x="807.0" y="391.1" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
-<rect x="803.0" y="337.5" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-4: tokens 122,207, wall 130 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
-<circle cx="823.0" cy="380.9" r="5" class="acc"><title>T-5: tokens 167,249, wall 165 s, resumes 1, stop ApprovalRequired (repository.merge)</title></circle>
-<text x="823.0" y="371.9" text-anchor="middle" font-size="9.5" fill="currentColor">r1</text>
-<rect x="819.0" y="307.8" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-5: tokens 167,249, wall 165 s, resumes 1, stop ApprovalRequired (repository.merge)</title></rect>
-<circle cx="839.0" cy="391.5" r="5" class="acc"><title>T-6: tokens 142,454, wall 132 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
-<text x="839.0" y="382.5" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
-<rect x="835.0" y="335.8" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-6: tokens 142,454, wall 132 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
-<line x1="795.0" x2="851.0" y1="391.5" y2="391.5" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
-<text x="823.0" y="470" text-anchor="middle" font-weight="600" fill="currentColor">97623a6</text>
-<text x="823.0" y="485" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 3, timed 3</text>
-<text x="823.0" y="498" text-anchor="middle" font-size="10.5" fill="#8a9a95">with tokens 3</text>
+<line x1="86" x2="890" y1="183.1" y2="183.1" stroke="currentColor" stroke-opacity="0.55" stroke-dasharray="6 4"/>
+<text x="92" y="178.1" text-anchor="start" font-size="11" fill="currentColor">Claude Code alone, operator&#x27;s full config, claude-fable-5-1, median 790,770 (n=3)</text>
+<line x1="86" x2="890" y1="248.2" y2="248.2" stroke="currentColor" stroke-opacity="0.55" stroke-dasharray="6 4"/>
+<text x="92" y="243.2" text-anchor="start" font-size="11" fill="currentColor">Codex alone, operator&#x27;s full config, median 599,555 (n=6)</text>
+<line x1="86" x2="890" y1="254.5" y2="254.5" stroke="currentColor" stroke-opacity="0.55" stroke-dasharray="6 4"/>
+<text x="884" y="249.5" text-anchor="end" font-size="11" fill="currentColor">Claude Code alone, operator&#x27;s full config, claude-opus-5-5, median 581,024 (n=3)</text>
+<line x1="86" x2="890" y1="420.5" y2="420.5" stroke="currentColor" stroke-opacity="0.55" stroke-dasharray="6 4"/>
+<text x="92" y="415.5" text-anchor="start" font-size="11" fill="currentColor">Claude Code isolated like takt&#x27;s harness, with a shell, median 92,772 (n=6)</text>
+<line x1="200.9" x2="200.9" y1="56" y2="452" class="acc-s" stroke-width="1.5" stroke-dasharray="3 3"/>
+<text x="205.9" y="66" font-size="11" font-weight="600" class="acc-t">wave 06: <tspan font-weight="400">review fixes</tspan></text>
+<line x1="315.7" x2="315.7" y1="82" y2="452" class="acc-s" stroke-width="1.5" stroke-dasharray="3 3"/>
+<text x="320.7" y="92" font-size="11" font-weight="600" class="acc-t">wave 07: <tspan font-weight="400">scenario corpus, PR scan policy</tspan></text>
+<line x1="430.6" x2="430.6" y1="56" y2="452" class="acc-s" stroke-width="1.5" stroke-dasharray="3 3"/>
+<text x="435.6" y="66" font-size="11" font-weight="600" class="acc-t">wave 08: <tspan font-weight="400">CI pending waits, finding intake</tspan></text>
+<line x1="660.3" x2="660.3" y1="82" y2="452" class="acc-s" stroke-width="1.5" stroke-dasharray="3 3"/>
+<text x="665.3" y="92" font-size="11" font-weight="600" class="acc-t">wave 09: <tspan font-weight="400">run record, riding grants</tspan></text>
+<line x1="545.4" x2="545.4" y1="120" y2="452" class="acc-s" stroke-width="2.5"/>
+<circle cx="545.4" cy="120" r="4" class="acc"/>
+<text x="552.4" y="138" font-size="10" fill="currentColor">turn-1: scenario-run-help-exit-codes</text>
+<text x="552.4" y="151" font-size="10" fill="currentColor">reproduced at 0a776d2</text>
+<text x="552.4" y="164" font-size="10" fill="currentColor">not_reproduced at 447423c</text>
+<text x="552.4" y="177" font-size="10" fill="currentColor">scorecard: no_regression, median tokens +24% (n=3)</text>
+<text x="552.4" y="190" font-size="10" fill="currentColor">merged at 67ab6ce; promoted at a0b8576</text>
+<text x="552.4" y="203" font-size="10" fill="currentColor">outcome: accepted</text>
+<circle cx="135.4" cy="306.1" r="5" class="acc"><title>trial-run1: tokens 429,262, wall not timed, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="135.4" y="297.1" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<circle cx="151.4" cy="452.0" r="4" fill="none" stroke="#8a9a95" stroke-width="1.5"><title>trial-run2: tokens not stated, wall not timed, resumes 0, stop error: pr.open: the forge refused the pull request (422, no commits between base and head)</title></circle>
+<line x1="123.4" x2="163.4" y1="306.1" y2="306.1" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
+<text x="143.4" y="470" text-anchor="middle" font-weight="600" fill="currentColor">before wave 06</text>
+<text x="143.4" y="485" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 2, timed 0</text>
+<text x="143.4" y="498" text-anchor="middle" font-size="10.5" fill="#8a9a95">with tokens 1</text>
+<circle cx="258.3" cy="400.4" r="5" class="acc"><title>trial-run3-6: tokens 151,764, wall not timed, resumes 2, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="258.3" y="391.4" text-anchor="middle" font-size="9.5" fill="currentColor">r2</text>
+<line x1="244.3" x2="272.3" y1="400.4" y2="400.4" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
+<text x="258.3" y="470" text-anchor="middle" font-weight="600" fill="currentColor">92b8cf3</text>
+<text x="258.3" y="485" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 1, timed 0</text>
+<text x="258.3" y="498" text-anchor="middle" font-size="10.5" fill="#8a9a95">with tokens 1</text>
+<circle cx="365.1" cy="405.9" r="5" class="acc"><title>trial-scenario-a: tokens 135,463, wall not timed, resumes 2, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="365.1" y="396.9" text-anchor="middle" font-size="9.5" fill="currentColor">r2</text>
+<circle cx="381.1" cy="400.4" r="5" class="acc"><title>trial-scenario-b: tokens 151,880, wall not timed, resumes 1, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="381.1" y="391.4" text-anchor="middle" font-size="9.5" fill="currentColor">r1</text>
+<line x1="353.1" x2="393.1" y1="403.2" y2="403.2" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
+<text x="373.1" y="470" text-anchor="middle" font-weight="600" fill="currentColor">7b5aca3</text>
+<text x="373.1" y="485" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 2, timed 0</text>
+<text x="373.1" y="498" text-anchor="middle" font-size="10.5" fill="#8a9a95">with tokens 2</text>
+<path d="M444.0,193.0L452.0,201.0M444.0,201.0L452.0,193.0" stroke="#8a9a95" stroke-width="1.8"><title>T-fetchfail-1: tokens not stated, wall 300 s, resumes 0, stop refused: the fetch of the remote&#x27;s trial branches timed out after 300 s; nothing was changed</title></path>
+<path d="M460.0,192.2L468.0,200.2M460.0,200.2L468.0,192.2" stroke="#8a9a95" stroke-width="1.8"><title>T-fetchfail-2: tokens not stated, wall 301 s, resumes 0, stop refused: the fetch of the remote&#x27;s trial branches timed out after 300 s; nothing was changed</title></path>
+<path d="M476.0,193.0L484.0,201.0M476.0,201.0L484.0,193.0" stroke="#8a9a95" stroke-width="1.8"><title>T-fetchfail-3: tokens not stated, wall 300 s, resumes 0, stop refused: the fetch of the remote&#x27;s trial branches timed out after 300 s; nothing was changed</title></path>
+<circle cx="496.0" cy="416.0" r="5" class="acc"><title>T-1: tokens 106,003, wall 127 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="496.0" y="407.0" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<rect x="492.0" y="340.1" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-1: tokens 106,003, wall 127 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
+<circle cx="512.0" cy="410.4" r="5" class="acc"><title>T-2: tokens 122,438, wall 137 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="512.0" y="401.4" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<rect x="508.0" y="331.6" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-2: tokens 122,438, wall 137 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
+<circle cx="528.0" cy="405.7" r="5" class="acc"><title>T-3: tokens 136,180, wall 133 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="528.0" y="396.7" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<rect x="524.0" y="334.9" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-3: tokens 136,180, wall 133 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
+<line x1="436.0" x2="540.0" y1="410.4" y2="410.4" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
+<text x="488.0" y="470" text-anchor="middle" font-weight="600" fill="currentColor">0a776d2</text>
+<text x="488.0" y="485" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 6, timed 6</text>
+<text x="488.0" y="498" text-anchor="middle" font-size="10.5" fill="#8a9a95">with tokens 3</text>
+<path d="M586.9,389.0L592.9,395.0L586.9,401.0L580.9,395.0Z" class="acc" fill-opacity="0.25" stroke-width="1.8"><title>T-7: tokens 167,613, wall 162 s, resumes 1, stop ApprovalRequired (repository.merge)</title></path>
+<text x="586.9" y="386.0" text-anchor="middle" font-size="9.5" fill="currentColor">r1</text>
+<rect x="582.9" y="310.3" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-7: tokens 167,613, wall 162 s, resumes 1, stop ApprovalRequired (repository.merge)</title></rect>
+<path d="M602.9,410.0L608.9,416.0L602.9,422.0L596.9,416.0Z" class="acc" fill-opacity="0.25" stroke-width="1.8"><title>T-8: tokens 105,753, wall 128 s, resumes 0, stop ApprovalRequired (repository.merge)</title></path>
+<text x="602.9" y="407.0" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<rect x="598.9" y="339.2" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-8: tokens 105,753, wall 128 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
+<path d="M618.9,394.4L624.9,400.4L618.9,406.4L612.9,400.4Z" class="acc" fill-opacity="0.25" stroke-width="1.8"><title>T-9: tokens 151,626, wall 159 s, resumes 1, stop ApprovalRequired (repository.merge)</title></path>
+<text x="618.9" y="391.4" text-anchor="middle" font-size="9.5" fill="currentColor">r1</text>
+<rect x="614.9" y="312.9" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-9: tokens 151,626, wall 159 s, resumes 1, stop ApprovalRequired (repository.merge)</title></rect>
+<line x1="574.9" x2="630.9" y1="400.4" y2="400.4" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
+<text x="602.9" y="470" text-anchor="middle" font-weight="600" fill="currentColor">447423c</text>
+<text x="602.9" y="485" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 3, timed 3</text>
+<text x="602.9" y="498" text-anchor="middle" font-size="10.5" fill="#8a9a95">with tokens 3</text>
+<text x="602.9" y="512" text-anchor="middle" font-size="10.5" class="acc-t">turn-1 candidate</text>
+<circle cx="701.7" cy="410.4" r="5" class="acc"><title>T-4: tokens 122,207, wall 130 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="701.7" y="401.4" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<rect x="697.7" y="337.5" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-4: tokens 122,207, wall 130 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
+<circle cx="717.7" cy="395.1" r="5" class="acc"><title>T-5: tokens 167,249, wall 165 s, resumes 1, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="717.7" y="386.1" text-anchor="middle" font-size="9.5" fill="currentColor">r1</text>
+<rect x="713.7" y="307.8" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-5: tokens 167,249, wall 165 s, resumes 1, stop ApprovalRequired (repository.merge)</title></rect>
+<circle cx="733.7" cy="403.6" r="5" class="acc"><title>T-6: tokens 142,454, wall 132 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="733.7" y="394.6" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<rect x="729.7" y="335.8" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-6: tokens 142,454, wall 132 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
+<line x1="689.7" x2="745.7" y1="403.6" y2="403.6" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
+<text x="717.7" y="470" text-anchor="middle" font-weight="600" fill="currentColor">97623a6</text>
+<text x="717.7" y="485" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 3, timed 3</text>
+<text x="717.7" y="498" text-anchor="middle" font-size="10.5" fill="#8a9a95">with tokens 3</text>
+<path d="M804.6,446.3L812.6,454.3M804.6,454.3L812.6,446.3" stroke="#8a9a95" stroke-width="1.8"><title>T-10: tokens not stated, wall 2 s, resumes 0, stop refused: the trial branch trial/24 was already on the remote at the seed commit; nothing was changed</title></path>
+<circle cx="824.6" cy="404.9" r="5" class="acc"><title>T-13: tokens 138,482, wall 140 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="824.6" y="395.9" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<rect x="820.6" y="329.0" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-13: tokens 138,482, wall 140 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
+<circle cx="840.6" cy="404.9" r="5" class="acc"><title>T-11: tokens 138,580, wall 148 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="840.6" y="395.9" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<rect x="836.6" y="322.2" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-11: tokens 138,580, wall 148 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
+<circle cx="856.6" cy="392.0" r="5" class="acc"><title>T-12: tokens 176,435, wall 142 s, resumes 0, stop ApprovalRequired (repository.merge)</title></circle>
+<text x="856.6" y="383.0" text-anchor="middle" font-size="9.5" fill="currentColor">r0</text>
+<rect x="852.6" y="327.3" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"><title>T-12: tokens 176,435, wall 142 s, resumes 0, stop ApprovalRequired (repository.merge)</title></rect>
+<line x1="796.6" x2="868.6" y1="404.9" y2="404.9" class="acc-s" stroke-width="2" stroke-opacity="0.7"/>
+<text x="832.6" y="470" text-anchor="middle" font-weight="600" fill="currentColor">56d1b70</text>
+<text x="832.6" y="485" text-anchor="middle" font-size="10.5" fill="#8a9a95">runs 4, timed 4</text>
+<text x="832.6" y="498" text-anchor="middle" font-size="10.5" fill="#8a9a95">with tokens 3</text>
+<text x="832.6" y="512" text-anchor="middle" font-size="10.5" fill="#b8430f">models: fable-5-1, opus-5-5</text>
 <circle cx="92" cy="540" r="5" class="acc"/>
 <text x="102" y="544" font-size="11" fill="currentColor">tokens, one run (rN = resumes; bar = median)</text>
 <rect x="348" y="536" width="8" height="8" fill="none" stroke="#8a9a95" stroke-width="1.6"/>
@@ -266,11 +294,11 @@ improvement turn and the free-running medians as reference lines. Generated by
 <text x="764" y="544" font-size="11" fill="currentColor">no figure stated</text>
 <path d="M92,552L98,558L92,564L86,558Z" class="acc" fill-opacity="0.25" stroke-width="1.8"/>
 <text x="102" y="562" font-size="11" fill="currentColor">tokens, one run of a candidate revision of an improvement turn, scored against the revision before the turn marker</text>
-<text x="86" y="588" font-size="11" fill="#8a9a95">Data: 2026-10-18 (UTC), docs/metrics/scenario-runs.jsonl, 29 runs. One scenario, n per revision under its label: first results, not a benchmark.</text>
+<text x="86" y="588" font-size="11" fill="#8a9a95">Data: 2026-10-18 (UTC), docs/metrics/scenario-runs.jsonl, 42 runs. One scenario, n per revision under its label: first results, not a benchmark.</text>
 <text x="86" y="605" font-size="11" fill="#8a9a95">Untimed revisions have no wall time; tokens are summed over the invocations that reached the merge approval, resumes included.</text>
 </svg>
 <!-- timeline.svg end -->
-<figcaption>Before wave 08 takt needed one or two resumes and was not timed; at <code>0a776d2</code> it reached the merge approval in one invocation. Tokens did not fall after that. n per revision is under each label.</figcaption>
+<figcaption>Before wave 08 takt needed one or two resumes and was not timed; at <code>0a776d2</code> it reached the merge approval in one invocation. Tokens did not fall after that. The <code>56d1b70</code> column ran mostly on claude-fable-5-1, as its label says. n per revision is under each label.</figcaption>
 </figure>
 
 <h2 id="turn">First improvement turn</h2>
@@ -306,14 +334,16 @@ is an inference.</p>
 
 <h2 id="waste">What the run journeys expose</h2>
 <p>Every scenario 1 run drawn as one lane, its operations in one vocabulary
-(<code>docs/metrics/journey.svg</code>), shows where takt spends steps it does not need.</p>
+(<code>docs/metrics/journey.svg</code>), shows where takt spends steps it does not need. Round 3
+recorded every arm's events with their times, so the free runs are drawn to scale too: model calls
+fill 58&ndash;81% of each of their lanes, and each waits 11&ndash;16 s on CI, once.</p>
 <div class="scroll">
 <table class="dense">
 <thead><tr><th>waste</th><th>seen in</th><th>filed as</th></tr></thead>
 <tbody>
-<tr><td>A model step that only asks for the merge approval, about 30k tokens per run</td><td>13 of 13 takt runs that reached the approval</td><td><code>story:no-model-step-for-approval</code></td></tr>
-<tr><td>A pull request opened at the seed, then CI run a second time after the tests</td><td>seed: 12 of 13; second CI: 9 of 9 timed runs</td><td><code>story:pr-opens-when-change-is-done</code></td></tr>
-<tr><td><code>repository.inspect</code> offered to a harness with no memory between steps, then <code>NoProgress</code> and a resume</td><td>6 of 13</td><td><code>story:no-inspect-for-stateless-harness</code></td></tr>
+<tr><td>A model step that only asks for the merge approval, about 30k tokens per run</td><td>16 of 16 takt runs that reached the approval</td><td><code>story:no-model-step-for-approval</code></td></tr>
+<tr><td>A pull request opened at the seed, then CI run a second time after the tests</td><td>seed: 15 of 16; second CI: 12 of 12 timed runs, round 3 included</td><td><code>story:pr-opens-when-change-is-done</code></td></tr>
+<tr><td><code>repository.inspect</code> offered to a harness with no memory between steps, then <code>NoProgress</code> and a resume</td><td>6 of 16; none in round 3</td><td><code>story:no-inspect-for-stateless-harness</code></td></tr>
 <tr><td>The trial-branch fetch hanging until its 300 s timeout</td><td>3 refused runs</td><td><code>story:trial-fetch-needs-no-user-ssh</code> (in wave 10, not yet in main)</td></tr>
 </tbody>
 </table>
@@ -321,7 +351,8 @@ is an inference.</p>
 
 <h2 id="why">Why takt anyway</h2>
 <p>takt's case is not efficiency. It is what the free runs did not give. The price on this toy
-scenario is about 1.7&times; the cost and 2&times; the wall time of the isolated free agent.</p>
+scenario is about 1.7&times; the cost and 2&times; the wall time of the isolated free agent, measured
+on one model. Round 3 kept the gap in tokens and time.</p>
 <ul>
 <li><strong>Evidence, not claims.</strong> Done is computed from validator records bound to a revision, never from the model's text.</li>
 <li><strong>Authority.</strong> A merge happens only under a grant recorded for the exact revision; without one it is refused.</li>
@@ -358,6 +389,7 @@ takt run --repo &lt;path&gt; --hours 1</pre>
 <h2 id="links">Links</h2>
 <ul>
 <li><a href="https://github.com/beyond10x/takt">takt on GitHub</a></li>
+<li><a href="protocols/">Protocols</a>: takt's own protocols, shown by a viewer built from the protocol files themselves</li>
 <li><a href="https://github.com/beyond10x/canon">Canon</a>: the protocol language and its evaluator</li>
 <li><a href="https://github.com/beyond10x/engineering-protocols">Engineering protocols</a>: <code>software.change/1</code> and other engineering protocols as Canon documents</li>
 <li><a href="https://github.com/beyond10x/takt/blob/main/LICENSE">Licence: Apache-2.0</a></li>
