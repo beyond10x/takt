@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>takt — agentic work that counts only on evidence</title>
+<meta name="description" content="takt is one open-source binary that drives a repository's work through engineering protocols. A harness takes one admissible step at a time; validators turn observations into evidence; Canon decides.">
+<style>
+:root {
+  --canvas: #f6f8f5; --panel: #fff; --heading: #0f1b1c; --text: #26332f; --muted: #4f625d;
+  --accent: #17684a; --hairline: #d6dfda; --code: #eaf0ec;
+  --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #101a1b; --panel: #172324; --heading: #f1f6f3; --text: #d5dfdb; --muted: #a8b8b3;
+    --accent: #b6e5ce; --hairline: #314244; --code: #101b1c;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--canvas); color: var(--text); font: 1rem/1.7 var(--sans); }
+main { max-width: 46rem; margin: 0 auto; padding: 5rem 1.5rem 4rem; }
+h1 { color: var(--heading); font-size: clamp(2.6rem, 6vw, 3.6rem); font-weight: 620; letter-spacing: -.05em; line-height: 1.08; margin: 0 0 1.2rem; }
+h2 { color: var(--heading); font-size: 1.35rem; font-weight: 620; letter-spacing: -.02em; margin: 3rem 0 .8rem; }
+.lede { color: var(--muted); font-size: 1.1rem; margin: 0 0 1rem; }
+.rule { border-left: 3px solid var(--accent); background: var(--panel); padding: 1rem 1.25rem; margin: 2rem 0 0; color: var(--heading); font-weight: 560; }
+a { color: var(--accent); }
+code, pre { font-family: var(--mono); font-size: .9rem; }
+:not(pre) > code { background: var(--code); padding: .1em .35em; border-radius: 4px; }
+pre { background: var(--code); border: 1px solid var(--hairline); border-radius: 8px; padding: 1rem 1.25rem; overflow-x: auto; line-height: 1.6; }
+ul { padding-left: 1.2rem; }
+li { margin: .35rem 0; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--hairline); border-radius: 8px; }
+th, td { text-align: left; vertical-align: top; padding: .6rem .9rem; border-bottom: 1px solid var(--hairline); }
+th { color: var(--heading); font-weight: 600; white-space: nowrap; }
+tr:last-child td, tr:last-child th { border-bottom: 0; }
+footer { margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--hairline); color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>takt</h1>
+<p class="lede">One open-source binary that drives a repository's work through engineering protocols.
+Point it at a repository: it takes an intent or the next ready story, opens a case on a protocol,
+and lets a harness such as Claude Code take one admissible step at a time.</p>
+<p class="lede">Nothing counts until a validator has turned an observation into evidence.
+<a href="https://github.com/beyond10x/canon">Canon</a> decides which claims hold and whether an
+outcome was earned; the model never does.</p>
+<p class="rule">Agents choose how to do the work. The protocol defines what must be true before the work counts.</p>
+
+<h2>How it works</h2>
+<ul>
+<li><strong>Protocol.</strong> A Canon document declares the claims, the actions, the evidence that
+establishes each claim, and the actions that wait for a grant, for example <code>software.change/1</code> or <code>story.delivery/1</code>.</li>
+<li><strong>Case.</strong> Each unit of work (an intent or a story from the planning store) opens a case on a protocol, held as files in the repository.</li>
+<li><strong>One step at a time.</strong> Canon evaluates the case and names the admissible actions; the harness performs one of them in a worktree and reports. What it says is a trace, not evidence.</li>
+<li><strong>Validators make evidence.</strong> A program turns an observation (a test run's exit status, a commit, a merged pull request) into an evidence record bound to the revision it observed.</li>
+<li><strong>Grant before merge.</strong> A merge through the repository's bot route happens only under a recorded grant (<code>takt approve</code>).</li>
+</ul>
+
+<h2>Status</h2>
+<table>
+<tr><th>M1</th><td>Done: one step validated on a scratch crate.</td></tr>
+<tr><th>M2</th><td>A planning-store story went end to end on a scratch repository: pull request merged, case <code>accepted</code>. Not yet unattended.</td></tr>
+<tr><th>In progress</th><td>Self-improvement (takt improving takt), and a measured comparison against harnesses running free, without takt.</td></tr>
+</table>
+
+<h2>Use</h2>
+<pre>takt run --repo &lt;path&gt; --intent "make the failing test pass" --iterations 1
+takt run --repo &lt;path&gt; --hours 1
+takt approve --repo &lt;path&gt; &lt;case&gt; repository.merge --by &lt;who&gt;
+takt scenario run --repo &lt;path&gt; &lt;id&gt; --hours 1
+takt protocols</pre>
+<p>Build with <code>cargo install --locked --path crates/takt-cli</code>. The
+<a href="https://github.com/beyond10x/takt#readme">README</a> lists the requirements, defaults and exit codes.</p>
+
+<h2>Links</h2>
+<ul>
+<li><a href="https://github.com/beyond10x/takt">takt on GitHub</a></li>
+<li><a href="https://github.com/beyond10x/canon">Canon</a>: the protocol language and its evaluator</li>
+<li><a href="https://github.com/beyond10x/engineering-protocols">Engineering protocols</a>: <code>software.change/1</code> and other engineering protocols as Canon documents</li>
+<li><a href="https://github.com/beyond10x/takt/blob/main/LICENSE">Licence: Apache-2.0</a></li>
+</ul>
+
+<footer>takt is a beyond10x project, licensed Apache-2.0. Early software.</footer>
+</main>
+</body>
+</html>
