@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T03:21:54Z",
+  "actor": "human:timo",
+  "artifact": "story:takt-domain-model",
+  "kind": "story",
+  "revision": 9,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "ess specify validate --path ess at 554e073 (wave 01 gate): takt v1 — 2 file(s), valid; exit 0",
+    "reference": "docs/waves/wave-01.md"
+  }
+}

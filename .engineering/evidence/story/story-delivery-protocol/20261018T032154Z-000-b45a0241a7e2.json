@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T03:21:54Z",
+  "actor": "human:timo",
+  "artifact": "story:story-delivery-protocol",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --locked at 554e073 (wave 01 gate): story_delivery 13 passed, 0 failed; exit 0",
+    "reference": "docs/waves/wave-01.md"
+  }
+}

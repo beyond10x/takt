@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:takt-domain-model
 kind: story
-status: active
+status: implemented
 title: Declare takt's nouns and their relations as an ESS domain document
 summary: Case, Run, Workflow, Step and EvidenceProducer typed and validated; the story's case and the authority grant as decided; no UNMAPPED marker
 relations:
@@ -17,10 +17,11 @@ scope:
   path: ess/ess-inputs.yaml
 - confidence: inferred
   path: ess/system.yaml
-revision: 8
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-10-18T03:21:54Z", actor: "human:timo", revision: 10, decided_on: {"recorded":{"test_result":1,"review_outcome":4,"verification":1}}}
 ---
 # Story: takt-domain-model
 
@@ -65,3 +66,19 @@ Generating Rust from the domain; changing the kernel to match the document; decl
 
 - Whether this repository wants a specification at all: `AGENTS.md:37` says spec first where one exists and that none exists; this story is the planning skill asking for one, and the operator may archive it to keep the no-spec stance. `inferable`: `AGENTS.md:37`.
 - Run resume and approval grant: decided, decision-blocker:approval-grant-and-case-resume (cleared); the document declares what the decision says.
+
+## ## Scope
+
+## Scope
+
+Confirmed by the implementor (wave 01), each line as the unit landed:
+
+- `AGENTS.md` (cited): confirmed; only the sentence saying the repository had no specification
+  was replaced.
+- `ess/domains/takt.yaml` (inferred → confirmed): created, 778 lines after two adversary passes.
+- `ess/ess-inputs.yaml` (inferred → confirmed): created.
+- `ess/system.yaml` (inferred → confirmed): created.
+
+Inferred mechanism lines in the body checked against the tree: `run.rs:21-22`, `validator.rs:20-31`,
+`run.rs:188-193` (187-193) correct; the Canon citations were corrected to `protocol.yaml:916-923`
+and `eval/mod.rs:359-365` after the adversary's pass 1.

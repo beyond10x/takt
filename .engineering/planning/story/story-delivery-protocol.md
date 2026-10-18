@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:story-delivery-protocol
 kind: story
-status: active
+status: implemented
 title: A protocol/1 document for delivering a planning-store story
 summary: Claims tests.pass, gate.green, pr.opened, ci.green, pr.merged and outcome accepted, as data Canon validates
 relations:
@@ -17,10 +17,11 @@ scope:
   path: crates/takt/tests/story_delivery.rs
 - confidence: inferred
   path: protocols/story-delivery/1.yaml
-revision: 7
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-18T03:21:54Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"test_result":1,"review_outcome":4,"verification":1}}}
 ---
 # Story: story-delivery-protocol
 
@@ -68,3 +69,18 @@ The validators that produce these records (story:gate-validator, story:forge-pul
 ## Correction (wave 01)
 
 Canon 0.6.0 reads a kind whose records disagree at one revision as unknown (`website/docs/reference/evaluation.md:39-42`), so `pr.merged` is established by a `merge_observation` record with result `merged`, not by a second `pull_request` result; `protocols/story-delivery/1.yaml` declares it so.
+
+## ## Scope
+
+## Scope
+
+Confirmed by the implementor (wave 01), each line as the unit landed:
+
+- `README.md` (cited): confirmed; one sentence names the protocol, with the path read from the
+  directory `takt` runs in (adversary pass 2).
+- `crates/takt/src/protocol.rs` (cited): confirmed as the loader (`from_file` at :43-47); not
+  changed.
+- `crates/takt/tests/story_delivery.rs` (inferred → confirmed): the unit's test file, 13 cases
+  after two adversary passes.
+- `protocols/story-delivery/1.yaml` (inferred → confirmed): the protocol file; `protocols/` did
+  not exist before; the layout follows engineering-protocols' `protocols/<name>/<major>.yaml`.
