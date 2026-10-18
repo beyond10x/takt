@@ -168,6 +168,18 @@ fn record(n: usize, kind: &str, result: &str, revision: &str) -> Record {
     )
 }
 
+/// One commit on the case's branch beyond its base, as an implementation step leaves it, and the
+/// case's `implementation` moved to it; answers the new revision.
+fn implemented(tree: &Path, case: &mut CaseDir) -> String {
+    fs::write(tree.join("implemented.txt"), "done\n").expect("a file");
+    git(tree, &["add", "implemented.txt"]);
+    git(tree, &["commit", "-q", "-m", "implemented by the test"]);
+    let revision = git(tree, &["rev-parse", "HEAD"]);
+    case.set_revision("implementation", &revision)
+        .expect("the revision moves");
+    revision
+}
+
 fn options(id: &str) -> RunOptions {
     RunOptions {
         protocol: PROTOCOL.to_owned(),
@@ -241,10 +253,7 @@ fn first_run(tree: &Path, id: &str, memory: &Rc<Memory>) -> (String, PathBuf, St
     let forge: Rc<dyn Forge> = memory.clone();
     let validators = validators(forge);
     let mut run = Run::open(tree, options(id), &Requester, &validators).expect("the case opens");
-    let revision = run
-        .case
-        .revision("implementation")
-        .expect("implementation has a revision");
+    let revision = implemented(tree, &mut run.case);
     run.case
         .add_evidence(&record(1, "test_result", "pass", &revision))
         .expect("the record is written");
@@ -272,12 +281,12 @@ fn first_run(tree: &Path, id: &str, memory: &Rc<Memory>) -> (String, PathBuf, St
 #[test]
 fn without_a_grant_the_run_stops_at_the_gate_and_the_resumed_run_merges_under_it() {
     let tree = scratch("grant");
-    let head = git(&tree, &["rev-parse", "HEAD"]);
     let memory = Rc::new(Memory {
         checks: Checks::Pass,
         ..Memory::default()
     });
     let (revision, case_dir, text) = first_run(&tree, "grant", &memory);
+    let head = git(&tree, &["rev-parse", "HEAD"]);
     assert_eq!(revision, head);
     assert_eq!(
         memory.calls.borrow().as_slice(),
@@ -1407,10 +1416,7 @@ fn run_with(
     let forge: Rc<dyn Forge> = memory.clone();
     let validators = validators(forge);
     let mut run = Run::open(tree, options(id), harness, &validators).expect("the case opens");
-    let revision = run
-        .case
-        .revision("implementation")
-        .expect("implementation has a revision");
+    let revision = implemented(tree, &mut run.case);
     run.case
         .add_evidence(&record(1, "test_result", "pass", &revision))
         .expect("the record is written");
@@ -1546,10 +1552,7 @@ fn adv2_a_case_finished_by_a_resumed_run_is_not_resumed_by_the_next_run() {
     .expect("the frontier answers")
     .expect("story:ready-one is taken");
     let case_dir = first.case.dir.clone();
-    let revision = first
-        .case
-        .revision("implementation")
-        .expect("implementation has a revision");
+    let revision = implemented(&repo, &mut first.case);
     first
         .case
         .add_evidence(&record(1, "test_result", "pass", &revision))
@@ -1996,7 +1999,7 @@ impl Harness for GrantingAndEditing {
 #[test]
 fn adv2_a_refused_case_write_discards_the_tree_change_with_it() {
     let tree = scratch("adv2-clean");
-    let head = git(&tree, &["rev-parse", "HEAD"]);
+    let start = git(&tree, &["rev-parse", "HEAD"]);
     let memory = Rc::new(Memory {
         checks: Checks::Pass,
         ..Memory::default()
@@ -2017,7 +2020,13 @@ fn adv2_a_refused_case_write_discards_the_tree_change_with_it() {
         .filter(|path| !path.starts_with(CASES_DIR))
         .collect();
     assert!(dirty.is_empty(), "{dirty:?}\n{text}");
-    assert_eq!(git(&tree, &["rev-parse", "HEAD"]), head, "{text}");
+    // The one commit beyond the start is the test's own; the refused step committed nothing.
+    assert_eq!(git(&tree, &["rev-parse", "HEAD^"]), start, "{text}");
+    assert_eq!(
+        git(&tree, &["log", "-1", "--format=%s"]),
+        "implemented by the test",
+        "{text}"
+    );
     assert!(memory.merged.borrow().is_empty(), "{text}");
 }
 
