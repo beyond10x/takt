@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:forge-pull-request-evidence
 kind: story
-status: draft
+status: active
 title: Open the pull request through the bot route and read its state as evidence
 summary: The Forge seam over b10x-gates; pr.opened and ci.green only from what the forge reports
 relations:
@@ -25,7 +25,10 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/forge.rs
-revision: 5
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T05:47:50Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-18T05:47:50Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":1}}}
 ---
 # Story: forge-pull-request-evidence
 
