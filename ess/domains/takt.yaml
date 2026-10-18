@@ -476,16 +476,16 @@ types:
   # lower-case letters and digits in words joined by `-`. One key is one finding: a filing of a
   # key the store holds already, under whatever kind, is refused.
   # read from: .engineering/planning/design/recursive-self-improvement.md:58-59
-  # read from: scripts/file-finding:145
-  # read from: scripts/file-finding:161-170
+  # read from: scripts/file-finding:167
+  # read from: scripts/file-finding:183-206
   - name: takt.work.FindingKey
     kind: newtype
     of: String
 
   # What filing a finding came to, the result of a `finding_record` record.
   # read from: protocols/self-improvement/1.yaml:41-44
-  # read from: scripts/file-finding:49
-  # read from: scripts/file-finding:176
+  # read from: scripts/file-finding:55
+  # read from: scripts/file-finding:213
   - name: takt.work.FilingResult
     kind: enum
     variants: [filed, malformed]
@@ -493,7 +493,7 @@ types:
   # What a finding's predicate came to on its scenario with a takt built from one revision, the
   # result of a `scenario_result` record.
   # read from: protocols/self-improvement/1.yaml:45-48
-  # read from: scripts/check-finding:157-162
+  # read from: scripts/check-finding:185-191
   - name: takt.work.ScenarioResult
     kind: enum
     variants: [reproduced, not_reproduced]
@@ -1263,10 +1263,10 @@ entities:
   # UNMAPPED: whether a finding may need several scenarios; one is declared.
   # read from: .engineering/planning/design/recursive-self-improvement.md:55-60
   # read from: .engineering/planning/story/finding-intake.md (§ Domain relations)
-  # read from: scripts/file-finding:11-31
-  # read from: scripts/file-finding:79
-  # read from: scripts/file-finding:138
-  # read from: scripts/check-finding:110-112
+  # read from: scripts/file-finding:11-32
+  # read from: scripts/file-finding:93
+  # read from: scripts/file-finding:156
+  # read from: scripts/check-finding:127-132
   - name: takt.work.Finding
     naming:
       summary: >-

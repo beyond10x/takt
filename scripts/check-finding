@@ -14,17 +14,25 @@
 #                    declares the scenario (`[scenario "<id>"]`, `story` and `seed`); `main`
 #   --repo           this repository; the top of the tree the script is run in
 #
-# Steps: the predicate is read from the store (`aep plan artifact show`) and parsed by
-# `scripts/file-finding --predicate`; the revision's tree is exported with `git archive` into a
-# build directory of its own under the cache and built with `cargo build --locked`, its target
-# directory inside that build directory whatever CARGO_TARGET_DIR says; the binary is kept per
-# revision, the build directory removed. The scenario repository is cloned, the clone's `trial/0`
-# cut from the scenario's seed and checked out and its remote removed, and the predicate's command
-# runs there through `sh -c`, with `$TAKT` the binary and `$SCENARIO` the clone, in an environment
-# holding only PATH, HOME, LANG, TAKT and SCENARIO, so no credential of the caller reaches it.
+# Steps: the finding's file is read from the store (`.engineering/planning/<kind>/<name>.md`,
+# read only, so the check needs no `aep` and no network) and its predicate parsed by
+# `scripts/file-finding --predicate`. The scenario declaration is read from `--declared-on`
+# with `git config --no-includes --blob`, as `takt scenario run` reads it. The revision's tree
+# is exported with `git archive` into a build directory of its own under the cache and built
+# with `cargo build --locked`, its target directory inside that build directory whatever
+# CARGO_TARGET_DIR says; the binary is kept per revision, the build directory removed. The
+# scenario repository is cloned, the clone's `trial/0` set to the scenario's seed (whatever
+# branch the checkout was on) and checked out, its remote removed, and the predicate's command
+# runs there through `sh -c`, with `$TAKT` the binary and `$SCENARIO` the clone. Its environment
+# holds only PATH, LANG, TAKT, SCENARIO and HOME, and HOME is a fresh directory of the check's
+# own, never the caller's, so no credential of the caller reaches it, neither from the
+# environment nor from a file a tool reads under HOME (git's credential store, a CLI's login).
+# Its one link out is `.cache/aep/protocol-sources`, the caller's cache of the public protocol
+# sources `aep` reads, so `aep` needs no network there. The command still runs as the caller's
+# user: this is no sandbox against a path it names outright.
 # The cache is `$XDG_CACHE_HOME/takt/check-finding`, `~/.cache/takt/check-finding` without it:
 # `builds/<sha>/takt`, and one directory per check under `runs/` holding the finding, the clone,
-# the command's output and the result, kept as the record of the check.
+# the predicate's home, the command's output and the result, kept as the record of the check.
 #
 # Standard output is one line, the result of the `scenario_result` evidence kind
 # (protocols/self-improvement/1.yaml): `reproduced` when every expectation the predicate gives
@@ -32,7 +40,8 @@
 # `not_reproduced`; both exit 0. A check that cannot run its predicate (no such finding, a
 # predicate that does not parse, a revision that names no commit, a scenario not declared, a
 # build that fails, a command past CHECK_FINDING_TIMEOUT seconds, 900 by default) prints nothing
-# on standard output and exits 1; a usage error exits 64.
+# on standard output and exits 1; a usage error, a CHECK_FINDING_TIMEOUT that is no whole number
+# of seconds among them, exits 64.
 set -euo pipefail
 
 say() { printf 'check-finding: %s\n' "$*" >&2; }
@@ -78,6 +87,14 @@ if [[ -z $repo ]]; then
     repo=$(git rev-parse --show-toplevel 2>/dev/null) || usage "not inside a repository; give --repo"
 fi
 repo=$(cd "$repo" 2>/dev/null && pwd -P) || usage "--repo: no directory"
+# Checked before anything runs: `timeout` given no duration it takes exits 125 without running
+# the command, which would be read as the predicate's exit.
+limit=${CHECK_FINDING_TIMEOUT:-900}
+[[ $limit =~ ^[1-9][0-9]{0,5}$ ]] ||
+    usage "CHECK_FINDING_TIMEOUT=$limit: give a whole number of seconds, 1 to 999999"
+[[ $finding =~ ^([a-z][a-z-]*):([a-z0-9]+(-[a-z0-9]+)*)$ ]] ||
+    usage "$finding: a finding is an artifact id, \`<kind>:<name>\`"
+finding_file=$repo/.engineering/planning/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.md
 
 cache=${XDG_CACHE_HOME:-}
 [[ $cache == /* ]] || cache=$HOME/.cache
@@ -86,10 +103,10 @@ mkdir -p "$root/runs" "$root/builds"
 run=$(mktemp -d "$root/runs/${finding//[^A-Za-z0-9-]/-}-XXXXXX")
 say "record: $run"
 
-# The finding and its predicate, from the store.
+# The finding and its predicate, from the store's file, read only.
 cd "$repo"
-aep plan artifact show "$finding" >"$run/finding.md" 2>"$run/finding.err" ||
-    fail "the store in $repo holds no $finding: $(head -n 1 "$run/finding.err")"
+[[ -f $finding_file ]] || fail "the store in $repo holds no $finding"
+cp -- "$finding_file" "$run/finding.md"
 "$here/file-finding" --predicate "$run/finding.md" >"$run/predicate.tsv" 2>"$run/predicate.err" ||
     fail "$finding: its predicate does not parse: $(tail -n 1 "$run/predicate.err")"
 declare -A predicate=()
@@ -107,9 +124,11 @@ sha=$(git -C "$repo" rev-parse --verify --quiet "$revision^{commit}") ||
 conf=.engineering/scenarios.conf
 git -C "$scenarios" cat-file -e "$declared_on:$conf" 2>/dev/null ||
     fail "$declared_on holds no $conf in $scenarios; the scenarios are declared there"
-seed=$(git -C "$scenarios" config --blob "$declared_on:$conf" --get "scenario.$scenario.seed") ||
+# Without includes, as takt reads it (crates/takt/src/git.rs:204): a scenario declared only
+# through an include is none to `takt scenario run`, and an include is never opened.
+seed=$(git -C "$scenarios" config --no-includes --blob "$declared_on:$conf" --get "scenario.$scenario.seed") ||
     fail "$conf at $declared_on declares no seed of scenario $scenario"
-story=$(git -C "$scenarios" config --blob "$declared_on:$conf" --get "scenario.$scenario.story") ||
+story=$(git -C "$scenarios" config --no-includes --blob "$declared_on:$conf" --get "scenario.$scenario.story") ||
     fail "$conf at $declared_on declares no story of scenario $scenario"
 seed=$(git -C "$scenarios" rev-parse --verify --quiet "$seed^{commit}") ||
     fail "scenario $scenario: its seed $seed is no commit in $scenarios"
@@ -139,15 +158,24 @@ git clone --quiet --no-checkout -- "$scenarios" "$clone" >&2 ||
     fail "clone $scenarios"
 git -C "$clone" cat-file -e "$seed^{commit}" 2>/dev/null ||
     fail "scenario $scenario: its seed ${seed:0:12} is reachable from no branch of $scenarios"
-git -C "$clone" checkout --quiet -b trial/0 "$seed" >&2 || fail "check out the seed ${seed:0:12}"
+# `-B`: the clone's one local branch is the one the checkout was on, `trial/0` when a scenario
+# run left it there; it is set to the seed whatever it held.
+git -C "$clone" checkout --quiet -B trial/0 "$seed" >&2 || fail "check out the seed ${seed:0:12}"
 git -C "$clone" remote remove origin
 git -C "$clone" config user.name check-finding
 git -C "$clone" config user.email check-finding@example.invalid
 
-limit=${CHECK_FINDING_TIMEOUT:-900}
+# The predicate's home: fresh, the check's own.
+home=$run/home
+mkdir -p "$home/.cache/aep"
+sources=${XDG_CACHE_HOME:-}
+[[ $sources == /* ]] || sources=$HOME/.cache
+sources=$sources/aep/protocol-sources
+[[ -d $sources ]] && ln -s -- "$sources" "$home/.cache/aep/protocol-sources"
+
 say "$finding: scenario $scenario ($story at ${seed:0:12}), takt at ${sha:0:12}: $command"
 set +e
-(cd "$clone" && env -i PATH="$PATH" HOME="$HOME" LANG="${LANG:-C.UTF-8}" TAKT="$takt" \
+(cd "$clone" && env -i PATH="$PATH" HOME="$home" LANG="${LANG:-C.UTF-8}" TAKT="$takt" \
     SCENARIO="$clone" timeout --kill-after=10 "$limit" sh -c "$command") \
     >"$run/output" 2>&1 </dev/null
 status=$?

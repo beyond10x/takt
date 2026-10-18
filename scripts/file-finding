@@ -23,7 +23,8 @@
 #             declares it (letters, digits, `-` and `_`)
 #   command   one shell line, run by `scripts/check-finding` in a fresh checkout of the scenario's
 #             seed with `$TAKT` the takt binary under test and `$SCENARIO` the checkout
-#   exit      the exit status the command gives while the defect is present, 0 to 255
+#   exit      the exit status the command gives while the defect is present, 0 to 255 but 124
+#             and 137, which `scripts/check-finding` reads as its timeout
 #   output    a fixed string its standard output or standard error then holds
 #   source    the run record or review that produced the finding, a path relative to the
 #             repository that exists
@@ -35,6 +36,11 @@
 # goes to standard error. A key already filed exits 3, a usage error 64, any other failure 1;
 # those print nothing on standard output. `--predicate` prints the block's entries, one
 # `key<TAB>value` a line, for `scripts/check-finding`, or `malformed`.
+#
+# The body is read once; the text whose predicate was parsed is the text `aep` files, through
+# its standard input. The check for the key and the write hold `flock` on `file-finding.lock`
+# in the repository's git directory, so two filings of one key cannot both pass the check;
+# without `flock` the script refuses to file.
 set -euo pipefail
 
 say() { printf 'file-finding: %s\n' "$*" >&2; }
@@ -50,11 +56,19 @@ malformed() {
     exit 2
 }
 
-# Reads the `expected_before` block of the file $1 into the associative array PREDICATE, or
-# refuses the finding as malformed.
+# Sets BODY to the whole text of the file $1, trailing newlines kept.
+BODY=
+read_body() {
+    local text
+    text=$(cat -- "$1" && printf x) || return 1
+    BODY=${text%x}
+}
+
+# Reads the `expected_before` block of the body text $1 into the associative array PREDICATE,
+# or refuses the finding as malformed.
 declare -A PREDICATE=()
 read_predicate() {
-    local file=$1 fence='```' line inside=0 blocks=0 key value
+    local text=$1 fence='```' line inside=0 blocks=0 key value
     while IFS= read -r line || [[ -n $line ]]; do
         line=${line%$'\r'}
         if ((!inside)); then
@@ -82,7 +96,7 @@ read_predicate() {
         [[ -v PREDICATE[$key] ]] && malformed "the expected_before block gives \`$key\` twice"
         [[ -n $value ]] || malformed "the expected_before block gives \`$key\` no value"
         PREDICATE[$key]=$value
-    done <"$file"
+    done < <(printf '%s' "$text")
     ((blocks > 0)) || malformed "the body holds no \`${fence}expected_before\` block: a finding without a predicate a machine can check is a note"
     ((blocks == 1)) || malformed "the body holds $blocks expected_before blocks; a finding has one predicate"
     ((!inside)) || malformed "the expected_before block is never closed"
@@ -97,6 +111,9 @@ read_predicate() {
     if [[ -v PREDICATE[exit] ]]; then
         [[ ${PREDICATE[exit]} =~ ^[0-9]{1,3}$ ]] && ((10#${PREDICATE[exit]} <= 255)) ||
             malformed "exit \`${PREDICATE[exit]}\` is no exit status, 0 to 255"
+        case $((10#${PREDICATE[exit]})) in
+        124 | 137) malformed "exit \`${PREDICATE[exit]}\` is what scripts/check-finding reads as its timeout, so the check could never give a result; expect another status, or the output" ;;
+        esac
     fi
 }
 
@@ -125,7 +142,8 @@ done
 
 if [[ -n $predicate_only ]]; then
     [[ -f $predicate_only && -r $predicate_only ]] || usage "--predicate $predicate_only: no readable file"
-    read_predicate "$predicate_only"
+    read_body "$predicate_only" || usage "--predicate $predicate_only: unreadable"
+    read_predicate "$BODY"
     for name in scenario command exit output source; do
         [[ -v PREDICATE[$name] ]] && printf '%s\t%s\n' "$name" "${PREDICATE[$name]}"
     done
@@ -137,6 +155,10 @@ fi
 [[ -n $from ]] || usage "--from is required"
 [[ $kind == story || $kind == blocker ]] || usage "--kind $kind: a finding is filed as a story or a blocker"
 [[ -f $from && -r $from ]] || usage "--from $from: no readable file"
+# Absolute before any `cd`, and read once: what is parsed is what is filed.
+from=$(realpath -e -- "$from") || usage "--from $from: does not resolve"
+read_body "$from" || usage "--from $from: unreadable"
+text=$BODY
 if [[ -z $repo ]]; then
     repo=$(git rev-parse --show-toplevel 2>/dev/null) || usage "not inside a repository; give --repo"
 fi
@@ -144,7 +166,7 @@ repo=$(cd "$repo" && pwd -P) || usage "--repo $repo: no directory"
 
 [[ $key =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] ||
     malformed "key \`$key\`: a finding key is lower-case letters and digits in words joined by \`-\`"
-read_predicate "$from"
+read_predicate "$text"
 
 # The source is a path of this repository, relative, that exists and stays inside it.
 source=${PREDICATE[source]}
@@ -159,7 +181,21 @@ resolved=$(realpath -e -- "$repo/$source") || malformed "source \`$source\` does
 
 cd "$repo"
 # `aep plan artifact new` accepts a second artifact with the same reference, so the refusal is
-# this script's: whatever kind holds the key already, the key is filed.
+# this script's: whatever kind holds the key already, the key is filed. The check and the write
+# hold one lock, so no other filing comes between them.
+command -v flock >/dev/null 2>&1 || {
+    say "flock is missing, and without it a second filing of finding:$key could pass the check; nothing was written"
+    exit 1
+}
+common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || {
+    say "$repo has no git directory to hold the filing lock; nothing was written"
+    exit 1
+}
+exec 9>>"$common/file-finding.lock"
+flock -w 120 9 || {
+    say "another filing held $common/file-finding.lock for 120 s; nothing was written"
+    exit 1
+}
 held=$(aep plan artifact list --ref "finding:$key") || {
     say "aep plan artifact list --ref finding:$key failed; nothing was written"
     exit 1
@@ -168,7 +204,8 @@ if [[ -n $held ]]; then
     say "finding:$key is filed already, as $(printf '%s\n' "$held" | awk 'NF { printf "%s%s", sep, $1; sep = ", " }'); nothing was written"
     exit 3
 fi
-aep plan artifact new "$kind" "$key" --title "$title" --ref "finding:$key" --tag finding --from "$from" >&2 || {
+printf '%s' "$text" |
+    aep plan artifact new "$kind" "$key" --title "$title" --ref "finding:$key" --tag finding --from - >&2 || {
     say "aep plan artifact new $kind $key failed"
     exit 1
 }

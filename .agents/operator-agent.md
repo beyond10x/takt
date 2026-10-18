@@ -87,8 +87,8 @@ goes to standard error.
    | key | what |
    |---|---|
    | `scenario` | the scenario's id in the scratch repository's `.engineering/scenarios.conf` |
-   | `command` | one shell line, run in a fresh clone of the scenario's seed, with `$TAKT` the binary under test and `$SCENARIO` the clone; no credential of the caller's environment reaches it |
-   | `exit` | the exit status while the defect is present, 0 to 255 |
+   | `command` | one shell line, run in a fresh clone of the scenario's seed, with `$TAKT` the binary under test and `$SCENARIO` the clone, in a fresh HOME of the check's own; no credential of the caller's environment or home reaches it |
+   | `exit` | the exit status while the defect is present, 0 to 255 but 124 and 137, which `check-finding` reads as its timeout and `file-finding` refuses as `malformed` |
    | `output` | a fixed string the command's standard output or standard error then holds |
    | `source` | the run record or review that produced the finding, a path in this repository |
 
@@ -100,9 +100,9 @@ goes to standard error.
    Exit 3: the key is filed already, under the id standard error names; a new source for the same
    defect goes into that artifact's body (`aep plan artifact body`), never into a second finding.
 4. **Reproduce.** `scripts/check-finding --scenarios <scratch checkout> <id> <revision>` at the
-   promoted revision, until story:promotion records one the revision the run was taken with. It
-   builds takt from that revision and prints `reproduced` or `not_reproduced`; any other exit
-   printed no result. `not_reproduced` here means the predicate does not catch the defect:
+   promoted revision; until story:promotion records one, at the revision the run was taken with.
+   It builds takt from that revision and prints `reproduced` or `not_reproduced`; when it exits
+   non-zero it printed no result. `not_reproduced` here means the predicate does not catch the defect:
    correct the body and check again before announcing it.
 5. **Announce.** `[FINDING takt] <ids>`, the ids `reproduced` held for.
 6. **Verify** (loop step 7): the same `scripts/check-finding` at the candidate's revision. The fix
