@@ -1885,20 +1885,21 @@ entities:
   # The promotion record names the revision the binary embeds and the scorecard it read, and the
   # latest record names the promoted baseline the next turn is compared with; the first is
   # written by `takt promote --baseline-only`, which installs nothing. A promotion is refused when
-  # a scenario's outcome is worse than the baseline's, the median of tokens exceeds the
-  # baseline's by more than 10 %, or another promotion was made the same UTC day, naming it.
-  # read from: .engineering/planning/story/promotion.md:35-39
-  # read from: .engineering/planning/story/promotion.md:46-48
-  # read from: .engineering/planning/story/promotion.md:91
+  # a scenario's outcome is worse than the baseline's (dominance, one case of margin, n=5), a
+  # scenario's median of tokens exceeds the baseline's maximum, or another promotion was made the
+  # same UTC day, naming it.
+  # read from: .engineering/planning/story/promotion.md:35-40
+  # read from: .engineering/planning/story/promotion.md:47-49
+  # read from: .engineering/planning/story/promotion.md:93
   # UNMAPPED: where the record is kept (the story leaves it open and its review asks for a pinned
   # place outside the repository a candidate changes), the instant it carries (the one-a-UTC-day
   # rule needs one; no field is declared), and how a `--baseline-only` record tells itself apart
   # from one that installed a binary. Open for the owner.
-  # read from: .engineering/planning/story/promotion.md:75
-  # read from: .engineering/planning/story/promotion.md:102
-  # UNMAPPED: the token rule promotion applies is open (median within 10 %, a larger n, a
-  # spread-aware rule or tokens per accepted unit), decided before story:promotion lands.
-  # read from: .engineering/planning/design/recursive-self-improvement.md:127
+  # read from: .engineering/planning/story/promotion.md:76
+  # read from: .engineering/planning/story/promotion.md:104
+  # The rule's parameters, n and the margin, are recorded with the scorecard; their fields are
+  # declared with the code (story:promotion).
+  # read from: .engineering/planning/design/recursive-self-improvement.md:132-138
   - name: takt.work.Promotion
     naming:
       summary: >-
@@ -2131,4 +2132,4 @@ entities:
   # Open for the owner.
   # read from: .engineering/planning/story/loop-scorecard.md:30-33
   # read from: .engineering/planning/story/loop-scorecard.md:48
-  # read from: .engineering/planning/design/recursive-self-improvement.md:177-179
+  # read from: .engineering/planning/design/recursive-self-improvement.md:185-187
