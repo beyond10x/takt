@@ -3,12 +3,12 @@
 //! enters takt: `b10x-gates bot` pushes under the bot, to the repository's HTTPS URL and over
 //! HTTPS only, `b10x-gates api` writes through JSON files and never a token in argv, the reads
 //! go through `gh`, and before any of it leaves the machine `b10x-gates scan-text` reads what a
-//! push would publish (every commit the remote's tracking ref of the case's base does not hold,
-//! or every commit of the head without one: the commit object as the push sends it, every
-//! header and the message, and every path it adds, changes or deletes, a gitlink's included,
-//! with the whole content of every file it adds or changes, as the objects the push sends, `git
-//! replace` notwithstanding) and a pull request's title and body. A validator turns what the forge reports into evidence; the
-//! forge itself writes no record.
+//! push would publish (the object set it sends: every object of the head the remote's tracking
+//! ref of the case's base does not hold, or every object of the head without one; each commit
+//! object raw, every header and the message, every name in every tree object, a gitlink's and
+//! an empty tree's included, every blob whole, `git replace` notwithstanding; a head that is not
+//! a commit refused) and a pull request's title and body. A validator turns what the forge
+//! reports into evidence; the forge itself writes no record.
 //!
 //! Every child process takt starts, the forge's and the others' (the test command, the
 //! harness, `aep`), goes through [`run_child`]: no standard input, its own process group,
@@ -840,9 +840,9 @@ impl BotRoute {
     /// would publish, its id and its object as the push sends it: every header (author,
     /// committer, encoding, signature, any other) and the message, bytes never converted.
     pub const MESSAGES: &str = "push.messages.txt";
-    /// The file under the directory `scan_outgoing` is given that holds every path each commit a
-    /// push would publish adds, changes or deletes, a gitlink's included, and the whole content
-    /// of every file it adds or changes ([`outgoing_text`]).
+    /// The file under the directory `scan_outgoing` is given that holds every tree object a push
+    /// would send, entry by entry (mode, name, id), and every blob it would send, whole
+    /// ([`outgoing_text`]).
     pub const FILES: &str = "push.files.txt";
     /// The most bytes of messages and files one scan before a push is given by default.
     pub const SCAN_LIMIT: usize = 32 << 20;
@@ -1145,22 +1145,6 @@ fn write_request(dir: &Path, request: &PullRequest) -> Result<(PathBuf, PathBuf)
 /// too), and file names as they are.
 const READ_OPTIONS: [&str; 3] = ["--no-replace-objects", "-c", "core.quotePath=false"];
 
-/// The `git log` that lists the paths each commit adds, changes or deletes, with the object
-/// each names by its full id and its mode, separated by NULs: the root commit's too, a merge's
-/// those that differ from every parent, no rename read as anything but a deletion and an
-/// addition, whatever the repository's configuration says.
-const FILE_OPTIONS: [&str; 9] = [
-    "log",
-    "--root",
-    "--diff-merges=dense-combined",
-    "--raw",
-    "--no-abbrev",
-    "--no-renames",
-    "-z",
-    "--no-color",
-    "--format=commit %H",
-];
-
 /// Runs the scan's git read `args` ([`READ_OPTIONS`] first) in `tree`, reading at most `left`
 /// bytes and counting what it read off `left`; `None` past it.
 fn read(tree: &Path, args: &[&str], left: &mut usize) -> Result<Option<String>> {
@@ -1190,6 +1174,23 @@ fn commit_id(tree: &Path, revision: &str) -> Result<String> {
         .map(|id| id.trim().to_owned())
         .filter(|id| !id.is_empty())
         .ok_or_else(|| anyhow!("{revision} names no commit"))
+}
+
+/// Refuses a `head` of `branch` that is not a commit, read without peeling: an annotated tag
+/// the branch names would be sent by the push as it is, its own text unscanned.
+fn head_is_a_commit(tree: &Path, branch: &str, head: &str) -> Result<()> {
+    if head.is_empty() || !head.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("the head {head:?} of {branch} is not an object id: refused, nothing was pushed");
+    }
+    let mut left = 64;
+    let kind = read(tree, &["cat-file", "-t", head], &mut left)?.unwrap_or_default();
+    let kind = kind.trim();
+    if kind != "commit" {
+        bail!(
+            "the head {head} of {branch} is a {kind}, not a commit: a push of it would send it as it is; refused, nothing was pushed"
+        );
+    }
+    Ok(())
 }
 
 /// The commit the ref named exactly `name` (a full name, `refs/...`) holds; `None` when no ref
@@ -1231,53 +1232,53 @@ fn published_commits(
     })
 }
 
-/// One path a commit's tree publishes, as a `git log` print of [`FILE_OPTIONS`] lists it.
-struct Listed {
-    commit: String,
-    path: String,
-    /// The mode the commit holds at the path; `000000` when the commit deletes it.
-    mode: String,
-    /// The object the commit holds at the path; all zeros when it deletes it.
-    object: String,
-}
-
-/// The paths a `git log` print of [`FILE_OPTIONS`] lists, in the order listed: every path,
-/// whatever its mode, a gitlink's and a deleted one's included.
-fn listed_files(listing: &str) -> Vec<Listed> {
-    let mut files = Vec::new();
-    let mut commit = String::new();
-    let mut tokens = listing
-        .split('\0')
-        .map(|token| token.trim_start_matches('\n'));
-    while let Some(token) = tokens.next() {
-        if let Some(id) = token.strip_prefix("commit ") {
-            id.trim().clone_into(&mut commit);
-            continue;
+/// The entries of the raw tree object `bytes`, each `<mode> <name>\0<id>`, as lines of text:
+/// `<mode> <name> <id>`, the name as the tree holds it. `hash` is the length of an id in bytes,
+/// 20 for SHA-1 and 32 for SHA-256. What does not parse is kept as it is, so nothing in the
+/// object goes unscanned.
+fn tree_entries(bytes: &[u8], hash: usize) -> String {
+    let mut text = String::new();
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        let Some(space) = rest.iter().position(|b| *b == b' ') else {
+            break;
+        };
+        let Some(nul) = rest[space..]
+            .iter()
+            .position(|b| *b == 0)
+            .map(|n| space + n)
+        else {
+            break;
+        };
+        if rest.len() < nul + 1 + hash {
+            break;
         }
-        if !token.starts_with(':') {
-            continue;
-        }
-        let Some(path) = tokens.next() else { break };
-        let parents = token.chars().take_while(|c| *c == ':').count();
-        let fields: Vec<&str> = token[parents..].split_whitespace().collect();
-        let mode = fields.get(parents).copied().unwrap_or_default();
-        let object = fields.get(2 * parents + 1).copied().unwrap_or_default();
-        files.push(Listed {
-            commit: commit.clone(),
-            path: path.to_owned(),
-            mode: mode.to_owned(),
-            object: object.to_owned(),
-        });
+        let id: String = rest[nul + 1..nul + 1 + hash]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        text.push_str(&format!(
+            "{} {} {id}\n",
+            String::from_utf8_lossy(&rest[..space]),
+            String::from_utf8_lossy(&rest[space + 1..nul])
+        ));
+        rest = &rest[nul + 1 + hash..];
     }
-    files
+    if !rest.is_empty() {
+        text.push_str(&String::from_utf8_lossy(rest));
+        text.push('\n');
+    }
+    text
 }
 
-/// What pushing `head` would publish ([`published_commits`]), read in at most `limit` bytes:
-/// every commit object as the push sends it, bytes as they are (every header, the encoding's
-/// and a signature's included, then the message, never converted); and every path each commit
-/// adds, changes or deletes, a gitlink's included, with the whole content of each file it adds
-/// or changes, each object once, raw (no text conversion, no filter). `None` once git prints
-/// more than `limit` bytes for all of it, read no further. The words for the commits.
+/// What pushing `head` would publish, read in at most `limit` bytes: the object set the push
+/// sends, `git rev-list --objects` over [`published_commits`], every object read raw through
+/// one `git cat-file --batch` ([`crate::git::read_objects`]). Every commit object as the push
+/// sends it, bytes as they are (every header, the encoding's and a signature's included, then
+/// the message, never converted); every tree object's entry names, whatever an entry's mode (a
+/// gitlink's, an empty tree's); every blob's whole content, raw (no text conversion, no filter).
+/// `None` once git prints more than `limit` bytes for all of it, read no further. The words for
+/// the commits.
 fn outgoing_text(
     tree: &Path,
     remote: &str,
@@ -1286,61 +1287,48 @@ fn outgoing_text(
     limit: usize,
 ) -> Result<(Option<(String, String)>, String)> {
     let (revisions, words) = published_commits(tree, remote, base, head)?;
-    let revisions: Vec<&str> = revisions.iter().map(String::as_str).collect();
     let mut left = limit;
-    let mut args = vec!["rev-list"];
-    args.extend(&revisions);
-    let Some(commits) = read(tree, &args, &mut left)? else {
-        return Ok((None, words));
-    };
-    let mut messages = String::new();
-    for commit in commits.lines().map(str::trim).filter(|id| !id.is_empty()) {
-        let Some(object) = read(tree, &["cat-file", "commit", commit], &mut left)? else {
-            return Ok((None, words));
-        };
-        messages.push_str(&format!("commit {commit}\n"));
-        messages.push_str(&object);
-        if !object.ends_with('\n') {
-            messages.push('\n');
-        }
-    }
-    let mut args: Vec<&str> = FILE_OPTIONS.to_vec();
-    args.extend(&revisions);
+    let mut args = vec!["rev-list", "--objects", "--no-object-names"];
+    args.extend(revisions.iter().map(String::as_str));
     let Some(listing) = read(tree, &args, &mut left)? else {
         return Ok((None, words));
     };
+    let ids: Vec<String> = listing
+        .lines()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect();
+    let Some(objects) = crate::git::read_objects(tree, &ids, left)? else {
+        return Ok((None, words));
+    };
+    let mut messages = String::new();
     let mut files = String::new();
-    let mut seen = std::collections::BTreeSet::new();
-    for Listed {
-        commit,
-        path,
-        mode,
-        object,
-    } in listed_files(&listing)
-    {
-        if object.chars().all(|c| c == '0') {
-            files.push_str(&format!("deleted {path} at {commit}\n"));
-            continue;
-        }
-        if mode == "160000" {
-            files.push_str(&format!("gitlink {path} at {commit}: {object}\n"));
-            continue;
-        }
-        files.push_str(&format!("file {path} at {commit}\n"));
-        if !seen.insert(object.clone()) {
-            continue;
-        }
-        let Some(content) = read(tree, &["cat-file", "blob", &object], &mut left)? else {
-            return Ok((None, words));
-        };
-        files.push_str(&content);
-        if !content.ends_with('\n') {
-            files.push('\n');
+    for object in objects {
+        let id = &object.id;
+        match object.kind.as_str() {
+            "commit" => {
+                messages.push_str(&format!("commit {id}\n"));
+                messages.push_str(&String::from_utf8_lossy(&object.bytes));
+                if !messages.ends_with('\n') {
+                    messages.push('\n');
+                }
+            }
+            "tree" => {
+                files.push_str(&format!("tree {id}\n"));
+                files.push_str(&tree_entries(&object.bytes, id.len() / 2));
+            }
+            kind => {
+                files.push_str(&format!("{kind} {id}\n"));
+                files.push_str(&String::from_utf8_lossy(&object.bytes));
+                if !files.ends_with('\n') {
+                    files.push('\n');
+                }
+            }
         }
     }
     Ok((Some((messages, files)), words))
 }
-
 /// `path` with nothing at it: a response file left from before is removed, so what is read
 /// after the call is what the call wrote, never a file something else put there.
 fn fresh(path: PathBuf) -> Result<PathBuf> {
@@ -1384,10 +1372,10 @@ impl Forge for BotRoute {
 
     /// One `scan-text` line over everything pushing `head` would publish:
     /// the pull request, when one is opened (the JSON request and the title and body as
-    /// published), and the commits [`Self::remote`] does not hold ([`published_commits`]): their
-    /// objects as the push sends them, every header and the message ([`Self::MESSAGES`]), and
-    /// every path they add, change or delete, with the whole content of every file they add or
-    /// change ([`Self::FILES`]), all written under `dir`. Once git prints more than
+    /// published), and the objects the push sends that [`Self::remote`] does not hold
+    /// ([`published_commits`], [`outgoing_text`]): every commit object raw ([`Self::MESSAGES`]),
+    /// every tree's entry names and every blob ([`Self::FILES`]), all written under `dir`. A
+    /// head that is not a commit is refused first ([`head_is_a_commit`]). Once git prints more than
     /// [`Self::scan_limit`] bytes for them, it is read no further and the push is refused,
     /// nothing written or scanned.
     fn scan_outgoing(&self, tree: &Path, dir: &Path, outgoing: &Outgoing<'_>) -> Result<()> {
@@ -1397,6 +1385,7 @@ impl Forge for BotRoute {
             head,
             request,
         } = *outgoing;
+        head_is_a_commit(tree, branch, head)?;
         let (text, commits) = outgoing_text(tree, &self.remote, base, head, self.scan_limit)?;
         let Some((messages, files)) = text else {
             bail!(

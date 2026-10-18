@@ -143,6 +143,112 @@ pub fn run_bounded(tree: &Path, args: &[&str], limit: usize) -> Result<Option<St
     Ok(Some(String::from_utf8_lossy(&kept).into_owned()))
 }
 
+/// One object [`read_objects`] read: its id, its type and its bytes as the repository holds
+/// them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Object {
+    /// The object's id.
+    pub id: String,
+    /// Its type: `commit`, `tree`, `blob` or `tag`.
+    pub kind: String,
+    /// Its bytes, raw.
+    pub bytes: Vec<u8>,
+}
+
+/// Reads the objects `ids` in `tree` through one `git cat-file --batch`, raw and without
+/// replacement objects (`GIT_NO_REPLACE_OBJECTS`), in the order given; `None` as soon as what
+/// git prints for them passes `limit` bytes: git is killed then and nothing more is read. An id
+/// git does not hold, or a git that exits non-zero, is an error.
+pub fn read_objects(tree: &Path, ids: &[String], limit: usize) -> Result<Option<Vec<Object>>> {
+    use std::io::{BufRead as _, BufReader, Read as _};
+    let mut child = command(tree, &["cat-file", "--batch"])?
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("run git cat-file --batch in {}", tree.display()))?;
+    let mut input: Vec<u8> = Vec::new();
+    for id in ids {
+        input.extend_from_slice(id.as_bytes());
+        input.push(b'\n');
+    }
+    let writer = child.stdin.take().map(|mut stdin| {
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        })
+    });
+    let stderr = child.stderr.take().map(|mut stream| {
+        std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = stream.by_ref().take(64 << 10).read_to_end(&mut said);
+            let _ = std::io::copy(&mut stream, &mut std::io::sink());
+            said
+        })
+    });
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("git cat-file --batch gave no output stream"))?;
+    let mut out = BufReader::new(stdout);
+    let answer = (|| -> Result<Option<Vec<Object>>> {
+        let mut objects = Vec::with_capacity(ids.len());
+        let mut total = 0usize;
+        for id in ids {
+            let mut header = Vec::new();
+            out.read_until(b'\n', &mut header)
+                .context("read git cat-file --batch")?;
+            let header = String::from_utf8_lossy(&header).trim_end().to_owned();
+            let fields: Vec<&str> = header.split(' ').collect();
+            let [found, kind, size] = fields[..] else {
+                bail!("git cat-file --batch answered {header:?} for {id}");
+            };
+            let size: usize = size
+                .parse()
+                .with_context(|| format!("git cat-file --batch answered {header:?}"))?;
+            total = total.saturating_add(header.len() + 1).saturating_add(size);
+            if total > limit {
+                return Ok(None);
+            }
+            let mut bytes = vec![0; size];
+            out.read_exact(&mut bytes)
+                .context("read git cat-file --batch")?;
+            let mut end = [0_u8; 1];
+            out.read_exact(&mut end)
+                .context("read git cat-file --batch")?;
+            objects.push(Object {
+                id: found.to_owned(),
+                kind: kind.to_owned(),
+                bytes,
+            });
+        }
+        Ok(Some(objects))
+    })();
+    drop(out);
+    if !matches!(answer, Ok(Some(_))) {
+        let _ = child.kill();
+    }
+    let status = child
+        .wait()
+        .with_context(|| format!("run git cat-file --batch in {}", tree.display()))?;
+    if let Some(writer) = writer {
+        let _ = writer.join();
+    }
+    let said = stderr
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    let objects = answer?;
+    if objects.is_some() && !status.success() {
+        bail!(
+            "git cat-file --batch in {} exited {}: {}",
+            tree.display(),
+            status,
+            String::from_utf8_lossy(&said).trim()
+        );
+    }
+    Ok(objects)
+}
+
 /// The `git <args>` [`output`] and [`run_bounded`] run in `tree`: pinned to the tree, with no
 /// code from configuration and no credential or redirecting variable in its environment.
 fn command(tree: &Path, args: &[&str]) -> Result<Command> {

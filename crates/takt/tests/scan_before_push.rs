@@ -674,7 +674,7 @@ fn messages_and_files_over_the_limit_are_refused_not_cut() {
     );
 }
 
-/// What the one scan before the push read last: the files the commits add or change.
+/// What the one scan before the push read last: the trees and the blobs the push sends.
 fn scanned_files(gates: &Gates) -> String {
     gates
         .lines()
@@ -685,7 +685,7 @@ fn scanned_files(gates: &Gates) -> String {
 }
 
 /// Every file a commit adds or changes is scanned whole, as the commit holds it, under a line
-/// naming it: no diff markers, no removed line between two the file holds next to each other,
+/// naming its blob, and its name in the tree that holds it: no diff markers, no removed line between two the file holds next to each other,
 /// and no context bound, so a literal wrapped across those lines is next to itself for the
 /// scanner's wrapped rule.
 #[test]
@@ -709,13 +709,12 @@ fn every_file_a_commit_changes_is_scanned_whole() {
     });
     assert_eq!(ran.stop, Ok(Stop::Iterations(1)), "{}", ran.text);
     let files = scanned_files(&gates);
-    let second = git(&tree, &["rev-parse", "HEAD"]);
+    let blob = git(&tree, &["rev-parse", "HEAD:notes.md"]);
     assert!(
-        files.contains(&format!(
-            "file notes.md at {second}\nabout {head}\n{tail} tail\n"
-        )),
+        files.contains(&format!("blob {blob}\nabout {head}\n{tail} tail\n")),
         "{files}"
     );
+    assert!(files.contains(&format!(" notes.md {blob}\n")), "{files}");
     assert!(
         files.contains(&format!("about {head}\nmiddle\n{tail} tail\n")),
         "{files}"
@@ -733,7 +732,7 @@ fn a_file_name_is_scanned_as_it_is() {
     });
     assert_eq!(ran.stop, Ok(Stop::Iterations(1)), "{}", ran.text);
     let files = scanned_files(&gates);
-    assert!(files.contains("file grüße.txt at "), "{files}");
+    assert!(files.contains("100644 grüße.txt "), "{files}");
 }
 /// With no tracking ref of the base on the remote, every commit of the head is scanned: a local
 /// commit on `main` the remote may not have is refused.
@@ -1492,4 +1491,83 @@ fn the_push_url_is_read_from_origin_once_and_only_on_github() {
         BotRoute::for_tree(&tree).expect_err("another host is refused")
     );
     assert!(error.contains("example.com"), "{error}");
+}
+
+/// Runs `git <args>` in `tree` with `input` on its standard input, through a file under the
+/// repository's git directory; its trimmed standard output.
+fn git_input(tree: &Path, args: &[&str], input: &[u8]) -> String {
+    let file = tree.join(".git/git-input");
+    fs::write(&file, input).expect("the input");
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(tree)
+        .stdin(fs::File::open(&file).expect("the input file"))
+        .output()
+        .expect("git runs");
+    fs::remove_file(&file).expect("the input removed");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("utf-8")
+        .trim()
+        .to_owned()
+}
+
+/// A tree entry naming an empty tree never shows in `git log --raw`, but the push sends the
+/// tree that holds it, its name included: every name in every tree object the push sends is
+/// scanned, so an entry named with the literal is refused.
+#[test]
+fn an_empty_tree_entry_named_with_the_literal_is_refused() {
+    let tree = scratch("empty-tree");
+    git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+    let empty = git_input(&tree, &["mktree"], b"");
+    let readme = git(&tree, &["rev-parse", "HEAD:README.md"]);
+    let listing = format!("100644 blob {readme}\tREADME.md\n040000 tree {empty}\t{FORBIDDEN}\n");
+    let with_entry = git_input(&tree, &["mktree"], listing.as_bytes());
+    let parent = git(&tree, &["rev-parse", "HEAD"]);
+    let head = git(
+        &tree,
+        &[
+            "commit-tree",
+            &with_entry,
+            "-p",
+            &parent,
+            "-m",
+            "implementation.edit: clean",
+        ],
+    );
+    git(&tree, &["update-ref", "refs/heads/takt/case", &head]);
+    scan_refused(&tree, &head, "with an empty tree named the literal");
+}
+
+/// The case's branch names an annotated tag object, not a commit: the tag's own text is never a
+/// commit's, and pushing the branch would send it. A head that is not a commit, read without
+/// peeling, is refused naming it, and nothing is scanned or pushed.
+#[test]
+fn a_head_that_is_not_a_commit_is_refused() {
+    let tree = scratch("tag-head");
+    git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+    commit(&tree, "work.txt", "clean\n", "implementation.edit: clean");
+    let commit_id = git(&tree, &["rev-parse", "HEAD"]);
+    let tag = git_input(
+        &tree,
+        &["hash-object", "-t", "tag", "-w", "--stdin"],
+        format!(
+            "object {commit_id}\ntype commit\ntag t\ntagger u <u@localhost> 1700000000 +0000\n\n{FORBIDDEN}\n"
+        )
+        .as_bytes(),
+    );
+    let (answer, lines) = scan_only(&tree, &tag);
+    let error = answer.expect_err("a tag head is refused");
+    assert!(error.contains(&tag), "{error}");
+    assert!(error.contains("not a commit"), "{error}");
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.argv.starts_with("b10x-gates bot -- push ")),
+        "{lines:#?}"
+    );
 }
