@@ -32,9 +32,12 @@ every step validated by Canon over evidence. This file is for agents working on 
 ## Commands
 
 ```
-task check                      # specification, format, lint, tests
+task check                      # specification, citations, format, lint, tests
 task build
 aep plan artifact validate
+python3 -I scripts/check-citations --require-digests [dump | fix | accept <doc>:<line>...]   # each ess/ `read from:` against its needles and digest (ess/domains/<doc>.citations.tsv); accept records a digest after a person read the lines
+git add <paths> && b10x-gates bot -- commit -F <file>   # staging is plain git; the route refuses add
+b10x-gates scan-text --policy <file> <path>...           # or B10X_GATES_POLICY; no policy found is "not scanned", never "passed"
 cargo run -p b10x-takt-cli -- run --repo <path> --intent "<text>" --iterations 1
 cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
 ```
@@ -55,8 +58,15 @@ cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
 - Credentials never enter a harness's environment, its prompt or a case record.
 - A run's outcome lives in files and the exit code, never only in a process, so a later
   orchestrator can drive takt without a change to it.
-- Judge surfaces are every path except `docs/**`, `README.md` and `CHANGELOG.md`. An agent never
-  grants the merge of a diff that touches a judge surface; a person does. Adding a path to that
+- Judge surfaces are every path except `docs/**`, `README.md` and `CHANGELOG.md`. The owner grants
+  the merge of a diff that touches a judge surface, or delegates that grant to a named role by a
+  record; the delegation is revocable, and a revoked one grants nothing from then on
+  (`product-requirements:takt` § 2). The delegation and its revocation are records the owner
+  makes, held at the base revision (`design:recursive-self-improvement` § Roles). Until
+  story:judge-guard lands, the record is the owner's decision recorded in the planning store
+  (`product-requirements:takt` § 2), and a revocation is a later owner decision recorded there;
+  from story:judge-guard on, both are held in `.engineering/delegations.yaml`, read at the base
+  revision, which is itself a judge surface. story:judge-guard enforces it. Adding a path to that
   list is itself a judge-surface change.
 - Two agent roles work on takt (`design:recursive-self-improvement` § Roles). The operator agent
   runs takt, reviews, measures, files findings and verifies fixes; it writes no takt code. The
@@ -69,6 +79,8 @@ cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
 - Every commit, push, pull request and tag goes through the bot route (`b10x-gates bot -- <git
   args>`); API writes through `b10x-gates api`. Pull-request and release bodies pass
   `b10x-gates scan-text` first.
+- A number in a commit message or a wave page (passes, tests, tokens, files) is the output of a
+  command run on that tree; a figure nobody computed is left out.
 - This repository is public. Committed text names no private repository, session or decision id,
   host detail or person.
 - Spec first: a story that introduces a noun declares it in `ess/` before code builds on it,

@@ -285,7 +285,7 @@ fn the_delivering_run_cannot_verify_its_own_fix() {
 }
 
 #[test]
-fn a_judge_surface_change_needs_the_owners_capability() {
+fn a_judge_surface_change_needs_the_judge_surface_capability() {
     let tree = scratch("judge");
     let mut case = open(&tree, SELF_IMPROVEMENT, "judge", &[("surface", "judge")]);
     add(&mut case, 1, "finding_record", "filed", "finding", VERIFIER);
