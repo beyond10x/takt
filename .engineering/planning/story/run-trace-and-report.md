@@ -2,13 +2,16 @@
 format: aep.planning-md/3
 id: story:run-trace-and-report
 kind: story
-status: draft
+status: active
 title: takt trace writes one takt-trace/1 file per run; takt report prints where its time and tokens went
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 - depends_on: story:step-records-per-call-usage
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 3}
 ---
 ## Outcome
 

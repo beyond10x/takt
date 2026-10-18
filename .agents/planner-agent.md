@@ -151,6 +151,10 @@ once at least three turns have been filed since the merge.
 - `b10x-gates scan-text` gates the commit: run it unpiped in a chain that stops on its exit
   status (`set -eo pipefail`). A `| tail` after it hid a refusal on 2026-10-18 and a personal path
   reached local main.
+- A store write can move lines that `ess/` cites (`relate` adds a frontmatter line). Before the
+  commit, run `python3 -I scripts/check-citations --require-digests`; on an unresolved line, run
+  `check-citations fix` and commit the re-point with the store change. On 2026-10-19 a `relate`
+  left main red with 5 unresolved citations.
 
 ## Intake
 
