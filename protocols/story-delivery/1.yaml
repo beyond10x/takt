@@ -45,6 +45,10 @@ evidence_kinds:
       changed: takt records the choice from the step, as it records a request for an approval.
       The record attests a choice, not that the change is correct: the tests, the gate and
       continuous integration stay validator evidence; it has no result
+  change_record:
+    description: >-
+      whether an implementation revision carries a commit beyond the case's base, takt's own take
+      of the story aside; its result is ahead or none
 
 claims:
   tests.pass:
@@ -90,6 +94,15 @@ claims:
       evidence:
         kind: handover
         subject: implementation
+  change.made:
+    description: >-
+      the current implementation revision carries a commit beyond the case's base: there is a
+      change to publish
+    true_when:
+      evidence:
+        kind: change_record
+        result: ahead
+        subject: implementation
 
 obligations:
   tests.required:
@@ -130,6 +143,15 @@ actions:
       is: unknown
     may_produce:
       - evidence: handover
+  change.read:
+    description: >-
+      read whether the implementation revision carries a commit beyond the case's base; taken
+      once the change is handed over
+    effect: read
+    precondition:
+      claim: change.handed_over
+    may_produce:
+      - evidence: change_record
   tests.run:
     description: run the tests against an implementation revision
     effect: read
@@ -144,13 +166,15 @@ actions:
     description: >-
       push the implementation revision, with the commits that record its approval above it when
       there are any, and open its pull request through the repository's bot route; needs the
-      tests and the gate green and the change handed over at the revision
+      tests and the gate green, the change handed over at the revision, and a commit beyond the
+      case's base, so nothing is opened at the seed
     effect: write
     precondition:
       all:
         - claim: tests.pass
         - claim: gate.green
         - claim: change.handed_over
+        - claim: change.made
     may_produce:
       - evidence: pull_request
   ci.read:

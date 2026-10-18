@@ -309,6 +309,17 @@ fn pr_open(tree: &Path, id: &str, forge: Rc<dyn Forge>) -> (Result<Stop, String>
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
+    // A commit beyond the case's base at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            "change-record",
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
+        .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
     (stop, String::from_utf8(out).expect("utf-8"))

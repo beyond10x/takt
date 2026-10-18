@@ -14,7 +14,7 @@ use takt::case::CASES_DIR;
 use takt::evidence::Record;
 use takt::forge::{Checks, Forge, Memory};
 use takt::harness::{Harness, StepContext, StepReport};
-use takt::validator::{CiRead, Observation, PrOpen, Validator};
+use takt::validator::{ChangeRead, CiRead, Observation, PrOpen, Validator};
 use takt::{Run, RunOptions, Stop};
 
 const PROTOCOL: &str = concat!(
@@ -208,6 +208,7 @@ fn the_pull_request_opens_once_the_change_is_complete_and_ci_runs_once() {
         }),
         Box::new(PrOpen::new(forge.clone())),
         Box::new(CiRead::new(forge)),
+        Box::new(ChangeRead),
     ];
     let options = RunOptions {
         protocol: PROTOCOL.to_owned(),
@@ -355,6 +356,7 @@ fn delivered(name: &str, memory: &Rc<Memory>, harness: &dyn Harness) -> (Stop, S
         }),
         Box::new(PrOpen::new(forge.clone())),
         Box::new(CiRead::new(forge)),
+        Box::new(ChangeRead),
     ];
     let options = RunOptions {
         protocol: PROTOCOL.to_owned(),
@@ -506,4 +508,25 @@ fn after_a_failed_ci_the_next_change_is_pushed_once_it_is_handed_over_again() {
         [true, true, false, true, true, false],
         "{text}"
     );
+}
+
+/// The list the choice rule reads (`takt::validator::BUILT_IN_ACTIONS`) names exactly the actions
+/// takt's built-in validators perform: a validator added without its action there would let its
+/// evidence kind pass for a choice the step choice records.
+#[test]
+fn the_built_in_actions_are_the_actions_of_the_built_in_validators() {
+    let forge: Rc<dyn Forge> = Rc::new(Memory::default());
+    let built_in: Vec<Box<dyn Validator>> = vec![
+        Box::new(takt::validator::TestsRun::new("true").expect("a command")),
+        Box::new(takt::validator::GateRun::new(".engineering/gates.yaml")),
+        Box::new(PrOpen::new(forge.clone())),
+        Box::new(CiRead::new(forge.clone())),
+        Box::new(takt::validator::PrMerged::new(forge)),
+        Box::new(ChangeRead),
+    ];
+    let mut actions: Vec<&str> = built_in.iter().map(|v| v.action()).collect();
+    actions.sort_unstable();
+    let mut listed = takt::validator::BUILT_IN_ACTIONS.to_vec();
+    listed.sort_unstable();
+    assert_eq!(actions, listed);
 }

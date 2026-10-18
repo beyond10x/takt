@@ -20,7 +20,7 @@ use takt::evidence::Record;
 use takt::forge::{Checks, Forge, Memory};
 use takt::frontier::{Aep, Frontier, Story, Take, Written, approve};
 use takt::harness::{Harness, StepContext, StepReport};
-use takt::validator::{CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
+use takt::validator::{ChangeRead, CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
 /// The delivery protocol, relative to this crate.
@@ -285,6 +285,7 @@ fn delivery(forge: Rc<dyn Forge>) -> Vec<Box<dyn Validator>> {
         Box::new(PrOpen::new(forge.clone())),
         Box::new(CiRead::new(forge.clone())),
         Box::new(PrMerged::new(forge)),
+        Box::new(ChangeRead),
     ]
 }
 
@@ -949,7 +950,7 @@ fn each_wait_on_the_forge_is_a_line_and_the_waiting_stop_is_the_last() {
     drop(opened);
     fs::write(repo.join("check.txt"), "fixed\n").expect("a file");
     git(&repo, &["commit", "-q", "-am", "the work"]);
-    let mut run = Run::resume(&repo, options(DELIVERY, 6), &id, &Requester, &validators)
+    let mut run = Run::resume(&repo, options(DELIVERY, 7), &id, &Requester, &validators)
         .expect("the case resumes");
     run.poll = Duration::from_millis(5);
     run.record_on(&store);

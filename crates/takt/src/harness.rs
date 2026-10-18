@@ -23,6 +23,9 @@ pub struct StepContext<'a> {
     /// The actions that need an approval: choosing one requests it and ends the run; nothing is
     /// performed for it.
     pub approvals: &'a [String],
+    /// Of the offered actions, the ones that record a choice: taken with no file changed, takt
+    /// records that the harness took it (`change.handover`).
+    pub choices: &'a [String],
     /// The current decision: claims, obligations, the frontier.
     pub decision: &'a Decision,
     /// The protocol the case runs under.

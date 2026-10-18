@@ -189,6 +189,17 @@ fn at_the_gate(repo: &Path) -> (String, String) {
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("written");
+    // A commit beyond the case's base at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &worked[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &worked,
+            "takt.change-read",
+        ))
+        .expect("written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
     assert_eq!(

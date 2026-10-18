@@ -1,8 +1,10 @@
 //! The story-delivery protocol as data: `protocols/story-delivery/1.yaml` is loaded, validated
-//! and compiled by Canon, a case is opened on it over a scratch git tree, and the six records
+//! and compiled by Canon, a case is opened on it over a scratch git tree, and the seven records
 //! the delivery of a story produces are added one at a time, each evaluated: one more claim true
-//! after each, `pr.open` admissible only once the change is handed over, `repository.merge` approval-required before the last, `accepted` legitimate only
-//! after it. Every record is about `implementation` at its revision, as the kernel binds claims.
+//! after each, `pr.open` admissible only once the change is handed over and a commit beyond
+//! the base recorded, `repository.merge` approval-required before the last, `accepted`
+//! legitimate only after it. Every record is about `implementation` at its revision, as the
+//! kernel binds claims.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
@@ -22,10 +24,11 @@ const PROTOCOL: &str = concat!(
 /// its own kind: Canon leaves a match unknown when records of one kind disagree, so a `merged`
 /// beside an `open` record of `pull_request` at one revision would decide neither claim.
 /// The hand-over has no result: takt records the harness's choice, not an outcome.
-const LADDER: [(&str, &str, &str); 6] = [
+const LADDER: [(&str, &str, &str); 7] = [
     ("test_result", "pass", "tests.pass"),
     ("gate_result", "pass", "gate.green"),
     ("handover", "", "change.handed_over"),
+    ("change_record", "ahead", "change.made"),
     ("pull_request", "open", "pr.opened"),
     ("ci_result", "pass", "ci.green"),
     ("merge_observation", "merged", "pr.merged"),
@@ -144,17 +147,17 @@ fn each_record_earns_one_claim_and_accepted_needs_the_merge() {
         let merge = status(&decision.actions, "repository.merge");
         let accepted = status(&decision.outcomes, "accepted");
         match seq {
-            1 | 2 => {
+            1..=3 => {
                 assert_eq!(pr_open, "blocked", "{}", decision.json);
                 assert_eq!(merge, "blocked", "{}", decision.json);
                 assert_eq!(accepted, "blocked", "{}", decision.json);
             }
-            3 | 4 => {
+            4 | 5 => {
                 assert_eq!(pr_open, "admissible", "{}", decision.json);
                 assert_eq!(merge, "blocked", "{}", decision.json);
                 assert_eq!(accepted, "blocked", "{}", decision.json);
             }
-            5 => {
+            6 => {
                 assert_eq!(merge, "approval-required", "{}", decision.json);
                 assert_eq!(accepted, "blocked", "{}", decision.json);
             }
@@ -363,6 +366,7 @@ mod adv {
             ("test_result", "pass"),
             ("gate_result", "pass"),
             ("handover", ""),
+            ("change_record", "ahead"),
             ("ci_result", "pass"),
         ]
         .iter()
@@ -414,6 +418,7 @@ mod adv {
             ("pull_request", "closed"),
             ("ci_result", "fail"),
             ("merge_observation", "closed"),
+            ("change_record", "none"),
         ]
         .iter()
         .enumerate()
@@ -423,6 +428,7 @@ mod adv {
         }
         let decision = case.evaluate(1).expect("evaluates");
         let mut expected: BTreeMap<String, String> = [
+            "change.made",
             "ci.green",
             "gate.green",
             "pr.merged",

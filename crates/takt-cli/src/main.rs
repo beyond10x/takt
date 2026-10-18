@@ -12,7 +12,9 @@ use takt::Frontier as _;
 use takt::forge::{BotRoute, Forge, Process, Runner, repository_of};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness};
-use takt::validator::{CiRead, DEFAULT_PROJECT, GateRun, PrMerged, PrOpen, TestsRun, Validator};
+use takt::validator::{
+    ChangeRead, CiRead, DEFAULT_PROJECT, GateRun, PrMerged, PrOpen, TestsRun, Validator,
+};
 use takt::{LoadedProtocol, Run, RunOptions, Stop, Unit};
 
 #[derive(Parser)]
@@ -203,8 +205,10 @@ struct LoopArgs {
 
 /// A harness that performs nothing. Asked while an approval is pending, it requests the gate
 /// action, changing no file, so the run stops `ApprovalRequired` and `takt approve` is the
-/// next step; asked for a judgement step with no approval pending, it ends the run with an
-/// error, `stopped: error:`, because nothing performs that step.
+/// next step; offered an action that records a choice (`change.handover`), it takes it,
+/// changing no file, so the work committed by hand is handed over as it stands; asked for any
+/// other judgement step, it ends the run with an error, `stopped: error:`, because nothing
+/// performs that step.
 struct NoHarness;
 
 impl Harness for NoHarness {
@@ -217,6 +221,13 @@ impl Harness for NoHarness {
             return Ok(takt::StepReport {
                 action: gate.clone(),
                 summary: "no harness: nothing but the approval is left; requesting it".to_owned(),
+                tokens: None,
+            });
+        }
+        if let Some(choice) = context.choices.first() {
+            return Ok(takt::StepReport {
+                action: choice.clone(),
+                summary: "no harness: the work committed is taken as it stands".to_owned(),
                 tokens: None,
             });
         }
@@ -534,10 +545,13 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
     }
 }
 
-/// The validators that need no forge: the test command, and the gate when a gates document is
-/// given or at its default path in `repo`, with the project file likewise.
+/// The validators that need no forge: the test command, `change.read`, and the gate when a gates
+/// document is given or at its default path in `repo`, with the project file likewise.
 fn validators_of(repo: &Path, looping: &LoopArgs) -> Result<Vec<Box<dyn Validator>>> {
-    let mut validators: Vec<Box<dyn Validator>> = vec![Box::new(TestsRun::new(&looping.test_cmd)?)];
+    let mut validators: Vec<Box<dyn Validator>> = vec![
+        Box::new(TestsRun::new(&looping.test_cmd)?),
+        Box::new(ChangeRead),
+    ];
     let gates = repository_file(repo, "gates", looping.gates.clone(), DEFAULT_GATES)?;
     let project = repository_file(repo, "project", looping.project.clone(), DEFAULT_PROJECT)?;
     if let Some(gates) = gates {
@@ -1651,10 +1665,10 @@ mod tests {
     }
 
     /// Without `--forge` and without an origin, neither forge validator is registered: no
-    /// `forge:` line, no `pr.open` or `ci.read` step, and after `tests.run` the hand-over and the edits are
-    /// the judgement steps left to the harness (`gate.run` and `ci.read` only read and record no
-    /// choice, and are not offered to a harness that keeps no state; `ci.read` also waits for
-    /// `pr.opened`).
+    /// `forge:` line, no `pr.open` or `ci.read` step. After `tests.run` the none harness hands the
+    /// work over as it stands, `change.read` finds no commit beyond the base, so `pr.open` stays
+    /// blocked, and the edits are the judgement steps left (`gate.run` and `ci.read` only read and
+    /// record no choice, and are not offered to a harness that keeps no state).
     #[test]
     fn without_an_origin_the_forge_is_none_and_no_forge_step_is_taken() {
         let repo = gated_repository("forge-default-none", None);
@@ -1667,10 +1681,12 @@ mod tests {
         assert!(!out.contains("forge:"), "{out}");
         assert!(!out.contains("pr.open {}"), "{out}");
         assert!(!out.contains("ci.read {}"), "{out}");
+        assert!(out.contains("step 2: change.handover (none)"), "{out}");
+        assert!(out.contains("evidence: change_record none"), "{out}");
         assert!(out.contains("step 1: tests.run {}"), "{out}");
         assert!(
             out.contains(
-                "stopped: error: step 2: the harness failed; everything the step changed was discarded: no harness: a judgement step among change.handover, implementation.edit, tests.write is left"
+                "stopped: error: step 4: the harness failed; everything the step changed was discarded: no harness: a judgement step among implementation.edit, tests.write is left"
             ),
             "{out}"
         );
@@ -1692,9 +1708,11 @@ mod tests {
         assert!(!out.contains("forge:"), "{out}");
         assert!(!out.contains("pr.open {}"), "{out}");
         assert!(!out.contains("ci.read {}"), "{out}");
+        assert!(out.contains("step 2: change.handover (none)"), "{out}");
+        assert!(out.contains("evidence: change_record none"), "{out}");
         assert!(
             out.contains(
-                "stopped: error: step 2: the harness failed; everything the step changed was discarded: no harness: a judgement step among change.handover, implementation.edit, tests.write is left"
+                "stopped: error: step 4: the harness failed; everything the step changed was discarded: no harness: a judgement step among implementation.edit, tests.write is left"
             ),
             "{out}"
         );

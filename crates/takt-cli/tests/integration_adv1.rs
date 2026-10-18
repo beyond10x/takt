@@ -244,19 +244,6 @@ fn adv1_an_approval_before_the_push_lets_the_resumed_run_open_the_pull_request()
     git(&repo, &["add", "feature.txt"]);
     git(&repo, &["commit", "-q", "-m", "the work"]);
     let worked = git(&repo, &["rev-parse", "HEAD"]);
-    // The work handed over at its revision, the record takt writes for a `change.handover`
-    // step: a `--harness none` run takes no judgement step, so the test writes it.
-    takt::CaseDir::resume(&repo, &id)
-        .expect("the case reads back")
-        .add_evidence(&takt::evidence::Record::new(
-            "handover",
-            "handover",
-            None,
-            "implementation",
-            &worked,
-            takt::run::CHOICE_PRODUCER,
-        ))
-        .expect("the record is written");
 
     let (code, out, err) = takt(
         Some(&bin),

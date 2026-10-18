@@ -1,5 +1,5 @@
 //! Validators: programs that turn an observation into evidence: `tests.run`, `gate.run`,
-//! `pr.open`, `ci.read` and `repository.merge`.
+//! `pr.open`, `ci.read`, `repository.merge` and `change.read`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1308,5 +1308,93 @@ impl Validator for PrMerged {
             },
             false,
         ))
+    }
+}
+
+/// The actions takt's built-in validators perform, whether or not a run has them configured:
+/// an evidence kind any of them may produce is an observation, never a choice the step choice
+/// records (`crate::run`).
+pub const BUILT_IN_ACTIONS: [&str; 6] = [
+    "tests.run",
+    "gate.run",
+    "pr.open",
+    "ci.read",
+    "repository.merge",
+    ChangeRead::ACTION,
+];
+
+/// `change.read`: observes whether the implementation revision carries a commit beyond the
+/// case's base, takt's own take of the story (`takt: take <story>`) aside, and writes one
+/// `change_record`: `ahead` when it does, `none` when it does not. The base is the commit
+/// pinned in `branch.yaml` when the case opened, else the base branch it names; a case with
+/// neither writes no record. It reads git only: nothing is run from the tree and nothing leaves
+/// the machine.
+#[derive(Debug, Clone, Default)]
+pub struct ChangeRead;
+
+impl ChangeRead {
+    /// The action it performs.
+    pub const ACTION: &str = "change.read";
+}
+
+impl Validator for ChangeRead {
+    fn name(&self) -> &str {
+        "takt.change-read"
+    }
+
+    fn action(&self) -> &str {
+        Self::ACTION
+    }
+
+    fn kind(&self) -> &str {
+        "change_record"
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        let dir = current(tree)?;
+        let base = match base_revision(tree, &dir)? {
+            Some((shown, commit)) => Some((shown, commit)),
+            None => Branch::read(&dir)?.base.map(|name| (name.clone(), name)),
+        };
+        let Some((shown, base)) = base else {
+            return Ok(Observation {
+                summary: "the case records no base; nothing to compare, the claim stays unknown"
+                    .to_owned(),
+                records: Vec::new(),
+                artifact: None,
+            });
+        };
+        let ahead = crate::git::run(
+            tree,
+            &[
+                "rev-list",
+                "--count",
+                "--invert-grep",
+                "--extended-regexp",
+                "--grep=^takt: take [^ ]+$",
+                &format!("{base}..{revision}"),
+            ],
+        )?;
+        let result = if ahead.trim() == "0" { "none" } else { "ahead" };
+        Ok(Observation {
+            summary: format!(
+                "{} carries {} commit(s) beyond {shown} but the take: {result}",
+                short(revision),
+                ahead.trim()
+            ),
+            records: vec![Record::new(
+                format!("change-record-{seq}"),
+                self.kind(),
+                Some(result.to_owned()),
+                self.subject(),
+                revision,
+                self.name(),
+            )],
+            artifact: None,
+        })
     }
 }

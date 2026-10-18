@@ -255,6 +255,17 @@ fn at_the_gate(repo: &Path, memory: &Rc<Memory>) -> (String, String) {
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
+    // A commit beyond the case's base at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &worked[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &worked,
+            "takt.change-read",
+        ))
+        .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
     let text = String::from_utf8_lossy(&out).into_owned();

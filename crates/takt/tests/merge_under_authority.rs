@@ -203,6 +203,16 @@ fn to_the_gate(case: &mut CaseDir, first: usize) {
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
+        // A commit beyond the case's base at the revision, as `change.read` records it.
+        case.add_evidence(&Record::new(
+            format!("change-record-e{}", first + owed.len()),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
+        .expect("the record is written");
     }
     let decision = case
         .evaluate(case.evaluations().expect("counts") + 1)
@@ -317,6 +327,17 @@ fn first_run(tree: &Path, id: &str, memory: &Rc<Memory>) -> (String, PathBuf, St
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
+    // A commit beyond the case's base at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &revision[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
+        .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
     let text = String::from_utf8(out).expect("utf-8");
@@ -365,7 +386,7 @@ fn without_a_grant_the_run_stops_at_the_gate_and_the_resumed_run_merges_under_it
     // What the double has been asked so far, this probe included.
     let asked = memory.calls.borrow().len();
     let before = records(&case_dir);
-    assert_eq!(before.len(), 5, "{text}");
+    assert_eq!(before.len(), 6, "{text}");
     assert!(
         before
             .iter()
@@ -469,7 +490,7 @@ fn without_a_grant_the_run_stops_at_the_gate_and_the_resumed_run_merges_under_it
         PullRequestState::Merged
     );
     let after = records(&case_dir);
-    assert_eq!(after.len(), 6, "{text}");
+    assert_eq!(after.len(), 7, "{text}");
     let merges: Vec<&(String, serde_json::Value)> = after
         .iter()
         .filter(|(_, record)| record["kind"] == "merge_observation")
@@ -477,8 +498,8 @@ fn without_a_grant_the_run_stops_at_the_gate_and_the_resumed_run_merges_under_it
     assert_eq!(merges.len(), 1, "{text}");
     let (name, merge) = merges[0];
     assert!(
-        name.starts_with("0006-"),
-        "numbered after the five records already there: {name}"
+        name.starts_with("0007-"),
+        "numbered after the six records already there: {name}"
     );
     assert_eq!(merge["format"], "canon-evidence/1", "{merge}");
     assert_eq!(merge["result"], "merged", "{merge}");
@@ -1188,6 +1209,17 @@ fn adv_a_grant_the_harness_writes_into_the_case_does_not_merge() {
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
+    // A commit beyond the case's base at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &revision[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
+        .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
     let text = String::from_utf8(out).expect("utf-8");
@@ -1540,6 +1572,17 @@ fn run_with(
             takt::run::CHOICE_PRODUCER,
         ))
         .expect("the record is written");
+    // A commit beyond the case's base at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &revision[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
+        .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
     let text = String::from_utf8(out).expect("utf-8");
@@ -1573,6 +1616,7 @@ fn a_record_the_harness_plants_in_the_case_is_refused_and_removed() {
             "test_result",
             "gate_result",
             "handover",
+            "change_record",
             "pull_request",
             "ci_result"
         ],
@@ -1616,7 +1660,7 @@ fn a_case_file_the_harness_changes_or_removes_is_restored_and_the_step_refused()
         .iter()
         .map(|(name, _)| name.clone())
         .collect();
-    assert_eq!(names.len(), 5, "{names:?}\n{text}");
+    assert_eq!(names.len(), 6, "{names:?}\n{text}");
     assert_eq!(names[0], "0001-e1.json", "{names:?}");
     assert!(memory.merged.borrow().is_empty(), "{text}");
 }
@@ -1693,6 +1737,18 @@ fn adv2_a_case_finished_by_a_resumed_run_is_not_resumed_by_the_next_run() {
             "implementation",
             &revision,
             takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+    // A commit beyond the case's base at the revision, as `change.read` records it.
+    first
+        .case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &revision[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
         ))
         .expect("the record is written");
     let stop = first.run(&mut out).expect("the run stops without an error");
@@ -2331,6 +2387,17 @@ fn adv2_a_case_resumed_at_a_new_commit_re_establishes_its_claims_before_the_merg
             "implementation",
             &moved,
             takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+    // A commit beyond the case's base at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &moved[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &moved,
+            "takt.change-read",
         ))
         .expect("the record is written");
     let mut out = Vec::new();

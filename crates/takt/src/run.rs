@@ -144,21 +144,64 @@ fn is_due(
 /// action's effect, the evidence kinds each action may produce, the kinds each claim is decided
 /// from (through the claims it reads), and the kinds that record a choice.
 ///
-/// A kind records a choice when every action that may produce it declares `effect: read` and
-/// every predicate that reads it (a claim's, an obligation's, a precondition, an outcome's)
-/// reads it without a `result`: what it attests is that the harness took the action, not an
-/// observation's outcome. Such a record is written by takt from the step itself ([`Run::run`]);
-/// every other kind only a validator writes.
+/// A kind records a choice when every action that may produce it declares `effect: read`, none
+/// of them is an action a built-in validator performs ([`crate::validator::BUILT_IN_ACTIONS`],
+/// whether or not the run has that validator), and every predicate that reads it (a claim's, an
+/// obligation's, a precondition, an outcome's) reads it without a `result`: what it attests is
+/// that the harness took the action, not an observation's outcome. Such a record is written by
+/// takt from the step itself ([`Run::run`]); every other kind only a validator writes. A kind
+/// that records a choice and that the protocol reads about no artifact is refused when the
+/// protocol is read: its record could be bound to no revision.
 struct Shape {
     effects: BTreeMap<String, String>,
     produces: BTreeMap<String, BTreeSet<String>>,
     reads: BTreeMap<String, BTreeSet<String>>,
     /// The kinds that record a choice, each with the artifacts the predicates reading it name.
     choices: BTreeMap<String, BTreeSet<String>>,
+    /// The actions whose precondition the case's inputs make false for good: false whatever any
+    /// claim or evidence becomes.
+    blocked_for_good: BTreeSet<String>,
+}
+
+/// The value of `predicate` from the case's `inputs` alone, every claim and every evidence
+/// match unknown: `Some(false)` only when no claim or evidence could make it true.
+fn by_inputs(
+    predicate: &b10x_canon::model::Predicate,
+    inputs: &[(String, String)],
+) -> Option<bool> {
+    use b10x_canon::model::{InputValue, Predicate};
+    match predicate {
+        Predicate::All(members) => {
+            let values: Vec<Option<bool>> = members.iter().map(|m| by_inputs(m, inputs)).collect();
+            if values.contains(&Some(false)) {
+                Some(false)
+            } else if values.iter().all(|v| *v == Some(true)) {
+                Some(true)
+            } else {
+                None
+            }
+        }
+        Predicate::Any(members) => {
+            let values: Vec<Option<bool>> = members.iter().map(|m| by_inputs(m, inputs)).collect();
+            if values.contains(&Some(true)) {
+                Some(true)
+            } else if values.iter().all(|v| *v == Some(false)) {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        Predicate::Not(inner) => by_inputs(inner, inputs).map(|value| !value),
+        Predicate::Input(test) => inputs
+            .iter()
+            .find(|(name, _)| name == test.input.as_str())
+            .map(|(_, value)| test.holds_for(&InputValue::new(value.clone()))),
+        _ => None,
+    }
 }
 
 impl Shape {
-    fn of(protocol: &LoadedProtocol) -> Result<Self> {
+    fn of(protocol: &LoadedProtocol, inputs: &[(String, String)]) -> Result<Self> {
         use b10x_canon::model::Predicate;
         let model = b10x_canon::model::parse(&protocol.yaml)
             .map_err(|error| anyhow::anyhow!("read the protocol {}: {error}", protocol.id))?;
@@ -239,13 +282,36 @@ impl Shape {
                 && producers
                     .iter()
                     .all(|action| effects.get(*action).is_some_and(|e| e == "read"))
+                && !producers
+                    .iter()
+                    .any(|action| crate::validator::BUILT_IN_ACTIONS.contains(&action.as_str()))
             {
-                choices.insert(
-                    kind.clone(),
-                    subjects.get(kind).cloned().unwrap_or_default(),
-                );
+                let about = subjects.get(kind).cloned().unwrap_or_default();
+                if about.is_empty() {
+                    bail!(
+                        "the protocol {} reads {kind}, a kind that records a choice ({} may produce it), about no artifact: its record could be bound to no revision; name the artifact (subject) where it is read",
+                        protocol.id,
+                        producers
+                            .iter()
+                            .map(|action| action.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                choices.insert(kind.clone(), about);
             }
         }
+        let blocked_for_good = model
+            .actions
+            .iter()
+            .filter(|(_, action)| {
+                action
+                    .precondition
+                    .as_ref()
+                    .is_some_and(|precondition| by_inputs(precondition, inputs) == Some(false))
+            })
+            .map(|(id, _)| id.as_str().to_owned())
+            .collect();
         let mut direct: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> = BTreeMap::new();
         for (id, claim) in model.claims.iter() {
             let mut kinds = BTreeSet::new();
@@ -289,6 +355,7 @@ impl Shape {
             produces,
             reads,
             choices,
+            blocked_for_good,
         })
     }
 
@@ -319,14 +386,17 @@ impl Shape {
         !self.is(action, "read") || !self.choices_of(action).is_empty()
     }
 
-    /// The actions that may produce evidence `claim` is decided from.
+    /// The actions that may produce evidence `claim` is decided from, but those the case's
+    /// inputs block for good.
     fn producers(&self, claim: &str) -> BTreeSet<String> {
         let Some(kinds) = self.reads.get(claim) else {
             return BTreeSet::new();
         };
         self.produces
             .iter()
-            .filter(|(_, produced)| !produced.is_disjoint(kinds))
+            .filter(|(action, produced)| {
+                !produced.is_disjoint(kinds) && !self.blocked_for_good.contains(*action)
+            })
             .map(|(action, _)| action.clone())
             .collect()
     }
@@ -1379,7 +1449,7 @@ impl<'a> Run<'a> {
         // sequence, never repeats.
         let mut seq = self.case.evaluations()?;
         let mut last_idle: Option<String> = None;
-        let shape = Shape::of(&self.case.protocol)?;
+        let shape = Shape::of(&self.case.protocol, &self.options.inputs)?;
         let keeps_state = self.harness.keeps_state();
         // The validators that observed without writing a record, each with the revision it
         // observed at: not due again there, because the next observation would end the same
@@ -1702,11 +1772,17 @@ impl<'a> Run<'a> {
                 .into_iter()
                 .filter(|a| self.options.gate.as_deref() == Some(a.as_str()))
                 .collect();
+            let choices: Vec<String> = offered
+                .iter()
+                .filter(|a| !shape.choices_of(a).is_empty())
+                .cloned()
+                .collect();
             let context = StepContext {
                 tree: &self.tree,
                 intent: &self.options.intent,
                 offered: &offered,
                 approvals: &approvals,
+                choices: &choices,
                 decision: &decision,
                 protocol: &self.case.protocol,
                 step: self.steps as usize,
@@ -2026,12 +2102,6 @@ impl<'a> Run<'a> {
                 writeln!(out, "  effect: no file changed")?;
                 let mut recorded = false;
                 for (kind, subjects) in choices {
-                    if subjects.is_empty() {
-                        bail!(
-                            "the protocol reads {kind}, which {} produces, about no artifact; nothing is recorded",
-                            report.action
-                        );
-                    }
                     for subject in subjects {
                         if self.case.has_evidence(kind, subject)? {
                             continue;
