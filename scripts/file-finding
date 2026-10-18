@@ -19,17 +19,25 @@
 #   source: docs/runs/trial-1.md
 #   ```
 #
-#   scenario  the scenario's id, as `.engineering/scenarios.conf` of the scenario repository
-#             declares it (letters, digits, `-` and `_`)
-#   command   one shell line, run by `scripts/check-finding` in a fresh checkout of the scenario's
-#             seed with `$TAKT` the takt binary under test and `$SCENARIO` the checkout
-#   exit      the exit status the command gives while the defect is present, 0 to 255 but 124
-#             and 137, which `scripts/check-finding` reads as its timeout
-#   output    a fixed string its standard output or standard error then holds
-#   source    the run record or review that produced the finding, a path relative to the
-#             repository that exists
+#   scenario    the scenario's id, as `.engineering/scenarios.conf` of the scenario repository
+#               declares it (letters, digits, `-` and `_`)
+#   repository  instead of a scenario: the repository the defect was seen on, an `https://` URL
+#               or an absolute path, cloned by `scripts/check-finding` at `seed`
+#   seed        with `repository`: the commit the task starts from, a commit id of 7 to 64 hex
+#               digits
+#   test        with `repository`, optional: the task's test command, handed to the command as
+#               `$TEST`
+#   command     one shell line, run by `scripts/check-finding` in a fresh checkout of the
+#               scenario's seed, or of `repository` at `seed`, with `$TAKT` the takt binary
+#               under test and `$SCENARIO` the checkout
+#   exit        the exit status the command gives while the defect is present, 0 to 255 but 124
+#               and 137, which `scripts/check-finding` reads as its timeout
+#   output      a fixed string its standard output or standard error then holds
+#   source      the run record or review that produced the finding, a path relative to the
+#               repository that exists
 #
-# `exit`, `output` or both; the predicate holds when every one given does.
+# `scenario` or `repository`, one of the two; `exit`, `output` or both; the predicate holds when
+# every one given does.
 #
 # Standard output is one line, the result of the `finding_record` evidence kind
 # (protocols/self-improvement/1.yaml): `filed` (exit 0) or `malformed` (exit 2). Everything else
@@ -90,8 +98,8 @@ read_predicate() {
         value=${value#"${value%%[![:space:]]*}"}
         value=${value%"${value##*[![:space:]]}"}
         case $key in
-        scenario | command | exit | output | source) ;;
-        *) malformed "the expected_before block gives \`$key\`, which nothing reads; it gives scenario, command, exit, output and source" ;;
+        scenario | repository | seed | test | command | exit | output | source) ;;
+        *) malformed "the expected_before block gives \`$key\`, which nothing reads; it gives scenario or repository, seed and test, command, exit, output and source" ;;
         esac
         [[ -v PREDICATE[$key] ]] && malformed "the expected_before block gives \`$key\` twice"
         [[ -n $value ]] || malformed "the expected_before block gives \`$key\` no value"
@@ -101,11 +109,32 @@ read_predicate() {
     ((blocks == 1)) || malformed "the body holds $blocks expected_before blocks; a finding has one predicate"
     ((!inside)) || malformed "the expected_before block is never closed"
     local name
-    for name in scenario command source; do
+    for name in command source; do
         [[ -v PREDICATE[$name] ]] || malformed "the expected_before block gives no \`$name\`"
     done
-    [[ ${PREDICATE[scenario]} =~ ^[A-Za-z0-9_-]+$ ]] ||
-        malformed "scenario \`${PREDICATE[scenario]}\`: a scenario id is letters, digits, \`-\` and \`_\`"
+    # One form: a scenario the scenario repository declares, or a repository and a seed the
+    # predicate names itself.
+    if [[ -v PREDICATE[scenario] && -v PREDICATE[repository] ]]; then
+        malformed "the expected_before block gives both \`scenario\` and \`repository\`; a predicate runs on one of them"
+    elif [[ -v PREDICATE[scenario] ]]; then
+        [[ ${PREDICATE[scenario]} =~ ^[A-Za-z0-9_-]+$ ]] ||
+            malformed "scenario \`${PREDICATE[scenario]}\`: a scenario id is letters, digits, \`-\` and \`_\`"
+        for name in seed test; do
+            [[ -v PREDICATE[$name] ]] &&
+                malformed "the expected_before block gives \`$name\` with a scenario; \`$name\` goes with \`repository\`, whose seed the scenario repository declares"
+        done
+    elif [[ -v PREDICATE[repository] ]]; then
+        case ${PREDICATE[repository]} in
+        https://?*) ;;
+        /?*) ;;
+        *) malformed "repository \`${PREDICATE[repository]}\`: a repository is an \`https://\` URL or an absolute path, so the check clones it with no credential of its own" ;;
+        esac
+        [[ -v PREDICATE[seed] ]] || malformed "the expected_before block gives \`repository\` but no \`seed\`: the commit the task starts from"
+        [[ ${PREDICATE[seed]} =~ ^[0-9a-f]{7,64}$ ]] ||
+            malformed "seed \`${PREDICATE[seed]}\`: a seed is a commit id, 7 to 64 hex digits, so the check starts from the same tree every time"
+    else
+        malformed "the expected_before block gives neither \`scenario\` nor \`repository\`: nothing to run the command on"
+    fi
     [[ -v PREDICATE[exit] || -v PREDICATE[output] ]] ||
         malformed "the expected_before block gives neither \`exit\` nor \`output\`: nothing to check the command against"
     if [[ -v PREDICATE[exit] ]]; then
@@ -144,7 +173,7 @@ if [[ -n $predicate_only ]]; then
     [[ -f $predicate_only && -r $predicate_only ]] || usage "--predicate $predicate_only: no readable file"
     read_body "$predicate_only" || usage "--predicate $predicate_only: unreadable"
     read_predicate "$BODY"
-    for name in scenario command exit output source; do
+    for name in scenario repository seed test command exit output source; do
         [[ -v PREDICATE[$name] ]] && printf '%s\t%s\n' "$name" "${PREDICATE[$name]}"
     done
     exit 0
