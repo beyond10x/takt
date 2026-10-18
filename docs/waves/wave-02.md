@@ -1,6 +1,6 @@
 # Wave 02: Pull the next ready story from the planning store as the unit of a run
 
-Skill: `aep:implementing` 0.23.1, wave mode. Stage: **2, dispatched** (updated as the unit moves). Approval: the operator's standing approval for the waves of `epic:composable-agentic-work` (same commit boundary each wave; no push).
+Skill: `aep:implementing` 0.23.1, wave mode. Stage: **closed** (unit merged, gate green, story implemented). Approval: the operator's standing approval for the waves of `epic:composable-agentic-work` (same commit boundary each wave; no push).
 
 ## Unit
 
@@ -152,7 +152,7 @@ Selection path: `aep plan artifact waves --kind story --status draft --format js
 | unit | branch | worktree | build dir | scratch |
 |---|---|---|---|---|
 | integration | `wave/2026-10-18-w2` | managed tree `takt-w2-int` | its `target/` | `~/.cache/takt-waves/2026-10-18-w2/int/scratch` |
-| frontier-next-ready-story | `impl/frontier-next-ready-story` at 366735b (correction 1), 45 cases; pass 1 recorded (1 blocker, 2 warnings, 1 note; all fixed), pass 2 running | managed tree `takt-w2-frontier` | its `target/` | `~/.cache/takt-waves/2026-10-18-w2/frontier/scratch` |
+| frontier-next-ready-story | `impl/frontier-next-ready-story` at 6ef44b6 (corrections 1 and 2), 53 cases; pass 1 (4 findings) and pass 2 (6) recorded; VERIFIED; merged | managed tree `takt-w2-frontier` | its `target/` | `~/.cache/takt-waves/2026-10-18-w2/frontier/scratch` |
 
 ## Dispatch
 
@@ -167,3 +167,4 @@ The opening store commit (this page, the story to `active`), the unit's commits,
 - 2026-10-18: opened under the standing approval; `story:frontier-next-ready-story` moved to active.
 - 2026-10-18: unit green at 3a411bf; red run: unresolved module (exit 101); green: lib 14, frontier 4, loop 2, story_delivery 13, cli 3. Scope correction: the intent argument sits at main.rs:36-38, not :30-32. Adversary pass 1 dispatched (`aep:adversary`).
 - 2026-10-18: adversary pass 1 (133,737 tokens, 42 tool uses, 12 min): the story was taken before the case was opened; correction 1 at 366735b (227,833 tokens, 26 tool uses, 6 min): the case first, a refused take removes it; 45 cases. Pass 2 dispatched. Pass-1 scratch holds a 702M mutant build directory, removed at teardown.
+- 2026-10-18 04:2xZ: pass 2 (185,095 tokens, 66 tool uses, 15 min; confirmed: a pre-existing defect in CaseDir::open found by two red cases, two mutant blind spots now covered, two notes no-op); correction 2 at 6ef44b6 (277,706 tokens, 27 tool uses, 6 min; the coordinator read the diff). Merge 7be883c; the domain comment on the unit updated. Gate on e8c5e3a, each step its own exit status: ess specify validate 0; cargo fmt --check 0; cargo clippy -D warnings 0; cargo test --workspace 0 (53 tests, 0 failed). Scope rewritten and typed (case.rs and frontier_cli.rs added); test_result evidence; story implemented. Sub-agent cost of the wave: 5 runs, about 1.0 M tokens. Teardown: pass-1 and pass-2 scratch hold 702M and 835M mutant build directories, removed at teardown by exact path.

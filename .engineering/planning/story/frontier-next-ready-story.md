@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:frontier-next-ready-story
 kind: story
-status: active
+status: implemented
 title: Pull the next ready story from the planning store as the unit of a run
 summary: The Frontier seam with an aep adapter and the ready rule as code; the story goes active when taken
 relations:
@@ -12,6 +12,10 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt-cli/src/main.rs
+- confidence: cited
+  path: crates/takt-cli/tests/frontier_cli.rs
+- confidence: cited
+  path: crates/takt/src/case.rs
 - confidence: inferred
   path: crates/takt/src/frontier.rs
 - confidence: cited
@@ -20,10 +24,11 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/tests/frontier.rs
-revision: 7
+revision: 11
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T03:24:17Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-10-18T03:24:17Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-10-18T04:25:50Z", actor: "human:timo", revision: 11, decided_on: {"recorded":{"test_result":1,"review_outcome":5,"verification":1}}}
 ---
 # Story: frontier-next-ready-story
 
@@ -70,3 +75,23 @@ Evidence written back on the story and the move to `implemented` (story:run-reco
 - Which status means ready: `inferable`, aep `artifacts/lifecycles/story.yaml` `descriptions` (`proposed`: refined and agreed enough to pick up).
 - Reading the store through the CLI versus linking the `aep` crates: `inferable` as the choice recorded here, `AGENTS.md:14` names the verbs as the only door to the store, and the CLI is what the store validates.
 - A story already `active` with an open case from an earlier run: `requires-stakeholder-input`, decision-blocker:approval-grant-and-case-resume.
+
+## ## Scope
+
+## Scope
+
+Confirmed by the implementor (wave 02), each line as the unit landed:
+
+- `crates/takt/src/frontier.rs` (inferred → confirmed): created; the `Frontier` seam, the ready
+  rule, the `aep` adapter with a store guard on every verb, a bounded retry on a busy executable.
+- `crates/takt/src/run.rs` (cited): confirmed; `Run::open_next` opens the case before the story
+  is taken and removes it on a refused take.
+- `crates/takt/src/lib.rs` (cited): confirmed; the module and its re-exports.
+- `crates/takt-cli/src/main.rs` (cited, corrected): the intent argument sat at :36-38 in the base
+  tree, not :30-32; `--intent` optional, the frontier asked without it.
+- `crates/takt/tests/frontier.rs` and `crates/takt/tests/fixtures/{one-ready,none-ready}`
+  (inferred → confirmed): created; the fixture stores built with `aep` itself.
+- `crates/takt-cli/tests/frontier_cli.rs` (added by the adversary, adopted by the unit): the
+  binary end to end on fixture copies.
+- `crates/takt/src/case.rs` (added in correction 2): `CaseDir::open` writes a case only after
+  everything refusable is decided; a pre-existing defect the adversary's second pass found.
