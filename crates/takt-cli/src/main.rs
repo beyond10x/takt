@@ -8,7 +8,7 @@ use std::rc::Rc;
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
 use takt::forge::{BotRoute, Forge, repository_of};
-use takt::frontier::Aep;
+use takt::frontier::{Aep, Frontier as _};
 use takt::harness::{ClaudeCode, Harness};
 use takt::validator::{CiRead, DEFAULT_PROJECT, GateRun, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{LoadedProtocol, Run, RunOptions, Stop, Unit};
@@ -271,10 +271,25 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 Some(given) => given.clone(),
                 None => LoadedProtocol::builtin(&opening)?,
             };
+            // The case this run resumes, found before anything is resumed: resuming checks the
+            // tree out onto the case's branch and records its head, so every refusal of what was
+            // given for it comes first. A resumed case keeps the protocol and the inputs it was
+            // opened with: a `--protocol` that names another, or any `--input`, is refused.
+            let resuming = case_to_resume(&repo, case.as_deref(), intent.is_some())?;
+            if let Some((id, own)) = &resuming {
+                if let (Some(given), Some(spec)) = (&given, &protocol) {
+                    refuse_another_protocol(id, own, given, spec)?;
+                }
+                if let Some((name, _)) = inputs.first() {
+                    return Err(anyhow!(
+                        "--input {name}: the case {id} is resumed, and a resumed case keeps the inputs it was opened with; run without --input; nothing was changed"
+                    ));
+                }
+            }
             // A case keeps only the inputs its protocol declares: one it does not declare would
             // be dropped without a word, so a case to be opened refuses it before anything is.
-            // A resumed case reads its own inputs, never these.
             if case.is_none()
+                && resuming.is_none()
                 && let Some((name, _)) = inputs
                     .iter()
                     .find(|(name, _)| !opens_on.inputs.iter().any(|(declared, _)| declared == name))
@@ -404,12 +419,6 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     }
                 },
             };
-            // A resumed case keeps the protocol it was opened on: a `--protocol` that names
-            // another is refused here, after the case was read and before anything ran. A case
-            // opened by this run is on the protocol given, by construction.
-            if let (Some(given), Some(spec)) = (&given, &protocol) {
-                refuse_another_protocol(&run.case, given, spec)?;
-            }
             if let Some(line) = &forge_line {
                 writeln!(out, "{line}")?;
             }
@@ -450,22 +459,53 @@ const STORY_DELIVERY: &str = "story.delivery/1";
 /// The protocol an `--intent` opens on when `--protocol` is not given.
 const SOFTWARE_CHANGE: &str = "software.change/1";
 
-/// Refuses `given`, named on the command line as `spec`, for `case` when it is not the protocol
-/// the case runs on: another id, or another document under the same id.
-fn refuse_another_protocol(case: &takt::CaseDir, given: &LoadedProtocol, spec: &str) -> Result<()> {
-    let own = &case.protocol;
+/// The case a run will resume, read without resuming it, with the protocol from its own
+/// `protocol.yaml`: the one `--case` names, when its directory holds a case; for a run with
+/// neither `--case` nor `--intent`, the open case of a story the store lists active, found as
+/// `Run::open_next` finds it. `None` when the run opens a case, or when `--case` names none
+/// (`Run::resume` refuses that). Nothing is checked out and nothing written.
+fn case_to_resume(
+    repo: &Path,
+    case: Option<&str>,
+    intent: bool,
+) -> Result<Option<(String, LoadedProtocol)>> {
+    let id = match (case, intent) {
+        (Some(id), false) => id.to_owned(),
+        (None, false) => {
+            let active = Aep::default().active(repo)?;
+            match takt::case::resumable(repo, &active, &mut std::io::sink())? {
+                Some((id, _story)) => id,
+                None => return Ok(None),
+            }
+        }
+        (_, true) => return Ok(None),
+    };
+    let dir = repo.join(takt::case::CASES_DIR).join(&id);
+    if !dir.join("case.yaml").is_file() {
+        return Ok(None);
+    }
+    let own = LoadedProtocol::from_file(&dir.join("protocol.yaml"))?;
+    Ok(Some((id, own)))
+}
+
+/// Refuses `given`, named on the command line as `spec`, for the case `id` when it is not
+/// `own`, the protocol the case runs on: another id, or another document under the same id.
+fn refuse_another_protocol(
+    id: &str,
+    own: &LoadedProtocol,
+    given: &LoadedProtocol,
+    spec: &str,
+) -> Result<()> {
     if own.id != given.id {
         return Err(anyhow!(
-            "the case {} runs on {}, not {} (--protocol {spec}): a case keeps the protocol it was opened on; resume it without --protocol; nothing was changed",
-            case.id,
+            "the case {id} runs on {}, not {} (--protocol {spec}): a case keeps the protocol it was opened on; resume it without --protocol; nothing was changed",
             own.id,
             given.id
         ));
     }
     if own.ir_json != given.ir_json {
         return Err(anyhow!(
-            "the case {} runs on its own copy of {}, and --protocol {spec} is another document of {}: a case keeps the protocol it was opened on; resume it without --protocol; nothing was changed",
-            case.id,
+            "the case {id} runs on its own copy of {}, and --protocol {spec} is another document of {}: a case keeps the protocol it was opened on; resume it without --protocol; nothing was changed",
             own.id,
             given.id
         ));

@@ -258,6 +258,47 @@ fn an_input_the_opening_protocol_does_not_declare_is_refused_before_anything_is_
     );
 }
 
+/// An input given for a case that is resumed, not opened, is one the resume would drop: the
+/// open case of an active story on `software.change/1`, which declares `risk`, given
+/// `--input risk=elevated` by a run with no intent (with and without its own `--protocol`) or
+/// with `--case`. Refused, naming the resumed case and not the protocol a new case would open
+/// on, saying a resumed case keeps its inputs; the tree, back on `main`, left as it was.
+#[test]
+fn an_input_given_for_a_resumed_case_is_refused_touching_nothing() {
+    let (_outer, repo) = repository(Some("one-ready"), "resumed-input");
+    let path = repo.to_str().expect("utf-8");
+    let mut args = no_steps(path);
+    args.extend(["--protocol", "software.change/1"]);
+    let (code, out, err) = takt(&args);
+    assert_eq!(code, 3, "stdout {out} stderr {err}");
+    let case = the_case(&repo);
+    git(&repo, &["checkout", "-q", "main"]);
+    let before = everything(&repo);
+    for extra in [
+        vec![],
+        vec!["--protocol", "software.change/1"],
+        vec!["--case", case.as_str()],
+    ] {
+        let mut args = no_steps(path);
+        args.extend(extra.iter().copied());
+        args.extend(["--input", "risk=elevated"]);
+        let (code, out, err) = takt(&args);
+        assert_eq!(code, 1, "{extra:?}: stdout {out} stderr {err}");
+        assert!(
+            err.contains(&format!("the case {case} is resumed"))
+                && err.contains("keeps the inputs it was opened with"),
+            "{extra:?}: stdout {out} stderr {err}"
+        );
+        assert!(!err.contains("story.delivery/1"), "{extra:?}: {err}");
+        assert!(!out.contains("stopped:"), "{extra:?}: {out}");
+        assert_eq!(
+            everything(&repo),
+            before,
+            "{extra:?}: the refused run changed the tree"
+        );
+    }
+}
+
 /// An intent, with no `--protocol`: the case opens on `software.change/1`, as before.
 #[test]
 fn an_intent_without_a_protocol_opens_on_software_change() {

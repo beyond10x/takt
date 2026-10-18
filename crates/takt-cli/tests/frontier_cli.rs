@@ -259,7 +259,9 @@ esac
 
 /// A case input outside the protocol's declared values: `CaseDir::open` refuses it before it
 /// writes anything, so the run exits 1, asks for no move (the story stays `proposed`) and
-/// leaves no case directory. An operator's typo in `--input risk=…` reaches it.
+/// leaves no case directory. An operator's typo in `--input risk=…` reaches it. The protocol is
+/// `software.change/1`, which declares `risk`, so the value check is what refuses it, not the
+/// binary's refusal of an input the protocol does not declare.
 #[test]
 fn a_run_whose_input_is_refused_leaves_the_story_proposed_and_no_case_directory() {
     let repo = repository("one-ready", "adv2-input");
@@ -273,11 +275,16 @@ fn a_run_whose_input_is_refused_leaves_the_story_proposed_and_no_case_directory(
         "1",
         "--test-cmd",
         "true",
+        "--protocol",
+        "software.change/1",
         "--input",
         "risk=bogus",
     ]);
     assert_eq!(code, 1, "the run fails: stdout {out} stderr {err}");
-    assert!(err.contains("risk"), "the error names the input: {err}");
+    assert!(
+        err.contains("the input risk takes one of") && err.contains("not `bogus`"),
+        "the value check of CaseDir::open names the input: {err}"
+    );
     assert!(!out.contains("frontier: took"), "{out}");
     assert_eq!(
         status(&repo, "story:ready-one"),
