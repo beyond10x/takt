@@ -1,7 +1,8 @@
 # Metrics over time
 
 The figures takt is judged by, kept as a committed series so a later run can be compared with an
-earlier one. Each file is JSON Lines: one object per line, appended to, never rewritten.
+earlier one. The data files are JSON Lines, one object per line. The three record files are
+appended to and never rewritten; `journeys.jsonl` is generated from them.
 
 | file | one line per |
 |---|---|
@@ -67,26 +68,42 @@ tokens, not tokens alone.
   file tools only.
 - Two known overheads are filed: a model step spent only on asking for the merge approval
   (`story:no-model-step-for-approval`, about 30k tokens per run), and CI running twice because
-  the pull request opens before the tests are written.
+  the pull request opens before the tests are written (`story:pr-opens-when-change-is-done`).
 - `I-modefail-1..3` are three attempts of the isolated arm that claude refused at start
   ("bypassPermissions not supported in restricted mode"), a runner configuration error. They are
   recorded with null figures and do not count towards the arm's medians.
 - Codex is another vendor; its model (gpt-6-astra) is read from its configuration, not from the
   run, and it reports no cost.
 - takt at 0a776d2 needed an https-origin workaround for a bug in its trial fetch; without it, 0/3
-  runs got past the fetch (`T-fetchfail-1..3`).
+  runs got past the fetch (`T-fetchfail-1..3`; `story:trial-fetch-needs-no-user-ssh`).
 - The earlier takt trials state only the stop, the steps and the tokens; they are not timed.
 - n is small: first results, not a benchmark.
+
+## The later runs and the first turn (2026-10-18)
+
+- takt at 97623a6 (wave 09) and at 447423c (the turn-1 candidate), 3 runs each: median tokens
+  142,454 and 151,626, median cost $0.31 and $0.32, median wall time 132 s and 159 s. Neither is
+  cheaper than takt at 0a776d2 or than the isolated arm. All six passed the held-out check.
+- Three of those six runs (T-5, T-7, T-9) needed a resume after a `repository.inspect` step ended
+  in `NoProgress` (`story:no-inspect-for-stateless-harness`).
+- `improvement-turns.jsonl` holds one turn, accepted by Canon. Its scorecard compares T-1..3 with
+  T-7..9: no worse outcome, median tokens +23.8%. The run record,
+  `docs/runs/2026-10-18-improvement-turn-1/README.md`, lists six deviations from the protocol as
+  designed, the first being that the records were written by hand (phase R0).
 
 ## `improvement-turns.jsonl`
 
 | field | meaning |
 |---|---|
+| `id`, `scenario` | the turn's name and the scenario it was checked on |
 | `finding` | the story that names the defect |
 | `predicate` | the command `scripts/check-finding` ran on the scenario |
 | `before`, `after` | revision, `reproduced` or `not_reproduced`, exit code, date and source of each check |
-| `merged` | branch, commit and date the fix was merged at |
-| `promoted_at` | the release the fix was promoted in; `null` until a scorecard promotes one |
+| `merged`, `reached_main` | branch, commit and date the fix was merged at, and the merge into `main` that carried it |
+| `scorecard_result`, `scorecard` | the comparison of the candidate with the baseline: the runs on each side, their median tokens, the change in per cent, notes and sources |
+| `outcome` | Canon's outcome for the turn's case, such as `accepted` |
+| `promoted_at` | the revision the fix was promoted at; `null` until one is promoted |
+| `source`, `notes` | the run record and case the line was read from, and what a reader needs to read it right |
 
 ## `waves.jsonl`
 
