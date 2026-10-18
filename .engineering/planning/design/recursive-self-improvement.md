@@ -8,7 +8,7 @@ summary: Three levels (work, takt, the loop), two agent roles, a pinned judge, a
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 8
+revision: 9
 ---
 # Design: recursive self-improvement of takt
 
@@ -55,7 +55,7 @@ that delegation was not revoked; it refuses every other grant there. story:judge
 it; until then the delegation is a record the wave cites (`docs/waves/wave-07.md`: four
 judge-surface merges under the operator role's grant on the owner's delegation, before the
 operator role was split). The planner grants only on the reviewer's verdict at the exact sha it
-grants, and a diff that widens authority waits for the owner's grant. The target stays 0
+grants; a diff that widens authority is granted under the owner's standing grant of 2026-10-18 and named to the owner. The target stays 0
 judge-surface merges without the grant the surface requires (`product-requirements:takt` § 3).
 Merge authority split by surface is the owner's decision (2026-10-18), and so are delegation on
 record (2026-10-18) and the four agent roles, which split the operator role into planner,
