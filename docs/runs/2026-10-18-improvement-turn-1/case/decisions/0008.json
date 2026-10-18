@@ -1,0 +1,212 @@
+{
+  "actions": {
+    "binary.promote": {
+      "status": "admissible"
+    },
+    "candidate.deliver": {
+      "status": "admissible"
+    },
+    "candidate.merge": {
+      "reasons": [
+        {
+          "input": "surface",
+          "value": "judge"
+        }
+      ],
+      "status": "blocked"
+    },
+    "candidate.merge_judge_surface": {
+      "status": "admissible"
+    },
+    "finding.file": {
+      "status": "admissible"
+    },
+    "scenario.reproduce": {
+      "status": "admissible"
+    },
+    "scenario.verify": {
+      "status": "admissible"
+    },
+    "scorecard.compare": {
+      "status": "admissible"
+    }
+  },
+  "case": "turn-1-scenario-help",
+  "claims": {
+    "finding.cited": {
+      "value": "true"
+    },
+    "fix.merged": {
+      "value": "true"
+    },
+    "promoted": {
+      "value": "true"
+    },
+    "scenario.passes_after": {
+      "value": "true"
+    },
+    "scenario.reproduced_before": {
+      "value": "true"
+    },
+    "scorecard.no_regression": {
+      "value": "true"
+    }
+  },
+  "explanation": {
+    "actions": {
+      "candidate.merge": {
+        "because": [
+          {
+            "input": "surface",
+            "value": "judge"
+          }
+        ],
+        "status": "blocked"
+      }
+    },
+    "computed_from": {
+      "at": "2026-10-18T16:02:08Z",
+      "authority": [
+        {
+          "capability": "repository.merge.judge_surface",
+          "decision": "granted"
+        },
+        {
+          "capability": "takt.promote",
+          "decision": "granted"
+        }
+      ],
+      "case": {
+        "artifacts": {
+          "baseline": {
+            "revision": "0a776d2"
+          },
+          "candidate": {
+            "revision": "447423c"
+          },
+          "finding": {
+            "revision": "eb54f3a"
+          },
+          "promotion": {
+            "revision": "a0b8576fe56aca1304e412eb62e5622762de198a"
+          }
+        },
+        "format": "canon-case/1",
+        "id": "turn-1-scenario-help",
+        "independence": {
+          "planner-run": [
+            "different_agent_run"
+          ]
+        },
+        "inputs": {
+          "surface": "judge"
+        },
+        "protocol": "self.improvement"
+      },
+      "evidence": [
+        "e1",
+        "e2",
+        "e3",
+        "e4",
+        "e5",
+        "e6"
+      ],
+      "protocol": "self.improvement",
+      "protocol_revision": 1,
+      "semantics": {
+        "canon": "0.6.0",
+        "format": "canon-decision/1"
+      }
+    },
+    "outcomes": {
+      "abandoned": {
+        "because": [
+          {
+            "decision": "explicitly_abandoned",
+            "present": false
+          }
+        ],
+        "status": "blocked"
+      },
+      "declined": {
+        "because": [
+          {
+            "evidence": "scenario_result",
+            "present": true,
+            "subject": "candidate"
+          },
+          {
+            "evidence": "e3",
+            "status": "applied"
+          }
+        ],
+        "status": "blocked"
+      },
+      "unreproducible": {
+        "because": [
+          {
+            "evidence": "scenario_result",
+            "present": true,
+            "subject": "baseline"
+          },
+          {
+            "evidence": "e2",
+            "status": "applied"
+          }
+        ],
+        "status": "blocked"
+      }
+    }
+  },
+  "format": "canon-decision/1",
+  "obligations": [
+    {
+      "id": "regression.required",
+      "status": "discharged"
+    },
+    {
+      "id": "reproduction.required",
+      "status": "discharged"
+    },
+    {
+      "id": "verification.required",
+      "status": "discharged"
+    }
+  ],
+  "outcomes": {
+    "abandoned": {
+      "reasons": [
+        {
+          "decision": "explicitly_abandoned",
+          "present": false
+        }
+      ],
+      "status": "blocked"
+    },
+    "accepted": {
+      "status": "legitimate"
+    },
+    "declined": {
+      "reasons": [
+        {
+          "evidence": "scenario_result",
+          "present": true,
+          "subject": "candidate"
+        }
+      ],
+      "status": "blocked"
+    },
+    "unreproducible": {
+      "reasons": [
+        {
+          "evidence": "scenario_result",
+          "present": true,
+          "subject": "baseline"
+        }
+      ],
+      "status": "blocked"
+    }
+  },
+  "protocol": "self.improvement",
+  "protocol_revision": 1
+}
