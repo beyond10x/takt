@@ -15,10 +15,14 @@ use takt::harness::{ClaudeCode, Harness};
 use takt::validator::{CiRead, DEFAULT_PROJECT, GateRun, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{LoadedProtocol, Run, RunOptions, Stop, Unit};
 
+/// The git revision this binary was built from, as `build.rs` read it: `<sha>`, `<sha>-dirty`
+/// or `unknown revision`.
+const REVISION: &str = env!("TAKT_REVISION");
+
 #[derive(Parser)]
 #[command(
     name = "takt",
-    version,
+    version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("TAKT_REVISION"), ")"),
     about = "Composable agentic work: one bounded, validated run at a time"
 )]
 struct Cli {
@@ -763,13 +767,15 @@ fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
     })
 }
 
-/// Runs the open case `run` to its stop, `forge_line` said first; the exit code. An error the
-/// loop ends on once the case is open, a forge that refused the pull request among them, is a
-/// stop like any other: one line on stdout, its own code.
+/// Runs the open case `run` to its stop, `forge_line` said first, the run given this binary's
+/// [`REVISION`] to record; the exit code. An error the loop ends on once the case is open, a
+/// forge that refused the pull request among them, is a stop like any other: one line on
+/// stdout, its own code.
 fn finish(run: &mut Run<'_>, forge_line: Option<&str>, out: &mut dyn Write) -> Result<u8> {
     if let Some(line) = forge_line {
         writeln!(out, "{line}")?;
     }
+    run.binary = Some(REVISION.to_owned());
     let stop = match run.run(out) {
         Ok(stop) => stop,
         Err(error) => {

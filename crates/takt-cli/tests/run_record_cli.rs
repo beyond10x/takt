@@ -270,3 +270,43 @@ fn takt_run_on_a_story_whose_case_is_accepted_records_the_test_result_and_moves_
         .contains("status: proposed")
     );
 }
+
+/// story:binary-embeds-revision: a run's `opened` line records the revision the binary was
+/// built from as `binary`, exactly as `takt --version` prints it in parentheses.
+#[test]
+fn takt_run_records_the_binarys_revision_on_the_opened_line() {
+    let (code, version, err) = takt(&["--version"]);
+    assert_eq!(code, 0, "{err}");
+    let revision = version
+        .trim_end()
+        .strip_suffix(')')
+        .and_then(|rest| rest.split_once(" ("))
+        .map(|(_, revision)| revision.to_owned())
+        .unwrap_or_else(|| panic!("no revision in parentheses: {version}"));
+
+    let repo = repository("binary");
+    let protocol = repo.join("tests-only.yaml");
+    let (code, out, err) = takt(&[
+        "run",
+        "--repo",
+        repo.to_str().expect("utf-8"),
+        "--intent",
+        "the tests pass",
+        "--harness",
+        "none",
+        "--forge",
+        "none",
+        "--iterations",
+        "1",
+        "--test-cmd",
+        "true",
+        "--protocol",
+        protocol.to_str().expect("utf-8"),
+    ]);
+    assert_eq!(code, 0, "stdout {out} stderr {err}");
+    let lines = takt::events::Events::new(&the_case(&repo))
+        .read()
+        .expect("one object per line");
+    assert_eq!(lines[0]["event"], "opened", "{lines:#?}");
+    assert_eq!(lines[0]["binary"], revision.as_str(), "{lines:#?}");
+}
