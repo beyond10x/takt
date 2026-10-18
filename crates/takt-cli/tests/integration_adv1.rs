@@ -274,7 +274,7 @@ fn adv1_an_approval_before_the_push_lets_the_resumed_run_open_the_pull_request()
             &id,
             "repository.push",
             "--by",
-            "operator",
+            "human:operator",
         ],
     );
     assert_eq!(code, 0, "stdout {out} stderr {err}");
