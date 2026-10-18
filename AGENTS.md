@@ -34,4 +34,6 @@ cargo run -p b10x-takt-cli -- run --repo <path> --intent "<text>" --iterations 1
   `b10x-gates scan-text` first.
 - This repository is public. Committed text names no private repository, session or decision id,
   host detail or person.
-- Spec first where a specification exists; this repository has none yet.
+- Spec first: `ess/` is the ESS specification of takt's nouns and their relations, checked with
+  `ess specify validate --path ess`; a story that introduces a noun declares it there before code
+  builds on it.

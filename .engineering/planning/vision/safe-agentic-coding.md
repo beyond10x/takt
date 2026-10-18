@@ -2,10 +2,12 @@
 format: aep.planning-md/3
 id: vision:safe-agentic-coding
 kind: vision
-status: draft
+status: in_review
 title: Safe agentic coding, proven by composable agentic work
 summary: Workflows of engineering protocols and loops, driven by a harness, validated by Canon over evidence, recorded in AEP; one binary pointed at a repository
-revision: 1
+revision: 2
+transitions:
+- {from: "draft", to: "in_review", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 2}
 ---
 # Vision: safe-agentic-coding
 

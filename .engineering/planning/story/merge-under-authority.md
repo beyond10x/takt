@@ -25,7 +25,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/merge_under_authority.rs
-revision: 10
+revision: 11
 ---
 # Story: merge-under-authority
 
@@ -37,7 +37,7 @@ The run merges a pull request exactly when the protocol admits `repository.merge
 
 `docs/design/takt.md` § 3: the loop runs "until an outcome is legitimate | an approval is needed | ..."; a deterministic step is "a merge on approval"; the `approval` block names a capability and an approver, `repository.merge` by the operator. In Canon an action that `requires` a capability is approval-required until a `canon-authority/1` decision grants it, and those decisions are supplied per evaluation (b10x-canon 0.6.0, `crates/canon/src/eval/mod.rs:319-326`; the document shape in `crates/canon/src/eval/authority.rs:7-21`: a list of `capability` and `decision: granted|denied`, one per capability). The kernel supplies none (`crates/takt/src/case.rs:185-189`), stops when only approval-required actions remain (`crates/takt/src/run.rs:194-201`), refuses to open a case id that exists (`crates/takt/src/case.rs:44-47`) and always opens a case (`crates/takt/src/run.rs:97-112`).
 
-This story, following the cleared decision-blocker:approval-grant-and-case-resume: the run stops at the gate. A run whose case holds no grant stops at `ApprovalRequired (repository.merge)` with the pull request open and nothing merged, so an unattended run never merges without a grant. `takt approve <case> repository.merge` writes the case's `authority.yaml`, a `canon-authority/1` document granting `repository.merge`, and records an `approval` evidence on the story in the planning store (`aep plan artifact evidence <story> --kind approval --source takt --ref <case>/authority.yaml`); approvals may be given to several cases in a batch. The next `takt run` on the repository, or `takt run --case <id>`, resumes the case instead of opening one: the frontier finds the story `active` with an open case directory and offers that case, and a story has at most one open case, so it is never given a second. On resume `authority.yaml` is read on every evaluation and passed as `Supplied.authority`; with `repository.merge` granted the action is admissible, the merge is a deterministic step performed through the `Forge` (story:forge-pull-request-evidence) and so through the repository's bot route, and a `pr.merged` validator reads the pull request back and writes a `pull_request` record with result `merged`, after which `accepted` is legitimate and the run stops Completed. The decision document records the grant the way Canon explains it.
+This story, following the cleared decision-blocker:approval-grant-and-case-resume: the run stops at the gate. A run whose case holds no grant stops at `ApprovalRequired (repository.merge)` with the pull request open and nothing merged, so an unattended run never merges without a grant. `takt approve <case> repository.merge` writes the case's `authority.yaml`, a `canon-authority/1` document granting `repository.merge`, and records an `approval` evidence on the story in the planning store (`aep plan artifact evidence <story> --kind approval --source takt --ref <case>/authority.yaml`); approvals may be given to several cases in a batch. The next `takt run` on the repository, or `takt run --case <id>`, resumes the case instead of opening one: the frontier finds the story `active` with an open case directory and offers that case, and a story has at most one open case, so it is never given a second. On resume `authority.yaml` is read on every evaluation and passed as `Supplied.authority`; with `repository.merge` granted the action is admissible, the merge is a deterministic step performed through the `Forge` (story:forge-pull-request-evidence) and so through the repository's bot route, and a `pr.merged` validator reads the pull request back and writes a `merge_observation` record with result `merged`, after which `accepted` is legitimate and the run stops Completed. The decision document records the grant the way Canon explains it.
 
 The `approval` block of `workflow/1` (`docs/design/takt.md` § 3: capability, approver) names the capability and the approver; the loader (story:workflow-schema-and-loader) hands it to this story's gate: the named capability becomes the run's gate, what `--gate` sets today (`crates/takt-cli/src/main.rs:66-68`, `crates/takt/src/run.rs:33-36`), and the approver is recorded with the grant, `takt approve <case> <capability> --by <approver>`, in `authority.yaml` and in the story's `approval` evidence. Whether the approver may approve is Mandate's and out of scope here.
 
@@ -66,7 +66,7 @@ The `approval` block of `workflow/1` (`docs/design/takt.md` § 3: capability, ap
 
 ## Acceptance
 
-Two runs on `protocols/story-delivery/1.yaml` with a forge double whose checks pass: the first, whose case holds no grant, stops at `ApprovalRequired (repository.merge)` with the pull request open and the double recording no merge; after `takt approve <case> repository.merge`, `takt run --case <id>` resumes that case, merges through the double, writes a `pull_request` record with result `merged`, and stops Completed with `accepted`.
+Two runs on `protocols/story-delivery/1.yaml` with a forge double whose checks pass: the first, whose case holds no grant, stops at `ApprovalRequired (repository.merge)` with the pull request open and the double recording no merge; after `takt approve <case> repository.merge`, `takt run --case <id>` resumes that case, merges through the double, writes a `merge_observation` record with result `merged`, and stops Completed with `accepted`.
 
 ## Checks
 
@@ -86,3 +86,7 @@ Whether the approver named in an `approval` block may approve (Mandate's); denyi
 - A `denied` decision: `inferable`, Canon treats it as not granted (`crates/canon/src/eval/authority.rs:7-12`); the run stops ApprovalRequired the same way.
 - Which story an `approval` record lands on: `inferable`, the story the case was opened for (story:frontier-next-ready-story derives the case from the story); a case opened on an `--intent` has no story, and `takt approve` writes `authority.yaml` only.
 - Resuming a case whose implementation revision moved on: `inferable`, the grant is read into the evaluation of the current revision, and Canon's claims about `implementation` are revision-bound, so a new commit returns `pr.opened` and `ci.green` to UNKNOWN and the merge is not admissible until they are re-established.
+
+## Correction (wave 01)
+
+Canon 0.6.0 reads a kind whose records disagree at one revision as unknown (`website/docs/reference/evaluation.md:39-42`), so `pr.merged` is established by a `merge_observation` record with result `merged`, not by a second `pull_request` result; `protocols/story-delivery/1.yaml` declares it so.
