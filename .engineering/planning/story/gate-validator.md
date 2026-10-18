@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:gate-validator
 kind: story
-status: draft
+status: active
 title: A gate validator turns an engineering-gates run into gate_result evidence
 summary: gate.green from a typed engineering-gates/1 document, pass or fail, nothing on unknown
 relations:
@@ -20,7 +20,10 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/gate_validator.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T04:27:09Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-18T04:27:09Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
 ---
 # Story: gate-validator
 
