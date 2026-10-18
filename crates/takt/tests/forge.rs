@@ -567,6 +567,17 @@ impl Recording {
 }
 
 impl Runner for Recording {
+    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+    /// dropped.
+    fn run_env(
+        &self,
+        tree: &std::path::Path,
+        argv: &[String],
+        _: &[(&str, &str)],
+    ) -> anyhow::Result<takt::forge::Exit> {
+        self.run(tree, argv)
+    }
+
     fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         self.lines.borrow_mut().push(argv.join(" "));
         let stdout = match argv.get(1).map(String::as_str) {
@@ -607,6 +618,17 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
     ));
     struct Shared(Rc<Recording>);
     impl Runner for Shared {
+        /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+        /// dropped.
+        fn run_env(
+            &self,
+            tree: &std::path::Path,
+            argv: &[String],
+            _: &[(&str, &str)],
+        ) -> anyhow::Result<takt::forge::Exit> {
+            self.run(tree, argv)
+        }
+
         fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
             self.0.run(tree, argv)
         }
@@ -643,7 +665,8 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
     assert_eq!(
         recording.lines.borrow().as_slice(),
         [
-            "b10x-gates bot -- push https://github.com/owner/repo.git takt/c1".to_owned(),
+            "b10x-gates bot -- push https://github.com/owner/repo.git takt/c1 --no-follow-tags --recurse-submodules=no"
+                .to_owned(),
             format!(
                 "b10x-gates scan-text --repository owner/repo --policy policy.yaml {} {}",
                 input.display(),
@@ -767,6 +790,16 @@ struct AnyNumber {
 }
 
 impl Forge for AnyNumber {
+    /// Scans nothing: the double publishes nothing off the machine.
+    fn scan_outgoing(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &takt::forge::Outgoing<'_>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn name(&self) -> &str {
         "any"
     }
@@ -1229,6 +1262,17 @@ fn adv_a_closed_pull_request_at_a_second_revision_is_recorded_closed() {
 struct Refusing(RefCell<Vec<String>>);
 
 impl Runner for Refusing {
+    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+    /// dropped.
+    fn run_env(
+        &self,
+        tree: &std::path::Path,
+        argv: &[String],
+        _: &[(&str, &str)],
+    ) -> anyhow::Result<takt::forge::Exit> {
+        self.run(tree, argv)
+    }
+
     fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         self.0.borrow_mut().push(argv.join(" "));
         let refused = argv.get(1).map(String::as_str) == Some("scan-text");
@@ -1252,6 +1296,17 @@ fn adv_a_request_scan_text_refuses_never_reaches_the_api() {
     let refusing = Rc::new(Refusing(RefCell::new(Vec::new())));
     struct Shared(Rc<Refusing>);
     impl Runner for Shared {
+        /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+        /// dropped.
+        fn run_env(
+            &self,
+            tree: &std::path::Path,
+            argv: &[String],
+            _: &[(&str, &str)],
+        ) -> anyhow::Result<takt::forge::Exit> {
+            self.run(tree, argv)
+        }
+
         fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
             self.0.run(tree, argv)
         }
@@ -1281,6 +1336,17 @@ fn adv_a_request_scan_text_refuses_never_reaches_the_api() {
 fn adv_an_api_reply_without_a_number_is_an_error_not_a_pull_request() {
     struct NoNumber;
     impl Runner for NoNumber {
+        /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+        /// dropped.
+        fn run_env(
+            &self,
+            tree: &std::path::Path,
+            argv: &[String],
+            _: &[(&str, &str)],
+        ) -> anyhow::Result<takt::forge::Exit> {
+            self.run(tree, argv)
+        }
+
         fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
             if argv.get(1).map(String::as_str) == Some("api") {
                 let output = argv
@@ -1886,6 +1952,17 @@ fn adv2_a_dirty_tree_over_another_cases_branch_is_refused_before_the_case_is_wri
 struct NoChecksYet;
 
 impl Runner for NoChecksYet {
+    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+    /// dropped.
+    fn run_env(
+        &self,
+        tree: &std::path::Path,
+        argv: &[String],
+        _: &[(&str, &str)],
+    ) -> anyhow::Result<takt::forge::Exit> {
+        self.run(tree, argv)
+    }
+
     fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         assert_eq!(argv.get(2).map(String::as_str), Some("checks"), "{argv:?}");
         Ok(Exit {

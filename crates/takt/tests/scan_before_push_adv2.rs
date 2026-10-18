@@ -132,6 +132,17 @@ struct Gates {
 }
 
 impl Runner for Gates {
+    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+    /// dropped.
+    fn run_env(
+        &self,
+        tree: &std::path::Path,
+        argv: &[String],
+        _: &[(&str, &str)],
+    ) -> anyhow::Result<takt::forge::Exit> {
+        self.run(tree, argv)
+    }
+
     fn run(&self, _tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         let words: Vec<&str> = argv.iter().map(String::as_str).collect();
         let ["b10x-gates", "scan-text", rest @ ..] = words.as_slice() else {
@@ -168,6 +179,17 @@ impl Runner for Gates {
 struct Shared(Rc<Gates>);
 
 impl Runner for Shared {
+    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+    /// dropped.
+    fn run_env(
+        &self,
+        tree: &std::path::Path,
+        argv: &[String],
+        _: &[(&str, &str)],
+    ) -> anyhow::Result<takt::forge::Exit> {
+        self.run(tree, argv)
+    }
+
     fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         self.0.run(tree, argv)
     }

@@ -202,6 +202,16 @@ impl PendingFor {
 }
 
 impl Forge for PendingFor {
+    /// Scans nothing: the double publishes nothing off the machine.
+    fn scan_outgoing(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &takt::forge::Outgoing<'_>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn name(&self) -> &str {
         "pending-for"
     }
@@ -528,6 +538,16 @@ impl Lagging {
 }
 
 impl Forge for Lagging {
+    /// Scans nothing: the double publishes nothing off the machine.
+    fn scan_outgoing(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &takt::forge::Outgoing<'_>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn name(&self) -> &str {
         "lagging"
     }
@@ -822,6 +842,16 @@ struct RefusesFor {
 }
 
 impl Forge for RefusesFor {
+    /// Scans nothing: the double publishes nothing off the machine.
+    fn scan_outgoing(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &takt::forge::Outgoing<'_>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn name(&self) -> &str {
         "refuses-for"
     }

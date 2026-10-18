@@ -158,6 +158,17 @@ fn refused(stderr: &str) -> Exit {
 }
 
 impl Runner for Gates {
+    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+    /// dropped.
+    fn run_env(
+        &self,
+        tree: &std::path::Path,
+        argv: &[String],
+        _: &[(&str, &str)],
+    ) -> anyhow::Result<takt::forge::Exit> {
+        self.run(tree, argv)
+    }
+
     fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         self.lines.borrow_mut().push(argv.join(" "));
         let command = argv.get(1).map(String::as_str);
@@ -209,6 +220,17 @@ impl Runner for Gates {
 struct Shared(Rc<Gates>);
 
 impl Runner for Shared {
+    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+    /// dropped.
+    fn run_env(
+        &self,
+        tree: &std::path::Path,
+        argv: &[String],
+        _: &[(&str, &str)],
+    ) -> anyhow::Result<takt::forge::Exit> {
+        self.run(tree, argv)
+    }
+
     fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         self.0.run(tree, argv)
     }
@@ -374,7 +396,8 @@ fn with_a_policy_given_to_the_forge_pr_open_opens_the_pull_request() {
         "{lines:?}"
     );
     assert_eq!(
-        lines[1], "b10x-gates bot -- push https://github.com/owner/repo.git takt/opens",
+        lines[1],
+        "b10x-gates bot -- push https://github.com/owner/repo.git takt/opens --no-follow-tags --recurse-submodules=no",
         "{lines:?}"
     );
     assert_eq!(
@@ -479,7 +502,8 @@ fn a_scan_refusal_after_the_push_names_the_pushed_branch() {
     assert_eq!(lines.len(), 3, "{lines:?}\n{text}");
     assert!(lines[0].starts_with("b10x-gates scan-text "), "{lines:?}");
     assert_eq!(
-        lines[1], "b10x-gates bot -- push https://github.com/owner/repo.git takt/refused",
+        lines[1],
+        "b10x-gates bot -- push https://github.com/owner/repo.git takt/refused --no-follow-tags --recurse-submodules=no",
         "{lines:?}"
     );
     assert!(lines[2].starts_with("b10x-gates scan-text "), "{lines:?}");

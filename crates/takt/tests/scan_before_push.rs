@@ -200,7 +200,16 @@ impl Runner for Gates {
             ["b10x-gates", "bot", "--", "push", ..] if self.push_refusal.is_some() => {
                 exit(128, "", self.push_refusal.as_deref().unwrap_or_default())
             }
-            ["b10x-gates", "bot", "--", "push", _, spec] => {
+            [
+                "b10x-gates",
+                "bot",
+                "--",
+                "push",
+                _,
+                spec,
+                "--no-follow-tags",
+                "--recurse-submodules=no",
+            ] => {
                 let (revision, branch) = match spec.split_once(":refs/heads/") {
                     Some((revision, branch)) => (revision.to_owned(), branch.to_owned()),
                     None => (
@@ -631,11 +640,11 @@ fn the_push_names_the_repository_url_not_the_remote() {
     let forge = bot(&gates);
     assert_eq!(
         forge.push_argv("takt/c").join(" "),
-        "b10x-gates bot -- push https://github.com/owner/repo.git takt/c"
+        "b10x-gates bot -- push https://github.com/owner/repo.git takt/c --no-follow-tags --recurse-submodules=no"
     );
     assert_eq!(
         forge.push_revision_argv("takt/c", "abc").join(" "),
-        "b10x-gates bot -- push https://github.com/owner/repo.git abc:refs/heads/takt/c"
+        "b10x-gates bot -- push https://github.com/owner/repo.git abc:refs/heads/takt/c --no-follow-tags --recurse-submodules=no"
     );
 }
 /// Messages and files over what one scan is given are refused, not cut: nothing is scanned,
@@ -1148,4 +1157,339 @@ fn a_step_that_moves_a_tracking_ref_is_refused_and_the_refs_put_back() {
         format!("refs/remotes/origin/main {start}"),
         "{text}"
     );
+}
+
+/// The bot route's scan before pushing `head` of `tree` (forked from `main`), through [`Gates`]:
+/// how it ended and the lines the runner was given.
+fn scan_only(tree: &Path, head: &str) -> (Result<(), String>, Vec<Line>) {
+    let gates = Rc::new(Gates::default());
+    let answer = bot(&gates)
+        .scan_outgoing(
+            tree,
+            &tree.join(".engineering/scan"),
+            &Outgoing {
+                branch: "takt/case",
+                base: "main",
+                head,
+                request: None,
+            },
+        )
+        .map_err(|error| format!("{error:#}"));
+    (answer, gates.lines())
+}
+
+/// The scan refused what pushing `head` would publish, with the policy's words.
+fn scan_refused(tree: &Path, head: &str, what: &str) {
+    let (answer, lines) = scan_only(tree, head);
+    let scanned: Vec<String> = lines.iter().flat_map(|line| line.scanned.clone()).collect();
+    let error = answer.expect_err(&format!(
+        "the scan passed {what}; it read:\n{}",
+        scanned.join("\n=====\n")
+    ));
+    assert!(
+        error.contains("would publish did not pass scan-text"),
+        "{what}: {error}"
+    );
+    assert!(error.contains("private rule"), "{what}: {error}");
+}
+
+/// Writes the commit object `text` into `tree`'s repository as it is and points `HEAD`'s
+/// branch at it: what a step could leave with `git hash-object` and `git update-ref`.
+fn raw_commit(tree: &Path, text: &str) -> String {
+    let file = tree.join(".git/raw-commit");
+    fs::write(&file, text).expect("the object's text");
+    let id = git(
+        tree,
+        &[
+            "hash-object",
+            "-t",
+            "commit",
+            "-w",
+            file.to_str().expect("utf-8"),
+        ],
+    );
+    fs::remove_file(&file).expect("the text removed");
+    let branch = git(tree, &["symbolic-ref", "HEAD"]);
+    git(tree, &["update-ref", &branch, &id]);
+    id
+}
+
+/// A commit header holds the literal, an unknown one and a signature alike: the scan reads the
+/// commit objects as the push sends them, every header with the message.
+#[test]
+fn a_commit_header_the_policy_forbids_is_refused() {
+    for (n, header) in [
+        format!("x-note {FORBIDDEN}"),
+        format!(
+            "gpgsig -----BEGIN PGP SIGNATURE-----\n \n {FORBIDDEN}\n -----END PGP SIGNATURE-----"
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let tree = scratch(&format!("header-{n}"));
+        git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+        commit(&tree, "work.txt", "clean\n", "implementation.edit: clean");
+        let parent = git(&tree, &["rev-parse", "HEAD"]);
+        let tree_id = git(&tree, &["rev-parse", "HEAD^{tree}"]);
+        let head = raw_commit(
+            &tree,
+            &format!(
+                "tree {tree_id}\nparent {parent}\nauthor u <u@localhost> 1700000000 +0000\ncommitter u <u@localhost> 1700000000 +0000\n{header}\n\nclean message\n"
+            ),
+        );
+        scan_refused(&tree, &head, &format!("with the header {n}"));
+    }
+}
+
+/// A step sets `i18n.commitEncoding`; takt's own commit then records the message as given under
+/// that encoding's name. The scan reads the bytes the push sends, not a conversion of them: the
+/// literal in the subject, or in the encoding's name, is refused.
+#[test]
+fn a_message_is_scanned_as_the_commit_holds_it_whatever_its_encoding() {
+    for (n, (encoding, subject)) in [
+        ("UTF-16LE", format!("implementation.edit: {FORBIDDEN}")),
+        (FORBIDDEN, "implementation.edit: clean".to_owned()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let tree = scratch(&format!("encoding-{n}"));
+        git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+        git(&tree, &["config", "i18n.commitEncoding", encoding]);
+        fs::write(tree.join("work.txt"), "clean\n").expect("a file");
+        let head = takt::git::commit_paths(&tree, &["work.txt".to_owned()], &subject)
+            .expect("takt commits");
+        scan_refused(&tree, &head, &format!("under the encoding {n}"));
+    }
+}
+
+/// A nested repository committed as a gitlink: its path is published in the tree, whatever its
+/// mode, so a path holding the literal, or under a directory that does, is refused.
+#[test]
+fn a_gitlink_path_is_scanned() {
+    for (n, path) in [FORBIDDEN.to_owned(), format!("{FORBIDDEN}/inner")]
+        .into_iter()
+        .enumerate()
+    {
+        let tree = scratch(&format!("gitlink-{n}"));
+        git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+        let sub = tree.join(&path);
+        fs::create_dir_all(&sub).expect("a nested directory");
+        git(&sub, &["init", "-q", "-b", "main"]);
+        fs::write(sub.join("f"), "inner\n").expect("a file");
+        git(&sub, &["add", "-A"]);
+        git(&sub, &["commit", "-q", "-m", "inner"]);
+        git(&tree, &["add", "-A"]);
+        git(&tree, &["commit", "-q", "-m", "implementation.edit: clean"]);
+        let head = git(&tree, &["rev-parse", "HEAD"]);
+        assert!(
+            git(&tree, &["ls-tree", "-r", "HEAD"]).contains("160000 commit"),
+            "precondition: a gitlink"
+        );
+        scan_refused(&tree, &head, &format!("with the gitlink {n}"));
+    }
+}
+
+/// takt does not commit a nested repository a step left as a gitlink the case's `HEAD` does not
+/// have: the commit is refused naming the path, and `HEAD` stays.
+#[test]
+fn takt_refuses_to_commit_a_new_gitlink() {
+    let tree = scratch("new-gitlink");
+    git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+    let before = git(&tree, &["rev-parse", "HEAD"]);
+    let sub = tree.join("nested");
+    fs::create_dir_all(&sub).expect("a nested directory");
+    git(&sub, &["init", "-q", "-b", "main"]);
+    fs::write(sub.join("f"), "inner\n").expect("a file");
+    git(&sub, &["add", "-A"]);
+    git(&sub, &["commit", "-q", "-m", "inner"]);
+    fs::write(tree.join("work.txt"), "work\n").expect("a file");
+    let error = takt::git::commit_paths(
+        &tree,
+        &["nested".to_owned(), "work.txt".to_owned()],
+        "implementation.edit: work",
+    )
+    .expect_err("a new gitlink is refused");
+    let error = format!("{error:#}");
+    assert!(error.contains("nested"), "{error}");
+    assert!(error.contains("gitlink"), "{error}");
+    assert_eq!(git(&tree, &["rev-parse", "HEAD"]), before);
+}
+
+/// With no tracking ref of the base, a ref git would find for `refs/remotes/origin/main` by its
+/// own lookup rules (`refs/refs/remotes/origin/main`) says nothing about the remote: the base's
+/// tracking ref is read by its full name only, and every commit of the head is scanned.
+#[test]
+fn the_bases_tracking_ref_is_read_by_its_full_name() {
+    let tree = scratch("full-name");
+    git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+    commit(
+        &tree,
+        "work.txt",
+        &format!("token {FORBIDDEN}\n"),
+        "implementation.edit: secret",
+    );
+    let secret = git(&tree, &["rev-parse", "HEAD"]);
+    commit(&tree, "work.txt", "clean\n", "implementation.edit: clean");
+    let head = git(&tree, &["rev-parse", "HEAD"]);
+    git(
+        &tree,
+        &["update-ref", "refs/refs/remotes/origin/main", &secret],
+    );
+    scan_refused(&tree, &head, "behind a ref named like the tracking ref");
+}
+
+/// A push carries `--no-follow-tags` and `--recurse-submodules=no`, last: an annotated tag on
+/// the head is not sent with it, nor a submodule's commit, whatever `push.*` says.
+#[test]
+fn a_push_follows_no_tag_and_no_submodule() {
+    let gates = Rc::new(Gates::default());
+    let forge = bot(&gates);
+    for argv in [
+        forge.push_argv("takt/c"),
+        forge.push_revision_argv("takt/c", "abc"),
+    ] {
+        assert_eq!(
+            argv[argv.len() - 2..],
+            ["--no-follow-tags", "--recurse-submodules=no"],
+            "{argv:?}"
+        );
+    }
+}
+
+/// A step may not set the configuration a push or takt's commit reads: `i18n.*` (the encoding a
+/// commit records), `push.*` (what a push sends besides the refspec), `http.*` (where it goes).
+/// The checkpoint puts each back and names it.
+#[test]
+fn a_step_that_sets_push_http_or_i18n_configuration_is_put_back() {
+    for (n, (key, value)) in [
+        ("i18n.commitEncoding", "UTF-16LE"),
+        ("push.followTags", "true"),
+        ("http.proxy", "http://127.0.0.1:9"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let tree = scratch(&format!("config-{n}"));
+        let checkpoint = takt::git::Checkpoint::take(&tree).expect("a checkpoint");
+        git(&tree, &["config", key, value]);
+        let back = checkpoint.put_back_git_dir(&tree);
+        assert!(!back.touched.is_empty(), "{key}: nothing put back");
+        assert!(back.failed.is_empty(), "{key}: {:?}", back.failed);
+        let config = fs::read_to_string(tree.join(".git/config")).expect("the config");
+        let name = key.rsplit('.').next().expect("a name");
+        assert!(!config.contains(name), "{key} stayed:\n{config}");
+    }
+}
+
+/// A step may not make a ref anywhere: outside `refs/heads`, `refs/tags` and `refs/remotes`
+/// too (a ref named like a tracking ref, a note, a replacement), each is a change the
+/// checkpoint names.
+#[test]
+fn a_step_that_makes_any_ref_is_named() {
+    let tree = scratch("any-ref");
+    let head = git(&tree, &["rev-parse", "HEAD"]);
+    let checkpoint = takt::git::Checkpoint::take(&tree).expect("a checkpoint");
+    for name in [
+        "refs/refs/remotes/origin/main",
+        "refs/notes/commits",
+        "refs/replace/x",
+    ] {
+        git(&tree, &["update-ref", name, &head]);
+    }
+    let refs = checkpoint.change(&tree).expect("the change").refs;
+    for name in [
+        "refs/refs/remotes/origin/main",
+        "refs/notes/commits",
+        "refs/replace/x",
+    ] {
+        assert!(
+            refs.iter().any(|reference| reference.contains(name)),
+            "{name} not named: {refs:?}"
+        );
+    }
+}
+
+/// A rewrite in the repository's configuration that would send the push to a local path: git
+/// refuses the `file` transport, the push carrying HTTPS alone, and the refusal names it.
+#[test]
+fn a_rewrite_to_a_local_path_is_refused() {
+    let tree = scratch("file-rewrite");
+    git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+    let sink = tree.join(".git/sink.git");
+    git(
+        &tree,
+        &["init", "-q", "--bare", sink.to_str().expect("utf-8")],
+    );
+    git(
+        &tree,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", sink.display()),
+            "https://github.com/owner/repo.git",
+        ],
+    );
+    let gates = Rc::new(Gates::default());
+    let forge = BotRoute::new(
+        "owner/repo",
+        Some(PathBuf::from(POLICY)),
+        Box::new(RealPush(gates)),
+    );
+    let head = git(&tree, &["rev-parse", "HEAD"]);
+    let error = forge
+        .push_revision(&tree, "takt/case", &head)
+        .expect_err("the file transport is refused");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("the push to https://github.com/owner/repo.git would go over file"),
+        "{error}"
+    );
+    assert!(
+        git(&sink, &["for-each-ref"]).is_empty(),
+        "the sink holds a ref"
+    );
+}
+
+/// The push URL comes from `origin` when the bot route is made, at run start: an SSH origin on
+/// github.com gives the repository's HTTPS URL, and an origin a step rewrites later moves it
+/// nowhere. An origin on another host is refused there, before anything is scanned or pushed.
+#[test]
+fn the_push_url_is_read_from_origin_once_and_only_on_github() {
+    let tree = scratch("url-at-start");
+    git(
+        &tree,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "git@github.com:owner/repo.git",
+        ],
+    );
+    let forge = BotRoute::for_tree(&tree).expect("an origin on github.com");
+    assert_eq!(forge.push_url(), "https://github.com/owner/repo.git");
+    git(
+        &tree,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/someone/else.git",
+        ],
+    );
+    assert_eq!(forge.push_url(), "https://github.com/owner/repo.git");
+    git(
+        &tree,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://example.com/owner/repo.git",
+        ],
+    );
+    let error = format!(
+        "{:#}",
+        BotRoute::for_tree(&tree).expect_err("another host is refused")
+    );
+    assert!(error.contains("example.com"), "{error}");
 }
