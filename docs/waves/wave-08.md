@@ -1,6 +1,6 @@
 # Wave 08: pending checks, and the intake of findings
 
-Skill: `aep:implementing` 0.23.1, wave mode. Stage: **running**. Approval: the operator role approved this selection (`ci-pending-waits` first, then `finding-intake`); each judge-surface merge needs the operator role's grant of its exact commit. Mode: interactive.
+Skill: `aep:implementing` 0.23.1, wave mode. Stage: **closed**. Approval: the operator role approved this selection (`ci-pending-waits` first, then `finding-intake`); each judge-surface merge needs the operator role's grant of its exact commit. Mode: interactive.
 
 ## Units
 
@@ -46,3 +46,18 @@ The opening store commit, each unit's commits, the merges into `wave/2026-10-18-
 ## Log
 
 - 2026-10-18: opened on the operator role's approval; both stories moved to active.
+- 2026-10-18: finding-intake committed at c469442; adversary pass 1 NEEDS-CHANGE (9 red, 4 warnings), recorded as review-result:adversary-finding-intake-pass-1; correction 1 dispatched.
+- 2026-10-18: ci-pending-waits committed at 200e15d; adversary pass 1 dispatched.
+- 2026-10-18: ci-pending-waits adversary pass 1 NEEDS-CHANGE (4 red: --hours inf panics, pending-check matcher reads "fail" anywhere in the error chain), recorded as review-result:adversary-ci-pending-waits-pass-1; correction 1 dispatched.
+- 2026-10-18: finding-intake correction 1 committed at 68aaec7 (9 of 9 adv1 cases green, gate 341 passed); adversary pass 2 dispatched.
+- 2026-10-18: ci-pending-waits correction 1 committed (4 of 4 adv1 cases green, gate 337 passed); adversary pass 2 dispatched.
+- 2026-10-18: ci-pending-waits adversary pass 2 INFEASIBLE (2 red, notes: unbalanced quotes, a refusal naming another rule), recorded as review-result:adversary-ci-pending-waits-pass-2; pass 1 outcome fixed; correction 2 dispatched, the coordinator verifies it.
+- 2026-10-18: finding-intake adversary pass 2 INFEASIBLE (2 red, one note: the declaration is not read by takt's rules), recorded as review-result:adversary-finding-intake-pass-2; pass 1 outcome fixed; correction 2 dispatched, the coordinator verifies it.
+- 2026-10-18: ci-pending-waits correction 2 at 913dd62 and finding-intake correction 2 at eb4542a, both verified by the coordinator (341 and 343 passed); pass 2 outcomes fixed; [GRANT?] sent for both.
+- 2026-10-18: both units granted by the operator role (913dd62, eb4542a) and merged at 306e2f0 and 1efa397; citations re-pointed at c5d9ae3 (132 comment lines, granted).
+- 2026-10-18: closed. Wave gate at c5d9ae3: fmt, clippy, ess exit 0; `cargo test --workspace --locked --no-fail-fast` 44 lanes, 361 passed, 0 failed; 310 of 310 in-repository citations resolve. Both stories implemented, each with a Landed section, a test_result and two review outcomes.
+
+## Follow-ups
+
+- `pr.open` pushes again on every poll, so a dropped connection ends a waiting run with exit 5; each poll writes about two decision files.
+- The checks read takes no head; `ci.read` requires the pushed head first, so it was not reachable here.

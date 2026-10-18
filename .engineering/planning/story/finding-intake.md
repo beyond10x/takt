@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:finding-intake
 kind: story
-status: active
+status: implemented
 title: Every finding is filed with a machine-checkable expected_before predicate
 summary: story or blocker, predicate, source path, --ref dedupe
 relations:
@@ -19,10 +19,11 @@ scope:
   path: scripts/check-finding
 - confidence: cited
   path: scripts/file-finding
-revision: 9
+revision: 11
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T13:07:06Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"review_outcome":7}}}
 - {from: "proposed", to: "active", at: "2026-10-18T13:07:06Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"review_outcome":7}}}
+- {from: "active", to: "implemented", at: "2026-10-18T13:58:13Z", actor: "human:timo", revision: 11, decided_on: {"recorded":{"test_result":1,"review_outcome":9}}}
 ---
 # Story: finding-intake
 
@@ -89,3 +90,15 @@ with a takt built from revision `b71cb85`, where the defect is present.
 ## Out of Scope
 
 Verifying fixes inside a case (story:self-improvement-protocol); the review panel itself.
+
+## Landed (wave 08)
+
+Read from `git diff --stat 4cbc096 eb4542a` at the close of wave 08 (wave branch head c5d9ae3). `scripts/file-finding` and `scripts/check-finding`; the operator profile's Intake section; `takt.work.Finding` declared in ESS. The acceptance ran end to end without network: takt at b71cb85 `reproduced`, at 4cbc096 `not_reproduced`.
+
+- `.agents/operator-agent.md`
+- `crates/takt-cli/tests/finding_scripts.rs`
+- `crates/takt-cli/tests/finding_scripts_adv1.rs`
+- `crates/takt-cli/tests/finding_scripts_adv2.rs`
+- `ess/domains/takt.yaml`
+- `scripts/check-finding`
+- `scripts/file-finding`
