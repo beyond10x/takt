@@ -162,7 +162,8 @@ actions:
   candidate.merge_judge_surface:
     description: >-
       merge a candidate that touches a judge surface; the owner holds this capability, or a role
-      the owner delegated it to by a revocable record (story:judge-guard enforces it)
+      the owner delegated it to by a revocable record, and a revoked delegation grants nothing
+      (story:judge-guard enforces it)
     effect: write
     precondition:
       all:

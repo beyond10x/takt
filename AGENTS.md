@@ -58,8 +58,13 @@ cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
 - Judge surfaces are every path except `docs/**`, `README.md` and `CHANGELOG.md`. The owner grants
   the merge of a diff that touches a judge surface, or delegates that grant to a named role by a
   record; the delegation is revocable, and a revoked one grants nothing from then on
-  (`product-requirements:takt` § 2). story:judge-guard enforces it. Adding a path to that list is
-  itself a judge-surface change.
+  (`product-requirements:takt` § 2). The delegation and its revocation are records the owner
+  makes, held at the base revision (`design:recursive-self-improvement` § Roles). Until
+  story:judge-guard lands, the record is the owner's decision recorded in the planning store
+  (`product-requirements:takt` § 2), and a revocation is a later owner decision recorded there;
+  from story:judge-guard on, both are held in `.engineering/delegations.yaml`, read at the base
+  revision, which is itself a judge surface. story:judge-guard enforces it. Adding a path to that
+  list is itself a judge-surface change.
 - Two agent roles work on takt (`design:recursive-self-improvement` § Roles). The operator agent
   runs takt, reviews, measures, files findings and verifies fixes; it writes no takt code. The
   developer agent delivers stories in waves; it never marks its own fix verified.

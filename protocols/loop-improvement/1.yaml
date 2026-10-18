@@ -13,7 +13,7 @@ protocol:
     least three further turns under the candidate the metric is compared again. Accepted once the
     metric improved; declined when it did not. Every change to the loop is a judge-surface change,
     so its merge needs the owner's grant or that of a role the owner delegated it to by a revocable
-    record (story:judge-guard enforces it).
+    record; a revoked delegation grants nothing (story:judge-guard enforces it).
 
 independence_dimensions:
   different_agent_run:
@@ -122,7 +122,8 @@ actions:
   loop.merge:
     description: >-
       merge the loop candidate; the owner holds this capability, or a role the owner delegated it
-      to by a revocable record
+      to by a revocable record, and a revoked delegation grants nothing (story:judge-guard
+      enforces it)
     effect: write
     precondition:
       claim: loop.definition_honest

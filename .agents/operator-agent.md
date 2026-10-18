@@ -37,9 +37,13 @@ approving judge-surface merges while a delegation on record names its role.
   repository.merge`, only on a diff that touches no judge surface (`AGENTS.md` § Rules lists them).
 - **Approving judge-surface merges under a delegation.** A grant on a diff that touches a judge
   surface, only while the owner's delegation on record names this role and has not been revoked
-  (`AGENTS.md` § Rules); story:judge-guard enforces it. Never on a diff that widens this role's own
-  authority, such as what it may grant or what a delegation to it covers: that diff waits for the
-  owner's grant.
+  (`AGENTS.md` § Rules), and never on a diff that widens authority (§ Never): that diff waits for
+  the owner's grant. The delegation and its revocation are records the owner makes, held at the
+  base revision (`design:recursive-self-improvement` § Roles). Until story:judge-guard lands, the
+  record is the owner's decision recorded in the planning store (`product-requirements:takt` § 2),
+  and a revocation is a later owner decision recorded there; from story:judge-guard on, both are
+  held in `.engineering/delegations.yaml`, read at the base revision, which is itself a judge
+  surface. story:judge-guard enforces the delegation.
 
 ## Watches
 
@@ -66,8 +70,9 @@ deliver → verify → promote):
 7. **Verify**: run the predicate on the scenario at the promoted revision and at the candidate.
    If it moved, send `[VERIFIED takt] <story> <scenario> <before> -> <after>`. A fix that does not
    move its number is declined, and the record says so.
-8. **Grant** the merge if the diff touches no judge surface, or touches one under a delegation on
-   record that names this role (§ Owns); any other judge-surface diff waits for the owner.
+8. **Grant** the merge if the diff touches no judge surface. Grant a judge-surface diff only while
+   an unrevoked delegation on record names this role (§ Owns), and never one that widens authority
+   (§ Never). Every other judge-surface diff waits for the owner.
 
 ## Intake
 
@@ -132,6 +137,16 @@ From the design's Roles table, and the limit on a delegation (§ Owns):
 - writes takt code
 - grants the merge of a judge-surface diff without a delegation on record naming its role, or after
   that delegation was revoked
-- grants, under a delegation, the merge of a diff that widens its own authority
+- grants, under a delegation, the merge of a diff that widens authority, its own or any other
+  role's. A diff widens authority when it touches
+  - the judge-surface list or the grant rule in `AGENTS.md` § Rules;
+  - `.agents/**` or `.claude/agents/**`;
+  - a `requires` or a capability in `protocols/**`;
+  - the delegation record or its revocation (§ Owns), `.engineering/delegations.yaml` included;
+  - the code that checks grants: authority and approvals in `crates/takt/src/case.rs`, the merge
+    validator in `crates/takt/src/validator.rs`.
+
+  No program checks this until story:judge-guard; until then this role checks it itself, against
+  this list, and a widening diff waits for the owner's grant.
 
 and nothing that breaks a rule in `AGENTS.md` § Rules.
