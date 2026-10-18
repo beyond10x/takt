@@ -66,11 +66,13 @@ types:\n\
 \x20   kind: newtype\n\
 \x20   of: String\n";
 
-/// One needle row per line citation of [`DOMAIN`].
+/// One needle row per in-repository citation of [`DOMAIN`].
 const NEEDLES: &str = "# key<TAB>needles\n\
 d.A|- name: d.A|crates/x/src/lib.rs|1\tpub fn alpha()\n\
 d.A|- name: d.A|crates/x/src/lib.rs|2\tpub fn beta() && 42\n\
-d.A|- name: d.A|scripts/tool|1\techo tool\n";
+d.A|- name: d.A|scripts/tool|1\techo tool\n\
+d.A|- name: d.A|docs/notes.md|1\tText.\n\
+d.A|- name: d.A|docs/notes.md|2\t# Notes\n";
 
 /// A tree whose every citation resolves.
 fn tree(at: &Path) -> PathBuf {
@@ -214,14 +216,91 @@ fn a_line_citation_without_needles_is_unresolved() {
 }
 
 #[test]
-fn a_document_without_a_needles_table_has_every_line_citation_unresolved() {
+fn a_document_without_a_needles_table_has_every_citation_unresolved() {
     let outer = scratch("no-table");
     let repo = tree(&outer.0);
     fs::remove_file(repo.join("ess/domains/d.citations.tsv")).expect("the table is removed");
     let output = check(&repo, "check");
     assert_eq!(output.status.code(), Some(1), "{}", shown(&output));
     assert!(
-        stdout(&output).contains("2 resolved, 3 unresolved"),
+        stdout(&output).contains("0 resolved, 5 unresolved"),
+        "{}",
+        shown(&output)
+    );
+}
+
+/// Notes whose `Section one` holds a subsection and is followed by a sibling section.
+const NOTES_NESTED: &str = "# Notes\n\n## Section one\n\nText.\n\n### Detail\n\nDeep.\n\n\
+```sh\n# not a heading\n```\n\n## Section two\n\nOther.\n";
+
+#[test]
+fn a_section_citation_resolves_by_its_needles_inside_the_section_only() {
+    let outer = scratch("section-bounds");
+    let repo = tree(&outer.0);
+    write(&repo.join("docs/notes.md"), NOTES_NESTED);
+    let table = repo.join("ess/domains/d.citations.tsv");
+    edit(
+        &table,
+        "docs/notes.md|1\tText.\n",
+        "docs/notes.md|1\tText. && Deep. && # not a heading\n",
+    );
+    let output = check(&repo, "check");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a subsection and a fenced `#` line stay inside the section: {}",
+        shown(&output)
+    );
+    edit(
+        &table,
+        "Text. && Deep. && # not a heading\n",
+        "Text. && Other.\n",
+    );
+    let output = check(&repo, "check");
+    assert_eq!(output.status.code(), Some(1), "{}", shown(&output));
+    assert!(
+        stdout(&output).contains("ess/domains/d.yaml:7: unresolved: docs/notes.md (§ Section one)"),
+        "the next section's text is not the cited section's: {}",
+        shown(&output)
+    );
+}
+
+#[test]
+fn a_file_citation_resolves_by_its_needles() {
+    let outer = scratch("file-needles");
+    let repo = tree(&outer.0);
+    edit(&repo.join("docs/notes.md"), "# Notes\n", "# Remarks\n");
+    let output = check(&repo, "check");
+    assert_eq!(output.status.code(), Some(1), "{}", shown(&output));
+    assert!(
+        stdout(&output).contains("ess/domains/d.yaml:8: unresolved: docs/notes.md\n"),
+        "{}",
+        shown(&output)
+    );
+}
+
+#[test]
+fn prose_read_from_the_on_a_comment_line_is_not_a_citation_but_any_other_is_named() {
+    let outer = scratch("prose");
+    let repo = tree(&outer.0);
+    edit(
+        &repo.join("ess/domains/d.yaml"),
+        "  # A noun.\n",
+        "  # A noun, read from the directory.\n",
+    );
+    let output = check(&repo, "check");
+    assert_eq!(output.status.code(), Some(0), "{}", shown(&output));
+    edit(
+        &repo.join("ess/domains/d.yaml"),
+        "  # A noun, read from the directory.\n",
+        "  # A noun, read from crates/x/src/lib.rs:9.\n",
+    );
+    let output = check(&repo, "check");
+    assert_eq!(output.status.code(), Some(1), "{}", shown(&output));
+    assert!(
+        stdout(&output).contains(
+            "ess/domains/d.yaml:3: unresolved: # A noun, read from crates/x/src/lib.rs:9."
+        ),
         "{}",
         shown(&output)
     );

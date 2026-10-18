@@ -306,3 +306,14 @@ takt.work.Finding|- name: takt.work.Finding|scripts/file-finding|1	# The body is
 takt.work.Finding|- name: takt.work.Finding|scripts/file-finding|2	scenario | command | exit | output | source) ;;
 takt.work.Finding|- name: takt.work.Finding|scripts/file-finding|3	[[ $kind == story || $kind == blocker ]]
 takt.work.Finding|- name: takt.work.Finding|scripts/check-finding|1	# Without includes, as takt reads it && config --no-includes --blob && story | seed) ;; && gives no \`seed\`
+takt.work.ScenarioId|- name: takt.work.ScenarioId|.engineering/planning/design/recursive-self-improvement.md|1	A scenario is a story of the scratch repository && Scenario 1 is the scratch
+takt.work.ScorecardId|- name: takt.work.ScorecardId|.engineering/planning/design/recursive-self-improvement.md|1	Per scenario run: outcome, steps, tokens && compared against the promoted revision's baseline
+takt.work.PromotionId|- name: takt.work.PromotionId|.engineering/planning/design/recursive-self-improvement.md|1	a promoted takt binary whose build embeds its git revision && story:promotion installs the promoted binary
+takt.work.Comparison|- name: takt.work.Comparison|.engineering/planning/design/recursive-self-improvement.md|1	Each scenario is compared against the promoted revision's baseline && no scenario's outcome worse
+takt.work.Scenario|- name: takt.work.Scenario|.engineering/planning/design/recursive-self-improvement.md|1	A scenario is a story of the scratch repository at a known seed commit && branch `trial/<n>` cut from the seed
+takt.work.Scenario|- name: takt.work.Scenario|.engineering/planning/story/scenario-corpus.md|1	id: story:scenario-corpus && each run gets a fresh base branch && `trial/<n>` on the scratch repository, cut from the scenario's seed commit
+takt.work.Scorecard|- name: takt.work.Scorecard|.engineering/planning/design/recursive-self-improvement.md|1	Per scenario run: outcome, steps, tokens, refusals, `NoProgress` and errors, wall time && read only from the run's events under the guarded `.engineering/cases/` && Each scenario is compared against the promoted revision's baseline
+takt.work.Scorecard|- name: takt.work.Scorecard|.engineering/planning/story/scorecard-reader.md|1	id: story:scorecard-reader && `takt scorecard` prints, per scenario run, outcome, steps, tokens, refusals
+takt.work.Promotion|- name: takt.work.Promotion|.engineering/planning/design/recursive-self-improvement.md|1	a promoted takt binary whose build embeds its git revision && story:promotion installs the promoted binary
+takt.work.Promotion|- name: takt.work.Promotion|.engineering/planning/story/promotion.md|1	id: story:promotion && `takt promote` installs a takt binary for runs only when the candidate's saved scorecard
+takt.work.Finding|- name: takt.work.Finding|.engineering/planning/story/finding-intake.md|1	Finding → Story: a finding becomes one story or one blocker && Finding → Scenario: the predicate names one scenario

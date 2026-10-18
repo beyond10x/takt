@@ -1,31 +1,39 @@
 #!/usr/bin/env -S python3 -I
 """check-citations: resolve every `read from:` citation of the ESS documents under `ess/`
-against the tree, so a citation whose line no longer says what it is cited for fails the check.
+against the tree, so a citation whose text no longer says what it is cited for fails the check.
 
   check-citations [--repo <dir>] [check | dump | fix]
 
-  check   every citation; exit 0 when each resolves and the needles tables have no unused row,
-          else exit 1 naming each unresolved citation (`<document>:<line>: unresolved: <cited>`)
-          with the lines it cites and where its needles are found
+  check   every citation; exit 0 when each resolves and the needles tables have no unused or
+          malformed row, else exit 1 naming each unresolved citation
+          (`<document>:<line>: unresolved: <cited>`) with the lines it cites and where its
+          needles are found
   dump    every citation with its key, its needles and its cited lines
   fix     check, and re-point each unresolved line citation whose needles occur once in the
-          cited file: the range keeps its length when the shifted range resolves, else it is the
-          span the needles cover; the documents are rewritten in place
+          cited file: to the cited range shifted, when that resolves, else to the span the
+          needles cover when it is no longer than the cited range; a citation whose needles
+          resolve only over a longer span is left unresolved for a person. Only the citation
+          lines are rewritten, each keeping its line ending
   --repo  the repository's root; the current directory without it
 
-A citation is the text after `read from:` on a comment line of a `*.yaml` document under `ess/`:
+A citation is a full comment line of a `*.yaml` document under `ess/` holding `read from: `
+and, after it, one of
 
   <path>:<a>[-<b>]          lines a to b of a file of this repository
-  <path> (§ <heading>)      a section: some heading line of the file holds <heading>
-  <path>                    a file: it exists
+  <path> (§ <heading>)      the section of that file under the heading whose text is <heading>
+  <path>                    the file
   <tool> <version>, ...     a cross-repository citation; external, counted, not resolved
 
-Anything else after `read from:` is unresolved: a form the checker does not know is not skipped.
+Every other `read from`, in any case, on any line, is unresolved and named: one after `:` in no
+form above, one in an inline comment or a scalar, a capitalised one. The one exception is prose:
+`read from the ` in lower case on a full comment line.
 
-A line citation resolves by its needles, held in `<document>.citations.tsv` beside the document,
-one row a citation: `<key><TAB><needle> && <needle> ...`. Every needle occurs in the cited range,
-in order, and when the citation is a range the first needle is on its first line. A line
-citation without a row is unresolved, and so is a row no citation uses. The key is
+Every in-repository citation resolves by its needles, held in `<document>.citations.tsv` beside
+the document, one row a citation: `<key><TAB><needle> && <needle> ...`. The needles occur in
+order: for a line citation inside the cited range, the first on its first line when it is a
+range and the last within one line of its last line; for a section citation inside the section,
+from its heading to the next heading of the same or a higher level; for a file citation anywhere
+in the file. A citation without a row is unresolved, and so is a row no citation uses. The key is
 `<declaration>|<following line>|<path>|<k>`: the top-level declaration the comment sits in (or
 the one its block precedes), the stripped line the comment block precedes, the cited path, and
 the citation's ordinal among those of that path before that line. A key does not hold a line
@@ -40,19 +48,23 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-MARK = "read from:"
+MARK = "read from: "
+MARKER = re.compile(r"read\s+from", re.IGNORECASE)
+PROSE = "read from the "
+CITATION = re.compile(r"^\s*#(?:.*\s)?read from: (.*)$")
 DECLARATION = re.compile(r"^  - name: (\S+)")
 PATH = r"[^\s:,()]+"
 LINE = re.compile(r"^(" + PATH + r"):(\d+)(?:-(\d+))?$")
 SECTION = re.compile(r"^(" + PATH + r") \(§ ([^)]+)\)$")
 FILE = re.compile(r"^(" + PATH + r")$")
 EXTERNAL = re.compile(r"^[A-Za-z][\w.-]* \d+\.\d+\.\d+\b[^,]*, \S")
+HEADING = re.compile(r"^(#{1,6})(?:\s+(.*?))?\s*$")
+FENCE = re.compile(r"^\s*(```|~~~)")
 FORMS = "<path>:<a>[-<b>], <path> (§ <heading>), <path>, or <tool> <version>, <path>"
 
 
 class Citation:
-    def __init__(self, document, index, cited, kind, key=None, match=None):
-        self.document = document
+    def __init__(self, index, cited, kind, key=None, match=None):
         self.index = index
         self.cited = cited
         self.kind = kind
@@ -69,53 +81,85 @@ class Citation:
         return a, int(self.match.group(3) or a)
 
 
-def citations(document, text):
-    """Every citation of one document, in order."""
+def split_lines(text):
+    """The lines of `text`, each with its ending, split on `\\n` only."""
+    return re.findall(r"[^\n]*\n|[^\n]+$", text)
+
+
+def body(line):
+    line = line[:-1] if line.endswith("\n") else line
+    return line[:-1] if line.endswith("\r") else line
+
+
+class Unreadable(Exception):
+    pass
+
+
+def read_raw(path):
+    """The lines of the file at `path` with their endings; None when there is no such file."""
+    try:
+        with open(path, encoding="utf-8", newline="") as f:
+            return split_lines(f.read())
+    except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+        return None
+    except UnicodeDecodeError as error:
+        raise Unreadable(f"not UTF-8 ({error.reason} at byte {error.start})") from None
+
+
+def citations(text):
+    """Every `read from` of one document, in order, as a citation."""
     top = ""
     ordinal = defaultdict(int)
     for i, line in enumerate(text):
         m = DECLARATION.match(line)
         if m:
             top = m.group(1)
-        if MARK not in line or not line.lstrip().startswith("#"):
+        hits = list(MARKER.finditer(line))
+        if not hits:
             continue
-        cited = line.split(MARK, 1)[1].strip()
+        comment = line.lstrip().startswith("#")
+        m = CITATION.match(line) if comment else None
+        prose = [h for h in hits if line.startswith(PROSE, h.start())]
+        if comment and len(prose) == len(hits):
+            continue
+        if m is None or len(hits) != 1:
+            yield Citation(i, line.strip(), "stray")
+            continue
+        cited = m.group(1).strip()
         j = i
         while j < len(text) and text[j].lstrip().startswith("#"):
             j += 1
         following = text[j].strip() if j < len(text) else ""
-        m = DECLARATION.match(text[j]) if j < len(text) else None
-        context = m.group(1) if m else top
+        d = DECLARATION.match(text[j]) if j < len(text) else None
+        context = d.group(1) if d else top
         if EXTERNAL.match(cited):
-            yield Citation(document, i, cited, "external")
+            yield Citation(i, cited, "external")
             continue
         for kind, form in (("line", LINE), ("section", SECTION), ("file", FILE)):
-            m = form.match(cited)
-            if m and in_repository(m.group(1)):
-                base = f"{context}|{following}|{m.group(1)}"
+            f = form.match(cited)
+            if f and in_repository(f.group(1)):
+                base = f"{context}|{following}|{f.group(1)}"
                 ordinal[base] += 1
-                yield Citation(document, i, cited, kind, f"{base}|{ordinal[base]}", m)
+                yield Citation(i, cited, kind, f"{base}|{ordinal[base]}", f)
                 break
         else:
-            yield Citation(document, i, cited, "unknown")
+            yield Citation(i, cited, "unknown")
 
 
 def in_repository(path):
     return not path.startswith("/") and ".." not in path.split("/")
 
 
-def read_lines(path):
-    try:
-        return path.read_text(encoding="utf-8").splitlines()
-    except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
-        return None
-
-
 def needles_table(path, name, problems):
     """The needles of each key in the table at `path`; empty when there is none."""
     table = {}
-    text = read_lines(path)
-    for n, row in enumerate(text or [], 1):
+    try:
+        raw = read_raw(path)
+    except Unreadable as error:
+        problems.append(f"{name}: {error}")
+        return table
+    for n, row in enumerate(raw or [], 1):
+        row = body(row)
         if not row.strip() or row.startswith("#"):
             continue
         key, tab, needle = row.partition("\t")
@@ -129,31 +173,58 @@ def needles_table(path, name, problems):
     return table
 
 
+def in_order(text, lo, hi, needles):
+    """The line index of each needle found in order in text[lo:hi]; None when one is missing."""
+    found = []
+    at = lo
+    for needle in needles:
+        r = next((r for r in range(at, hi) if needle in text[r]), None)
+        if r is None:
+            return None
+        found.append(r)
+        at = r
+    return found
+
+
 def resolves(text, a, b, needles):
-    if text is None or a < 1 or b > len(text) or a > b:
+    if a < 1 or b > len(text) or a > b:
         return False
-    at = a - 1
-    for k, needle in enumerate(needles):
-        found = next((r for r in range(at, b) if needle in text[r]), None)
-        if found is None or (k == 0 and a != b and found != a - 1):
-            return False
-        at = found
-    return True
+    found = in_order(text, a - 1, b, needles)
+    if found is None:
+        return False
+    if a != b and found[0] != a - 1:
+        return False
+    return found[-1] >= b - 2
+
+
+def sections(text, heading):
+    """Every (start, end) line index span of a section whose heading text is `heading`."""
+    headings = []
+    fenced = False
+    for r, line in enumerate(text):
+        if FENCE.match(line):
+            fenced = not fenced
+            continue
+        m = None if fenced else HEADING.match(line)
+        if m:
+            headings.append((r, len(m.group(1)), (m.group(2) or "").strip()))
+    spans = []
+    for k, (r, level, title) in enumerate(headings):
+        if title != heading:
+            continue
+        end = next((s for s, lv, _ in headings[k + 1 :] if lv <= level), len(text))
+        spans.append((r, end))
+    return spans
 
 
 def locate(text, needles):
     """Every (a, b) the needles span in order, the first needle on a."""
     spans = []
     for start, line in enumerate(text):
-        if needles[0] not in line:
-            continue
-        at = start
-        for needle in needles[1:]:
-            at = next((r for r in range(at, len(text)) if needle in text[r]), None)
-            if at is None:
-                break
-        if at is not None:
-            spans.append((start + 1, at + 1))
+        if needles[0] in line:
+            found = in_order(text, start, len(text), needles)
+            if found is not None:
+                spans.append((start + 1, found[-1] + 1))
     return spans
 
 
@@ -193,12 +264,17 @@ def main():
     unused_total = 0
     for document in sorted(ess.rglob("*.yaml")):
         name = document.relative_to(repo).as_posix()
-        text = read_lines(document)
+        try:
+            raw = read_raw(document) or []
+        except Unreadable as error:
+            problems.append(f"{name}: {error}")
+            continue
+        text = [body(line) for line in raw]
         table_path = document.with_name(document.stem + ".citations.tsv")
         table = needles_table(table_path, table_path.relative_to(repo).as_posix(), problems)
         seen = set()
         rewrite = {}
-        for c in citations(name, text):
+        for c in citations(text):
             if c.kind == "external":
                 counts["external"] += 1
                 if args.mode == "dump":
@@ -206,58 +282,79 @@ def main():
                 continue
             ok = False
             cited = None
-            if c.kind != "unknown":
+            error = None
+            needles = None
+            if c.kind in ("line", "section", "file"):
                 seen.add(c.key)
+                needles = table.get(c.key)
                 if c.path not in files:
-                    files[c.path] = read_lines(repo / c.path)
-                cited = files[c.path]
-            if c.kind == "file":
-                ok = cited is not None
-            elif c.kind == "section":
-                heading = c.match.group(2)
-                ok = cited is not None and any(
-                    line.startswith("#") and heading in line for line in cited
-                )
-            elif c.kind == "line":
-                ok = c.key in table and resolves(cited, *c.lines, table[c.key])
+                    try:
+                        lines = read_raw(repo / c.path)
+                        files[c.path] = (None if lines is None else [body(l) for l in lines], None)
+                    except Unreadable as unreadable:
+                        files[c.path] = (None, f"{unreadable}: {c.path}")
+                cited, error = files[c.path]
+                if cited is None and error is None:
+                    error = f"no such file: {c.path}"
+            if cited is not None and needles:
+                if c.kind == "file":
+                    ok = in_order(cited, 0, len(cited), needles) is not None
+                elif c.kind == "section":
+                    ok = any(
+                        in_order(cited, lo, hi, needles) is not None
+                        for lo, hi in sections(cited, c.match.group(2))
+                    )
+                else:
+                    ok = resolves(cited, *c.lines, needles)
             counts["resolved" if ok else "unresolved"] += 1
             if ok and args.mode != "dump":
                 continue
-            state = "ok" if ok else "unresolved"
-            print(f"{name}:{c.index + 1}: {state}: {c.cited}")
+            print(f"{name}:{c.index + 1}: {'ok' if ok else 'unresolved'}: {c.cited}")
+            if c.kind == "stray":
+                print("      `read from` outside a `# read from: <citation>` comment line")
+                continue
             if c.kind == "unknown":
                 print(f"      not a citation form: {FORMS}")
                 continue
             print(f"      key: {c.key}")
-            if cited is None:
-                print(f"      no such file: {c.path}")
+            print(f"      needles: {' && '.join(needles) if needles else 'none'}")
+            if error:
+                print(f"      {error}")
+                continue
+            if c.kind == "section":
+                found = sections(cited, c.match.group(2))
+                heads = ", ".join(str(lo + 1) for lo, _ in found) or "none"
+                print(f"      headings with that text at: {heads}")
                 continue
             if c.kind != "line":
                 continue
             a, b = c.lines
-            needles = table.get(c.key)
-            print(f"      needles: {' && '.join(needles) if needles else 'none'}")
             show_lines(cited, a, b)
             if ok or not needles:
                 continue
             spans = locate(cited, needles)
-            found = ", ".join(span(*s) for s in spans[:6]) or "nowhere"
-            print(f"      needles found at: {found}")
-            if args.mode == "fix" and len(spans) == 1:
-                shift = spans[0][0] - a
-                na, nb = a + shift, b + shift
-                if not resolves(cited, na, nb, needles):
-                    na, nb = spans[0]
-                new = f"{c.path}:{span(na, nb)}"
-                rewrite[c.index] = text[c.index].replace(c.cited, new, 1)
-                print(f"      re-pointed: {new}")
+            print(f"      needles found at: {', '.join(span(*s) for s in spans[:6]) or 'nowhere'}")
+            if args.mode != "fix" or len(spans) != 1:
+                continue
+            shift = spans[0][0] - a
+            na, nb = a + shift, b + shift
+            if not resolves(cited, na, nb, needles):
+                na, nb = spans[0]
+                if nb - na > b - a:
+                    print("      not re-pointed: the needles span more lines than the cited range")
+                    continue
+            new = f"{c.path}:{span(na, nb)}"
+            line = raw[c.index]
+            rewrite[c.index] = line.replace(c.cited, new, 1)
+            print(f"      re-pointed: {new}")
         for key in sorted(set(table) - seen):
             print(f"{table_path.relative_to(repo).as_posix()}: unused needle: {key}")
             unused_total += 1
         if rewrite:
             for i, line in rewrite.items():
-                text[i] = line
-            document.write_text("\n".join(text) + "\n", encoding="utf-8")
+                raw[i] = line
+            with open(document, "w", encoding="utf-8", newline="") as f:
+                f.write("".join(raw))
             print(f"{name}: rewrote {len(rewrite)} citation lines")
     for problem in problems:
         print(problem)
