@@ -47,7 +47,11 @@ cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
 - When two product qualities conflict, the order is secure, autonomous, reliable, deterministic,
   efficient (`product-requirements:takt` § 3).
 - Evidence comes from validators only, never from a model's text. A new claim needs a validator
-  that writes a `canon-evidence/1` record bound to a revision.
+  that writes a `canon-evidence/1` record bound to a revision. One exception, by design: a choice
+  record (producer `takt.choice`, such as `handover`) is written by takt and attests which action
+  the harness chose at a revision with no file changed, as an approval request does; it never makes a
+  claim about the work true (`tests.pass`, `gate.green`, `ci.green`, `pr.merged`), and a protocol
+  may gate an action on it but never an outcome on it alone.
 - Protocols are data: use `b10x-canon-engineering`'s built-ins, or a `protocol/1` file; never a
   model of a protocol written in Rust. Where a person is needed is the protocol's: an action that
   `requires` a capability waits for a grant (`takt approve`). The one gate in Rust is the merge

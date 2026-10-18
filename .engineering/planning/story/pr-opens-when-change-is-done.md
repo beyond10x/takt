@@ -13,7 +13,7 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: cited
   path: protocols/story-delivery/1.yaml
-revision: 4
+revision: 5
 ---
 # Story: pr-opens-when-change-is-done
 
@@ -45,3 +45,7 @@ On takt at 0a776d2, holds; after the fix, fails:
 ## Acceptance
 
 On scenario 1, a run reaches `ApprovalRequired` with exactly one CI result recorded, at the revision the grant is given at, and no `pr.open` before the first implementation commit; the run's wall time and steps are recorded in docs/metrics.
+
+## The evidence rule
+
+The evidence rule in `AGENTS.md` § Rules gains its one exception (decided 2026-10-18, D35): choice records written by takt (producer `takt.choice`, first `handover` from story:pr-opens-when-change-is-done) attest which action the harness chose; they gate an action, never make a claim about the work true.
