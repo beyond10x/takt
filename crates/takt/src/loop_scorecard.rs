@@ -189,7 +189,8 @@ fn is_commit(repo: &Path, revision: &str) -> bool {
 
 impl Definitions {
     /// Reads definitions from `text`: [`DEFINITIONS_FORMAT`], each target with exactly one
-    /// bound, and no version of a metric defined twice.
+    /// bound, a finite number its metric's figures can take (a share's 0 to 1, any other's 0
+    /// and above), and no version of a metric defined twice.
     pub fn parse(text: &str) -> Result<Self> {
         let definitions: Self =
             serde_yaml_ng::from_str(text).context("read the loop metric definitions")?;
@@ -211,12 +212,19 @@ impl Definitions {
                     }
                     // A bound that is no finite number (`.nan`, `.inf`) is never missed or
                     // never met: no target at all.
-                    if target
-                        .at_least
-                        .or(target.at_most)
-                        .is_some_and(|bound| !bound.is_finite())
-                    {
+                    let bound = target.at_least.or(target.at_most).unwrap_or_default();
+                    if !bound.is_finite() {
                         bail!("{id} v{}: a target is a finite number", definition.version);
+                    }
+                    // A target no figure of the metric can take is meaningless: a share is 0 to
+                    // 1, and a count, a token figure or a time is never below 0.
+                    let share = id.ends_with("_share");
+                    if bound < 0.0 || (share && bound > 1.0) {
+                        bail!(
+                            "{id} v{}: a target of {bound} is outside {}",
+                            definition.version,
+                            if share { "0 to 1" } else { "0 and above" }
+                        );
                     }
                 }
             }

@@ -1491,6 +1491,39 @@ fn a_target_that_is_not_a_finite_number_is_refused() {
     }
 }
 
+/// A target no figure of its metric can take is refused: a share outside 0 to 1, a negative
+/// time, count or token figure. One inside the range reads.
+#[test]
+fn a_target_outside_its_metrics_range_is_refused() {
+    let definitions = |metric: &str, bound: &str| {
+        format!(
+            "format: takt-loop-metrics/1\nmetrics:\n  {metric}:\n    version: 1\n    definition: the figure\n    target:\n      {bound}\n"
+        )
+    };
+    for (metric, bound) in [
+        ("accepted_share", "at_least: 1.5"),
+        ("accepted_share", "at_least: -0.1"),
+        ("promoted_share", "at_most: 2"),
+        ("finding_to_verified", "at_most: -60"),
+        ("median_tokens_per_accepted_turn", "at_most: -1"),
+        ("turns", "at_least: -3"),
+    ] {
+        assert!(
+            Definitions::parse(&definitions(metric, bound)).is_err(),
+            "{metric} {bound} is refused"
+        );
+    }
+    for (metric, bound) in [
+        ("accepted_share", "at_least: 1"),
+        ("promoted_share", "at_least: 0"),
+        ("finding_to_verified", "at_most: 0"),
+        ("median_tokens_per_accepted_turn", "at_most: 200000"),
+    ] {
+        Definitions::parse(&definitions(metric, bound))
+            .unwrap_or_else(|error| panic!("{metric} {bound}: {error:#}"));
+    }
+}
+
 /// `loop.measure` and `loop.compare` take the baseline's definitions from the snapshot the case
 /// took when it opened, never from the object store: a snapshot whose target differs from the
 /// base's file decides the measurement, and with no snapshot neither records anything.

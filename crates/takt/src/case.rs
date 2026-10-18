@@ -40,6 +40,51 @@ pub const STORY_FILE: &str = "story.yaml";
 /// once exactly one holds; no grant lands and no second run starts meanwhile.
 pub const LOCK_FILE: &str = "run.lock";
 
+/// The protocol whose cases open with a baseline the run is given: `loop.improvement/1`.
+pub const LOOP_PROTOCOL: &str = "loop.improvement/1";
+
+/// The loop case's baseline artifact, and the name `takt run` reads it from:
+/// `--input loop_baseline=<full commit id>`, which the protocol declares as no case input.
+pub const LOOP_BASELINE: &str = "loop_baseline";
+
+/// The commit a loop case opens with as its baseline, from `value`: a full commit id (40 or 64
+/// lower-case hexadecimal digits) of a commit `tree` holds. A missing value, or any other (a
+/// short id, a name, a tree's id, an id the repository does not hold), is refused, naming why,
+/// before anything is written. Until promotions are recorded the operator gives it; then the
+/// latest promotion's revision.
+pub fn loop_baseline(tree: &Path, value: Option<&str>) -> Result<String> {
+    let Some(value) = value else {
+        bail!(
+            "{LOOP_PROTOCOL} opens with --input {LOOP_BASELINE}=<full commit id>, the promoted revision its baseline is; none was given; nothing was written"
+        );
+    };
+    let full = matches!(value.len(), 40 | 64)
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if !full {
+        bail!(
+            "--input {LOOP_BASELINE}={value}: a loop case's baseline is a full commit id, 40 or 64 lower-case hexadecimal digits; nothing was written"
+        );
+    }
+    let resolved = crate::git::run(
+        tree,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{value}^{{commit}}"),
+        ],
+    );
+    if resolved.as_deref().ok() != Some(value) {
+        bail!(
+            "--input {LOOP_BASELINE}={value}: no commit of {} has that id; nothing was written",
+            tree.display()
+        );
+    }
+    Ok(value.to_owned())
+}
+
 /// Whether `path`, relative to the tree, is the cases directory or lies under it: what the
 /// kernel's change detection, commit and clean leave out. The directory and its contents only,
 /// never a path that merely starts with the same characters.
@@ -1793,6 +1838,21 @@ impl CaseDir {
             }
         }
         Ok(true)
+    }
+
+    /// Opens a loop case's baseline, before any step: `loop_baseline` at `revision`, a commit
+    /// [`loop_baseline`] answered, and the baseline's metric definitions snapshotted into the
+    /// case ([`crate::loop_scorecard::snapshot_baseline`]), which every loop validator reads the
+    /// baseline from. A snapshot that cannot be taken is an error.
+    pub fn open_loop_baseline(&mut self, tree: &Path, revision: &str) -> Result<()> {
+        self.set_revision(LOOP_BASELINE, revision)?;
+        if !crate::loop_scorecard::snapshot_baseline(tree, self)? {
+            bail!(
+                "the loop case {} could not snapshot its baseline {revision}",
+                self.id
+            );
+        }
+        Ok(())
     }
 
     /// Moves `artifact` to `revision`; evidence about the old revision no longer applies.

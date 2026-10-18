@@ -45,8 +45,9 @@ const NO_CONFIGURED_CODE: [&str; 18] = [
 ];
 
 /// The variables of the caller's environment that would point git elsewhere than the tree, or
-/// change how it reads a path or its configuration; none reaches a git takt runs.
-const REDIRECTING_ENV: [&str; 12] = [
+/// change how it reads a path, its configuration or its history (`GIT_TEST_COMMIT_GRAPH`
+/// writes a commit-graph after every commit); none reaches a git takt runs.
+const REDIRECTING_ENV: [&str; 13] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_COMMON_DIR",
@@ -59,6 +60,7 @@ const REDIRECTING_ENV: [&str; 12] = [
     "GIT_NOGLOB_PATHSPECS",
     "GIT_ICASE_PATHSPECS",
     "GIT_LITERAL_PATHSPECS",
+    "GIT_TEST_COMMIT_GRAPH",
 ];
 
 /// Runs `git <args>` in `tree` with `input` on its standard input, with no code from
