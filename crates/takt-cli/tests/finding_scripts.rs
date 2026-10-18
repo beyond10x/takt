@@ -22,6 +22,10 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../takt/tests/fixtu
 /// The run record a finding cites, relative to the repository it is filed in.
 const SOURCE: &str = "docs/runs/trial-1.md";
 
+/// The URL a repository-form predicate names; a `.invalid` host, so a check that clones it
+/// instead of the `--checkout` standing in for it fails without a network.
+const REPOSITORY_URL: &str = "https://example.invalid/scenarios";
+
 /// A scratch directory under this crate's build directory, removed on drop.
 struct Scratch(PathBuf);
 
@@ -524,21 +528,33 @@ impl World {
     }
 
     /// Runs `check-finding` from the takt source on `finding` at `revision` without
-    /// `--scenarios`: the predicate names its repository and seed itself.
+    /// `--scenarios`: the predicate names its repository and seed itself, and `--checkout`
+    /// makes the scenario repository's checkout stand in for the predicate's URL.
     fn check_repository(&self, finding: &str, revision: &str, env: &[(&str, &str)]) -> Output {
         let cache = self.cache();
         let mut all = vec![("XDG_CACHE_HOME", cache.to_str().expect("UTF-8"))];
         all.extend_from_slice(env);
-        script("check-finding", &self.takt, &[finding, revision], &all)
+        let checkout = self.checkout();
+        script(
+            "check-finding",
+            &self.takt,
+            &["--checkout", &checkout, finding, revision],
+            &all,
+        )
     }
 
-    /// The default-protocol finding's predicate in its repository form: the scenario
-    /// repository named by its path and seed, the task's test command, citing [`SOURCE`]; the
-    /// command checks that `$TEST` reached it.
+    /// The `--checkout` value that makes the scenario repository stand in for
+    /// [`REPOSITORY_URL`].
+    fn checkout(&self) -> String {
+        format!("{REPOSITORY_URL}={}", self.scenarios.display())
+    }
+
+    /// The default-protocol finding's predicate in its repository form: the repository by its
+    /// URL and seed, the task's test command, citing [`SOURCE`]; the command checks that `$TEST`
+    /// reached it.
     fn repository_predicate(&self) -> String {
         format!(
-            "repository: {}\nseed: {}\ntest: ./check.sh\ncommand: test \"$TEST\" = ./check.sh && \"$TAKT\" run --repo .\nexit: 3\noutput: on software.change/1\nsource: {SOURCE}\n",
-            self.scenarios.display(),
+            "repository: {REPOSITORY_URL}\nseed: {}\ntest: ./check.sh\ncommand: test \"$TEST\" = ./check.sh && \"$TAKT\" run --repo .\nexit: 3\noutput: on software.change/1\nsource: {SOURCE}\n",
             self.seed
         )
     }
@@ -738,7 +754,7 @@ fn a_finding_on_a_repository_is_filed_with_its_repository_seed_and_test() {
     );
     let artifact = show(&world.takt, "story:repo-form");
     for line in [
-        format!("repository: {}", world.scenarios.display()),
+        format!("repository: {REPOSITORY_URL}"),
         format!("seed: {}", world.seed),
         "test: ./check.sh".to_owned(),
     ] {
@@ -757,7 +773,7 @@ fn a_finding_on_a_repository_is_filed_with_its_repository_seed_and_test() {
     assert!(output.status.success(), "{}", shown(&output));
     let printed = String::from_utf8_lossy(&output.stdout);
     for line in [
-        format!("repository\t{}", world.scenarios.display()),
+        format!("repository\t{REPOSITORY_URL}"),
         format!("seed\t{}", world.seed),
         "test\t./check.sh".to_owned(),
         "command\ttest \"$TEST\" = ./check.sh && \"$TAKT\" run --repo .".to_owned(),
@@ -803,12 +819,41 @@ fn a_repository_finding_is_checked_in_a_clone_of_its_repository_at_its_seed() {
         shown(&output)
     );
     // --scenarios given as well changes nothing: the predicate's repository is the one cloned.
-    let output = world.check("story:repo-form", &world.defect, &[]);
+    let cache = world.cache();
+    let checkout = world.checkout();
+    let output = script(
+        "check-finding",
+        &world.takt,
+        &[
+            "--scenarios",
+            world.scenarios.to_str().expect("UTF-8"),
+            "--checkout",
+            &checkout,
+            "story:repo-form",
+            &world.defect,
+        ],
+        &[("XDG_CACHE_HOME", cache.to_str().expect("UTF-8"))],
+    );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "reproduced\n",
         "{}",
         shown(&output)
+    );
+    // The check's record names the URL the predicate gave and the checkout that stood in.
+    let runs = world.cache().join("takt/check-finding/runs");
+    let results: Vec<String> = fs::read_dir(&runs)
+        .expect("the runs directory")
+        .map(|entry| fs::read_to_string(entry.expect("an entry").path().join("result")))
+        .filter_map(Result::ok)
+        .collect();
+    assert!(
+        results.iter().all(|result| {
+            result.contains(&format!("repository: {REPOSITORY_URL}\n"))
+                && result.contains(&format!("checkout: {}\n", world.scenarios.display()))
+                && result.contains(&format!("seed: {}\n", world.seed))
+        }),
+        "{results:?}"
     );
 }
 
@@ -820,20 +865,58 @@ fn a_repository_finding_the_check_cannot_clone_at_its_seed_gives_no_result() {
         .replace(&world.seed, "0123456789abcdef0123456789abcdef01234567");
     let filed = file(&world.takt, "unheld-seed", &body(Some(&unheld)), &[]);
     assert!(filed.status.success(), "{}", shown(&filed));
+    let filed = file(
+        &world.takt,
+        "repo-form",
+        &body(Some(&world.repository_predicate())),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = world.check_repository("story:unheld-seed", &world.defect, &[]);
+    assert!(
+        !output.status.success(),
+        "a seed the repository does not hold: {}",
+        shown(&output)
+    );
+    assert!(output.stdout.is_empty(), "{}", shown(&output));
     let empty = world.outer.0.join("no-repository");
     fs::create_dir_all(&empty).expect("a directory");
-    let none = world.repository_predicate().replace(
-        &world.scenarios.display().to_string(),
-        empty.to_str().expect("UTF-8"),
-    );
-    let filed = file(&world.takt, "no-repository", &body(Some(&none)), &[]);
-    assert!(filed.status.success(), "{}", shown(&filed));
-    for (what, finding) in [
-        ("a seed the repository does not hold", "story:unheld-seed"),
-        ("a path that is no repository", "story:no-repository"),
-    ] {
-        let output = world.check_repository(finding, &world.defect, &[]);
-        assert!(!output.status.success(), "{what}: {}", shown(&output));
+    let cache = world.cache();
+    let env = [("XDG_CACHE_HOME", cache.to_str().expect("UTF-8"))];
+    let no_repository = format!("{REPOSITORY_URL}={}", empty.display());
+    let no_directory = format!("{REPOSITORY_URL}={}", world.outer.0.join("none").display());
+    let cases: Vec<(&str, Vec<&str>, i32)> = vec![
+        (
+            "a checkout that is no repository",
+            vec!["--checkout", &no_repository],
+            1,
+        ),
+        (
+            "no checkout: the URL itself, which no network resolves",
+            vec![],
+            1,
+        ),
+        (
+            "a checkout that is no <url>=<path>",
+            vec!["--checkout", "nonsense"],
+            64,
+        ),
+        (
+            "a checkout path that is no directory",
+            vec!["--checkout", &no_directory],
+            64,
+        ),
+    ];
+    for (what, flags, code) in cases {
+        let mut args = flags;
+        args.extend(["story:repo-form", world.defect.as_str()]);
+        let output = script("check-finding", &world.takt, &args, &env);
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{what}: {}",
+            shown(&output)
+        );
         assert!(output.stdout.is_empty(), "{what}: {}", shown(&output));
     }
 }
@@ -846,8 +929,7 @@ fn a_predicate_mixing_or_missing_the_scenario_and_repository_forms_is_refused() 
     let scenario_form = predicate();
     let seed = git_out(&repo, &["rev-parse", "HEAD"]);
     let repository_form = format!(
-        "repository: {}\nseed: {seed}\ncommand: \"$TAKT\" run --repo .\nexit: 3\nsource: {SOURCE}\n",
-        repo.display()
+        "repository: {REPOSITORY_URL}\nseed: {seed}\ncommand: \"$TAKT\" run --repo .\nexit: 3\nsource: {SOURCE}\n"
     );
     let replaced = |text: &str, key: &str, value: &str| {
         text.lines()
@@ -913,6 +995,22 @@ fn a_predicate_mixing_or_missing_the_scenario_and_repository_forms_is_refused() 
         (
             "a relative repository path",
             replaced(&repository_form, "repository", "../canon"),
+        ),
+        (
+            "an absolute repository path, one machine's",
+            replaced(
+                &repository_form,
+                "repository",
+                repo.to_str().expect("UTF-8"),
+            ),
+        ),
+        (
+            "a repository as a file URL",
+            replaced(
+                &repository_form,
+                "repository",
+                &format!("file://{}", repo.display()),
+            ),
         ),
         (
             "a seed that is no commit id",

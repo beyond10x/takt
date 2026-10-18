@@ -22,7 +22,9 @@
 #   scenario    the scenario's id, as `.engineering/scenarios.conf` of the scenario repository
 #               declares it (letters, digits, `-` and `_`)
 #   repository  instead of a scenario: the repository the defect was seen on, an `https://` URL
-#               or an absolute path, cloned by `scripts/check-finding` at `seed`
+#               and nothing else (a predicate is committed to a public repository, and a path is
+#               one machine's), cloned by `scripts/check-finding` at `seed`; a local checkout
+#               stands in for the URL only through that script's `--checkout` option
 #   seed        with `repository`: the commit the task starts from, a commit id of 7 to 64 hex
 #               digits
 #   test        with `repository`, optional: the task's test command, handed to the command as
@@ -126,8 +128,7 @@ read_predicate() {
     elif [[ -v PREDICATE[repository] ]]; then
         case ${PREDICATE[repository]} in
         https://?*) ;;
-        /?*) ;;
-        *) malformed "repository \`${PREDICATE[repository]}\`: a repository is an \`https://\` URL or an absolute path, so the check clones it with no credential of its own" ;;
+        *) malformed "repository \`${PREDICATE[repository]}\`: a repository is an \`https://\` URL, which the check clones with no credential of its own and which holds on every machine; a local checkout stands in for it through check-finding's \`--checkout <url>=<path>\`" ;;
         esac
         [[ -v PREDICATE[seed] ]] || malformed "the expected_before block gives \`repository\` but no \`seed\`: the commit the task starts from"
         [[ ${PREDICATE[seed]} =~ ^[0-9a-f]{7,64}$ ]] ||

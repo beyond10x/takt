@@ -2,7 +2,8 @@
 # check-finding: run a filed finding's `expected_before` predicate on its scenario with a takt
 # built from a given revision, and print whether the defect is there.
 #
-#   check-finding [--scenarios <repo>] [--declared-on <rev>] [--repo <dir>] <finding> <revision>
+#   check-finding [--scenarios <repo>] [--declared-on <rev>] [--checkout <url>=<path>]...
+#                 [--repo <dir>] <finding> <revision>
 #
 #   <finding>        the finding's artifact id in this repository's planning store, as
 #                    `scripts/file-finding` filed it (`story:<key>` or `blocker:<key>`)
@@ -13,21 +14,26 @@
 #                    predicate that names its `repository` ignores it
 #   --declared-on    the revision of the scenario repository whose `.engineering/scenarios.conf`
 #                    declares the scenario (`[scenario "<id>"]`, `story` and `seed`); `main`
+#   --checkout       for a predicate that names its `repository`: a local checkout that stands in
+#                    for that `https://` URL, cloned instead of it (speed, or no network);
+#                    repeatable, one URL each. The predicate itself never names a path: it is
+#                    committed to a public repository and must hold on every machine
 #   --repo           this repository; the top of the tree the script is run in
 #
 # Steps: the finding's file is read from the store (`.engineering/planning/<kind>/<name>.md`,
 # read only, so the check needs no `aep`) and its predicate parsed by
 # `scripts/file-finding --predicate`. A predicate names a `scenario`, whose declaration is read
 # from `--declared-on` with `git config --no-includes --blob`, as `takt scenario run` reads it;
-# or a `repository` (an `https://` URL or an absolute path) with the `seed` the task starts from
-# and, optionally, the task's `test` command. The revision is checked out into a build directory
+# or a `repository` (an `https://` URL) with the `seed` the task starts from and, optionally,
+# the task's `test` command. The revision is checked out into a build directory
 # of its own under the cache (a clone sharing this repository's objects, so a commit no branch
 # holds builds too) and built with `cargo build --locked`, its target directory inside that
 # build directory whatever CARGO_TARGET_DIR says; the binary is kept per revision beside a
 # `revision` file naming the commit it was built from, and the build directory removed. A build
 # is made in a checkout, never from an export, so the binary's `--version` and its runs' `opened`
 # records name the revision; a kept binary with no `revision` file beside it predates that and is
-# built again. The scenario repository, or the predicate's repository, is cloned
+# built again. The scenario repository, or the predicate's repository (the checkout `--checkout`
+# gives for its URL, else the URL itself), is cloned
 # (`GIT_TERMINAL_PROMPT=0`: a repository that wants a credential fails, it does not ask), the
 # clone's `trial/0` set to the seed (whatever branch the checkout was on) and checked out, its
 # remote removed, and the predicate's command runs there through `sh -c`, with `$TAKT` the
@@ -56,7 +62,7 @@ set -euo pipefail
 say() { printf 'check-finding: %s\n' "$*" >&2; }
 usage() {
     say "$*"
-    say "usage: check-finding [--scenarios <repo>] [--declared-on <rev>] [--repo <dir>] <finding> <revision>"
+    say "usage: check-finding [--scenarios <repo>] [--declared-on <rev>] [--checkout <url>=<path>]... [--repo <dir>] <finding> <revision>"
     exit 64
 }
 fail() {
@@ -66,15 +72,23 @@ fail() {
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 scenarios= declared_on=main repo=
+declare -A checkouts=()
 positional=()
 while (($#)); do
     case $1 in
-    --scenarios | --declared-on | --repo)
+    --scenarios | --declared-on | --repo | --checkout)
         (($# >= 2)) || usage "$1 takes a value"
         case $1 in
         --scenarios) scenarios=$2 ;;
         --declared-on) declared_on=$2 ;;
         --repo) repo=$2 ;;
+        --checkout)
+            [[ $2 == https://?*=?* ]] || usage "--checkout $2: give <https-url>=<path>, the URL a predicate names and the local checkout that stands in for it"
+            url=${2%%=*}
+            path=${2#*=}
+            [[ -z ${checkouts[$url]+x} ]] || usage "--checkout $2: $url is given twice"
+            checkouts[$url]=$(cd "$path" 2>/dev/null && pwd -P) || usage "--checkout $2: $path is no directory"
+            ;;
         esac
         shift 2
         ;;
@@ -175,6 +189,12 @@ if [[ -n $scenario ]]; then
 else
     [[ -z $scenarios ]] || say "--scenarios is not read: the predicate names its repository, $repository"
     source=$repository
+    checkout=
+    if [[ -n ${checkouts[$repository]+x} ]]; then
+        checkout=${checkouts[$repository]}
+        source=$checkout
+        say "$repository: cloning the checkout $checkout in its place"
+    fi
     seed=${predicate[seed]}
     where="$repository at ${seed:0:12}"
 fi
@@ -250,6 +270,7 @@ fi
         printf 'scenario: %s\nstory: %s\n' "$scenario" "$story"
     else
         printf 'repository: %s\n' "$repository"
+        [[ -z $checkout ]] || printf 'checkout: %s\n' "$checkout"
         [[ -z $test_command ]] || printf 'test: %s\n' "$test_command"
     fi
     printf 'seed: %s\nexit: %s\nresult: %s\n' "$seed" "$status" "$result"

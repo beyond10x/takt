@@ -176,7 +176,7 @@ goes to standard error.
    | key | what |
    |---|---|
    | `scenario` | the scenario's id in the scratch repository's `.engineering/scenarios.conf` |
-   | `repository` | instead of `scenario`: the repository the defect was seen on, an `https://` URL or an absolute path, which `check-finding` clones without `--scenarios`; for a task taken from a sibling repository, that repository |
+   | `repository` | instead of `scenario`: the repository the defect was seen on, an `https://` URL and never a path (the predicate is committed to a public repository and must hold on every machine), which `check-finding` clones without `--scenarios`; a local checkout stands in for the URL only through `check-finding --checkout <url>=<path>` at check time |
    | `seed` | with `repository`: the commit the task starts from, a commit id |
    | `test` | with `repository`, optional: the task's test command, handed to the command as `$TEST` |
    | `command` | one shell line, run in a fresh clone of the scenario's seed, or of `repository` at `seed`, with `$TAKT` the binary under test and `$SCENARIO` the clone, in a fresh HOME of the check's own; no credential of the caller's environment or home reaches it |
