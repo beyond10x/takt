@@ -2,7 +2,8 @@ takt.work.CaseId|- name: takt.work.CaseId|crates/takt/src/run.rs|1	.unwrap_or_el
 takt.work.CaseId|- name: takt.work.CaseId|crates/takt/src/frontier.rs|1	pub fn case_id(&self, instant: &str) -> String { && instant.replace([':', '-'], "")	sha256:011628b2eb958bd516b56063070e6fb5f70b8e41d57335141c05eb7395c2cc21
 takt.work.CaseId|- name: takt.work.CaseId|crates/takt/src/case.rs|1	doc.insert("id".into(), id.into());	sha256:e89b6938a954dfdaa73094979b3682c3fc277518b66fae386933a3378cf91b4d
 takt.work.CaseId|- name: takt.work.CaseId|crates/takt/src/case.rs|2	pub fn check_id(id: &str) -> Result<()> { && Some("it contains a path separator".to_owned())	sha256:7669cd69bcf38211fa1eb4d3bc61239bded933b17fc1e067daa957b465fdc9a4
-takt.work.CaseId|- name: takt.work.CaseId|crates/takt/src/case.rs|3	const REFUSED_IN_A_BRANCH && as a branch name"	sha256:c72b790c5c0d0f31732751b9232a89de616bcf9288da576ab055e238751bbfa6
+takt.work.CaseId|- name: takt.work.CaseId|crates/takt/src/case.rs|3	const MAX_ID_BYTES && as a branch name"	sha256:5e00381d86f6e7629bdefa44a8716d5c51e7dfa778f133c2564e45cccecfc313
+takt.work.CaseId|- name: takt.work.CaseId|crates/takt/src/case.rs|4	const DEFAULT_IGNORABLE && .collect()	sha256:be407081758f6498e07c131b74865e91999a08e84d65b698082d7f046401d12e
 takt.work.RunId|- name: takt.work.RunId|crates/takt/src/run.rs|1	pub struct Run<'a> { && pub tokens: u64,	sha256:8843cc7747fdca9fc669e0f9029be63d60f459ff54f25b408511e2c782ec8b74
 takt.work.RunId|- name: takt.work.RunId|crates/takt/src/run.rs|2	.unwrap_or_else(|| format!("takt-{}"	sha256:03cdcecec9a3332200cf30aa13d87a996fcfa53636d4e12a99df1aa683b8df71
 takt.work.RunId|- name: takt.work.RunId|crates/takt-cli/src/main.rs|1	"stopped: {stop}; steps {}, tokens {}, case {}", && run.case.dir.display()	sha256:faa754f7915cae8e619259a66f67ec00a2929886e61c0f79bd8c0d365f00aa5e

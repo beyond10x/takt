@@ -230,3 +230,118 @@ fn a_case_directory_under_a_refused_id_is_not_resumed() {
         assert_eq!(git(&tree, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
     }
 }
+
+/// Whether `git branch` makes `takt/<id>` in `tree`; the branch is deleted again when it was.
+fn git_creates_branch(tree: &Path, id: &str) -> bool {
+    let branch = format!("takt/{id}");
+    let made = Command::new("git")
+        .args(["branch", "-q", &branch])
+        .current_dir(tree)
+        .output()
+        .expect("git runs")
+        .status
+        .success();
+    if made {
+        git(tree, &["branch", "-q", "-D", &branch]);
+    }
+    made
+}
+
+/// An id is at most 250 bytes, counted in bytes, not characters: git keeps `takt/<id>` as the
+/// file `<id>` and locks it as `<id>.lock`, which a 255-byte file name limit holds only that
+/// far. The refusal names the limit; an id at the limit opens its case.
+#[test]
+fn an_id_longer_than_250_bytes_is_refused_naming_the_limit() {
+    let tree = repository("length");
+    for id in ["a".repeat(250), "\u{fc}".repeat(125)] {
+        assert_eq!(id.len(), 250);
+        check_id(&id).unwrap_or_else(|error| panic!("{} bytes: {error:#}", id.len()));
+        assert!(git_creates_branch(&tree, &id), "git refuses 250 bytes");
+    }
+    for id in ["a".repeat(251), "\u{fc}".repeat(126), "b".repeat(300)] {
+        let refusal = format!("{:#}", check_id(&id).expect_err("too long"));
+        assert!(refusal.contains("case id"), "{refusal}");
+        assert!(
+            refusal.contains(&format!("{} bytes", id.len())) && refusal.contains("250"),
+            "the length and the limit are not named: {refusal}"
+        );
+        let refusal = format!(
+            "{:#}",
+            CaseDir::open(&tree, protocol(), &id, "probe", &[]).expect_err("too long")
+        );
+        assert!(refusal.contains("250"), "{refusal}");
+        assert!(!tree.join(CASES_DIR).exists(), "a case directory was made");
+        assert!(git(&tree, &["branch", "--list", "takt/*"]).is_empty());
+    }
+}
+
+/// The refusal names the id as it was typed: a quote or a backslash shows as itself, and only
+/// a character that does not show is written as its code point.
+#[test]
+fn the_refusal_names_the_id_as_typed() {
+    for (id, shown) in [
+        ("it's~", "it's~"),
+        ("a\"b~", "a\"b~"),
+        ("x\\y", "x\\y"),
+        ("it's\u{200b}", "it's\\u{200b}"),
+        ("a b", "a\\u{20}b"),
+    ] {
+        let refusal = format!("{:#}", check_id(id).expect_err(id));
+        assert!(
+            refusal.contains(&format!("the case id `{shown}` is refused")),
+            "{}: {refusal}",
+            id.escape_debug()
+        );
+    }
+}
+
+/// Every default-ignorable code point (Unicode 16.0, `Default_Ignorable_Code_Point` of
+/// DerivedCoreProperties.txt) is refused, named by its code point: each is invisible, so an id
+/// holding one reads as the id without it (`a` U+034F `b` as `ab`).
+#[test]
+fn every_default_ignorable_code_point_is_refused_naming_it() {
+    let ranges: &[(u32, u32)] = &[
+        (0x00AD, 0x00AD),
+        (0x034F, 0x034F),
+        (0x061C, 0x061C),
+        (0x115F, 0x1160),
+        (0x17B4, 0x17B5),
+        (0x180B, 0x180F),
+        (0x200B, 0x200F),
+        (0x202A, 0x202E),
+        (0x2060, 0x206F),
+        (0x3164, 0x3164),
+        (0xFE00, 0xFE0F),
+        (0xFEFF, 0xFEFF),
+        (0xFFA0, 0xFFA0),
+        (0xFFF0, 0xFFF8),
+        (0x1BCA0, 0x1BCA3),
+        (0x1D173, 0x1D17A),
+        (0xE0000, 0xE0FFF),
+    ];
+    let mut missed = Vec::new();
+    for &(first, last) in ranges {
+        for point in first..=last {
+            let c = char::from_u32(point).expect("a character");
+            let id = format!("a{c}b");
+            match check_id(&id) {
+                Ok(()) => missed.push(format!("U+{point:04X}")),
+                Err(error) => {
+                    let error = format!("{error:#}");
+                    assert!(error.contains(&format!("U+{point:04X}")), "{error}");
+                }
+            }
+        }
+    }
+    assert!(missed.is_empty(), "accepted: {missed:?}");
+}
+
+/// The check does not normalise: `café` precomposed (NFC) and decomposed (NFD) both pass, and
+/// they are two ids, two case directories and two branches.
+#[test]
+fn ids_differing_only_in_normalisation_are_two_ids() {
+    let (nfc, nfd) = ("caf\u{e9}", "cafe\u{301}");
+    check_id(nfc).unwrap_or_else(|error| panic!("{error:#}"));
+    check_id(nfd).unwrap_or_else(|error| panic!("{error:#}"));
+    assert_ne!(nfc, nfd);
+}
