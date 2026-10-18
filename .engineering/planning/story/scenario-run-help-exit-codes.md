@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scenario-run-help-exit-codes
 kind: story
-status: active
+status: implemented
 title: takt scenario run --help lists only the exit codes that verb gives
 tags:
 - finding
@@ -15,10 +15,11 @@ relations:
 scope:
 - confidence: inferred
   path: crates/takt-cli/src/main.rs
-revision: 4
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T14:01:47Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-18T14:01:47Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-18T15:23:35Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: scenario-run-help-exit-codes
 
@@ -47,3 +48,10 @@ source: .engineering/planning/story/cli-small-fixes.md
 ## Acceptance
 
 `takt scenario run --help` exits 0 and its exit-code list holds no line with `frontier: nothing ready`; `takt run --help` still lists it; `scripts/check-finding` on this finding prints `reproduced` at 0a776d2 and `not_reproduced` at the fix.
+
+## Landed (wave 09)
+
+Read from `git diff --stat 8ce2019 447423c` at the close of wave 09 (wave branch head 1425689). The finding of the first recorded improvement turn; the operator role verified it with `scripts/check-finding`: reproduced at 0a776d2, not_reproduced at 447423c.
+
+- `crates/takt-cli/src/main.rs`
+- `crates/takt-cli/tests/scenario_help.rs`
