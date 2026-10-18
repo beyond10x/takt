@@ -8,7 +8,7 @@ summary: Carries design:recursive-self-improvement as stories
 relations:
 - derived_from: design:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 3
 ---
 # Epic: recursive-self-improvement
 
@@ -30,10 +30,20 @@ deferred to a later epic: it starts after two weeks of R2 with no regression.
 
 ## Ordering against the hardening wave
 
-Phase R2 of the design needs story:validator-confinement, story:tree-hygiene and
-story:authority-hardening, and story:first-recorded-improvement-turn's candidate is
-story:cli-protocol-defaults (all under epic:composable-agentic-work). On 2026-10-18 they are filed
-on a branch that is not yet on main, so the `depends_on` edges from story:judge-guard,
-story:self-improvement-protocol and story:first-recorded-improvement-turn to them are named in
-those stories' Ordering sections; the edges are added with `aep plan artifact relate` once that
-branch is on main.
+story:validator-confinement, story:tree-hygiene, story:authority-hardening and the first turn's
+candidate story:cli-protocol-defaults are implemented on main (epic:composable-agentic-work), and
+the `depends_on` edges from story:judge-guard and story:self-improvement-protocol to them are
+recorded.
+
+The path to this epic's acceptance, as of 2026-10-19:
+
+1. story:promotion: `takt promote` installs a binary only on a no-regression scorecard.
+2. story:judge-guard: the promoted takt judges takt's cases; a judge-surface merge needs the
+   owner's grant or a delegation on record.
+3. story:self-improvement-protocol: validators write every record of a `self.improvement/1` case.
+   The epic's acceptance is met by the first case this story drives to `accepted` whose
+   `binary.promote` is decided by the scorecard.
+
+Beside that path: story:loop-scorecard, then story:loop-case-opener (the L2 turn through `takt
+run`); story:improvement-turns-2-and-3-recorded, once the first promotion after wave 12 is
+installed, gives story:loop-scorecard its three recorded turns.

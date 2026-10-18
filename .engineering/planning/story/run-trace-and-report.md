@@ -8,7 +8,22 @@ relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 - depends_on: story:step-records-per-call-usage
-revision: 3
+scope:
+- confidence: inferred
+  path: crates/takt-cli/src/main.rs
+- confidence: inferred
+  path: crates/takt/src/lib.rs
+- confidence: inferred
+  path: crates/takt/src/report.rs
+- confidence: inferred
+  path: crates/takt/src/trace.rs
+- confidence: inferred
+  path: crates/takt/tests/trace.rs
+- confidence: inferred
+  path: docs/metrics/README.md
+- confidence: cited
+  path: ess/domains/takt.yaml
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 3}
