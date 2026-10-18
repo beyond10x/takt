@@ -491,6 +491,32 @@ types:
     kind: enum
     variants: [no_regression, regression]
 
+  # A finding's key, the `<key>` of its reference `finding:<key>` in the planning store:
+  # lower-case letters and digits in words joined by `-`. One key is one finding: a filing of a
+  # key the store holds already, under whatever kind, is refused.
+  # read from: .engineering/planning/design/recursive-self-improvement.md:58-59
+  # read from: scripts/file-finding:167
+  # read from: scripts/file-finding:183-206
+  - name: takt.work.FindingKey
+    kind: newtype
+    of: String
+
+  # What filing a finding came to, the result of a `finding_record` record.
+  # read from: protocols/self-improvement/1.yaml:41-44
+  # read from: scripts/file-finding:55
+  # read from: scripts/file-finding:213
+  - name: takt.work.FilingResult
+    kind: enum
+    variants: [filed, malformed]
+
+  # What a finding's predicate came to on its scenario with a takt built from one revision, the
+  # result of a `scenario_result` record.
+  # read from: protocols/self-improvement/1.yaml:45-48
+  # read from: scripts/check-finding:207-213
+  - name: takt.work.ScenarioResult
+    kind: enum
+    variants: [reproduced, not_reproduced]
+
 entities:
   # The case a run opens: the directory `<tree>/.engineering/cases/<id>/`, holding `case.yaml`, the
   # `canon-case/1` snapshot that canon.protocol.Case declares (protocol.yaml:861) with its
@@ -1245,3 +1271,57 @@ entities:
       initial: Promoted
       states: [Promoted]
       terminal: [Promoted]
+
+  # A finding: a defect of takt filed in the planning store as one draft story or one open
+  # blocker, carrying the reference `finding:<key>`, an `expected_before` predicate a machine can
+  # check (a command run on a named scenario, with the exit status or the output it gives while
+  # the defect is present) and the path of the run record or review that produced it.
+  # `scripts/file-finding` files it through `aep plan artifact new`, refusing a key the store
+  # holds and a predicate that does not parse, with nothing written; `scripts/check-finding` runs
+  # the predicate in a clone of the scenario's seed with a takt built from a given revision.
+  # UNMAPPED: whether a finding may need several scenarios; one is declared.
+  # read from: .engineering/planning/design/recursive-self-improvement.md:55-60
+  # read from: .engineering/planning/story/finding-intake.md (§ Domain relations)
+  # read from: scripts/file-finding:11-32
+  # read from: scripts/file-finding:93
+  # read from: scripts/file-finding:156
+  # read from: scripts/check-finding:127-154
+  - name: takt.work.Finding
+    naming:
+      summary: >-
+        A defect of takt in the planning store, with the predicate that reproduces it on a
+        scenario and the record it came from.
+    identity:
+      name: key
+      type: takt.work.FindingKey
+    fields:
+      - name: artifact
+        type: String
+        summary: The store artifact the finding is, `story:<key>` or `blocker:<key>`.
+      - name: scenario
+        type: takt.work.ScenarioId
+        summary: The scenario the predicate runs on.
+      - name: command
+        type: String
+        summary: >-
+          One shell line, run in a fresh clone of the scenario's seed with `$TAKT` the takt binary
+          under test.
+      - name: exit
+        type: Optional<Integer>
+        summary: The exit status the command gives while the defect is present.
+      - name: output
+        type: Optional<String>
+        summary: A fixed string the command's output holds while the defect is present.
+      - name: source
+        type: String
+        summary: The run record or review that produced the finding, a path in the repository.
+    relations:
+      - name: scenario
+        kind: references
+        target: takt.work.Scenario
+        cardinality: one
+        via: scenario
+    lifecycle:
+      initial: Filed
+      states: [Filed]
+      terminal: [Filed]
