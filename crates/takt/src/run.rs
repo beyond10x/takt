@@ -20,7 +20,7 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::case::{CASES_DIR, CaseDir};
 use crate::events::{BY_STORE, BY_TAKT, Event, Events};
-use crate::frontier::{Frontier, IMPLEMENTED, STORE_DIRS, Story, TEST_RESULT, Take, Unit};
+use crate::frontier::{Frontier, IMPLEMENTED, Story, TEST_RESULT, Take, Unit};
 use crate::harness::{Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
 use crate::validator::Validator;
@@ -128,42 +128,101 @@ fn is_due(
     }))
 }
 
-/// One entry of a snapshot: a file with its bytes, or a symbolic link with its target. A link
-/// is an entry by itself and is never followed: what it points at may lie outside the tree,
-/// and nothing the kernel does for a case reaches outside the tree.
+/// One entry of a snapshot: a regular file with its bytes and whether it is executable, a
+/// symbolic link with its target, or anything else (a FIFO, a socket, a device) by its kind
+/// alone. A link is an entry by itself and is never followed: what it points at may lie outside
+/// the tree, and nothing the kernel does for a case reaches outside the tree. Anything else is
+/// never opened: reading a FIFO no one writes would block the run for good.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Entry {
-    File(Vec<u8>),
+    File { bytes: Vec<u8>, executable: bool },
     Link(PathBuf),
+    Other(&'static str),
 }
 
-/// Every file and link under `dir`, by path relative to it: the cases directory as it is
-/// before a judgement step, which the step may not touch.
+/// What a file that is not a regular file, a directory or a link is.
+fn other_kind(kind: std::fs::FileType) -> &'static str {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt as _;
+        if kind.is_fifo() {
+            return "fifo";
+        }
+        if kind.is_socket() {
+            return "socket";
+        }
+        if kind.is_block_device() {
+            return "block device";
+        }
+        if kind.is_char_device() {
+            return "character device";
+        }
+    }
+    let _ = kind;
+    "other"
+}
+
+/// Whether `meta` gives its file an execute bit.
+#[cfg(unix)]
+fn is_executable(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    meta.permissions().mode() & 0o111 != 0
+}
+
+/// Whether `meta` gives its file an execute bit: never on this platform.
+#[cfg(not(unix))]
+fn is_executable(_: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// Every file, link and other entry under `dir`, by path relative to it: the cases directory
+/// as it is before a judgement step, which the step may not touch.
 fn snapshot(dir: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
-    fn walk(root: &Path, dir: &Path, entries: &mut BTreeMap<PathBuf, Entry>) -> Result<()> {
+    snapshot_without(dir, None)
+}
+
+/// [`snapshot`] of `dir` without what lies under `without`, a path relative to it.
+fn snapshot_without(dir: &Path, without: Option<&Path>) -> Result<BTreeMap<PathBuf, Entry>> {
+    fn walk(
+        root: &Path,
+        dir: &Path,
+        without: Option<&Path>,
+        entries: &mut BTreeMap<PathBuf, Entry>,
+    ) -> Result<()> {
         for entry in std::fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
             let path = entry?.path();
             let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
-            let kind = std::fs::symlink_metadata(&path)
-                .with_context(|| format!("read {}", path.display()))?
-                .file_type();
+            if without.is_some_and(|without| relative.starts_with(without)) {
+                continue;
+            }
+            let meta = std::fs::symlink_metadata(&path)
+                .with_context(|| format!("read {}", path.display()))?;
+            let kind = meta.file_type();
             if kind.is_symlink() {
                 let target = std::fs::read_link(&path)
                     .with_context(|| format!("read the link {}", path.display()))?;
                 entries.insert(relative, Entry::Link(target));
             } else if kind.is_dir() {
-                walk(root, &path, entries)?;
-            } else {
+                walk(root, &path, without, entries)?;
+            } else if kind.is_file() {
                 let bytes =
                     std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-                entries.insert(relative, Entry::File(bytes));
+                entries.insert(
+                    relative,
+                    Entry::File {
+                        bytes,
+                        executable: is_executable(&meta),
+                    },
+                );
+            } else {
+                entries.insert(relative, Entry::Other(other_kind(kind)));
             }
         }
         Ok(())
     }
     let mut entries = BTreeMap::new();
     if std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
-        walk(dir, dir, &mut entries)?;
+        walk(dir, dir, without, &mut entries)?;
     }
     Ok(entries)
 }
@@ -197,15 +256,40 @@ fn make_link(target: &Path, at: &Path) -> Result<()> {
     )
 }
 
+/// Writes `bytes` to `at` and gives it an execute bit or takes it away, as `executable` says.
+fn put_back_file(at: &Path, bytes: &[u8], executable: bool) -> Result<()> {
+    std::fs::write(at, bytes).with_context(|| format!("put back {}", at.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut permissions = std::fs::metadata(at)
+            .with_context(|| format!("read {}", at.display()))?
+            .permissions();
+        let mode = permissions.mode();
+        permissions.set_mode(if executable {
+            mode | ((mode & 0o444) >> 2)
+        } else {
+            mode & !0o111
+        });
+        std::fs::set_permissions(at, permissions)
+            .with_context(|| format!("put back the mode of {}", at.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = executable;
+    Ok(())
+}
+
 /// Puts `dir` back to `before` at the paths `changed`: whatever is at the path now is removed
 /// (a link as the link itself, never what it points at; a directory the step made in a file's
-/// place with everything in it), then the file is written again as it was, or the link made
-/// again; a path the step added stays removed. The paths go in order, so a link or file the
-/// step put in place of a directory is gone before anything is written below it.
+/// place with everything in it), then the file is written again as it was, its mode with it,
+/// or the link made again; a path the step added stays removed, and an entry that was neither
+/// a file nor a link (a FIFO) cannot be made again and stays removed too. The paths go in
+/// order, so a link or file the step put in place of a directory is gone before anything is
+/// written below it.
 fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -> Result<()> {
     if std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_symlink()) {
         bail!(
-            "the cases directory {} was replaced by a link; nothing is put back through it",
+            "the directory {} was replaced by a link; nothing is put back through it",
             dir.display()
         );
     }
@@ -226,22 +310,44 @@ fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -
                 .with_context(|| format!("create {}", parent.display()))?;
         }
         match before.get(path) {
-            Some(Entry::File(bytes)) => std::fs::write(&full, bytes)
-                .with_context(|| format!("put back {}", full.display()))?,
+            Some(Entry::File { bytes, executable }) => put_back_file(&full, bytes, *executable)?,
             Some(Entry::Link(target)) => make_link(target, &full)?,
-            None => {}
+            Some(Entry::Other(_)) | None => {}
         }
     }
     Ok(())
 }
 
-/// The planning store's directories under `tree` ([`crate::frontier::STORE_DIRS`]), in that
-/// order.
-fn store_dirs(tree: &Path) -> Vec<PathBuf> {
-    STORE_DIRS
-        .iter()
-        .map(|dir| tree.join(dir.trim_end_matches('/')))
-        .collect()
+/// The directory under the tree that holds the planning store, the project file that says
+/// where the store is kept, and the cases: everything in it but the cases is the store's, which
+/// no judgement step writes.
+const ENGINEERING: &str = ".engineering";
+
+/// Whether `path`, relative to the tree as git names it, is the store's: under [`ENGINEERING`]
+/// (or that directory itself) and not under the cases directory.
+fn is_guarded_store_path(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    (path == ENGINEERING || path.starts_with(&format!("{ENGINEERING}/")))
+        && !crate::case::is_under_cases(path)
+}
+
+/// Everything under [`ENGINEERING`] but the cases directory, as [`snapshot`] takes it: what a
+/// step that wrote there is put back to.
+fn snapshot_store(tree: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
+    let cases = Path::new(CASES_DIR)
+        .strip_prefix(ENGINEERING)
+        .unwrap_or(Path::new(CASES_DIR));
+    snapshot_without(&tree.join(ENGINEERING), Some(cases))
+}
+
+/// Puts everything under [`ENGINEERING`] but the cases directory back to `kept`, where it still
+/// differs.
+fn put_back_store(tree: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<()> {
+    let again = differing(kept, &snapshot_store(tree)?);
+    if !again.is_empty() {
+        restore(&tree.join(ENGINEERING), kept, &again)?;
+    }
+    Ok(())
 }
 
 /// Discards everything a judgement step did, back to `checkpoint`, and puts the cases directory
@@ -722,9 +828,30 @@ impl<'a> Run<'a> {
     pub fn run(&mut self, out: &mut dyn Write) -> Result<Stop> {
         self.case.hold()?;
         let events = Events::new(&self.case.dir);
-        let outcome = self
-            .run_held(&events, out)
-            .and_then(|stop| self.close(&events, &stop, out).map(|()| stop));
+        // A panic in the loop (a harness or a validator that broke) is recorded as the run's
+        // `error` line and the case let go before the panic goes on: the record ends, and the
+        // case is not left held.
+        let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.run_held(&events, out)
+                .and_then(|stop| self.close(&events, &stop, out).map(|()| stop))
+        })) {
+            Ok(outcome) => outcome,
+            Err(panic) => {
+                let what = panic
+                    .downcast_ref::<&str>()
+                    .map(|text| (*text).to_owned())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "a panic with no message".to_owned());
+                let _ = events.emit(
+                    self.steps,
+                    &Event::Error {
+                        error: format!("the run panicked: {what}"),
+                    },
+                );
+                let _ = self.case.release();
+                std::panic::resume_unwind(panic);
+            }
+        };
         let outcome = match outcome {
             Ok(stop) => Ok(stop),
             Err(error) => Err(
@@ -1351,42 +1478,87 @@ impl<'a> Run<'a> {
             // ended; a step that touched it is refused.
             let cases = self.tree.join(CASES_DIR);
             let kept = snapshot(&cases)?;
-            // The planning store likewise: its artifacts and evidence are what the store's
-            // lifecycle moves a story on, and evidence comes from validators only. Only takt's
-            // own writes, made once a case is accepted ([`Run::record_on`]), change it; a step
-            // that created, changed or removed anything there is refused and put back.
-            let store = store_dirs(&self.tree);
-            let store_kept = store
-                .iter()
-                .map(|dir| snapshot(dir))
-                .collect::<Result<Vec<_>>>()?;
+            // The planning store likewise, and everything else under `.engineering/` but the
+            // cases: the project file that says where the store is kept among it. Its
+            // artifacts and evidence are what the store's lifecycle moves a story on, and
+            // evidence comes from validators only. Only takt's own writes, made once a case is
+            // accepted ([`Run::record_on`]), change it. A step whose change git sees there
+            // (a file, a link, a mode, a rename), or that left anything there the snapshot sees
+            // differ (a FIFO, which git does not list), is refused, and put back to the
+            // snapshot taken here.
+            let store_kept = snapshot_store(&self.tree)?;
+            let store_dirty_before: BTreeSet<String> = crate::git::changed_paths(&self.tree)?
+                .into_iter()
+                .filter(|path| is_guarded_store_path(path))
+                .collect();
             // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
             // base, and a sibling case's branch, which a step could otherwise move under it; a
             // branch another worktree has checked out is that session's, but never the case's
             // base or its own branch.
             let checkpoint =
                 crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
-            let stepped = self.harness.step(&context);
+            // A harness that panics is put back like one that failed, then the panic goes on
+            // to `run`, which records it and lets go of the case.
+            let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.harness.step(&context)
+            }));
             // What git runs or reads as configuration first: every git call after this one
             // would read what the step planted there. Nothing in it ends early; a path it could
             // not put back is named in the refusal below.
             let git_dir = checkpoint.put_back_git_dir(&self.tree);
-            let touched = differing(&kept, &snapshot(&cases)?);
-            let mut store_touched: Vec<String> = Vec::new();
-            for ((dir, name), before) in store.iter().zip(STORE_DIRS).zip(&store_kept) {
-                store_touched.extend(
-                    differing(before, &snapshot(dir)?)
+            let tree = self.tree.clone();
+            let undo = || -> Result<()> {
+                undo_step(&tree, &checkpoint, &cases, &kept)?;
+                put_back_store(&tree, &store_kept)
+            };
+            let stepped = match stepped {
+                Ok(stepped) => stepped,
+                Err(panic) => {
+                    if let Err(undo) = undo() {
+                        eprintln!(
+                            "step {}: the harness panicked, and the step's change could not be discarded: {undo:#}",
+                            self.steps
+                        );
+                    }
+                    std::panic::resume_unwind(panic);
+                }
+            };
+            // What the step left, read now; a read that fails (a file the run may not read)
+            // discards the step before the run ends on the error.
+            let seen = (|| -> Result<(Vec<PathBuf>, Vec<String>)> {
+                let touched = differing(&kept, &snapshot(&cases)?);
+                let mut store_touched: BTreeSet<String> =
+                    differing(&store_kept, &snapshot_store(&tree)?)
                         .iter()
-                        .map(|path| Path::new(name).join(path).display().to_string()),
-                );
-            }
+                        .map(|path| Path::new(ENGINEERING).join(path).display().to_string())
+                        .collect();
+                store_touched.extend(crate::git::changed_paths(&tree)?.into_iter().filter(
+                    |path| is_guarded_store_path(path) && !store_dirty_before.contains(path),
+                ));
+                Ok((touched, store_touched.into_iter().collect()))
+            })();
+            let (touched, store_touched) = match seen {
+                Ok(seen) => seen,
+                Err(error) => {
+                    return Err(match undo() {
+                        Ok(()) => error.context(format!(
+                            "step {}: what the step left could not be read; everything it changed was discarded",
+                            self.steps
+                        )),
+                        Err(undo) => error.context(format!(
+                            "step {}: what the step left could not be read, and its change could not be discarded: {undo:#}",
+                            self.steps
+                        )),
+                    });
+                }
+            };
             if !touched.is_empty() {
                 restore(&cases, &kept, &touched)?;
             }
             let report = match stepped {
                 Ok(report) => report,
                 Err(error) => {
-                    return Err(match undo_step(&self.tree, &checkpoint, &cases, &kept) {
+                    return Err(match undo() {
                         Ok(()) => error.context(format!(
                             "step {}: the harness failed; everything the step changed was discarded",
                             self.steps
@@ -1425,7 +1597,7 @@ impl<'a> Run<'a> {
             )
             .and_then(|()| writeln!(out, "  said: {}", report.summary));
             if let Err(error) = told {
-                undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                undo()?;
                 record_step(self)?;
                 return Err(anyhow::Error::new(error).context(format!(
                     "step {}: {} could not be printed; the change was discarded",
@@ -1435,7 +1607,7 @@ impl<'a> Run<'a> {
             let change = match checkpoint.change(&self.tree) {
                 Ok(change) => change,
                 Err(error) => {
-                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    undo()?;
                     record_step(self)?;
                     return Err(error.context(format!(
                         "step {}: what {} changed could not be read; the change was discarded",
@@ -1445,7 +1617,7 @@ impl<'a> Run<'a> {
             };
             let changed = &change.paths;
             if !touched.is_empty() {
-                undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                undo()?;
                 let paths: Vec<String> = touched
                     .iter()
                     .map(|p| Path::new(CASES_DIR).join(p).display().to_string())
@@ -1464,13 +1636,7 @@ impl<'a> Run<'a> {
                 return Ok(Stop::StepRefused(why));
             }
             if !store_touched.is_empty() {
-                undo_step(&self.tree, &checkpoint, &cases, &kept)?;
-                for (dir, before) in store.iter().zip(&store_kept) {
-                    let again = differing(before, &snapshot(dir)?);
-                    if !again.is_empty() {
-                        restore(dir, before, &again)?;
-                    }
-                }
+                undo()?;
                 let why = format!(
                     "{} wrote into the planning store, which only takt writes once a case is accepted: {}",
                     report.action,
@@ -1539,7 +1705,7 @@ impl<'a> Run<'a> {
                 None
             };
             if let Some(why) = overreach {
-                undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                undo()?;
                 record_step(self)?;
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "  refused: {why}; the change was discarded")?;
@@ -1547,7 +1713,7 @@ impl<'a> Run<'a> {
             }
             if approvals.contains(&report.action) {
                 if !changed.is_empty() {
-                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    undo()?;
                     let why = format!("{} requested with changes", report.action);
                     record_step(self)?;
                     self.refused(events, BY_TAKT, &why)?;
@@ -1578,7 +1744,7 @@ impl<'a> Run<'a> {
                 None
             };
             if let Some(why) = refusal {
-                undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                undo()?;
                 record_step(self)?;
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "  refused: {why}; the change was discarded")?;
@@ -1607,7 +1773,7 @@ impl<'a> Run<'a> {
             ) {
                 Ok(head) => head,
                 Err(error) => {
-                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
+                    undo()?;
                     record_step(self)?;
                     return Err(error.context(format!(
                         "step {}: the commit of {}'s change failed; the change was discarded",

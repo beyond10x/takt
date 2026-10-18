@@ -203,8 +203,10 @@ impl Events {
     /// Every line written so far, each read as JSON, in order; none before the first. Blank
     /// lines are passed over. A line that does not read is skipped when it was cut short: it
     /// is the last line and has no end (the next [`Events::emit`] ends it and records the
-    /// skip), or the line after it is the [`Event::Skipped`] line naming it. Any other line
-    /// that does not read is an error naming the file and the line.
+    /// skip), or the line after it is the [`Event::Skipped`] line naming it. Lines that do not
+    /// read one after another (a repair that was cut short too) are skipped together when the
+    /// last of them is such a line. Any other line that does not read is an error naming the
+    /// file and the line.
     pub fn read(&self) -> Result<Vec<serde_json::Value>> {
         let text = match std::fs::read_to_string(&self.path) {
             Ok(text) => text,
@@ -220,29 +222,41 @@ impl Events {
             .map(|line| serde_json::from_str(line).ok())
             .collect();
         let mut read = Vec::new();
-        for (n, line) in lines.iter().enumerate() {
-            if line.trim().is_empty() {
+        let mut n = 0;
+        while n < lines.len() {
+            if lines[n].trim().is_empty() {
+                n += 1;
                 continue;
             }
             if let Some(value) = &parsed[n] {
                 read.push(value.clone());
+                n += 1;
                 continue;
             }
-            let last_unended = n + 1 == lines.len() && !ended;
+            // A repair cut short too is one more torn line: the lines that do not read, one
+            // after another, are skipped together when the last of them was cut short.
+            let mut last = n;
+            while last + 1 < lines.len()
+                && parsed[last + 1].is_none()
+                && !lines[last + 1].trim().is_empty()
+            {
+                last += 1;
+            }
+            let last_unended = last + 1 == lines.len() && !ended;
             let named_skipped = parsed
-                .get(n + 1)
+                .get(last + 1)
                 .and_then(Option::as_ref)
                 .is_some_and(|next| {
-                    next["event"] == "skipped" && next["line"].as_u64() == Some(n as u64 + 1)
+                    next["event"] == "skipped" && next["line"].as_u64() == Some(last as u64 + 1)
                 });
-            if last_unended || named_skipped {
-                continue;
+            if !(last_unended || named_skipped) {
+                return Err(anyhow::anyhow!(
+                    "line {} of {} does not read as an event, and was not cut short",
+                    n + 1,
+                    self.path.display()
+                ));
             }
-            return Err(anyhow::anyhow!(
-                "line {} of {} does not read as an event, and was not cut short",
-                n + 1,
-                self.path.display()
-            ));
+            n = last + 1;
         }
         Ok(read)
     }
