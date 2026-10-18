@@ -100,6 +100,22 @@ deliver → verify → promote):
 
 Each wait is one blocking wait on a file or a ref, not a stream of empty turns.
 
+A turn counts on the loop scorecard only as a `self.improvement` case under `.engineering/cases/`;
+a turn recorded elsewhere, such as an R0 case under `docs/runs/`, is copied there unchanged.
+
+**The L2 turn.** Once three improvement turns are recorded, and weekly after that, open a
+`loop.improvement/1` case with `loop_baseline` at the promoted revision. The validator
+`loop.measure` writes the loop scorecard's `loop_measurement`; its retained
+`loop-measurement-<n>.json` holds each figure with the turns it was computed from. File the metric
+furthest below its target, measured as shortfall over target, as a finding against the loop
+(§ Intake), naming the metric, its target, its figure and the case ids the figure names. With no
+figure below target there is no L2 finding that week. Targets live in
+`protocols/loop-improvement/metrics.yaml`; a metric with no target is never below it. Targets are the
+owner's: set or change one only under the owner's word or standing grant, and name the change to
+the owner. Every L2 change is a judge-surface change: grant its merge
+only after `loop.definition.check` records `unchanged` or `dual_reported`. Start `loop.compare`
+once at least three turns have been filed since the merge.
+
 ## Writing
 
 - A message that puts a choice names its options, each with its cost, then a recommendation and
