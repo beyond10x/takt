@@ -36,7 +36,7 @@ scope:
   path: crates/takt/tests/authority_adv1.rs
 - confidence: inferred
   path: crates/takt/tests/merge_under_authority.rs
-revision: 9
+revision: 10
 ---
 # Story: judge-guard
 
@@ -116,3 +116,10 @@ delegation is on record, and is refused again once that delegation's revocation 
 ## Out of Scope
 
 Promotion (story:promotion); Substrate confinement (story:confinement-seam).
+
+## From the grant-subject review
+
+From the reviewer verdict on story:grant-binds-to-action-subject at 938cc5a (approve, granted by the owner):
+
+- `crates/takt/src/protocol.rs:195-225` finds a grant's subject by walking the raw protocol YAML for the evidence-reading forms Canon 0.6.0 has (`evidence`, `first`, `before`); a form a later Canon adds would be missed with no error. The judge should read the subject from Canon's typed predicates, or refuse a protocol whose forms it does not know.
+- `crates/takt/src/case.rs:1517`: an edit to a case's `protocol.yaml` made outside a run is not detected; no digest pins it and the IR is recompiled from it (`protocol.rs:72`). The judge pins the protocol by digest at open and refuses a case whose copy differs.
