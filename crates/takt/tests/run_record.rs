@@ -444,6 +444,7 @@ fn the_story_holds_one_test_result_at_the_records_own_instant_from_takt() {
         recorded[0]
     );
     assert_eq!(recorded[0]["change"]["reference"], path.as_str());
+    assert_eq!(recorded[0]["actor"], "agent:takt", "{}", recorded[0]);
     let written = of(&lines, "store_evidence");
     assert_eq!(written.len(), 1, "{lines:#?}");
     assert_eq!(written[0]["at"], observed_at);
@@ -958,4 +959,169 @@ fn each_wait_on_the_forge_is_a_line_and_the_waiting_stop_is_the_last() {
         "{last}"
     );
     assert!(store_evidence(&repo, STORY, "test_result").is_empty());
+}
+
+/// A judgement step that edits a story's file in the planning store by hand, here moving it
+/// to `implemented`, is refused and put back: only takt writes the store, once a case is
+/// accepted.
+struct EditsTheStore;
+
+impl Harness for EditsTheStore {
+    fn name(&self) -> &str {
+        "edits-the-store"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
+        let path = context
+            .tree
+            .join(".engineering/planning/story/ready-one.md");
+        let text = fs::read_to_string(&path)?;
+        fs::write(&path, text.replace("status: active", "status: implemented"))?;
+        Ok(StepReport {
+            action: "implementation.edit".to_owned(),
+            summary: "marked the story implemented".to_owned(),
+            tokens: None,
+        })
+    }
+}
+
+#[test]
+fn a_judgement_step_that_edits_the_planning_store_is_refused_and_put_back() {
+    let repo = repository("edits-store");
+    let validators: Vec<Box<dyn Validator>> =
+        vec![Box::new(TestsRun::new("false").expect("a command"))];
+    let store = Aep::default();
+    let mut out = Vec::new();
+    let mut run = Run::open_next(
+        &repo,
+        options(DELIVERY, 3),
+        &store,
+        &EditsTheStore,
+        &validators,
+        &mut out,
+    )
+    .expect("the frontier answers")
+    .expect("story:ready-one is taken");
+    run.record_on(&store);
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let stop = run.run(&mut out).expect("the run stops without an error");
+    let text = String::from_utf8_lossy(&out).into_owned();
+    let dir = run.case.dir.clone();
+    drop(run);
+    let Stop::StepRefused(why) = &stop else {
+        panic!("{stop:?}\n{text}");
+    };
+    assert!(
+        why.contains("wrote into the planning store")
+            && why.contains(".engineering/planning/story/ready-one.md"),
+        "{why}"
+    );
+    assert_eq!(status(&repo, STORY), "active", "{text}");
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        git(
+            &repo,
+            &["status", "--porcelain", "--", ".", ":!.engineering/cases"]
+        ),
+        ""
+    );
+    let lines = events(&dir);
+    let refusals = of(&lines, "refusal");
+    assert_eq!(refusals.len(), 1, "{lines:#?}");
+    assert_eq!(refusals[0]["by"], "takt");
+    assert_eq!(lines.last().expect("a line")["event"], "stop");
+}
+
+/// A line of the record that does not read and was not cut short (a hand edit in the middle of
+/// the file) does not turn an accepted case into a run that errs: the store's writes are not
+/// made, an `error` line says why, and the stop is the one the case reached, recorded last.
+#[test]
+fn an_unreadable_line_is_an_error_line_and_the_accepted_stop_is_kept() {
+    let repo = repository("unreadable");
+    let store = Aep::default();
+    let validators: Vec<Box<dyn Validator>> = vec![tests_pass()];
+    let protocol = repo.join("tests-only.yaml").display().to_string();
+    let mut out = Vec::new();
+    let opened = Run::open_next(
+        &repo,
+        options(&protocol, 4),
+        &store,
+        &NoHarness,
+        &validators,
+        &mut out,
+    )
+    .expect("the frontier answers")
+    .expect("story:ready-one is taken");
+    let id = opened.case.id.clone();
+    let dir = opened.case.dir.clone();
+    drop(opened);
+    fs::write(dir.join(EVENTS_FILE), "not an event\n").expect("a line");
+
+    let mut run =
+        Run::resume(&repo, options(&protocol, 4), &id, &NoHarness, &validators).expect("resumes");
+    run.record_on(&store);
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).expect("the run keeps its stop");
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert_eq!(stop, Stop::Completed("accepted".to_owned()), "{text}");
+    let raw = fs::read_to_string(dir.join(EVENTS_FILE)).expect("events.jsonl");
+    let lines: Vec<serde_json::Value> = raw
+        .lines()
+        .skip(1)
+        .map(|line| serde_json::from_str(line).expect("one object per line"))
+        .collect();
+    let errors = of(&lines, "error");
+    assert_eq!(errors.len(), 1, "{lines:#?}");
+    assert!(
+        errors[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("line 1") && error.contains("does not read")),
+        "{}",
+        errors[0]
+    );
+    assert_eq!(
+        lines.last().expect("a line")["stop"],
+        "Completed (accepted)"
+    );
+    assert!(store_evidence(&repo, STORY, "test_result").is_empty());
+}
+
+/// A line cut short is ended by the next line written, which names it as skipped; the record
+/// reads on, every line after it whole.
+#[test]
+fn a_torn_line_is_ended_named_and_skipped() {
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("run-record-{}-torn-unit", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch).expect("a directory");
+    let events = takt::events::Events::new(&scratch);
+    events
+        .emit(
+            0,
+            &takt::events::Event::Error {
+                error: "first".to_owned(),
+            },
+        )
+        .expect("a line");
+    let mut text = fs::read_to_string(events.path()).expect("the file");
+    text.push_str(r#"{"at":"2026-10-18T00:00:00Z","ev"#);
+    fs::write(events.path(), &text).expect("a torn line");
+    assert_eq!(events.read().expect("reads").len(), 1);
+    events
+        .emit(
+            1,
+            &takt::events::Event::Error {
+                error: "third".to_owned(),
+            },
+        )
+        .expect("a line");
+    let read = events.read().expect("reads");
+    let kinds: Vec<&str> = read
+        .iter()
+        .map(|line| line["event"].as_str().expect("an event"))
+        .collect();
+    assert_eq!(kinds, ["error", "skipped", "error"], "{read:#?}");
+    assert_eq!(read[1]["line"], 2);
+    assert_eq!(read[2]["error"], "third");
+    let _ = fs::remove_dir_all(&scratch);
 }

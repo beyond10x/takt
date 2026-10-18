@@ -38,6 +38,11 @@ pub const IMPLEMENTED: &str = "implemented";
 pub const TEST_RESULT: &str = "test_result";
 /// The source the store records for the `test_result` evidence a run writes.
 pub const SOURCE: &str = "takt";
+/// Who the store records as acting for a run's writes: the evidence's actor and the move's
+/// executor.
+pub const ACTOR: &str = "agent:takt";
+/// The variable `aep` reads the actor of a write from.
+const ACTOR_VARIABLE: &str = "AEP_ACTOR";
 
 /// A story taken from the planning store: the unit of a run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,12 +241,19 @@ pub fn is_story_store_path(path: &str, story: &str) -> bool {
 /// store or the story's evidence directory ([`is_story_store_path`]), or it is discarded. Every
 /// such failure is the error, with nothing left behind; the implementation revision is not
 /// the run's to move here and is not moved.
+///
+/// `recorded` writes the run's record of the write, given the commit (`None` when the write
+/// changed nothing), as soon as the commit is made and before anything else: the two stand or
+/// fall together, and a record that cannot be written takes the commit back, the case's branch
+/// reset to where it was, and is the error. A refusal records nothing here; it is the
+/// caller's to record.
 pub fn write_on_case_branch(
     tree: &Path,
     branch: &str,
     story: &str,
     subject: &str,
     write: impl FnOnce() -> Result<Written>,
+    recorded: impl FnOnce(Option<&str>) -> Result<()>,
 ) -> Result<std::result::Result<Option<String>, String>> {
     let on = crate::git::current_branch(tree)?;
     if on.as_deref() != Some(branch) {
@@ -259,6 +271,7 @@ pub fn write_on_case_branch(
             uncommitted.join(", ")
         ));
     }
+    let before = crate::git::head(tree)?;
     let discard = |why: String| -> anyhow::Error {
         match crate::git::discard_uncommitted(tree) {
             Ok(()) => anyhow!("{why}; what it changed was discarded"),
@@ -286,6 +299,7 @@ pub fn write_on_case_branch(
         return Ok(Err(refusal));
     }
     if changed.is_empty() {
+        recorded(None)?;
         return Ok(Ok(None));
     }
     if let Some(outside) = changed
@@ -296,12 +310,24 @@ pub fn write_on_case_branch(
             "the store's write on {story} changed {outside}, outside the planning store and the story's evidence"
         )));
     }
-    match crate::git::commit_paths(tree, &changed, subject) {
-        Ok(head) => Ok(Ok(Some(head))),
-        Err(error) => Err(discard(format!(
+    let head = crate::git::commit_paths(tree, &changed, subject).map_err(|error| {
+        discard(format!(
             "the store's write on {story} could not be committed on {branch}: {error:#}"
-        ))),
+        ))
+    })?;
+    if let Err(error) = recorded(Some(&head)) {
+        return Err(
+            match crate::git::run(tree, &["reset", "-q", "--hard", &before]) {
+                Ok(_) => error.context(format!(
+                    "the store's write on {story} could not be recorded; its commit {head} was taken back, {branch} reset to {before}"
+                )),
+                Err(reset) => error.context(format!(
+                    "the store's write on {story} could not be recorded, and its commit {head} could not be taken back: {reset:#}"
+                )),
+            },
+        );
     }
+    Ok(Ok(Some(head)))
 }
 
 /// The directories of the planning store a record in it may change, relative to the tree: the
@@ -444,12 +470,26 @@ impl Aep {
     /// what it printed on success, or what it printed on a non-zero exit, trimmed, as the
     /// inner error. A reply longer than the limit is an error, never read cut.
     fn plan(&self, repo: &Path, args: &[&str]) -> Result<std::result::Result<String, String>> {
+        self.plan_as(repo, args, None)
+    }
+
+    /// [`Aep::plan`], the child told who acts (`AEP_ACTOR`) when `actor` names one, so the store
+    /// attributes the write to it rather than to the person the process runs as.
+    fn plan_as(
+        &self,
+        repo: &Path,
+        args: &[&str],
+        actor: Option<&str>,
+    ) -> Result<std::result::Result<String, String>> {
         let mut command = Command::new(&self.command);
         command
             .args(["plan", "artifact"])
             .args(args)
             .current_dir(repo);
         crate::forge::without_credentials(&mut command, |_| false);
+        if let Some(actor) = actor {
+            command.env(ACTOR_VARIABLE, actor);
+        }
         let output = crate::forge::run_child(&mut command, self.limits)
             .with_context(|| format!("run {} plan artifact {}", self.command, args.join(" ")))?;
         if output.stdout_cut {
@@ -580,9 +620,9 @@ impl Frontier for Aep {
         .map_err(|refusal| anyhow!("aep plan artifact evidence {story}: {refusal}"))
     }
 
-    /// `evidence <story> --kind test_result --source takt --ref <reference> --at <at>`: the
-    /// reference the record in the case, the instant the record's own, never one chosen here;
-    /// the repository's own store only, like `list`.
+    /// `evidence <story> --kind test_result --source takt --ref <reference> --at <at>`, as
+    /// [`ACTOR`]: the reference the record in the case, the instant the record's own, never one
+    /// chosen here; the repository's own store only, like `list`.
     fn record_test_result(
         &self,
         repo: &Path,
@@ -592,7 +632,7 @@ impl Frontier for Aep {
     ) -> Result<Written> {
         Self::store(repo)?;
         Ok(
-            match self.plan(
+            match self.plan_as(
                 repo,
                 &[
                     "evidence",
@@ -606,6 +646,7 @@ impl Frontier for Aep {
                     "--at",
                     at,
                 ],
+                Some(ACTOR),
             )? {
                 Ok(_) => Written::Done,
                 Err(refusal) => Written::Refused(refusal),
@@ -613,21 +654,15 @@ impl Frontier for Aep {
         )
     }
 
-    /// `move <story> --to implemented`, which the store's lifecycle allows once the story holds
-    /// a `test_result` record; the repository's own store only, like `list`.
+    /// `move <story> --to implemented --executor agent:takt`, which the store's lifecycle allows
+    /// once the story holds a `test_result` record; the repository's own store only, like
+    /// `list`.
     fn implemented(&self, repo: &Path, story: &str) -> Result<Written> {
         Self::store(repo)?;
         Ok(
             match self.plan(
                 repo,
-                &[
-                    "move",
-                    story,
-                    "--to",
-                    IMPLEMENTED,
-                    "--executor",
-                    "agent:takt",
-                ],
+                &["move", story, "--to", IMPLEMENTED, "--executor", ACTOR],
             )? {
                 Ok(_) => Written::Done,
                 Err(refusal) => Written::Refused(refusal),

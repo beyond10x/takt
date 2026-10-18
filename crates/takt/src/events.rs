@@ -92,8 +92,12 @@ pub enum Event {
     Refusal { by: String, reason: String },
     /// The run pauses on the forge for `seconds`, then observes the actions `on` again.
     Waiting { on: Vec<String>, seconds: f64 },
-    /// The run ended on an error, as it was reported.
+    /// An error, as it was reported: the one a run ended on, or one met while recording an
+    /// accepted case in the store, after which the run keeps its stop.
     Error { error: String },
+    /// The line `line`, from 1, was cut short, without its end, and is skipped on read; written
+    /// with the next event, which ends the torn line first.
+    Skipped { line: usize, reason: String },
     /// The run stopped: why, with the steps taken and the tokens reported.
     Stop {
         stop: String,
@@ -132,8 +136,39 @@ impl Events {
         &self.path
     }
 
-    /// Appends `event` at step `step`, the instant now, as one line written whole.
+    /// Appends `event` at step `step`, the instant now, as one line written whole. A file whose
+    /// last line was cut short (a write that hit a full disk, a process killed mid-write) has no
+    /// end to that line: it is ended first, and a [`Event::Skipped`] line naming it is written
+    /// before the event, in the same write, so the event is never appended to a torn line and
+    /// the reader knows the torn one was skipped.
     pub fn emit(&self, step: u64, event: &Event) -> Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(&self.path)
+            .with_context(|| format!("open {}", self.path.display()))?;
+        let mut text = String::new();
+        if let Some(line) = self
+            .torn(&mut file)
+            .with_context(|| format!("read {}", self.path.display()))?
+        {
+            text.push('\n');
+            text.push_str(&Self::line(
+                step,
+                &Event::Skipped {
+                    line,
+                    reason: "the line was cut short, without its end, and is skipped".to_owned(),
+                },
+            )?);
+        }
+        text.push_str(&Self::line(step, event)?);
+        file.write_all(text.as_bytes())
+            .with_context(|| format!("write {}", self.path.display()))
+    }
+
+    /// `event` at `step`, the instant now, as one line with its end.
+    fn line(step: u64, event: &Event) -> Result<String> {
         let mut line = serde_json::to_string(&Line {
             at: crate::now(),
             step,
@@ -141,17 +176,35 @@ impl Events {
         })
         .context("write an event")?;
         line.push('\n');
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .with_context(|| format!("open {}", self.path.display()))?;
-        file.write_all(line.as_bytes())
-            .with_context(|| format!("write {}", self.path.display()))
+        Ok(line)
     }
 
-    /// Every line written so far, each read as JSON; none before the first. A line that does
-    /// not read is an error naming the file.
+    /// The number, from 1, of the file's last line when it has no end: the line was cut short.
+    /// `None` for an empty file and for one whose last line ends.
+    fn torn(&self, file: &mut std::fs::File) -> std::io::Result<Option<usize>> {
+        use std::io::{Read as _, Seek as _, SeekFrom};
+        if file.metadata()?.len() == 0 {
+            return Ok(None);
+        }
+        let mut last = [0_u8; 1];
+        file.seek(SeekFrom::End(-1))?;
+        file.read_exact(&mut last)?;
+        if last[0] == b'\n' {
+            return Ok(None);
+        }
+        file.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(Some(
+            bytes.iter().filter(|byte| **byte == b'\n').count() + 1,
+        ))
+    }
+
+    /// Every line written so far, each read as JSON, in order; none before the first. Blank
+    /// lines are passed over. A line that does not read is skipped when it was cut short: it
+    /// is the last line and has no end (the next [`Events::emit`] ends it and records the
+    /// skip), or the line after it is the [`Event::Skipped`] line naming it. Any other line
+    /// that does not read is an error naming the file and the line.
     pub fn read(&self) -> Result<Vec<serde_json::Value>> {
         let text = match std::fs::read_to_string(&self.path) {
             Ok(text) => text,
@@ -160,13 +213,37 @@ impl Events {
                 return Err(error).with_context(|| format!("read {}", self.path.display()));
             }
         };
-        text.lines()
-            .filter(|line| !line.trim().is_empty())
-            .enumerate()
-            .map(|(n, line)| {
-                serde_json::from_str(line)
-                    .with_context(|| format!("read line {} of {}", n + 1, self.path.display()))
-            })
-            .collect()
+        let ended = text.ends_with('\n');
+        let lines: Vec<&str> = text.split_terminator('\n').collect();
+        let parsed: Vec<Option<serde_json::Value>> = lines
+            .iter()
+            .map(|line| serde_json::from_str(line).ok())
+            .collect();
+        let mut read = Vec::new();
+        for (n, line) in lines.iter().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Some(value) = &parsed[n] {
+                read.push(value.clone());
+                continue;
+            }
+            let last_unended = n + 1 == lines.len() && !ended;
+            let named_skipped = parsed
+                .get(n + 1)
+                .and_then(Option::as_ref)
+                .is_some_and(|next| {
+                    next["event"] == "skipped" && next["line"].as_u64() == Some(n as u64 + 1)
+                });
+            if last_unended || named_skipped {
+                continue;
+            }
+            return Err(anyhow::anyhow!(
+                "line {} of {} does not read as an event, and was not cut short",
+                n + 1,
+                self.path.display()
+            ));
+        }
+        Ok(read)
     }
 }
