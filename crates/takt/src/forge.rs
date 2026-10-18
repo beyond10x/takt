@@ -6,6 +6,7 @@
 //! reports into evidence; the forge itself writes no record.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -83,8 +84,36 @@ pub struct PullRequest {
     pub body: String,
 }
 
+/// A pull request's head: the branch and the commit it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Head {
+    /// The head branch.
+    pub branch: String,
+    /// The commit the head branch names.
+    pub sha: String,
+}
+
+/// What the forge reports about a pull request: its state and its head. A validator checks
+/// the head against the case's branch and revision before it trusts a number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestView {
+    /// The state.
+    pub state: PullRequestState,
+    /// The head.
+    pub head: Head,
+}
+
+/// What an `origin` URL names: the host and the `<owner>/<repo>` on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Origin {
+    /// The host, `github.com` for the bot route.
+    pub host: String,
+    /// `<owner>/<repo>`.
+    pub repository: String,
+}
+
 /// The repository host: pushes a branch, opens its pull request, and reports the pull
-/// request's state and the checks on its head.
+/// request's state and head and the checks on its head.
 pub trait Forge {
     /// The adapter's name.
     fn name(&self) -> &str;
@@ -93,8 +122,8 @@ pub trait Forge {
     /// Opens the pull request `request` describes; `dir` is where the adapter keeps what it
     /// sent and what came back, when it keeps anything. The pull request's number.
     fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64>;
-    /// The state of pull request `number`.
-    fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestState>;
+    /// The state and the head of pull request `number`.
+    fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView>;
     /// The checks on the head of pull request `number`.
     fn checks(&self, tree: &Path, number: u64) -> Result<Checks>;
 }
@@ -193,16 +222,26 @@ impl BotRoute {
         }
     }
 
-    /// For `tree`: the repository from its `origin` URL, the policy from the environment,
-    /// every line run as a process.
+    /// The host the bot route serves: it pushes under a GitHub App and reads through `gh`.
+    pub const HOST: &str = "github.com";
+
+    /// For `tree`: the repository from its `origin` URL, which must be on [`Self::HOST`], the
+    /// policy from the environment, every line run as a process.
     pub fn for_tree(tree: &Path) -> Result<Self> {
         let url = crate::git::remote_url(tree, "origin")
             .context("the forge `bot` needs an origin remote")?;
-        let repository = repository_of(&url).ok_or_else(|| {
-            anyhow!("the origin remote {url} does not name an <owner>/<repo> repository; give --forge none")
+        let origin = repository_of(&url).ok_or_else(|| {
+            anyhow!("the origin remote {url} names no <owner>/<repo> on a host; give --forge none")
         })?;
+        if origin.host != Self::HOST {
+            bail!(
+                "the origin remote {url} is on {}, not {}: the bot route pushes under a GitHub App and reads through gh; give --forge none",
+                origin.host,
+                Self::HOST
+            );
+        }
         let policy = std::env::var_os(POLICY_VAR).map(PathBuf::from);
-        Ok(Self::new(repository, policy, Box::new(Process)))
+        Ok(Self::new(origin.repository, policy, Box::new(Process)))
     }
 
     /// The line that pushes `branch`.
@@ -257,7 +296,7 @@ impl BotRoute {
             "view".to_owned(),
             number.to_string(),
             "--json".to_owned(),
-            "state,mergedAt".to_owned(),
+            "state,mergedAt,headRefName,headRefOid".to_owned(),
         ]
     }
 
@@ -340,18 +379,31 @@ impl Forge for BotRoute {
             .ok_or_else(|| anyhow!("the response {} has no number", output.display()))
     }
 
-    fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestState> {
+    fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView> {
         let argv = self.view_argv(number);
         let document = self.read_json(tree, &argv)?;
-        match document["state"].as_str() {
-            Some("OPEN") => Ok(PullRequestState::Open),
-            Some("MERGED") => Ok(PullRequestState::Merged),
-            Some("CLOSED") => Ok(PullRequestState::Closed),
+        let state = match document["state"].as_str() {
+            Some("OPEN") => PullRequestState::Open,
+            Some("MERGED") => PullRequestState::Merged,
+            Some("CLOSED") => PullRequestState::Closed,
             other => bail!(
                 "{} reported the state {other:?}, not OPEN, MERGED or CLOSED",
                 argv.join(" ")
             ),
-        }
+        };
+        let field = |name: &str| -> Result<String> {
+            document[name]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| anyhow!("{} reported no {name}", argv.join(" ")))
+        };
+        Ok(PullRequestView {
+            state,
+            head: Head {
+                branch: field("headRefName")?,
+                sha: field("headRefOid")?,
+            },
+        })
     }
 
     fn checks(&self, tree: &Path, number: u64) -> Result<Checks> {
@@ -383,46 +435,58 @@ impl Forge for BotRoute {
     }
 }
 
-/// The `<owner>/<repo>` an `origin` URL names, in the forms git writes them:
-/// `git@host:owner/repo.git`, `ssh://git@host/owner/repo.git`, `https://host/owner/repo`.
-/// A local path names none.
+/// The host and the `<owner>/<repo>` an `origin` URL names, in the forms git writes them:
+/// `git@host:owner/repo.git`, `ssh://git@host[:port]/owner/repo.git`, `https://host/owner/repo`.
+/// A local path, or a URL with no host (`file://`), names none.
 #[must_use]
-pub fn repository_of(url: &str) -> Option<String> {
+pub fn repository_of(url: &str) -> Option<Origin> {
     let url = url.trim().trim_end_matches('/');
-    let path = if let Some((_, rest)) = url.split_once("://") {
-        rest.split_once('/')?.1
-    } else if let Some((_, rest)) = url.split_once(':') {
-        rest
+    let (authority, path) = if let Some((_, rest)) = url.split_once("://") {
+        rest.split_once('/')?
     } else {
-        return None;
+        url.split_once(':')?
     };
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = host.split_once(':').map_or(host, |(host, _)| host);
     let path = path.strip_suffix(".git").unwrap_or(path);
     let mut parts = path.rsplit('/');
     let repo = parts.next()?;
     let owner = parts.next()?;
-    (!owner.is_empty() && !repo.is_empty()).then(|| format!("{owner}/{repo}"))
+    (!host.is_empty() && !owner.is_empty() && !repo.is_empty()).then(|| Origin {
+        host: host.to_owned(),
+        repository: format!("{owner}/{repo}"),
+    })
 }
 
-/// The in-memory double: answers what it is set to and logs every call, for the tests.
+/// The in-memory double: answers what it is set to and logs every call, for the tests. A pull
+/// request it opened has the head it was opened for, at the revision last pushed for that
+/// branch (the tree's `HEAD` at the push), unless `head` says otherwise.
 #[derive(Debug, Default)]
 pub struct Memory {
     /// What `checks` answers for a pull request it opened.
     pub checks: Checks,
-    /// What `pull_request` answers for a pull request it opened.
+    /// The state `pull_request` answers for a pull request it opened.
     pub state: PullRequestState,
+    /// The head `pull_request` answers instead of the one it was opened for, when set.
+    pub head: Option<Head>,
     /// Every call, in order: `push <branch>`, `open <branch> #<n>`, `view #<n>`, `checks #<n>`.
     pub calls: RefCell<Vec<String>>,
     /// The pull requests opened, numbered from 1 in this order.
     pub opened: RefCell<Vec<PullRequest>>,
+    /// The revision last pushed, by branch.
+    pub pushed: RefCell<BTreeMap<String, String>>,
 }
 
 impl Memory {
-    fn known(&self, number: u64) -> Result<()> {
+    /// The index of pull request `number` among the opened ones.
+    fn index(&self, number: u64) -> Result<usize> {
         let opened = self.opened.borrow().len();
-        if number == 0 || usize::try_from(number).is_ok_and(|n| n > opened) {
-            bail!("no pull request #{number} was opened through the double");
+        match usize::try_from(number) {
+            Ok(n) if n >= 1 && n <= opened => Ok(n - 1),
+            _ => bail!("no pull request #{number} was opened through the double"),
         }
-        Ok(())
     }
 }
 
@@ -431,7 +495,9 @@ impl Forge for Memory {
         "memory"
     }
 
-    fn push(&self, _: &Path, branch: &str) -> Result<()> {
+    fn push(&self, tree: &Path, branch: &str) -> Result<()> {
+        let sha = crate::git::head(tree)?;
+        self.pushed.borrow_mut().insert(branch.to_owned(), sha);
         self.calls.borrow_mut().push(format!("push {branch}"));
         Ok(())
     }
@@ -446,14 +512,27 @@ impl Forge for Memory {
         Ok(number)
     }
 
-    fn pull_request(&self, _: &Path, number: u64) -> Result<PullRequestState> {
-        self.known(number)?;
+    fn pull_request(&self, _: &Path, number: u64) -> Result<PullRequestView> {
+        let index = self.index(number)?;
         self.calls.borrow_mut().push(format!("view #{number}"));
-        Ok(self.state)
+        let head = self.head.clone().unwrap_or_else(|| {
+            let branch = self.opened.borrow()[index].branch.clone();
+            let sha = self
+                .pushed
+                .borrow()
+                .get(&branch)
+                .cloned()
+                .unwrap_or_default();
+            Head { branch, sha }
+        });
+        Ok(PullRequestView {
+            state: self.state,
+            head,
+        })
     }
 
     fn checks(&self, _: &Path, number: u64) -> Result<Checks> {
-        self.known(number)?;
+        self.index(number)?;
         self.calls.borrow_mut().push(format!("checks #{number}"));
         Ok(self.checks)
     }

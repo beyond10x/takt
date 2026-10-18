@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
-use takt::forge::{BotRoute, Forge};
+use takt::forge::{BotRoute, Forge, repository_of};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness};
 use takt::validator::{CiRead, DEFAULT_PROJECT, GateRun, PrOpen, TestsRun, Validator};
@@ -200,19 +200,43 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 }
                 validators.push(Box::new(gate));
             }
-            // The forge: the bot route when asked for, or when the repository has an origin to
-            // push to; an origin that names no <owner>/<repo> refuses the run in one line before
-            // any case is opened, unless `--forge none` says so.
-            let forge = match forge.as_deref() {
-                Some("none") => None,
-                Some("bot") => Some(BotRoute::for_tree(&repo)?),
-                None => match takt::git::remote_url(&repo, "origin") {
-                    Ok(_) => Some(BotRoute::for_tree(&repo)?),
-                    Err(_) => None,
+            // The forge: the bot route when asked for, or by default when `origin` is a
+            // repository on github.com, the host the bot route serves. `--forge bot` elsewhere
+            // is refused in one line before any case is opened; by default another host gets
+            // no forge, said in one line once the case is open.
+            let bot = |repo: &Path| -> Result<(Option<BotRoute>, Option<String>)> {
+                let bot = BotRoute::for_tree(repo)?;
+                let line = format!(
+                    "forge: bot ({}); pr.open and ci.read go through the bot route",
+                    bot.repository
+                );
+                Ok((Some(bot), Some(line)))
+            };
+            let (forge, forge_line) = match forge.as_deref() {
+                Some("none") => (None, None),
+                Some("bot") => bot(&repo)?,
+                None => match takt::git::remote_url(&repo, "origin")
+                    .ok()
+                    .as_deref()
+                    .map(repository_of)
+                {
+                    None => (None, None),
+                    Some(Some(origin)) if origin.host == BotRoute::HOST => bot(&repo)?,
+                    Some(Some(origin)) => (
+                        None,
+                        Some(format!(
+                            "forge: none (origin {} is not {})",
+                            origin.host,
+                            BotRoute::HOST
+                        )),
+                    ),
+                    Some(None) => (
+                        None,
+                        Some("forge: none (origin names no <owner>/<repo> on a host)".to_owned()),
+                    ),
                 },
                 Some(other) => return Err(anyhow!("no forge `{other}`: bot or none")),
             };
-            let repository = forge.as_ref().map(|forge| forge.repository.clone());
             if let Some(forge) = forge {
                 let forge: Rc<dyn Forge> = Rc::new(forge);
                 validators.push(Box::new(PrOpen::new(forge.clone())));
@@ -240,11 +264,8 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     }
                 },
             };
-            if let Some(repository) = &repository {
-                writeln!(
-                    out,
-                    "forge: bot ({repository}); pr.open and ci.read go through the bot route"
-                )?;
+            if let Some(line) = &forge_line {
+                writeln!(out, "{line}")?;
             }
             let stop = run.run(out)?;
             writeln!(
@@ -737,6 +758,55 @@ mod tests {
         ));
         assert!(error.contains("origin"), "{error}");
         assert!(!repo.join(".engineering/cases").exists());
+    }
+
+    /// The bot route pushes under a GitHub App and reads through `gh`: asked for on another
+    /// host it is refused before any case is opened.
+    #[test]
+    fn forge_bot_on_a_non_github_origin_is_refused_before_the_run() {
+        let repo = gated_repository("forge-bot-elsewhere", None);
+        git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "git@gitlab.example.com:owner/repo.git",
+            ],
+        );
+        let error = takt_error(&delivery_args(
+            repo.to_str().expect("utf-8"),
+            "elsewhere",
+            &["--forge", "bot"],
+        ));
+        assert!(error.contains("not github.com"), "{error}");
+        assert!(!repo.join(".engineering/cases").exists());
+    }
+
+    /// Without `--forge`, an origin on another host gets no forge, and the run says so.
+    #[test]
+    fn with_a_non_github_origin_the_default_forge_is_none_and_the_run_says_so() {
+        let repo = gated_repository("forge-default-elsewhere", None);
+        git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://gitlab.example.com/owner/repo.git",
+            ],
+        );
+        let (code, out) = takt(&delivery_args(
+            repo.to_str().expect("utf-8"),
+            "default-elsewhere",
+            &["--iterations", "1"],
+        ));
+        assert_eq!(code, 3, "{out}");
+        assert!(
+            out.contains("forge: none (origin gitlab.example.com is not github.com)"),
+            "{out}"
+        );
+        assert!(!out.contains("forge: bot"), "{out}");
     }
 
     #[test]

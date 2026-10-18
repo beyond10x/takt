@@ -38,13 +38,12 @@ pub fn current_branch(tree: &Path) -> Result<Option<String>> {
     Ok((name != "HEAD").then_some(name))
 }
 
-/// Creates `branch` at `HEAD` and checks it out. A branch that exists is an error, unless the
-/// tree is already on it: a case's branch left behind when the store would not take the case
-/// is reset to `HEAD` and used again.
-pub fn create_branch(tree: &Path, branch: &str) -> Result<()> {
-    let on_it = current_branch(tree)?.as_deref() == Some(branch);
-    let flag = if on_it { "-B" } else { "-b" };
-    run(tree, &["checkout", "-q", flag, branch])?;
+/// Creates `branch` and checks it out, at `from` when given, else at `HEAD`; a branch that
+/// exists is an error.
+pub fn create_branch(tree: &Path, branch: &str, from: Option<&str>) -> Result<()> {
+    let mut args = vec!["checkout", "-q", "-b", branch];
+    args.extend(from);
+    run(tree, &args)?;
     Ok(())
 }
 

@@ -22,16 +22,22 @@ pub const BRANCH_PREFIX: &str = "takt/";
 /// The file under the case directory that records the branch and its pull request.
 pub const BRANCH_FILE: &str = "branch.yaml";
 
-/// The case's branch, recorded as `branch.yaml` under the case directory: created at `HEAD`
-/// when the case opens, pushed and given its one pull request by the `pr.open` validator.
+/// The case's branch, recorded as `branch.yaml` under the case directory: created when the
+/// case opens, at the tip of its base, pushed and given its one pull request by the `pr.open`
+/// validator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Branch {
     /// `takt/<case id>`.
     pub name: String,
-    /// The branch the tree was on when the case opened, the pull request's base; absent when
-    /// `HEAD` was detached.
+    /// The pull request's base, the branch the case forked from: the branch the tree was on
+    /// when the case opened, or, when that was another case's branch, that case's base; absent
+    /// when `HEAD` was detached or the other case was gone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// The branch the tree was on when the case opened, the one a discarded case returns the
+    /// tree to; absent when `HEAD` was detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<String>,
     /// The implementation revision last pushed, the pull request's head; absent until the
     /// first push.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,7 +111,9 @@ impl CaseDir {
     /// SHA-256 of the intent text, `implementation` at `HEAD`, every other artifact at `r0`, and
     /// the inputs given; a declared input that is not given is refused, naming its values: the
     /// kernel takes no default, because the inputs select the obligations the case owes. The
-    /// case's branch `takt/<id>` is created at `HEAD` and checked out, and recorded with the
+    /// case's branch `takt/<id>` is created and checked out at the tip of its base (the branch
+    /// the tree is on, or that case's base when the tree is on another case's branch, so a
+    /// case never forks from another case's commits), and recorded with its base and the
     /// branch it left as `branch.yaml`; a branch that exists refuses the case. Nothing is
     /// written until `HEAD`, the inputs and the branch are in order, and a write that fails
     /// takes the directory with it, so a case directory exists only with its `case.yaml`.
@@ -161,29 +169,36 @@ impl CaseDir {
             }
             doc.insert("inputs".into(), values.into());
         }
-        // The pull request's base: the branch the tree is on. A tree already on a case's
-        // branch lends that case's base, so a case opened over another is against the same
-        // base, not against the other case.
-        let base = match crate::git::current_branch(tree)? {
-            Some(name) => {
-                if let Some(other) = name.strip_prefix(BRANCH_PREFIX) {
-                    Branch::read(&tree.join(CASES_DIR).join(other))
-                        .ok()
-                        .and_then(|branch| branch.base)
-                } else {
-                    Some(name)
-                }
+        // The case's branch forks from its base: the branch the tree is on, or, when the tree
+        // is on another case's branch, that case's base, at its tip, so a case never forks from
+        // another case's commits. `left` is the branch the tree was on, which a discarded case
+        // returns to.
+        let left = crate::git::current_branch(tree)?;
+        let (base, from) = match left
+            .as_deref()
+            .map(|name| (name, name.strip_prefix(BRANCH_PREFIX)))
+        {
+            Some((_, Some(other))) => {
+                let base = Branch::read(&tree.join(CASES_DIR).join(other))
+                    .ok()
+                    .and_then(|branch| branch.base);
+                (base.clone(), base)
             }
-            None => None,
+            Some((name, None)) => (Some(name.to_owned()), None),
+            None => (None, None),
         };
         let branch = Branch {
             name: Branch::name_of(id),
             base,
+            left,
             pushed: None,
             pull_request: None,
         };
-        crate::git::create_branch(tree, &branch.name)?;
-        let case = Self {
+        crate::git::create_branch(tree, &branch.name, from.as_deref())?;
+        // The branch's tip is the implementation revision: not the HEAD the case was asked on
+        // when the branch forked from a base elsewhere.
+        let head = crate::git::head(tree)?;
+        let mut case = Self {
             id: id.to_owned(),
             dir,
             branch: branch.name.clone(),
@@ -192,6 +207,14 @@ impl CaseDir {
             doc: doc.into(),
             written: 0,
         };
+        if case
+            .protocol
+            .artifacts
+            .iter()
+            .any(|artifact| artifact == "implementation")
+        {
+            case.doc["artifacts"]["implementation"]["revision"] = head.into();
+        }
         if let Err(error) = case.create(intent, &branch) {
             if case.dir.exists()
                 && let Err(removal) = std::fs::remove_dir_all(&case.dir)
@@ -232,7 +255,7 @@ impl CaseDir {
         if let Some(cases) = self.dir.parent() {
             let _ = std::fs::remove_dir(cases);
         }
-        crate::git::leave_branch(&self.tree, &branch.name, branch.base.as_deref())
+        crate::git::leave_branch(&self.tree, &branch.name, branch.left.as_deref())
     }
 
     /// Writes `case.yaml`.
