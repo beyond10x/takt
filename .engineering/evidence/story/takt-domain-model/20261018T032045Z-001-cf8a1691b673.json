@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T03:20:45Z",
+  "actor": "human:timo",
+  "artifact": "story:takt-domain-model",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "ess specify validate --path ess: baseline has no ess/ directory; treatment prints 'takt v1 — 2 file(s), valid', exit 0",
+    "reference": "verify-baseline.txt vs verify-treatment.txt under the unit scratch"
+  }
+}
