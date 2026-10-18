@@ -10,11 +10,11 @@ relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:declared-loops
 - informed_by: design:recursive-self-improvement
-revision: 4
+revision: 5
 ---
 # Design: continuous work and orchestration as a tree of takt cases
 
-Status: draft, 2026-10-18, revised once after one review (24 findings, all taken). Serves
+Status: draft, 2026-10-18, revised once after one review (24 findings, all taken), then for the exit-code registry (§ 5). Serves
 `product-requirements:takt` R10, R12, R13, R16, R17 and § 6 (orchestration, prepared for).
 
 Two questions, one answer. A bounded run (`--hours 8`) must not end early because the ready
@@ -30,7 +30,7 @@ planning is a unit like any other, every loop is a Canon case, cases form a tree
 |---|---|
 | a run opens one case: `Run::open`, `open_unit`, `open_next` | `crates/takt/src/run.rs:220-289,341` |
 | with nothing ready a run prints `frontier: nothing ready` and exits | `crates/takt-cli/src/main.rs:332` |
-| on the wave 06 branch the exit codes are 0 completed or nothing ready, 1 refused, 2 bad arguments, 3 a budget or nothing more to do, 4 approval required, 5 error | `fix/2026-10-18-review:crates/takt-cli/src/main.rs:145-160` |
+| the exit codes are 0 completed or nothing ready, 1 refused, 2 bad arguments, 3 a budget or nothing more to do, 4 approval required, 5 error; on the wave 08 branch 6 waited on the forge (§ 5) | `crates/takt-cli/src/main.rs:194-211`; story:ci-pending-waits at 200e15d |
 | ready = `proposed`, unblocked, dependencies done; picked in id order | `crates/takt/src/frontier.rs:5-9,164` |
 | nothing in takt moves a story `draft -> proposed`; refinement, decomposition, scoping and wave selection happen outside takt | `frontier.rs` (no such move) |
 | AEP has no priority field; `aep plan artifact set` changes title, summary, owner, tags, refs and model digest | `aep plan artifact set --help` |
@@ -38,7 +38,7 @@ planning is a unit like any other, every loop is a Canon case, cases form a tree
 | a crashed run leaves `run.lock` behind; the refusal says to remove it by hand | `case.rs:61-66` |
 | `.engineering/cases/` is excluded from every commit takt makes; the take (`aep move --to active`) is swept into the case branch's first commit | `crates/takt/src/git.rs:78-79` |
 | a validator runs once per `(kind, subject, revision)` | `run.rs:83-96` (`is_due`) |
-| a resumed run counts tokens from 0 | `run.rs:328` |
+| a resumed run counts tokens from 0 | `run.rs:400,443` |
 | story:declared-loops (draft) adds the outer loop: one case per unit, many cases per run, no parent | the story's Context |
 
 ## 2. Planning is a unit: `plan.refill/1`
@@ -58,7 +58,7 @@ Two consequences the protocol must carry:
 
 - The planning store is part of the pinned judge (`design:recursive-self-improvement` § The judge),
   and the judge-surface allow-list is `docs/**`, `README.md`, `CHANGELOG.md`. So today every
-  planning case ends in one human merge grant. O6 asks whether `.engineering/planning/story/**`
+  planning case ends in one merge grant the surface requires (the owner's, or a role's delegated on record). O6 asks whether `.engineering/planning/story/**`
   leaves the judge surface for an `agent:planner` grant, with lifecycles, `project.yaml`, epics,
   designs, the PRD and the vision staying judge. Until the owner decides, planning costs one human
   merge per case, and "the worker never waits" holds only when that merge lands ahead of need.
@@ -80,7 +80,7 @@ stop planning   when buffer ≥ 1.5 × remaining, or one wave is planned ahead
 
 Before the first per-story figure exists, the rule is "fewer than 2 ready". One wave ahead is the
 cap, so planning does not run ahead of what the next delivery will invalidate. If no epic
-qualifies (§ 2 pick), the run stops with `FrontierExhausted` and exits 7 (§ 7). It does not invent
+qualifies (§ 2 pick), the run stops with `FrontierExhausted` and exits 8 (§ 5). It does not invent
 work.
 
 ## 4. Steering
@@ -105,10 +105,18 @@ evidence writes bump it.
 - `takt pause --repo <path> [--at step|unit]` writes `control.yaml` into the root case directory
   (§ 6). The cases directory is already protected from harness writes (`run.rs:570-578`).
 - The dispatcher reads it before each pick; a story case reads it before each step. Both stop with
-  `Paused`, exit 6.
+  `Paused`, exit 7.
 - SIGTERM: a handler sets the same pause flag, read at step boundaries; nothing is forwarded to the
   harness child (`harness.rs:170-185` runs it with `command.output()` and no handler today).
 - Resume is `takt run` again: open cases resume (`main.rs:982` test, "frontier: resumed ...").
+
+Exit codes ≥ 6 are registered in this section only; every other section and document refers here.
+
+| code | stop | status |
+|---|---|---|
+| 6 | `Waiting`: the run waited on the forge and its budget ended first; the next run resumes the case | built by story:ci-pending-waits (on the wave 08 branch at 200e15d, `crates/takt-cli/src/main.rs:203-204`) |
+| 7 | `Paused` | proposed, build step 7 (§ 11) |
+| 8 | `FrontierExhausted` (§ 3) | proposed, build step 7 (§ 11) |
 
 ## 6. Every loop is a case, and dispatch is an action
 
@@ -189,7 +197,7 @@ until the root completes | its budget is spent | Paused
 | property | rule |
 |---|---|
 | deterministic | the order is a pure function of the case files, the store and the tags. Slot occupancy depends on which children finished first, so it is recorded per pick, and a replay re-derives each pick from its record |
-| budgets | a parent gives each child a slice. Tokens are cumulative per case from `events.jsonl`, so a resumed or re-dispatched child does not start at 0 again (today: `run.rs:328`). The root's `budget.within` sums its children |
+| budgets | a parent gives each child a slice. Tokens are cumulative per case from `events.jsonl`, so a resumed or re-dispatched child does not start at 0 again (today: `run.rs:400,443`). The root's `budget.within` sums its children |
 | stalls | a child that stops on a budget, `NoProgress` or `StepRefused` is re-dispatched once with a 1.5× slice; a second stop files a finding and the parent moves on. A judgement step decides only where the protocol names one |
 | locks | `run.lock` records the holder's pid and the dispatcher's id. The dispatcher reclaims a lock whose pid is dead and records the reclaim as an event. Without this a restart finds every in-flight child held (`case.rs:61-66`) and `runnable` is empty |
 | crash | the dispatcher keeps nothing in memory that is not in the case files, so a restart rebuilds the tree from them |
@@ -218,7 +226,7 @@ against qualities 1 (secure) and 4 (deterministic).
 | 4 | `wave.delivery/1` with parallel `story.delivery/1` children on an integration branch; the `integrated` outcome (O7) | 3 |
 | 5 | roles as harness profiles; per-action write-path allow-list; `review.panel/1` | 2; story:second-harness-adapter for mixed harnesses |
 | 6 | `plan.refill/1`, digest-pinned proposals, the low-water mark, `rank:NN` ordering | 3; O6 for agent-granted planning merges |
-| 7 | `takt pause`, SIGTERM handler; stops `Paused` (6), `FrontierExhausted` (7), `UnitWithdrawn` (3) | 2 |
+| 7 | `takt pause`, SIGTERM handler; stops `Paused` (7), `FrontierExhausted` (8), `UnitWithdrawn` (3); codes as registered in § 5 | 2 |
 | 8 | the root across repositories | 4, 5, 6 (PRD § 6) |
 
 Steps 1 to 4 earn the PRD success row "wave delivery through takt".
@@ -230,7 +238,7 @@ Steps 1 to 4 earn the PRD success row "wave delivery through takt".
 - Hidden cost: planning and review tokens and minutes count in "per accepted unit" (PRD § 3).
 - Stale plans: one wave ahead at most (§ 3); at each wave boundary the planner re-scopes the
   remaining `proposed` stories whose scope paths changed, through `proposed -> draft`.
-- Judge bypass: a planned story that touches a judge surface still needs a human merge grant.
+- Judge bypass: a planned story that touches a judge surface still needs a merge grant the surface requires.
   Pinning by digest (§ 2) stops an edit after approval.
 
 ## 13. Open for the owner
@@ -242,5 +250,5 @@ Steps 1 to 4 earn the PRD success row "wave delivery through takt".
 | O3 | priority in AEP, or the `rank:NN` tag? | the tag now; a typed field in AEP later, so every tool reads one order |
 | O4 | does takt become the orchestrator, or does an outside orchestrator drive takt cases? | build the case tree inside takt and keep the dispatcher replaceable |
 | O5 | one dispatcher per machine, or per repository? | per repository; across repositories is step 8 |
-| O6 | does `.engineering/planning/story/**` leave the judge surface for an `agent:planner` grant? | no; each planning case costs one human merge |
+| O6 | does `.engineering/planning/story/**` leave the judge surface for an `agent:planner` grant? | no; each planning case costs one merge under the grant the surface requires |
 | O7 | the wave child's outcome: an `integrated` variant of `story.delivery/1`, or a separate protocol? | a variant: same claims, `repository.merge` targets the integration branch |
