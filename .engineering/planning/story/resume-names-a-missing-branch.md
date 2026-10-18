@@ -11,6 +11,8 @@ refs:
   reference: resume-names-a-missing-branch
 relations:
 - informed_by: review-result:findings-hunt-33ab42c
+- depends_on: story:abandon-a-case
+- decomposes: epic:composable-agentic-work
 revision: 1
 ---
 ## Outcome

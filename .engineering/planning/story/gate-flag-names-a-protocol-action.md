@@ -11,6 +11,7 @@ refs:
   reference: gate-flag-names-a-protocol-action
 relations:
 - informed_by: review-result:findings-hunt-33ab42c
+- decomposes: epic:composable-agentic-work
 revision: 1
 ---
 ## Outcome
