@@ -1106,20 +1106,27 @@ fn added_records(
     Ok((!added.is_empty()).then_some(added))
 }
 
-/// The directory of the case whose branch `tree` is on: `takt/<id>` names the case `<id>`.
+/// The directory of the case whose branch `tree` is on: `takt/<id>` names the case `<id>`. A
+/// refusal shows the branch as [`check_id`] shows an id, a character that does not show written
+/// as its code point.
 pub fn current(tree: &Path) -> Result<PathBuf> {
     let branch = crate::git::current_branch(tree)?
         .ok_or_else(|| anyhow!("the tree {} is not on a branch", tree.display()))?;
     let id = branch.strip_prefix(BRANCH_PREFIX).ok_or_else(|| {
         anyhow!(
-            "the tree {} is on {branch}, not on a case's branch {BRANCH_PREFIX}<id>",
-            tree.display()
+            "the tree {} is on {}, not on a case's branch {BRANCH_PREFIX}<id>",
+            tree.display(),
+            shown(&branch)
         )
     })?;
-    check_id(id).with_context(|| format!("the branch {branch} names no case"))?;
+    check_id(id).with_context(|| format!("the branch {} names no case", shown(&branch)))?;
     let dir = tree.join(CASES_DIR).join(id);
     if !dir.join("case.yaml").is_file() {
-        bail!("the branch {branch} names no case at {}", dir.display());
+        bail!(
+            "the branch {} names no case at {}",
+            shown(&branch),
+            dir.display()
+        );
     }
     Ok(dir)
 }
