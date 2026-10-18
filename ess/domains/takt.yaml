@@ -935,8 +935,8 @@ types:
   # lower-case letters and digits in words joined by `-`. One key is one finding: a filing of a
   # key the store holds already, under whatever kind, is refused.
   # read from: .engineering/planning/design/recursive-self-improvement.md:84-85
-  # read from: scripts/file-finding:167
-  # read from: scripts/file-finding:183-206
+  # read from: scripts/file-finding:242
+  # read from: scripts/file-finding:258-281
   - name: takt.work.FindingKey
     kind: newtype
     of: String
@@ -945,8 +945,8 @@ types:
   # (`story:<key>`) or a blocker (`blocker:<key>`), never both and never neither; decided
   # 2026-10-18. No blocker is declared in this specification, so the blocker variant carries the
   # artifact id as text.
-  # read from: scripts/file-finding:156
-  # read from: scripts/file-finding:208
+  # read from: scripts/file-finding:231
+  # read from: scripts/file-finding:283
   # read from: .engineering/planning/story/finding-intake.md:51
   - name: takt.work.FindingArtifact
     kind: union
@@ -957,8 +957,8 @@ types:
 
   # What filing a finding came to, the result of a `finding_record` record.
   # read from: protocols/self-improvement/1.yaml:41-44
-  # read from: scripts/file-finding:55
-  # read from: scripts/file-finding:213
+  # read from: scripts/file-finding:70
+  # read from: scripts/file-finding:288
   - name: takt.work.FilingResult
     kind: enum
     variants: [filed, malformed]
@@ -966,7 +966,7 @@ types:
   # What a finding's predicate came to on its scenario with a takt built from one revision, the
   # result of a `scenario_result` record.
   # read from: protocols/self-improvement/1.yaml:45-48
-  # read from: scripts/check-finding:207-213
+  # read from: scripts/check-finding:293-299
   - name: takt.work.ScenarioResult
     kind: enum
     variants: [reproduced, not_reproduced]
@@ -2070,34 +2070,48 @@ entities:
 
   # A finding: a defect of takt filed in the planning store as one draft story or one open
   # blocker, carrying the reference `finding:<key>`, an `expected_before` predicate a machine can
-  # check (a command run on a named scenario, with the exit status or the output it gives while
-  # the defect is present) and the path of the run record or review that produced it.
-  # `scripts/file-finding` files it through `aep plan artifact new`, refusing a key the store
-  # holds and a predicate that does not parse, with nothing written; `scripts/check-finding` runs
-  # the predicate in a clone of the scenario's seed with a takt built from a given revision.
+  # check (a command run on a named scenario, or on a named repository at a seed commit, with the
+  # exit status or the output it gives while the defect is present) and the path of the run
+  # record or review that produced it. `scripts/file-finding` files it through
+  # `aep plan artifact new`, refusing a key the store holds and a predicate that does not parse,
+  # with nothing written; `scripts/check-finding` runs the predicate in a clone of the scenario's
+  # seed, or of the repository at its seed, with a takt built from a given revision in a checkout
+  # of it, so the binary names that revision.
   # read from: .engineering/planning/design/recursive-self-improvement.md:81-86
   # read from: .engineering/planning/story/finding-intake.md (§ Domain relations)
-  # read from: scripts/file-finding:11-32
-  # read from: scripts/file-finding:93
-  # read from: scripts/file-finding:156
-  # read from: scripts/check-finding:127-154
-  # One predicate on one scenario: a body with a second `expected_before` block, or a block that
-  # gives `scenario` twice, is malformed and nothing is filed.
-  # read from: scripts/file-finding:96
-  # read from: scripts/file-finding:101
+  # read from: .engineering/planning/story/finding-on-any-repository.md (§ Outcome)
+  # read from: .engineering/planning/story/check-finding-builds-name-their-revision.md (§ Outcome)
+  # read from: scripts/file-finding:11-47
+  # read from: scripts/file-finding:108
+  # read from: scripts/file-finding:231
+  # read from: scripts/check-finding:161-274
+  # One predicate on one scenario or one repository: a body with a second `expected_before`
+  # block, a block that gives a key twice, or one that gives both `scenario` and `repository`, or
+  # neither, is malformed and nothing is filed. `seed` and `test` go with `repository` only: a
+  # scenario's seed is the scenario repository's to declare. A repository is an `https://` URL
+  # and nothing else (a predicate is committed to a public repository and must hold on every
+  # machine; the check clones it with no credential of its own), a local checkout standing in
+  # for it only through `check-finding --checkout <url>=<path>` at check time; a seed is a commit
+  # id. A filed repository names a public host: a dotted DNS name, not `localhost` or a name
+  # under it, or a dotted-decimal IPv4 address outside the zero, loopback, private, link-local
+  # and shared ranges, and no IPv6 literal. The check is a lint on the URL's text, not a
+  # boundary.
+  # read from: scripts/file-finding:111
+  # read from: scripts/file-finding:116
+  # read from: scripts/file-finding:122-182
   # A finding is filed as exactly one store artifact, a story or a blocker, and that artifact is
   # filed for that finding alone (its id is `<kind>:<key>`, the finding's key): one-to-one,
   # decided 2026-10-18, held in `artifact` (takt.work.FindingArtifact). A relation entry needs a
   # field typed by the target's identity, and the story variant sits inside a union beside a
   # blocker this specification does not declare, so no relation to takt.work.Story is declared and
   # the one-to-one is stated here.
-  # read from: scripts/file-finding:208
+  # read from: scripts/file-finding:283
   # read from: .engineering/planning/story/finding-intake.md:51
   - name: takt.work.Finding
     naming:
       summary: >-
         A defect of takt in the planning store, with the predicate that reproduces it on a
-        scenario and the record it came from.
+        scenario or on a repository at a seed, and the record it came from.
     identity:
       name: key
       type: takt.work.FindingKey
@@ -2106,13 +2120,28 @@ entities:
         type: takt.work.FindingArtifact
         summary: The store artifact the finding is, `story:<key>` or `blocker:<key>`.
       - name: scenario
-        type: takt.work.ScenarioId
-        summary: The scenario the predicate runs on.
+        type: Optional<takt.work.ScenarioId>
+        summary: >-
+          The scenario the predicate runs on; absent when the predicate names its repository.
+      - name: repository
+        type: Optional<String>
+        summary: >-
+          The repository the defect was seen on, an `https://` URL; absent when the predicate
+          names a scenario. One of `scenario` and `repository` is given.
+      - name: seed
+        type: Optional<takt.work.Revision>
+        summary: >-
+          With `repository`: the commit the task starts from, which the check clones and checks
+          out.
+      - name: test
+        type: Optional<String>
+        summary: >-
+          With `repository`, optional: the task's test command, handed to the command as `$TEST`.
       - name: command
         type: String
         summary: >-
-          One shell line, run in a fresh clone of the scenario's seed with `$TAKT` the takt binary
-          under test.
+          One shell line, run in a fresh clone of the scenario's seed, or of the repository at
+          its seed, with `$TAKT` the takt binary under test.
       - name: exit
         type: Optional<Integer>
         summary: The exit status the command gives while the defect is present.
