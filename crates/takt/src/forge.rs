@@ -599,6 +599,9 @@ impl BotRoute {
     pub const REQUEST: &str = "pull-request.request.json";
     /// The file under the directory `open_pull_request` is given that holds what came back.
     pub const RESPONSE: &str = "pull-request.response.json";
+    /// The file under the directory `open_pull_request` is given that holds the title and the
+    /// body as they are published, decoded: the text `scan-text` reads line by line.
+    pub const PUBLISHED: &str = "pull-request.published.txt";
     /// The file under the directory `merge` is given that holds what was sent.
     pub const MERGE_REQUEST: &str = "pull-request.merge.request.json";
     /// The file under the directory `merge` is given that holds what came back.
@@ -694,9 +697,21 @@ impl BotRoute {
     /// policy as the API write that would send it; the path comes last.
     #[must_use]
     pub fn scan_argv(&self, path: &Path) -> Vec<String> {
+        self.scan_paths_argv(&[path])
+    }
+
+    /// The line that scans a pull request before it is opened: the JSON `request` the API write
+    /// sends and, last, the `published` title and body, decoded, as the forge shows them. The
+    /// scanner's rules match line by line, and the JSON holds the body as one escaped line.
+    #[must_use]
+    pub fn scan_request_argv(&self, request: &Path, published: &Path) -> Vec<String> {
+        self.scan_paths_argv(&[request, published])
+    }
+
+    fn scan_paths_argv(&self, paths: &[&Path]) -> Vec<String> {
         let mut argv = vec!["b10x-gates".to_owned(), "scan-text".to_owned()];
         argv.extend(self.scope());
-        argv.push(path.display().to_string());
+        argv.extend(paths.iter().map(|path| path.display().to_string()));
         argv
     }
 
@@ -854,12 +869,17 @@ impl Forge for BotRoute {
         });
         let bytes = serde_json::to_vec_pretty(&document).context("serialize the pull request")?;
         std::fs::write(&input, bytes).with_context(|| format!("write {}", input.display()))?;
-        self.succeed(tree, &self.scan_argv(&input)).with_context(|| {
-            format!(
-                "the pull request for {branch} did not pass scan-text and was not opened; its title and body stayed on this machine, but the branch {branch} was pushed before the scan",
-                branch = request.branch
-            )
-        })?;
+        let published = dir.join(Self::PUBLISHED);
+        std::fs::write(&published, format!("{}\n\n{}", request.title, request.body))
+            .with_context(|| format!("write {}", published.display()))?;
+        self.succeed(tree, &self.scan_request_argv(&input, &published))
+            .with_context(|| {
+                format!(
+                    "the pull request for {branch} did not pass scan-text over {} and was not opened; its title and body stayed on this machine, but the branch {branch} was pushed before the scan",
+                    published.display(),
+                    branch = request.branch
+                )
+            })?;
         self.succeed(tree, &self.open_argv(&input, &output))?;
         let text = std::fs::read_to_string(&output)
             .with_context(|| format!("read the response {}", output.display()))?;

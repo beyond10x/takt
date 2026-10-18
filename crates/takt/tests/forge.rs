@@ -593,8 +593,9 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
         [
             "b10x-gates bot -- push origin takt/c1".to_owned(),
             format!(
-                "b10x-gates scan-text --repository owner/repo --policy policy.yaml {}",
-                input.display()
+                "b10x-gates scan-text --repository owner/repo --policy policy.yaml {} {}",
+                input.display(),
+                dir.join("pull-request.published.txt").display()
             ),
             format!(
                 "b10x-gates api --method POST --path /repos/owner/repo/pulls --input {} --output {} --repository owner/repo --policy policy.yaml",
