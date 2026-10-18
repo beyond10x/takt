@@ -80,6 +80,11 @@ the repository's bot route), `Confinement` (none first; Substrate later).
 A hosted service, a console, a database, cross-repository scheduling, and any runtime of its own
 for model turns: the harness is an adapter, the loop is in this binary, the truth is Canon's.
 
+Continuous work and orchestration inside one repository, planning as a unit, every loop a case in
+one tree, one deterministic dispatcher, and cross-repository scheduling as its last step, are
+designed in the planning-store artifact `design:continuous-orchestration`
+(`.engineering/planning/design/continuous-orchestration.md`).
+
 ## 6. Self-improvement
 
 takt is improved by takt: the improvement process is itself modelled as protocols, and the same
