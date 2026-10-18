@@ -1127,7 +1127,7 @@ types:
 
   # One operation of a harness-neutral trace, named in the shared vocabulary whatever harness
   # produced it. Declared ahead of the code (story:normalized-harness-trace).
-  # read from: .engineering/planning/story/normalized-harness-trace.md:26
+  # read from: .engineering/planning/story/normalized-harness-trace.md:27
   # UNMAPPED: the vocabulary. The story lists intents (inspect, change, verify, research, wait,
   # coordinate) and operations (file reads, file modifications, commands, test runs, pull-request
   # and CI operations) without saying whether they are one enum or two levels, and the journey
@@ -2240,15 +2240,15 @@ entities:
   # harness step takt drives and every run of a free-running harness in a comparison, with the
   # harness's raw usage record kept beside it unchanged as the only source of token and cost
   # figures. Declared ahead of the code (story:normalized-harness-trace).
-  # read from: .engineering/planning/story/normalized-harness-trace.md:26
-  # read from: .engineering/planning/story/normalized-harness-trace.md:50
+  # read from: .engineering/planning/story/normalized-harness-trace.md:27
+  # read from: .engineering/planning/story/normalized-harness-trace.md:51
   # UNMAPPED: the trace's relation to takt.work.Run: one per run (the story's title), but a
   # free-running harness's run is no takt Run, and whether a takt run's trace is kept under its
   # case (the story's expected-before looks there) and so owned, or stands apart, is not said.
-  # read from: .engineering/planning/story/normalized-harness-trace.md:40
+  # read from: .engineering/planning/story/normalized-harness-trace.md:41
   # UNMAPPED: whether takt reads an external normalizer's format, calls it, or carries its own
   # adapter, and so the raw usage record's format; `raw_usage` holds a path until then.
-  # read from: .engineering/planning/story/normalized-harness-trace.md:34
+  # read from: .engineering/planning/story/normalized-harness-trace.md:35
   - name: takt.work.Trace
     naming:
       summary: >-
