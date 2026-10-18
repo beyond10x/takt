@@ -137,7 +137,9 @@ One line per wave: its title and a short label from `docs/waves/wave-NN.md`, the
 delivered, the merge commit into `main` and that commit's time. `closing_store_commit` is the
 planning-store commit that closed the wave, where one is named. `measured_at` is the first
 measured revision that contains the wave, when the merge commit itself was not measured; the
-chart marks the wave before that revision's column.
+chart marks the wave before that revision's column. A wave no measured revision contains yet gets
+an empty column at its merge commit, and a measured revision that is an ancestor of a wave's merge
+(`git merge-base --is-ancestor`) is drawn left of that wave's marker.
 
 ## The timeline
 

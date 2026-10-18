@@ -77,23 +77,108 @@ const FORMAT_CHARACTERS: &[(u32, u32)] = &[
     (0xE0020, 0xE007F),
 ];
 
+/// The default-ignorable code points, `Default_Ignorable_Code_Point` of Unicode 16.0's
+/// DerivedCoreProperties.txt, as inclusive ranges: invisible wherever they stand, so a name
+/// holding one reads as the name without it (U+034F COMBINING GRAPHEME JOINER, the variation
+/// selectors, the Hangul fillers, the reserved tag and filler planes).
+const DEFAULT_IGNORABLE: &[(u32, u32)] = &[
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+];
+
 /// Whether `c` has no business in a name that is shown to people: a control character, a
-/// whitespace or separator character (spaces, U+2028, U+2029), or a format character.
+/// whitespace or separator character (spaces, U+2028, U+2029), a format character or a
+/// default-ignorable code point.
 fn is_unshowable(c: char) -> bool {
     let point = u32::from(c);
     c.is_control()
         || c.is_whitespace()
         || FORMAT_CHARACTERS
             .iter()
+            .chain(DEFAULT_IGNORABLE)
             .any(|&(first, last)| (first..=last).contains(&point))
+}
+
+/// `id` as it was typed, but for each character that does not show ([`is_unshowable`]),
+/// written as its code point (`\u{200b}`): a quote or a backslash shows as itself.
+fn shown(id: &str) -> String {
+    id.chars()
+        .map(|c| {
+            if is_unshowable(c) {
+                c.escape_unicode().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
+/// The longest case id, in bytes: git keeps the branch `takt/<id>` as the file `<id>` and locks
+/// it as `<id>.lock`, and a file name holds 255 bytes.
+const MAX_ID_BYTES: usize = 250;
+
+/// The characters git refuses anywhere in a branch name, besides `\`, controls and spaces.
+const REFUSED_IN_A_BRANCH: &[char] = &['~', '^', ':', '?', '*', '['];
+
+/// Why git would refuse `takt/<id>` as a branch name, for an id [`check_id`] has already found
+/// one name with no `/`, `\`, `..`, control or whitespace character: git's `check-ref-format`
+/// rules for one component of a ref (no leading `.`, no trailing `.` or `.lock`, no `@{`, none
+/// of `~ ^ : ? * [`), and a name of at most [`MAX_ID_BYTES`] bytes, so the ref's lock file can
+/// be made. `@` alone is refused too: git reads a lone `@` as `HEAD`, though it accepts
+/// `takt/@`.
+fn branch_refusal(id: &str) -> Option<String> {
+    if id.len() > MAX_ID_BYTES {
+        return Some(format!(
+            "it is {} bytes long, past the limit of {MAX_ID_BYTES}: git cannot make the lock file of the branch {BRANCH_PREFIX}<id>",
+            id.len()
+        ));
+    }
+    if id == "@" {
+        return Some("it is `@` alone, which git reads as `HEAD`".to_owned());
+    }
+    let why = if id.starts_with('.') {
+        "it starts with `.`".to_owned()
+    } else if id.ends_with(".lock") {
+        "it ends with `.lock`".to_owned()
+    } else if id.ends_with('.') {
+        "it ends with `.`".to_owned()
+    } else if id.contains("@{") {
+        "it contains `@{`".to_owned()
+    } else {
+        let c = id.chars().find(|c| REFUSED_IN_A_BRANCH.contains(c))?;
+        format!("it contains `{c}`")
+    };
+    Some(format!(
+        "{why}, and git refuses {BRANCH_PREFIX}{id} as a branch name"
+    ))
 }
 
 /// Refuses a case id that is not one plain name under the cases directory: empty, `.`, a `..`
 /// anywhere, a leading `/`, a path separator, or a character that does not show as itself (a
-/// control, whitespace, separator or Unicode format character, named by its code point). Every
-/// id an operator gives (`takt approve`, `takt run --case`, `RunOptions.case_id`) passes here
-/// before it is joined to a path, so no id reaches outside `.engineering/cases`, nests a case
-/// inside another, or displays as another id in a message or a `takt/<id>` branch.
+/// control, whitespace, separator or Unicode format character, or a default-ignorable code
+/// point, named by its code point); and an id whose branch `takt/<id>` git would not accept,
+/// past 250 bytes among them ([`branch_refusal`]). Every id an operator gives (`takt approve`,
+/// `takt run --case`, `RunOptions.case_id`) passes here before it is joined to a path, so no
+/// id reaches outside `.engineering/cases`, nests a case inside another, holds a character
+/// that does not show in a message or a `takt/<id>` branch, or opens a case whose branch git
+/// cannot make. The check does not normalise: `café` precomposed (NFC) and decomposed (NFD)
+/// are two ids, two case directories and two branches. The refusal names the id as typed, a
+/// character that does not show written as its code point.
 pub fn check_id(id: &str) -> Result<()> {
     let why = if id.is_empty() {
         Some("it is empty".to_owned())
@@ -105,18 +190,18 @@ pub fn check_id(id: &str) -> Result<()> {
         Some("it starts with `/`".to_owned())
     } else if id.contains(['/', '\\']) {
         Some("it contains a path separator".to_owned())
+    } else if let Some(c) = id.chars().find(|c| is_unshowable(*c)) {
+        Some(format!(
+            "it contains U+{:04X}, a control, whitespace, separator, format or default-ignorable character",
+            u32::from(c)
+        ))
     } else {
-        id.chars().find(|c| is_unshowable(*c)).map(|c| {
-            format!(
-                "it contains U+{:04X}, a control, whitespace, separator or format character",
-                u32::from(c)
-            )
-        })
+        branch_refusal(id)
     };
     match why {
         Some(why) => bail!(
             "the case id `{}` is refused: {why}; a case id is one name under {CASES_DIR}",
-            id.escape_debug()
+            shown(id)
         ),
         None => Ok(()),
     }
@@ -1273,20 +1358,27 @@ fn changes(tree: &Path, parent: &str, commit: &str) -> Result<Option<Vec<Change>
     Ok(Some(changes))
 }
 
-/// The directory of the case whose branch `tree` is on: `takt/<id>` names the case `<id>`.
+/// The directory of the case whose branch `tree` is on: `takt/<id>` names the case `<id>`. A
+/// refusal shows the branch as [`check_id`] shows an id, a character that does not show written
+/// as its code point.
 pub fn current(tree: &Path) -> Result<PathBuf> {
     let branch = crate::git::current_branch(tree)?
         .ok_or_else(|| anyhow!("the tree {} is not on a branch", tree.display()))?;
     let id = branch.strip_prefix(BRANCH_PREFIX).ok_or_else(|| {
         anyhow!(
-            "the tree {} is on {branch}, not on a case's branch {BRANCH_PREFIX}<id>",
-            tree.display()
+            "the tree {} is on {}, not on a case's branch {BRANCH_PREFIX}<id>",
+            tree.display(),
+            shown(&branch)
         )
     })?;
-    check_id(id).with_context(|| format!("the branch {branch} names no case"))?;
+    check_id(id).with_context(|| format!("the branch {} names no case", shown(&branch)))?;
     let dir = tree.join(CASES_DIR).join(id);
     if !dir.join("case.yaml").is_file() {
-        bail!("the branch {branch} names no case at {}", dir.display());
+        bail!(
+            "the branch {} names no case at {}",
+            shown(&branch),
+            dir.display()
+        );
     }
     Ok(dir)
 }

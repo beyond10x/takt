@@ -1,0 +1,17 @@
+format: canon-case/1
+id: turn-1-scenario-help
+protocol: self.improvement
+artifacts:
+  finding:
+    revision: eb54f3a
+  baseline:
+    revision: 0a776d2
+  candidate:
+    revision: 447423c
+  promotion:
+    revision: a0b8576fe56aca1304e412eb62e5622762de198a
+inputs:
+  surface: judge
+independence:
+  planner-run:
+  - different_agent_run

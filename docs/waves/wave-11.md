@@ -1,6 +1,6 @@
 # Wave 11: records reach the base, the binary's revision, one pull request per handed-over change
 
-Skill: `aep:implementing` 0.23.1, wave mode. Stage: **running**. Approval: the planner role named these units for wave 11 and accepted their early start from the wave 10 branch; each judge-surface merge needs the planner's grant of its exact commit, on a reviewer verdict. Mode: interactive.
+Skill: `aep:implementing` 0.23.1, wave mode. Stage: **closed**. Approval: the planner role named these units for wave 11 and accepted their early start from the wave 10 branch; each judge-surface merge needs the planner's grant of its exact commit, on a reviewer verdict. Mode: interactive.
 
 ## Units
 
@@ -43,3 +43,21 @@ One opening commit (this page, the stories to `active`), each unit's commits on 
 
 - 2026-10-18: units started early from 8b0afc5. binary-embeds-revision: a295a53, two adversary passes, corrections dd9bf05 and 85c98bf (the last verified by the coordinator, 538 passed). records-reach-base: d0602ac, two adversary passes, corrections 98813e3 and e46d9d0 (the last verified by the coordinator, 530 passed). Efficiency unit: reworked to the planner's option C, 22a8389 (530 passed), adversary pass 1 running.
 - 2026-10-18: wave opened from main at 9922f12.
+- 2026-10-18: binary-embeds-revision granted at 85c98bf; the wave merged in at 3f07876, granted for the merge delta and merged at fc0ee65.
+- 2026-10-18: records-reach-base granted at e46d9d0; the wave merged in twice (01d56f0, c889e98), granted for the merge delta and merged at 290c366.
+- 2026-10-18: the efficiency unit reached a fourth correction after two adversary passes and two reviewer rounds (the reviewer's blocking finding: a protocol whose outcome a choice record can satisfy through negation or order forms). On the planner's decision the wave closes with its two granted units, and the efficiency unit carries over into wave 12 unchanged: impl/efficiency keeps its history (22a8389, 45ad4cb, a74688f, 1f55e0e, 57c6462) and its three stories stay `active`.
+- 2026-10-18: main (6adc36d) merged into the wave branch at 75e27e9; `task check` exit 0 at the wave head (462 of 462 citations; 628 passed, 0 failed, 4 ignored). The two stories carry a `Landed (wave 11)` section and a `test_result`, and are `implemented`; the four adversary passes are recorded as review-results.
+
+## Close
+
+| story | merge into the wave | correction rounds |
+|---|---|---|
+| `story:binary-embeds-revision` | fc0ee65 | 2, plus the wave merge |
+| `story:records-reach-base` | 290c366 | 2, plus two wave merges |
+| `story:pr-opens-when-change-is-done`, `story:no-model-step-for-approval`, `story:no-inspect-for-stateless-harness` | carried over to wave 12 | 4 so far |
+
+Follow-ups, each carried by a story:
+
+- `story:wave11-review-follow-ups` (wave 12): the reviewers' low findings on both units; the step guard's refusal message and comment that still say the store is written only once a case is accepted; a citation for the Step sentence on kept records; `pr.open`'s own commit count against `change.read` (a base branch that moves after the case opens; a hand-made commit carrying a take line).
+- `story:confinement-seam` (wave 13): a base object a step overwrites under its own id, read by any read at the base.
+- `story:self-improvement-protocol`: the producer of `merge_observation` for `loop.merge`.
