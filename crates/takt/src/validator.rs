@@ -589,15 +589,19 @@ impl Validator for PrOpen {
             None => Next::Open(request_of(&dir, &name, branch.base.as_deref(), revision)?),
         };
         // A pull request needs a commit on the case's branch beyond its base: at the base itself
-        // the forge has nothing to compare, and opening one would be refused there. Nothing is
-        // pushed and no record written; a commit moves the revision and makes `pr.open` due
-        // again.
+        // the forge has nothing to compare, and opening one would be refused there. The take
+        // committed when the case opened (`takt: take <story>`) is not such a commit: it moves
+        // the story's status, not the work. Nothing is pushed and no record written; a commit
+        // moves the revision and makes `pr.open` due again.
         if let Next::Open(request) = &next {
             let ahead = crate::git::run(
                 tree,
                 &[
                     "rev-list",
                     "--count",
+                    "--invert-grep",
+                    "--extended-regexp",
+                    "--grep=^takt: take [^ ]+$",
                     &format!("{}..{revision}", request.base),
                 ],
             )?;

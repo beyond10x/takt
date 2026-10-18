@@ -706,7 +706,7 @@ impl<'a> Run<'a> {
                 if !foreign.is_empty() || !outside.is_empty() {
                     restore(&cases, &kept, &touched)?;
                     if !outside.is_empty() {
-                        crate::git::discard_all(&self.tree)?;
+                        crate::git::discard_uncommitted(&self.tree)?;
                     }
                     foreign.extend(outside);
                     let mut why = format!(

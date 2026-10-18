@@ -78,8 +78,8 @@ fn empty(name: &str) -> Scratch {
     Scratch { root, repo }
 }
 
-/// A committed repository on `main`: a source file, a test, notes, a script that leaves
-/// `stamp.txt` behind as a validator's run may, and `*.local` ignored.
+/// A committed repository on `main`: a source file, a test, notes, a script that writes
+/// `stamp.txt` and changes `notes.md` (a test command a validator refuses), and `*.local` ignored.
 fn repository(name: &str) -> Scratch {
     let scratch = empty(name);
     let dir = &scratch.repo;
@@ -269,31 +269,25 @@ fn a_case_does_not_open_on_a_tree_with_uncommitted_work() {
 }
 
 #[test]
-fn a_step_that_edits_a_path_already_uncommitted_is_refused_and_undone() {
-    // `stamp.sh`, the test command, leaves `stamp.txt` untracked and `notes.md` modified: what a
-    // validator's run may leave. The step edits each in turn.
-    for path in ["stamp.txt", "notes.md"] {
-        let tree = repository(&format!("predirty-{}", path.replace('.', "-")));
-        let validators = tests_run("./stamp.sh");
-        let harness = acting("implementation.edit", |tree: &Path| {
-            fs::write(tree.join(path), "model\n").expect("a write");
-            fs::write(tree.join("src/lib.rs"), "model\n").expect("a write");
-        });
-        let id = "predirty";
-        let (stop, text) = run(&tree, id, 4, &harness, &validators);
-        let stop = stop.expect("the run stops");
-        assert!(
-            matches!(&stop, Stop::StepRefused(why) if why.contains(path)),
-            "{path}: {stop:?}\n{text}"
-        );
-        assert_eq!(read(&tree.join(path)), "validator\n", "{path}\n{text}");
-        assert_eq!(read(&tree.join("src/lib.rs")), "a\n", "{path}\n{text}");
-        assert_eq!(
-            git(&tree, &["rev-list", "--count", "main..HEAD"]),
-            "0",
-            "{path}: nothing was committed\n{text}"
-        );
-    }
+fn a_validator_run_that_leaves_files_behind_leaves_no_path_uncommitted_for_a_step() {
+    // `stamp.sh`, the test command, writes `stamp.txt` and changes `notes.md`. A validator may
+    // change only what it declares (story:validator-confinement), so its run is refused and
+    // undone, and no step ever starts on a path already uncommitted.
+    let tree = repository("predirty");
+    let validators = tests_run("./stamp.sh");
+    let harness = acting("implementation.edit", |tree: &Path| {
+        fs::write(tree.join("src/lib.rs"), "model\n").expect("a write");
+    });
+    let (stop, text) = run(&tree, "predirty", 4, &harness, &validators);
+    let stop = stop.expect("the run stops");
+    assert!(
+        matches!(&stop, Stop::StepRefused(why) if why.contains("stamp.txt") && why.contains("notes.md")),
+        "{stop:?}\n{text}"
+    );
+    assert!(!tree.join("stamp.txt").exists(), "{text}");
+    assert_eq!(read(&tree.join("notes.md")), "committed\n", "{text}");
+    assert_eq!(read(&tree.join("src/lib.rs")), "a\n", "{text}");
+    assert!(dirty(&tree).is_empty(), "{:?}\n{text}", dirty(&tree));
 }
 
 #[test]
@@ -481,8 +475,7 @@ fn a_case_file_the_step_turned_into_a_directory_is_put_back() {
 #[test]
 fn an_accepted_step_commits_exactly_the_paths_it_changed() {
     let tree = repository("exact");
-    // `stamp.sh` leaves `stamp.txt` and `notes.md` uncommitted: not the step's, not committed.
-    let validators = tests_run("./stamp.sh");
+    let validators = tests_run("true");
     let harness = acting("implementation.edit", |tree: &Path| {
         fs::write(tree.join("src/lib.rs"), "b\n").expect("a write");
         fs::write(tree.join("src/new file ü.rs"), "new\n").expect("a write");
@@ -509,10 +502,7 @@ fn an_accepted_step_commits_exactly_the_paths_it_changed() {
         opened.case.revision("implementation").as_deref(),
         Some(git(&tree, &["rev-parse", "HEAD"]).as_str())
     );
-    let mut left = dirty(&tree);
-    left.sort();
-    assert_eq!(left, ["notes.md", "stamp.txt"], "{text}");
-    assert_eq!(read(&tree.join("stamp.txt")), "validator\n");
+    assert!(dirty(&tree).is_empty(), "{:?}\n{text}", dirty(&tree));
 }
 
 #[test]
