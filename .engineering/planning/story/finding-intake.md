@@ -19,7 +19,7 @@ scope:
   path: scripts/check-finding
 - confidence: cited
   path: scripts/file-finding
-revision: 12
+revision: 13
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T13:07:06Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"review_outcome":7}}}
 - {from: "proposed", to: "active", at: "2026-10-18T13:07:06Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"review_outcome":7}}}
@@ -48,6 +48,7 @@ intake procedure is written into `.agents/operator-agent.md`, which story:agent-
 - Finding → Story: a finding becomes one story or one blocker. Inferred from the design.
 - Finding → Scenario: the predicate names one scenario. UNMAPPED: whether a finding may need several.
 - Finding → Scenario: exactly one (takt.work.Finding) (settles the marker above).
+- Finding → store artifact: a finding is filed as exactly one store artifact, a story or a blocker (`scripts/file-finding --kind`), one-to-one (takt.work.Finding `artifact`). Decided 2026-10-18.
 
 ## Scope
 

@@ -18,7 +18,7 @@ use takt::evidence::Record;
 use takt::forge::{Checks, Forge, Memory};
 use takt::frontier::{Aep, approve};
 use takt::harness::{Harness, StepContext, StepReport};
-use takt::validator::{CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
+use takt::validator::{ChangeRead, CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
 /// The delivery protocol, relative to this crate.
@@ -169,6 +169,14 @@ impl Harness for Requester {
                 tokens: None,
             });
         }
+        // The work committed is complete: hand it over, changing nothing.
+        if context.offered.contains(&"change.handover".to_owned()) {
+            return Ok(StepReport {
+                action: "change.handover".to_owned(),
+                summary: "hand it over".to_owned(),
+                tokens: None,
+            });
+        }
         Err(anyhow!("the gate was not offered"))
     }
 }
@@ -210,10 +218,12 @@ impl Validator for GatePass {
 }
 
 /// The validators of a delivery run through `forge`, in the order the binary registers them:
-/// the real tests validator, its command `true`, a gate that passes, and the forge's three.
+/// the real tests validator, its command `true`, `change.read`, a gate that passes, and the
+/// forge's three.
 fn delivery(forge: Rc<dyn Forge>) -> Vec<Box<dyn Validator>> {
     vec![
         Box::new(TestsRun::new("true").expect("a command")),
+        Box::new(ChangeRead),
         Box::new(GatePass),
         Box::new(PrOpen::new(forge.clone())),
         Box::new(CiRead::new(forge.clone())),

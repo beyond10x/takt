@@ -163,7 +163,8 @@ fn declare(repo: &Path, text: &str) {
 /// counting from 1. `gh pr view` reports the pull request open with the head it was opened
 /// for, at the commit last pushed for it; `gh pr checks` one check, passing. `claude` appends a
 /// line to `work.txt` and answers `implementation.edit`, or, once an approval is offered,
-/// answers `repository.merge`.
+/// answers `repository.merge`, or, once its `work.txt` exists and `change.handover` is offered,
+/// takes it, changing nothing.
 fn doubles(bin: &Path, state: &Path, remote: &Path) {
     fs::create_dir_all(bin).expect("a stub directory");
     let state = state.display().to_string();
@@ -264,6 +265,9 @@ exit 2
         r#"#!/bin/sh
 case "$2" in
   *"These need an approval"*) action=repository.merge ;;
+  *"- change.handover:"*)
+    if [ -e work.txt ]; then action=change.handover;
+    else echo "the work" >> work.txt; action=implementation.edit; fi ;;
   *) echo "the work" >> work.txt; action=implementation.edit ;;
 esac
 printf '{"result":"{\\"action\\": \\"%s\\", \\"summary\\": \\"the double\\"}","usage":{"input_tokens":1}}' "$action"

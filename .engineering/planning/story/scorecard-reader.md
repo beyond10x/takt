@@ -19,7 +19,7 @@ scope:
   path: crates/takt/src/scorecard.rs
 - confidence: inferred
   path: crates/takt/tests/scorecard.rs
-revision: 9
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":4}}}
 - {from: "proposed", to: "active", at: "2026-10-18T15:28:21Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":4}}}
@@ -49,6 +49,7 @@ reader.
 
 - Scorecard → Scenario run: one row per run. UNMAPPED: whether a scorecard covers one candidate
   revision or a period.
+- Scorecard → Revision: a scorecard covers one takt revision, the one its saved file `scorecard-<revision>.json` is named by (takt.work.Scorecard). Decided 2026-10-18 (settles the marker above).
 
 ## Scope
 

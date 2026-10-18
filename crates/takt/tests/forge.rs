@@ -135,8 +135,9 @@ struct Outcome {
 }
 
 /// A run on the delivery protocol over `tree` with `pr.open` and `ci.read` over `forge` as the
-/// only validators, the tests and the gate already green at HEAD, two steps at most: the
-/// budget stops the run before a judgement step would be offered to the harness.
+/// only validators, the tests and the gate already green, the change handed over and a commit
+/// beyond the base recorded at HEAD (four records), two steps at most: the budget stops the run
+/// before a judgement step would be offered to the harness.
 fn delivered(tree: &Path, id: &str, forge: Rc<dyn Forge>) -> Outcome {
     let options = RunOptions {
         protocol: PROTOCOL.to_owned(),
@@ -159,6 +160,27 @@ fn delivered(tree: &Path, id: &str, forge: Rc<dyn Forge>) -> Outcome {
         .expect("the record is written");
     run.case
         .add_evidence(&record(2, "gate_result", "pass", &revision))
+        .expect("the record is written");
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("handover-{}", &revision[..8]),
+            "handover",
+            None,
+            "implementation",
+            &revision,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+    // A change to publish at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &revision[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
         .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
@@ -236,8 +258,8 @@ fn with_checks_passing_the_pull_request_and_the_ci_result_are_recorded_at_the_pu
         "{}",
         outcome.text
     );
-    assert_eq!(outcome.records.len(), 4, "{}", outcome.text);
-    let pull_request = &outcome.records[2];
+    assert_eq!(outcome.records.len(), 6, "{}", outcome.text);
+    let pull_request = &outcome.records[4];
     assert_eq!(pull_request["format"], "canon-evidence/1", "{pull_request}");
     assert_eq!(pull_request["kind"], "pull_request", "{pull_request}");
     assert_eq!(pull_request["result"], "open", "{pull_request}");
@@ -248,7 +270,7 @@ fn with_checks_passing_the_pull_request_and_the_ci_result_are_recorded_at_the_pu
         "{pull_request}"
     );
     assert_eq!(pull_request["producer"], "takt.pr-open", "{pull_request}");
-    let ci = &outcome.records[3];
+    let ci = &outcome.records[5];
     assert_eq!(ci["kind"], "ci_result", "{ci}");
     assert_eq!(ci["result"], "pass", "{ci}");
     assert_eq!(ci["subject"], "implementation", "{ci}");
@@ -345,8 +367,8 @@ fn with_checks_pending_no_ci_result_is_written_and_ci_green_stays_unknown() {
         outcome.text
     );
     assert!(outcome.text.contains("pending"), "{}", outcome.text);
-    assert_eq!(outcome.records.len(), 3, "{}", outcome.text);
-    assert_eq!(outcome.records[2]["kind"], "pull_request");
+    assert_eq!(outcome.records.len(), 5, "{}", outcome.text);
+    assert_eq!(outcome.records[4]["kind"], "pull_request");
     assert_eq!(
         claim(&outcome.decision, "pr.opened"),
         "true",
@@ -391,9 +413,9 @@ fn with_checks_failing_one_fail_record_is_written_and_ci_green_is_false() {
         "{}",
         outcome.text
     );
-    assert_eq!(outcome.records.len(), 4, "{}", outcome.text);
-    assert_eq!(outcome.records[3]["result"], "fail");
-    assert_eq!(outcome.records[3]["producer"], "takt.ci-read");
+    assert_eq!(outcome.records.len(), 6, "{}", outcome.text);
+    assert_eq!(outcome.records[5]["result"], "fail");
+    assert_eq!(outcome.records[5]["producer"], "takt.ci-read");
     assert_eq!(
         claim(&outcome.decision, "ci.green"),
         "false",
@@ -409,7 +431,10 @@ fn with_checks_failing_one_fail_record_is_written_and_ci_green_is_false() {
 }
 
 /// `ci.read` before any pull request exists observes nothing and writes nothing: a claim
-/// about continuous integration needs a pull request head to be about.
+/// about continuous integration needs a pull request head to be about. Since
+/// story:pr-opens-when-change-is-done the protocol does not admit `ci.read` before `pr.opened`
+/// holds, so the loop never takes it there: the validator is observed directly, and the run
+/// shows it blocked and takes no step for it.
 #[test]
 fn ci_read_without_a_pull_request_writes_no_record() {
     let tree = scratch("no-pr");
@@ -428,13 +453,30 @@ fn ci_read_without_a_pull_request_writes_no_record() {
         case_id: Some("no-pr".to_owned()),
         gate: None,
     };
-    let validators: Vec<Box<dyn Validator>> = vec![Box::new(CiRead::new(forge))];
+    let validators: Vec<Box<dyn Validator>> = vec![Box::new(CiRead::new(forge.clone()))];
     let mut run = Run::open(&tree, options, &NoHarness, &validators).expect("the case opens");
+    let revision = run
+        .case
+        .revision("implementation")
+        .expect("implementation has a revision");
+    let observation = CiRead::new(forge)
+        .observe(&tree, &revision, 1)
+        .expect("observes");
+    assert!(observation.records.is_empty(), "{}", observation.summary);
+    assert!(
+        observation.summary.contains("no pull request is open"),
+        "{}",
+        observation.summary
+    );
     let mut out = Vec::new();
-    let stop = run.run(&mut out).expect("the run stops without an error");
+    let stop = run.run(&mut out);
     let text = String::from_utf8(out).expect("utf-8");
-    assert_eq!(stop, Stop::Iterations(1), "{text}");
-    assert!(text.contains("step 1: ci.read {}"), "{text}");
+    assert!(
+        stop.is_err(),
+        "the harness is left a judgement step: {text}"
+    );
+    assert!(text.contains("ci.read (blocked)"), "{text}");
+    assert!(!text.contains("ci.read {}"), "{text}");
     assert!(!text.contains("evidence:"), "{text}");
     assert!(
         memory.calls.borrow().is_empty(),
@@ -859,6 +901,27 @@ fn at_the_untouched_base_the_harness_is_offered_a_step_before_anything_is_pushed
     run.case
         .add_evidence(&record(2, "gate_result", "pass", &revision))
         .expect("the record is written");
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("handover-{}", &revision[..8]),
+            "handover",
+            None,
+            "implementation",
+            &revision,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+    // A change to publish at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &revision[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
+        .expect("the record is written");
     let mut out = Vec::new();
     let error = format!(
         "{:#}",
@@ -1096,6 +1159,27 @@ fn adv_a_closed_pull_request_at_a_second_revision_is_recorded_closed() {
     run.case
         .add_evidence(&record(2, "gate_result", "pass", &first))
         .expect("the record is written");
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("handover-{}", &first[..8]),
+            "handover",
+            None,
+            "implementation",
+            &first,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+    // A change to publish at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &first[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &first,
+            "takt.change-read",
+        ))
+        .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
     let text = String::from_utf8(out).expect("utf-8");
@@ -1322,7 +1406,7 @@ fn a_pull_request_head_the_forge_reports_elsewhere_earns_no_record() {
         ..Memory::default()
     });
     let outcome = delivered(&tree, "elsewhere", memory);
-    assert_eq!(outcome.records.len(), 4, "{}", outcome.text);
+    assert_eq!(outcome.records.len(), 6, "{}", outcome.text);
     fs::write(tree.join("README.md"), "second\n").expect("a change");
     git(&tree, &["commit", "-q", "-am", "second"]);
     let second = git(&tree, &["rev-parse", "HEAD"]);
@@ -1910,7 +1994,7 @@ fn pr_open_sets_branch_yaml_right_when_its_name_was_rewritten() {
         ..Memory::default()
     });
     let outcome = delivered(&tree, "renamed", memory.clone());
-    assert_eq!(outcome.records.len(), 4, "{}", outcome.text);
+    assert_eq!(outcome.records.len(), 6, "{}", outcome.text);
     let mut branch = Branch::read(&outcome.case_dir).expect("the branch file");
     branch.name = "HEAD:main".to_owned();
     branch

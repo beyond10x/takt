@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:binary-embeds-revision
 kind: story
-status: active
+status: implemented
 title: takt --version and every run record the revision the binary was built from
 summary: 'R9: the binary prints and records its git revision, so a promotion is checked against it, not a build note'
 relations:
@@ -15,10 +15,11 @@ scope:
   path: crates/takt-cli/src/main.rs
 - confidence: inferred
   path: crates/takt/src/events.rs
-revision: 5
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T18:27:20Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-18T18:27:20Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-18T20:06:55Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: binary-embeds-revision
 
@@ -44,3 +45,25 @@ On takt at a0b8576, holds; after the fix, fails:
 ## Acceptance
 
 A binary built at a commit prints `takt 0.1.0 (<sha>)`, and `(<sha>-dirty)` when built from a tree with uncommitted changes; a run's `opened` event records that revision; a build outside a git checkout prints `(unknown revision)` and never a guessed one.
+
+## Landed (wave 11)
+
+Read from `git diff --stat fc0ee65^1 fc0ee65` (the unit's merge into the wave branch) at the close of wave 11 (wave branch head 75e27e9). A build script reads the revision with git at build time (redirecting GIT_* removed, no configured code, attributes off): the sha, `-dirty` for a tracked change or an untracked file under `crates/` or `protocols/`, or `unknown revision`; `takt --version` prints it and the `opened` event records it as `binary`. Granted at 85c98bf and, for the wave merge, 3f07876. Low reviewer findings carried by story:wave11-review-follow-ups.
+
+- `crates/takt-cli/build.rs`
+- `crates/takt-cli/src/main.rs`
+- `crates/takt-cli/tests/revision_adv1.rs`
+- `crates/takt-cli/tests/revision_adv2.rs`
+- `crates/takt-cli/tests/revision_build.rs`
+- `crates/takt-cli/tests/run_record_cli.rs`
+- `crates/takt-cli/tests/scorecard_adv1.rs`
+- `crates/takt-cli/tests/scorecard_cli.rs`
+- `crates/takt-cli/tests/version_cli.rs`
+- `crates/takt/src/events.rs`
+- `crates/takt/src/run.rs`
+- `crates/takt/tests/run_record.rs`
+- `crates/takt/tests/scorecard.rs`
+- `crates/takt/tests/scorecard_adv1.rs`
+- `crates/takt/tests/scorecard_adv2.rs`
+- `ess/domains/takt.citations.tsv`
+- `ess/domains/takt.yaml`

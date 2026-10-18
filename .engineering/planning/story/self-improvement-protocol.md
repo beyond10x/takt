@@ -25,7 +25,7 @@ scope:
   path: crates/takt/tests/improvement_protocols.rs
 - confidence: cited
   path: protocols/self-improvement/1.yaml
-revision: 6
+revision: 7
 ---
 # Story: self-improvement-protocol
 
@@ -49,8 +49,8 @@ defects, a review's value) stays a `decision:` requirement or human-sourced evid
 
 - Improvement turn → Case: a turn is a Canon case under `self.improvement/1`; not redeclared in
   `ess/domains/takt.yaml`.
-- Case → Finding: one turn verifies one finding. Inferred from the design.
-- promotion_record result: takt.work.PromotionResult; Case → Finding UNMAPPED in ess/domains/takt.yaml.
+- Case → Finding: an improvement case references exactly one Finding; a Finding may have many cases (a retried or re-opened turn). Many-to-one, the case side references (`ess/domains/takt.yaml`, takt.work.Case `finding`). Decided 2026-10-18.
+- promotion_record result: takt.work.PromotionResult.
 
 ## Scope
 
