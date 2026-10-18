@@ -716,11 +716,12 @@ impl Process {
 /// What every [`Process`] child is started with, over what takt inherited: git never prompts
 /// on the terminal, and an empty `GIT_ASKPASS` ends git's search for an askpass program before
 /// it reaches `core.askPass` or the user's `GIT_ASKPASS` or `SSH_ASKPASS`; SSH, should a line
-/// reach it, never asks for a password or a host key.
-pub const NO_PROMPT: [(&str, &str); 3] = [
+/// reach it, never asks for a password or a host key; and no git under it honours a replace ref.
+pub const NO_PROMPT: [(&str, &str); 4] = [
     ("GIT_TERMINAL_PROMPT", "0"),
     ("GIT_ASKPASS", ""),
     ("GIT_SSH_COMMAND", "ssh -o BatchMode=yes"),
+    ("GIT_NO_REPLACE_OBJECTS", "1"),
 ];
 
 impl Default for Process {

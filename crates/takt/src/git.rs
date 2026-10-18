@@ -87,6 +87,9 @@ fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
     if let Some(parent) = tree.parent() {
         command.env("GIT_CEILING_DIRECTORIES", parent);
     }
+    // A replace ref (`refs/replace/<object>`) would make every read of an object return
+    // another's content: no git takt runs honours one.
+    command.env("GIT_NO_REPLACE_OBJECTS", "1");
     let mut child = command
         .args(NO_CONFIGURED_CODE)
         .args(args)
@@ -937,8 +940,9 @@ pub struct GitDirPutBack {
 
 /// The tree as it was before a judgement step or a validator's observation: what its change is
 /// measured against and what a refused or failed one is put back to. `HEAD` and its branch,
-/// and every other branch and tag of the repository (the case's base, a sibling case's branch)
-/// but one checked out in another worktree, which is that session's ([`unguarded_refs`]), the
+/// every replace ref, and every other branch and tag of the repository (the case's base, a
+/// sibling case's branch) but one checked out in another worktree, which is that session's
+/// ([`unguarded_refs`]), the
 /// case's base and its own branch excepted ([`Checkpoint::take_guarding`]); the index's entries
 /// and the index file itself; every uncommitted path outside the cases directory with what was
 /// at it (a validator's run may leave one); the ignored paths with what is at each a file git
@@ -1026,8 +1030,8 @@ fn unguarded_refs(tree: &Path, branch: Option<&str>, kept: &[String]) -> Result<
     Ok(refs)
 }
 
-/// The refs a checkpoint guards beside `HEAD`: every branch and tag of the repository, each with
-/// the object it names, but those `unguarded` names ([`unguarded_refs`]).
+/// The refs a checkpoint guards beside `HEAD`: every branch, tag and replace ref of the
+/// repository, each with the object it names, but those `unguarded` names ([`unguarded_refs`]).
 fn guarded_refs(tree: &Path, unguarded: &BTreeSet<String>) -> Result<BTreeMap<String, String>> {
     let listed = raw(
         tree,
@@ -1036,6 +1040,7 @@ fn guarded_refs(tree: &Path, unguarded: &BTreeSet<String>) -> Result<BTreeMap<St
             "--format=%(objectname) %(refname)",
             "refs/heads/",
             "refs/tags/",
+            "refs/replace/",
         ],
         None,
     )?;
@@ -1064,8 +1069,8 @@ fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<String, C
 }
 
 impl Checkpoint {
-    /// Takes the checkpoint of `tree`, guarding `HEAD` and its branch and every other branch and
-    /// tag of the repository but one another worktree has checked out.
+    /// Takes the checkpoint of `tree`, guarding `HEAD` and its branch, every replace ref, and
+    /// every other branch and tag of the repository but one another worktree has checked out.
     pub fn take(tree: &Path) -> Result<Self> {
         Self::take_guarding(tree, &[])
     }

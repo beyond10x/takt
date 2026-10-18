@@ -113,6 +113,26 @@ fn commit(tree: &Path, definitions: &str, message: &str) -> String {
     git(tree, &["rev-parse", "HEAD"])
 }
 
+/// Files the finding `key` in `tree`'s planning store as `scripts/file-finding` does, its store
+/// file committed at `at`; the commit.
+fn file(tree: &Path, key: &str, at: &str) -> String {
+    let relative = format!(".engineering/planning/story/{key}.md");
+    let path = tree.join(&relative);
+    fs::create_dir_all(path.parent().expect("a parent")).expect("the store");
+    fs::write(&path, format!("# finding {key}\n")).expect("the finding");
+    git(tree, &["add", "--", &relative]);
+    let status = Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
+        .args(["commit", "-q", "-m", "file the finding", "--", &relative])
+        .env("GIT_AUTHOR_DATE", at)
+        .env("GIT_COMMITTER_DATE", at)
+        .current_dir(tree)
+        .status()
+        .expect("git runs");
+    assert!(status.success(), "commit {relative}");
+    git(tree, &["rev-parse", "HEAD"])
+}
+
 /// One decision of a fixture turn: its instant, the claims true at it, the outcome legitimate.
 struct At<'a> {
     at: &'a str,
@@ -201,9 +221,10 @@ fn turn(tree: &Path, id: &str, finding: Option<&str>, decisions: &[At<'_>], toke
     }
 }
 
-/// A turn that was filed at `filed`, verified at `verified` and closed with `verdict`, promoted
-/// when the verdict is `accepted`.
+/// A turn whose finding was filed in the store at `filed`, verified at `verified` and closed with
+/// `verdict`, promoted when the verdict is `accepted`.
 fn closed(tree: &Path, id: &str, filed: &str, verified: &str, verdict: &str, tokens: Option<u64>) {
+    file(tree, id, filed);
     let promoted: &[&str] = if verdict == "accepted" {
         &[
             "finding.cited",
@@ -311,7 +332,7 @@ fn ids(value: &serde_json::Value) -> Vec<String> {
 /// and the figures it retains each name the case ids they were computed from.
 #[test]
 fn three_recorded_turns_give_one_loop_measurement_whose_figures_name_their_cases() {
-    let (tree, head) = scratch("acceptance", DEFINED);
+    let (tree, _) = scratch("acceptance", DEFINED);
     closed(
         &tree,
         "turn-a",
@@ -336,6 +357,7 @@ fn three_recorded_turns_give_one_loop_measurement_whose_figures_name_their_cases
         "declined",
         Some(50),
     );
+    let head = git(&tree, &["rev-parse", "HEAD"]);
     let case = loop_case(&tree, "loop-1", &head, &head);
     let validators: Vec<Box<dyn Validator>> = vec![
         Box::new(LoopMeasure),
@@ -470,18 +492,19 @@ fn an_open_turn_has_no_verdict_and_counts_in_the_accepted_share() {
         "declined",
         None,
     );
+    let head = file(&tree, "turn-c", "2026-10-18T12:00:00Z");
     turn(
         &tree,
         "turn-c",
         Some("turn-c"),
         &[At {
-            at: "2026-10-18T12:00:00Z",
+            at: "2026-10-18T12:05:00Z",
             holds: &["finding.cited"],
             legitimate: None,
         }],
         None,
     );
-    let card = LoopScorecard::read(&tree).expect("reads");
+    let card = LoopScorecard::read_at(&tree, Some(&head)).expect("reads");
     assert_eq!(card.rows.len(), 3);
     let open = &card.rows[2];
     assert_eq!(open.turn, "turn-c");
@@ -528,6 +551,7 @@ fn the_time_from_finding_to_verified_is_computed_from_each_rows_instants() {
         None,
     );
     // Verified, then a new candidate: the verification no longer holds.
+    file(&tree, "turn-c", "2026-10-18T08:00:00Z");
     turn(
         &tree,
         "turn-c",
@@ -551,14 +575,16 @@ fn the_time_from_finding_to_verified_is_computed_from_each_rows_instants() {
         ],
         None,
     );
-    // Verified, undone, verified again: verified from the last time it began to hold.
+    // Verified, undone, verified again: verified from the last time it began to hold. Filed in
+    // the store at 07:00, its case first evaluated at 07:05: filed at 07:00.
+    let head = file(&tree, "turn-d", "2026-10-18T07:00:00Z");
     turn(
         &tree,
         "turn-d",
         Some("turn-d"),
         &[
             At {
-                at: "2026-10-18T07:00:00Z",
+                at: "2026-10-18T07:05:00Z",
                 holds: &["finding.cited"],
                 legitimate: None,
             },
@@ -580,7 +606,7 @@ fn the_time_from_finding_to_verified_is_computed_from_each_rows_instants() {
         ],
         None,
     );
-    let card = LoopScorecard::read(&tree).expect("reads");
+    let card = LoopScorecard::read_at(&tree, Some(&head)).expect("reads");
     let row = |id: &str| {
         card.rows
             .iter()
@@ -594,6 +620,10 @@ fn the_time_from_finding_to_verified_is_computed_from_each_rows_instants() {
     assert_eq!(
         row("turn-a").verified_at.as_deref(),
         Some("2026-10-18T10:30:00Z")
+    );
+    assert_eq!(
+        row("turn-d").filed_at.as_deref(),
+        Some("2026-10-18T07:00:00Z")
     );
     assert_eq!(row("turn-c").verified_at, None);
     assert_eq!(
@@ -612,14 +642,14 @@ fn the_time_from_finding_to_verified_is_computed_from_each_rows_instants() {
 }
 
 /// The recorded first turn reads as a row: accepted and promoted, its revisions from its
-/// snapshot, filed and verified when its decisions first held each claim, and no tokens or
-/// finding key, because the hand recording wrote no run record and no story record.
+/// snapshot, verified when its decisions first held the claim, and no tokens, finding key or
+/// filing time, because the hand recording wrote no run record and no story record.
 #[test]
 fn the_recorded_first_turn_reads_as_an_accepted_promoted_row() {
-    let (tree, _) = scratch("turn-1", DEFINED);
+    let (tree, head) = scratch("turn-1", DEFINED);
     let into = tree.join(".engineering/cases/turn-1-scenario-help");
     copy(Path::new(TURN_1), &into);
-    let card = LoopScorecard::read(&tree).expect("reads");
+    let card = LoopScorecard::read_at(&tree, Some(&head)).expect("reads");
     assert_eq!(card.rows.len(), 1);
     let row = &card.rows[0];
     assert_eq!(row.turn, "turn-1-scenario-help");
@@ -627,7 +657,7 @@ fn the_recorded_first_turn_reads_as_an_accepted_promoted_row() {
     assert!(row.promoted);
     assert_eq!(row.baseline, "0a776d2");
     assert_eq!(row.candidate, "447423c");
-    assert_eq!(row.filed_at.as_deref(), Some("2026-10-18T14:40:03Z"));
+    assert_eq!(row.filed_at, None);
     assert_eq!(row.verified_at.as_deref(), Some("2026-10-18T14:40:03Z"));
     assert_eq!(row.tokens, None);
     assert_eq!(row.wall_ms, None);
@@ -739,6 +769,31 @@ fn a_changed_definition_is_dual_reported_when_both_figures_print_and_redefined_o
         ("redefined".to_owned(), false)
     );
     assert_eq!(checked("removed", None), ("redefined".to_owned(), false));
+    // A metric whose figure no code computes cannot print: added, or as an uncomputed version.
+    let added = format!(
+        "{DEFINED}  escaped_defects:\n    version: 1\n    definition: escaped defects, human-sourced\n"
+    );
+    assert_eq!(
+        checked("uncomputed-metric", Some(&added)),
+        ("redefined".to_owned(), false)
+    );
+    let uncomputed = with_accepted_share(
+        "  accepted_share:
+    version: 3
+    definition: accepted rows over the rows of the last week
+    target:
+      at_least: 0.75
+    previous:
+      - version: 1
+        definition: accepted rows over all rows, open turns included
+        target:
+          at_least: 0.75
+",
+    );
+    assert_eq!(
+        checked("uncomputed-version", Some(&uncomputed)),
+        ("redefined".to_owned(), false)
+    );
 }
 
 /// Writes a `merge_observation` record of the loop candidate at `at` into `case`.
@@ -760,45 +815,108 @@ fn merged(case: &mut CaseDir, at: &str) {
     fs::write(&path, serde_json::to_string_pretty(&record).expect("json")).expect("the record");
 }
 
-/// `loop.compare`: the turns filed after the candidate merged against those filed before, on
-/// the metrics below their target before: `improved` when each is better after, else
-/// `not_improved`; fewer than three turns after the merge records nothing.
+/// Moves the turn `id`'s `baseline` revision to `revision`.
+fn on_baseline(tree: &Path, id: &str, revision: &str) {
+    let path = tree.join(".engineering/cases").join(id).join("case.yaml");
+    let text = fs::read_to_string(&path).expect("case.yaml").replace(
+        &format!("revision: b-{id}"),
+        &format!("revision: {revision}"),
+    );
+    fs::write(&path, text).expect("case.yaml");
+}
+
+/// A turn closed with `verdict` on a baseline that holds everything committed so far.
+fn after(tree: &Path, id: &str, at: &str, verdict: &str) {
+    closed(tree, id, at, at, verdict, None);
+    on_baseline(tree, id, &git(tree, &["rev-parse", "HEAD"]));
+}
+
+/// `loop.compare`: the turns whose baseline holds the merged candidate against the turns the
+/// case's measurement of the baseline read, on the metrics below their target there: `improved`
+/// when each is better after, else `not_improved`. Fewer than three turns with a verdict on such
+/// a baseline record nothing, open turns and turns on another baseline not counted; so does a
+/// case with no measurement of the baseline, or no merge of the candidate.
 #[test]
-fn the_loop_comparison_sets_the_turns_after_the_merge_against_those_before() {
-    let (tree, head) = scratch("compare", DEFINED);
+fn the_loop_comparison_sets_the_turns_on_the_candidate_against_those_measured() {
+    let (tree, _) = scratch("compare", DEFINED);
     for (id, at, verdict) in [
         ("before-a", "2026-10-18T09:00:00Z", "accepted"),
         ("before-b", "2026-10-18T09:10:00Z", "declined"),
         ("before-c", "2026-10-18T09:20:00Z", "declined"),
-        ("after-a", "2026-10-18T11:00:00Z", "accepted"),
-        ("after-b", "2026-10-18T11:10:00Z", "accepted"),
     ] {
         closed(&tree, id, at, at, verdict, None);
     }
-    let mut case = loop_case(&tree, "loop-compare", &head, &head);
-    merged(&mut case, "2026-10-18T10:00:00Z");
-    let observation = LoopCompare.observe(&tree, &head, 1).expect("observes");
+    let base = git(&tree, &["rev-parse", "HEAD"]);
+    let candidate = commit(&tree, DEFINED, "the loop candidate");
+    let mut case = loop_case(&tree, "loop-compare", &base, &candidate);
+
+    let observation = LoopCompare.observe(&tree, &candidate, 1).expect("observes");
     assert!(observation.records.is_empty(), "{}", observation.summary);
     assert!(
-        observation.summary.contains("at least 3"),
+        observation.summary.contains("no merge"),
+        "{}",
+        observation.summary
+    );
+    merged(&mut case, "2026-10-18T10:00:00Z");
+    let observation = LoopCompare.observe(&tree, &candidate, 2).expect("observes");
+    assert!(observation.records.is_empty(), "{}", observation.summary);
+    assert!(
+        observation.summary.contains("no loop measurement"),
         "{}",
         observation.summary
     );
 
-    closed(
+    let measurement = LoopMeasure.observe(&tree, &base, 3).expect("measures");
+    assert_eq!(measurement.records.len(), 1, "{}", measurement.summary);
+    let retained = measurement.artifact.expect("the measurement retained");
+    fs::create_dir_all(case.dir.join("artifacts")).expect("artifacts");
+    fs::write(
+        case.dir.join("artifacts").join(&retained.name),
+        &retained.bytes,
+    )
+    .expect("retained");
+    case.add_evidence(&measurement.records[0]).expect("written");
+
+    after(&tree, "after-a", "2026-10-18T11:00:00Z", "accepted");
+    after(&tree, "after-b", "2026-10-18T11:10:00Z", "accepted");
+    turn(
         &tree,
-        "after-c",
-        "2026-10-18T11:20:00Z",
-        "2026-10-18T11:20:00Z",
-        "declined",
+        "after-open",
+        None,
+        &[At {
+            at: "2026-10-18T11:15:00Z",
+            holds: &["finding.cited"],
+            legitimate: None,
+        }],
         None,
     );
-    let observation = LoopCompare.observe(&tree, &head, 2).expect("observes");
+    on_baseline(&tree, "after-open", &git(&tree, &["rev-parse", "HEAD"]));
+    // Accepted, but on the baseline, which does not hold the candidate: not a turn after.
+    closed(
+        &tree,
+        "elsewhere",
+        "2026-10-18T11:16:00Z",
+        "2026-10-18T11:16:00Z",
+        "accepted",
+        None,
+    );
+    on_baseline(&tree, "elsewhere", &base);
+    let observation = LoopCompare.observe(&tree, &candidate, 4).expect("observes");
+    assert!(observation.records.is_empty(), "{}", observation.summary);
+    assert!(
+        observation.summary.contains("2 turns with a verdict"),
+        "{}",
+        observation.summary
+    );
+
+    after(&tree, "after-c", "2026-10-18T11:20:00Z", "declined");
+    let observation = LoopCompare.observe(&tree, &candidate, 5).expect("observes");
     assert_eq!(observation.records.len(), 1, "{}", observation.summary);
     let record = &observation.records[0];
     assert_eq!(record.kind, "loop_comparison");
     assert_eq!(record.subject, "loop_candidate");
-    // Accepted share 1/3 before, 2/3 after: improved.
+    assert_eq!(record.subject_revision, candidate);
+    // Accepted share 1/3 before, 2/4 after, the open turn counted: improved.
     assert_eq!(
         record.result.as_deref(),
         Some("improved"),
@@ -811,33 +929,21 @@ fn the_loop_comparison_sets_the_turns_after_the_merge_against_those_before() {
         .expect("the comparison retained");
     let retained: serde_json::Value = serde_json::from_slice(&artifact.bytes).expect("json");
     assert_eq!(ids(&retained["compared"]), ["accepted_share"], "{retained}");
+    assert_eq!(
+        ids(&retained["before"]["turns"]),
+        ["before-a", "before-b", "before-c"],
+        "{retained}"
+    );
+    assert_eq!(
+        ids(&retained["after"]["turns"]),
+        ["after-a", "after-b", "after-c", "after-open"],
+        "{retained}"
+    );
 
-    closed(
-        &tree,
-        "after-d",
-        "2026-10-18T11:30:00Z",
-        "2026-10-18T11:30:00Z",
-        "declined",
-        None,
-    );
-    closed(
-        &tree,
-        "after-e",
-        "2026-10-18T11:40:00Z",
-        "2026-10-18T11:40:00Z",
-        "declined",
-        None,
-    );
-    // Accepted share 2/5 after against 1/3 before is still better; 2/6 is not.
-    closed(
-        &tree,
-        "after-f",
-        "2026-10-18T11:50:00Z",
-        "2026-10-18T11:50:00Z",
-        "declined",
-        None,
-    );
-    let observation = LoopCompare.observe(&tree, &head, 3).expect("observes");
+    // Accepted share 2/6 after against 1/3 before is no better.
+    after(&tree, "after-d", "2026-10-18T11:30:00Z", "declined");
+    after(&tree, "after-e", "2026-10-18T11:40:00Z", "declined");
+    let observation = LoopCompare.observe(&tree, &candidate, 6).expect("observes");
     assert_eq!(
         observation.records[0].result.as_deref(),
         Some("not_improved"),
@@ -846,8 +952,10 @@ fn the_loop_comparison_sets_the_turns_after_the_merge_against_those_before() {
     );
 }
 
-/// The definitions this repository ships parse, and every figure they define is one the code
-/// computes, current and previous versions alike.
+/// The definitions this repository ships parse, every figure they define is one the code
+/// computes, current and previous versions alike, and they hold the planner's targets: accepted
+/// and promoted share at least 0.8, finding to verified at most a day, none for the turns and
+/// the median tokens.
 #[test]
 fn the_shipped_definitions_parse_and_each_figure_is_computed() {
     let text = fs::read_to_string(
@@ -866,9 +974,86 @@ fn the_shipped_definitions_parse_and_each_figure_is_computed() {
     ] {
         assert!(definitions.metrics.contains_key(metric), "{metric}");
     }
+    let target = |metric: &str| {
+        definitions.metrics[metric]
+            .target
+            .map(|target| (target.at_least, target.at_most))
+    };
+    assert_eq!(target("accepted_share"), Some((Some(0.8), None)));
+    assert_eq!(target("promoted_share"), Some((Some(0.8), None)));
+    assert_eq!(target("finding_to_verified"), Some((None, Some(86400.0))));
+    assert_eq!(target("median_tokens_per_accepted_turn"), None);
+    assert_eq!(target("turns"), None);
     LoopScorecard::default()
         .figures(&definitions)
         .expect("every figure is computed");
+}
+
+/// A judgement step plants `refs/replace/<base>` pointing the baseline at the candidate. While it
+/// is there, what takt reads at the base is still the base's: the run's judge-surface list
+/// (`takt::run::judge_list_at`) and the baseline's metric definitions in
+/// `loop.definition.check`. The checkpoint the step was measured against names the ref as a
+/// change, and its restore removes it.
+#[test]
+fn a_planted_replace_ref_changes_no_read_at_the_base_and_the_restore_removes_it() {
+    let (tree, _) = scratch("replace-ref", DEFINED);
+    fs::create_dir_all(tree.join(".engineering")).expect("the directory");
+    fs::write(tree.join(takt::run::JUDGE_LIST), "- src/**\n").expect("the list");
+    let base = commit(&tree, DEFINED, "the base");
+    fs::write(tree.join(takt::run::JUDGE_LIST), "- docs/**\n").expect("the list");
+    let silent = with_accepted_share(
+        "  accepted_share:
+    version: 1
+    definition: accepted rows over closed rows, open turns left out
+    target:
+      at_least: 0.1
+",
+    );
+    let head = commit(&tree, &silent, "the candidate");
+    let _case = loop_case(&tree, "loop-replace-ref", &base, &head);
+
+    let checkpoint = takt::git::Checkpoint::take(&tree).expect("a checkpoint");
+    git(&tree, &["replace", &base, &head]);
+    assert_eq!(
+        git(
+            &tree,
+            &["for-each-ref", "--format=%(refname)", "refs/replace/"]
+        ),
+        format!("refs/replace/{base}"),
+        "the step planted its ref"
+    );
+    assert_eq!(
+        takt::run::judge_list_at(&tree, &base).expect("reads"),
+        Ok(vec!["src/**".to_owned()]),
+        "the judge-surface list at the base is the base's"
+    );
+    let observation = LoopDefinitionCheck
+        .observe(&tree, &head, 1)
+        .expect("observes");
+    assert_eq!(
+        observation.records[0].result.as_deref(),
+        Some("redefined"),
+        "the baseline's definitions are the base's: {}",
+        observation.summary
+    );
+
+    let change = checkpoint.change(&tree).expect("the change");
+    assert!(
+        change
+            .refs
+            .iter()
+            .any(|moved| moved.starts_with(&format!("refs/replace/{base}"))),
+        "{change:?}"
+    );
+    checkpoint.restore(&tree).expect("restored");
+    assert_eq!(
+        git(
+            &tree,
+            &["for-each-ref", "--format=%(refname)", "refs/replace/"]
+        ),
+        "",
+        "the restore removed the planted ref"
+    );
 }
 
 /// The three validators perform the protocol's actions and produce its evidence kinds about

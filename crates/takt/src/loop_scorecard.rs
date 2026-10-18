@@ -8,10 +8,11 @@
 //! (`loop.compare`).
 //!
 //! A row's figures come from the turn's records only: its verdict, whether it was promoted, and
-//! when its finding was filed and verified from the decisions Canon wrote for it; its tokens
-//! and wall time from its run record ([`crate::scorecard`]); its revisions from its snapshot;
-//! its finding from the story it was opened for. What a record does not hold is absent, never
-//! guessed.
+//! when its finding was verified from the decisions Canon wrote for it; its tokens and wall
+//! time from its run record ([`crate::scorecard`]); its revisions from its snapshot; its
+//! finding from the story it was opened for, and when that was filed from the commit that
+//! added the finding to the store, read through git at the base. What a record does not hold
+//! is absent, never guessed.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -44,8 +45,8 @@ pub const MIN_TURNS: usize = 3;
 pub struct LoopScorecardRow {
     /// The turn: its case id.
     pub turn: String,
-    /// The finding's key: the story or blocker the case was opened for, `story:<key>` or
-    /// `blocker:<key>` as `scripts/file-finding` files it; absent when the case records none.
+    /// The finding's key: the store artifact the case was opened for, `story:<key>` or
+    /// `decision-blocker:<key>` as `scripts/file-finding` files it; absent when it records none.
     pub finding: Option<String>,
     /// The `baseline` artifact's revision in the case's snapshot.
     pub baseline: String,
@@ -55,11 +56,12 @@ pub struct LoopScorecardRow {
     pub verdict: Option<String>,
     /// Whether the case's latest decision holds the claim `promoted`.
     pub promoted: bool,
-    /// The tokens of the case's runs; absent when the case has no run record.
+    /// The tokens of the case's runs; absent when no step of its run record reports any.
     pub tokens: Option<u64>,
     /// The wall time of the case's runs, in milliseconds; absent when it has no run record.
     pub wall_ms: Option<u64>,
-    /// When the finding was filed: the instant of the first decision holding `finding.cited`.
+    /// When the finding was filed: the time of the commit that added its artifact to the store,
+    /// read through git at the base; absent when that cannot be read.
     pub filed_at: Option<String>,
     /// When the finding was verified gone: the instant of the first decision of the last
     /// unbroken run of decisions holding `scenario.passes_after`, when the latest holds it;
@@ -333,6 +335,19 @@ fn compute(
                 .filter(|row| row.verdict.as_deref() == Some("accepted"))
                 .count(),
         ),
+        ("accepted_share", 2) => {
+            let closed: Vec<&&LoopScorecardRow> =
+                rows.iter().filter(|row| row.verdict.is_some()).collect();
+            let counted = closed
+                .iter()
+                .filter(|row| row.verdict.as_deref() == Some("accepted"))
+                .count();
+            (
+                (!closed.is_empty()).then(|| counted as f64 / closed.len() as f64),
+                format!("{counted}/{}", closed.len()),
+                closed.iter().map(|row| row.turn.clone()).collect(),
+            )
+        }
         ("promoted_share", 1) => share(rows.iter().filter(|row| row.promoted).count()),
         ("median_tokens_per_accepted_turn", 1) => {
             let counted: Vec<&&LoopScorecardRow> = rows
@@ -425,11 +440,63 @@ fn snapshot(case_dir: &Path) -> Result<serde_yaml_ng::Value> {
     serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))
 }
 
+/// The finding's key and its file in the planning store, for the store artifact `artifact` a
+/// case was opened for: `story:<key>` or `decision-blocker:<key>` (`blocker:<key>` as
+/// `scripts/file-finding` names the kind), the key lower-case letters and digits in words joined
+/// by `-`; none for anything else.
+fn store_path(artifact: &str) -> Option<(String, String)> {
+    let (kind, key) = artifact.split_once(':')?;
+    let dir = match kind {
+        "story" => "story",
+        "blocker" | "decision-blocker" => "decision-blocker",
+        _ => return None,
+    };
+    let is_key = key.split('-').all(|word| {
+        !word.is_empty()
+            && word
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    });
+    is_key.then(|| {
+        (
+            key.to_owned(),
+            format!(".engineering/planning/{dir}/{key}.md"),
+        )
+    })
+}
+
+/// When the commit that added `path` to the history of `base` was made, its committer time as
+/// Canon writes an instant; the earliest when it was added more than once. None when `base` is
+/// no commit id or git cannot say.
+fn added_at(repo: &Path, base: &str, path: &str) -> Option<String> {
+    if !is_commit_id(base) {
+        return None;
+    }
+    let listed = crate::git::run(
+        repo,
+        &["log", "--diff-filter=A", "--format=%ct", base, "--", path],
+    )
+    .ok()?;
+    let seconds: i64 = listed.lines().last()?.trim().parse().ok()?;
+    time::OffsetDateTime::from_unix_timestamp(seconds)
+        .ok()?
+        .format(&time::macros::format_description!(
+            "[year]-[month]-[day]T[hour]:[minute]:[second]Z"
+        ))
+        .ok()
+}
+
 impl LoopScorecard {
-    /// The rows of the `self.improvement` cases under `repo`'s cases directory, in name order;
-    /// none when the directory is absent. A case of another protocol is no turn. A snapshot, a
-    /// decision or a run record that does not read is an error naming it.
+    /// The rows as [`Self::read_at`] reads them with no base: no `filed_at`.
     pub fn read(repo: &Path) -> Result<Self> {
+        Self::read_at(repo, None)
+    }
+
+    /// The rows of the `self.improvement` cases under `repo`'s cases directory, in name order;
+    /// none when the directory is absent. A case of another protocol is no turn. Each row's
+    /// `filed_at` is read through git at `base`. A snapshot, a decision or a run record that
+    /// does not read is an error naming it.
+    pub fn read_at(repo: &Path, base: Option<&str>) -> Result<Self> {
         let cases = repo.join(CASES_DIR);
         let mut names: Vec<String> = Vec::new();
         match std::fs::read_dir(&cases) {
@@ -471,31 +538,33 @@ impl LoopScorecard {
             };
             let decided = decisions(&dir)?;
             let latest = decided.last().map(|(decision, _)| decision);
-            let filed_at = decided
-                .iter()
-                .find(|(decision, _)| decision.holds("finding.cited"))
-                .and_then(|(_, at)| at.clone());
             let verified_at = decided
                 .iter()
                 .rev()
                 .take_while(|(decision, _)| decision.holds("scenario.passes_after"))
                 .last()
                 .and_then(|(_, at)| at.clone());
-            let finding = crate::case::story_of(&dir)?.and_then(|story| {
-                story
-                    .strip_prefix("story:")
-                    .or_else(|| story.strip_prefix("blocker:"))
-                    .map(str::to_owned)
-            });
+            let artifact = crate::case::story_of(&dir)?;
+            let stored = artifact.as_deref().and_then(store_path);
+            let filed_at = match (base, &stored) {
+                (Some(base), Some((_, path))) => added_at(repo, base, path),
+                _ => None,
+            };
+            // A step reports its tokens only when its harness counted them: a record none of
+            // whose steps did holds no token count, which is not a count of 0.
+            let counted = crate::events::Events::new(&dir)
+                .read()?
+                .iter()
+                .any(|line| line["event"] == "step" && line["tokens"].as_u64().is_some());
             let spend = spent.get(&name);
             rows.push(LoopScorecardRow {
                 turn: name.clone(),
-                finding,
+                finding: stored.map(|(key, _)| key),
                 baseline: revision("baseline")?,
                 candidate: revision("candidate")?,
                 verdict: latest.and_then(|decision| decision.legitimate().into_iter().next()),
                 promoted: latest.is_some_and(|decision| decision.holds("promoted")),
-                tokens: spend.map(|case| case.tokens),
+                tokens: spend.filter(|_| counted).map(|case| case.tokens),
                 wall_ms: spend.map(|case| case.wall_ms),
                 filed_at,
                 verified_at,
@@ -620,7 +689,7 @@ impl Validator for LoopMeasure {
             Ok(definitions) => definitions,
             Err(why) => return Ok(nothing(format!("{why}; nothing recorded"))),
         };
-        let card = LoopScorecard::read(tree)?;
+        let card = LoopScorecard::read_at(tree, Some(revision))?;
         if card.rows.len() < MIN_TURNS {
             return Ok(nothing(format!(
                 "{} turns recorded under {CASES_DIR}, at least {MIN_TURNS} needed; nothing recorded",
@@ -729,10 +798,29 @@ pub fn check(
     (overall, each)
 }
 
+/// The metrics of `definitions` some figure of which the code does not compute over the rows of
+/// `card`, current or previous, each with why.
+fn uncomputed(card: &LoopScorecard, definitions: &Definitions) -> Vec<(String, String)> {
+    let rows: Vec<&LoopScorecardRow> = card.rows.iter().collect();
+    definitions
+        .metrics
+        .iter()
+        .filter_map(|(id, metric)| {
+            std::iter::once(metric.current())
+                .chain(metric.previous.iter().cloned())
+                .find_map(|definition| compute(id, definition.version, &rows).err())
+                .map(|error| (id.clone(), format!("{error:#}")))
+        })
+        .collect()
+}
+
 /// `loop.definition.check`: the metric definitions at the candidate revision against those at
 /// the case's `loop_baseline` revision, both read through git; writes one `definition_check`
-/// record about `loop_candidate`, its result [`DefinitionCheck`]. No definitions at the
-/// baseline records nothing.
+/// record about `loop_candidate`, its result [`DefinitionCheck`]. The figures the candidate's
+/// definitions name are then computed over the recorded turns: a metric any of whose figures
+/// the code does not compute is `redefined`, whatever [`check`] found, since its figure cannot
+/// print; so is every metric when the turns do not read. No definitions at the baseline records
+/// nothing.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoopDefinitionCheck;
 
@@ -772,7 +860,28 @@ impl Validator for LoopDefinitionCheck {
                 )));
             }
         };
-        let (result, each) = check(&base_definitions, candidate.as_ref());
+        let (mut result, mut each) = check(&base_definitions, candidate.as_ref());
+        let mut why = why;
+        if let Some(candidate) = &candidate {
+            let failed: Vec<(String, String)> = match LoopScorecard::read_at(tree, Some(&base)) {
+                Ok(card) => uncomputed(&card, candidate),
+                Err(error) => candidate
+                    .metrics
+                    .keys()
+                    .map(|id| (id.clone(), format!("{error:#}")))
+                    .collect(),
+            };
+            for (id, reason) in &failed {
+                match each.iter_mut().find(|(each_id, _)| each_id == id) {
+                    Some((_, stands)) => *stands = DefinitionCheck::Redefined,
+                    None => each.push((id.clone(), DefinitionCheck::Redefined)),
+                }
+                why.push_str(&format!("; {id} does not print: {reason}"));
+            }
+            if !failed.is_empty() {
+                result = DefinitionCheck::Redefined;
+            }
+        }
         let changed: Vec<String> = each
             .iter()
             .filter(|(_, stands)| *stands != DefinitionCheck::Unchanged)
@@ -803,41 +912,88 @@ impl Validator for LoopDefinitionCheck {
     }
 }
 
-/// The instant the case whose branch `tree` is on recorded `revision` of `loop_candidate`
-/// merged: the earliest `merge_observation` record, result `merged`, about it; none without one.
-fn merged_at(tree: &Path, revision: &str) -> Result<Option<i128>> {
+/// The evidence records of the case whose branch `tree` is on, in name order (the order they
+/// were written), each read as YAML, of which a JSON record is one.
+fn case_records(tree: &Path) -> Result<Vec<serde_yaml_ng::Value>> {
     let dir = crate::case::current(tree)?.join("evidence");
-    let mut earliest: Option<i128> = None;
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
     for entry in std::fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {
         let path = entry?.path();
         if path
             .extension()
-            .is_none_or(|extension| extension != "json" && extension != "yaml")
+            .is_some_and(|extension| extension == "json" || extension == "yaml")
         {
-            continue;
-        }
-        let text =
-            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        let record: serde_yaml_ng::Value =
-            serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
-        if record["kind"].as_str() == Some("merge_observation")
-            && record["result"].as_str() == Some("merged")
-            && record["subject"].as_str() == Some("loop_candidate")
-            && record["subject_revision"].as_str() == Some(revision)
-            && let Some(at) = record["observed_at"].as_str().and_then(instant)
-        {
-            earliest = Some(earliest.map_or(at, |earliest| earliest.min(at)));
+            paths.push(path);
         }
     }
-    Ok(earliest)
+    paths.sort();
+    paths
+        .iter()
+        .map(|path| {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("read {}", path.display()))?;
+            serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))
+        })
+        .collect()
 }
 
-/// `loop.compare`: the turns whose finding was filed after the case recorded the candidate
-/// merged (at least [`MIN_TURNS`]) against the turns filed before, under the definitions at
-/// the case's `loop_baseline` revision. The metrics compared are those whose current figure
-/// missed its target before; `improved` when each of them is better after, in its target's
-/// direction, else `not_improved`. Writes one `loop_comparison` record about `loop_candidate`
-/// and retains both sides' figures as `loop-comparison-<seq>.json`.
+/// Whether `record` is of `kind` with `result` (any when none) about `subject` at `revision`.
+fn is_record(
+    record: &serde_yaml_ng::Value,
+    kind: &str,
+    result: Option<&str>,
+    subject: &str,
+    revision: &str,
+) -> bool {
+    record["kind"].as_str() == Some(kind)
+        && result.is_none_or(|result| record["result"].as_str() == Some(result))
+        && record["subject"].as_str() == Some(subject)
+        && record["subject_revision"].as_str() == Some(revision)
+}
+
+/// The turns the case's latest `loop_measurement` about `loop_baseline` at `base` read, as the
+/// measurement it retained names them; none without such a measurement or its retained file.
+fn measured_turns(tree: &Path, base: &str) -> Result<Option<Vec<String>>> {
+    let Some(id) = case_records(tree)?
+        .iter()
+        .rev()
+        .find(|record| is_record(record, "loop_measurement", None, "loop_baseline", base))
+        .and_then(|record| record["id"].as_str().map(str::to_owned))
+    else {
+        return Ok(None);
+    };
+    let path = crate::case::current(tree)?
+        .join("artifacts")
+        .join(format!("{id}.json"));
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let retained: serde_json::Value =
+        serde_json::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    Ok(retained["turns"].as_array().map(|turns| {
+        turns
+            .iter()
+            .filter_map(|turn| turn.as_str().map(str::to_owned))
+            .collect()
+    }))
+}
+
+/// Whether the commit `revision` descends from the commit `ancestor`, or is it; never for a
+/// revision that is no commit id.
+fn descends(tree: &Path, ancestor: &str, revision: &str) -> bool {
+    is_commit_id(ancestor)
+        && is_commit_id(revision)
+        && crate::git::run(tree, &["merge-base", "--is-ancestor", ancestor, revision]).is_ok()
+}
+
+/// `loop.compare`: due once the case holds a `merge_observation` of the loop candidate (the
+/// protocol's precondition; nothing is recorded without one). The turns whose baseline revision
+/// descends from the merged candidate, at least [`MIN_TURNS`] of them with a verdict, against
+/// the turns the case's `loop_measurement` of the baseline read, under the definitions at the
+/// case's `loop_baseline` revision. The metrics compared are those whose current figure missed
+/// its target before; `improved` when each of them is better after, in its target's direction,
+/// else `not_improved`. Writes one `loop_comparison` record about `loop_candidate` and retains
+/// both sides' figures as `loop-comparison-<seq>.json`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoopCompare;
 
@@ -864,28 +1020,43 @@ impl Validator for LoopCompare {
             Ok(definitions) => definitions,
             Err(why) => return Ok(nothing(format!("the baseline: {why}; nothing recorded"))),
         };
-        let Some(merged) = merged_at(tree, revision)? else {
+        let records = case_records(tree)?;
+        if !records.iter().any(|record| {
+            is_record(
+                record,
+                "merge_observation",
+                Some("merged"),
+                "loop_candidate",
+                revision,
+            )
+        }) {
             return Ok(nothing(format!(
                 "no merge of the loop candidate {} is recorded; nothing recorded",
                 short(revision)
             )));
+        }
+        let Some(measured) = measured_turns(tree, &base)? else {
+            return Ok(nothing(format!(
+                "no loop measurement of the baseline {} is retained in the case; nothing recorded",
+                short(&base)
+            )));
         };
-        let card = LoopScorecard::read(tree)?;
-        let filed = |row: &LoopScorecardRow| row.filed_at.as_deref().and_then(instant);
+        let card = LoopScorecard::read_at(tree, Some(&base))?;
         let before: Vec<&LoopScorecardRow> = card
             .rows
             .iter()
-            .filter(|row| filed(row).is_some_and(|at| at < merged))
+            .filter(|row| measured.contains(&row.turn))
             .collect();
         let after: Vec<&LoopScorecardRow> = card
             .rows
             .iter()
-            .filter(|row| filed(row).is_some_and(|at| at >= merged))
+            .filter(|row| descends(tree, revision, &row.baseline))
             .collect();
-        if after.len() < MIN_TURNS {
+        let ran = after.iter().filter(|row| row.verdict.is_some()).count();
+        if ran < MIN_TURNS {
             return Ok(nothing(format!(
-                "{} turns filed since the candidate merged, at least {MIN_TURNS} needed; nothing recorded",
-                after.len()
+                "{ran} turns with a verdict on a baseline that holds the candidate {}, at least {MIN_TURNS} needed; nothing recorded",
+                short(revision)
             )));
         }
         let (was, now) = match (
