@@ -9,7 +9,7 @@ use std::time::Instant;
 use anyhow::{Context as _, Result};
 
 use crate::case::{CASES_DIR, CaseDir};
-use crate::frontier::Unit;
+use crate::frontier::{Frontier, Take, Unit};
 use crate::harness::{Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
 use crate::validator::Validator;
@@ -147,6 +147,50 @@ impl<'a> Run<'a> {
             started: Instant::now(),
             options,
         })
+    }
+
+    /// Opens the case on the next ready story of `frontier`, the store told last: for each
+    /// candidate in order, the case is opened first (the protocol loaded, the inputs checked),
+    /// then the story is taken; a refusal removes the case just opened, is printed on `out`
+    /// verbatim, and the next candidate is tried. `None`, with no case opened, when nothing is
+    /// ready. One case directory per taken story, none for a refused one.
+    pub fn open_next(
+        tree: &Path,
+        options: RunOptions,
+        frontier: &dyn Frontier,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+        out: &mut dyn Write,
+    ) -> Result<Option<Self>> {
+        for id in frontier.candidates(tree)? {
+            let story = frontier.show(tree, &id)?;
+            let title = story.title.clone();
+            let run = Self::open_unit(
+                tree,
+                options.clone(),
+                Unit::Story(story),
+                harness,
+                validators,
+            )?;
+            match frontier.take(tree, &id)? {
+                Take::Taken => {
+                    writeln!(out, "frontier: took {id}: {title}")?;
+                    return Ok(Some(run));
+                }
+                Take::Refused(refusal) => {
+                    let dir = run.case.dir.clone();
+                    std::fs::remove_dir_all(&dir).with_context(|| {
+                        format!("remove the case {} the store would not take", dir.display())
+                    })?;
+                    // The cases directory stays only while a case is in it.
+                    if let Some(cases) = dir.parent() {
+                        let _ = std::fs::remove_dir(cases);
+                    }
+                    writeln!(out, "frontier: {id} not taken: {refusal}")?;
+                }
+            }
+        }
+        Ok(None)
     }
 
     fn budget_spent(&self) -> Option<Stop> {

@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness};
 use takt::validator::{TestsRun, Validator};
-use takt::{Frontier, LoadedProtocol, Run, RunOptions, Stop, Unit};
+use takt::{LoadedProtocol, Run, RunOptions, Stop, Unit};
 
 #[derive(Parser)]
 #[command(
@@ -171,22 +171,28 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 other => return Err(anyhow!("no harness `{other}`: claude or none")),
             };
             let validators: Vec<Box<dyn Validator>> = vec![Box::new(TestsRun::new(&test_cmd)?)];
-            // The unit: the intent given, or else the next ready story of the planning store,
-            // asked for only once everything else about the run is in order.
-            let unit = match intent {
-                Some(intent) => Unit::Intent(intent),
-                None => match Aep::default().next(&repo, out)? {
-                    Some(story) => {
-                        writeln!(out, "frontier: took {}: {}", story.id, story.title)?;
-                        Unit::Story(story)
-                    }
+            // The unit: the intent given, or else the next ready story of the planning store;
+            // the case is opened before the store is told, so a run that cannot open its case
+            // takes nothing.
+            let mut run = match intent {
+                Some(intent) => {
+                    Run::open_unit(&repo, options, Unit::Intent(intent), harness, &validators)?
+                }
+                None => match Run::open_next(
+                    &repo,
+                    options,
+                    &Aep::default(),
+                    harness,
+                    &validators,
+                    out,
+                )? {
+                    Some(run) => run,
                     None => {
                         writeln!(out, "frontier: nothing ready")?;
                         return Ok(0);
                     }
                 },
             };
-            let mut run = Run::open_unit(&repo, options, unit, harness, &validators)?;
             let stop = run.run(out)?;
             writeln!(
                 out,

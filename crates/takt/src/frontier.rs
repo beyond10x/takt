@@ -6,7 +6,9 @@
 //! is done (`implemented` or `archived`); among the ready ones the first in id order is the
 //! unit. Taking a story moves it `proposed` → `active`, so a story with an open case is never
 //! taken twice. A store may refuse the move; then the story is not taken, the refusal is printed
-//! verbatim and the next ready story is tried.
+//! verbatim and the next ready story is tried. A run opens the case before it takes the story
+//! and removes the case again when the store refuses ([`crate::Run::open_next`]), so a story is
+//! never `active` without a case to work it.
 
 use std::io::Write;
 use std::path::Path;
@@ -62,14 +64,34 @@ pub enum Unit {
     Story(Story),
 }
 
-/// The planning store behind a trait: asked for the next ready story, it hands one over and
-/// records in the store that the story is being worked.
+/// The planning store behind a trait: it names the ready stories in the order to try them,
+/// hands one over with its body, and records in the store that a story is being worked.
 pub trait Frontier {
     /// The adapter's name.
     fn name(&self) -> &str;
-    /// The next ready story of the store in `repo`, taken; `None` when nothing is ready. A story
-    /// the store refuses to hand over is reported on `out`, verbatim, and skipped.
-    fn next(&self, repo: &Path, out: &mut dyn Write) -> Result<Option<Story>>;
+    /// The ids of the ready stories of the store in `repo`, in the order to try them.
+    fn candidates(&self, repo: &Path) -> Result<Vec<String>>;
+    /// The story `id`, with its body.
+    fn show(&self, repo: &Path, id: &str) -> Result<Story>;
+    /// Tells the store the story `id` is being worked, `proposed` → `active`, the store judging
+    /// the move; its refusal, verbatim, when it would not.
+    fn take(&self, repo: &Path, id: &str) -> Result<Take>;
+    /// The next ready story, taken, with no case opened for it: down the candidates, the first
+    /// the store hands over; a refusal is printed on `out`, verbatim, and the next is tried;
+    /// `None` when nothing is ready. A run opens the case first and takes the story last, so it
+    /// uses [`crate::Run::open_next`] instead.
+    fn next(&self, repo: &Path, out: &mut dyn Write) -> Result<Option<Story>> {
+        for id in self.candidates(repo)? {
+            let story = self.show(repo, &id)?;
+            match self.take(repo, &id)? {
+                Take::Taken => return Ok(Some(story)),
+                Take::Refused(refusal) => {
+                    writeln!(out, "frontier: {id} not taken: {refusal}")?;
+                }
+            }
+        }
+        Ok(None)
+    }
 }
 
 /// An artifact as `aep plan artifact list --format json` lists it: the fields the rule reads.
@@ -197,9 +219,21 @@ impl Aep {
             .map_err(|refusal| anyhow!("aep plan artifact list: {refusal}"))?;
         serde_json::from_str(&json).context("read the artifact list")
     }
+}
 
-    /// The story `id`, with its body.
-    pub fn show(&self, repo: &Path, id: &str) -> Result<Story> {
+impl Frontier for Aep {
+    fn name(&self) -> &str {
+        "aep"
+    }
+
+    /// `list`, the ready rule, id order.
+    fn candidates(&self, repo: &Path) -> Result<Vec<String>> {
+        let listed = self.list(repo)?;
+        Ok(ready(&listed).into_iter().map(|a| a.id.clone()).collect())
+    }
+
+    /// `show <id> --format json`; the repository's own store only, like `list`.
+    fn show(&self, repo: &Path, id: &str) -> Result<Story> {
         #[derive(Deserialize)]
         struct Shown {
             id: String,
@@ -207,6 +241,7 @@ impl Aep {
             #[serde(default)]
             body: String,
         }
+        Self::store(repo)?;
         let json = self
             .plan(repo, &["show", id, "--format", "json"])?
             .map_err(|refusal| anyhow!("aep plan artifact show {id}: {refusal}"))?;
@@ -218,9 +253,9 @@ impl Aep {
         })
     }
 
-    /// Moves `id` to [`TAKEN`], the store judging the move; its refusal, verbatim, when it
-    /// would not.
-    pub fn take(&self, repo: &Path, id: &str) -> Result<Take> {
+    /// `move <id> --to active`, the one write; the repository's own store only, like `list`.
+    fn take(&self, repo: &Path, id: &str) -> Result<Take> {
+        Self::store(repo)?;
         Ok(
             match self.plan(
                 repo,
@@ -230,26 +265,6 @@ impl Aep {
                 Err(refusal) => Take::Refused(refusal),
             },
         )
-    }
-}
-
-impl Frontier for Aep {
-    fn name(&self) -> &str {
-        "aep"
-    }
-
-    fn next(&self, repo: &Path, out: &mut dyn Write) -> Result<Option<Story>> {
-        let listed = self.list(repo)?;
-        for candidate in ready(&listed) {
-            let story = self.show(repo, &candidate.id)?;
-            match self.take(repo, &candidate.id)? {
-                Take::Taken => return Ok(Some(story)),
-                Take::Refused(refusal) => {
-                    writeln!(out, "frontier: {} not taken: {refusal}", candidate.id)?;
-                }
-            }
-        }
-        Ok(None)
     }
 }
 
