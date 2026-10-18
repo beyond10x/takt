@@ -15,7 +15,7 @@ scope:
   path: crates/takt-cli/tests/scenario_run.rs
 - confidence: inferred
   path: crates/takt/src/git.rs
-revision: 8
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T12:07:49Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-10-18T12:07:50Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
@@ -42,6 +42,7 @@ scenario is declared in the scratch repository, not in takt: its story id, its s
 - Scenario → Story: one scenario names exactly one story of the scratch repository's store.
   UNMAPPED: whether a scenario may later name several stories.
 - Scenario run → Case: one run opens one case. Inferred from `crates/takt/src/run.rs`, one run one case.
+- Scenario → Story: exactly one (takt.work.Scenario); each run cuts one takt.work.TrialBranch with one case (settles the marker above).
 
 ## Scope
 

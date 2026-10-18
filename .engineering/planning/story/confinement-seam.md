@@ -31,7 +31,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/confinement.rs
-revision: 8
+revision: 10
 ---
 # Story: confinement-seam
 
@@ -48,6 +48,7 @@ This story: a `Confinement` trait that every spawn goes through (program, argume
 ## Domain relations
 
 - Validator → Action and Harness step → Action are the two places a run spawns on a step. Inferred from `crates/takt/src/run.rs:174` (validator) and `run.rs:211` (harness); git spawns around them, `run.rs:223`, `run.rs:242`, `run.rs:250`; the forge (story:forge-pull-request-evidence) and the frontier (story:frontier-next-ready-story) spawn from their adapters, inferred from those stories' Context.
+- Confinement adapter: takt.work.ConfinementName.
 
 ## Scope
 
@@ -102,3 +103,9 @@ What the adversary passes of waves 04 and 05 measured about the harness's reach,
   test command and the gates' command bindings run with the run's own permissions.
 - A grant written while a run holds the case is refused by the lock; a grant written between runs
   by whoever holds the tree is trusted, which is where `takt approve` legitimately writes.
+
+## Path resolution and fail-closed profile
+
+From the wave 10 work on story:step-cannot-forge-its-validators (2026-10-18): that story refuses a guarded path whose resolution crosses a link anywhere, or leaves the tree, checked per component with `symlink_metadata` (std only). The check is not race-free: a link planted between the check and the use is not caught. This story replaces it with `openat2` and `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV` (Linux), as a sibling sandbox host already resolves paths, with an fd-based snapshot and a named refusal, not a silent downgrade, where the syscall is not available.
+
+The confinement this seam adds is fail-closed: a declared profile (writable scopes, read-only toolchain roots, process, memory, time and output limits, no egress unless a destination is named) applies to the harness child and to the test command, and a run whose backend cannot enforce the profile is refused by name, never run unconfined.

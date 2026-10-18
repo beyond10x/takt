@@ -11,12 +11,13 @@ relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 - depends_on: story:scorecard-reader
+- depends_on: story:harness-journey-timeline
 scope:
 - confidence: inferred
   path: crates/takt/src/harness.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 3
+revision: 4
 ---
 # Story: normalized-harness-trace
 
@@ -47,3 +48,7 @@ On takt at 3ad0bd9, holds; after the fix, fails:
 ## Acceptance
 
 For one scenario run under takt and one free-running Claude Code run of the same scenario, the trace of each lists its operations in the shared vocabulary, a comparison report states which operation kinds one run has and the other lacks, and the raw usage of each run (input, output, cache read, cache write, as each harness reported them) is recorded beside the trace and is the only source of every token and cost figure in the report.
+
+## Domain relations
+
+- Trace → TraceOperation: takt.work.Trace; Trace → Run and the vocabulary UNMAPPED there.

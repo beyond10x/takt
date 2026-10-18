@@ -16,11 +16,15 @@ role the owner delegated it to on record.
 | milestone | state |
 |---|---|
 | M1 one step validated | done 2026-10-18 (`docs/runs/2026-10-18-m1-scratch.md`) |
-| M2 a story end to end | built: the planning-store frontier, the story protocol, the gate validator, the pull request and CI through the bot route, the merge under a recorded grant; not yet proven: no recorded run has taken a story from ready to merged with the grant as the only manual step |
+| M2 a story end to end | built: the planning-store frontier, the story protocol, the gate validator, the pull request and CI through the bot route, the merge under a recorded grant, waits on pending checks (wave 08), the run recorded on the story (wave 09). Not yet proven: no recorded run has taken a story from ready to merged with the grant as the only manual step |
+| unattended scenario 1 | next: accepted with one invocation plus one grant, daily for a week. Of 9 timed runs at 0a776d2 and later, 6 reached the merge approval in one invocation (`docs/metrics/`) |
+| self-improvement | phase R0: the first improvement turn was accepted on 2026-10-18 from records written by hand (`docs/runs/2026-10-18-improvement-turn-1/`). Not built: the scorecard reader, promotion, the judge guard and validators for `self.improvement/1`, in that order |
 | M3 to M5 | workflows as `workflow/1` files, a second harness and the confinement seam, a week of daily runs: not built |
 | continuous runs | a run that plans its next stories and works a wave with parallel workers: designed, not built |
 
-The design is `docs/design/takt.md`; its § 4 lists what each milestone has.
+The design is `docs/design/takt.md`; its § 4 lists what each milestone has. Scenario runs and
+their figures are in `docs/metrics/`; on scenario 1 an isolated Claude Code was cheaper and faster
+than takt.
 
 ## Use
 

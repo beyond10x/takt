@@ -4,11 +4,11 @@ id: design:recursive-self-improvement
 kind: design
 status: draft
 title: 'Recursive self-improvement of takt: takt improves takt, the loop is a protocol, the loop improves itself'
-summary: Three levels (work, takt, the loop), two agent roles, a pinned judge, a scorecard; L1 and L2 modelled as protocol/1 documents
+summary: Three levels (work, takt, the loop), four agent roles, a pinned judge, a scorecard; L1 and L2 modelled as protocol/1 documents
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 5
+revision: 10
 ---
 # Design: recursive self-improvement of takt
 
@@ -55,7 +55,7 @@ that delegation was not revoked; it refuses every other grant there. story:judge
 it; until then the delegation is a record the wave cites (`docs/waves/wave-07.md`: four
 judge-surface merges under the operator role's grant on the owner's delegation, before the
 operator role was split). The planner grants only on the reviewer's verdict at the exact sha it
-grants, and a diff that widens authority waits for the owner's grant. The target stays 0
+grants; a diff that widens authority is granted under the owner's standing grant of 2026-10-18 and named to the owner. The target stays 0
 judge-surface merges without the grant the surface requires (`product-requirements:takt` § 3).
 Merge authority split by surface is the owner's decision (2026-10-18), and so are delegation on
 record (2026-10-18) and the four agent roles, which split the operator role into planner,
@@ -123,6 +123,12 @@ most the baseline plus 10 %; at most one promotion a day. A metric's definition 
 surface; for one cycle after a change the previous definition's numbers are printed beside the
 new ones, so a metric cannot be redefined to look better.
 
+
+Open question, from the first recorded improvement turn (2026-10-18): at n=3 the token default trips on run-to-run noise. On scenario 1 with an unchanged harness, six takt runs at two revisions spread from 106,003 to 167,249 tokens; the turn's candidate, which changed only help text, had a median 24 % over its baseline because two of its three runs hit the known `repository.inspect` NoProgress (story:no-inspect-for-stateless-harness). `takt scorecard --against` therefore prints n and the minimum, median and maximum per side and flags only worse outcomes (story:scorecard-reader); which token rule promotion applies (a larger n, a spread-aware rule, or tokens per accepted unit with the known waste removed) is open and decided before story:promotion lands.
+
+
+Outcomes are compared by dominance (story:scorecard-reader, wave 10): per scenario the candidate is worse when, for some outcome rank, its share of cases at that rank or better is below the baseline's; a median rank missed regressions in fewer than half a scenario's cases (68 of 200 seeded worse candidates passed in its adversary pass). Dominance is strict, so a re-run of unchanged code with one flaky outcome, such as the `repository.inspect` NoProgress that scenario 1 hit in 3 of 6 runs, reports worse. How many trials promotion needs, and whether it re-runs or allows a margin, is decided with the token rule above.
+
 ## What earns each claim
 
 A validator earns a claim where the thing is observable: `scenario.reproduced_before`,
@@ -186,7 +192,8 @@ change is a judge-surface change.
 ## Agent profiles
 
 `.agents/planner-agent.md`, `.agents/developer-agent.md`, `.agents/reviewer-agent.md` and `.agents/doc-writer-agent.md` (start reading, owns, watches, loop,
-forbidden), each with a pointer stub under `.claude/agents/`.
+forbidden), each opening with a frontmatter of `name` and `description`, and each linked from
+`.claude/agents/` by a relative symlink of the same name.
 
 ## Not in this design
 
