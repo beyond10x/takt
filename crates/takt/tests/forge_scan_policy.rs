@@ -298,6 +298,17 @@ fn pr_open(tree: &Path, id: &str, forge: Rc<dyn Forge>) -> (Result<Stop, String>
             ))
             .expect("the record is written");
     }
+    // The change handed over at the revision, as takt records a `change.handover` step.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            "handover",
+            "handover",
+            None,
+            "implementation",
+            &revision,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
     (stop, String::from_utf8(out).expect("utf-8"))

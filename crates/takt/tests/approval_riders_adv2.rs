@@ -210,6 +210,16 @@ fn at_the_gate(
     run.case
         .add_evidence(&record(2, "gate_result", &worked))
         .expect("written");
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("handover-{}", &worked[..8]),
+            "handover",
+            None,
+            "implementation",
+            &worked,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
     assert_eq!(

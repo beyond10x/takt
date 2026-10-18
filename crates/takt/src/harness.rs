@@ -53,6 +53,14 @@ pub trait Harness {
     fn last_usage(&self) -> Option<crate::events::TokenUsage> {
         None
     }
+    /// Whether the harness keeps what it learned in one step for the next. A harness that does
+    /// not is never offered an action whose effect is `read` (`repository.inspect`) unless the
+    /// action records a choice (`change.handover`): what it read would be gone at the next
+    /// step, and a step that changes nothing and records nothing ends the run with
+    /// `NoProgress`. Not by default.
+    fn keeps_state(&self) -> bool {
+        false
+    }
 }
 
 /// Claude Code in print mode, with file tools only.
@@ -86,17 +94,32 @@ impl Default for ClaudeCode {
     }
 }
 
-/// The meaning of each action the prompt explains.
-fn describe(action: &str) -> &'static str {
-    match action {
+/// The meaning of each action the prompt explains: the adapter's own words for the actions it
+/// knows, else the description the protocol declares for the action, on one line.
+fn describe(action: &str, protocol: &LoadedProtocol) -> String {
+    let known = match action {
         "repository.inspect" => "read files to understand the code; change nothing",
         "tests.write" => {
             "add or change test files only (paths under tests/ or test/, or named *_test.*, test_*.*, *.test.*, *.spec.*)"
         }
         "implementation.edit" => "change the implementation so the intent holds",
         "plan.edit" => "write or change the plan",
-        _ => "perform this protocol action",
+        _ => "",
+    };
+    if !known.is_empty() {
+        return known.to_owned();
     }
+    b10x_canon::model::parse(&protocol.yaml)
+        .ok()
+        .and_then(|model| {
+            model
+                .actions
+                .iter()
+                .find(|(id, _)| id.as_str() == action)
+                .and_then(|(_, declared)| declared.description.clone())
+        })
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_else(|| "perform this protocol action".to_owned())
 }
 
 impl ClaudeCode {
@@ -134,7 +157,10 @@ impl ClaudeCode {
         }
         text.push_str("\nYou may perform exactly ONE of these actions now, nothing else:\n");
         for action in context.offered {
-            text.push_str(&format!("- {action}: {}\n", describe(action)));
+            text.push_str(&format!(
+                "- {action}: {}\n",
+                describe(action, context.protocol)
+            ));
         }
         if !context.approvals.is_empty() {
             text.push_str(
@@ -181,6 +207,12 @@ impl Harness for ClaudeCode {
 
     fn last_usage(&self) -> Option<crate::events::TokenUsage> {
         self.reported.get()
+    }
+
+    /// Each step is a `claude -p` of its own with `--no-session-persistence`: nothing it read
+    /// is there at the next step.
+    fn keeps_state(&self) -> bool {
+        false
     }
 
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport> {

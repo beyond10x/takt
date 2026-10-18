@@ -304,6 +304,19 @@ fn approve_then_the_resumed_run_merges() {
     git(&repo, &["add", "feature.txt"]);
     git(&repo, &["commit", "-q", "-m", "the work"]);
     let worked = git_out(&repo, &["rev-parse", "HEAD"]);
+    // The work handed over at its revision, the record takt writes for a `change.handover`
+    // step: a `--harness none` run takes no judgement step, so the test writes it.
+    takt::CaseDir::resume(&repo, &id)
+        .expect("the case reads back")
+        .add_evidence(&takt::evidence::Record::new(
+            "handover",
+            "handover",
+            None,
+            "implementation",
+            &worked,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
 
     let (code, out, err) = takt_through(&bin, &run);
     assert_eq!(code, 4, "stdout {out} stderr {err}");
@@ -447,6 +460,16 @@ fn a_run_with_no_harness_on_a_case_that_needs_only_the_grant_stops_approval_requ
         ))
         .expect("the record is written");
     }
+    // The change handed over at the revision, as takt records a `change.handover` step.
+    case.add_evidence(&takt::evidence::Record::new(
+        "handover",
+        "handover",
+        None,
+        "implementation",
+        &revision,
+        takt::run::CHOICE_PRODUCER,
+    ))
+    .expect("the record is written");
     let (code, out, err) = takt(&[
         "run",
         "--repo",

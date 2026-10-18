@@ -528,6 +528,20 @@ fn a_forge_refusing_the_pull_request_stops_the_run_with_a_documented_code() {
     let mut case = CaseDir::resume(&repo, "refused").expect("the case reads back");
     case.set_revision("implementation", &head)
         .expect("the revision is recorded");
+    // The work handed over at its revision, the record takt writes for a `change.handover`
+    // step: a `--harness none` run takes no judgement step, so the test writes it.
+    takt::CaseDir::resume(&repo, "refused")
+        .expect("the case reads back")
+        .add_evidence(&takt::evidence::Record::new(
+            "handover",
+            "handover",
+            None,
+            "implementation",
+            &head,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+
     let bin = refusing_gates(&outer);
     let (code, out, err) = takt_with_path(
         Some(&bin),
@@ -622,6 +636,16 @@ fn approval_required_and_completed_exit_with_different_documented_codes() {
         ))
         .expect("the record is written");
     }
+    // The change handed over at the revision, as takt records a `change.handover` step.
+    case.add_evidence(&takt::evidence::Record::new(
+        "handover",
+        "handover",
+        None,
+        "implementation",
+        &revision,
+        takt::run::CHOICE_PRODUCER,
+    ))
+    .expect("the record is written");
     let (approval, out, err) = takt(&[
         "run",
         "--repo",

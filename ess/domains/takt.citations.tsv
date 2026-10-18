@@ -71,7 +71,7 @@ takt.work.StepKind|- name: takt.work.StepKind|crates/takt/src/run.rs|1	fn is_due
 takt.work.StepKind|- name: takt.work.StepKind|docs/design/takt.md|1	judgement step: the harness performs ONE admissible action && deterministic step: a command	sha256:5250b424a3ee33bfa7ecebb0d3b04fbf235b2b0b5ca48b0e6566ddb8c173fe49
 takt.work.StepKind|- name: takt.work.StepKind|crates/takt/src/run.rs|2	// A deterministic step first: a validator due at this decision.	sha256:9ed3f0ae2f991e7b9bb0c12fdf5ffd29b0b1f1f018cc4048a2d58c70d462503a
 takt.work.StepKind|- name: takt.work.StepKind|crates/takt/src/run.rs|3	// Then a judgement step among the offered actions.	sha256:d9789b6c9b8eb8191d92f0cb3c868d1d1cc5afe3f0f2ab5807371c69e34b49d5
-takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|1	/// Why a run stopped. && NoProgress,	sha256:010af188f918fe7b30d07a25506585c253c98592a445ec273a989b23ee690aca
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|1	/// Why a run stopped. && NoProgress,	sha256:68a887c30d00468e5135d29d9e9fe5d0ee6144e7bfade20661a69dbfed181d11
 takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|2	return Ok(Stop::NoProgress);	sha256:ca848510b88f60a9861c3e56dfb7d7a72faff8d5bcec0e63966f49b45cd2a190
 takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|3	let approvals = decision.approval_required(); && Stop::ApprovalRequired(approvals)	sha256:c42e2b3d6c208f58f7a7f01c782808c10b56d1a97ce2ea6abaaa8e3b9be8b07e
 takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|4	return Ok(Stop::ApprovalRequired(vec![report.action]));	sha256:c320b6dd04c58e07442ab3e03f66c9f19291d691f546eebedba27d922ce1cfba
@@ -93,7 +93,7 @@ takt.work.DeterministicStep|- name: takt.work.DeterministicStep|docs/design/takt
 takt.work.DeterministicStep|- name: takt.work.DeterministicStep|crates/takt/src/validator.rs|5	pub struct TestsRun { && pub command: Vec<String>,	sha256:bdf0fefcd4b2308fcc6a1637d8758ce241aeb88d2e9ce4d5c15eeb55ac565089
 takt.work.DeterministicStep|- name: takt.work.DeterministicStep|crates/takt-cli/src/main.rs|1	/// The test command, split at white space, run without a shell. && test_cmd: String,	sha256:668e9ba041ea3a9f7061b73ded28bc1f3390df65dcad80398810aee06bb4e90b
 takt.work.JudgementStep|- name: takt.work.JudgementStep|docs/design/takt.md|1	| `step` judgement | actions (a subset of the protocol's), brief |	sha256:27aa806c5e8b4b298fe7370aaac31b85dbc020651931ec119ea47ee5fba1eaa9
-takt.work.JudgementStep|- name: takt.work.JudgementStep|crates/takt/src/run.rs|1	// The judgement actions: the admissible ones no validator owns. && .collect();	sha256:16796dff43abdb13f795b391afd44142370f13200eac56a8082dcbf872454d98
+takt.work.JudgementStep|- name: takt.work.JudgementStep|crates/takt/src/run.rs|1	// The judgement actions: the admissible ones no validator owns. && .collect();	sha256:25f1c622bc040e300f1f5ae90cca907c05412d6363f6dac10459e13051679644
 takt.work.JudgementStep|- name: takt.work.JudgementStep|crates/takt/src/harness.rs|1	/// The intent the case was opened for. && pub intent: &'a str,	sha256:cb105364e8538e40b124d2cfbb7129042844656bb95b92153cd55b90d40085c9
 takt.work.StepBlock|- name: takt.work.StepBlock|docs/design/takt.md|1	| `step` deterministic | && | `step` judgement |	sha256:4e72325a127ec500cc38719d020f9af59d68b45989c7c9e6be976f975a939c3f
 takt.work.ForgeName|- name: takt.work.ForgeName|crates/takt/src/forge.rs|1	pub trait Forge { && fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()>;	sha256:a2120266cd76b05e881617a9e0cd5967b3b9ac17f4c7c5f56989adff03959c2d
@@ -158,7 +158,7 @@ takt.work.Story|- name: approvals|crates/takt/src/frontier.rs|1	.record_approval
 takt.work.Story|- name: open_case|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|2	A story has at most one open case.	sha256:8aa3b1b04d9e92d3128ed92881c85af12175f209f108603ce71eba804e0a41c3
 takt.work.Run|- name: takt.work.Run|crates/takt/src/run.rs|1	//! The loop: evaluate, frontier, one step && //! merge is then a deterministic step like any other.	sha256:3505b8befc341da8ab256031726f12ab49c29c0dfea9fc160bd762379eab316d
 takt.work.Run|- name: takt.work.Run|crates/takt/src/run.rs|2	pub struct Run<'a> { && options: RunOptions,	sha256:b1dab11114ad94630e9340bacc02c74684a2fe0237599553f6a36b263fc61751
-takt.work.Run|- name: takt.work.Run|crates/takt/src/run.rs|3	fn run_held(&mut self, events: &Events, out: &mut dyn Write) -> Result<Stop> { && self.case.set_revision("implementation", &head)?;	sha256:b0c4dab5b4bf74e3161786bc4fd625da852d191a01d642cbf65a898bd20af685
+takt.work.Run|- name: takt.work.Run|crates/takt/src/run.rs|3	fn run_held(&mut self, events: &Events, out: &mut dyn Write) -> Result<Stop> { && self.case.set_revision("implementation", &head)?;	sha256:4d0f2fffc8bdfd1df71deaafeff669bc37d8294a65162ea07150476cfa90efc4
 takt.work.Run|- name: takt.work.Run|crates/takt/src/case.rs|1	pub const LOCK_FILE: &str = "run.lock";	sha256:4f7dbd12538daacf7ef920553c6899338e5020dc92198612068b7b714a3125bd
 takt.work.Run|- name: takt.work.Run|crates/takt/src/case.rs|2	fn take_hold(case_dir: &Path, id: &str) -> Result<()> { && .create_new(true)	sha256:1867de51522eadf73030c613d682d972100b70744dc17dda9d0d3ee8501a8c93
 takt.work.Run|- name: takt.work.Run|crates/takt/src/case.rs|3	let _held = Held::take(&dir, id)?;	sha256:a3e464ead9e50f24dca6e8fd67cc72f616361e254340fc168c2db6de622ce4cd
@@ -202,7 +202,7 @@ takt.work.Run|- name: started_at|crates/takt/src/run.rs|4	self.started.elapsed()
 takt.work.Run|- name: steps|crates/takt/src/run.rs|1	/// Steps taken. && pub steps: u64,	sha256:20ce303995f46a3b8b9ace412a20682cbfc91a88410e4195f91c617eb5f06522
 takt.work.Run|- name: tokens|crates/takt/src/run.rs|1	/// Tokens the harness reported. && pub tokens: u64,	sha256:de135d4bf5cb59c3e0a0750d469c457915353ebe975f6ddf0b65a642fb0e77ab
 takt.work.Run|- name: tokens|crates/takt/src/run.rs|2	if let Some(tokens) = report.tokens { && self.tokens += tokens;	sha256:625946c0dd523991317346ae4063d484fbac7f4d6a0eb0466c45fd2636e95051
-takt.work.Run|- name: stop|crates/takt/src/run.rs|1	/// Why a run stopped. && NoProgress,	sha256:010af188f918fe7b30d07a25506585c253c98592a445ec273a989b23ee690aca
+takt.work.Run|- name: stop|crates/takt/src/run.rs|1	/// Why a run stopped. && NoProgress,	sha256:68a887c30d00468e5135d29d9e9fe5d0ee6144e7bfade20661a69dbfed181d11
 takt.work.Run|- name: stop|crates/takt-cli/src/main.rs|1	"stopped: {stop}; steps {}, tokens {}, case {}",	sha256:98257f5c5af2d08f43a9f2846cc89fa820c74c27b9f9d7f92a148ab66d50736c
 takt.work.Run|- name: case|crates/takt/src/run.rs|1	/// The case. && pub case: CaseDir,	sha256:fb1464f714266ee9bd46a36b7af85f4574761526da2452513afb13d037a70d53
 takt.work.Run|- name: case|crates/takt/src/run.rs|2	pub fn resume( && let case = CaseDir::resume(tree, id)?;	sha256:774ce68c1af4f4650b007842fa67afb8d4c7bba269497097988dd774921616c7
@@ -386,3 +386,6 @@ takt.work.ScorecardCase|- name: takt.work.ScorecardCase|crates/takt/src/scorecar
 takt.work.ScorecardCase|- name: takt.work.ScorecardCase|crates/takt/src/scorecard.rs|2	/// One [`Case`] a case with a record, in case order. && cases	sha256:daf7f55226da25793a542e6326322430189e2ae2eacca5d06763533d513a123f
 takt.work.Scorecard|- name: takt.work.Scorecard|crates/takt/src/scorecard.rs|4	/// Compares this scorecard with `saved` && Ok(worse)	sha256:818ce81a36fa99d2d899fe8808b20e8eeacb174d5c6178baab3dbc02ef056d8f
 takt.work.Comparison|- name: takt.work.Comparison|crates/takt/src/scorecard.rs|1	let at_least = |cases: &[Case], at: u8| { && writeln!(out, "scenario {scenario}  outcomes by rank  {verdict}")?;	sha256:cb875fa1b3c7cde3ddc14a7d15f1e57dda9df3926b828b99a54d0b8be28a2c09
+takt.work.Step|- name: takt.work.Step|crates/takt/src/run.rs|14	/// A kind records a choice when every action that may produce it declares `effect: read` and && /// every other kind only a validator writes.	sha256:dd34c4b39cc00ef75f67814e3ed7cf3553e2d0fc9e0d7c79ea96164ba9deee15
+takt.work.Step|- name: takt.work.Step|crates/takt/src/run.rs|15	// An action whose evidence records a choice ([`Shape`]): takt writes that record, && continue;	sha256:be6ede669eb7fb4c0b9dc3c544f8d9beb5c5f31859ad5fce4fa2123015f5a21f
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/run.rs|1	/// The producer of a record takt writes from a judgement step that records a choice: the && pub const CHOICE_PRODUCER: &str = "takt.choice";	sha256:25d94cf4d7465a261ace1d7c13da43e268efe2587688b317e0ebe3ad5166dadd

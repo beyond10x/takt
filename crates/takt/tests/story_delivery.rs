@@ -1,7 +1,7 @@
 //! The story-delivery protocol as data: `protocols/story-delivery/1.yaml` is loaded, validated
-//! and compiled by Canon, a case is opened on it over a scratch git tree, and the five records
+//! and compiled by Canon, a case is opened on it over a scratch git tree, and the six records
 //! the delivery of a story produces are added one at a time, each evaluated: one more claim true
-//! after each, `repository.merge` approval-required before the last, `accepted` legitimate only
+//! after each, `pr.open` admissible only once the change is handed over, `repository.merge` approval-required before the last, `accepted` legitimate only
 //! after it. Every record is about `implementation` at its revision, as the kernel binds claims.
 
 use std::fs;
@@ -21,9 +21,11 @@ const PROTOCOL: &str = concat!(
 /// The records a delivery produces, in order, each with the claim it establishes. The merge is
 /// its own kind: Canon leaves a match unknown when records of one kind disagree, so a `merged`
 /// beside an `open` record of `pull_request` at one revision would decide neither claim.
-const LADDER: [(&str, &str, &str); 5] = [
+/// The hand-over has no result: takt records the harness's choice, not an outcome.
+const LADDER: [(&str, &str, &str); 6] = [
     ("test_result", "pass", "tests.pass"),
     ("gate_result", "pass", "gate.green"),
+    ("handover", "", "change.handed_over"),
     ("pull_request", "open", "pr.opened"),
     ("ci_result", "pass", "ci.green"),
     ("merge_observation", "merged", "pr.merged"),
@@ -84,11 +86,12 @@ fn open(tree: &Path, id: &str) -> CaseDir {
     CaseDir::open(tree, protocol, id, "deliver the story", &[]).expect("the case opens")
 }
 
+/// A record of `kind` about `implementation` at `revision`; an empty `result` writes none.
 fn record(n: usize, kind: &str, result: &str, revision: &str) -> Record {
     Record::new(
         format!("e{n}"),
         kind,
-        Some(result.to_owned()),
+        (!result.is_empty()).then(|| result.to_owned()),
         "implementation",
         revision,
         "story-delivery-test",
@@ -141,17 +144,17 @@ fn each_record_earns_one_claim_and_accepted_needs_the_merge() {
         let merge = status(&decision.actions, "repository.merge");
         let accepted = status(&decision.outcomes, "accepted");
         match seq {
-            1 => {
+            1 | 2 => {
                 assert_eq!(pr_open, "blocked", "{}", decision.json);
                 assert_eq!(merge, "blocked", "{}", decision.json);
                 assert_eq!(accepted, "blocked", "{}", decision.json);
             }
-            2 | 3 => {
+            3 | 4 => {
                 assert_eq!(pr_open, "admissible", "{}", decision.json);
                 assert_eq!(merge, "blocked", "{}", decision.json);
                 assert_eq!(accepted, "blocked", "{}", decision.json);
             }
-            4 => {
+            5 => {
                 assert_eq!(merge, "approval-required", "{}", decision.json);
                 assert_eq!(accepted, "blocked", "{}", decision.json);
             }
@@ -359,6 +362,7 @@ mod adv {
         for (n, (kind, result)) in [
             ("test_result", "pass"),
             ("gate_result", "pass"),
+            ("handover", ""),
             ("ci_result", "pass"),
         ]
         .iter()
@@ -418,7 +422,7 @@ mod adv {
                 .expect("the record is written");
         }
         let decision = case.evaluate(1).expect("evaluates");
-        let expected: BTreeMap<String, String> = [
+        let mut expected: BTreeMap<String, String> = [
             "ci.green",
             "gate.green",
             "pr.merged",
@@ -428,6 +432,8 @@ mod adv {
         .into_iter()
         .map(|claim| (claim.to_owned(), "false".to_owned()))
         .collect();
+        // A hand-over has no result to fail with: with no `handover` record the claim is unknown.
+        expected.insert("change.handed_over".to_owned(), "unknown".to_owned());
         assert_eq!(decision.claims, expected, "{}", decision.json);
         assert_eq!(
             status(&decision.actions, "pr.open"),

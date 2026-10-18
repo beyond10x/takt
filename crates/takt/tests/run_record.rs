@@ -185,7 +185,8 @@ impl Harness for NoHarness {
     }
 }
 
-/// A harness that requests the merge gate as soon as it is offered, changing nothing.
+/// A harness that requests the merge gate as soon as it is offered, and otherwise hands the
+/// change over (`change.handover`), changing nothing either way.
 struct Requester;
 
 impl Harness for Requester {
@@ -198,6 +199,14 @@ impl Harness for Requester {
             return Ok(StepReport {
                 action: "repository.merge".to_owned(),
                 summary: "the story holds; merge it".to_owned(),
+                tokens: Some(7),
+            });
+        }
+        // The work committed is complete: hand it over, changing nothing.
+        if context.offered.contains(&"change.handover".to_owned()) {
+            return Ok(StepReport {
+                action: "change.handover".to_owned(),
+                summary: "the story holds; hand it over".to_owned(),
                 tokens: Some(7),
             });
         }
@@ -587,13 +596,16 @@ fn with_a_forge_the_store_is_written_after_the_merge_and_nothing_rides_on_the_gr
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), worked, "{text}");
     let gate = events(&dir);
     assert_eq!(of(&gate, "store_evidence").len(), 0);
-    let harness = of(&gate, "step")
+    // The one harness step hands the change over; once only the grant stands between the case
+    // and its outcome the run stops with no further harness step (story:no-model-step-for-approval).
+    let harness: Vec<&serde_json::Value> = of(&gate, "step")
         .into_iter()
-        .find(|line| line["by"] == "harness")
-        .cloned()
-        .expect("the harness step");
-    assert_eq!(harness["action"], "repository.merge");
-    assert_eq!(harness["tokens"], 7);
+        .filter(|line| line["by"] == "harness")
+        .collect();
+    assert_eq!(harness.len(), 1, "{gate:#?}");
+    assert_eq!(harness[0]["action"], "change.handover");
+    assert_eq!(harness[0]["tokens"], 7);
+    assert_eq!(of(&gate, "stop")[0]["tokens"], 7, "{gate:#?}");
 
     approve(&repo, &store, &id, "repository.merge", "operator").expect("the approval is given");
     let approved = git(&repo, &["rev-parse", "HEAD"]);

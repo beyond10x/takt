@@ -175,6 +175,16 @@ fn worked_case(repo: &Path) -> String {
     run.case
         .add_evidence(&record(2, "gate_result", &worked))
         .expect("written");
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("handover-{}", &worked[..8]),
+            "handover",
+            None,
+            "implementation",
+            &worked,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("written");
     id
 }
 

@@ -137,6 +137,12 @@ impl Harness for Scripted {
         "scripted"
     }
 
+    /// The script that answers `repository.inspect` keeps state: only such a harness is offered
+    /// an action that only reads (story:no-inspect-for-stateless-harness).
+    fn keeps_state(&self) -> bool {
+        matches!(self.first, First::FixAsInspect)
+    }
+
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
         std::thread::sleep(self.pause);
         let action = if context.decision.holds("tests.pass") {
