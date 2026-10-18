@@ -153,8 +153,9 @@ fn declare(repo: &Path, text: &str) {
 /// HTTPS-only transport takt sets for the route's own git), or does nothing when `state/no-fetch` exists, sleeps 45 s
 /// and fails when `state/hang-fetch` exists, standing in for a fetch waiting on a prompt, and
 /// fails at once with git's access-rights message when `state/refuse-fetch` exists; `b10x-gates bot
-/// -- push [options] <remote> <spec>` appends its `GIT_ALLOW_PROTOCOL` to `state/push-env`, runs
-/// a real `git push` of the spec into `remote` with every
+/// -- push [options] <remote> <spec>` appends its spec and its `GIT_ALLOW_PROTOCOL` to
+/// `state/push-env`, runs a real `git push` of the spec into `remote` (again standing in for the
+/// HTTPS server, so without the HTTPS-only transport) with every
 /// option takt gave (`--porcelain`, `--force-with-lease`), its report on stdout as git prints it,
 /// keeps the commit pushed per branch (`pushed-<branch, / as _>`), or exits 1 when
 /// `state/refuse-push` exists; `scan-text` passes;
@@ -207,12 +208,12 @@ case "$1" in
         if [ -e "$state/no-fetch" ]; then exit 0; fi
         env -u GIT_ALLOW_PROTOCOL git fetch -q "$remote" "$spec"; exit $? ;;
       push)
-        printf 'GIT_ALLOW_PROTOCOL=%s\n' "${{GIT_ALLOW_PROTOCOL-unset}}" >> "$state/push-env"
+        printf '%s GIT_ALLOW_PROTOCOL=%s\n' "$spec" "${{GIT_ALLOW_PROTOCOL-unset}}" >> "$state/push-env"
         if [ -e "$state/refuse-push" ]; then echo "refused by the double" >&2; exit 1; fi
         branch="${{spec#*:refs/heads/}}"; revision="${{spec%%:*}}"
         if [ "$branch" = "$spec" ]; then revision="refs/heads/$spec"; fi
         git rev-parse "$revision" > "$state/pushed-$(printf '%s' "$branch" | tr / _)" || exit 1
-        git push $options "$remote" "$spec" 2>/dev/null; exit $? ;;
+        env -u GIT_ALLOW_PROTOCOL git push $options "$remote" "$spec" 2>/dev/null; exit $? ;;
     esac ;;
   scan-text) exit 0 ;;
   api)
@@ -633,8 +634,8 @@ const FETCH_TRIALS: &str = "bot -- fetch https://github.com/owner/repo.git +refs
 /// user's SSH agent loaded and a prompt allowed in takt's own environment, the trial fetch
 /// names the remote's HTTPS URL, and its child gets no agent socket, no git prompt, SSH in
 /// batch mode, standard input from `/dev/null`, an empty `GIT_ASKPASS` and HTTPS as the one
-/// transport git may use; the run proceeds to cut `trial/0`, and the push, which is not the
-/// fetch, is not held to HTTPS.
+/// transport git may use; the run proceeds to cut `trial/0`. The push of the case's branch by
+/// `pr.open` is held to HTTPS as the fetch is; the push that creates `trial/0` is not, yet.
 #[test]
 fn the_trial_fetch_goes_over_https_with_no_user_credential_and_no_prompt() {
     let world = world("https-fetch");
@@ -651,11 +652,22 @@ fn the_trial_fetch_goes_over_https_with_no_user_credential_and_no_prompt() {
         ],
     );
     let pushed = fs::read_to_string(world.state.join("push-env")).expect("a push ran");
+    let (case, trial): (Vec<&str>, Vec<&str>) = pushed
+        .lines()
+        .partition(|line| line.starts_with("takt/") || line.contains(":refs/heads/takt/"));
     assert!(
-        pushed
-            .lines()
-            .all(|line| line == "GIT_ALLOW_PROTOCOL=unset"),
-        "a push held to a transport: {pushed}"
+        !case.is_empty()
+            && case
+                .iter()
+                .all(|line| line.ends_with(" GIT_ALLOW_PROTOCOL=https")),
+        "the case's branch pushed over another transport than HTTPS: {pushed}"
+    );
+    assert!(
+        !trial.is_empty()
+            && trial
+                .iter()
+                .all(|line| line.ends_with(" GIT_ALLOW_PROTOCOL=unset")),
+        "the trial push: {pushed}"
     );
     let seen = fs::read_to_string(world.state.join("fetch-env")).expect("the fetch ran");
     assert_eq!(

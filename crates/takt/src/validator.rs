@@ -706,8 +706,10 @@ fn above(revision: &str, head: &str) -> String {
 /// is pushed. A number the case directory carries is trusted only once the forge reports the pull
 /// request's head as the case's branch at the head pushed, else no record is written. A case
 /// with no base is refused before anything is pushed. The title is the intent's first line,
-/// the body the intent and the claims that hold; the forge passes both through `scan-text`
-/// before they leave the machine.
+/// the body the intent and the claims that hold. Before every push the forge scans what it
+/// would publish ([`Forge::scan_outgoing`]): the messages and the diff of the commits from the
+/// base to the head pushed and, when the pull request is opened, its title and body; a refused
+/// scan pushes nothing, opens nothing and writes no record.
 pub struct PrOpen {
     /// The forge the push and the pull request go through.
     pub forge: Rc<dyn Forge>,
@@ -830,7 +832,8 @@ impl Validator for PrOpen {
     }
 
     /// The case's `branch.yaml`, and what the bot route keeps of the request it sent, the text it
-    /// scanned as published and the response it read.
+    /// scanned as published, the commit messages and diff it scanned before the push and the
+    /// response it read.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
         vec![
@@ -838,6 +841,8 @@ impl Validator for PrOpen {
             artifacts.join(BotRoute::REQUEST),
             artifacts.join(BotRoute::RESPONSE),
             artifacts.join(BotRoute::PUBLISHED),
+            artifacts.join(BotRoute::MESSAGES),
+            artifacts.join(BotRoute::DIFF),
         ]
     }
 
@@ -914,6 +919,32 @@ impl Validator for PrOpen {
                 ));
             }
         }
+        // Everything the push and the pull request would publish is scanned before either
+        // leaves: the messages and the diff of `base..head`, and the title and body of a pull
+        // request about to be opened. A refusal pushes nothing and records nothing.
+        let (base, request) = match &next {
+            Next::Open(request) => (request.base.clone(), Some(request)),
+            Next::Read(number) => (
+                branch.base.clone().ok_or_else(|| {
+                    anyhow!(
+                        "the case has pull request #{number} but no base branch to count the commits it would push from; nothing pushed"
+                    )
+                })?,
+                None,
+            ),
+        };
+        self.forge
+            .scan_outgoing(
+                tree,
+                &dir.join("artifacts"),
+                &crate::forge::Outgoing {
+                    branch: &name,
+                    base: &base,
+                    head: &head,
+                    request,
+                },
+            )
+            .with_context(|| format!("scan {name} before the push through the forge {forge}"))?;
         self.forge
             .push_revision(tree, &name, &head)
             .with_context(|| format!("push {name} through the forge {forge}"))?;

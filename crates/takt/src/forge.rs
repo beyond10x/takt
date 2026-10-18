@@ -1,8 +1,9 @@
 //! The `Forge` seam: the repository host behind a trait, one adapter that goes through the
 //! organization's bot route, and an in-memory double for the tests. The bot credential never
-//! enters takt: `b10x-gates bot` pushes under the bot, `b10x-gates api` writes through JSON
-//! files and never a token in argv, the reads go through `gh`, and a pull-request body passes
-//! `b10x-gates scan-text` before it leaves the machine. A validator turns what the forge
+//! enters takt: `b10x-gates bot` pushes under the bot, over HTTPS only, `b10x-gates api` writes
+//! through JSON files and never a token in argv, the reads go through `gh`, and the commits a
+//! push publishes, their messages and diff, and a pull request's title and body pass
+//! `b10x-gates scan-text` before they leave the machine. A validator turns what the forge
 //! reports into evidence; the forge itself writes no record.
 //!
 //! Every child process takt starts, the forge's and the others' (the test command, the
@@ -266,11 +267,34 @@ pub struct Origin {
     pub repository: String,
 }
 
+/// What `pr.open` is about to publish: the commit `head` pushed as `branch`, so every commit of
+/// `base..head` with its message and its diff, and, when the pull request is opened with the
+/// push, its title and body.
+#[derive(Debug, Clone, Copy)]
+pub struct Outgoing<'a> {
+    /// The branch pushed.
+    pub branch: &'a str,
+    /// The branch the commits are counted from: what is already there.
+    pub base: &'a str,
+    /// The commit pushed.
+    pub head: &'a str,
+    /// The pull request opened after the push; none when it is open already.
+    pub request: Option<&'a PullRequest>,
+}
+
 /// The repository host: pushes a branch, opens its pull request, reports the pull request's
 /// state and head and the checks on its head, and merges it.
 pub trait Forge {
     /// The adapter's name.
     fn name(&self) -> &str;
+    /// Scans everything `outgoing` would publish, before any of it leaves the machine; `dir` is
+    /// where the adapter keeps the text it scanned. A refusal is an error, and the caller pushes
+    /// nothing. The default scans nothing: it is for an adapter that publishes nothing off the
+    /// machine, such as the in-memory double; an adapter that pushes overrides it.
+    fn scan_outgoing(&self, tree: &Path, dir: &Path, outgoing: &Outgoing<'_>) -> Result<()> {
+        let _ = (tree, dir, outgoing);
+        Ok(())
+    }
     /// Pushes `branch` of `tree` to the repository.
     fn push(&self, tree: &Path, branch: &str) -> Result<()>;
     /// Pushes the commit `revision` of `tree` to the repository as `branch`: [`Self::push`]
@@ -288,8 +312,8 @@ pub trait Forge {
         )
     }
     /// Opens the pull request `request` describes, for a head branch already pushed (`pr.open`
-    /// pushes it first); `dir` is where the adapter keeps what it sent and what came back, when
-    /// it keeps anything. The pull request's number.
+    /// scans it, [`Self::scan_outgoing`], and pushes it first); `dir` is where the adapter keeps
+    /// what it sent and what came back, when it keeps anything. The pull request's number.
     fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64>;
     /// The state and the head of pull request `number`.
     fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView>;
@@ -326,6 +350,12 @@ impl Exit {
 pub trait Runner {
     /// Runs `argv` in `tree`.
     fn run(&self, tree: &Path, argv: &[String]) -> Result<Exit>;
+    /// Runs `argv` in `tree` with `env` set for this line alone. A runner that starts no
+    /// process, a test's, runs it as [`Self::run`].
+    fn run_env(&self, tree: &Path, argv: &[String], env: &[(&str, &str)]) -> Result<Exit> {
+        let _ = env;
+        self.run(tree, argv)
+    }
 }
 
 /// What a child process takt starts is held to: killed, with what it started, once it has run
@@ -735,6 +765,10 @@ impl Runner for Process {
     fn run(&self, tree: &Path, argv: &[String]) -> Result<Exit> {
         self.run_with(tree, argv, &[])
     }
+
+    fn run_env(&self, tree: &Path, argv: &[String], env: &[(&str, &str)]) -> Result<Exit> {
+        self.run_with(tree, argv, env)
+    }
 }
 
 impl Process {
@@ -761,11 +795,12 @@ impl Process {
     }
 }
 
-/// The adapter over the organization's bot route: `b10x-gates bot -- push` pushes the branch,
-/// `b10x-gates scan-text` checks the pull request before it leaves the machine, `b10x-gates
-/// api` opens it and merges it with JSON files, and read-only `gh pr view` and `gh pr checks`
-/// report its state and checks. The scan and every API write name the repository and, when one
-/// is known, the policy file as `--policy`; `b10x-gates` reads its own environment otherwise.
+/// The adapter over the organization's bot route: `b10x-gates scan-text` checks what a push and
+/// a pull request would publish before any of it leaves the machine, `b10x-gates bot -- push`
+/// pushes the branch over HTTPS only, `b10x-gates api` opens the pull request and merges it with
+/// JSON files, and read-only `gh pr view` and `gh pr checks` report its state and checks. The
+/// scan and every API write name the repository and, when one is known, the policy file as
+/// `--policy`; `b10x-gates` reads its own environment otherwise.
 pub struct BotRoute {
     /// `<owner>/<repo>`, from the `origin` URL.
     pub repository: String,
@@ -773,6 +808,9 @@ pub struct BotRoute {
     pub policy: Option<PathBuf>,
     /// The remote the branch is pushed to.
     pub remote: String,
+    /// The most bytes of commit messages and diff one scan before a push is given; more is
+    /// refused, never cut ([`Self::SCAN_LIMIT`] by default).
+    pub scan_limit: usize,
     runner: Box<dyn Runner>,
 }
 
@@ -782,6 +820,7 @@ impl fmt::Debug for BotRoute {
             .field("repository", &self.repository)
             .field("policy", &self.policy)
             .field("remote", &self.remote)
+            .field("scan_limit", &self.scan_limit)
             .finish_non_exhaustive()
     }
 }
@@ -798,6 +837,17 @@ impl BotRoute {
     pub const MERGE_REQUEST: &str = "pull-request.merge.request.json";
     /// The file under the directory `merge` is given that holds what came back.
     pub const MERGE_RESPONSE: &str = "pull-request.merge.response.json";
+    /// The file under the directory `scan_outgoing` is given that holds the messages of the
+    /// commits a push would publish, `git log --format=%B <base>..<head>`.
+    pub const MESSAGES: &str = "push.messages.txt";
+    /// The file under the directory `scan_outgoing` is given that holds the diff of each commit
+    /// a push would publish, as git prints it with no external diff and no text conversion.
+    pub const DIFF: &str = "push.diff.txt";
+    /// The most bytes of messages and diff one scan before a push is given by default.
+    pub const SCAN_LIMIT: usize = 32 << 20;
+    /// What a push's child is started with beyond every forge child's: git may push over HTTPS
+    /// alone, whatever URL the remote or the repository's configuration names.
+    pub const PUSH_ENV: [(&str, &str); 1] = [("GIT_ALLOW_PROTOCOL", "https")];
 
     /// Over `repository` with `policy`, running every line through `runner`.
     #[must_use]
@@ -810,6 +860,7 @@ impl BotRoute {
             repository: repository.into(),
             policy,
             remote: "origin".to_owned(),
+            scan_limit: Self::SCAN_LIMIT,
             runner,
         }
     }
@@ -1003,6 +1054,103 @@ impl BotRoute {
         let exit = self.runner.run(tree, argv)?;
         reading_of(argv, &exit)
     }
+
+    /// Runs the push line `argv` in `tree` over HTTPS alone ([`Self::PUSH_ENV`]). A push git
+    /// refuses because the remote, or a URL rewrite in the repository's configuration, would
+    /// send it over another transport is refused naming the remote, the URL it is configured
+    /// with and that transport.
+    fn push_line(&self, tree: &Path, argv: &[String]) -> Result<()> {
+        let exit = self.runner.run_env(tree, argv, &Self::PUSH_ENV)?;
+        if exit.success() {
+            return Ok(());
+        }
+        if let Some(transport) = refused_transport(&exit.stderr) {
+            let configured = |key: &str| {
+                crate::git::run(
+                    tree,
+                    &["config", "--get", &format!("remote.{}.{key}", self.remote)],
+                )
+                .ok()
+                .filter(|url| !url.is_empty())
+            };
+            let url = configured("pushurl")
+                .or_else(|| configured("url"))
+                .map_or_else(
+                    || "no URL takt could read".to_owned(),
+                    |url| without_userinfo(&url),
+                );
+            bail!(
+                "the remote {} ({url}) would push over {transport}, not https: the bot route pushes over HTTPS only, so nothing was pushed",
+                self.remote
+            );
+        }
+        Err(Failed {
+            line: argv.join(" "),
+            code: exit.code,
+            stderr: exit.stderr.trim().to_owned(),
+        }
+        .into())
+    }
+}
+
+/// The transport git names when `GIT_ALLOW_PROTOCOL` refused it: `transport 'ssh' not allowed`.
+fn refused_transport(stderr: &str) -> Option<&str> {
+    stderr.lines().find_map(|line| {
+        let (_, rest) = line.split_once("transport '")?;
+        let (transport, rest) = rest.split_once('\'')?;
+        rest.trim_start()
+            .starts_with("not allowed")
+            .then_some(transport)
+    })
+}
+
+/// Writes the pull request `request` into `dir`: the JSON the API write sends as
+/// [`BotRoute::REQUEST`], and the title and body as they are published, decoded, as
+/// [`BotRoute::PUBLISHED`]. Both paths.
+fn write_request(dir: &Path, request: &PullRequest) -> Result<(PathBuf, PathBuf)> {
+    let input = dir.join(BotRoute::REQUEST);
+    let document = serde_json::json!({
+        "title": request.title,
+        "head": request.branch,
+        "base": request.base,
+        "body": request.body,
+    });
+    let bytes = serde_json::to_vec_pretty(&document).context("serialize the pull request")?;
+    std::fs::write(&input, bytes).with_context(|| format!("write {}", input.display()))?;
+    let published = dir.join(BotRoute::PUBLISHED);
+    std::fs::write(&published, format!("{}\n\n{}", request.title, request.body))
+        .with_context(|| format!("write {}", published.display()))?;
+    Ok((input, published))
+}
+
+/// The options of every `git log` that reads what a push would publish: no colour, messages in
+/// UTF-8 whatever the repository's configuration says, the range after `--end-of-options`.
+const LOG_OPTIONS: [&str; 2] = ["--no-color", "--encoding=UTF-8"];
+
+/// The messages of the commits `base..head`, `git log --format=%B`, and the diff of each of
+/// them as git prints it: no external diff, no text conversion (a binary file is git's one
+/// line), a merge as its dense combined diff. Every commit's own diff, not the net diff of the
+/// range: the push publishes every commit, and a line one commit adds and a later one removes is
+/// in none of the net diff.
+fn outgoing_text(tree: &Path, base: &str, head: &str) -> Result<(String, String)> {
+    let range = format!("{base}..{head}");
+    let mut messages = vec!["log", "--format=%B"];
+    messages.extend(LOG_OPTIONS);
+    messages.extend(["--end-of-options", &range]);
+    let mut diff = vec![
+        "log",
+        "--patch",
+        "--cc",
+        "--format=commit %H",
+        "--no-ext-diff",
+        "--no-textconv",
+    ];
+    diff.extend(LOG_OPTIONS);
+    diff.extend(["--end-of-options", &range]);
+    Ok((
+        crate::git::run(tree, &messages)?,
+        crate::git::run(tree, &diff)?,
+    ))
 }
 
 /// `path` with nothing at it: a response file left from before is removed, so what is read
@@ -1035,8 +1183,7 @@ impl Forge for BotRoute {
     }
 
     fn push(&self, tree: &Path, branch: &str) -> Result<()> {
-        self.succeed(tree, &self.push_argv(branch))?;
-        Ok(())
+        self.push_line(tree, &self.push_argv(branch))
     }
 
     fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> Result<()> {
@@ -1044,29 +1191,64 @@ impl Forge for BotRoute {
         if at == revision {
             return self.push(tree, branch);
         }
-        self.succeed(tree, &self.push_revision_argv(branch, revision))?;
+        self.push_line(tree, &self.push_revision_argv(branch, revision))
+    }
+
+    /// One `scan-text` line over the pull request, when one is opened (the JSON request and the
+    /// title and body as published), the messages of `base..head` ([`Self::MESSAGES`]) and the
+    /// diff of each of its commits ([`Self::DIFF`]), all written under `dir`. Messages and diff
+    /// over [`Self::scan_limit`] bytes are refused before anything is written or scanned.
+    fn scan_outgoing(&self, tree: &Path, dir: &Path, outgoing: &Outgoing<'_>) -> Result<()> {
+        let Outgoing {
+            branch,
+            base,
+            head,
+            request,
+        } = *outgoing;
+        let (messages, diff) = outgoing_text(tree, base, head)?;
+        let size = messages.len() + diff.len();
+        if size > self.scan_limit {
+            bail!(
+                "the commits {base}..{} of {branch} come to {size} bytes of messages and diff, over the {} bytes one scan is given: refused, not cut; nothing was pushed",
+                &head[..head.len().min(12)],
+                self.scan_limit
+            );
+        }
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        let mut paths = Vec::new();
+        if let Some(request) = request {
+            let (input, published) = write_request(dir, request)?;
+            paths.extend([input, published]);
+        }
+        for (name, text) in [(Self::MESSAGES, messages), (Self::DIFF, diff)] {
+            let path = dir.join(name);
+            std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
+            paths.push(path);
+        }
+        let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+        self.succeed(tree, &self.scan_paths_argv(&paths))
+            .with_context(|| {
+                format!(
+                    "what pushing {branch} would publish did not pass scan-text: the commits {base}..{} with their messages and diff{}; nothing was pushed and no pull request opened",
+                    &head[..head.len().min(12)],
+                    if request.is_some() {
+                        ", the pull request's title and body"
+                    } else {
+                        ""
+                    }
+                )
+            })?;
         Ok(())
     }
 
     fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64> {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let input = dir.join(Self::REQUEST);
         let output = fresh(dir.join(Self::RESPONSE))?;
-        let document = serde_json::json!({
-            "title": request.title,
-            "head": request.branch,
-            "base": request.base,
-            "body": request.body,
-        });
-        let bytes = serde_json::to_vec_pretty(&document).context("serialize the pull request")?;
-        std::fs::write(&input, bytes).with_context(|| format!("write {}", input.display()))?;
-        let published = dir.join(Self::PUBLISHED);
-        std::fs::write(&published, format!("{}\n\n{}", request.title, request.body))
-            .with_context(|| format!("write {}", published.display()))?;
+        let (input, published) = write_request(dir, request)?;
         self.succeed(tree, &self.scan_request_argv(&input, &published))
             .with_context(|| {
                 format!(
-                    "the pull request for {branch} did not pass scan-text over {} and was not opened; its title and body stayed on this machine, but the branch {branch} was pushed before the scan",
+                    "the pull request for {branch} did not pass scan-text over {} and was not opened; its title and body stayed on this machine, but the branch {branch} was pushed before this scan",
                     published.display(),
                     branch = request.branch
                 )
