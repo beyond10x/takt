@@ -1,4 +1,4 @@
-<svg class="takt-journey" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 1327" role="img" aria-labelledby="takt-journey-title" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="11">
+<svg class="takt-journey" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 1447" role="img" aria-labelledby="takt-journey-title" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="11">
 <title id="takt-journey-title">Every recorded scenario 1 run, one lane each, in one vocabulary of operations</title>
 <style>.takt-journey{color:#26332f}.takt-journey .grid{stroke:#8a9a95;stroke-opacity:.22}.takt-journey .k-model_call{fill:#17684a;stroke:#17684a}.takt-journey .k-read{fill:#8a9a95;stroke:#8a9a95}.takt-journey .k-edit{fill:#2f6fb0;stroke:#2f6fb0}.takt-journey .k-test{fill:#7b5cc4;stroke:#7b5cc4}.takt-journey .k-gate{fill:#a07a1a;stroke:#a07a1a}.takt-journey .k-push{fill:#e07b39;stroke:#e07b39}.takt-journey .k-pr_open{fill:#b8430f;stroke:#b8430f}.takt-journey .k-ci_wait{fill:#d9a42b;stroke:#d9a42b}.takt-journey .k-ci_pass{fill:#23877a;stroke:#23877a}.takt-journey .k-approval_wait{fill:#c43b8f;stroke:#c43b8f}.takt-journey .k-refusal{fill:#c0392b;stroke:#c0392b}.takt-journey .k-no_progress{fill:#7d4a3a;stroke:#7d4a3a}.takt-journey .k-resume{fill:#26332f;stroke:#26332f}.takt-journey .k-other{fill:#b5c0bc;stroke:#b5c0bc}.takt-journey .noop{fill-opacity:0;stroke-width:1.3}.takt-journey .placed{fill-opacity:.35;stroke-dasharray:2 1.5;stroke-width:1}.takt-journey .call{stroke:currentColor;stroke-width:1.4}@media (prefers-color-scheme: dark){.takt-journey{color:#d5dfdb}.takt-journey .k-model_call{fill:#6fcf9f;stroke:#6fcf9f}.takt-journey .k-read{fill:#8a9a95;stroke:#8a9a95}.takt-journey .k-edit{fill:#6aa7e8;stroke:#6aa7e8}.takt-journey .k-test{fill:#a98ee6;stroke:#a98ee6}.takt-journey .k-gate{fill:#d4ad4a;stroke:#d4ad4a}.takt-journey .k-push{fill:#f0a06a;stroke:#f0a06a}.takt-journey .k-pr_open{fill:#e87a46;stroke:#e87a46}.takt-journey .k-ci_wait{fill:#e8c25e;stroke:#e8c25e}.takt-journey .k-ci_pass{fill:#53c2b2;stroke:#53c2b2}.takt-journey .k-approval_wait{fill:#e57ab9;stroke:#e57ab9}.takt-journey .k-refusal{fill:#ef6f61;stroke:#ef6f61}.takt-journey .k-no_progress{fill:#c08a77;stroke:#c08a77}.takt-journey .k-resume{fill:#d5dfdb;stroke:#d5dfdb}.takt-journey .k-other{fill:#5d6f6a;stroke:#5d6f6a}}@media print{.takt-journey{color:#26332f}.takt-journey .grid{stroke:#8a9a95;stroke-opacity:.22}.takt-journey .k-model_call{fill:#17684a;stroke:#17684a}.takt-journey .k-read{fill:#8a9a95;stroke:#8a9a95}.takt-journey .k-edit{fill:#2f6fb0;stroke:#2f6fb0}.takt-journey .k-test{fill:#7b5cc4;stroke:#7b5cc4}.takt-journey .k-gate{fill:#a07a1a;stroke:#a07a1a}.takt-journey .k-push{fill:#e07b39;stroke:#e07b39}.takt-journey .k-pr_open{fill:#b8430f;stroke:#b8430f}.takt-journey .k-ci_wait{fill:#d9a42b;stroke:#d9a42b}.takt-journey .k-ci_pass{fill:#23877a;stroke:#23877a}.takt-journey .k-approval_wait{fill:#c43b8f;stroke:#c43b8f}.takt-journey .k-refusal{fill:#c0392b;stroke:#c0392b}.takt-journey .k-no_progress{fill:#7d4a3a;stroke:#7d4a3a}.takt-journey .k-resume{fill:#26332f;stroke:#26332f}.takt-journey .k-other{fill:#b5c0bc;stroke:#b5c0bc}.takt-journey .noop{fill-opacity:0;stroke-width:1.3}.takt-journey .placed{fill-opacity:.35;stroke-dasharray:2 1.5;stroke-width:1}.takt-journey .call{stroke:currentColor;stroke-width:1.4}}</style>
 <text x="20" y="24" font-size="15" font-weight="600" fill="currentColor">Scenario 1: every recorded run, one lane each</text>
@@ -612,642 +612,813 @@
 <text x="579.1" y="640" font-size="8.5" fill="currentColor">2nd CI</text>
 <rect x="585.2" y="641.5" width="25.5" height="12" rx="1.5" class="k-model_call call"><title>T-12 op 18: model_call (repository.merge), approval, 132.5-142.9 s</title></rect>
 <rect x="607.0" y="641.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-12 op 19: approval_wait, approval, 142.0-142.0 s</title></rect>
-<text x="20" y="678" font-size="12" font-weight="600" fill="currentColor">Claude Code, isolated like takt&#x27;s harness</text>
-<line x1="20" x2="1070" y1="682" y2="682" class="grid"/>
-<text x="40" y="698.5" fill="currentColor">I-modefail-1</text>
-<line x1="260.0" x2="260.0" y1="686" y2="703" class="grid"/>
-<line x1="333.6" x2="333.6" y1="686" y2="703" class="grid"/>
-<line x1="407.3" x2="407.3" y1="686" y2="703" class="grid"/>
-<line x1="480.9" x2="480.9" y1="686" y2="703" class="grid"/>
-<line x1="554.5" x2="554.5" y1="686" y2="703" class="grid"/>
-<line x1="628.2" x2="628.2" y1="686" y2="703" class="grid"/>
-<line x1="701.8" x2="701.8" y1="686" y2="703" class="grid"/>
-<line x1="775.5" x2="775.5" y1="686" y2="703" class="grid"/>
-<line x1="849.1" x2="849.1" y1="686" y2="703" class="grid"/>
-<line x1="922.7" x2="922.7" y1="686" y2="703" class="grid"/>
-<line x1="996.4" x2="996.4" y1="686" y2="703" class="grid"/>
-<line x1="1070.0" x2="1070.0" y1="686" y2="703" class="grid"/>
-<rect x="260.0" y="688.5" width="9.8" height="12" rx="1.5" class="k-refusal"><title>I-modefail-1 op 1: refusal, refused, 0.0-4.0 s</title></rect>
-<text x="40" y="719.5" fill="currentColor">I-modefail-2</text>
-<line x1="260.0" x2="260.0" y1="707" y2="724" class="grid"/>
-<line x1="333.6" x2="333.6" y1="707" y2="724" class="grid"/>
-<line x1="407.3" x2="407.3" y1="707" y2="724" class="grid"/>
-<line x1="480.9" x2="480.9" y1="707" y2="724" class="grid"/>
-<line x1="554.5" x2="554.5" y1="707" y2="724" class="grid"/>
-<line x1="628.2" x2="628.2" y1="707" y2="724" class="grid"/>
-<line x1="701.8" x2="701.8" y1="707" y2="724" class="grid"/>
-<line x1="775.5" x2="775.5" y1="707" y2="724" class="grid"/>
-<line x1="849.1" x2="849.1" y1="707" y2="724" class="grid"/>
-<line x1="922.7" x2="922.7" y1="707" y2="724" class="grid"/>
-<line x1="996.4" x2="996.4" y1="707" y2="724" class="grid"/>
-<line x1="1070.0" x2="1070.0" y1="707" y2="724" class="grid"/>
-<rect x="260.0" y="709.5" width="9.8" height="12" rx="1.5" class="k-refusal"><title>I-modefail-2 op 1: refusal, refused, 0.0-4.0 s</title></rect>
-<text x="40" y="740.5" fill="currentColor">I-modefail-3</text>
-<line x1="260.0" x2="260.0" y1="728" y2="745" class="grid"/>
-<line x1="333.6" x2="333.6" y1="728" y2="745" class="grid"/>
-<line x1="407.3" x2="407.3" y1="728" y2="745" class="grid"/>
-<line x1="480.9" x2="480.9" y1="728" y2="745" class="grid"/>
-<line x1="554.5" x2="554.5" y1="728" y2="745" class="grid"/>
-<line x1="628.2" x2="628.2" y1="728" y2="745" class="grid"/>
-<line x1="701.8" x2="701.8" y1="728" y2="745" class="grid"/>
-<line x1="775.5" x2="775.5" y1="728" y2="745" class="grid"/>
-<line x1="849.1" x2="849.1" y1="728" y2="745" class="grid"/>
-<line x1="922.7" x2="922.7" y1="728" y2="745" class="grid"/>
-<line x1="996.4" x2="996.4" y1="728" y2="745" class="grid"/>
-<line x1="1070.0" x2="1070.0" y1="728" y2="745" class="grid"/>
-<rect x="260.0" y="730.5" width="9.8" height="12" rx="1.5" class="k-refusal"><title>I-modefail-3 op 1: refusal, refused, 0.0-4.0 s</title></rect>
-<text x="40" y="761.5" fill="currentColor">I-1 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
-<rect x="260.0" y="751.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 1: model_call</title></rect>
-<rect x="276.0" y="751.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 2: model_call</title></rect>
-<rect x="292.0" y="751.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 3: model_call</title></rect>
-<rect x="308.0" y="751.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 4: model_call</title></rect>
-<rect x="324.0" y="751.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 5: model_call</title></rect>
-<rect x="340.0" y="751.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 6: model_call</title></rect>
-<rect x="356.0" y="751.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 7: model_call</title></rect>
-<rect x="372.0" y="751.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 8: model_call</title></rect>
-<text x="392.5" y="761.0" font-size="9.5" fill="currentColor" fill-opacity=".7">8 operations; 51 s in all</text>
-<text x="40" y="782.5" fill="currentColor">I-2 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
-<rect x="260.0" y="772.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 1: model_call</title></rect>
-<rect x="276.0" y="772.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 2: model_call</title></rect>
-<rect x="292.0" y="772.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 3: model_call</title></rect>
-<rect x="308.0" y="772.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 4: model_call</title></rect>
-<rect x="324.0" y="772.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 5: model_call</title></rect>
-<rect x="340.0" y="772.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 6: model_call</title></rect>
-<rect x="356.0" y="772.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 7: model_call</title></rect>
-<rect x="372.0" y="772.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 8: model_call</title></rect>
-<text x="392.5" y="782.0" font-size="9.5" fill="currentColor" fill-opacity=".7">8 operations; 74 s in all</text>
-<text x="40" y="803.5" fill="currentColor">I-3 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
-<rect x="260.0" y="793.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 1: model_call</title></rect>
-<rect x="276.0" y="793.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 2: model_call</title></rect>
-<rect x="292.0" y="793.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 3: model_call</title></rect>
-<rect x="308.0" y="793.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 4: model_call</title></rect>
-<rect x="324.0" y="793.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 5: model_call</title></rect>
-<rect x="340.0" y="793.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 6: model_call</title></rect>
-<rect x="356.0" y="793.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 7: model_call</title></rect>
-<rect x="372.0" y="793.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 8: model_call</title></rect>
-<rect x="388.0" y="793.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 9: model_call</title></rect>
-<text x="408.5" y="803.0" font-size="9.5" fill="currentColor" fill-opacity=".7">9 operations; 64 s in all</text>
-<text x="40" y="824.5" fill="currentColor">I-4</text>
-<line x1="260.0" x2="260.0" y1="812" y2="829" class="grid"/>
-<line x1="333.6" x2="333.6" y1="812" y2="829" class="grid"/>
-<line x1="407.3" x2="407.3" y1="812" y2="829" class="grid"/>
-<line x1="480.9" x2="480.9" y1="812" y2="829" class="grid"/>
-<line x1="554.5" x2="554.5" y1="812" y2="829" class="grid"/>
-<line x1="628.2" x2="628.2" y1="812" y2="829" class="grid"/>
-<line x1="701.8" x2="701.8" y1="812" y2="829" class="grid"/>
-<line x1="775.5" x2="775.5" y1="812" y2="829" class="grid"/>
-<line x1="849.1" x2="849.1" y1="812" y2="829" class="grid"/>
-<line x1="922.7" x2="922.7" y1="812" y2="829" class="grid"/>
-<line x1="996.4" x2="996.4" y1="812" y2="829" class="grid"/>
-<line x1="1070.0" x2="1070.0" y1="812" y2="829" class="grid"/>
-<rect x="270.6" y="814.5" width="6.4" height="12" rx="1.5" class="k-model_call"><title>I-4 op 1: model_call, 4.3-6.9 s</title></rect>
-<rect x="275.4" y="814.5" width="3.0" height="12" rx="1.5" class="k-read"><title>I-4 op 2: read, 6.9-7.0 s</title></rect>
-<rect x="277.2" y="814.5" width="5.4" height="12" rx="1.5" class="k-model_call"><title>I-4 op 3: model_call, 7.0-9.2 s</title></rect>
-<rect x="281.1" y="814.5" width="3.0" height="12" rx="1.5" class="k-read"><title>I-4 op 4: read, 9.2-9.2 s</title></rect>
-<rect x="282.6" y="814.5" width="20.1" height="12" rx="1.5" class="k-model_call"><title>I-4 op 5: model_call, 9.2-17.4 s</title></rect>
-<rect x="301.2" y="814.5" width="3.0" height="12" rx="1.5" class="k-test"><title>I-4 op 6: test, 17.4-17.5 s</title></rect>
-<rect x="303.0" y="814.5" width="10.3" height="12" rx="1.5" class="k-model_call"><title>I-4 op 7: model_call, 17.5-21.7 s</title></rect>
-<rect x="313.3" y="814.5" width="4.9" height="12" rx="1.5" class="k-push"><title>I-4 op 8: push, 21.7-23.7 s</title></rect>
-<rect x="318.2" y="814.5" width="13.3" height="12" rx="1.5" class="k-model_call"><title>I-4 op 9: model_call, 23.7-29.1 s</title></rect>
-<rect x="329.9" y="814.5" width="3.0" height="12" rx="1.5" class="k-pr_open"><title>I-4 op 10: pr_open, 29.1-29.2 s</title></rect>
-<rect x="331.7" y="814.5" width="8.6" height="12" rx="1.5" class="k-model_call"><title>I-4 op 11: model_call, 29.2-32.7 s</title></rect>
-<rect x="340.3" y="814.5" width="4.7" height="12" rx="1.5" class="k-pr_open"><title>I-4 op 12: pr_open, 32.7-34.6 s</title></rect>
-<rect x="344.9" y="814.5" width="5.4" height="12" rx="1.5" class="k-model_call"><title>I-4 op 13: model_call, 34.6-36.8 s</title></rect>
-<rect x="350.3" y="814.5" width="28.0" height="12" rx="1.5" class="k-ci_wait"><title>I-4 op 14: ci_wait, 36.8-48.2 s</title></rect>
-<rect x="378.3" y="814.5" width="12.3" height="12" rx="1.5" class="k-model_call"><title>I-4 op 15: model_call, 48.2-53.2 s</title></rect>
-<rect x="389.1" y="814.5" width="3.0" height="12" rx="1.5" class="k-other"><title>I-4 op 16: other, success, 53.2-53.2 s</title></rect>
-<text x="40" y="845.5" fill="currentColor">I-5</text>
-<line x1="260.0" x2="260.0" y1="833" y2="850" class="grid"/>
-<line x1="333.6" x2="333.6" y1="833" y2="850" class="grid"/>
-<line x1="407.3" x2="407.3" y1="833" y2="850" class="grid"/>
-<line x1="480.9" x2="480.9" y1="833" y2="850" class="grid"/>
-<line x1="554.5" x2="554.5" y1="833" y2="850" class="grid"/>
-<line x1="628.2" x2="628.2" y1="833" y2="850" class="grid"/>
-<line x1="701.8" x2="701.8" y1="833" y2="850" class="grid"/>
-<line x1="775.5" x2="775.5" y1="833" y2="850" class="grid"/>
-<line x1="849.1" x2="849.1" y1="833" y2="850" class="grid"/>
-<line x1="922.7" x2="922.7" y1="833" y2="850" class="grid"/>
-<line x1="996.4" x2="996.4" y1="833" y2="850" class="grid"/>
-<line x1="1070.0" x2="1070.0" y1="833" y2="850" class="grid"/>
-<rect x="271.0" y="835.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>I-5 op 1: model_call, 4.5-7.2 s</title></rect>
-<rect x="276.2" y="835.5" width="3.0" height="12" rx="1.5" class="k-read"><title>I-5 op 2: read, 7.2-7.3 s</title></rect>
-<rect x="277.9" y="835.5" width="5.6" height="12" rx="1.5" class="k-model_call"><title>I-5 op 3: model_call, 7.3-9.6 s</title></rect>
-<rect x="282.1" y="835.5" width="3.0" height="12" rx="1.5" class="k-read"><title>I-5 op 4: read, 9.6-9.6 s</title></rect>
-<rect x="283.6" y="835.5" width="20.6" height="12" rx="1.5" class="k-model_call"><title>I-5 op 5: model_call, 9.6-18.0 s</title></rect>
-<rect x="302.7" y="835.5" width="3.0" height="12" rx="1.5" class="k-test"><title>I-5 op 6: test, 18.0-18.2 s</title></rect>
-<rect x="304.7" y="835.5" width="9.6" height="12" rx="1.5" class="k-model_call"><title>I-5 op 7: model_call, 18.2-22.1 s</title></rect>
-<rect x="314.2" y="835.5" width="5.4" height="12" rx="1.5" class="k-push"><title>I-5 op 8: push, 22.1-24.3 s</title></rect>
-<rect x="319.6" y="835.5" width="14.2" height="12" rx="1.5" class="k-model_call"><title>I-5 op 9: model_call, 24.3-30.1 s</title></rect>
-<rect x="333.9" y="835.5" width="4.9" height="12" rx="1.5" class="k-pr_open"><title>I-5 op 10: pr_open, 30.1-32.1 s</title></rect>
-<rect x="338.8" y="835.5" width="5.4" height="12" rx="1.5" class="k-model_call"><title>I-5 op 11: model_call, 32.1-34.3 s</title></rect>
-<rect x="344.2" y="835.5" width="26.8" height="12" rx="1.5" class="k-ci_wait"><title>I-5 op 12: ci_wait, 34.3-45.2 s</title></rect>
-<rect x="370.9" y="835.5" width="13.0" height="12" rx="1.5" class="k-model_call"><title>I-5 op 13: model_call, 45.2-50.5 s</title></rect>
-<rect x="382.7" y="835.5" width="3.0" height="12" rx="1.5" class="k-other"><title>I-5 op 14: other, success, 50.6-50.6 s</title></rect>
-<text x="40" y="866.5" fill="currentColor">I-6</text>
-<line x1="260.0" x2="260.0" y1="854" y2="871" class="grid"/>
-<line x1="333.6" x2="333.6" y1="854" y2="871" class="grid"/>
-<line x1="407.3" x2="407.3" y1="854" y2="871" class="grid"/>
-<line x1="480.9" x2="480.9" y1="854" y2="871" class="grid"/>
-<line x1="554.5" x2="554.5" y1="854" y2="871" class="grid"/>
-<line x1="628.2" x2="628.2" y1="854" y2="871" class="grid"/>
-<line x1="701.8" x2="701.8" y1="854" y2="871" class="grid"/>
-<line x1="775.5" x2="775.5" y1="854" y2="871" class="grid"/>
-<line x1="849.1" x2="849.1" y1="854" y2="871" class="grid"/>
-<line x1="922.7" x2="922.7" y1="854" y2="871" class="grid"/>
-<line x1="996.4" x2="996.4" y1="854" y2="871" class="grid"/>
-<line x1="1070.0" x2="1070.0" y1="854" y2="871" class="grid"/>
-<rect x="269.6" y="856.5" width="7.4" height="12" rx="1.5" class="k-model_call"><title>I-6 op 1: model_call, 3.9-6.9 s</title></rect>
-<rect x="275.4" y="856.5" width="3.0" height="12" rx="1.5" class="k-read"><title>I-6 op 2: read, 6.9-6.9 s</title></rect>
-<rect x="276.9" y="856.5" width="4.9" height="12" rx="1.5" class="k-model_call"><title>I-6 op 3: model_call, 6.9-8.9 s</title></rect>
-<rect x="280.3" y="856.5" width="3.0" height="12" rx="1.5" class="k-read"><title>I-6 op 4: read, 8.9-9.0 s</title></rect>
-<rect x="282.1" y="856.5" width="19.9" height="12" rx="1.5" class="k-model_call"><title>I-6 op 5: model_call, 9.0-17.1 s</title></rect>
-<rect x="300.5" y="856.5" width="3.0" height="12" rx="1.5" class="k-test"><title>I-6 op 6: test, 17.1-17.2 s</title></rect>
-<rect x="302.2" y="856.5" width="9.3" height="12" rx="1.5" class="k-model_call"><title>I-6 op 7: model_call, 17.2-21.0 s</title></rect>
-<rect x="311.5" y="856.5" width="5.4" height="12" rx="1.5" class="k-push"><title>I-6 op 8: push, 21.0-23.2 s</title></rect>
-<rect x="316.9" y="856.5" width="10.3" height="12" rx="1.5" class="k-model_call"><title>I-6 op 9: model_call, 23.2-27.4 s</title></rect>
-<rect x="325.8" y="856.5" width="3.0" height="12" rx="1.5" class="k-other"><title>I-6 op 10: other, 27.4-27.5 s</title></rect>
-<rect x="327.5" y="856.5" width="5.9" height="12" rx="1.5" class="k-model_call"><title>I-6 op 11: model_call, 27.5-29.9 s</title></rect>
-<rect x="331.9" y="856.5" width="3.0" height="12" rx="1.5" class="k-pr_open"><title>I-6 op 12: pr_open, 29.9-30.0 s</title></rect>
-<rect x="333.6" y="856.5" width="7.9" height="12" rx="1.5" class="k-model_call"><title>I-6 op 13: model_call, 30.0-33.2 s</title></rect>
-<rect x="341.5" y="856.5" width="4.9" height="12" rx="1.5" class="k-pr_open"><title>I-6 op 14: pr_open, 33.2-35.2 s</title></rect>
-<rect x="346.4" y="856.5" width="5.2" height="12" rx="1.5" class="k-model_call"><title>I-6 op 15: model_call, 35.2-37.3 s</title></rect>
-<rect x="351.6" y="856.5" width="40.0" height="12" rx="1.5" class="k-ci_wait"><title>I-6 op 16: ci_wait, 37.3-53.6 s</title></rect>
-<rect x="391.6" y="856.5" width="11.5" height="12" rx="1.5" class="k-model_call"><title>I-6 op 17: model_call, 53.6-58.3 s</title></rect>
-<rect x="401.6" y="856.5" width="3.0" height="12" rx="1.5" class="k-other"><title>I-6 op 18: other, success, 58.3-58.3 s</title></rect>
-<text x="20" y="893" font-size="12" font-weight="600" fill="currentColor">Claude Code, full configuration</text>
-<line x1="20" x2="1070" y1="897" y2="897" class="grid"/>
-<text x="40" y="913.5" fill="currentColor">C-1 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
-<rect x="260.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 1: model_call</title></rect>
-<rect x="276.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 2: model_call</title></rect>
-<rect x="292.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 3: model_call</title></rect>
-<rect x="308.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 4: model_call</title></rect>
-<rect x="324.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 5: model_call</title></rect>
-<rect x="340.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 6: model_call</title></rect>
-<rect x="356.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 7: model_call</title></rect>
-<rect x="372.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 8: model_call</title></rect>
-<rect x="388.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 9: model_call</title></rect>
-<rect x="404.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 10: model_call</title></rect>
-<rect x="420.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 11: model_call</title></rect>
-<rect x="436.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 12: model_call</title></rect>
-<rect x="452.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 13: model_call</title></rect>
-<rect x="468.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 14: model_call</title></rect>
-<rect x="484.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 15: model_call</title></rect>
-<rect x="500.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 16: model_call</title></rect>
-<rect x="516.0" y="903.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 17: model_call</title></rect>
-<text x="536.5" y="913.0" font-size="9.5" fill="currentColor" fill-opacity=".7">17 operations; 71 s in all</text>
-<text x="40" y="934.5" fill="currentColor">C-2 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
-<rect x="260.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 1: model_call</title></rect>
-<rect x="276.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 2: model_call</title></rect>
-<rect x="292.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 3: model_call</title></rect>
-<rect x="308.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 4: model_call</title></rect>
-<rect x="324.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 5: model_call</title></rect>
-<rect x="340.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 6: model_call</title></rect>
-<rect x="356.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 7: model_call</title></rect>
-<rect x="372.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 8: model_call</title></rect>
-<rect x="388.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 9: model_call</title></rect>
-<rect x="404.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 10: model_call</title></rect>
-<rect x="420.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 11: model_call</title></rect>
-<rect x="436.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 12: model_call</title></rect>
-<rect x="452.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 13: model_call</title></rect>
-<rect x="468.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 14: model_call</title></rect>
-<rect x="484.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 15: model_call</title></rect>
-<rect x="500.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 16: model_call</title></rect>
-<rect x="516.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 17: model_call</title></rect>
-<rect x="532.0" y="924.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 18: model_call</title></rect>
-<text x="552.5" y="934.0" font-size="9.5" fill="currentColor" fill-opacity=".7">18 operations; 65 s in all</text>
-<text x="40" y="955.5" fill="currentColor">C-3 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
-<rect x="260.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 1: model_call</title></rect>
-<rect x="276.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 2: model_call</title></rect>
-<rect x="292.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 3: model_call</title></rect>
-<rect x="308.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 4: model_call</title></rect>
-<rect x="324.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 5: model_call</title></rect>
-<rect x="340.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 6: model_call</title></rect>
-<rect x="356.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 7: model_call</title></rect>
-<rect x="372.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 8: model_call</title></rect>
-<rect x="388.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 9: model_call</title></rect>
-<rect x="404.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 10: model_call</title></rect>
-<rect x="420.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 11: model_call</title></rect>
-<rect x="436.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 12: model_call</title></rect>
-<rect x="452.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 13: model_call</title></rect>
-<rect x="468.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 14: model_call</title></rect>
-<rect x="484.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 15: model_call</title></rect>
-<rect x="500.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 16: model_call</title></rect>
-<rect x="516.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 17: model_call</title></rect>
-<rect x="532.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 18: model_call</title></rect>
-<rect x="548.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 19: model_call</title></rect>
-<rect x="564.0" y="945.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 20: model_call</title></rect>
-<text x="584.5" y="955.0" font-size="9.5" fill="currentColor" fill-opacity=".7">20 operations; 64 s in all</text>
-<text x="40" y="976.5" fill="currentColor">C-4</text>
-<line x1="260.0" x2="260.0" y1="964" y2="981" class="grid"/>
-<line x1="333.6" x2="333.6" y1="964" y2="981" class="grid"/>
-<line x1="407.3" x2="407.3" y1="964" y2="981" class="grid"/>
-<line x1="480.9" x2="480.9" y1="964" y2="981" class="grid"/>
-<line x1="554.5" x2="554.5" y1="964" y2="981" class="grid"/>
-<line x1="628.2" x2="628.2" y1="964" y2="981" class="grid"/>
-<line x1="701.8" x2="701.8" y1="964" y2="981" class="grid"/>
-<line x1="775.5" x2="775.5" y1="964" y2="981" class="grid"/>
-<line x1="849.1" x2="849.1" y1="964" y2="981" class="grid"/>
-<line x1="922.7" x2="922.7" y1="964" y2="981" class="grid"/>
-<line x1="996.4" x2="996.4" y1="964" y2="981" class="grid"/>
-<line x1="1070.0" x2="1070.0" y1="964" y2="981" class="grid"/>
-<rect x="271.3" y="966.5" width="11.8" height="12" rx="1.5" class="k-model_call"><title>C-4 op 1: model_call, 4.6-9.4 s</title></rect>
-<rect x="283.1" y="966.5" width="3.4" height="12" rx="1.5" class="k-read"><title>C-4 op 2: read, 9.4-10.8 s</title></rect>
-<rect x="286.5" y="966.5" width="8.8" height="12" rx="1.5" class="k-model_call"><title>C-4 op 3: model_call, 10.8-14.4 s</title></rect>
-<rect x="293.8" y="966.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-4 op 4: read, 14.4-14.6 s</title></rect>
-<rect x="295.8" y="966.5" width="33.4" height="12" rx="1.5" class="k-model_call"><title>C-4 op 5: model_call, 14.6-28.2 s</title></rect>
-<rect x="329.2" y="966.5" width="3.2" height="12" rx="1.5" class="k-other"><title>C-4 op 6: other, 28.2-29.5 s</title></rect>
-<rect x="332.4" y="966.5" width="7.1" height="12" rx="1.5" class="k-model_call"><title>C-4 op 7: model_call, 29.5-32.4 s</title></rect>
-<rect x="339.5" y="966.5" width="3.7" height="12" rx="1.5" class="k-other"><title>C-4 op 8: other, 32.4-33.9 s</title></rect>
-<rect x="343.2" y="966.5" width="18.2" height="12" rx="1.5" class="k-model_call"><title>C-4 op 9: model_call, 33.9-41.3 s</title></rect>
-<rect x="359.9" y="966.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-4 op 10: edit, changed, 41.3-41.3 s</title></rect>
-<rect x="361.4" y="966.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>C-4 op 11: model_call, 41.3-44.0 s</title></rect>
-<rect x="366.5" y="966.5" width="3.0" height="12" rx="1.5" class="k-test"><title>C-4 op 12: test, 44.0-44.1 s</title></rect>
-<rect x="368.2" y="966.5" width="10.6" height="12" rx="1.5" class="k-model_call"><title>C-4 op 13: model_call, 44.1-48.4 s</title></rect>
-<rect x="377.3" y="966.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-4 op 14: edit, changed, 48.4-48.4 s</title></rect>
-<rect x="378.8" y="966.5" width="11.5" height="12" rx="1.5" class="k-model_call"><title>C-4 op 15: model_call, 48.4-53.1 s</title></rect>
-<rect x="388.8" y="966.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-4 op 16: edit, changed, 53.1-53.1 s</title></rect>
-<rect x="390.3" y="966.5" width="8.6" height="12" rx="1.5" class="k-model_call"><title>C-4 op 17: model_call, 53.1-56.6 s</title></rect>
-<rect x="397.4" y="966.5" width="3.0" height="12" rx="1.5" class="k-test"><title>C-4 op 18: test, 56.6-56.7 s</title></rect>
-<rect x="399.2" y="966.5" width="26.8" height="12" rx="1.5" class="k-model_call"><title>C-4 op 19: model_call, 56.7-67.6 s</title></rect>
-<rect x="424.4" y="966.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-4 op 20: other, 67.6-67.7 s</title></rect>
-<rect x="426.2" y="966.5" width="9.1" height="12" rx="1.5" class="k-model_call"><title>C-4 op 21: model_call, 67.7-71.4 s</title></rect>
-<rect x="435.3" y="966.5" width="8.6" height="12" rx="1.5" class="k-push"><title>C-4 op 22: push, 71.4-74.9 s</title></rect>
-<rect x="443.8" y="966.5" width="14.7" height="12" rx="1.5" class="k-model_call"><title>C-4 op 23: model_call, 74.9-80.9 s</title></rect>
-<rect x="457.1" y="966.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-4 op 24: other, 80.9-81.0 s</title></rect>
-<rect x="458.8" y="966.5" width="10.1" height="12" rx="1.5" class="k-model_call"><title>C-4 op 25: model_call, 81.0-85.1 s</title></rect>
-<rect x="468.9" y="966.5" width="4.9" height="12" rx="1.5" class="k-pr_open"><title>C-4 op 26: pr_open, 85.1-87.1 s</title></rect>
-<rect x="473.8" y="966.5" width="9.1" height="12" rx="1.5" class="k-model_call"><title>C-4 op 27: model_call, 87.1-90.8 s</title></rect>
-<rect x="482.9" y="966.5" width="28.2" height="12" rx="1.5" class="k-ci_wait"><title>C-4 op 28: ci_wait, 90.8-102.3 s</title></rect>
-<rect x="511.1" y="966.5" width="8.3" height="12" rx="1.5" class="k-model_call"><title>C-4 op 29: model_call, 102.3-105.7 s</title></rect>
-<rect x="517.9" y="966.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-4 op 30: other, 105.7-106.4 s</title></rect>
-<rect x="521.2" y="966.5" width="11.8" height="12" rx="1.5" class="k-model_call"><title>C-4 op 31: model_call, 106.4-111.2 s</title></rect>
-<rect x="531.4" y="966.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-4 op 32: other, success, 111.2-111.2 s</title></rect>
-<text x="40" y="997.5" fill="currentColor">C-5</text>
-<line x1="260.0" x2="260.0" y1="985" y2="1002" class="grid"/>
-<line x1="333.6" x2="333.6" y1="985" y2="1002" class="grid"/>
-<line x1="407.3" x2="407.3" y1="985" y2="1002" class="grid"/>
-<line x1="480.9" x2="480.9" y1="985" y2="1002" class="grid"/>
-<line x1="554.5" x2="554.5" y1="985" y2="1002" class="grid"/>
-<line x1="628.2" x2="628.2" y1="985" y2="1002" class="grid"/>
-<line x1="701.8" x2="701.8" y1="985" y2="1002" class="grid"/>
-<line x1="775.5" x2="775.5" y1="985" y2="1002" class="grid"/>
-<line x1="849.1" x2="849.1" y1="985" y2="1002" class="grid"/>
-<line x1="922.7" x2="922.7" y1="985" y2="1002" class="grid"/>
-<line x1="996.4" x2="996.4" y1="985" y2="1002" class="grid"/>
-<line x1="1070.0" x2="1070.0" y1="985" y2="1002" class="grid"/>
-<rect x="271.8" y="987.5" width="11.8" height="12" rx="1.5" class="k-model_call"><title>C-5 op 1: model_call, 4.8-9.6 s</title></rect>
-<rect x="282.1" y="987.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-5 op 2: read, 9.6-9.7 s</title></rect>
-<rect x="283.8" y="987.5" width="10.8" height="12" rx="1.5" class="k-model_call"><title>C-5 op 3: model_call, 9.7-14.1 s</title></rect>
-<rect x="293.1" y="987.5" width="3.0" height="12" rx="1.5" class="k-test"><title>C-5 op 4: test, 14.1-14.2 s</title></rect>
-<rect x="294.9" y="987.5" width="60.4" height="12" rx="1.5" class="k-model_call"><title>C-5 op 5: model_call, 14.2-38.8 s</title></rect>
-<rect x="352.5" y="987.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-5 op 6: read, 38.3-38.3 s</title></rect>
-<rect x="353.7" y="987.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-5 op 7: read, 38.8-38.8 s</title></rect>
-<rect x="355.2" y="987.5" width="37.3" height="12" rx="1.5" class="k-model_call"><title>C-5 op 8: model_call, 38.8-54.0 s</title></rect>
-<rect x="375.3" y="987.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-5 op 9: edit, changed, 47.6-47.7 s</title></rect>
-<rect x="379.0" y="987.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-5 op 10: edit, changed, 49.1-49.1 s</title></rect>
-<rect x="383.4" y="987.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-5 op 11: edit, changed, 50.9-51.1 s</title></rect>
-<rect x="391.0" y="987.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-5 op 12: edit, changed, 54.0-54.1 s</title></rect>
-<rect x="392.8" y="987.5" width="9.6" height="12" rx="1.5" class="k-model_call"><title>C-5 op 13: model_call, 54.1-58.0 s</title></rect>
-<rect x="402.4" y="987.5" width="2.9" height="12" rx="1.5" class="k-test"><title>C-5 op 14: test, 58.0-59.2 s</title></rect>
-<rect x="405.3" y="987.5" width="56.7" height="12" rx="1.5" class="k-model_call"><title>C-5 op 15: model_call, 59.2-82.3 s</title></rect>
-<rect x="455.9" y="987.5" width="5.2" height="12" rx="1.5" class="k-push"><title>C-5 op 16: push, 79.8-81.9 s</title></rect>
-<rect x="460.5" y="987.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-5 op 17: edit, changed, 82.3-82.5 s</title></rect>
-<rect x="462.5" y="987.5" width="14.7" height="12" rx="1.5" class="k-model_call"><title>C-5 op 18: model_call, 82.5-88.5 s</title></rect>
-<rect x="477.2" y="987.5" width="5.4" height="12" rx="1.5" class="k-pr_open"><title>C-5 op 19: pr_open, 88.5-90.7 s</title></rect>
-<rect x="482.6" y="987.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>C-5 op 20: model_call, 90.7-93.4 s</title></rect>
-<rect x="489.3" y="987.5" width="28.7" height="12" rx="1.5" class="k-ci_wait"><title>C-5 op 21: ci_wait, 93.4-105.1 s</title></rect>
-<rect x="518.0" y="987.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>C-5 op 22: model_call, 105.1-107.8 s</title></rect>
-<rect x="523.1" y="987.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-5 op 23: read, 107.8-107.8 s</title></rect>
-<rect x="524.6" y="987.5" width="9.3" height="12" rx="1.5" class="k-model_call"><title>C-5 op 24: model_call, 107.8-111.6 s</title></rect>
-<rect x="532.7" y="987.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-5 op 25: other, success, 111.7-111.7 s</title></rect>
-<text x="40" y="1018.5" fill="currentColor">C-6</text>
-<line x1="260.0" x2="260.0" y1="1006" y2="1023" class="grid"/>
-<line x1="333.6" x2="333.6" y1="1006" y2="1023" class="grid"/>
-<line x1="407.3" x2="407.3" y1="1006" y2="1023" class="grid"/>
-<line x1="480.9" x2="480.9" y1="1006" y2="1023" class="grid"/>
-<line x1="554.5" x2="554.5" y1="1006" y2="1023" class="grid"/>
-<line x1="628.2" x2="628.2" y1="1006" y2="1023" class="grid"/>
-<line x1="701.8" x2="701.8" y1="1006" y2="1023" class="grid"/>
-<line x1="775.5" x2="775.5" y1="1006" y2="1023" class="grid"/>
-<line x1="849.1" x2="849.1" y1="1006" y2="1023" class="grid"/>
-<line x1="922.7" x2="922.7" y1="1006" y2="1023" class="grid"/>
-<line x1="996.4" x2="996.4" y1="1006" y2="1023" class="grid"/>
-<line x1="1070.0" x2="1070.0" y1="1006" y2="1023" class="grid"/>
-<rect x="271.8" y="1008.5" width="11.3" height="12" rx="1.5" class="k-model_call"><title>C-6 op 1: model_call, 4.8-9.4 s</title></rect>
-<rect x="281.6" y="1008.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-6 op 2: read, 9.4-9.5 s</title></rect>
-<rect x="283.3" y="1008.5" width="10.8" height="12" rx="1.5" class="k-model_call"><title>C-6 op 3: model_call, 9.5-13.9 s</title></rect>
-<rect x="292.6" y="1008.5" width="3.0" height="12" rx="1.5" class="k-test"><title>C-6 op 4: test, 13.9-14.1 s</title></rect>
-<rect x="294.6" y="1008.5" width="55.0" height="12" rx="1.5" class="k-model_call"><title>C-6 op 5: model_call, 14.1-36.5 s</title></rect>
-<rect x="348.1" y="1008.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-6 op 6: edit, changed, 36.5-36.6 s</title></rect>
-<rect x="349.8" y="1008.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>C-6 op 7: model_call, 36.6-39.3 s</title></rect>
-<rect x="355.0" y="1008.5" width="3.0" height="12" rx="1.5" class="k-test"><title>C-6 op 8: test, 39.3-39.4 s</title></rect>
-<rect x="356.7" y="1008.5" width="7.9" height="12" rx="1.5" class="k-model_call"><title>C-6 op 9: model_call, 39.4-42.6 s</title></rect>
-<rect x="363.1" y="1008.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-6 op 10: edit, changed, 42.6-42.7 s</title></rect>
-<rect x="364.8" y="1008.5" width="7.6" height="12" rx="1.5" class="k-model_call"><title>C-6 op 11: model_call, 42.7-45.8 s</title></rect>
-<rect x="370.9" y="1008.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-6 op 12: edit, changed, 45.8-45.8 s</title></rect>
-<rect x="372.4" y="1008.5" width="7.9" height="12" rx="1.5" class="k-model_call"><title>C-6 op 13: model_call, 45.8-49.0 s</title></rect>
-<rect x="378.8" y="1008.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-6 op 14: edit, changed, 49.0-49.1 s</title></rect>
-<rect x="380.5" y="1008.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>C-6 op 15: model_call, 49.1-51.8 s</title></rect>
-<rect x="385.6" y="1008.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-6 op 16: edit, changed, 51.8-51.9 s</title></rect>
-<rect x="387.4" y="1008.5" width="12.5" height="12" rx="1.5" class="k-model_call"><title>C-6 op 17: model_call, 51.9-57.0 s</title></rect>
-<rect x="398.4" y="1008.5" width="3.0" height="12" rx="1.5" class="k-test"><title>C-6 op 18: test, 57.0-57.6 s</title></rect>
-<rect x="401.4" y="1008.5" width="21.6" height="12" rx="1.5" class="k-model_call"><title>C-6 op 19: model_call, 57.6-66.4 s</title></rect>
-<rect x="421.5" y="1008.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-6 op 20: other, 66.4-66.5 s</title></rect>
-<rect x="423.2" y="1008.5" width="8.3" height="12" rx="1.5" class="k-model_call"><title>C-6 op 21: model_call, 66.5-69.9 s</title></rect>
-<rect x="431.6" y="1008.5" width="4.7" height="12" rx="1.5" class="k-push"><title>C-6 op 22: push, 69.9-71.8 s</title></rect>
-<rect x="436.2" y="1008.5" width="23.8" height="12" rx="1.5" class="k-model_call"><title>C-6 op 23: model_call, 71.8-81.5 s</title></rect>
-<rect x="458.5" y="1008.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-6 op 24: edit, changed, 81.5-81.5 s</title></rect>
-<rect x="460.0" y="1008.5" width="8.1" height="12" rx="1.5" class="k-model_call"><title>C-6 op 25: model_call, 81.5-84.8 s</title></rect>
-<rect x="466.6" y="1008.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-6 op 26: other, 84.8-84.9 s</title></rect>
-<rect x="468.4" y="1008.5" width="12.3" height="12" rx="1.5" class="k-model_call"><title>C-6 op 27: model_call, 84.9-89.9 s</title></rect>
-<rect x="480.7" y="1008.5" width="5.6" height="12" rx="1.5" class="k-pr_open"><title>C-6 op 28: pr_open, 89.9-92.2 s</title></rect>
-<rect x="486.3" y="1008.5" width="10.3" height="12" rx="1.5" class="k-model_call"><title>C-6 op 29: model_call, 92.2-96.4 s</title></rect>
-<rect x="496.6" y="1008.5" width="31.9" height="12" rx="1.5" class="k-ci_wait"><title>C-6 op 30: ci_wait, 96.4-109.4 s</title></rect>
-<rect x="528.5" y="1008.5" width="8.1" height="12" rx="1.5" class="k-model_call"><title>C-6 op 31: model_call, 109.4-112.7 s</title></rect>
-<rect x="535.1" y="1008.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-6 op 32: read, 112.7-112.8 s</title></rect>
-<rect x="536.9" y="1008.5" width="12.5" height="12" rx="1.5" class="k-model_call"><title>C-6 op 33: model_call, 112.8-117.9 s</title></rect>
-<rect x="547.9" y="1008.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-6 op 34: other, success, 117.9-117.9 s</title></rect>
-<text x="20" y="1045" font-size="12" font-weight="600" fill="currentColor">Codex, full configuration</text>
-<line x1="20" x2="1070" y1="1049" y2="1049" class="grid"/>
-<text x="40" y="1065.5" fill="currentColor">X-1 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
-<rect x="260.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-1 op 1: model_call, agent_message</title></rect>
-<rect x="276.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-1 op 2: read</title></rect>
-<rect x="292.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-1 op 3: read</title></rect>
-<rect x="308.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-1 op 4: model_call, agent_message</title></rect>
-<rect x="324.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-1 op 5: read</title></rect>
-<rect x="340.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-1 op 6: read</title></rect>
-<rect x="356.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-1 op 7: other</title></rect>
-<rect x="372.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-1 op 8: test</title></rect>
-<rect x="388.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-1 op 9: other</title></rect>
-<rect x="404.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-1 op 10: model_call, agent_message</title></rect>
-<rect x="420.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-edit"><title>X-1 op 11: edit, changed</title></rect>
-<rect x="436.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-1 op 12: test, fail</title></rect>
-<rect x="452.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-edit"><title>X-1 op 13: edit, changed</title></rect>
-<rect x="468.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-1 op 14: test</title></rect>
-<rect x="484.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-1 op 15: other</title></rect>
-<rect x="500.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-1 op 16: model_call, agent_message</title></rect>
-<rect x="516.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-1 op 17: read</title></rect>
-<rect x="532.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-1 op 18: other</title></rect>
-<rect x="548.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-push"><title>X-1 op 19: push</title></rect>
-<rect x="564.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-1 op 20: other</title></rect>
-<rect x="580.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-pr_open"><title>X-1 op 21: pr_open</title></rect>
-<rect x="596.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-1 op 22: model_call, agent_message</title></rect>
-<rect x="612.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-1 op 23: read</title></rect>
-<rect x="628.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-ci_wait"><title>X-1 op 24: ci_wait</title></rect>
-<rect x="644.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-1 op 25: other</title></rect>
-<rect x="660.0" y="1055.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-1 op 26: model_call, agent_message</title></rect>
-<text x="680.5" y="1065.0" font-size="9.5" fill="currentColor" fill-opacity=".7">26 operations; 101 s in all</text>
-<text x="40" y="1086.5" fill="currentColor">X-2 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
-<rect x="260.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-2 op 1: model_call, agent_message</title></rect>
-<rect x="276.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-2 op 2: read</title></rect>
-<rect x="292.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-2 op 3: read</title></rect>
-<rect x="308.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-2 op 4: model_call, agent_message</title></rect>
-<rect x="324.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-2 op 5: read</title></rect>
-<rect x="340.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-2 op 6: read</title></rect>
-<rect x="356.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-2 op 7: other</title></rect>
-<rect x="372.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-2 op 8: model_call, agent_message</title></rect>
-<rect x="388.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-2 op 9: test</title></rect>
-<rect x="404.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-edit"><title>X-2 op 10: edit, changed</title></rect>
-<rect x="420.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-2 op 11: test, fail</title></rect>
-<rect x="436.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-edit"><title>X-2 op 12: edit, changed</title></rect>
-<rect x="452.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-2 op 13: test</title></rect>
-<rect x="468.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-2 op 14: model_call, agent_message</title></rect>
-<rect x="484.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-2 op 15: other</title></rect>
-<rect x="500.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-push"><title>X-2 op 16: push</title></rect>
-<rect x="516.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-2 op 17: other</title></rect>
-<rect x="532.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-pr_open"><title>X-2 op 18: pr_open</title></rect>
-<rect x="548.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-2 op 19: read</title></rect>
-<rect x="564.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-2 op 20: model_call, agent_message</title></rect>
-<rect x="580.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-ci_wait"><title>X-2 op 21: ci_wait</title></rect>
-<rect x="596.0" y="1076.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-2 op 22: model_call, agent_message</title></rect>
-<text x="616.5" y="1086.0" font-size="9.5" fill="currentColor" fill-opacity=".7">22 operations; 84 s in all</text>
-<text x="40" y="1107.5" fill="currentColor">X-3 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
-<rect x="260.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-3 op 1: model_call, agent_message</title></rect>
-<rect x="276.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-3 op 2: read</title></rect>
-<rect x="292.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-3 op 3: model_call, agent_message</title></rect>
-<rect x="308.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-3 op 4: read</title></rect>
-<rect x="324.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-3 op 5: read</title></rect>
-<rect x="340.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-3 op 6: test</title></rect>
-<rect x="356.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-3 op 7: other</title></rect>
-<rect x="372.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-3 op 8: model_call, agent_message</title></rect>
-<rect x="388.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-3 op 9: other</title></rect>
-<rect x="404.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-edit"><title>X-3 op 10: edit, changed</title></rect>
-<rect x="420.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-3 op 11: test, fail</title></rect>
-<rect x="436.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-edit"><title>X-3 op 12: edit, changed</title></rect>
-<rect x="452.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-3 op 13: test</title></rect>
-<rect x="468.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-3 op 14: model_call, agent_message</title></rect>
-<rect x="484.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-3 op 15: read</title></rect>
-<rect x="500.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-3 op 16: other</title></rect>
-<rect x="516.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-push"><title>X-3 op 17: push</title></rect>
-<rect x="532.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-3 op 18: other</title></rect>
-<rect x="548.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-3 op 19: model_call, agent_message</title></rect>
-<rect x="564.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-pr_open"><title>X-3 op 20: pr_open</title></rect>
-<rect x="580.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-3 op 21: read</title></rect>
-<rect x="596.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-ci_wait"><title>X-3 op 22: ci_wait</title></rect>
-<rect x="612.0" y="1097.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-3 op 23: model_call, agent_message</title></rect>
-<text x="632.5" y="1107.0" font-size="9.5" fill="currentColor" fill-opacity=".7">23 operations; 96 s in all</text>
-<text x="40" y="1128.5" fill="currentColor">X-4</text>
-<line x1="260.0" x2="260.0" y1="1116" y2="1133" class="grid"/>
-<line x1="333.6" x2="333.6" y1="1116" y2="1133" class="grid"/>
-<line x1="407.3" x2="407.3" y1="1116" y2="1133" class="grid"/>
-<line x1="480.9" x2="480.9" y1="1116" y2="1133" class="grid"/>
-<line x1="554.5" x2="554.5" y1="1116" y2="1133" class="grid"/>
-<line x1="628.2" x2="628.2" y1="1116" y2="1133" class="grid"/>
-<line x1="701.8" x2="701.8" y1="1116" y2="1133" class="grid"/>
-<line x1="775.5" x2="775.5" y1="1116" y2="1133" class="grid"/>
-<line x1="849.1" x2="849.1" y1="1116" y2="1133" class="grid"/>
-<line x1="922.7" x2="922.7" y1="1116" y2="1133" class="grid"/>
-<line x1="996.4" x2="996.4" y1="1116" y2="1133" class="grid"/>
-<line x1="1070.0" x2="1070.0" y1="1116" y2="1133" class="grid"/>
-<rect x="272.5" y="1118.5" width="11.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 1: model_call, agent_message, 5.1-9.6 s</title></rect>
-<rect x="283.6" y="1118.5" width="4.2" height="12" rx="1.5" class="k-model_call"><title>X-4 op 2: model_call, 9.6-11.3 s</title></rect>
-<rect x="286.2" y="1118.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 3: read, 11.3-11.3 s</title></rect>
-<rect x="286.2" y="1118.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 4: model_call, 11.3-11.4 s</title></rect>
-<rect x="286.5" y="1118.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 5: read, 11.4-11.4 s</title></rect>
-<rect x="288.0" y="1118.5" width="14.7" height="12" rx="1.5" class="k-model_call"><title>X-4 op 6: model_call, 11.4-17.4 s</title></rect>
-<rect x="301.2" y="1118.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 7: read, 17.4-17.4 s</title></rect>
-<rect x="301.2" y="1118.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 8: model_call, 17.4-17.4 s</title></rect>
-<rect x="301.2" y="1118.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 9: read, 17.4-17.4 s</title></rect>
-<rect x="301.2" y="1118.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 10: model_call, 17.4-17.5 s</title></rect>
-<rect x="303.0" y="1118.5" width="22.8" height="12" rx="1.5" class="k-other"><title>X-4 op 11: other, 17.5-26.8 s</title></rect>
-<rect x="325.8" y="1118.5" width="10.6" height="12" rx="1.5" class="k-model_call"><title>X-4 op 12: model_call, agent_message, 26.8-31.1 s</title></rect>
-<rect x="336.3" y="1118.5" width="3.9" height="12" rx="1.5" class="k-model_call"><title>X-4 op 13: model_call, 31.1-32.7 s</title></rect>
-<rect x="338.8" y="1118.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 14: read, 32.7-32.7 s</title></rect>
-<rect x="338.8" y="1118.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 15: model_call, 32.7-32.8 s</title></rect>
-<rect x="339.0" y="1118.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-4 op 16: test, 32.8-32.8 s</title></rect>
-<rect x="340.5" y="1118.5" width="18.7" height="12" rx="1.5" class="k-model_call"><title>X-4 op 17: model_call, 32.8-40.4 s</title></rect>
-<rect x="357.7" y="1118.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>X-4 op 18: edit, changed, 40.4-40.4 s</title></rect>
-<rect x="357.7" y="1118.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 19: model_call, 40.4-40.6 s</title></rect>
-<rect x="358.2" y="1118.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-4 op 20: test, fail, 40.6-40.9 s</title></rect>
-<rect x="360.4" y="1118.5" width="13.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 21: model_call, 40.9-46.2 s</title></rect>
-<rect x="371.9" y="1118.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>X-4 op 22: edit, changed, 46.2-46.2 s</title></rect>
-<rect x="371.9" y="1118.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 23: model_call, 46.2-46.3 s</title></rect>
-<rect x="372.1" y="1118.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-4 op 24: test, 46.3-46.6 s</title></rect>
-<rect x="374.4" y="1118.5" width="15.5" height="12" rx="1.5" class="k-model_call"><title>X-4 op 25: model_call, agent_message, 46.6-52.9 s</title></rect>
-<rect x="389.8" y="1118.5" width="10.6" height="12" rx="1.5" class="k-model_call"><title>X-4 op 26: model_call, 52.9-57.2 s</title></rect>
-<rect x="398.9" y="1118.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 27: read, 57.2-57.4 s</title></rect>
-<rect x="399.4" y="1118.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 28: model_call, 57.4-57.6 s</title></rect>
-<rect x="401.4" y="1118.5" width="4.2" height="12" rx="1.5" class="k-push"><title>X-4 op 29: push, 57.6-59.3 s</title></rect>
-<rect x="405.6" y="1118.5" width="9.6" height="12" rx="1.5" class="k-model_call"><title>X-4 op 30: model_call, 59.3-63.2 s</title></rect>
-<rect x="413.6" y="1118.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-4 op 31: other, 63.2-63.2 s</title></rect>
-<rect x="415.1" y="1118.5" width="7.1" height="12" rx="1.5" class="k-model_call"><title>X-4 op 32: model_call, 63.2-66.1 s</title></rect>
-<rect x="422.2" y="1118.5" width="4.2" height="12" rx="1.5" class="k-pr_open"><title>X-4 op 33: pr_open, 66.1-67.8 s</title></rect>
-<rect x="426.4" y="1118.5" width="9.6" height="12" rx="1.5" class="k-model_call"><title>X-4 op 34: model_call, 67.8-71.7 s</title></rect>
-<rect x="434.5" y="1118.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 35: read, 71.7-71.7 s</title></rect>
-<rect x="436.0" y="1118.5" width="4.9" height="12" rx="1.5" class="k-model_call"><title>X-4 op 36: model_call, 71.7-73.7 s</title></rect>
-<rect x="440.9" y="1118.5" width="27.7" height="12" rx="1.5" class="k-ci_wait"><title>X-4 op 37: ci_wait, 73.7-85.0 s</title></rect>
-<rect x="440.9" y="1118.5" width="8.3" height="12" rx="1.5" class="k-model_call"><title>X-4 op 38: model_call, agent_message, 73.7-77.1 s</title></rect>
-<rect x="449.2" y="1118.5" width="13.7" height="12" rx="1.5" class="k-model_call"><title>X-4 op 39: model_call, 77.1-82.7 s</title></rect>
-<rect x="461.5" y="1118.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 40: read, 82.7-82.7 s</title></rect>
-<rect x="468.6" y="1118.5" width="6.4" height="12" rx="1.5" class="k-model_call"><title>X-4 op 41: model_call, agent_message, 85.0-87.6 s</title></rect>
-<rect x="473.5" y="1118.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-4 op 42: other, turn.completed, 87.6-87.6 s</title></rect>
-<text x="40" y="1149.5" fill="currentColor">X-5</text>
-<line x1="260.0" x2="260.0" y1="1137" y2="1154" class="grid"/>
-<line x1="333.6" x2="333.6" y1="1137" y2="1154" class="grid"/>
-<line x1="407.3" x2="407.3" y1="1137" y2="1154" class="grid"/>
-<line x1="480.9" x2="480.9" y1="1137" y2="1154" class="grid"/>
-<line x1="554.5" x2="554.5" y1="1137" y2="1154" class="grid"/>
-<line x1="628.2" x2="628.2" y1="1137" y2="1154" class="grid"/>
-<line x1="701.8" x2="701.8" y1="1137" y2="1154" class="grid"/>
-<line x1="775.5" x2="775.5" y1="1137" y2="1154" class="grid"/>
-<line x1="849.1" x2="849.1" y1="1137" y2="1154" class="grid"/>
-<line x1="922.7" x2="922.7" y1="1137" y2="1154" class="grid"/>
-<line x1="996.4" x2="996.4" y1="1137" y2="1154" class="grid"/>
-<line x1="1070.0" x2="1070.0" y1="1137" y2="1154" class="grid"/>
-<rect x="269.1" y="1139.5" width="10.8" height="12" rx="1.5" class="k-model_call"><title>X-5 op 1: model_call, agent_message, 3.7-8.1 s</title></rect>
-<rect x="279.9" y="1139.5" width="5.4" height="12" rx="1.5" class="k-model_call"><title>X-5 op 2: model_call, 8.1-10.3 s</title></rect>
-<rect x="283.8" y="1139.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 3: read, 10.3-10.3 s</title></rect>
-<rect x="283.8" y="1139.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 4: model_call, 10.3-10.3 s</title></rect>
-<rect x="283.8" y="1139.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 5: read, 10.3-10.3 s</title></rect>
-<rect x="285.3" y="1139.5" width="6.1" height="12" rx="1.5" class="k-model_call"><title>X-5 op 6: model_call, agent_message, 10.3-12.8 s</title></rect>
-<rect x="291.4" y="1139.5" width="5.6" height="12" rx="1.5" class="k-model_call"><title>X-5 op 7: model_call, 12.8-15.1 s</title></rect>
-<rect x="295.6" y="1139.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 8: read, 15.1-15.1 s</title></rect>
-<rect x="295.6" y="1139.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 9: model_call, 15.1-15.2 s</title></rect>
-<rect x="297.3" y="1139.5" width="12.8" height="12" rx="1.5" class="k-other"><title>X-5 op 10: other, 15.2-20.4 s</title></rect>
-<rect x="295.8" y="1139.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 11: model_call, 15.2-15.2 s</title></rect>
-<rect x="295.8" y="1139.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 12: read, 15.2-15.2 s</title></rect>
-<rect x="310.1" y="1139.5" width="8.3" height="12" rx="1.5" class="k-model_call"><title>X-5 op 13: model_call, 20.4-23.8 s</title></rect>
-<rect x="316.9" y="1139.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 14: read, 23.8-23.8 s</title></rect>
-<rect x="316.9" y="1139.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 15: model_call, 23.8-23.9 s</title></rect>
-<rect x="318.7" y="1139.5" width="11.5" height="12" rx="1.5" class="k-other"><title>X-5 op 16: other, 23.9-28.6 s</title></rect>
-<rect x="330.2" y="1139.5" width="7.9" height="12" rx="1.5" class="k-model_call"><title>X-5 op 17: model_call, agent_message, 28.6-31.8 s</title></rect>
-<rect x="338.1" y="1139.5" width="10.3" height="12" rx="1.5" class="k-model_call"><title>X-5 op 18: model_call, 31.8-36.0 s</title></rect>
-<rect x="346.9" y="1139.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>X-5 op 19: edit, changed, 36.0-36.0 s</title></rect>
-<rect x="346.9" y="1139.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 20: model_call, 36.0-36.1 s</title></rect>
-<rect x="347.1" y="1139.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-5 op 21: test, fail, 36.1-36.1 s</title></rect>
-<rect x="348.6" y="1139.5" width="10.8" height="12" rx="1.5" class="k-model_call"><title>X-5 op 22: model_call, 36.1-40.5 s</title></rect>
-<rect x="357.9" y="1139.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>X-5 op 23: edit, changed, 40.5-40.5 s</title></rect>
-<rect x="357.9" y="1139.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 24: model_call, 40.5-40.7 s</title></rect>
-<rect x="358.4" y="1139.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-5 op 25: test, 40.7-40.7 s</title></rect>
-<rect x="359.9" y="1139.5" width="19.9" height="12" rx="1.5" class="k-model_call"><title>X-5 op 26: model_call, 40.7-48.8 s</title></rect>
-<rect x="378.3" y="1139.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 27: read, 48.8-49.1 s</title></rect>
-<rect x="380.5" y="1139.5" width="7.9" height="12" rx="1.5" class="k-model_call"><title>X-5 op 28: model_call, agent_message, 49.1-52.3 s</title></rect>
-<rect x="386.9" y="1139.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 29: model_call, 52.3-53.1 s</title></rect>
-<rect x="390.3" y="1139.5" width="4.4" height="12" rx="1.5" class="k-push"><title>X-5 op 30: push, 53.1-54.9 s</title></rect>
-<rect x="394.8" y="1139.5" width="7.6" height="12" rx="1.5" class="k-model_call"><title>X-5 op 31: model_call, 54.9-58.0 s</title></rect>
-<rect x="400.9" y="1139.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-5 op 32: other, 58.0-58.2 s</title></rect>
-<rect x="402.9" y="1139.5" width="13.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 33: model_call, 58.2-63.5 s</title></rect>
-<rect x="415.9" y="1139.5" width="5.2" height="12" rx="1.5" class="k-pr_open"><title>X-5 op 34: pr_open, 63.5-65.6 s</title></rect>
-<rect x="421.0" y="1139.5" width="4.2" height="12" rx="1.5" class="k-model_call"><title>X-5 op 35: model_call, 65.6-67.3 s</title></rect>
-<rect x="423.7" y="1139.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 36: read, 67.3-67.3 s</title></rect>
-<rect x="425.2" y="1139.5" width="4.7" height="12" rx="1.5" class="k-model_call"><title>X-5 op 37: model_call, 67.3-69.2 s</title></rect>
-<rect x="429.9" y="1139.5" width="27.7" height="12" rx="1.5" class="k-ci_wait"><title>X-5 op 38: ci_wait, 69.2-80.5 s</title></rect>
-<rect x="429.9" y="1139.5" width="7.6" height="12" rx="1.5" class="k-model_call"><title>X-5 op 39: model_call, agent_message, 69.2-72.3 s</title></rect>
-<rect x="457.6" y="1139.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>X-5 op 40: model_call, agent_message, 80.5-83.2 s</title></rect>
-<rect x="462.7" y="1139.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-5 op 41: other, turn.completed, 83.2-83.2 s</title></rect>
-<text x="40" y="1170.5" fill="currentColor">X-6</text>
-<line x1="260.0" x2="260.0" y1="1158" y2="1175" class="grid"/>
-<line x1="333.6" x2="333.6" y1="1158" y2="1175" class="grid"/>
-<line x1="407.3" x2="407.3" y1="1158" y2="1175" class="grid"/>
-<line x1="480.9" x2="480.9" y1="1158" y2="1175" class="grid"/>
-<line x1="554.5" x2="554.5" y1="1158" y2="1175" class="grid"/>
-<line x1="628.2" x2="628.2" y1="1158" y2="1175" class="grid"/>
-<line x1="701.8" x2="701.8" y1="1158" y2="1175" class="grid"/>
-<line x1="775.5" x2="775.5" y1="1158" y2="1175" class="grid"/>
-<line x1="849.1" x2="849.1" y1="1158" y2="1175" class="grid"/>
-<line x1="922.7" x2="922.7" y1="1158" y2="1175" class="grid"/>
-<line x1="996.4" x2="996.4" y1="1158" y2="1175" class="grid"/>
-<line x1="1070.0" x2="1070.0" y1="1158" y2="1175" class="grid"/>
-<rect x="270.1" y="1160.5" width="11.5" height="12" rx="1.5" class="k-model_call"><title>X-6 op 1: model_call, agent_message, 4.1-8.8 s</title></rect>
-<rect x="281.6" y="1160.5" width="4.4" height="12" rx="1.5" class="k-model_call"><title>X-6 op 2: model_call, 8.8-10.6 s</title></rect>
-<rect x="284.5" y="1160.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 3: read, 10.6-10.6 s</title></rect>
-<rect x="284.5" y="1160.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 4: model_call, 10.6-10.6 s</title></rect>
-<rect x="284.5" y="1160.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 5: read, 10.6-10.6 s</title></rect>
-<rect x="286.0" y="1160.5" width="8.6" height="12" rx="1.5" class="k-model_call"><title>X-6 op 6: model_call, 10.6-14.1 s</title></rect>
-<rect x="293.1" y="1160.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 7: read, 14.1-14.1 s</title></rect>
-<rect x="293.1" y="1160.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 8: model_call, 14.1-14.1 s</title></rect>
-<rect x="293.1" y="1160.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 9: read, 14.1-14.1 s</title></rect>
-<rect x="293.1" y="1160.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 10: model_call, 14.1-14.1 s</title></rect>
-<rect x="293.1" y="1160.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 11: read, 14.1-14.1 s</title></rect>
-<rect x="293.1" y="1160.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 12: model_call, 14.1-14.1 s</title></rect>
-<rect x="293.1" y="1160.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-6 op 13: other, 14.1-14.1 s</title></rect>
-<rect x="293.1" y="1160.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 14: model_call, 14.1-14.2 s</title></rect>
-<rect x="294.9" y="1160.5" width="13.0" height="12" rx="1.5" class="k-other"><title>X-6 op 15: other, 14.2-19.5 s</title></rect>
-<rect x="307.9" y="1160.5" width="13.3" height="12" rx="1.5" class="k-model_call"><title>X-6 op 16: model_call, agent_message, 19.5-24.9 s</title></rect>
-<rect x="321.1" y="1160.5" width="3.4" height="12" rx="1.5" class="k-model_call"><title>X-6 op 17: model_call, 24.9-26.3 s</title></rect>
-<rect x="323.1" y="1160.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 18: read, 26.3-26.3 s</title></rect>
-<rect x="323.1" y="1160.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 19: model_call, 26.3-26.5 s</title></rect>
-<rect x="323.5" y="1160.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-6 op 20: test, 26.5-26.8 s</title></rect>
-<rect x="325.8" y="1160.5" width="15.2" height="12" rx="1.5" class="k-model_call"><title>X-6 op 21: model_call, 26.8-33.0 s</title></rect>
-<rect x="339.5" y="1160.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>X-6 op 22: edit, changed, 33.0-33.0 s</title></rect>
-<rect x="339.5" y="1160.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 23: model_call, 33.0-33.2 s</title></rect>
-<rect x="340.0" y="1160.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-6 op 24: test, fail, 33.2-33.2 s</title></rect>
-<rect x="341.5" y="1160.5" width="17.4" height="12" rx="1.5" class="k-model_call"><title>X-6 op 25: model_call, 33.2-40.3 s</title></rect>
-<rect x="357.4" y="1160.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>X-6 op 26: edit, changed, 40.3-40.3 s</title></rect>
-<rect x="357.4" y="1160.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 27: model_call, 40.3-40.4 s</title></rect>
-<rect x="357.7" y="1160.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-6 op 28: test, 40.4-40.4 s</title></rect>
-<rect x="357.7" y="1160.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 29: model_call, 40.4-40.6 s</title></rect>
-<rect x="358.2" y="1160.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-6 op 30: other, 40.6-40.7 s</title></rect>
-<rect x="359.9" y="1160.5" width="15.5" height="12" rx="1.5" class="k-model_call"><title>X-6 op 31: model_call, agent_message, 40.7-47.0 s</title></rect>
-<rect x="375.4" y="1160.5" width="2.7" height="12" rx="1.5" class="k-model_call"><title>X-6 op 32: model_call, 47.0-48.1 s</title></rect>
-<rect x="376.6" y="1160.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 33: read, 48.1-48.1 s</title></rect>
-<rect x="376.6" y="1160.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 34: model_call, 48.1-48.2 s</title></rect>
-<rect x="378.3" y="1160.5" width="4.7" height="12" rx="1.5" class="k-push"><title>X-6 op 35: push, 48.2-50.1 s</title></rect>
-<rect x="383.0" y="1160.5" width="8.1" height="12" rx="1.5" class="k-model_call"><title>X-6 op 36: model_call, 50.1-53.4 s</title></rect>
-<rect x="389.6" y="1160.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-6 op 37: test, 53.4-53.4 s</title></rect>
-<rect x="391.1" y="1160.5" width="5.6" height="12" rx="1.5" class="k-model_call"><title>X-6 op 38: model_call, 53.4-55.7 s</title></rect>
-<rect x="396.7" y="1160.5" width="4.2" height="12" rx="1.5" class="k-pr_open"><title>X-6 op 39: pr_open, 55.7-57.4 s</title></rect>
-<rect x="400.9" y="1160.5" width="5.6" height="12" rx="1.5" class="k-model_call"><title>X-6 op 40: model_call, 57.4-59.7 s</title></rect>
-<rect x="405.0" y="1160.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 41: read, 59.7-59.7 s</title></rect>
-<rect x="406.5" y="1160.5" width="4.7" height="12" rx="1.5" class="k-model_call"><title>X-6 op 42: model_call, 59.7-61.6 s</title></rect>
-<rect x="411.2" y="1160.5" width="27.5" height="12" rx="1.5" class="k-ci_wait"><title>X-6 op 43: ci_wait, 61.6-72.8 s</title></rect>
-<rect x="411.2" y="1160.5" width="7.4" height="12" rx="1.5" class="k-model_call"><title>X-6 op 44: model_call, agent_message, 61.6-64.6 s</title></rect>
-<rect x="438.7" y="1160.5" width="5.4" height="12" rx="1.5" class="k-model_call"><title>X-6 op 45: model_call, agent_message, 72.8-75.0 s</title></rect>
-<rect x="442.8" y="1160.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-6 op 46: other, turn.completed, 75.1-75.1 s</title></rect>
-<rect x="20" y="1191" width="12" height="9" rx="1.5" class="k-model_call"/>
-<text x="37" y="1199" fill="currentColor">model call</text>
-<rect x="172" y="1191" width="12" height="9" rx="1.5" class="k-read"/>
-<text x="189" y="1199" fill="currentColor">read</text>
-<rect x="324" y="1191" width="12" height="9" rx="1.5" class="k-edit"/>
-<text x="341" y="1199" fill="currentColor">edit</text>
-<rect x="476" y="1191" width="12" height="9" rx="1.5" class="k-test"/>
-<text x="493" y="1199" fill="currentColor">test</text>
-<rect x="628" y="1191" width="12" height="9" rx="1.5" class="k-gate"/>
-<text x="645" y="1199" fill="currentColor">gate</text>
-<rect x="780" y="1191" width="12" height="9" rx="1.5" class="k-push"/>
-<text x="797" y="1199" fill="currentColor">push</text>
-<rect x="932" y="1191" width="12" height="9" rx="1.5" class="k-pr_open"/>
-<text x="949" y="1199" fill="currentColor">pr open</text>
-<rect x="20" y="1209" width="12" height="9" rx="1.5" class="k-ci_wait"/>
-<text x="37" y="1217" fill="currentColor">ci wait</text>
-<rect x="172" y="1209" width="12" height="9" rx="1.5" class="k-ci_pass"/>
-<text x="189" y="1217" fill="currentColor">ci pass</text>
-<rect x="324" y="1209" width="12" height="9" rx="1.5" class="k-approval_wait"/>
-<text x="341" y="1217" fill="currentColor">approval wait</text>
-<rect x="476" y="1209" width="12" height="9" rx="1.5" class="k-refusal"/>
-<text x="493" y="1217" fill="currentColor">refusal</text>
-<rect x="628" y="1209" width="12" height="9" rx="1.5" class="k-no_progress"/>
-<text x="645" y="1217" fill="currentColor">no progress</text>
-<rect x="780" y="1209" width="12" height="9" rx="1.5" class="k-resume"/>
-<text x="797" y="1217" fill="currentColor">resume</text>
-<rect x="932" y="1209" width="12" height="9" rx="1.5" class="k-other"/>
-<text x="949" y="1217" fill="currentColor">other</text>
-<rect x="20" y="1233" width="12" height="9" rx="1.5" class="k-pr_open noop"/>
-<text x="37" y="1241" fill="currentColor">hollow: the step changed nothing</text>
-<rect x="268" y="1233" width="12" height="9" rx="1.5" class="k-edit call"/>
-<text x="285" y="1241" fill="currentColor">outlined: a takt step taken by the harness (one model call)</text>
-<rect x="620" y="1233" width="6" height="9" rx="1.5" class="k-test placed"/>
-<text x="632" y="1241" fill="currentColor">dashed: no time recorded, placed in order between timed operations</text>
-<text x="20" y="1267" font-size="10.5" fill="currentColor" fill-opacity=".7">Data: 2026-10-18 (UTC), docs/metrics/journeys.jsonl from the raw records each run in docs/metrics/scenario-runs.jsonl names. No token or cost figure is read from the journeys.</text>
-<text x="20" y="1283" font-size="10.5" fill="currentColor" fill-opacity=".7">Free and isolated runs without a stream record only a turn count (Claude Code) or their items in order (Codex); runs with a stream are timed. First results, not a benchmark.</text>
+<text x="30" y="668" font-size="10.5" font-style="italic" fill="currentColor" fill-opacity=".8">a0b8576</text>
+<text x="40" y="687.5" fill="currentColor">T-14</text>
+<line x1="260.0" x2="260.0" y1="675" y2="692" class="grid"/>
+<line x1="333.6" x2="333.6" y1="675" y2="692" class="grid"/>
+<line x1="407.3" x2="407.3" y1="675" y2="692" class="grid"/>
+<line x1="480.9" x2="480.9" y1="675" y2="692" class="grid"/>
+<line x1="554.5" x2="554.5" y1="675" y2="692" class="grid"/>
+<line x1="628.2" x2="628.2" y1="675" y2="692" class="grid"/>
+<line x1="701.8" x2="701.8" y1="675" y2="692" class="grid"/>
+<line x1="775.5" x2="775.5" y1="675" y2="692" class="grid"/>
+<line x1="849.1" x2="849.1" y1="675" y2="692" class="grid"/>
+<line x1="922.7" x2="922.7" y1="675" y2="692" class="grid"/>
+<line x1="996.4" x2="996.4" y1="675" y2="692" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="675" y2="692" class="grid"/>
+<rect x="265.9" y="677.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-14 op 1: test (tests.run), pass, 3.0-3.0 s</title></rect>
+<rect x="265.9" y="677.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-14 op 2: gate (gate.run), pass, 3.0-3.0 s</title></rect>
+<rect x="265.9" y="677.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-14 op 3: pr_open (pr.open), nothing, 3.0-3.0 s</title></rect>
+<text x="265.9" y="676" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="265.9" y="677.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-14 op 4: other (ci.read), nothing, 3.0-3.0 s</title></rect>
+<rect x="269.6" y="677.5" width="42.7" height="12" rx="1.5" class="k-edit call"><title>T-14 op 5: edit (implementation.edit), changed, 3.9-21.3 s</title></rect>
+<rect x="310.0" y="677.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-14 op 6: test (tests.run), pass, 21.0-21.0 s</title></rect>
+<rect x="310.0" y="677.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-14 op 7: gate (gate.run), pass, 21.0-21.0 s</title></rect>
+<rect x="311.5" y="677.5" width="9.8" height="12" rx="1.5" class="k-pr_open"><title>T-14 op 8: pr_open (pr.open), opened, 21.0-25.0 s</title></rect>
+<rect x="321.4" y="677.5" width="4.9" height="12" rx="1.5" class="k-ci_wait"><title>T-14 op 9: ci_wait (ci.read), pending, 25.0-27.0 s</title></rect>
+<rect x="326.3" y="677.5" width="76.1" height="12" rx="1.5" class="k-ci_pass"><title>T-14 op 10: ci_pass (ci.read), pass, 27.0-58.0 s</title></rect>
+<rect x="404.6" y="677.5" width="46.1" height="12" rx="1.5" class="k-edit call"><title>T-14 op 11: edit (tests.write), changed, 58.9-77.7 s</title></rect>
+<rect x="447.5" y="677.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-14 op 12: test (tests.run), pass, 77.0-77.0 s</title></rect>
+<rect x="447.5" y="677.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-14 op 13: gate (gate.run), pass, 77.0-78.0 s</title></rect>
+<rect x="451.5" y="677.5" width="4.9" height="12" rx="1.5" class="k-push"><title>T-14 op 14: push (pr.open), pushed, 78.0-80.0 s</title></rect>
+<rect x="454.9" y="677.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-14 op 15: other (ci.read), nothing, 80.0-81.0 s</title></rect>
+<rect x="458.8" y="677.5" width="76.1" height="12" rx="1.5" class="k-push"><title>T-14 op 16: push (pr.open), pushed, 81.0-112.0 s</title></rect>
+<rect x="534.9" y="677.5" width="4.9" height="12" rx="1.5" class="k-ci_pass"><title>T-14 op 17: ci_pass (ci.read), pass, 112.0-114.0 s</title></rect>
+<text x="534.9" y="676" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="540.8" y="677.5" width="32.4" height="12" rx="1.5" class="k-model_call call"><title>T-14 op 18: model_call (repository.merge), approval, 114.4-127.6 s</title></rect>
+<rect x="570.2" y="677.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-14 op 19: approval_wait, approval, 127.0-127.0 s</title></rect>
+<text x="40" y="708.5" fill="currentColor">T-15</text>
+<line x1="260.0" x2="260.0" y1="696" y2="713" class="grid"/>
+<line x1="333.6" x2="333.6" y1="696" y2="713" class="grid"/>
+<line x1="407.3" x2="407.3" y1="696" y2="713" class="grid"/>
+<line x1="480.9" x2="480.9" y1="696" y2="713" class="grid"/>
+<line x1="554.5" x2="554.5" y1="696" y2="713" class="grid"/>
+<line x1="628.2" x2="628.2" y1="696" y2="713" class="grid"/>
+<line x1="701.8" x2="701.8" y1="696" y2="713" class="grid"/>
+<line x1="775.5" x2="775.5" y1="696" y2="713" class="grid"/>
+<line x1="849.1" x2="849.1" y1="696" y2="713" class="grid"/>
+<line x1="922.7" x2="922.7" y1="696" y2="713" class="grid"/>
+<line x1="996.4" x2="996.4" y1="696" y2="713" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="696" y2="713" class="grid"/>
+<rect x="270.8" y="698.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-15 op 1: test (tests.run), pass, 5.0-5.0 s</title></rect>
+<rect x="270.8" y="698.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-15 op 2: gate (gate.run), pass, 5.0-5.0 s</title></rect>
+<rect x="270.8" y="698.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-15 op 3: pr_open (pr.open), nothing, 5.0-5.0 s</title></rect>
+<text x="270.8" y="697" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="270.8" y="698.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-15 op 4: other (ci.read), nothing, 5.0-5.0 s</title></rect>
+<rect x="274.0" y="698.5" width="48.4" height="12" rx="1.5" class="k-edit call"><title>T-15 op 5: edit (implementation.edit), changed, 5.7-25.4 s</title></rect>
+<rect x="319.9" y="698.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-15 op 6: test (tests.run), pass, 25.0-25.0 s</title></rect>
+<rect x="319.9" y="698.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-15 op 7: gate (gate.run), pass, 25.0-25.0 s</title></rect>
+<rect x="321.4" y="698.5" width="12.3" height="12" rx="1.5" class="k-pr_open"><title>T-15 op 8: pr_open (pr.open), opened, 25.0-30.0 s</title></rect>
+<rect x="332.1" y="698.5" width="3.0" height="12" rx="1.5" class="k-ci_wait"><title>T-15 op 9: ci_wait (ci.read), pending, 30.0-31.0 s</title></rect>
+<rect x="336.1" y="698.5" width="78.5" height="12" rx="1.5" class="k-ci_pass"><title>T-15 op 10: ci_pass (ci.read), pass, 31.0-63.0 s</title></rect>
+<rect x="415.6" y="698.5" width="46.4" height="12" rx="1.5" class="k-edit call"><title>T-15 op 11: edit (tests.write), changed, 63.4-82.3 s</title></rect>
+<rect x="459.8" y="698.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-15 op 12: test (tests.run), pass, 82.0-82.0 s</title></rect>
+<rect x="459.8" y="698.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-15 op 13: gate (gate.run), pass, 82.0-82.0 s</title></rect>
+<rect x="461.3" y="698.5" width="9.8" height="12" rx="1.5" class="k-push"><title>T-15 op 14: push (pr.open), pushed, 82.0-86.0 s</title></rect>
+<rect x="469.6" y="698.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-15 op 15: other (ci.read), nothing, 86.0-86.0 s</title></rect>
+<rect x="471.1" y="698.5" width="78.5" height="12" rx="1.5" class="k-push"><title>T-15 op 16: push (pr.open), pushed, 86.0-118.0 s</title></rect>
+<rect x="548.1" y="698.5" width="3.0" height="12" rx="1.5" class="k-ci_pass"><title>T-15 op 17: ci_pass (ci.read), pass, 118.0-119.0 s</title></rect>
+<text x="548.1" y="697" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="554.3" y="698.5" width="21.1" height="12" rx="1.5" class="k-model_call call"><title>T-15 op 18: model_call (repository.merge), approval, 119.9-128.5 s</title></rect>
+<rect x="572.7" y="698.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-15 op 19: approval_wait, approval, 128.0-128.0 s</title></rect>
+<text x="40" y="729.5" fill="currentColor">T-16</text>
+<line x1="260.0" x2="260.0" y1="717" y2="734" class="grid"/>
+<line x1="333.6" x2="333.6" y1="717" y2="734" class="grid"/>
+<line x1="407.3" x2="407.3" y1="717" y2="734" class="grid"/>
+<line x1="480.9" x2="480.9" y1="717" y2="734" class="grid"/>
+<line x1="554.5" x2="554.5" y1="717" y2="734" class="grid"/>
+<line x1="628.2" x2="628.2" y1="717" y2="734" class="grid"/>
+<line x1="701.8" x2="701.8" y1="717" y2="734" class="grid"/>
+<line x1="775.5" x2="775.5" y1="717" y2="734" class="grid"/>
+<line x1="849.1" x2="849.1" y1="717" y2="734" class="grid"/>
+<line x1="922.7" x2="922.7" y1="717" y2="734" class="grid"/>
+<line x1="996.4" x2="996.4" y1="717" y2="734" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="717" y2="734" class="grid"/>
+<rect x="265.9" y="719.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-16 op 1: test (tests.run), pass, 3.0-4.0 s</title></rect>
+<rect x="268.3" y="719.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-16 op 2: gate (gate.run), pass, 4.0-4.0 s</title></rect>
+<rect x="268.3" y="719.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-16 op 3: pr_open (pr.open), nothing, 4.0-4.0 s</title></rect>
+<text x="268.3" y="718" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="268.3" y="719.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-16 op 4: other (ci.read), nothing, 4.0-4.0 s</title></rect>
+<rect x="270.3" y="719.5" width="43.0" height="12" rx="1.5" class="k-edit call"><title>T-16 op 5: edit (implementation.edit), changed, 4.2-21.7 s</title></rect>
+<rect x="310.0" y="719.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-16 op 6: test (tests.run), pass, 21.0-21.0 s</title></rect>
+<rect x="310.0" y="719.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-16 op 7: gate (gate.run), pass, 21.0-21.0 s</title></rect>
+<rect x="311.5" y="719.5" width="12.3" height="12" rx="1.5" class="k-pr_open"><title>T-16 op 8: pr_open (pr.open), opened, 21.0-26.0 s</title></rect>
+<rect x="322.3" y="719.5" width="3.0" height="12" rx="1.5" class="k-ci_wait"><title>T-16 op 9: ci_wait (ci.read), pending, 26.0-27.0 s</title></rect>
+<rect x="326.3" y="719.5" width="78.5" height="12" rx="1.5" class="k-ci_pass"><title>T-16 op 10: ci_pass (ci.read), pass, 27.0-59.0 s</title></rect>
+<rect x="407.0" y="719.5" width="49.6" height="12" rx="1.5" class="k-edit call"><title>T-16 op 11: edit (tests.write), changed, 59.9-80.1 s</title></rect>
+<rect x="454.9" y="719.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-16 op 12: test (tests.run), pass, 80.0-81.0 s</title></rect>
+<rect x="457.3" y="719.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-16 op 13: gate (gate.run), pass, 81.0-81.0 s</title></rect>
+<rect x="458.8" y="719.5" width="7.4" height="12" rx="1.5" class="k-push"><title>T-16 op 14: push (pr.open), pushed, 81.0-84.0 s</title></rect>
+<rect x="464.7" y="719.5" width="3.0" height="12" rx="1.5" class="k-ci_wait"><title>T-16 op 15: ci_wait (ci.read), pending, 84.0-85.0 s</title></rect>
+<rect x="468.6" y="719.5" width="78.5" height="12" rx="1.5" class="k-push"><title>T-16 op 16: push (pr.open), pushed, 85.0-117.0 s</title></rect>
+<rect x="545.7" y="719.5" width="3.0" height="12" rx="1.5" class="k-ci_pass"><title>T-16 op 17: ci_pass (ci.read), pass, 117.0-118.0 s</title></rect>
+<text x="545.7" y="718" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="551.8" y="719.5" width="20.6" height="12" rx="1.5" class="k-model_call call"><title>T-16 op 18: model_call (repository.merge), approval, 118.9-127.3 s</title></rect>
+<rect x="570.2" y="719.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-16 op 19: approval_wait, approval, 127.0-127.0 s</title></rect>
+<text x="40" y="750.5" fill="currentColor">T-17</text>
+<line x1="260.0" x2="260.0" y1="738" y2="755" class="grid"/>
+<line x1="333.6" x2="333.6" y1="738" y2="755" class="grid"/>
+<line x1="407.3" x2="407.3" y1="738" y2="755" class="grid"/>
+<line x1="480.9" x2="480.9" y1="738" y2="755" class="grid"/>
+<line x1="554.5" x2="554.5" y1="738" y2="755" class="grid"/>
+<line x1="628.2" x2="628.2" y1="738" y2="755" class="grid"/>
+<line x1="701.8" x2="701.8" y1="738" y2="755" class="grid"/>
+<line x1="775.5" x2="775.5" y1="738" y2="755" class="grid"/>
+<line x1="849.1" x2="849.1" y1="738" y2="755" class="grid"/>
+<line x1="922.7" x2="922.7" y1="738" y2="755" class="grid"/>
+<line x1="996.4" x2="996.4" y1="738" y2="755" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="738" y2="755" class="grid"/>
+<rect x="265.9" y="740.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-17 op 1: test (tests.run), pass, 3.0-3.0 s</title></rect>
+<rect x="265.9" y="740.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-17 op 2: gate (gate.run), pass, 3.0-3.0 s</title></rect>
+<rect x="265.9" y="740.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-17 op 3: pr_open (pr.open), nothing, 3.0-3.0 s</title></rect>
+<text x="265.9" y="739" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="265.9" y="740.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-17 op 4: other (ci.read), nothing, 3.0-3.0 s</title></rect>
+<rect x="269.8" y="740.5" width="45.7" height="12" rx="1.5" class="k-edit call"><title>T-17 op 5: edit (implementation.edit), changed, 4.0-22.6 s</title></rect>
+<rect x="312.5" y="740.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-17 op 6: test (tests.run), pass, 22.0-22.0 s</title></rect>
+<rect x="312.5" y="740.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-17 op 7: gate (gate.run), pass, 22.0-22.0 s</title></rect>
+<rect x="314.0" y="740.5" width="12.3" height="12" rx="1.5" class="k-pr_open"><title>T-17 op 8: pr_open (pr.open), opened, 22.0-27.0 s</title></rect>
+<rect x="326.3" y="740.5" width="4.9" height="12" rx="1.5" class="k-ci_wait"><title>T-17 op 9: ci_wait (ci.read), pending, 27.0-29.0 s</title></rect>
+<rect x="331.2" y="740.5" width="76.1" height="12" rx="1.5" class="k-ci_pass"><title>T-17 op 10: ci_pass (ci.read), pass, 29.0-60.0 s</title></rect>
+<rect x="408.5" y="740.5" width="46.9" height="12" rx="1.5" class="k-edit call"><title>T-17 op 11: edit (tests.write), changed, 60.5-79.6 s</title></rect>
+<rect x="452.4" y="740.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-17 op 12: test (tests.run), pass, 79.0-80.0 s</title></rect>
+<rect x="454.9" y="740.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-17 op 13: gate (gate.run), pass, 80.0-80.0 s</title></rect>
+<rect x="456.4" y="740.5" width="4.9" height="12" rx="1.5" class="k-push"><title>T-17 op 14: push (pr.open), pushed, 80.0-82.0 s</title></rect>
+<rect x="459.8" y="740.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-17 op 15: other (ci.read), nothing, 82.0-83.0 s</title></rect>
+<rect x="463.7" y="740.5" width="78.5" height="12" rx="1.5" class="k-push"><title>T-17 op 16: push (pr.open), pushed, 83.0-115.0 s</title></rect>
+<rect x="540.8" y="740.5" width="3.0" height="12" rx="1.5" class="k-ci_pass"><title>T-17 op 17: ci_pass (ci.read), pass, 115.0-116.0 s</title></rect>
+<text x="540.8" y="739" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="546.4" y="740.5" width="30.2" height="12" rx="1.5" class="k-model_call call"><title>T-17 op 18: model_call (repository.merge), approval, 116.7-129.0 s</title></rect>
+<rect x="575.1" y="740.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-17 op 19: approval_wait, approval, 129.0-129.0 s</title></rect>
+<text x="40" y="771.5" fill="currentColor">T-18</text>
+<line x1="260.0" x2="260.0" y1="759" y2="776" class="grid"/>
+<line x1="333.6" x2="333.6" y1="759" y2="776" class="grid"/>
+<line x1="407.3" x2="407.3" y1="759" y2="776" class="grid"/>
+<line x1="480.9" x2="480.9" y1="759" y2="776" class="grid"/>
+<line x1="554.5" x2="554.5" y1="759" y2="776" class="grid"/>
+<line x1="628.2" x2="628.2" y1="759" y2="776" class="grid"/>
+<line x1="701.8" x2="701.8" y1="759" y2="776" class="grid"/>
+<line x1="775.5" x2="775.5" y1="759" y2="776" class="grid"/>
+<line x1="849.1" x2="849.1" y1="759" y2="776" class="grid"/>
+<line x1="922.7" x2="922.7" y1="759" y2="776" class="grid"/>
+<line x1="996.4" x2="996.4" y1="759" y2="776" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="759" y2="776" class="grid"/>
+<rect x="265.9" y="761.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-18 op 1: test (tests.run), pass, 3.0-3.0 s</title></rect>
+<rect x="265.9" y="761.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-18 op 2: gate (gate.run), pass, 3.0-3.0 s</title></rect>
+<rect x="265.9" y="761.5" width="3.0" height="12" rx="1.5" class="k-pr_open noop"><title>T-18 op 3: pr_open (pr.open), nothing, 3.0-3.0 s</title></rect>
+<text x="265.9" y="760" font-size="8.5" fill="currentColor">seed pr.open</text>
+<rect x="265.9" y="761.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-18 op 4: other (ci.read), nothing, 3.0-3.0 s</title></rect>
+<rect x="269.8" y="761.5" width="42.7" height="12" rx="1.5" class="k-edit call"><title>T-18 op 5: edit (implementation.edit), changed, 4.0-21.4 s</title></rect>
+<rect x="310.0" y="761.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-18 op 6: test (tests.run), pass, 21.0-21.0 s</title></rect>
+<rect x="310.0" y="761.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-18 op 7: gate (gate.run), pass, 21.0-21.0 s</title></rect>
+<rect x="311.5" y="761.5" width="9.8" height="12" rx="1.5" class="k-pr_open"><title>T-18 op 8: pr_open (pr.open), opened, 21.0-25.0 s</title></rect>
+<rect x="321.4" y="761.5" width="4.9" height="12" rx="1.5" class="k-ci_wait"><title>T-18 op 9: ci_wait (ci.read), pending, 25.0-27.0 s</title></rect>
+<rect x="326.3" y="761.5" width="76.1" height="12" rx="1.5" class="k-ci_pass"><title>T-18 op 10: ci_pass (ci.read), pass, 27.0-58.0 s</title></rect>
+<rect x="404.3" y="761.5" width="42.5" height="12" rx="1.5" class="k-edit call"><title>T-18 op 11: edit (tests.write), changed, 58.8-76.1 s</title></rect>
+<rect x="445.0" y="761.5" width="3.0" height="12" rx="1.5" class="k-test"><title>T-18 op 12: test (tests.run), pass, 76.0-76.0 s</title></rect>
+<rect x="445.0" y="761.5" width="3.0" height="12" rx="1.5" class="k-gate"><title>T-18 op 13: gate (gate.run), pass, 76.0-76.0 s</title></rect>
+<rect x="446.5" y="761.5" width="4.9" height="12" rx="1.5" class="k-push"><title>T-18 op 14: push (pr.open), pushed, 76.0-78.0 s</title></rect>
+<rect x="450.0" y="761.5" width="3.0" height="12" rx="1.5" class="k-other noop"><title>T-18 op 15: other (ci.read), nothing, 78.0-79.0 s</title></rect>
+<rect x="453.9" y="761.5" width="78.5" height="12" rx="1.5" class="k-push"><title>T-18 op 16: push (pr.open), pushed, 79.0-111.0 s</title></rect>
+<rect x="531.0" y="761.5" width="3.0" height="12" rx="1.5" class="k-ci_pass"><title>T-18 op 17: ci_pass (ci.read), pass, 111.0-112.0 s</title></rect>
+<text x="531.0" y="760" font-size="8.5" fill="currentColor">2nd CI</text>
+<rect x="537.4" y="761.5" width="25.0" height="12" rx="1.5" class="k-model_call call"><title>T-18 op 18: model_call (repository.merge), approval, 113.0-123.2 s</title></rect>
+<rect x="560.4" y="761.5" width="3.0" height="12" rx="1.5" class="k-approval_wait"><title>T-18 op 19: approval_wait, approval, 123.0-123.0 s</title></rect>
+<text x="20" y="798" font-size="12" font-weight="600" fill="currentColor">Claude Code, isolated like takt&#x27;s harness</text>
+<line x1="20" x2="1070" y1="802" y2="802" class="grid"/>
+<text x="40" y="818.5" fill="currentColor">I-modefail-1</text>
+<line x1="260.0" x2="260.0" y1="806" y2="823" class="grid"/>
+<line x1="333.6" x2="333.6" y1="806" y2="823" class="grid"/>
+<line x1="407.3" x2="407.3" y1="806" y2="823" class="grid"/>
+<line x1="480.9" x2="480.9" y1="806" y2="823" class="grid"/>
+<line x1="554.5" x2="554.5" y1="806" y2="823" class="grid"/>
+<line x1="628.2" x2="628.2" y1="806" y2="823" class="grid"/>
+<line x1="701.8" x2="701.8" y1="806" y2="823" class="grid"/>
+<line x1="775.5" x2="775.5" y1="806" y2="823" class="grid"/>
+<line x1="849.1" x2="849.1" y1="806" y2="823" class="grid"/>
+<line x1="922.7" x2="922.7" y1="806" y2="823" class="grid"/>
+<line x1="996.4" x2="996.4" y1="806" y2="823" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="806" y2="823" class="grid"/>
+<rect x="260.0" y="808.5" width="9.8" height="12" rx="1.5" class="k-refusal"><title>I-modefail-1 op 1: refusal, refused, 0.0-4.0 s</title></rect>
+<text x="40" y="839.5" fill="currentColor">I-modefail-2</text>
+<line x1="260.0" x2="260.0" y1="827" y2="844" class="grid"/>
+<line x1="333.6" x2="333.6" y1="827" y2="844" class="grid"/>
+<line x1="407.3" x2="407.3" y1="827" y2="844" class="grid"/>
+<line x1="480.9" x2="480.9" y1="827" y2="844" class="grid"/>
+<line x1="554.5" x2="554.5" y1="827" y2="844" class="grid"/>
+<line x1="628.2" x2="628.2" y1="827" y2="844" class="grid"/>
+<line x1="701.8" x2="701.8" y1="827" y2="844" class="grid"/>
+<line x1="775.5" x2="775.5" y1="827" y2="844" class="grid"/>
+<line x1="849.1" x2="849.1" y1="827" y2="844" class="grid"/>
+<line x1="922.7" x2="922.7" y1="827" y2="844" class="grid"/>
+<line x1="996.4" x2="996.4" y1="827" y2="844" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="827" y2="844" class="grid"/>
+<rect x="260.0" y="829.5" width="9.8" height="12" rx="1.5" class="k-refusal"><title>I-modefail-2 op 1: refusal, refused, 0.0-4.0 s</title></rect>
+<text x="40" y="860.5" fill="currentColor">I-modefail-3</text>
+<line x1="260.0" x2="260.0" y1="848" y2="865" class="grid"/>
+<line x1="333.6" x2="333.6" y1="848" y2="865" class="grid"/>
+<line x1="407.3" x2="407.3" y1="848" y2="865" class="grid"/>
+<line x1="480.9" x2="480.9" y1="848" y2="865" class="grid"/>
+<line x1="554.5" x2="554.5" y1="848" y2="865" class="grid"/>
+<line x1="628.2" x2="628.2" y1="848" y2="865" class="grid"/>
+<line x1="701.8" x2="701.8" y1="848" y2="865" class="grid"/>
+<line x1="775.5" x2="775.5" y1="848" y2="865" class="grid"/>
+<line x1="849.1" x2="849.1" y1="848" y2="865" class="grid"/>
+<line x1="922.7" x2="922.7" y1="848" y2="865" class="grid"/>
+<line x1="996.4" x2="996.4" y1="848" y2="865" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="848" y2="865" class="grid"/>
+<rect x="260.0" y="850.5" width="9.8" height="12" rx="1.5" class="k-refusal"><title>I-modefail-3 op 1: refusal, refused, 0.0-4.0 s</title></rect>
+<text x="40" y="881.5" fill="currentColor">I-1 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
+<rect x="260.0" y="871.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 1: model_call</title></rect>
+<rect x="276.0" y="871.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 2: model_call</title></rect>
+<rect x="292.0" y="871.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 3: model_call</title></rect>
+<rect x="308.0" y="871.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 4: model_call</title></rect>
+<rect x="324.0" y="871.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 5: model_call</title></rect>
+<rect x="340.0" y="871.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 6: model_call</title></rect>
+<rect x="356.0" y="871.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 7: model_call</title></rect>
+<rect x="372.0" y="871.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-1 op 8: model_call</title></rect>
+<text x="392.5" y="881.0" font-size="9.5" fill="currentColor" fill-opacity=".7">8 operations; 51 s in all</text>
+<text x="40" y="902.5" fill="currentColor">I-2 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
+<rect x="260.0" y="892.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 1: model_call</title></rect>
+<rect x="276.0" y="892.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 2: model_call</title></rect>
+<rect x="292.0" y="892.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 3: model_call</title></rect>
+<rect x="308.0" y="892.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 4: model_call</title></rect>
+<rect x="324.0" y="892.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 5: model_call</title></rect>
+<rect x="340.0" y="892.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 6: model_call</title></rect>
+<rect x="356.0" y="892.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 7: model_call</title></rect>
+<rect x="372.0" y="892.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-2 op 8: model_call</title></rect>
+<text x="392.5" y="902.0" font-size="9.5" fill="currentColor" fill-opacity=".7">8 operations; 74 s in all</text>
+<text x="40" y="923.5" fill="currentColor">I-3 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
+<rect x="260.0" y="913.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 1: model_call</title></rect>
+<rect x="276.0" y="913.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 2: model_call</title></rect>
+<rect x="292.0" y="913.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 3: model_call</title></rect>
+<rect x="308.0" y="913.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 4: model_call</title></rect>
+<rect x="324.0" y="913.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 5: model_call</title></rect>
+<rect x="340.0" y="913.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 6: model_call</title></rect>
+<rect x="356.0" y="913.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 7: model_call</title></rect>
+<rect x="372.0" y="913.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 8: model_call</title></rect>
+<rect x="388.0" y="913.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>I-3 op 9: model_call</title></rect>
+<text x="408.5" y="923.0" font-size="9.5" fill="currentColor" fill-opacity=".7">9 operations; 64 s in all</text>
+<text x="40" y="944.5" fill="currentColor">I-4</text>
+<line x1="260.0" x2="260.0" y1="932" y2="949" class="grid"/>
+<line x1="333.6" x2="333.6" y1="932" y2="949" class="grid"/>
+<line x1="407.3" x2="407.3" y1="932" y2="949" class="grid"/>
+<line x1="480.9" x2="480.9" y1="932" y2="949" class="grid"/>
+<line x1="554.5" x2="554.5" y1="932" y2="949" class="grid"/>
+<line x1="628.2" x2="628.2" y1="932" y2="949" class="grid"/>
+<line x1="701.8" x2="701.8" y1="932" y2="949" class="grid"/>
+<line x1="775.5" x2="775.5" y1="932" y2="949" class="grid"/>
+<line x1="849.1" x2="849.1" y1="932" y2="949" class="grid"/>
+<line x1="922.7" x2="922.7" y1="932" y2="949" class="grid"/>
+<line x1="996.4" x2="996.4" y1="932" y2="949" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="932" y2="949" class="grid"/>
+<rect x="270.6" y="934.5" width="6.4" height="12" rx="1.5" class="k-model_call"><title>I-4 op 1: model_call, 4.3-6.9 s</title></rect>
+<rect x="275.4" y="934.5" width="3.0" height="12" rx="1.5" class="k-read"><title>I-4 op 2: read, 6.9-7.0 s</title></rect>
+<rect x="277.2" y="934.5" width="5.4" height="12" rx="1.5" class="k-model_call"><title>I-4 op 3: model_call, 7.0-9.2 s</title></rect>
+<rect x="281.1" y="934.5" width="3.0" height="12" rx="1.5" class="k-read"><title>I-4 op 4: read, 9.2-9.2 s</title></rect>
+<rect x="282.6" y="934.5" width="20.1" height="12" rx="1.5" class="k-model_call"><title>I-4 op 5: model_call, 9.2-17.4 s</title></rect>
+<rect x="301.2" y="934.5" width="3.0" height="12" rx="1.5" class="k-test"><title>I-4 op 6: test, 17.4-17.5 s</title></rect>
+<rect x="303.0" y="934.5" width="10.3" height="12" rx="1.5" class="k-model_call"><title>I-4 op 7: model_call, 17.5-21.7 s</title></rect>
+<rect x="313.3" y="934.5" width="4.9" height="12" rx="1.5" class="k-push"><title>I-4 op 8: push, 21.7-23.7 s</title></rect>
+<rect x="318.2" y="934.5" width="13.3" height="12" rx="1.5" class="k-model_call"><title>I-4 op 9: model_call, 23.7-29.1 s</title></rect>
+<rect x="329.9" y="934.5" width="3.0" height="12" rx="1.5" class="k-pr_open"><title>I-4 op 10: pr_open, 29.1-29.2 s</title></rect>
+<rect x="331.7" y="934.5" width="8.6" height="12" rx="1.5" class="k-model_call"><title>I-4 op 11: model_call, 29.2-32.7 s</title></rect>
+<rect x="340.3" y="934.5" width="4.7" height="12" rx="1.5" class="k-pr_open"><title>I-4 op 12: pr_open, 32.7-34.6 s</title></rect>
+<rect x="344.9" y="934.5" width="5.4" height="12" rx="1.5" class="k-model_call"><title>I-4 op 13: model_call, 34.6-36.8 s</title></rect>
+<rect x="350.3" y="934.5" width="28.0" height="12" rx="1.5" class="k-ci_wait"><title>I-4 op 14: ci_wait, 36.8-48.2 s</title></rect>
+<rect x="378.3" y="934.5" width="12.3" height="12" rx="1.5" class="k-model_call"><title>I-4 op 15: model_call, 48.2-53.2 s</title></rect>
+<rect x="389.1" y="934.5" width="3.0" height="12" rx="1.5" class="k-other"><title>I-4 op 16: other, success, 53.2-53.2 s</title></rect>
+<text x="40" y="965.5" fill="currentColor">I-5</text>
+<line x1="260.0" x2="260.0" y1="953" y2="970" class="grid"/>
+<line x1="333.6" x2="333.6" y1="953" y2="970" class="grid"/>
+<line x1="407.3" x2="407.3" y1="953" y2="970" class="grid"/>
+<line x1="480.9" x2="480.9" y1="953" y2="970" class="grid"/>
+<line x1="554.5" x2="554.5" y1="953" y2="970" class="grid"/>
+<line x1="628.2" x2="628.2" y1="953" y2="970" class="grid"/>
+<line x1="701.8" x2="701.8" y1="953" y2="970" class="grid"/>
+<line x1="775.5" x2="775.5" y1="953" y2="970" class="grid"/>
+<line x1="849.1" x2="849.1" y1="953" y2="970" class="grid"/>
+<line x1="922.7" x2="922.7" y1="953" y2="970" class="grid"/>
+<line x1="996.4" x2="996.4" y1="953" y2="970" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="953" y2="970" class="grid"/>
+<rect x="271.0" y="955.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>I-5 op 1: model_call, 4.5-7.2 s</title></rect>
+<rect x="276.2" y="955.5" width="3.0" height="12" rx="1.5" class="k-read"><title>I-5 op 2: read, 7.2-7.3 s</title></rect>
+<rect x="277.9" y="955.5" width="5.6" height="12" rx="1.5" class="k-model_call"><title>I-5 op 3: model_call, 7.3-9.6 s</title></rect>
+<rect x="282.1" y="955.5" width="3.0" height="12" rx="1.5" class="k-read"><title>I-5 op 4: read, 9.6-9.6 s</title></rect>
+<rect x="283.6" y="955.5" width="20.6" height="12" rx="1.5" class="k-model_call"><title>I-5 op 5: model_call, 9.6-18.0 s</title></rect>
+<rect x="302.7" y="955.5" width="3.0" height="12" rx="1.5" class="k-test"><title>I-5 op 6: test, 18.0-18.2 s</title></rect>
+<rect x="304.7" y="955.5" width="9.6" height="12" rx="1.5" class="k-model_call"><title>I-5 op 7: model_call, 18.2-22.1 s</title></rect>
+<rect x="314.2" y="955.5" width="5.4" height="12" rx="1.5" class="k-push"><title>I-5 op 8: push, 22.1-24.3 s</title></rect>
+<rect x="319.6" y="955.5" width="14.2" height="12" rx="1.5" class="k-model_call"><title>I-5 op 9: model_call, 24.3-30.1 s</title></rect>
+<rect x="333.9" y="955.5" width="4.9" height="12" rx="1.5" class="k-pr_open"><title>I-5 op 10: pr_open, 30.1-32.1 s</title></rect>
+<rect x="338.8" y="955.5" width="5.4" height="12" rx="1.5" class="k-model_call"><title>I-5 op 11: model_call, 32.1-34.3 s</title></rect>
+<rect x="344.2" y="955.5" width="26.8" height="12" rx="1.5" class="k-ci_wait"><title>I-5 op 12: ci_wait, 34.3-45.2 s</title></rect>
+<rect x="370.9" y="955.5" width="13.0" height="12" rx="1.5" class="k-model_call"><title>I-5 op 13: model_call, 45.2-50.5 s</title></rect>
+<rect x="382.7" y="955.5" width="3.0" height="12" rx="1.5" class="k-other"><title>I-5 op 14: other, success, 50.6-50.6 s</title></rect>
+<text x="40" y="986.5" fill="currentColor">I-6</text>
+<line x1="260.0" x2="260.0" y1="974" y2="991" class="grid"/>
+<line x1="333.6" x2="333.6" y1="974" y2="991" class="grid"/>
+<line x1="407.3" x2="407.3" y1="974" y2="991" class="grid"/>
+<line x1="480.9" x2="480.9" y1="974" y2="991" class="grid"/>
+<line x1="554.5" x2="554.5" y1="974" y2="991" class="grid"/>
+<line x1="628.2" x2="628.2" y1="974" y2="991" class="grid"/>
+<line x1="701.8" x2="701.8" y1="974" y2="991" class="grid"/>
+<line x1="775.5" x2="775.5" y1="974" y2="991" class="grid"/>
+<line x1="849.1" x2="849.1" y1="974" y2="991" class="grid"/>
+<line x1="922.7" x2="922.7" y1="974" y2="991" class="grid"/>
+<line x1="996.4" x2="996.4" y1="974" y2="991" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="974" y2="991" class="grid"/>
+<rect x="269.6" y="976.5" width="7.4" height="12" rx="1.5" class="k-model_call"><title>I-6 op 1: model_call, 3.9-6.9 s</title></rect>
+<rect x="275.4" y="976.5" width="3.0" height="12" rx="1.5" class="k-read"><title>I-6 op 2: read, 6.9-6.9 s</title></rect>
+<rect x="276.9" y="976.5" width="4.9" height="12" rx="1.5" class="k-model_call"><title>I-6 op 3: model_call, 6.9-8.9 s</title></rect>
+<rect x="280.3" y="976.5" width="3.0" height="12" rx="1.5" class="k-read"><title>I-6 op 4: read, 8.9-9.0 s</title></rect>
+<rect x="282.1" y="976.5" width="19.9" height="12" rx="1.5" class="k-model_call"><title>I-6 op 5: model_call, 9.0-17.1 s</title></rect>
+<rect x="300.5" y="976.5" width="3.0" height="12" rx="1.5" class="k-test"><title>I-6 op 6: test, 17.1-17.2 s</title></rect>
+<rect x="302.2" y="976.5" width="9.3" height="12" rx="1.5" class="k-model_call"><title>I-6 op 7: model_call, 17.2-21.0 s</title></rect>
+<rect x="311.5" y="976.5" width="5.4" height="12" rx="1.5" class="k-push"><title>I-6 op 8: push, 21.0-23.2 s</title></rect>
+<rect x="316.9" y="976.5" width="10.3" height="12" rx="1.5" class="k-model_call"><title>I-6 op 9: model_call, 23.2-27.4 s</title></rect>
+<rect x="325.8" y="976.5" width="3.0" height="12" rx="1.5" class="k-other"><title>I-6 op 10: other, 27.4-27.5 s</title></rect>
+<rect x="327.5" y="976.5" width="5.9" height="12" rx="1.5" class="k-model_call"><title>I-6 op 11: model_call, 27.5-29.9 s</title></rect>
+<rect x="331.9" y="976.5" width="3.0" height="12" rx="1.5" class="k-pr_open"><title>I-6 op 12: pr_open, 29.9-30.0 s</title></rect>
+<rect x="333.6" y="976.5" width="7.9" height="12" rx="1.5" class="k-model_call"><title>I-6 op 13: model_call, 30.0-33.2 s</title></rect>
+<rect x="341.5" y="976.5" width="4.9" height="12" rx="1.5" class="k-pr_open"><title>I-6 op 14: pr_open, 33.2-35.2 s</title></rect>
+<rect x="346.4" y="976.5" width="5.2" height="12" rx="1.5" class="k-model_call"><title>I-6 op 15: model_call, 35.2-37.3 s</title></rect>
+<rect x="351.6" y="976.5" width="40.0" height="12" rx="1.5" class="k-ci_wait"><title>I-6 op 16: ci_wait, 37.3-53.6 s</title></rect>
+<rect x="391.6" y="976.5" width="11.5" height="12" rx="1.5" class="k-model_call"><title>I-6 op 17: model_call, 53.6-58.3 s</title></rect>
+<rect x="401.6" y="976.5" width="3.0" height="12" rx="1.5" class="k-other"><title>I-6 op 18: other, success, 58.3-58.3 s</title></rect>
+<text x="20" y="1013" font-size="12" font-weight="600" fill="currentColor">Claude Code, full configuration</text>
+<line x1="20" x2="1070" y1="1017" y2="1017" class="grid"/>
+<text x="40" y="1033.5" fill="currentColor">C-1 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
+<rect x="260.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 1: model_call</title></rect>
+<rect x="276.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 2: model_call</title></rect>
+<rect x="292.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 3: model_call</title></rect>
+<rect x="308.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 4: model_call</title></rect>
+<rect x="324.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 5: model_call</title></rect>
+<rect x="340.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 6: model_call</title></rect>
+<rect x="356.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 7: model_call</title></rect>
+<rect x="372.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 8: model_call</title></rect>
+<rect x="388.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 9: model_call</title></rect>
+<rect x="404.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 10: model_call</title></rect>
+<rect x="420.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 11: model_call</title></rect>
+<rect x="436.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 12: model_call</title></rect>
+<rect x="452.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 13: model_call</title></rect>
+<rect x="468.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 14: model_call</title></rect>
+<rect x="484.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 15: model_call</title></rect>
+<rect x="500.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 16: model_call</title></rect>
+<rect x="516.0" y="1023.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-1 op 17: model_call</title></rect>
+<text x="536.5" y="1033.0" font-size="9.5" fill="currentColor" fill-opacity=".7">17 operations; 71 s in all</text>
+<text x="40" y="1054.5" fill="currentColor">C-2 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
+<rect x="260.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 1: model_call</title></rect>
+<rect x="276.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 2: model_call</title></rect>
+<rect x="292.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 3: model_call</title></rect>
+<rect x="308.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 4: model_call</title></rect>
+<rect x="324.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 5: model_call</title></rect>
+<rect x="340.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 6: model_call</title></rect>
+<rect x="356.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 7: model_call</title></rect>
+<rect x="372.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 8: model_call</title></rect>
+<rect x="388.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 9: model_call</title></rect>
+<rect x="404.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 10: model_call</title></rect>
+<rect x="420.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 11: model_call</title></rect>
+<rect x="436.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 12: model_call</title></rect>
+<rect x="452.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 13: model_call</title></rect>
+<rect x="468.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 14: model_call</title></rect>
+<rect x="484.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 15: model_call</title></rect>
+<rect x="500.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 16: model_call</title></rect>
+<rect x="516.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 17: model_call</title></rect>
+<rect x="532.0" y="1044.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-2 op 18: model_call</title></rect>
+<text x="552.5" y="1054.0" font-size="9.5" fill="currentColor" fill-opacity=".7">18 operations; 65 s in all</text>
+<text x="40" y="1075.5" fill="currentColor">C-3 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
+<rect x="260.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 1: model_call</title></rect>
+<rect x="276.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 2: model_call</title></rect>
+<rect x="292.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 3: model_call</title></rect>
+<rect x="308.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 4: model_call</title></rect>
+<rect x="324.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 5: model_call</title></rect>
+<rect x="340.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 6: model_call</title></rect>
+<rect x="356.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 7: model_call</title></rect>
+<rect x="372.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 8: model_call</title></rect>
+<rect x="388.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 9: model_call</title></rect>
+<rect x="404.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 10: model_call</title></rect>
+<rect x="420.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 11: model_call</title></rect>
+<rect x="436.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 12: model_call</title></rect>
+<rect x="452.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 13: model_call</title></rect>
+<rect x="468.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 14: model_call</title></rect>
+<rect x="484.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 15: model_call</title></rect>
+<rect x="500.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 16: model_call</title></rect>
+<rect x="516.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 17: model_call</title></rect>
+<rect x="532.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 18: model_call</title></rect>
+<rect x="548.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 19: model_call</title></rect>
+<rect x="564.0" y="1065.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>C-3 op 20: model_call</title></rect>
+<text x="584.5" y="1075.0" font-size="9.5" fill="currentColor" fill-opacity=".7">20 operations; 64 s in all</text>
+<text x="40" y="1096.5" fill="currentColor">C-4</text>
+<line x1="260.0" x2="260.0" y1="1084" y2="1101" class="grid"/>
+<line x1="333.6" x2="333.6" y1="1084" y2="1101" class="grid"/>
+<line x1="407.3" x2="407.3" y1="1084" y2="1101" class="grid"/>
+<line x1="480.9" x2="480.9" y1="1084" y2="1101" class="grid"/>
+<line x1="554.5" x2="554.5" y1="1084" y2="1101" class="grid"/>
+<line x1="628.2" x2="628.2" y1="1084" y2="1101" class="grid"/>
+<line x1="701.8" x2="701.8" y1="1084" y2="1101" class="grid"/>
+<line x1="775.5" x2="775.5" y1="1084" y2="1101" class="grid"/>
+<line x1="849.1" x2="849.1" y1="1084" y2="1101" class="grid"/>
+<line x1="922.7" x2="922.7" y1="1084" y2="1101" class="grid"/>
+<line x1="996.4" x2="996.4" y1="1084" y2="1101" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="1084" y2="1101" class="grid"/>
+<rect x="271.3" y="1086.5" width="11.8" height="12" rx="1.5" class="k-model_call"><title>C-4 op 1: model_call, 4.6-9.4 s</title></rect>
+<rect x="283.1" y="1086.5" width="3.4" height="12" rx="1.5" class="k-read"><title>C-4 op 2: read, 9.4-10.8 s</title></rect>
+<rect x="286.5" y="1086.5" width="8.8" height="12" rx="1.5" class="k-model_call"><title>C-4 op 3: model_call, 10.8-14.4 s</title></rect>
+<rect x="293.8" y="1086.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-4 op 4: read, 14.4-14.6 s</title></rect>
+<rect x="295.8" y="1086.5" width="33.4" height="12" rx="1.5" class="k-model_call"><title>C-4 op 5: model_call, 14.6-28.2 s</title></rect>
+<rect x="329.2" y="1086.5" width="3.2" height="12" rx="1.5" class="k-other"><title>C-4 op 6: other, 28.2-29.5 s</title></rect>
+<rect x="332.4" y="1086.5" width="7.1" height="12" rx="1.5" class="k-model_call"><title>C-4 op 7: model_call, 29.5-32.4 s</title></rect>
+<rect x="339.5" y="1086.5" width="3.7" height="12" rx="1.5" class="k-other"><title>C-4 op 8: other, 32.4-33.9 s</title></rect>
+<rect x="343.2" y="1086.5" width="18.2" height="12" rx="1.5" class="k-model_call"><title>C-4 op 9: model_call, 33.9-41.3 s</title></rect>
+<rect x="359.9" y="1086.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-4 op 10: edit, changed, 41.3-41.3 s</title></rect>
+<rect x="361.4" y="1086.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>C-4 op 11: model_call, 41.3-44.0 s</title></rect>
+<rect x="366.5" y="1086.5" width="3.0" height="12" rx="1.5" class="k-test"><title>C-4 op 12: test, 44.0-44.1 s</title></rect>
+<rect x="368.2" y="1086.5" width="10.6" height="12" rx="1.5" class="k-model_call"><title>C-4 op 13: model_call, 44.1-48.4 s</title></rect>
+<rect x="377.3" y="1086.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-4 op 14: edit, changed, 48.4-48.4 s</title></rect>
+<rect x="378.8" y="1086.5" width="11.5" height="12" rx="1.5" class="k-model_call"><title>C-4 op 15: model_call, 48.4-53.1 s</title></rect>
+<rect x="388.8" y="1086.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-4 op 16: edit, changed, 53.1-53.1 s</title></rect>
+<rect x="390.3" y="1086.5" width="8.6" height="12" rx="1.5" class="k-model_call"><title>C-4 op 17: model_call, 53.1-56.6 s</title></rect>
+<rect x="397.4" y="1086.5" width="3.0" height="12" rx="1.5" class="k-test"><title>C-4 op 18: test, 56.6-56.7 s</title></rect>
+<rect x="399.2" y="1086.5" width="26.8" height="12" rx="1.5" class="k-model_call"><title>C-4 op 19: model_call, 56.7-67.6 s</title></rect>
+<rect x="424.4" y="1086.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-4 op 20: other, 67.6-67.7 s</title></rect>
+<rect x="426.2" y="1086.5" width="9.1" height="12" rx="1.5" class="k-model_call"><title>C-4 op 21: model_call, 67.7-71.4 s</title></rect>
+<rect x="435.3" y="1086.5" width="8.6" height="12" rx="1.5" class="k-push"><title>C-4 op 22: push, 71.4-74.9 s</title></rect>
+<rect x="443.8" y="1086.5" width="14.7" height="12" rx="1.5" class="k-model_call"><title>C-4 op 23: model_call, 74.9-80.9 s</title></rect>
+<rect x="457.1" y="1086.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-4 op 24: other, 80.9-81.0 s</title></rect>
+<rect x="458.8" y="1086.5" width="10.1" height="12" rx="1.5" class="k-model_call"><title>C-4 op 25: model_call, 81.0-85.1 s</title></rect>
+<rect x="468.9" y="1086.5" width="4.9" height="12" rx="1.5" class="k-pr_open"><title>C-4 op 26: pr_open, 85.1-87.1 s</title></rect>
+<rect x="473.8" y="1086.5" width="9.1" height="12" rx="1.5" class="k-model_call"><title>C-4 op 27: model_call, 87.1-90.8 s</title></rect>
+<rect x="482.9" y="1086.5" width="28.2" height="12" rx="1.5" class="k-ci_wait"><title>C-4 op 28: ci_wait, 90.8-102.3 s</title></rect>
+<rect x="511.1" y="1086.5" width="8.3" height="12" rx="1.5" class="k-model_call"><title>C-4 op 29: model_call, 102.3-105.7 s</title></rect>
+<rect x="517.9" y="1086.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-4 op 30: other, 105.7-106.4 s</title></rect>
+<rect x="521.2" y="1086.5" width="11.8" height="12" rx="1.5" class="k-model_call"><title>C-4 op 31: model_call, 106.4-111.2 s</title></rect>
+<rect x="531.4" y="1086.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-4 op 32: other, success, 111.2-111.2 s</title></rect>
+<text x="40" y="1117.5" fill="currentColor">C-5</text>
+<line x1="260.0" x2="260.0" y1="1105" y2="1122" class="grid"/>
+<line x1="333.6" x2="333.6" y1="1105" y2="1122" class="grid"/>
+<line x1="407.3" x2="407.3" y1="1105" y2="1122" class="grid"/>
+<line x1="480.9" x2="480.9" y1="1105" y2="1122" class="grid"/>
+<line x1="554.5" x2="554.5" y1="1105" y2="1122" class="grid"/>
+<line x1="628.2" x2="628.2" y1="1105" y2="1122" class="grid"/>
+<line x1="701.8" x2="701.8" y1="1105" y2="1122" class="grid"/>
+<line x1="775.5" x2="775.5" y1="1105" y2="1122" class="grid"/>
+<line x1="849.1" x2="849.1" y1="1105" y2="1122" class="grid"/>
+<line x1="922.7" x2="922.7" y1="1105" y2="1122" class="grid"/>
+<line x1="996.4" x2="996.4" y1="1105" y2="1122" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="1105" y2="1122" class="grid"/>
+<rect x="271.8" y="1107.5" width="11.8" height="12" rx="1.5" class="k-model_call"><title>C-5 op 1: model_call, 4.8-9.6 s</title></rect>
+<rect x="282.1" y="1107.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-5 op 2: read, 9.6-9.7 s</title></rect>
+<rect x="283.8" y="1107.5" width="10.8" height="12" rx="1.5" class="k-model_call"><title>C-5 op 3: model_call, 9.7-14.1 s</title></rect>
+<rect x="293.1" y="1107.5" width="3.0" height="12" rx="1.5" class="k-test"><title>C-5 op 4: test, 14.1-14.2 s</title></rect>
+<rect x="294.9" y="1107.5" width="60.4" height="12" rx="1.5" class="k-model_call"><title>C-5 op 5: model_call, 14.2-38.8 s</title></rect>
+<rect x="352.5" y="1107.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-5 op 6: read, 38.3-38.3 s</title></rect>
+<rect x="353.7" y="1107.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-5 op 7: read, 38.8-38.8 s</title></rect>
+<rect x="355.2" y="1107.5" width="37.3" height="12" rx="1.5" class="k-model_call"><title>C-5 op 8: model_call, 38.8-54.0 s</title></rect>
+<rect x="375.3" y="1107.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-5 op 9: edit, changed, 47.6-47.7 s</title></rect>
+<rect x="379.0" y="1107.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-5 op 10: edit, changed, 49.1-49.1 s</title></rect>
+<rect x="383.4" y="1107.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-5 op 11: edit, changed, 50.9-51.1 s</title></rect>
+<rect x="391.0" y="1107.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-5 op 12: edit, changed, 54.0-54.1 s</title></rect>
+<rect x="392.8" y="1107.5" width="9.6" height="12" rx="1.5" class="k-model_call"><title>C-5 op 13: model_call, 54.1-58.0 s</title></rect>
+<rect x="402.4" y="1107.5" width="2.9" height="12" rx="1.5" class="k-test"><title>C-5 op 14: test, 58.0-59.2 s</title></rect>
+<rect x="405.3" y="1107.5" width="56.7" height="12" rx="1.5" class="k-model_call"><title>C-5 op 15: model_call, 59.2-82.3 s</title></rect>
+<rect x="455.9" y="1107.5" width="5.2" height="12" rx="1.5" class="k-push"><title>C-5 op 16: push, 79.8-81.9 s</title></rect>
+<rect x="460.5" y="1107.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-5 op 17: edit, changed, 82.3-82.5 s</title></rect>
+<rect x="462.5" y="1107.5" width="14.7" height="12" rx="1.5" class="k-model_call"><title>C-5 op 18: model_call, 82.5-88.5 s</title></rect>
+<rect x="477.2" y="1107.5" width="5.4" height="12" rx="1.5" class="k-pr_open"><title>C-5 op 19: pr_open, 88.5-90.7 s</title></rect>
+<rect x="482.6" y="1107.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>C-5 op 20: model_call, 90.7-93.4 s</title></rect>
+<rect x="489.3" y="1107.5" width="28.7" height="12" rx="1.5" class="k-ci_wait"><title>C-5 op 21: ci_wait, 93.4-105.1 s</title></rect>
+<rect x="518.0" y="1107.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>C-5 op 22: model_call, 105.1-107.8 s</title></rect>
+<rect x="523.1" y="1107.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-5 op 23: read, 107.8-107.8 s</title></rect>
+<rect x="524.6" y="1107.5" width="9.3" height="12" rx="1.5" class="k-model_call"><title>C-5 op 24: model_call, 107.8-111.6 s</title></rect>
+<rect x="532.7" y="1107.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-5 op 25: other, success, 111.7-111.7 s</title></rect>
+<text x="40" y="1138.5" fill="currentColor">C-6</text>
+<line x1="260.0" x2="260.0" y1="1126" y2="1143" class="grid"/>
+<line x1="333.6" x2="333.6" y1="1126" y2="1143" class="grid"/>
+<line x1="407.3" x2="407.3" y1="1126" y2="1143" class="grid"/>
+<line x1="480.9" x2="480.9" y1="1126" y2="1143" class="grid"/>
+<line x1="554.5" x2="554.5" y1="1126" y2="1143" class="grid"/>
+<line x1="628.2" x2="628.2" y1="1126" y2="1143" class="grid"/>
+<line x1="701.8" x2="701.8" y1="1126" y2="1143" class="grid"/>
+<line x1="775.5" x2="775.5" y1="1126" y2="1143" class="grid"/>
+<line x1="849.1" x2="849.1" y1="1126" y2="1143" class="grid"/>
+<line x1="922.7" x2="922.7" y1="1126" y2="1143" class="grid"/>
+<line x1="996.4" x2="996.4" y1="1126" y2="1143" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="1126" y2="1143" class="grid"/>
+<rect x="271.8" y="1128.5" width="11.3" height="12" rx="1.5" class="k-model_call"><title>C-6 op 1: model_call, 4.8-9.4 s</title></rect>
+<rect x="281.6" y="1128.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-6 op 2: read, 9.4-9.5 s</title></rect>
+<rect x="283.3" y="1128.5" width="10.8" height="12" rx="1.5" class="k-model_call"><title>C-6 op 3: model_call, 9.5-13.9 s</title></rect>
+<rect x="292.6" y="1128.5" width="3.0" height="12" rx="1.5" class="k-test"><title>C-6 op 4: test, 13.9-14.1 s</title></rect>
+<rect x="294.6" y="1128.5" width="55.0" height="12" rx="1.5" class="k-model_call"><title>C-6 op 5: model_call, 14.1-36.5 s</title></rect>
+<rect x="348.1" y="1128.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-6 op 6: edit, changed, 36.5-36.6 s</title></rect>
+<rect x="349.8" y="1128.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>C-6 op 7: model_call, 36.6-39.3 s</title></rect>
+<rect x="355.0" y="1128.5" width="3.0" height="12" rx="1.5" class="k-test"><title>C-6 op 8: test, 39.3-39.4 s</title></rect>
+<rect x="356.7" y="1128.5" width="7.9" height="12" rx="1.5" class="k-model_call"><title>C-6 op 9: model_call, 39.4-42.6 s</title></rect>
+<rect x="363.1" y="1128.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-6 op 10: edit, changed, 42.6-42.7 s</title></rect>
+<rect x="364.8" y="1128.5" width="7.6" height="12" rx="1.5" class="k-model_call"><title>C-6 op 11: model_call, 42.7-45.8 s</title></rect>
+<rect x="370.9" y="1128.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-6 op 12: edit, changed, 45.8-45.8 s</title></rect>
+<rect x="372.4" y="1128.5" width="7.9" height="12" rx="1.5" class="k-model_call"><title>C-6 op 13: model_call, 45.8-49.0 s</title></rect>
+<rect x="378.8" y="1128.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-6 op 14: edit, changed, 49.0-49.1 s</title></rect>
+<rect x="380.5" y="1128.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>C-6 op 15: model_call, 49.1-51.8 s</title></rect>
+<rect x="385.6" y="1128.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-6 op 16: edit, changed, 51.8-51.9 s</title></rect>
+<rect x="387.4" y="1128.5" width="12.5" height="12" rx="1.5" class="k-model_call"><title>C-6 op 17: model_call, 51.9-57.0 s</title></rect>
+<rect x="398.4" y="1128.5" width="3.0" height="12" rx="1.5" class="k-test"><title>C-6 op 18: test, 57.0-57.6 s</title></rect>
+<rect x="401.4" y="1128.5" width="21.6" height="12" rx="1.5" class="k-model_call"><title>C-6 op 19: model_call, 57.6-66.4 s</title></rect>
+<rect x="421.5" y="1128.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-6 op 20: other, 66.4-66.5 s</title></rect>
+<rect x="423.2" y="1128.5" width="8.3" height="12" rx="1.5" class="k-model_call"><title>C-6 op 21: model_call, 66.5-69.9 s</title></rect>
+<rect x="431.6" y="1128.5" width="4.7" height="12" rx="1.5" class="k-push"><title>C-6 op 22: push, 69.9-71.8 s</title></rect>
+<rect x="436.2" y="1128.5" width="23.8" height="12" rx="1.5" class="k-model_call"><title>C-6 op 23: model_call, 71.8-81.5 s</title></rect>
+<rect x="458.5" y="1128.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>C-6 op 24: edit, changed, 81.5-81.5 s</title></rect>
+<rect x="460.0" y="1128.5" width="8.1" height="12" rx="1.5" class="k-model_call"><title>C-6 op 25: model_call, 81.5-84.8 s</title></rect>
+<rect x="466.6" y="1128.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-6 op 26: other, 84.8-84.9 s</title></rect>
+<rect x="468.4" y="1128.5" width="12.3" height="12" rx="1.5" class="k-model_call"><title>C-6 op 27: model_call, 84.9-89.9 s</title></rect>
+<rect x="480.7" y="1128.5" width="5.6" height="12" rx="1.5" class="k-pr_open"><title>C-6 op 28: pr_open, 89.9-92.2 s</title></rect>
+<rect x="486.3" y="1128.5" width="10.3" height="12" rx="1.5" class="k-model_call"><title>C-6 op 29: model_call, 92.2-96.4 s</title></rect>
+<rect x="496.6" y="1128.5" width="31.9" height="12" rx="1.5" class="k-ci_wait"><title>C-6 op 30: ci_wait, 96.4-109.4 s</title></rect>
+<rect x="528.5" y="1128.5" width="8.1" height="12" rx="1.5" class="k-model_call"><title>C-6 op 31: model_call, 109.4-112.7 s</title></rect>
+<rect x="535.1" y="1128.5" width="3.0" height="12" rx="1.5" class="k-read"><title>C-6 op 32: read, 112.7-112.8 s</title></rect>
+<rect x="536.9" y="1128.5" width="12.5" height="12" rx="1.5" class="k-model_call"><title>C-6 op 33: model_call, 112.8-117.9 s</title></rect>
+<rect x="547.9" y="1128.5" width="3.0" height="12" rx="1.5" class="k-other"><title>C-6 op 34: other, success, 117.9-117.9 s</title></rect>
+<text x="20" y="1165" font-size="12" font-weight="600" fill="currentColor">Codex, full configuration</text>
+<line x1="20" x2="1070" y1="1169" y2="1169" class="grid"/>
+<text x="40" y="1185.5" fill="currentColor">X-1 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
+<rect x="260.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-1 op 1: model_call, agent_message</title></rect>
+<rect x="276.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-1 op 2: read</title></rect>
+<rect x="292.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-1 op 3: read</title></rect>
+<rect x="308.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-1 op 4: model_call, agent_message</title></rect>
+<rect x="324.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-1 op 5: read</title></rect>
+<rect x="340.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-1 op 6: read</title></rect>
+<rect x="356.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-1 op 7: other</title></rect>
+<rect x="372.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-1 op 8: test</title></rect>
+<rect x="388.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-1 op 9: other</title></rect>
+<rect x="404.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-1 op 10: model_call, agent_message</title></rect>
+<rect x="420.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-edit"><title>X-1 op 11: edit, changed</title></rect>
+<rect x="436.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-1 op 12: test, fail</title></rect>
+<rect x="452.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-edit"><title>X-1 op 13: edit, changed</title></rect>
+<rect x="468.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-1 op 14: test</title></rect>
+<rect x="484.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-1 op 15: other</title></rect>
+<rect x="500.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-1 op 16: model_call, agent_message</title></rect>
+<rect x="516.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-1 op 17: read</title></rect>
+<rect x="532.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-1 op 18: other</title></rect>
+<rect x="548.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-push"><title>X-1 op 19: push</title></rect>
+<rect x="564.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-1 op 20: other</title></rect>
+<rect x="580.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-pr_open"><title>X-1 op 21: pr_open</title></rect>
+<rect x="596.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-1 op 22: model_call, agent_message</title></rect>
+<rect x="612.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-1 op 23: read</title></rect>
+<rect x="628.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-ci_wait"><title>X-1 op 24: ci_wait</title></rect>
+<rect x="644.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-1 op 25: other</title></rect>
+<rect x="660.0" y="1175.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-1 op 26: model_call, agent_message</title></rect>
+<text x="680.5" y="1185.0" font-size="9.5" fill="currentColor" fill-opacity=".7">26 operations; 101 s in all</text>
+<text x="40" y="1206.5" fill="currentColor">X-2 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
+<rect x="260.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-2 op 1: model_call, agent_message</title></rect>
+<rect x="276.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-2 op 2: read</title></rect>
+<rect x="292.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-2 op 3: read</title></rect>
+<rect x="308.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-2 op 4: model_call, agent_message</title></rect>
+<rect x="324.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-2 op 5: read</title></rect>
+<rect x="340.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-2 op 6: read</title></rect>
+<rect x="356.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-2 op 7: other</title></rect>
+<rect x="372.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-2 op 8: model_call, agent_message</title></rect>
+<rect x="388.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-2 op 9: test</title></rect>
+<rect x="404.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-edit"><title>X-2 op 10: edit, changed</title></rect>
+<rect x="420.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-2 op 11: test, fail</title></rect>
+<rect x="436.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-edit"><title>X-2 op 12: edit, changed</title></rect>
+<rect x="452.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-2 op 13: test</title></rect>
+<rect x="468.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-2 op 14: model_call, agent_message</title></rect>
+<rect x="484.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-2 op 15: other</title></rect>
+<rect x="500.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-push"><title>X-2 op 16: push</title></rect>
+<rect x="516.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-2 op 17: other</title></rect>
+<rect x="532.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-pr_open"><title>X-2 op 18: pr_open</title></rect>
+<rect x="548.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-2 op 19: read</title></rect>
+<rect x="564.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-2 op 20: model_call, agent_message</title></rect>
+<rect x="580.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-ci_wait"><title>X-2 op 21: ci_wait</title></rect>
+<rect x="596.0" y="1196.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-2 op 22: model_call, agent_message</title></rect>
+<text x="616.5" y="1206.0" font-size="9.5" fill="currentColor" fill-opacity=".7">22 operations; 84 s in all</text>
+<text x="40" y="1227.5" fill="currentColor">X-3 <tspan font-size="9.5" fill-opacity=".7">order only</tspan></text>
+<rect x="260.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-3 op 1: model_call, agent_message</title></rect>
+<rect x="276.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-3 op 2: read</title></rect>
+<rect x="292.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-3 op 3: model_call, agent_message</title></rect>
+<rect x="308.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-3 op 4: read</title></rect>
+<rect x="324.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-3 op 5: read</title></rect>
+<rect x="340.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-3 op 6: test</title></rect>
+<rect x="356.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-3 op 7: other</title></rect>
+<rect x="372.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-3 op 8: model_call, agent_message</title></rect>
+<rect x="388.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-3 op 9: other</title></rect>
+<rect x="404.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-edit"><title>X-3 op 10: edit, changed</title></rect>
+<rect x="420.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-3 op 11: test, fail</title></rect>
+<rect x="436.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-edit"><title>X-3 op 12: edit, changed</title></rect>
+<rect x="452.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-test"><title>X-3 op 13: test</title></rect>
+<rect x="468.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-3 op 14: model_call, agent_message</title></rect>
+<rect x="484.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-3 op 15: read</title></rect>
+<rect x="500.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-3 op 16: other</title></rect>
+<rect x="516.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-push"><title>X-3 op 17: push</title></rect>
+<rect x="532.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-other"><title>X-3 op 18: other</title></rect>
+<rect x="548.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-3 op 19: model_call, agent_message</title></rect>
+<rect x="564.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-pr_open"><title>X-3 op 20: pr_open</title></rect>
+<rect x="580.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-read"><title>X-3 op 21: read</title></rect>
+<rect x="596.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-ci_wait"><title>X-3 op 22: ci_wait</title></rect>
+<rect x="612.0" y="1217.5" width="14.5" height="12" rx="1.5" class="k-model_call"><title>X-3 op 23: model_call, agent_message</title></rect>
+<text x="632.5" y="1227.0" font-size="9.5" fill="currentColor" fill-opacity=".7">23 operations; 96 s in all</text>
+<text x="40" y="1248.5" fill="currentColor">X-4</text>
+<line x1="260.0" x2="260.0" y1="1236" y2="1253" class="grid"/>
+<line x1="333.6" x2="333.6" y1="1236" y2="1253" class="grid"/>
+<line x1="407.3" x2="407.3" y1="1236" y2="1253" class="grid"/>
+<line x1="480.9" x2="480.9" y1="1236" y2="1253" class="grid"/>
+<line x1="554.5" x2="554.5" y1="1236" y2="1253" class="grid"/>
+<line x1="628.2" x2="628.2" y1="1236" y2="1253" class="grid"/>
+<line x1="701.8" x2="701.8" y1="1236" y2="1253" class="grid"/>
+<line x1="775.5" x2="775.5" y1="1236" y2="1253" class="grid"/>
+<line x1="849.1" x2="849.1" y1="1236" y2="1253" class="grid"/>
+<line x1="922.7" x2="922.7" y1="1236" y2="1253" class="grid"/>
+<line x1="996.4" x2="996.4" y1="1236" y2="1253" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="1236" y2="1253" class="grid"/>
+<rect x="272.5" y="1238.5" width="11.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 1: model_call, agent_message, 5.1-9.6 s</title></rect>
+<rect x="283.6" y="1238.5" width="4.2" height="12" rx="1.5" class="k-model_call"><title>X-4 op 2: model_call, 9.6-11.3 s</title></rect>
+<rect x="286.2" y="1238.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 3: read, 11.3-11.3 s</title></rect>
+<rect x="286.2" y="1238.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 4: model_call, 11.3-11.4 s</title></rect>
+<rect x="286.5" y="1238.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 5: read, 11.4-11.4 s</title></rect>
+<rect x="288.0" y="1238.5" width="14.7" height="12" rx="1.5" class="k-model_call"><title>X-4 op 6: model_call, 11.4-17.4 s</title></rect>
+<rect x="301.2" y="1238.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 7: read, 17.4-17.4 s</title></rect>
+<rect x="301.2" y="1238.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 8: model_call, 17.4-17.4 s</title></rect>
+<rect x="301.2" y="1238.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 9: read, 17.4-17.4 s</title></rect>
+<rect x="301.2" y="1238.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 10: model_call, 17.4-17.5 s</title></rect>
+<rect x="303.0" y="1238.5" width="22.8" height="12" rx="1.5" class="k-other"><title>X-4 op 11: other, 17.5-26.8 s</title></rect>
+<rect x="325.8" y="1238.5" width="10.6" height="12" rx="1.5" class="k-model_call"><title>X-4 op 12: model_call, agent_message, 26.8-31.1 s</title></rect>
+<rect x="336.3" y="1238.5" width="3.9" height="12" rx="1.5" class="k-model_call"><title>X-4 op 13: model_call, 31.1-32.7 s</title></rect>
+<rect x="338.8" y="1238.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 14: read, 32.7-32.7 s</title></rect>
+<rect x="338.8" y="1238.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 15: model_call, 32.7-32.8 s</title></rect>
+<rect x="339.0" y="1238.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-4 op 16: test, 32.8-32.8 s</title></rect>
+<rect x="340.5" y="1238.5" width="18.7" height="12" rx="1.5" class="k-model_call"><title>X-4 op 17: model_call, 32.8-40.4 s</title></rect>
+<rect x="357.7" y="1238.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>X-4 op 18: edit, changed, 40.4-40.4 s</title></rect>
+<rect x="357.7" y="1238.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 19: model_call, 40.4-40.6 s</title></rect>
+<rect x="358.2" y="1238.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-4 op 20: test, fail, 40.6-40.9 s</title></rect>
+<rect x="360.4" y="1238.5" width="13.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 21: model_call, 40.9-46.2 s</title></rect>
+<rect x="371.9" y="1238.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>X-4 op 22: edit, changed, 46.2-46.2 s</title></rect>
+<rect x="371.9" y="1238.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 23: model_call, 46.2-46.3 s</title></rect>
+<rect x="372.1" y="1238.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-4 op 24: test, 46.3-46.6 s</title></rect>
+<rect x="374.4" y="1238.5" width="15.5" height="12" rx="1.5" class="k-model_call"><title>X-4 op 25: model_call, agent_message, 46.6-52.9 s</title></rect>
+<rect x="389.8" y="1238.5" width="10.6" height="12" rx="1.5" class="k-model_call"><title>X-4 op 26: model_call, 52.9-57.2 s</title></rect>
+<rect x="398.9" y="1238.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 27: read, 57.2-57.4 s</title></rect>
+<rect x="399.4" y="1238.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-4 op 28: model_call, 57.4-57.6 s</title></rect>
+<rect x="401.4" y="1238.5" width="4.2" height="12" rx="1.5" class="k-push"><title>X-4 op 29: push, 57.6-59.3 s</title></rect>
+<rect x="405.6" y="1238.5" width="9.6" height="12" rx="1.5" class="k-model_call"><title>X-4 op 30: model_call, 59.3-63.2 s</title></rect>
+<rect x="413.6" y="1238.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-4 op 31: other, 63.2-63.2 s</title></rect>
+<rect x="415.1" y="1238.5" width="7.1" height="12" rx="1.5" class="k-model_call"><title>X-4 op 32: model_call, 63.2-66.1 s</title></rect>
+<rect x="422.2" y="1238.5" width="4.2" height="12" rx="1.5" class="k-pr_open"><title>X-4 op 33: pr_open, 66.1-67.8 s</title></rect>
+<rect x="426.4" y="1238.5" width="9.6" height="12" rx="1.5" class="k-model_call"><title>X-4 op 34: model_call, 67.8-71.7 s</title></rect>
+<rect x="434.5" y="1238.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 35: read, 71.7-71.7 s</title></rect>
+<rect x="436.0" y="1238.5" width="4.9" height="12" rx="1.5" class="k-model_call"><title>X-4 op 36: model_call, 71.7-73.7 s</title></rect>
+<rect x="440.9" y="1238.5" width="27.7" height="12" rx="1.5" class="k-ci_wait"><title>X-4 op 37: ci_wait, 73.7-85.0 s</title></rect>
+<rect x="440.9" y="1238.5" width="8.3" height="12" rx="1.5" class="k-model_call"><title>X-4 op 38: model_call, agent_message, 73.7-77.1 s</title></rect>
+<rect x="449.2" y="1238.5" width="13.7" height="12" rx="1.5" class="k-model_call"><title>X-4 op 39: model_call, 77.1-82.7 s</title></rect>
+<rect x="461.5" y="1238.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-4 op 40: read, 82.7-82.7 s</title></rect>
+<rect x="468.6" y="1238.5" width="6.4" height="12" rx="1.5" class="k-model_call"><title>X-4 op 41: model_call, agent_message, 85.0-87.6 s</title></rect>
+<rect x="473.5" y="1238.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-4 op 42: other, turn.completed, 87.6-87.6 s</title></rect>
+<text x="40" y="1269.5" fill="currentColor">X-5</text>
+<line x1="260.0" x2="260.0" y1="1257" y2="1274" class="grid"/>
+<line x1="333.6" x2="333.6" y1="1257" y2="1274" class="grid"/>
+<line x1="407.3" x2="407.3" y1="1257" y2="1274" class="grid"/>
+<line x1="480.9" x2="480.9" y1="1257" y2="1274" class="grid"/>
+<line x1="554.5" x2="554.5" y1="1257" y2="1274" class="grid"/>
+<line x1="628.2" x2="628.2" y1="1257" y2="1274" class="grid"/>
+<line x1="701.8" x2="701.8" y1="1257" y2="1274" class="grid"/>
+<line x1="775.5" x2="775.5" y1="1257" y2="1274" class="grid"/>
+<line x1="849.1" x2="849.1" y1="1257" y2="1274" class="grid"/>
+<line x1="922.7" x2="922.7" y1="1257" y2="1274" class="grid"/>
+<line x1="996.4" x2="996.4" y1="1257" y2="1274" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="1257" y2="1274" class="grid"/>
+<rect x="269.1" y="1259.5" width="10.8" height="12" rx="1.5" class="k-model_call"><title>X-5 op 1: model_call, agent_message, 3.7-8.1 s</title></rect>
+<rect x="279.9" y="1259.5" width="5.4" height="12" rx="1.5" class="k-model_call"><title>X-5 op 2: model_call, 8.1-10.3 s</title></rect>
+<rect x="283.8" y="1259.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 3: read, 10.3-10.3 s</title></rect>
+<rect x="283.8" y="1259.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 4: model_call, 10.3-10.3 s</title></rect>
+<rect x="283.8" y="1259.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 5: read, 10.3-10.3 s</title></rect>
+<rect x="285.3" y="1259.5" width="6.1" height="12" rx="1.5" class="k-model_call"><title>X-5 op 6: model_call, agent_message, 10.3-12.8 s</title></rect>
+<rect x="291.4" y="1259.5" width="5.6" height="12" rx="1.5" class="k-model_call"><title>X-5 op 7: model_call, 12.8-15.1 s</title></rect>
+<rect x="295.6" y="1259.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 8: read, 15.1-15.1 s</title></rect>
+<rect x="295.6" y="1259.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 9: model_call, 15.1-15.2 s</title></rect>
+<rect x="297.3" y="1259.5" width="12.8" height="12" rx="1.5" class="k-other"><title>X-5 op 10: other, 15.2-20.4 s</title></rect>
+<rect x="295.8" y="1259.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 11: model_call, 15.2-15.2 s</title></rect>
+<rect x="295.8" y="1259.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 12: read, 15.2-15.2 s</title></rect>
+<rect x="310.1" y="1259.5" width="8.3" height="12" rx="1.5" class="k-model_call"><title>X-5 op 13: model_call, 20.4-23.8 s</title></rect>
+<rect x="316.9" y="1259.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 14: read, 23.8-23.8 s</title></rect>
+<rect x="316.9" y="1259.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 15: model_call, 23.8-23.9 s</title></rect>
+<rect x="318.7" y="1259.5" width="11.5" height="12" rx="1.5" class="k-other"><title>X-5 op 16: other, 23.9-28.6 s</title></rect>
+<rect x="330.2" y="1259.5" width="7.9" height="12" rx="1.5" class="k-model_call"><title>X-5 op 17: model_call, agent_message, 28.6-31.8 s</title></rect>
+<rect x="338.1" y="1259.5" width="10.3" height="12" rx="1.5" class="k-model_call"><title>X-5 op 18: model_call, 31.8-36.0 s</title></rect>
+<rect x="346.9" y="1259.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>X-5 op 19: edit, changed, 36.0-36.0 s</title></rect>
+<rect x="346.9" y="1259.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 20: model_call, 36.0-36.1 s</title></rect>
+<rect x="347.1" y="1259.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-5 op 21: test, fail, 36.1-36.1 s</title></rect>
+<rect x="348.6" y="1259.5" width="10.8" height="12" rx="1.5" class="k-model_call"><title>X-5 op 22: model_call, 36.1-40.5 s</title></rect>
+<rect x="357.9" y="1259.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>X-5 op 23: edit, changed, 40.5-40.5 s</title></rect>
+<rect x="357.9" y="1259.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 24: model_call, 40.5-40.7 s</title></rect>
+<rect x="358.4" y="1259.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-5 op 25: test, 40.7-40.7 s</title></rect>
+<rect x="359.9" y="1259.5" width="19.9" height="12" rx="1.5" class="k-model_call"><title>X-5 op 26: model_call, 40.7-48.8 s</title></rect>
+<rect x="378.3" y="1259.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 27: read, 48.8-49.1 s</title></rect>
+<rect x="380.5" y="1259.5" width="7.9" height="12" rx="1.5" class="k-model_call"><title>X-5 op 28: model_call, agent_message, 49.1-52.3 s</title></rect>
+<rect x="386.9" y="1259.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 29: model_call, 52.3-53.1 s</title></rect>
+<rect x="390.3" y="1259.5" width="4.4" height="12" rx="1.5" class="k-push"><title>X-5 op 30: push, 53.1-54.9 s</title></rect>
+<rect x="394.8" y="1259.5" width="7.6" height="12" rx="1.5" class="k-model_call"><title>X-5 op 31: model_call, 54.9-58.0 s</title></rect>
+<rect x="400.9" y="1259.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-5 op 32: other, 58.0-58.2 s</title></rect>
+<rect x="402.9" y="1259.5" width="13.0" height="12" rx="1.5" class="k-model_call"><title>X-5 op 33: model_call, 58.2-63.5 s</title></rect>
+<rect x="415.9" y="1259.5" width="5.2" height="12" rx="1.5" class="k-pr_open"><title>X-5 op 34: pr_open, 63.5-65.6 s</title></rect>
+<rect x="421.0" y="1259.5" width="4.2" height="12" rx="1.5" class="k-model_call"><title>X-5 op 35: model_call, 65.6-67.3 s</title></rect>
+<rect x="423.7" y="1259.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-5 op 36: read, 67.3-67.3 s</title></rect>
+<rect x="425.2" y="1259.5" width="4.7" height="12" rx="1.5" class="k-model_call"><title>X-5 op 37: model_call, 67.3-69.2 s</title></rect>
+<rect x="429.9" y="1259.5" width="27.7" height="12" rx="1.5" class="k-ci_wait"><title>X-5 op 38: ci_wait, 69.2-80.5 s</title></rect>
+<rect x="429.9" y="1259.5" width="7.6" height="12" rx="1.5" class="k-model_call"><title>X-5 op 39: model_call, agent_message, 69.2-72.3 s</title></rect>
+<rect x="457.6" y="1259.5" width="6.6" height="12" rx="1.5" class="k-model_call"><title>X-5 op 40: model_call, agent_message, 80.5-83.2 s</title></rect>
+<rect x="462.7" y="1259.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-5 op 41: other, turn.completed, 83.2-83.2 s</title></rect>
+<text x="40" y="1290.5" fill="currentColor">X-6</text>
+<line x1="260.0" x2="260.0" y1="1278" y2="1295" class="grid"/>
+<line x1="333.6" x2="333.6" y1="1278" y2="1295" class="grid"/>
+<line x1="407.3" x2="407.3" y1="1278" y2="1295" class="grid"/>
+<line x1="480.9" x2="480.9" y1="1278" y2="1295" class="grid"/>
+<line x1="554.5" x2="554.5" y1="1278" y2="1295" class="grid"/>
+<line x1="628.2" x2="628.2" y1="1278" y2="1295" class="grid"/>
+<line x1="701.8" x2="701.8" y1="1278" y2="1295" class="grid"/>
+<line x1="775.5" x2="775.5" y1="1278" y2="1295" class="grid"/>
+<line x1="849.1" x2="849.1" y1="1278" y2="1295" class="grid"/>
+<line x1="922.7" x2="922.7" y1="1278" y2="1295" class="grid"/>
+<line x1="996.4" x2="996.4" y1="1278" y2="1295" class="grid"/>
+<line x1="1070.0" x2="1070.0" y1="1278" y2="1295" class="grid"/>
+<rect x="270.1" y="1280.5" width="11.5" height="12" rx="1.5" class="k-model_call"><title>X-6 op 1: model_call, agent_message, 4.1-8.8 s</title></rect>
+<rect x="281.6" y="1280.5" width="4.4" height="12" rx="1.5" class="k-model_call"><title>X-6 op 2: model_call, 8.8-10.6 s</title></rect>
+<rect x="284.5" y="1280.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 3: read, 10.6-10.6 s</title></rect>
+<rect x="284.5" y="1280.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 4: model_call, 10.6-10.6 s</title></rect>
+<rect x="284.5" y="1280.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 5: read, 10.6-10.6 s</title></rect>
+<rect x="286.0" y="1280.5" width="8.6" height="12" rx="1.5" class="k-model_call"><title>X-6 op 6: model_call, 10.6-14.1 s</title></rect>
+<rect x="293.1" y="1280.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 7: read, 14.1-14.1 s</title></rect>
+<rect x="293.1" y="1280.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 8: model_call, 14.1-14.1 s</title></rect>
+<rect x="293.1" y="1280.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 9: read, 14.1-14.1 s</title></rect>
+<rect x="293.1" y="1280.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 10: model_call, 14.1-14.1 s</title></rect>
+<rect x="293.1" y="1280.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 11: read, 14.1-14.1 s</title></rect>
+<rect x="293.1" y="1280.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 12: model_call, 14.1-14.1 s</title></rect>
+<rect x="293.1" y="1280.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-6 op 13: other, 14.1-14.1 s</title></rect>
+<rect x="293.1" y="1280.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 14: model_call, 14.1-14.2 s</title></rect>
+<rect x="294.9" y="1280.5" width="13.0" height="12" rx="1.5" class="k-other"><title>X-6 op 15: other, 14.2-19.5 s</title></rect>
+<rect x="307.9" y="1280.5" width="13.3" height="12" rx="1.5" class="k-model_call"><title>X-6 op 16: model_call, agent_message, 19.5-24.9 s</title></rect>
+<rect x="321.1" y="1280.5" width="3.4" height="12" rx="1.5" class="k-model_call"><title>X-6 op 17: model_call, 24.9-26.3 s</title></rect>
+<rect x="323.1" y="1280.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 18: read, 26.3-26.3 s</title></rect>
+<rect x="323.1" y="1280.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 19: model_call, 26.3-26.5 s</title></rect>
+<rect x="323.5" y="1280.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-6 op 20: test, 26.5-26.8 s</title></rect>
+<rect x="325.8" y="1280.5" width="15.2" height="12" rx="1.5" class="k-model_call"><title>X-6 op 21: model_call, 26.8-33.0 s</title></rect>
+<rect x="339.5" y="1280.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>X-6 op 22: edit, changed, 33.0-33.0 s</title></rect>
+<rect x="339.5" y="1280.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 23: model_call, 33.0-33.2 s</title></rect>
+<rect x="340.0" y="1280.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-6 op 24: test, fail, 33.2-33.2 s</title></rect>
+<rect x="341.5" y="1280.5" width="17.4" height="12" rx="1.5" class="k-model_call"><title>X-6 op 25: model_call, 33.2-40.3 s</title></rect>
+<rect x="357.4" y="1280.5" width="3.0" height="12" rx="1.5" class="k-edit"><title>X-6 op 26: edit, changed, 40.3-40.3 s</title></rect>
+<rect x="357.4" y="1280.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 27: model_call, 40.3-40.4 s</title></rect>
+<rect x="357.7" y="1280.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-6 op 28: test, 40.4-40.4 s</title></rect>
+<rect x="357.7" y="1280.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 29: model_call, 40.4-40.6 s</title></rect>
+<rect x="358.2" y="1280.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-6 op 30: other, 40.6-40.7 s</title></rect>
+<rect x="359.9" y="1280.5" width="15.5" height="12" rx="1.5" class="k-model_call"><title>X-6 op 31: model_call, agent_message, 40.7-47.0 s</title></rect>
+<rect x="375.4" y="1280.5" width="2.7" height="12" rx="1.5" class="k-model_call"><title>X-6 op 32: model_call, 47.0-48.1 s</title></rect>
+<rect x="376.6" y="1280.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 33: read, 48.1-48.1 s</title></rect>
+<rect x="376.6" y="1280.5" width="3.0" height="12" rx="1.5" class="k-model_call"><title>X-6 op 34: model_call, 48.1-48.2 s</title></rect>
+<rect x="378.3" y="1280.5" width="4.7" height="12" rx="1.5" class="k-push"><title>X-6 op 35: push, 48.2-50.1 s</title></rect>
+<rect x="383.0" y="1280.5" width="8.1" height="12" rx="1.5" class="k-model_call"><title>X-6 op 36: model_call, 50.1-53.4 s</title></rect>
+<rect x="389.6" y="1280.5" width="3.0" height="12" rx="1.5" class="k-test"><title>X-6 op 37: test, 53.4-53.4 s</title></rect>
+<rect x="391.1" y="1280.5" width="5.6" height="12" rx="1.5" class="k-model_call"><title>X-6 op 38: model_call, 53.4-55.7 s</title></rect>
+<rect x="396.7" y="1280.5" width="4.2" height="12" rx="1.5" class="k-pr_open"><title>X-6 op 39: pr_open, 55.7-57.4 s</title></rect>
+<rect x="400.9" y="1280.5" width="5.6" height="12" rx="1.5" class="k-model_call"><title>X-6 op 40: model_call, 57.4-59.7 s</title></rect>
+<rect x="405.0" y="1280.5" width="3.0" height="12" rx="1.5" class="k-read"><title>X-6 op 41: read, 59.7-59.7 s</title></rect>
+<rect x="406.5" y="1280.5" width="4.7" height="12" rx="1.5" class="k-model_call"><title>X-6 op 42: model_call, 59.7-61.6 s</title></rect>
+<rect x="411.2" y="1280.5" width="27.5" height="12" rx="1.5" class="k-ci_wait"><title>X-6 op 43: ci_wait, 61.6-72.8 s</title></rect>
+<rect x="411.2" y="1280.5" width="7.4" height="12" rx="1.5" class="k-model_call"><title>X-6 op 44: model_call, agent_message, 61.6-64.6 s</title></rect>
+<rect x="438.7" y="1280.5" width="5.4" height="12" rx="1.5" class="k-model_call"><title>X-6 op 45: model_call, agent_message, 72.8-75.0 s</title></rect>
+<rect x="442.8" y="1280.5" width="3.0" height="12" rx="1.5" class="k-other"><title>X-6 op 46: other, turn.completed, 75.1-75.1 s</title></rect>
+<rect x="20" y="1311" width="12" height="9" rx="1.5" class="k-model_call"/>
+<text x="37" y="1319" fill="currentColor">model call</text>
+<rect x="172" y="1311" width="12" height="9" rx="1.5" class="k-read"/>
+<text x="189" y="1319" fill="currentColor">read</text>
+<rect x="324" y="1311" width="12" height="9" rx="1.5" class="k-edit"/>
+<text x="341" y="1319" fill="currentColor">edit</text>
+<rect x="476" y="1311" width="12" height="9" rx="1.5" class="k-test"/>
+<text x="493" y="1319" fill="currentColor">test</text>
+<rect x="628" y="1311" width="12" height="9" rx="1.5" class="k-gate"/>
+<text x="645" y="1319" fill="currentColor">gate</text>
+<rect x="780" y="1311" width="12" height="9" rx="1.5" class="k-push"/>
+<text x="797" y="1319" fill="currentColor">push</text>
+<rect x="932" y="1311" width="12" height="9" rx="1.5" class="k-pr_open"/>
+<text x="949" y="1319" fill="currentColor">pr open</text>
+<rect x="20" y="1329" width="12" height="9" rx="1.5" class="k-ci_wait"/>
+<text x="37" y="1337" fill="currentColor">ci wait</text>
+<rect x="172" y="1329" width="12" height="9" rx="1.5" class="k-ci_pass"/>
+<text x="189" y="1337" fill="currentColor">ci pass</text>
+<rect x="324" y="1329" width="12" height="9" rx="1.5" class="k-approval_wait"/>
+<text x="341" y="1337" fill="currentColor">approval wait</text>
+<rect x="476" y="1329" width="12" height="9" rx="1.5" class="k-refusal"/>
+<text x="493" y="1337" fill="currentColor">refusal</text>
+<rect x="628" y="1329" width="12" height="9" rx="1.5" class="k-no_progress"/>
+<text x="645" y="1337" fill="currentColor">no progress</text>
+<rect x="780" y="1329" width="12" height="9" rx="1.5" class="k-resume"/>
+<text x="797" y="1337" fill="currentColor">resume</text>
+<rect x="932" y="1329" width="12" height="9" rx="1.5" class="k-other"/>
+<text x="949" y="1337" fill="currentColor">other</text>
+<rect x="20" y="1353" width="12" height="9" rx="1.5" class="k-pr_open noop"/>
+<text x="37" y="1361" fill="currentColor">hollow: the step changed nothing</text>
+<rect x="268" y="1353" width="12" height="9" rx="1.5" class="k-edit call"/>
+<text x="285" y="1361" fill="currentColor">outlined: a takt step taken by the harness (one model call)</text>
+<rect x="620" y="1353" width="6" height="9" rx="1.5" class="k-test placed"/>
+<text x="632" y="1361" fill="currentColor">dashed: no time recorded, placed in order between timed operations</text>
+<text x="20" y="1387" font-size="10.5" fill="currentColor" fill-opacity=".7">Data: 2026-10-18 (UTC), docs/metrics/journeys.jsonl from the raw records each run in docs/metrics/scenario-runs.jsonl names. No token or cost figure is read from the journeys.</text>
+<text x="20" y="1403" font-size="10.5" fill="currentColor" fill-opacity=".7">Free and isolated runs without a stream record only a turn count (Claude Code) or their items in order (Codex); runs with a stream are timed. First results, not a benchmark.</text>
 </svg>
