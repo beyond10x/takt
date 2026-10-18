@@ -521,3 +521,244 @@ fn nothing_ready_opens_no_case_through_the_run() {
     assert_eq!(String::from_utf8_lossy(&out), "");
     assert!(!repo.join(".engineering/cases").exists());
 }
+
+/// A stand-in for `aep` like [`refusing_aep`], refusing to move every id in `refused` and
+/// moving the rest: the stores the fixtures can build never refuse, so the refusal paths are
+/// reached only through a stub. Every call is appended to `calls.log` beside the script.
+fn stub_aep(dir: &Path, refused: &[&str]) -> String {
+    let log = dir.join("calls.log");
+    let pattern = if refused.is_empty() {
+        "never-matches".to_owned()
+    } else {
+        refused.join("|")
+    };
+    let script = r##"#!/bin/sh
+printf '%s\n' "$*" >> "@LOG@"
+case "$3" in
+  list)
+    printf '%s\n' '[{"id":"story:c","kind":"story","status":"proposed","title":"C","path":"story/c.md","relations":[],"refs":[],"blocked_by":[]},{"id":"story:a","kind":"story","status":"proposed","title":"A","path":"story/a.md","relations":[],"refs":[],"blocked_by":[]},{"id":"story:b","kind":"story","status":"proposed","title":"B","path":"story/b.md","relations":[],"refs":[],"blocked_by":[]}]'
+    ;;
+  show)
+    printf '{"id":"%s","kind":"story","status":"proposed","title":"Title of %s","body":"# Story\\n"}\n' "$4" "$4"
+    ;;
+  move)
+    case "$4" in
+      @REFUSED@)
+        printf '%s\n' "$4 is proposed; the profile wants it to serve an objective first" >&2
+        exit 1
+        ;;
+    esac
+    printf '%s moved proposed -> active (revision 2)\n' "$4"
+    ;;
+  *)
+    printf 'unexpected: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac
+"##
+    .replace("@LOG@", &log.display().to_string())
+    .replace("@REFUSED@", &pattern);
+    let path = dir.join("aep-stub-adv2.sh");
+    fs::write(&path, script).expect("the stub is written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable");
+    }
+    path.display().to_string()
+}
+
+/// The names under `<repo>/.engineering/cases`, sorted; `None` when the directory is absent.
+fn case_names(repo: &Path) -> Option<Vec<String>> {
+    let dir = repo.join(".engineering/cases");
+    if !dir.exists() {
+        return None;
+    }
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .expect("a readable cases directory")
+        .map(|e| {
+            e.expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    Some(names)
+}
+
+/// Every candidate refused: the frontier answers `None`, each refusal is printed in id order,
+/// and nothing is left on disk, not even an empty `cases/` directory, since each refused
+/// story's case was opened and removed in turn.
+#[test]
+fn a_store_refusing_every_candidate_leaves_no_cases_directory_behind() {
+    let repo = repository("one-ready", "adv2-all-refused");
+    let frontier = Aep {
+        command: stub_aep(&repo, &["story:a", "story:b", "story:c"]),
+    };
+    let validators: Vec<Box<dyn Validator>> = vec![];
+    let mut out = Vec::new();
+    let run = Run::open_next(&repo, options(), &frontier, &Never, &validators, &mut out)
+        .expect("the frontier answers");
+    assert!(run.is_none(), "{}", String::from_utf8_lossy(&out));
+    assert_eq!(
+        String::from_utf8_lossy(&out),
+        "frontier: story:a not taken: story:a is proposed; the profile wants it to serve an objective first\n\
+         frontier: story:b not taken: story:b is proposed; the profile wants it to serve an objective first\n\
+         frontier: story:c not taken: story:c is proposed; the profile wants it to serve an objective first\n"
+    );
+    assert_eq!(
+        case_names(&repo),
+        None,
+        "no case and no empty cases directory is left after every candidate was refused"
+    );
+    let calls = fs::read_to_string(repo.join("calls.log")).expect("the stub logged its calls");
+    let moves: Vec<&str> = calls
+        .lines()
+        .filter(|line| line.starts_with("plan artifact move "))
+        .collect();
+    assert_eq!(moves.len(), 3, "{calls}");
+}
+
+/// A given case id names the taken story's case, even when the first candidate was refused
+/// and its case, under the same id, had to go first: the id is not silently dropped for a
+/// story, and the second open under the same id succeeds because the first was removed.
+#[test]
+fn a_given_case_id_names_the_taken_story_case_after_a_refusal() {
+    let repo = repository("one-ready", "adv2-given-id");
+    let frontier = Aep {
+        command: stub_aep(&repo, &["story:a"]),
+    };
+    let validators: Vec<Box<dyn Validator>> = vec![];
+    let mut options = options();
+    options.case_id = Some("given".to_owned());
+    let mut out = Vec::new();
+    let run = Run::open_next(&repo, options, &frontier, &Never, &validators, &mut out)
+        .expect("the frontier answers")
+        .expect("story:b is taken");
+    let Unit::Story(story) = &run.unit else {
+        panic!("the unit is a story, not {:?}", run.unit);
+    };
+    assert_eq!(story.id, "story:b");
+    assert_eq!(
+        run.case.id, "given",
+        "the case id given is the case id used for a story"
+    );
+    assert_eq!(run.case.dir, repo.join(".engineering/cases/given"));
+    assert_eq!(case_names(&repo), Some(vec!["given".to_owned()]));
+    let intent = fs::read_to_string(run.case.dir.join("intent.md")).expect("intent.md");
+    assert_eq!(
+        intent, "Title of story:b\n\n# Story\n",
+        "the case holds the taken story, not the refused one"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out),
+        "frontier: story:a not taken: story:a is proposed; the profile wants it to serve an objective first\n\
+         frontier: took story:b: Title of story:b\n"
+    );
+}
+
+/// A refusal removes the case it opened and nothing beside it: a case from an earlier run in
+/// the same `cases/` directory survives, and the directory stays because it is not empty.
+#[test]
+fn a_refusal_removes_only_the_case_it_opened_not_its_neighbours() {
+    let repo = repository("one-ready", "adv2-neighbour");
+    let earlier = repo.join(".engineering/cases/earlier");
+    fs::create_dir_all(earlier.join("evidence")).expect("an earlier case");
+    fs::write(
+        earlier.join("case.yaml"),
+        "format: canon-case/1\nid: earlier\n",
+    )
+    .expect("its snapshot");
+    let frontier = Aep {
+        command: stub_aep(&repo, &["story:a"]),
+    };
+    let validators: Vec<Box<dyn Validator>> = vec![];
+    let mut out = Vec::new();
+    let run = Run::open_next(&repo, options(), &frontier, &Never, &validators, &mut out)
+        .expect("the frontier answers")
+        .expect("story:b is taken");
+    assert!(run.case.id.starts_with("story-b-"), "{}", run.case.id);
+    assert_eq!(
+        case_names(&repo),
+        Some(vec!["earlier".to_owned(), run.case.id.clone()]),
+        "the earlier case survives the refusal of story:a"
+    );
+    assert!(
+        earlier.join("case.yaml").is_file(),
+        "the earlier case's snapshot is untouched"
+    );
+}
+
+/// The case is opened before the store is told: when the open fails (a protocol nothing
+/// provides), the frontier asks for no move at all and leaves no case directory, so the story
+/// stays `proposed` for the next run. Pinned at the library level, where the stub's log shows
+/// `show` and never `move`.
+#[test]
+fn an_open_that_fails_asks_for_no_move_and_leaves_no_case() {
+    let repo = repository("one-ready", "adv2-open-fails");
+    let frontier = Aep {
+        command: stub_aep(&repo, &[]),
+    };
+    let validators: Vec<Box<dyn Validator>> = vec![];
+    let mut options = options();
+    options.protocol = "no-such/1".to_owned();
+    let mut out = Vec::new();
+    let error = match Run::open_next(&repo, options, &frontier, &Never, &validators, &mut out) {
+        Ok(_) => panic!("the protocol is not provided, yet a run opened"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("no-such/1"), "{error}");
+    assert_eq!(
+        String::from_utf8_lossy(&out),
+        "",
+        "nothing was taken or refused"
+    );
+    let calls = fs::read_to_string(repo.join("calls.log")).expect("the stub logged its calls");
+    assert!(
+        calls
+            .lines()
+            .any(|line| line == "plan artifact show story:a --format json"),
+        "{calls}"
+    );
+    assert!(
+        !calls
+            .lines()
+            .any(|line| line.starts_with("plan artifact move ")),
+        "no move was asked for: {calls}"
+    );
+    assert_eq!(case_names(&repo), None, "no case directory was opened");
+}
+
+/// An open refused on a case input (a value outside the protocol's declared ones) asks for no
+/// move either, so the story stays `proposed`, and leaves no case directory: `CaseDir::open`
+/// checks the inputs before it writes anything, so the contract "one case directory per taken
+/// story, none for a refused one" has no third outcome.
+#[test]
+fn an_open_refused_on_its_inputs_asks_for_no_move_and_leaves_no_case() {
+    let repo = repository("one-ready", "adv2-input-refused");
+    let frontier = Aep {
+        command: stub_aep(&repo, &[]),
+    };
+    let validators: Vec<Box<dyn Validator>> = vec![];
+    let mut options = options();
+    options.inputs[0] = ("risk".to_owned(), "bogus".to_owned());
+    let mut out = Vec::new();
+    let error = match Run::open_next(&repo, options, &frontier, &Never, &validators, &mut out) {
+        Ok(_) => panic!("the input is outside the declared values, yet a run opened"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("risk"), "{error}");
+    let calls = fs::read_to_string(repo.join("calls.log")).expect("the stub logged its calls");
+    assert!(
+        !calls
+            .lines()
+            .any(|line| line.starts_with("plan artifact move ")),
+        "no move was asked for: {calls}"
+    );
+    assert_eq!(
+        case_names(&repo),
+        None,
+        "a story that was not taken has no case directory"
+    );
+}

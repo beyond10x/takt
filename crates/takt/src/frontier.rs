@@ -184,12 +184,33 @@ impl Aep {
     /// Runs `aep plan artifact <args>` in `repo`: what it printed on success, or what it
     /// printed on a non-zero exit, trimmed, as the inner error.
     fn plan(&self, repo: &Path, args: &[&str]) -> Result<std::result::Result<String, String>> {
-        let output = Command::new(&self.command)
-            .args(["plan", "artifact"])
-            .args(args)
-            .current_dir(repo)
-            .output()
-            .with_context(|| format!("run {} plan artifact {}", self.command, args.join(" ")))?;
+        let mut busy = 0;
+        let output = loop {
+            match Command::new(&self.command)
+                .args(["plan", "artifact"])
+                .args(args)
+                .current_dir(repo)
+                .output()
+            {
+                Ok(output) => break output,
+                // An executable written a moment ago is busy while a child another thread forked
+                // meanwhile still holds the write handle it inherited; that is over as soon as
+                // the child has exec'd, so the spawn is retried briefly before it is an error.
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && busy < 50 =>
+                {
+                    busy += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                Err(error) => {
+                    return Err(anyhow!(
+                        "run {} plan artifact {}: {error}",
+                        self.command,
+                        args.join(" ")
+                    ));
+                }
+            }
+        };
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         if output.status.success() {
             return Ok(Ok(stdout));

@@ -34,6 +34,8 @@ impl CaseDir {
     /// SHA-256 of the intent text, `implementation` at `HEAD`, every other artifact at `r0`, and
     /// the inputs given; a declared input that is not given is refused, naming its values: the
     /// kernel takes no default, because the inputs select the obligations the case owes.
+    /// Nothing is written until `HEAD` and the inputs are in order, and a write that fails takes
+    /// the directory with it, so a case directory exists only with its `case.yaml`.
     pub fn open(
         tree: &Path,
         protocol: LoadedProtocol,
@@ -45,12 +47,6 @@ impl CaseDir {
         if dir.exists() {
             return Err(anyhow!("the case {id} already exists at {}", dir.display()));
         }
-        std::fs::create_dir_all(dir.join("evidence"))
-            .with_context(|| format!("create {}", dir.display()))?;
-        std::fs::create_dir_all(dir.join("decisions"))?;
-        std::fs::write(dir.join("protocol.ir.json"), &protocol.ir_json)?;
-        std::fs::write(dir.join("protocol.yaml"), &protocol.yaml)?;
-        std::fs::write(dir.join("intent.md"), intent)?;
         let head = crate::git::head(tree)?;
         let mut artifacts = serde_yaml_ng::Mapping::new();
         for artifact in &protocol.artifacts {
@@ -99,8 +95,33 @@ impl CaseDir {
             doc: doc.into(),
             written: 0,
         };
-        case.write()?;
+        if let Err(error) = case.create(intent) {
+            if case.dir.exists()
+                && let Err(removal) = std::fs::remove_dir_all(&case.dir)
+            {
+                return Err(error.context(format!(
+                    "and the half-written case {} could not be removed: {removal}",
+                    case.dir.display()
+                )));
+            }
+            // The cases directory stays only while a case is in it.
+            if let Some(cases) = case.dir.parent() {
+                let _ = std::fs::remove_dir(cases);
+            }
+            return Err(error);
+        }
         Ok(case)
+    }
+
+    /// Creates the directory and writes the case's files, `case.yaml` last.
+    fn create(&self, intent: &str) -> Result<()> {
+        std::fs::create_dir_all(self.dir.join("evidence"))
+            .with_context(|| format!("create {}", self.dir.display()))?;
+        std::fs::create_dir_all(self.dir.join("decisions"))?;
+        std::fs::write(self.dir.join("protocol.ir.json"), &self.protocol.ir_json)?;
+        std::fs::write(self.dir.join("protocol.yaml"), &self.protocol.yaml)?;
+        std::fs::write(self.dir.join("intent.md"), intent)?;
+        self.write()
     }
 
     /// Writes `case.yaml`.
