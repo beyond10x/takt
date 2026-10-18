@@ -187,48 +187,31 @@ pub struct GateRun {
 /// validator evaluates them.
 const GATE_INPUTS: &str = "gate-inputs";
 
-/// The case's base revision: the commit the base branch in `branch.yaml` names now.
-fn base_revision(tree: &Path, case_dir: &Path) -> Result<(String, String)> {
+/// The case's base revision: the commit pinned in `branch.yaml` when the case opened, shown
+/// with the base branch's name, and the commit. `None` for a case that pins none (one opened
+/// before the pin was recorded): no branch name stands in for it, because a test command can
+/// move any branch, even onto `HEAD`, without touching the tree.
+fn base_revision(tree: &Path, case_dir: &Path) -> Result<Option<(String, String)>> {
     let branch = Branch::read(case_dir)?;
     let shown = branch.base.as_deref().unwrap_or("a detached HEAD");
-    // The commit pinned when the case opened: never what a branch names now, which a test
-    // command can move without touching the tree.
-    if let Some(pinned) = &branch.base_commit {
-        let at = crate::git::run(
-            tree,
-            &[
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                "--end-of-options",
-                &format!("{pinned}^{{commit}}"),
-            ],
-        )
-        .with_context(|| format!("resolve the case's base commit {pinned}"))?;
-        return Ok((format!("{shown} at {}, pinned at open", short(&at)), at));
-    }
-    let base = branch.base.ok_or_else(|| {
-        anyhow!(
-            "the case pins no base commit and has no base branch: it was opened from a detached HEAD; the gates document and the project file are read from the base revision"
-        )
-    })?;
+    let Some(pinned) = &branch.base_commit else {
+        return Ok(None);
+    };
     let at = crate::git::run(
         tree,
         &[
-            "merge-base",
-            "HEAD",
+            "rev-parse",
+            "--verify",
+            "--quiet",
             "--end-of-options",
-            &format!("{base}^{{commit}}"),
+            &format!("{pinned}^{{commit}}"),
         ],
     )
-    .with_context(|| format!("find where HEAD forked from the case's base branch {base}"))?;
-    Ok((
-        format!(
-            "the merge-base of HEAD and {base}, {} (the case pins no base commit)",
-            short(&at)
-        ),
+    .with_context(|| format!("resolve the case's base commit {pinned}"))?;
+    Ok(Some((
+        format!("{shown} at {}, pinned at open", short(&at)),
         at,
-    ))
+    )))
 }
 
 /// The files a project file names that decide what a gate runs: the executables of the
@@ -338,7 +321,16 @@ impl Validator for GateRun {
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
         let dir = current(tree)?;
-        let (base, at) = base_revision(tree, &dir)?;
+        let Some((base, at)) = base_revision(tree, &dir)? else {
+            return Ok(Observation {
+                summary: format!(
+                    "the gates document {}: not run; the case pins no base commit ({BRANCH_FILE} has no base_commit; it was opened before takt recorded one), and the gate is read from nothing else; no record, the claim stays unknown; abandon the case and open it again",
+                    self.gates.display()
+                ),
+                records: Vec::new(),
+                artifact: None,
+            });
+        };
         let document = format!("{} from {base}", self.gates.display());
         let gates = file_at(tree, &at, &self.gates)?
             .ok_or_else(|| anyhow!("the gates document {document} is not in the base revision"))?;

@@ -831,10 +831,10 @@ fn takt_git_runs_no_code_the_repository_configures() {
     assert!(!marker("hook").exists(), "a post-commit hook ran");
 }
 
-/// A case opened before the base commit was pinned reads the gate from where `HEAD` forked from
-/// its base branch, and the summary says so.
+/// A case opened before the base commit was pinned gets no gate record: no branch name stands
+/// in for the pin. The summary says so and names the way out.
 #[test]
-fn an_unpinned_case_reads_the_gate_from_the_merge_base_and_names_it() {
+fn an_unpinned_case_gets_no_gate_record_and_is_told_the_way_out() {
     let tree = repository("unpinned", r#"fs.file.exists("README.md")"#, &[]);
     let validators: Vec<Box<dyn Validator>> =
         vec![Box::new(GateRun::new(".engineering/gates.yaml"))];
@@ -851,11 +851,16 @@ fn an_unpinned_case_reads_the_gate_from_the_merge_base_and_names_it() {
     let stop = run.run(&mut out);
     let text = String::from_utf8(out).expect("utf-8");
     assert!(
-        text.contains("the merge-base of HEAD and main"),
+        text.contains("the case pins no base commit"),
         "{stop:?}\n{text}"
     );
     assert!(
-        text.contains("evidence: gate_result pass"),
+        text.contains("abandon the case and open it again"),
+        "{stop:?}\n{text}"
+    );
+    assert!(!text.contains("evidence: gate_result"), "{stop:?}\n{text}");
+    assert!(
+        records(&dir).iter().all(|r| r["kind"] != "gate_result"),
         "{stop:?}\n{text}"
     );
 }
