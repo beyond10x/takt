@@ -17,7 +17,7 @@ scope:
   path: crates/takt/tests/story_delivery.rs
 - confidence: inferred
   path: protocols/story-delivery/1.yaml
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 5}
@@ -35,7 +35,7 @@ An operator who opens a case on a planning-store story can read from the decisio
 The document this story writes, validated and compiled by Canon exactly as the built-ins are:
 
 - artifacts `intent`, `plan`, `implementation`; inputs as the workflow needs them (at least `risk`);
-- evidence kinds `test_result` (pass, fail), `gate_result` (pass, fail), `pull_request` (open, merged), `ci_result` (pass, fail);
+- evidence kinds `test_result` (pass, fail), `gate_result` (pass, fail), `pull_request` (open), `ci_result` (pass, fail), `merge_observation` (merged);
 - claims `tests.pass`, `gate.green`, `pr.opened`, `ci.green`, `pr.merged`, every one about `implementation` at its current revision, so a new commit returns all of them to UNKNOWN the way the kernel already relies on (`crates/takt/src/case.rs:119-128`, `run.rs:250-254`);
 - actions `repository.inspect`, `tests.write`, `implementation.edit`, `tests.run` with the ids and effects of `software.change/1`, so the harness brief (`crates/takt/src/harness.rs:71-81`) and the tests validator (`crates/takt/src/validator.rs:56-58`) apply unchanged; `gate.run`; `pr.open` with precondition `tests.pass` and `gate.green`; `ci.read`; `repository.merge` with precondition `ci.green` and `pr.opened`, requiring capability `repository.merge`;
 - outcome `accepted` requiring `pr.merged`; `abandoned` on an explicit decision.
@@ -54,7 +54,7 @@ The document this story writes, validated and compiled by Canon exactly as the b
 
 ## Acceptance
 
-A test opens a case on `protocols/story-delivery/1.yaml` through `CaseDir::open`, adds evidence records about `implementation` at its revision in the order `test_result` pass, `gate_result` pass, `pull_request` open, `ci_result` pass, `pull_request` merged, and the decision after each record shows exactly one more claim true, `repository.merge` approval-required before the last record, and `accepted` legitimate only after it.
+A test opens a case on `protocols/story-delivery/1.yaml` through `CaseDir::open`, adds evidence records about `implementation` at its revision in the order `test_result` pass, `gate_result` pass, `pull_request` open, `ci_result` pass, `merge_observation` merged, and the decision after each record shows exactly one more claim true, `repository.merge` approval-required before the last record, and `accepted` legitimate only after it.
 
 ## Out of Scope
 
@@ -64,3 +64,7 @@ The validators that produce these records (story:gate-validator, story:forge-pul
 
 - Where the protocol lives: `inferable`, `AGENTS.md:27-28` admits a `protocol/1` file in this repository; upstreaming is a later choice and not this story.
 - What the pull request claims are about: `inferable` as a design choice recorded here, `implementation` at a revision, because every claim the kernel tracks is bound to that artifact (`crates/takt/src/run.rs:254`); a separate `pull_request` artifact would need its own revision bookkeeping and was not chosen.
+
+## Correction (wave 01)
+
+Canon 0.6.0 reads a kind whose records disagree at one revision as unknown (`website/docs/reference/evaluation.md:39-42`), so `pr.merged` is established by a `merge_observation` record with result `merged`, not by a second `pull_request` result; `protocols/story-delivery/1.yaml` declares it so.
