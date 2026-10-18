@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:check-finding-builds-name-their-revision
 kind: story
-status: draft
+status: implemented
 title: A takt built by check-finding names its revision
 tags:
 - finding
@@ -11,7 +11,12 @@ refs:
   reference: check-finding-builds-name-their-revision
 relations:
 - informed_by: review-result:findings-hunt-3fe3f21
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T23:06:59Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-18T23:06:59Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-18T23:07:07Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 
