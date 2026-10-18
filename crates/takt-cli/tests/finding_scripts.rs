@@ -885,6 +885,10 @@ fn a_repository_finding_the_check_cannot_clone_at_its_seed_gives_no_result() {
     let env = [("XDG_CACHE_HOME", cache.to_str().expect("UTF-8"))];
     let no_repository = format!("{REPOSITORY_URL}={}", empty.display());
     let no_directory = format!("{REPOSITORY_URL}={}", world.outer.0.join("none").display());
+    let other_url = format!(
+        "https://other.invalid/scenarios={}",
+        world.scenarios.display()
+    );
     let cases: Vec<(&str, Vec<&str>, i32)> = vec![
         (
             "a checkout that is no repository",
@@ -904,6 +908,11 @@ fn a_repository_finding_the_check_cannot_clone_at_its_seed_gives_no_result() {
         (
             "a checkout path that is no directory",
             vec!["--checkout", &no_directory],
+            64,
+        ),
+        (
+            "a checkout for a URL the predicate does not name",
+            vec!["--checkout", &other_url],
             64,
         ),
     ];
@@ -990,6 +999,14 @@ fn a_predicate_mixing_or_missing_the_scenario_and_repository_forms_is_refused() 
                 &repository_form,
                 "repository",
                 "http://example.invalid/canon.git",
+            ),
+        ),
+        (
+            "a repository URL carrying a user or a credential",
+            replaced(
+                &repository_form,
+                "repository",
+                "https://ci-user:t0k3n-not-real@example.invalid/canon.git",
             ),
         ),
         (
@@ -1093,5 +1110,164 @@ fn a_takt_check_finding_builds_names_its_revision() {
             .trim(),
         world.defect,
         "the build records the revision it was made from"
+    );
+}
+
+/// The predicate's clone runs as the predicate will, not as the caller: a caller's global git
+/// configuration that rewrites the predicate's URL to a local path (`insteadOf`) and names a
+/// credential helper reaches neither the clone nor the predicate. Without the rewrite the URL
+/// resolves nowhere, so the check has no result; the helper is never called.
+#[test]
+fn the_predicates_clone_reads_no_git_configuration_or_credential_of_the_caller() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let world = world("callers-config");
+    let filed = file(
+        &world.takt,
+        "repo-form",
+        &body(Some(&world.repository_predicate())),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let home = world.outer.0.join("callers-home");
+    fs::create_dir_all(&home).expect("a directory");
+    let log = world.outer.0.join("helper-calls.log");
+    let helper = home.join("helper.sh");
+    write(
+        &helper,
+        &format!("#!/bin/sh\necho called >> {}\nexit 0\n", log.display()),
+    );
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).expect("executable");
+    write(
+        &home.join(".gitconfig"),
+        &format!(
+            "[url \"{}\"]\n\tinsteadOf = {REPOSITORY_URL}\n[credential]\n\thelper = {}\n",
+            world.scenarios.display(),
+            helper.display()
+        ),
+    );
+    let cache = world.cache();
+    let output = script(
+        "check-finding",
+        &world.takt,
+        &["story:repo-form", &world.defect],
+        &[
+            ("XDG_CACHE_HOME", cache.to_str().expect("UTF-8")),
+            ("HOME", home.to_str().expect("UTF-8")),
+        ],
+    );
+    assert!(
+        !output.status.success(),
+        "the caller's insteadOf sent the predicate's URL to a local repository: {}",
+        shown(&output)
+    );
+    assert!(output.stdout.is_empty(), "{}", shown(&output));
+    assert!(
+        !log.exists(),
+        "the caller's credential helper was called: {}",
+        fs::read_to_string(&log).unwrap_or_default()
+    );
+    // The scenario form, with the same caller configuration, still runs and still calls no
+    // helper: the clone of a local path needs none, and the configuration is not read.
+    let filed = file(
+        &world.takt,
+        "default-protocol",
+        &body(Some(&predicate())),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = world.check(
+        "story:default-protocol",
+        &world.defect,
+        &[("HOME", home.to_str().expect("UTF-8"))],
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&output)
+    );
+    assert!(!log.exists(), "the caller's credential helper was called");
+}
+
+/// A local clone shares no object file with the repository it was cloned from: a predicate
+/// that damages an object in its clone damages nothing in the `--checkout` or `--scenarios`
+/// source, and the source's objects keep one link each.
+#[test]
+fn the_predicates_clone_hardlinks_no_object_of_its_source() {
+    use std::os::unix::fs::MetadataExt;
+
+    let world = world("no-hardlinks");
+    // The predicate corrupts every loose object in its clone, then reports the result.
+    let predicate = world.repository_predicate().replace(
+        "command: test \"$TEST\" = ./check.sh && \"$TAKT\" run --repo .",
+        "command: find .git/objects -type f -exec sh -c 'echo damaged > \"$1\"' _ {} \\; && \"$TAKT\" run --repo .",
+    );
+    let filed = file(&world.takt, "repo-form", &body(Some(&predicate)), &[]);
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = world.check_repository("story:repo-form", &world.defect, &[]);
+    assert!(output.status.success(), "{}", shown(&output));
+    let fsck = Command::new("git")
+        .args(["fsck", "--strict"])
+        .current_dir(&world.scenarios)
+        .output()
+        .expect("git runs");
+    assert!(
+        fsck.status.success(),
+        "the source repository is damaged: {}",
+        String::from_utf8_lossy(&fsck.stderr)
+    );
+    let mut objects = 0;
+    for entry in walk(&world.scenarios.join(".git/objects")) {
+        let links = fs::metadata(&entry).expect("metadata").nlink();
+        assert_eq!(links, 1, "{} has {links} links", entry.display());
+        objects += 1;
+    }
+    assert!(objects > 0, "no object file found");
+}
+
+/// Every regular file below `dir`.
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(dir).expect("a readable directory") {
+        let path = entry.expect("an entry").path();
+        if path.is_dir() {
+            files.extend(walk(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// A short seed in the predicate is recorded resolved to the full commit id, as the scenario
+/// form records its seed.
+#[test]
+fn a_repository_findings_seed_is_recorded_as_the_full_commit_id() {
+    let world = world("full-seed");
+    let short = &world.seed[..12];
+    let predicate = world
+        .repository_predicate()
+        .replace(&format!("seed: {}", world.seed), &format!("seed: {short}"));
+    let filed = file(&world.takt, "repo-form", &body(Some(&predicate)), &[]);
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = world.check_repository("story:repo-form", &world.defect, &[]);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&output)
+    );
+    let runs = world.cache().join("takt/check-finding/runs");
+    let results: Vec<String> = fs::read_dir(&runs)
+        .expect("the runs directory")
+        .map(|entry| fs::read_to_string(entry.expect("an entry").path().join("result")))
+        .filter_map(Result::ok)
+        .collect();
+    assert!(
+        results
+            .iter()
+            .all(|result| result.contains(&format!("seed: {}\n", world.seed))),
+        "{results:?}"
     );
 }

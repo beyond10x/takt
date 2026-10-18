@@ -61,7 +61,6 @@ jobs:
 
   gate:
     name: Gate the tagged commit
-    if: github.event_name == 'push'
     needs: provenance
     uses: ./.github/workflows/check.yml
 
@@ -90,10 +89,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          key: release-${{ matrix.target }}
 
       - name: Build takt from the locked release
         run: cargo build --release --locked -p b10x-takt-cli --target ${{ matrix.target }}
@@ -124,12 +119,8 @@ jobs:
 
   release:
     name: Publish binaries and release notes
-    # A manual backfill skips the gate job. GitHub's implicit `success()` treats that skipped
-    # ancestor as false, so every result that authorizes publication is spelled out.
-    if: >-
-      always() && needs.provenance.result == 'success' && needs.build.result == 'success' &&
-      (needs.gate.result == 'success' ||
-       (github.event_name == 'workflow_dispatch' && needs.gate.result == 'skipped'))
+    # Every path, the manual backfill included, runs the gate; nothing publishes past a failed
+    # or skipped job.
     needs: [provenance, gate, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -173,7 +164,8 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --clobber
+            # A backfill adds what is missing; an asset already published is never replaced.
+            gh release upload "$TAG" dist/*
           else
             gh release create "$TAG" dist/* --title "$TAG" --notes-file notes.md --verify-tag
           fi

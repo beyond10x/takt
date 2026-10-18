@@ -127,6 +127,7 @@ read_predicate() {
         done
     elif [[ -v PREDICATE[repository] ]]; then
         case ${PREDICATE[repository]} in
+        https://*@*) malformed "repository \`${PREDICATE[repository]}\`: a repository URL carries no user or credential; the check clones with none" ;;
         https://?*) ;;
         *) malformed "repository \`${PREDICATE[repository]}\`: a repository is an \`https://\` URL, which the check clones with no credential of its own and which holds on every machine; a local checkout stands in for it through check-finding's \`--checkout <url>=<path>\`" ;;
         esac

@@ -198,6 +198,12 @@ else
     seed=${predicate[seed]}
     where="$repository at ${seed:0:12}"
 fi
+# A --checkout for a URL the predicate does not name stands in for nothing: a mistyped URL
+# would otherwise send the check to the network without a word.
+for url in "${!checkouts[@]}"; do
+    [[ $url == "$repository" ]] ||
+        usage "--checkout $url=${checkouts[$url]}: the predicate names ${repository:-no repository}, not $url"
+done
 
 # takt, built from the revision in a checkout of its own, once per revision. The checkout is a
 # clone sharing this repository's objects, so a revision no branch holds still builds, and a
@@ -224,21 +230,6 @@ if [[ ! -x $takt || ! -f $root/builds/$sha/revision ]]; then
     trap - EXIT
 fi
 
-# The starting state: a clone of the scenario repository, or of the predicate's repository, on
-# `trial/0` at the seed, with no remote, so nothing the predicate does reaches the repository
-# it was cloned from. A repository that wants a credential fails here; nothing asks for one.
-clone=$run/scenario
-GIT_TERMINAL_PROMPT=0 git clone --quiet --no-checkout -- "$source" "$clone" >&2 ||
-    fail "clone $source"
-git -C "$clone" cat-file -e "$seed^{commit}" 2>/dev/null ||
-    fail "$where: the seed ${seed:0:12} is reachable from no branch of $source"
-# `-B`: the clone's one local branch is the one the checkout was on, `trial/0` when a scenario
-# run left it there; it is set to the seed whatever it held.
-git -C "$clone" checkout --quiet -B trial/0 "$seed" >&2 || fail "check out the seed ${seed:0:12}"
-git -C "$clone" remote remove origin
-git -C "$clone" config user.name check-finding
-git -C "$clone" config user.email check-finding@example.invalid
-
 # The predicate's home: fresh, the check's own.
 home=$run/home
 mkdir -p "$home/.cache/aep"
@@ -246,6 +237,29 @@ sources=${XDG_CACHE_HOME:-}
 [[ $sources == /* ]] || sources=$HOME/.cache
 sources=$sources/aep/protocol-sources
 [[ -d $sources ]] && ln -s -- "$sources" "$home/.cache/aep/protocol-sources"
+
+# The starting state: a clone of the scenario repository, or of the predicate's repository, on
+# `trial/0` at the seed, with no remote, so nothing the predicate does reaches the repository
+# it was cloned from. The clone runs as the predicate will, not as the caller: in the fresh
+# HOME, with no system or global git configuration (a caller's `insteadOf` could send a public
+# URL to a private repository over the caller's ssh key), no credential helper, no ssh command
+# and no prompt, so a repository that wants a credential fails rather than being read with the
+# caller's; and without hardlinks, so a predicate that damages an object in its clone damages
+# nothing in the repository it was cloned from.
+clone=$run/scenario
+env HOME="$home" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
+    git -c credential.helper= -c core.sshCommand=false -c core.askPass= \
+    clone --quiet --no-checkout --no-hardlinks -- "$source" "$clone" >&2 ||
+    fail "clone $source"
+resolved=$(git -C "$clone" rev-parse --verify --quiet "$seed^{commit}") ||
+    fail "$where: the seed ${seed:0:12} is reachable from no branch of $source"
+seed=$resolved
+# `-B`: the clone's one local branch is the one the checkout was on, `trial/0` when a scenario
+# run left it there; it is set to the seed whatever it held.
+git -C "$clone" checkout --quiet -B trial/0 "$seed" >&2 || fail "check out the seed ${seed:0:12}"
+git -C "$clone" remote remove origin
+git -C "$clone" config user.name check-finding
+git -C "$clone" config user.email check-finding@example.invalid
 
 say "$finding: $where, takt at ${sha:0:12}: $command"
 environment=(PATH="$PATH" HOME="$home" LANG="${LANG:-C.UTF-8}" TAKT="$takt" SCENARIO="$clone")
