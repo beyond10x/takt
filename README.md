@@ -61,7 +61,8 @@ takt --version
 - for story runs, `aep` on the `PATH` and its planning store in the repository
   (`.engineering/project.yaml`) with ready stories
 - for pull requests, an `origin` on github.com and `b10x-gates` and `gh` on the `PATH`; another
-  host gets no forge, and `--forge none` runs without one
+  host gets no forge, and `--forge none` runs without one; the forge's gates policy comes from
+  `B10X_GATES_POLICY`
 
 Built on [Canon](https://github.com/beyond10x/canon) and
 [Engineering protocols](https://github.com/beyond10x/engineering-protocols). Licence: Apache-2.0.

@@ -645,14 +645,15 @@ impl Validator for PrOpen {
         "implementation"
     }
 
-    /// The case's `branch.yaml`, and what the bot route keeps of the request it sent and the
-    /// response it read.
+    /// The case's `branch.yaml`, and what the bot route keeps of the request it sent, the text it
+    /// scanned as published and the response it read.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
         vec![
             PathBuf::from(BRANCH_FILE),
             artifacts.join(BotRoute::REQUEST),
             artifacts.join(BotRoute::RESPONSE),
+            artifacts.join(BotRoute::PUBLISHED),
         ]
     }
 
