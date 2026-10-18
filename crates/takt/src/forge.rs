@@ -112,8 +112,8 @@ pub struct Origin {
     pub repository: String,
 }
 
-/// The repository host: pushes a branch, opens its pull request, and reports the pull
-/// request's state and head and the checks on its head.
+/// The repository host: pushes a branch, opens its pull request, reports the pull request's
+/// state and head and the checks on its head, and merges it.
 pub trait Forge {
     /// The adapter's name.
     fn name(&self) -> &str;
@@ -126,6 +126,11 @@ pub trait Forge {
     fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView>;
     /// The checks on the head of pull request `number`.
     fn checks(&self, tree: &Path, number: u64) -> Result<Checks>;
+    /// Merges pull request `number`, whose head must still be `head`: a head that moved since it
+    /// was read is refused, not merged. `dir` is where the adapter keeps what it sent and what
+    /// came back, when it keeps anything. What the merge made of the pull request is read back
+    /// through [`Self::pull_request`]; the merge itself answers nothing a validator records.
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()>;
 }
 
 /// What a program the adapter ran answered.
@@ -178,9 +183,9 @@ impl Runner for Process {
 
 /// The adapter over the organization's bot route: `b10x-gates bot -- push` pushes the branch,
 /// `b10x-gates scan-text` checks the pull request before it leaves the machine, `b10x-gates
-/// api` opens it with JSON files, and read-only `gh pr view` and `gh pr checks` report its
-/// state and checks. The policy file is `--policy` when one is known; `b10x-gates` reads its
-/// own environment otherwise.
+/// api` opens it and merges it with JSON files, and read-only `gh pr view` and `gh pr checks`
+/// report its state and checks. The policy file is `--policy` when one is known; `b10x-gates`
+/// reads its own environment otherwise.
 pub struct BotRoute {
     /// `<owner>/<repo>`, from the `origin` URL.
     pub repository: String,
@@ -206,6 +211,10 @@ impl BotRoute {
     pub const REQUEST: &str = "pull-request.request.json";
     /// The file under the directory `open_pull_request` is given that holds what came back.
     pub const RESPONSE: &str = "pull-request.response.json";
+    /// The file under the directory `merge` is given that holds what was sent.
+    pub const MERGE_REQUEST: &str = "pull-request.merge.request.json";
+    /// The file under the directory `merge` is given that holds what came back.
+    pub const MERGE_RESPONSE: &str = "pull-request.merge.response.json";
 
     /// Over `repository` with `policy`, running every line through `runner`.
     #[must_use]
@@ -277,17 +286,16 @@ impl BotRoute {
         ]
     }
 
-    /// The line that opens the pull request `input` describes, the response written to
-    /// `output`.
-    #[must_use]
-    pub fn open_argv(&self, input: &Path, output: &Path) -> Vec<String> {
+    /// The line of an API write: `method` on `path`, the document read from `input`, the
+    /// response written to `output`.
+    fn api_argv(&self, method: &str, path: String, input: &Path, output: &Path) -> Vec<String> {
         let mut argv = vec![
             "b10x-gates".to_owned(),
             "api".to_owned(),
             "--method".to_owned(),
-            "POST".to_owned(),
+            method.to_owned(),
             "--path".to_owned(),
-            format!("/repos/{}/pulls", self.repository),
+            path,
             "--input".to_owned(),
             input.display().to_string(),
             "--output".to_owned(),
@@ -300,6 +308,30 @@ impl BotRoute {
             argv.push(policy.display().to_string());
         }
         argv
+    }
+
+    /// The line that opens the pull request `input` describes, the response written to
+    /// `output`.
+    #[must_use]
+    pub fn open_argv(&self, input: &Path, output: &Path) -> Vec<String> {
+        self.api_argv(
+            "POST",
+            format!("/repos/{}/pulls", self.repository),
+            input,
+            output,
+        )
+    }
+
+    /// The line that merges pull request `number`, the head to match read from `input`, the
+    /// response written to `output`.
+    #[must_use]
+    pub fn merge_argv(&self, number: u64, input: &Path, output: &Path) -> Vec<String> {
+        self.api_argv(
+            "PUT",
+            format!("/repos/{}/pulls/{number}/merge", self.repository),
+            input,
+            output,
+        )
     }
 
     /// The line that reads the state of pull request `number`.
@@ -464,6 +496,33 @@ impl Forge for BotRoute {
             Checks::Pass
         })
     }
+
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()> {
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        let input = dir.join(Self::MERGE_REQUEST);
+        let output = dir.join(Self::MERGE_RESPONSE);
+        // The head to match: the API refuses the merge when the pull request's head is no longer
+        // this commit, so what is merged is what was read and recorded, never a later push.
+        let document = serde_json::json!({ "sha": head });
+        let bytes = serde_json::to_vec_pretty(&document).context("serialize the merge request")?;
+        std::fs::write(&input, bytes).with_context(|| format!("write {}", input.display()))?;
+        let argv = self.merge_argv(number, &input, &output);
+        self.succeed(tree, &argv)?;
+        let text = std::fs::read_to_string(&output)
+            .with_context(|| format!("read the response {}", output.display()))?;
+        let response: serde_json::Value = serde_json::from_str(&text)
+            .with_context(|| format!("read the response {}", output.display()))?;
+        if response["merged"] != true {
+            bail!(
+                "{} did not merge pull request #{number}: {}",
+                argv.join(" "),
+                response["message"]
+                    .as_str()
+                    .unwrap_or("the response does not say `merged: true`")
+            );
+        }
+        Ok(())
+    }
 }
 
 /// The host and the `<owner>/<repo>` an `origin` URL names, in the forms git writes them:
@@ -521,21 +580,26 @@ pub fn without_userinfo(url: &str) -> String {
 
 /// The in-memory double: answers what it is set to and logs every call, for the tests. A pull
 /// request it opened has the head it was opened for, at the revision last pushed for that
-/// branch (the tree's `HEAD` at the push), unless `head` says otherwise.
+/// branch (the tree's `HEAD` at the push), unless `head` says otherwise; one it merged is
+/// `merged` from then on. A merge whose head is not the revision last pushed for the branch is
+/// refused, as the API refuses one given a head to match.
 #[derive(Debug, Default)]
 pub struct Memory {
     /// What `checks` answers for a pull request it opened.
     pub checks: Checks,
-    /// The state `pull_request` answers for a pull request it opened.
+    /// The state `pull_request` answers for a pull request it opened and has not merged.
     pub state: PullRequestState,
     /// The head `pull_request` answers instead of the one it was opened for, when set.
     pub head: Option<Head>,
-    /// Every call, in order: `push <branch>`, `open <branch> #<n>`, `view #<n>`, `checks #<n>`.
+    /// Every call, in order: `push <branch>`, `open <branch> #<n>`, `view #<n>`, `checks #<n>`,
+    /// `merge #<n>`.
     pub calls: RefCell<Vec<String>>,
     /// The pull requests opened, numbered from 1 in this order.
     pub opened: RefCell<Vec<PullRequest>>,
     /// The revision last pushed, by branch.
     pub pushed: RefCell<BTreeMap<String, String>>,
+    /// The pull requests merged, by number.
+    pub merged: RefCell<Vec<u64>>,
 }
 
 impl Memory {
@@ -584,15 +648,32 @@ impl Forge for Memory {
                 .unwrap_or_default();
             Head { branch, sha }
         });
-        Ok(PullRequestView {
-            state: self.state,
-            head,
-        })
+        let state = if self.merged.borrow().contains(&number) {
+            PullRequestState::Merged
+        } else {
+            self.state
+        };
+        Ok(PullRequestView { state, head })
     }
 
     fn checks(&self, _: &Path, number: u64) -> Result<Checks> {
         self.index(number)?;
         self.calls.borrow_mut().push(format!("checks #{number}"));
         Ok(self.checks)
+    }
+
+    fn merge(&self, _: &Path, _: &Path, number: u64, head: &str) -> Result<()> {
+        let index = self.index(number)?;
+        self.calls.borrow_mut().push(format!("merge #{number}"));
+        let branch = self.opened.borrow()[index].branch.clone();
+        let pushed = self.pushed.borrow().get(&branch).cloned();
+        if pushed.as_deref() != Some(head) {
+            bail!(
+                "pull request #{number} has the head {branch} at {}, not {head}; not merged",
+                pushed.as_deref().unwrap_or("nothing pushed")
+            );
+        }
+        self.merged.borrow_mut().push(number);
+        Ok(())
     }
 }
