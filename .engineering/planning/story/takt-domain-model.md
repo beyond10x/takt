@@ -17,7 +17,7 @@ scope:
   path: ess/ess-inputs.yaml
 - confidence: inferred
   path: ess/system.yaml
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":1}}}
@@ -36,11 +36,11 @@ The planning skill asks that a noun with no typed home be modelled before storie
 
 ## Domain relations
 
-- Case → Protocol: exactly one; the case references the protocol; the protocol exists before and outlives the case. Settled by b10x-canon 0.6.0 `ess/domains/protocol.yaml:644-651`, entity `canon.protocol.Case`, relation `protocol` (kind references, cardinality one).
+- Case → Protocol: exactly one; the case references the protocol; the protocol exists before and outlives the case. Settled by b10x-canon 0.6.0 `ess/domains/protocol.yaml:916-923`, entity `canon.protocol.Case`, relation `protocol` (kind references, cardinality one).
 - Run → Case: one-to-one today, inferred from `crates/takt/src/run.rs:75` and `run.rs:105`; the outer loop (story:declared-loops) makes it one-to-many, one case per unit.
 - Run → Unit: one intent, required, inferred from `crates/takt/src/run.rs:21-22` and `crates/takt-cli/src/main.rs:30-32`.
 - Story → Case: at most one open case per story; a story is taken when `proposed` and is `active` while its case is open (aep `artifacts/lifecycles/story.yaml`, `transitions`, `descriptions`); a later run resumes that case rather than opening a second. Decided in the cleared decision-blocker:approval-grant-and-case-resume.
-- AuthorityDecision → Case: one list per evaluation, at most one decision per capability, inferred from b10x-canon 0.6.0 `crates/canon/src/eval/mod.rs:319-326` and `crates/canon/src/eval/authority.rs:7-21`; written by `takt approve <case> <capability>` as the case's `authority.yaml` and read into every evaluation of the resumed case. Decided in the cleared decision-blocker:approval-grant-and-case-resume.
+- AuthorityDecision → Case: one list per evaluation, at most one decision per capability, inferred from b10x-canon 0.6.0 `crates/canon/src/eval/mod.rs:359-365` and `crates/canon/src/eval/authority.rs:7-21`; written by `takt approve <case> <capability>` as the case's `authority.yaml` and read into every evaluation of the resumed case. Decided in the cleared decision-blocker:approval-grant-and-case-resume.
 - Validator → Action, EvidenceKind, Subject: exactly one each, inferred from `crates/takt/src/validator.rs:20-31`.
 - Harness step → Action: exactly one of the offered actions, inferred from `crates/takt/src/run.rs:188-193` and `crates/takt/src/harness.rs:42-47`.
 

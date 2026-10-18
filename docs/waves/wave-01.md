@@ -158,8 +158,8 @@ Selection path: `aep plan artifact waves --kind story --status draft --format js
 | unit | branch | worktree | build dir | scratch |
 |---|---|---|---|---|
 | integration | `wave/2026-10-18-w1` at 1638755 (opening commit) | managed tree `takt-w1-int` (worktree registry id takt-w1-int) | its `target/` | `~/.cache/takt-waves/2026-10-18-w1/int/scratch` |
-| story-delivery-protocol | `impl/story-delivery-protocol` at e50efdb, implementor green (7→9 cases), adversary pass 1 running | managed tree `takt-w1-protocol` | its `target/` | `~/.cache/takt-waves/2026-10-18-w1/protocol/scratch` |
-| takt-domain-model | `impl/takt-domain-model` at ee1adfd, implementor green (ess validate exit 0), adversary pass 1 running | managed tree `takt-w1-domain` | its `target/` | `~/.cache/takt-waves/2026-10-18-w1/domain/scratch` |
+| story-delivery-protocol | `impl/story-delivery-protocol` at 467a6ab (correction 1), 9 cases; adversary pass 1 recorded (7 findings, all fixed), pass 2 running | managed tree `takt-w1-protocol` | its `target/` | `~/.cache/takt-waves/2026-10-18-w1/protocol/scratch` |
+| takt-domain-model | `impl/takt-domain-model` at ee1adfd; adversary pass 1 recorded (2 warnings, 7 notes), correction 1 running | managed tree `takt-w1-domain` | its `target/` | `~/.cache/takt-waves/2026-10-18-w1/domain/scratch` |
 
 Managed trees live under the worktree registry's trees directory for this repository; unit briefs at `<scratch>/brief.md`; coordinator lease `takt-w1-coordinator` on the integration tree.
 
@@ -176,3 +176,4 @@ The opening store commit on the integration branch (this page, the two stories m
 - 2026-10-18: stage 1 written; waiting for the operator's approval of the commits above.
 - 2026-10-18: operator approved wave 01 and granted standing approval for the following waves of the epic (same commit boundary, no push). Opening commit 1638755; two implementors dispatched (`aep:implementor`).
 - 2026-10-18: protocol unit green at e50efdb (red run: 0 passed 2 failed with the file absent; green: 2 passed); the implementor found Canon reads one kind with two results at one revision as unknown, so `pr.merged` comes from `merge_observation`; the two story bodies corrected in the store. Domain unit green at ee1adfd (`takt v1 — 2 file(s), valid`; red runs: no `ess/`, then no domain file). Adversaries dispatched (`aep:adversary`). Implementor cost: protocol 117,087 tokens, 42 tool uses, 8.5 min; domain 189,938 tokens, 69 tool uses, 17 min.
+- 2026-10-18: protocol adversary pass 1 (145,094 tokens, 24 tool uses, 12 min): 7 findings, 2 red cases; correction 1 at 467a6ab (161,258 tokens, 22 tool uses, 5 min), 9 cases green; pass 2 dispatched. Domain adversary pass 1 (150,357 tokens, 51 tool uses, 11 min): confirmed, 2 warnings, 7 notes; correction 1 dispatched; the two story citation errors fixed in the store. Pass-1 adversary scratch holds a 608M build directory (protocol unit), to be removed at teardown.

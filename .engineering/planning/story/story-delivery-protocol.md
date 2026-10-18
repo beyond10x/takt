@@ -17,7 +17,7 @@ scope:
   path: crates/takt/tests/story_delivery.rs
 - confidence: inferred
   path: protocols/story-delivery/1.yaml
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-18T02:34:09Z", actor: "human:timo", revision: 5}
@@ -34,7 +34,7 @@ An operator who opens a case on a planning-store story can read from the decisio
 
 The document this story writes, validated and compiled by Canon exactly as the built-ins are:
 
-- artifacts `intent`, `plan`, `implementation`; inputs as the workflow needs them (at least `risk`);
+- artifacts `intent`, `plan`, `implementation`; no case input (a declared input nothing reads refuses every caller that does not supply it; Canon takes the default when the key is left out: adversary pass 1, finding 2);
 - evidence kinds `test_result` (pass, fail), `gate_result` (pass, fail), `pull_request` (open), `ci_result` (pass, fail), `merge_observation` (merged);
 - claims `tests.pass`, `gate.green`, `pr.opened`, `ci.green`, `pr.merged`, every one about `implementation` at its current revision, so a new commit returns all of them to UNKNOWN the way the kernel already relies on (`crates/takt/src/case.rs:119-128`, `run.rs:250-254`);
 - actions `repository.inspect`, `tests.write`, `implementation.edit`, `tests.run` with the ids and effects of `software.change/1`, so the harness brief (`crates/takt/src/harness.rs:71-81`) and the tests validator (`crates/takt/src/validator.rs:56-58`) apply unchanged; `gate.run`; `pr.open` with precondition `tests.pass` and `gate.green`; `ci.read`; `repository.merge` with precondition `ci.green` and `pr.opened`, requiring capability `repository.merge`;
