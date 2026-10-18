@@ -3967,31 +3967,38 @@ impl<'a> Run<'a> {
             if !touched.is_empty() {
                 restore(&cases, &kept, &touched)?;
             }
+            // A step that returned when the hour budget ended, failed (killed by it) or not, is
+            // discarded whole like any failed step, recorded as a refusal, and the run stops on
+            // the budget; the tokens it reported are counted. One that failed by itself before
+            // then failed as any other.
+            if let Some(h) = self.options.hours
+                && self.deadline().is_some_and(|deadline| returned >= deadline)
+            {
+                let ended = match &stepped {
+                    Ok(report) => {
+                        self.tokens += report.tokens.unwrap_or(0);
+                        format!("it reported {} at or after the run's end", report.action)
+                    }
+                    Err(error) => format!("{error:#}"),
+                };
+                if let Err(undo) = undo() {
+                    return Err(anyhow::anyhow!(
+                        "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}",
+                        self.steps
+                    ));
+                }
+                let why = format!(
+                    "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}",
+                    self.steps
+                );
+                // Written after the cases directory was put back, which would take a line
+                // written before it along.
+                self.refused(events, BY_TAKT, &why)?;
+                writeln!(out, "{why}")?;
+                return Ok(Stop::Hours(h));
+            }
             let report = match stepped {
                 Ok(report) => report,
-                // A step that failed when the hour budget ended, killed by it, is discarded
-                // whole like any failed step, recorded as a refusal, and the run stops on the
-                // budget. One that failed by itself before then failed as any other.
-                Err(error)
-                    if self.deadline().is_some_and(|deadline| returned >= deadline)
-                        && let Some(h) = self.options.hours =>
-                {
-                    if let Err(undo) = undo() {
-                        return Err(error.context(format!(
-                            "step {}: the hour budget ran out during the step, and the step's change could not be discarded: {undo:#}",
-                            self.steps
-                        )));
-                    }
-                    let why = format!(
-                        "step {}: the hour budget ran out during the step; everything the step changed was discarded: {error:#}",
-                        self.steps
-                    );
-                    // Written after the cases directory was put back, which would take a line
-                    // written before it along.
-                    self.refused(events, BY_TAKT, &why)?;
-                    writeln!(out, "{why}")?;
-                    return Ok(Stop::Hours(h));
-                }
                 Err(error) => {
                     return Err(match undo() {
                         Ok(()) => error.context(format!(

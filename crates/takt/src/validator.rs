@@ -274,7 +274,26 @@ impl Validator for TestsRun {
         time_left: Option<std::time::Duration>,
     ) -> Result<(Observation, bool)> {
         let deadline = time_left.and_then(|left| std::time::Instant::now().checked_add(left));
-        Ok((self.observe_by(tree, revision, seq, deadline)?, false))
+        let observed = self.observe_by(tree, revision, seq, deadline);
+        Ok((ended_by(deadline, self.action(), observed)?, false))
+    }
+}
+
+/// What an observation held to `deadline` answers: an error once it returned at or after it,
+/// whatever it observed, so the budget that ended it records nothing; else `observed`.
+fn ended_by(
+    deadline: Option<std::time::Instant>,
+    action: &str,
+    observed: Result<Observation>,
+) -> Result<Observation> {
+    if !deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+        return observed;
+    }
+    match observed {
+        Err(error) => Err(error),
+        Ok(_) => {
+            bail!("{action} returned at or after the run's end; what it observed is not recorded")
+        }
     }
 }
 
@@ -517,6 +536,32 @@ impl Validator for GateRun {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        self.observe_by(tree, revision, seq, None)
+    }
+
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        time_left: Option<std::time::Duration>,
+    ) -> Result<(Observation, bool)> {
+        let deadline = time_left.and_then(|left| std::time::Instant::now().checked_add(left));
+        let observed = self.observe_by(tree, revision, seq, deadline);
+        Ok((ended_by(deadline, self.action(), observed)?, false))
+    }
+}
+
+impl GateRun {
+    /// Observes, each command the gate runs held to the smaller of the project file's timeout
+    /// and what is left before `deadline` when the gate's commands are collected.
+    fn observe_by(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Observation> {
         let dir = current(tree)?;
         let Some((base, at)) = base_revision(tree, &dir)? else {
             return Ok(Observation {
@@ -603,7 +648,7 @@ impl Validator for GateRun {
                 .as_ref()
                 .map(|(path, text)| copy("project", path, text))
                 .transpose()?;
-            let prepared = canon_engineering_assertions::prepare(
+            let mut prepared = canon_engineering_assertions::prepare(
                 tree,
                 &gates,
                 copied.as_deref(),
@@ -616,6 +661,12 @@ impl Validator for GateRun {
                 ),
                 None => format!("prepare the gates document {document}"),
             })?;
+            if let Some(deadline) = deadline {
+                prepared.context.timeout = prepared
+                    .context
+                    .timeout
+                    .min(deadline.saturating_duration_since(std::time::Instant::now()));
+            }
             canon_engineering_assertions::collect(prepared, now)
                 .with_context(|| format!("collect the observations of {document}"))
         })();
