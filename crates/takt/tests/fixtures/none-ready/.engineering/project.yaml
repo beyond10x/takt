@@ -1,0 +1,11 @@
+version: aep.project/5
+
+protocol: adp/1
+profile: development.standard
+protocols: git+https://github.com/beyond10x/aep#6d7a44d3607d2d9a6ffdf0a165993c546c43d0db
+planning_scope: "none-ready"
+store:
+  git: {}
+
+summary: >-
+  A fixture planning store for the frontier tests

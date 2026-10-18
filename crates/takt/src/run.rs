@@ -9,6 +9,7 @@ use std::time::Instant;
 use anyhow::{Context as _, Result};
 
 use crate::case::{CASES_DIR, CaseDir};
+use crate::frontier::Unit;
 use crate::harness::{Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
 use crate::validator::Validator;
@@ -80,6 +81,8 @@ pub struct Run<'a> {
     pub tree: PathBuf,
     /// The case.
     pub case: CaseDir,
+    /// What the run works on: the intent given, or the story the frontier took.
+    pub unit: Unit,
     /// The judgement actor.
     pub harness: &'a dyn Harness,
     /// The validators, one per deterministic action.
@@ -93,13 +96,36 @@ pub struct Run<'a> {
 }
 
 impl<'a> Run<'a> {
-    /// Opens the case and prepares the run.
+    /// Opens the case on the intent in `options` and prepares the run.
     pub fn open(
         tree: &Path,
         options: RunOptions,
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
     ) -> Result<Self> {
+        let unit = Unit::Intent(options.intent.clone());
+        Self::open_unit(tree, options, unit, harness, validators)
+    }
+
+    /// Opens the case on `unit` and prepares the run. For a story, `intent.md` is the story's
+    /// title followed by its body, and the case id, unless `options` gives one, is derived from
+    /// the story id and the instant.
+    pub fn open_unit(
+        tree: &Path,
+        mut options: RunOptions,
+        unit: Unit,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        match &unit {
+            Unit::Intent(intent) => options.intent = intent.clone(),
+            Unit::Story(story) => {
+                options.intent = story.intent();
+                if options.case_id.is_none() {
+                    options.case_id = Some(story.case_id(&crate::now()));
+                }
+            }
+        }
         let protocol = if Path::new(&options.protocol).is_file() {
             LoadedProtocol::from_file(Path::new(&options.protocol))?
         } else {
@@ -113,6 +139,7 @@ impl<'a> Run<'a> {
         Ok(Self {
             tree: tree.to_path_buf(),
             case,
+            unit,
             harness,
             validators,
             steps: 0,
