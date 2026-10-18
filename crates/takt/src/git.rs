@@ -68,6 +68,82 @@ const REDIRECTING_ENV: [&str; 12] = [
 /// than find a repository further up; and for a tree without a `.git` git searches no further
 /// than the tree itself.
 fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
+    let mut child = command(tree, args)?
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        stdin
+            .write_all(input)
+            .with_context(|| format!("write to git {}", args.join(" ")))?;
+    }
+    child
+        .wait_with_output()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))
+}
+
+/// Runs `git <args>` in `tree` as [`run`] does, with nothing on its standard input, and answers
+/// its standard output as text (invalid UTF-8 replaced, nothing trimmed), or `None` as soon as it
+/// passes `limit` bytes: git is killed then and nothing more is read. Exiting non-zero is an
+/// error naming what git said.
+pub fn run_bounded(tree: &Path, args: &[&str], limit: usize) -> Result<Option<String>> {
+    use std::io::Read as _;
+    let mut child = command(tree, args)?
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
+    let stderr = child.stderr.take().map(|mut stream| {
+        std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = stream.by_ref().take(64 << 10).read_to_end(&mut said);
+            let _ = std::io::copy(&mut stream, &mut std::io::sink());
+            said
+        })
+    });
+    let mut kept = Vec::new();
+    let mut over = false;
+    if let Some(stdout) = child.stdout.take() {
+        let read = stdout
+            .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
+            .read_to_end(&mut kept);
+        read.with_context(|| format!("read git {}", args.join(" ")))?;
+        over = kept.len() > limit;
+    }
+    if over {
+        let _ = child.kill();
+    }
+    let status = child
+        .wait()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
+    let said = stderr
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    if over {
+        return Ok(None);
+    }
+    if !status.success() {
+        bail!(
+            "git {} in {} exited {}: {}",
+            args.join(" "),
+            tree.display(),
+            status,
+            String::from_utf8_lossy(&said).trim()
+        );
+    }
+    Ok(Some(String::from_utf8_lossy(&kept).into_owned()))
+}
+
+/// The `git <args>` [`output`] and [`run_bounded`] run in `tree`: pinned to the tree, with no
+/// code from configuration and no credential or redirecting variable in its environment.
+fn command(tree: &Path, args: &[&str]) -> Result<Command> {
     let tree =
         std::path::absolute(tree).with_context(|| format!("make {} absolute", tree.display()))?;
     let tree = tree.as_path();
@@ -87,27 +163,11 @@ fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
     if let Some(parent) = tree.parent() {
         command.env("GIT_CEILING_DIRECTORIES", parent);
     }
-    let mut child = command
+    command
         .args(NO_CONFIGURED_CODE)
         .args(args)
-        .current_dir(tree)
-        .stdin(if input.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
-    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
-        stdin
-            .write_all(input)
-            .with_context(|| format!("write to git {}", args.join(" ")))?;
-    }
-    child
-        .wait_with_output()
-        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))
+        .current_dir(tree);
+    Ok(command)
 }
 
 /// Runs `git <args>` in `tree`, `input` on its standard input; answers its standard output as

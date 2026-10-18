@@ -707,9 +707,9 @@ fn above(revision: &str, head: &str) -> String {
 /// request's head as the case's branch at the head pushed, else no record is written. A case
 /// with no base is refused before anything is pushed. The title is the intent's first line,
 /// the body the intent and the claims that hold. Before every push the forge scans what it
-/// would publish ([`Forge::scan_outgoing`]): the messages and the diff of the commits from the
-/// base to the head pushed and, when the pull request is opened, its title and body; a refused
-/// scan pushes nothing, opens nothing and writes no record.
+/// would publish ([`Forge::scan_outgoing`]): every commit of the head pushed the remote does
+/// not hold, with its author, committer, message and diff, and, when the pull request is opened,
+/// its title and body; a refused scan pushes nothing, opens nothing and writes no record.
 pub struct PrOpen {
     /// The forge the push and the pull request go through.
     pub forge: Rc<dyn Forge>,
@@ -920,8 +920,8 @@ impl Validator for PrOpen {
             }
         }
         // Everything the push and the pull request would publish is scanned before either
-        // leaves: the messages and the diff of `base..head`, and the title and body of a pull
-        // request about to be opened. A refusal pushes nothing and records nothing.
+        // leaves: the commits the remote does not hold, and the title and body of a pull request
+        // about to be opened. A refusal pushes nothing and records nothing.
         let (base, request) = match &next {
             Next::Open(request) => (request.base.clone(), Some(request)),
             Next::Read(number) => (
@@ -1222,7 +1222,9 @@ impl Validator for CiRead {
 /// other head is not merged and not replaced. When the case's branch holds riders above the
 /// pull request's head that it descends from and that carry the revision, the branch is pushed
 /// first, named in `branch.yaml` before the push, so the head merged carries the records and a
-/// push the forge took but reported failed is merged by the next run. A head carrying riders
+/// push the forge took but reported failed is merged by the next run; the forge scans what that
+/// push would publish before it ([`Forge::scan_outgoing`]), and a refused scan pushes nothing,
+/// merges nothing and writes no record. A head carrying riders
 /// is one CI was not read on: its checks are read before the merge, and pending or failing checks merge nothing and
 /// write no record, the summary saying which; a later run merges it. Pending checks, a head
 /// pushed that the pull request does not show yet, and a merge the forge refuses for a required
@@ -1271,12 +1273,15 @@ impl Validator for PrMerged {
         "implementation"
     }
 
-    /// The case's `branch.yaml`, when takt's riders are pushed before the merge, and
-    /// what the bot route keeps of the merge request it sent and the response it read.
+    /// The case's `branch.yaml`, when takt's riders are pushed before the merge, the commit
+    /// messages and diff the bot route scanned before that push, and what it keeps of the merge
+    /// request it sent and the response it read.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
         vec![
             PathBuf::from(BRANCH_FILE),
+            artifacts.join(BotRoute::MESSAGES),
+            artifacts.join(BotRoute::DIFF),
             artifacts.join(BotRoute::MERGE_REQUEST),
             artifacts.join(BotRoute::MERGE_RESPONSE),
         ]
@@ -1382,6 +1387,27 @@ impl Validator for PrMerged {
                     )
                     .is_ok()
                 {
+                    // What the push would publish is scanned before it, as `pr.open` scans
+                    // its own; a refusal pushes nothing, merges nothing and records nothing.
+                    let base = branch.base.clone().ok_or_else(|| {
+                        anyhow!(
+                            "the case has pull request #{number} but no base branch to count the commits it would push from; nothing pushed, nothing merged"
+                        )
+                    })?;
+                    self.forge
+                        .scan_outgoing(
+                            tree,
+                            &dir.join("artifacts"),
+                            &crate::forge::Outgoing {
+                                branch: &name,
+                                base: &base,
+                                head: &local,
+                                request: None,
+                            },
+                        )
+                        .with_context(|| {
+                            format!("scan {name} before the push through the forge {forge}")
+                        })?;
                     // Named before the push: a push the forge took but reported failed leaves
                     // the head it took recorded, and the next run merges it.
                     branch.pushed = Some(local.clone());

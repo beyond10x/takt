@@ -1,23 +1,27 @@
 //! `pr.open` scans everything it is about to publish before anything leaves the machine: the
-//! commit messages of `base..head`, the diff of every commit in that range, and, when it opens
-//! the pull request, the title and the body. A scan that refuses stops `pr.open` with nothing
-//! pushed, no pull request opened and no record written, and the refusal carries what the
-//! policy said, never the text it refused.
+//! commits the push would publish (their identities, messages and diffs, the diff's lines as the
+//! files hold them) and, when it opens the pull request, the title and the body; so does
+//! `repository.merge` before it pushes takt's riders. A scan that refuses stops the step with
+//! nothing pushed, no pull request opened, nothing merged and no record written, and the refusal
+//! carries what the policy said, never the text it refused.
 //!
 //! A recording runner stands in for `b10x-gates` and `gh`: `scan-text` refuses a file that holds
 //! [`FORBIDDEN`], as a policy rule would, and says which file and line, never the text; every
 //! line is kept with what each file `scan-text` names held. Nothing leaves the machine.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 
-use anyhow::anyhow;
-use takt::forge::{BotRoute, Exit, Forge, Runner};
+use anyhow::{anyhow, bail};
+use takt::forge::{
+    BotRoute, Checks, Exit, Forge, Memory, Outgoing, PullRequest, PullRequestView, Runner,
+};
+use takt::frontier::{Aep, approve};
 use takt::harness::{Harness, StepContext, StepReport};
-use takt::validator::{PrOpen, Validator};
+use takt::validator::{CiRead, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
 /// The protocol under test, relative to this crate.
@@ -451,7 +455,11 @@ fn a_clean_case_is_scanned_whole_before_the_push_and_then_opened() {
         all.contains("implementation.edit: a clean summary"),
         "{all}"
     );
-    assert!(all.contains("+a line of work"), "{all}");
+    assert!(all.lines().any(|line| line == "a line of work"), "{all}");
+    assert!(
+        !all.contains("+a line of work"),
+        "the diff is scanned with its markers: {all}"
+    );
     assert!(
         all.contains("deliver the story\n\nThe story's body."),
         "{all}"
@@ -615,12 +623,406 @@ fn messages_and_diff_over_the_limit_are_refused_not_cut() {
         );
     });
     let error = ran.stop.as_ref().expect_err("too large to scan");
-    assert!(error.contains("over the 256 bytes"), "{error}");
+    assert!(error.contains("more than the 256 bytes"), "{error}");
     assert!(error.contains("refused, not cut"), "{error}");
     assert!(error.contains("nothing was pushed"), "{error}");
     assert!(gates.argvs().is_empty(), "{:#?}", gates.argvs());
     assert!(
         !kinds(&ran.case_dir).contains(&"pull_request".to_owned()),
         "{error}"
+    );
+}
+
+/// What the one scan before the push read last: the diff of the commits.
+fn scanned_diff(gates: &Gates) -> String {
+    gates
+        .lines()
+        .into_iter()
+        .find(|line| line.argv.starts_with("b10x-gates scan-text "))
+        .and_then(|line| line.scanned.last().cloned())
+        .expect("a scan before the push")
+}
+
+/// A commit removes the line between two lines it keeps: in the diff the removed line stands
+/// between them, in the file they are next to each other. The diff is scanned as the file
+/// holds its lines, without the markers and without the removed line, so a literal wrapped
+/// across the two is next to itself for the scanner's wrapped rule.
+#[test]
+fn the_diff_is_scanned_as_the_files_hold_their_lines() {
+    let (head, tail) = FORBIDDEN.split_at(6);
+    let tree = scratch("lines");
+    let gates = Rc::new(Gates::default());
+    let ran = pr_open(&tree, "lines", Rc::new(bot(&gates)), |tree| {
+        commit(
+            tree,
+            "notes.md",
+            &format!("about {head}\nmiddle\n{tail} tail\n"),
+            "implementation.edit: notes",
+        );
+        commit(
+            tree,
+            "notes.md",
+            &format!("about {head}\n{tail} tail\n"),
+            "implementation.edit: fewer notes",
+        );
+    });
+    assert_eq!(ran.stop, Ok(Stop::Iterations(1)), "{}", ran.text);
+    let diff = scanned_diff(&gates);
+    assert!(
+        diff.contains(&format!("\nabout {head}\n{tail} tail\n")),
+        "{diff}"
+    );
+    assert!(diff.contains("diff --git a/notes.md b/notes.md"), "{diff}");
+    assert!(!diff.contains("+about"), "{diff}");
+}
+
+/// A file name that is not ASCII is scanned as git holds it, not octal-escaped.
+#[test]
+fn a_file_name_is_scanned_as_it_is() {
+    let tree = scratch("names");
+    let gates = Rc::new(Gates::default());
+    let ran = pr_open(&tree, "names", Rc::new(bot(&gates)), |tree| {
+        commit(tree, "grüße.txt", "hallo\n", "implementation.edit: greet");
+    });
+    assert_eq!(ran.stop, Ok(Stop::Iterations(1)), "{}", ran.text);
+    let diff = scanned_diff(&gates);
+    assert!(
+        diff.contains("diff --git a/grüße.txt b/grüße.txt"),
+        "{diff}"
+    );
+}
+
+/// With no tracking ref of the remote, the base's commits no remote-tracking ref holds are
+/// scanned with the case's: a local commit on `main` the remote may not have is refused.
+#[test]
+fn with_no_tracking_ref_the_bases_own_commits_are_scanned() {
+    let tree = scratch("untracked-base");
+    commit(
+        &tree,
+        "local.txt",
+        &format!("token {FORBIDDEN}\n"),
+        "local work",
+    );
+    let gates = Rc::new(Gates::default());
+    let ran = pr_open(&tree, "untracked-base", Rc::new(bot(&gates)), |tree| {
+        commit(tree, "work.txt", "clean\n", "implementation.edit: clean");
+    });
+    refused_before_anything_left(&ran, &gates);
+}
+
+/// With tracking refs of the remote, what they hold is not scanned again: a literal in a
+/// commit `origin/main` holds does not stop the push, and the scanned messages hold only the
+/// case's commit.
+#[test]
+fn a_commit_the_remote_holds_is_not_scanned_again() {
+    let tree = scratch("tracked-base");
+    commit(
+        &tree,
+        "old.txt",
+        &format!("token {FORBIDDEN}\n"),
+        "published long ago",
+    );
+    let main = git(&tree, &["rev-parse", "HEAD"]);
+    git(&tree, &["update-ref", "refs/remotes/origin/main", &main]);
+    let gates = Rc::new(Gates::default());
+    let ran = pr_open(&tree, "tracked-base", Rc::new(bot(&gates)), |tree| {
+        commit(tree, "work.txt", "clean\n", "implementation.edit: clean");
+    });
+    assert_eq!(ran.stop, Ok(Stop::Iterations(1)), "{}", ran.text);
+    let scanned = gates.lines()[0].scanned.join("\n");
+    assert!(scanned.contains("implementation.edit: clean"), "{scanned}");
+    assert!(!scanned.contains("published long ago"), "{scanned}");
+    assert!(scanned.contains("author t <t@localhost>"), "{scanned}");
+}
+
+/// git's output is read no further than the limit: past it the answer is none.
+#[test]
+fn git_output_past_the_limit_is_not_read() {
+    let tree = scratch("bounded");
+    commit(&tree, "work.txt", &"x\n".repeat(100), "work");
+    let all = takt::git::run_bounded(&tree, &["log", "--patch"], 1 << 20)
+        .expect("git runs")
+        .expect("under the limit");
+    assert!(all.len() > 64, "{all}");
+    assert_eq!(
+        takt::git::run_bounded(&tree, &["log", "--patch"], 64).expect("git runs"),
+        None
+    );
+}
+
+/// The fixture stores, one directory each, relative to this crate.
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+
+/// A forge over [`Memory`] that logs `scan <branch>` for each scan and the pushes as the
+/// double does, and refuses a scan while `refuse` is set.
+#[derive(Default)]
+struct Scanning {
+    memory: Memory,
+    refuse: Cell<bool>,
+    log: RefCell<Vec<String>>,
+}
+
+impl Forge for Scanning {
+    fn name(&self) -> &str {
+        "scanning"
+    }
+
+    fn scan_outgoing(&self, _: &Path, _: &Path, outgoing: &Outgoing<'_>) -> anyhow::Result<()> {
+        self.log
+            .borrow_mut()
+            .push(format!("scan {} {}", outgoing.branch, outgoing.head));
+        if self.refuse.get() {
+            bail!("scan-text: 1 private rule(s); private details remain local");
+        }
+        Ok(())
+    }
+
+    fn push(&self, tree: &Path, branch: &str) -> anyhow::Result<()> {
+        self.log.borrow_mut().push(format!("push {branch}"));
+        self.memory.push(tree, branch)
+    }
+
+    fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> anyhow::Result<()> {
+        self.log
+            .borrow_mut()
+            .push(format!("push {branch} {revision}"));
+        self.memory.push_revision(tree, branch, revision)
+    }
+
+    fn open_pull_request(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        request: &PullRequest,
+    ) -> anyhow::Result<u64> {
+        self.memory.open_pull_request(tree, dir, request)
+    }
+
+    fn pull_request(&self, tree: &Path, number: u64) -> anyhow::Result<PullRequestView> {
+        self.memory.pull_request(tree, number)
+    }
+
+    fn checks(&self, tree: &Path, number: u64) -> anyhow::Result<Checks> {
+        self.memory.checks(tree, number)
+    }
+
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> anyhow::Result<()> {
+        self.log.borrow_mut().push(format!("merge #{number}"));
+        self.memory.merge(tree, dir, number, head)
+    }
+}
+
+/// Requests the merge gate as soon as it is offered, changing nothing.
+struct Requester;
+
+impl Harness for Requester {
+    fn name(&self) -> &str {
+        "requester"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
+        if context.approvals.contains(&"repository.merge".to_owned()) {
+            return Ok(StepReport {
+                action: "repository.merge".to_owned(),
+                summary: "merge it".to_owned(),
+                tokens: None,
+            });
+        }
+        Err(anyhow!("the gate was not offered"))
+    }
+}
+
+/// A delivery run's validators over `forge`: tests (`true`), the gate as `TestsRun` would not
+/// do, so a gate that always passes, and the forge's three.
+fn delivery(forge: &Rc<Scanning>) -> Vec<Box<dyn Validator>> {
+    let forge: Rc<dyn Forge> = forge.clone();
+    vec![
+        Box::new(TestsRun::new("true").expect("a command")),
+        Box::new(GatePass),
+        Box::new(PrOpen::new(forge.clone())),
+        Box::new(CiRead::new(forge.clone())),
+        Box::new(PrMerged::new(forge)),
+    ]
+}
+
+/// `gate.run` without a gate: one `gate_result` pass at the revision.
+struct GatePass;
+
+impl Validator for GatePass {
+    fn name(&self) -> &str {
+        "record.gate-pass"
+    }
+
+    fn action(&self) -> &str {
+        "gate.run"
+    }
+
+    fn kind(&self) -> &str {
+        "gate_result"
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(
+        &self,
+        _: &Path,
+        revision: &str,
+        seq: usize,
+    ) -> Result<takt::validator::Observation, anyhow::Error> {
+        Ok(takt::validator::Observation {
+            summary: "pass".to_owned(),
+            records: vec![takt::evidence::Record::new(
+                format!("gate-result-{seq}"),
+                self.kind(),
+                Some("pass".to_owned()),
+                self.subject(),
+                revision,
+                self.name(),
+            )],
+            artifact: None,
+        })
+    }
+}
+
+/// The options of a delivery run of the fixture store's story.
+fn delivery_options() -> RunOptions {
+    RunOptions {
+        protocol: PROTOCOL.to_owned(),
+        intent: String::new(),
+        inputs: Vec::new(),
+        iterations: Some(12),
+        hours: None,
+        tokens: None,
+        case_id: None,
+        gate: Some("repository.merge".to_owned()),
+    }
+}
+
+/// Copies the directory `from` to `to`.
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir_all(to).expect("a directory");
+    for entry in fs::read_dir(from).expect("a readable fixture") {
+        let entry = entry.expect("an entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("a file type").is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).expect("a copied file");
+        }
+    }
+}
+
+/// The fixture store's story taken, worked, opened through `forge`, its checks passing, and
+/// granted the merge: the tree, the case id. The next run pushes takt's riders before the merge.
+fn granted(name: &str, forge: &Rc<Scanning>) -> (Scratch, String) {
+    let tree = scratch(name);
+    copy_dir(&Path::new(FIXTURES).join("one-ready"), &tree);
+    fs::write(tree.join("check.txt"), "broken\n").expect("a file");
+    git(&tree, &["add", "-A"]);
+    git(&tree, &["commit", "-q", "-m", "the store"]);
+    let validators = delivery(forge);
+    let store = Aep::default();
+    let mut out = Vec::new();
+    let opened = Run::open_next(
+        &tree,
+        delivery_options(),
+        &store,
+        &Requester,
+        &validators,
+        &mut out,
+    )
+    .expect("the frontier answers")
+    .expect("the story is taken");
+    let id = opened.case.id.clone();
+    drop(opened);
+    fs::write(tree.join("check.txt"), "fixed\n").expect("a file");
+    git(&tree, &["commit", "-q", "-am", "the work"]);
+    let mut run = Run::resume(&tree, delivery_options(), &id, &Requester, &validators)
+        .expect("the case resumes");
+    run.record_on(&store);
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).expect("the run stops without an error");
+    drop(run);
+    assert_eq!(
+        stop,
+        Stop::ApprovalRequired(vec!["repository.merge".to_owned()]),
+        "{}",
+        String::from_utf8_lossy(&out)
+    );
+    approve(&tree, &store, &id, "repository.merge", "human:operator")
+        .expect("the approval is given");
+    (tree, id)
+}
+
+/// Runs the granted case once more, past the gate: how it ended and what it printed.
+fn merge_run(tree: &Path, id: &str, forge: &Rc<Scanning>) -> (Result<Stop, String>, String) {
+    let validators = delivery(forge);
+    let store = Aep::default();
+    let mut run = Run::resume(tree, delivery_options(), id, &NoHarness, &validators)
+        .expect("the case resumes");
+    run.record_on(&store);
+    run.poll = std::time::Duration::from_millis(5);
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
+    (stop, String::from_utf8_lossy(&out).into_owned())
+}
+
+/// `repository.merge` pushes takt's riders above the reviewed head before it merges: the forge
+/// scans that push before it, and the merge follows.
+#[test]
+fn the_rider_push_before_the_merge_is_scanned_first() {
+    let forge = Rc::new(Scanning {
+        memory: Memory {
+            checks: Checks::Pass,
+            ..Memory::default()
+        },
+        ..Scanning::default()
+    });
+    let (tree, id) = granted("riders", &forge);
+    let before = forge.log.borrow().len();
+    let (stop, text) = merge_run(&tree, &id, &forge);
+    assert_eq!(stop, Ok(Stop::Completed("accepted".to_owned())), "{text}");
+    let log = forge.log.borrow()[before..].to_vec();
+    let push = log
+        .iter()
+        .position(|line| line.starts_with("push "))
+        .unwrap_or_else(|| panic!("the riders were pushed: {log:#?}"));
+    let pushed = log[push].rsplit(' ').next().expect("a revision").to_owned();
+    assert!(
+        log[..push].contains(&format!("scan takt/{id} {pushed}")),
+        "{log:#?}"
+    );
+    assert!(log.contains(&"merge #1".to_owned()), "{log:#?}");
+}
+
+/// A scan that refuses the riders' push: nothing is pushed, nothing merged, no record written.
+#[test]
+fn a_refused_scan_of_the_rider_push_pushes_and_merges_nothing() {
+    let forge = Rc::new(Scanning {
+        memory: Memory {
+            checks: Checks::Pass,
+            ..Memory::default()
+        },
+        ..Scanning::default()
+    });
+    let (tree, id) = granted("riders-refused", &forge);
+    let before = forge.log.borrow().len();
+    forge.refuse.set(true);
+    let (stop, text) = merge_run(&tree, &id, &forge);
+    let error = stop.expect_err("the scan refused");
+    assert!(error.contains("private rule"), "{error}\n{text}");
+    let log = forge.log.borrow()[before..].to_vec();
+    assert!(
+        !log.iter().any(|line| line.starts_with("push ")),
+        "{log:#?}"
+    );
+    assert!(forge.memory.merged.borrow().is_empty(), "{log:#?}");
+    let dir = tree.join(".engineering/cases").join(&id);
+    assert!(
+        !kinds(&dir).contains(&"merge_observation".to_owned()),
+        "{:?}",
+        kinds(&dir)
     );
 }

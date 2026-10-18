@@ -1,9 +1,11 @@
 //! The `Forge` seam: the repository host behind a trait, one adapter that goes through the
 //! organization's bot route, and an in-memory double for the tests. The bot credential never
 //! enters takt: `b10x-gates bot` pushes under the bot, over HTTPS only, `b10x-gates api` writes
-//! through JSON files and never a token in argv, the reads go through `gh`, and the commits a
-//! push publishes, their messages and diff, and a pull request's title and body pass
-//! `b10x-gates scan-text` before they leave the machine. A validator turns what the forge
+//! through JSON files and never a token in argv, the reads go through `gh`, and before any of
+//! it leaves the machine `b10x-gates scan-text` reads what a push would publish (every commit
+//! the remote's tracking refs do not hold: its author, committer, message and diff, the diff's
+//! lines as the files hold them, every file as text) and a pull request's title and body. A
+//! validator turns what the forge
 //! reports into evidence; the forge itself writes no record.
 //!
 //! Every child process takt starts, the forge's and the others' (the test command, the
@@ -267,14 +269,14 @@ pub struct Origin {
     pub repository: String,
 }
 
-/// What `pr.open` is about to publish: the commit `head` pushed as `branch`, so every commit of
-/// `base..head` with its message and its diff, and, when the pull request is opened with the
-/// push, its title and body.
+/// What a push is about to publish: the commit `head` pushed as `branch`, so every commit of
+/// `head` the remote does not hold yet, and, when the pull request is opened with the push, its
+/// title and body.
 #[derive(Debug, Clone, Copy)]
 pub struct Outgoing<'a> {
     /// The branch pushed.
     pub branch: &'a str,
-    /// The branch the commits are counted from: what is already there.
+    /// The branch the case forked from: what the remote holds when no tracking ref says.
     pub base: &'a str,
     /// The commit pushed.
     pub head: &'a str,
@@ -837,11 +839,12 @@ impl BotRoute {
     pub const MERGE_REQUEST: &str = "pull-request.merge.request.json";
     /// The file under the directory `merge` is given that holds what came back.
     pub const MERGE_RESPONSE: &str = "pull-request.merge.response.json";
-    /// The file under the directory `scan_outgoing` is given that holds the messages of the
-    /// commits a push would publish, `git log --format=%B <base>..<head>`.
+    /// The file under the directory `scan_outgoing` is given that holds, for each commit a push
+    /// would publish, its id, its author's and its committer's name and email, and its message.
     pub const MESSAGES: &str = "push.messages.txt";
     /// The file under the directory `scan_outgoing` is given that holds the diff of each commit
-    /// a push would publish, as git prints it with no external diff and no text conversion.
+    /// a push would publish, every file as text, its lines as the file holds them
+    /// ([`published_lines`]).
     pub const DIFF: &str = "push.diff.txt";
     /// The most bytes of messages and diff one scan before a push is given by default.
     pub const SCAN_LIMIT: usize = 32 << 20;
@@ -1123,34 +1126,152 @@ fn write_request(dir: &Path, request: &PullRequest) -> Result<(PathBuf, PathBuf)
     Ok((input, published))
 }
 
-/// The options of every `git log` that reads what a push would publish: no colour, messages in
-/// UTF-8 whatever the repository's configuration says, the range after `--end-of-options`.
-const LOG_OPTIONS: [&str; 2] = ["--no-color", "--encoding=UTF-8"];
+/// The options of every `git log` that reads what a push would publish: file names as they are,
+/// no colour, no mailmap, whatever the repository's configuration says.
+const LOG_OPTIONS: [&str; 5] = [
+    "-c",
+    "core.quotePath=false",
+    "log",
+    "--no-color",
+    "--no-use-mailmap",
+];
 
-/// The messages of the commits `base..head`, `git log --format=%B`, and the diff of each of
-/// them as git prints it: no external diff, no text conversion (a binary file is git's one
-/// line), a merge as its dense combined diff. Every commit's own diff, not the net diff of the
-/// range: the push publishes every commit, and a line one commit adds and a later one removes is
-/// in none of the net diff.
-fn outgoing_text(tree: &Path, base: &str, head: &str) -> Result<(String, String)> {
-    let range = format!("{base}..{head}");
-    let mut messages = vec!["log", "--format=%B"];
-    messages.extend(LOG_OPTIONS);
-    messages.extend(["--end-of-options", &range]);
-    let mut diff = vec![
-        "log",
-        "--patch",
-        "--cc",
-        "--format=commit %H",
-        "--no-ext-diff",
-        "--no-textconv",
-    ];
-    diff.extend(LOG_OPTIONS);
-    diff.extend(["--end-of-options", &range]);
+/// The rest of the options of the `git log` that reads the commits' messages: each commit's id,
+/// its author's and its committer's name and email, then its message.
+const MESSAGE_OPTIONS: [&str; 2] = [
+    "--encoding=UTF-8",
+    "--format=commit %H%nauthor %an <%ae>%ncommitter %cn <%ce>%n%n%B",
+];
+
+/// The rest of the options of the `git log` that reads the commits' diffs: each commit's own
+/// diff, a merge as its dense combined diff, every file as text whatever its attributes say, no
+/// external diff and no text conversion.
+const DIFF_OPTIONS: [&str; 6] = [
+    "--patch",
+    "--cc",
+    "--text",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--format=commit %H",
+];
+
+/// The commit `revision` names, by its id; an error when it names none.
+fn commit_id(tree: &Path, revision: &str) -> Result<String> {
+    crate::git::run(
+        tree,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &format!("{revision}^{{commit}}"),
+        ],
+    )
+    .with_context(|| format!("{revision} names no commit"))
+}
+
+/// The commits pushing `head` to `remote` publishes, as the revision arguments of one `git log`
+/// each, and the words for them. The commits of `head` the remote's tracking refs do not hold;
+/// with no tracking ref of the remote, the commits of `head` not on `base` and the commits of
+/// `base` no remote-tracking ref holds. Every revision is a commit id, so none is read as an
+/// option.
+fn published_commits(
+    tree: &Path,
+    remote: &str,
+    base: &str,
+    head: &str,
+) -> Result<(Vec<Vec<String>>, String)> {
+    let head = commit_id(tree, head)?;
+    let short = head[..head.len().min(12)].to_owned();
+    if !crate::git::refs(tree, &[&format!("refs/remotes/{remote}/")])?.is_empty() {
+        return Ok((
+            vec![vec![
+                head,
+                "--not".to_owned(),
+                format!("--remotes={remote}"),
+            ]],
+            format!("the commits of {short} no tracking ref of {remote} holds"),
+        ));
+    }
+    let base_id = commit_id(tree, base)?;
     Ok((
-        crate::git::run(tree, &messages)?,
-        crate::git::run(tree, &diff)?,
+        vec![
+            vec![head, format!("^{base_id}")],
+            vec![base_id, "--not".to_owned(), "--remotes".to_owned()],
+        ],
+        format!(
+            "the commits {base}..{short} and those of {base} no remote-tracking ref holds ({remote} has no tracking ref)"
+        ),
     ))
+}
+
+/// The lines of `diff`, a `git log --patch` print, as the files the commits publish hold them:
+/// in each hunk the lines the commit's tree holds (context and added) without their one prefix
+/// column (one per parent in a merge's combined diff), the removed ones left out, which the
+/// parent holds and which would otherwise stand between two lines the file holds next to each
+/// other; git's `\ No newline` note left out; every other line, the file headers and the hunk
+/// headers included, as git printed it.
+fn published_lines(diff: &str) -> String {
+    let mut text = String::with_capacity(diff.len());
+    let mut columns: Option<usize> = None;
+    for line in diff.lines() {
+        if let Some(width) = columns {
+            let prefix = line.get(..width.min(line.len())).unwrap_or("");
+            let content = prefix.chars().all(|c| matches!(c, ' ' | '+' | '-'))
+                && (prefix.len() == width || line.is_empty());
+            if line.starts_with('\\') {
+                continue;
+            }
+            if content {
+                if !prefix.contains('-') {
+                    text.push_str(line.get(width..).unwrap_or(""));
+                    text.push('\n');
+                }
+                continue;
+            }
+            columns = None;
+        }
+        let ats = line.chars().take_while(|c| *c == '@').count();
+        if ats >= 2 && line[ats..].starts_with(' ') {
+            columns = Some(ats - 1);
+        }
+        text.push_str(line);
+        text.push('\n');
+    }
+    text
+}
+
+/// What pushing `head` to `remote` would publish ([`published_commits`]), read in at most
+/// `limit` bytes: the commits' ids, identities and messages, and their diffs as the files hold
+/// the lines ([`published_lines`]); `None` once git prints more than `limit` bytes, read no
+/// further. The words for the commits.
+fn outgoing_text(
+    tree: &Path,
+    remote: &str,
+    base: &str,
+    head: &str,
+    limit: usize,
+) -> Result<(Option<(String, String)>, String)> {
+    let (selections, words) = published_commits(tree, remote, base, head)?;
+    let mut left = limit;
+    let mut messages = String::new();
+    let mut diff = String::new();
+    for (options, into) in [
+        (&MESSAGE_OPTIONS[..], &mut messages),
+        (&DIFF_OPTIONS[..], &mut diff),
+    ] {
+        for revisions in &selections {
+            let mut args: Vec<&str> = LOG_OPTIONS.to_vec();
+            args.extend(options);
+            args.extend(revisions.iter().map(String::as_str));
+            let Some(text) = crate::git::run_bounded(tree, &args, left)? else {
+                return Ok((None, words));
+            };
+            left = left.saturating_sub(text.len());
+            into.push_str(&text);
+        }
+    }
+    Ok((Some((messages, published_lines(&diff))), words))
 }
 
 /// `path` with nothing at it: a response file left from before is removed, so what is read
@@ -1194,10 +1315,13 @@ impl Forge for BotRoute {
         self.push_line(tree, &self.push_revision_argv(branch, revision))
     }
 
-    /// One `scan-text` line over the pull request, when one is opened (the JSON request and the
-    /// title and body as published), the messages of `base..head` ([`Self::MESSAGES`]) and the
-    /// diff of each of its commits ([`Self::DIFF`]), all written under `dir`. Messages and diff
-    /// over [`Self::scan_limit`] bytes are refused before anything is written or scanned.
+    /// One `scan-text` line over everything pushing `head` to [`Self::remote`] would publish:
+    /// the pull request, when one is opened (the JSON request and the title and body as
+    /// published), and the commits the remote does not hold ([`published_commits`]): their ids,
+    /// authors, committers and messages ([`Self::MESSAGES`]) and their diffs as the files hold
+    /// the lines ([`Self::DIFF`]), all written under `dir`. Once git prints more than
+    /// [`Self::scan_limit`] bytes for them, it is read no further and the push is refused,
+    /// nothing written or scanned.
     fn scan_outgoing(&self, tree: &Path, dir: &Path, outgoing: &Outgoing<'_>) -> Result<()> {
         let Outgoing {
             branch,
@@ -1205,15 +1329,13 @@ impl Forge for BotRoute {
             head,
             request,
         } = *outgoing;
-        let (messages, diff) = outgoing_text(tree, base, head)?;
-        let size = messages.len() + diff.len();
-        if size > self.scan_limit {
+        let (text, commits) = outgoing_text(tree, &self.remote, base, head, self.scan_limit)?;
+        let Some((messages, diff)) = text else {
             bail!(
-                "the commits {base}..{} of {branch} come to {size} bytes of messages and diff, over the {} bytes one scan is given: refused, not cut; nothing was pushed",
-                &head[..head.len().min(12)],
+                "{commits}, which pushing {branch} would publish, come to more than the {} bytes of messages and diff one scan is given: refused, not cut; nothing was pushed",
                 self.scan_limit
             );
-        }
+        };
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         let mut paths = Vec::new();
         if let Some(request) = request {
@@ -1229,10 +1351,14 @@ impl Forge for BotRoute {
         self.succeed(tree, &self.scan_paths_argv(&paths))
             .with_context(|| {
                 format!(
-                    "what pushing {branch} would publish did not pass scan-text: the commits {base}..{} with their messages and diff{}; nothing was pushed and no pull request opened",
-                    &head[..head.len().min(12)],
+                    "what pushing {branch} would publish did not pass scan-text: {commits}, with their identities, messages and diffs{}; nothing was pushed{}",
                     if request.is_some() {
-                        ", the pull request's title and body"
+                        ", and the pull request's title and body"
+                    } else {
+                        ""
+                    },
+                    if request.is_some() {
+                        " and no pull request opened"
                     } else {
                         ""
                     }
