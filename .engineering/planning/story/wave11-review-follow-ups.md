@@ -2,12 +2,16 @@
 format: aep.planning-md/3
 id: story:wave11-review-follow-ups
 kind: story
-status: draft
+status: active
 title: Close the low findings from the wave 11 grant reviews
 relations:
 - depends_on: story:records-reach-base
 - depends_on: story:binary-embeds-revision
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T20:13:55Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-18T20:13:56Z", actor: "human:timo", revision: 3}
 ---
 ## Outcome
 

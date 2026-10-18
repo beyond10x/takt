@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:loop-scorecard
 kind: story
-status: draft
+status: active
 title: Validators drive loop.improvement/1 cases; the L2 turn runs after three L1 turns
 summary: loop scorecard, definition check, comparison; the weekly L2 turn
 relations:
@@ -21,7 +21,10 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/improvement_protocols.rs
-revision: 10
+revision: 12
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T20:13:47Z", actor: "human:timo", revision: 11, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "proposed", to: "active", at: "2026-10-18T20:13:47Z", actor: "human:timo", revision: 12, decided_on: {"recorded":{"review_outcome":3}}}
 ---
 # Story: loop-scorecard
 
