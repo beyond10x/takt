@@ -156,7 +156,9 @@ once at least three turns have been filed since the merge.
   tree whose citations resolve: in the managed worktree, after the store commit (for a `docs/**`
   branch, after merging it into a worktree cut from `main`), run `python3 -I
   scripts/check-citations --require-digests` unpiped in the same `set -eo pipefail` chain as
-  scan-text, and merge into `main` only when it exits 0. On an unresolved line, run
+  scan-text, and merge into `main` only when it exits 0 and the worktree contains `main`'s tip
+  (`git merge-base --is-ancestor main HEAD`); if `main` moved, merge it into the worktree and run
+  the check again, so the `--no-ff` merge into `main` has the checked tree. On an unresolved line, run
   `check-citations fix` outside that chain (it exits 1 even when it re-pointed every line), then
   run the check again: when it exits 0, commit the re-point in the worktree as its own commit and
   merge; when it does not (the cited text changed, or a needle matches twice), merge nothing and
