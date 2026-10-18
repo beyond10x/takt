@@ -741,10 +741,10 @@ const APPROVALS_AT_MOST: usize = 64;
 /// [`crate::frontier::approve_subject`] of `story` and one capability, and every path it changes
 /// in the planning store ([`crate::frontier::is_store_path`]). Such a commit is the approval's
 /// own: it records the grant and changes no path outside the store. The case stays at
-/// `revision`, and `pr.open` pushes `revision` itself, not `HEAD`
-/// ([`crate::forge::Forge::push_revision`]), so what is pushed, checked and merged is the
-/// revision the grant was given at. A commit that does anything else, or a case with no story,
-/// is no approval's.
+/// `revision`, the one the grant was given at and every claim is about; `pr.open` and
+/// `repository.merge` push `HEAD` with those commits above it and merge that head, so the
+/// approval's record reaches the base with the pull request and nothing else rides along. A
+/// commit that does anything else, or a case with no story, is no approval's.
 pub fn approvals_only(
     tree: &Path,
     revision: &str,

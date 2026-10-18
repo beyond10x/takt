@@ -514,13 +514,51 @@ fn short(revision: &str) -> &str {
     revision.get(..8).unwrap_or(revision)
 }
 
+/// Whether the pull request head `head` carries the implementation revision `revision` of the
+/// case at `case_dir`: it is the revision, or it reaches the revision only through the
+/// approval's own commits ([`crate::case::approvals_only`]), which change nothing but the
+/// planning store and are how an approval's record reaches the base with the pull request. A
+/// head that is not a commit of the repository carries nothing.
+fn carries(tree: &Path, case_dir: &Path, revision: &str, head: &str) -> Result<bool> {
+    if head == revision {
+        return Ok(true);
+    }
+    if head.len() < 7
+        || !head.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || crate::git::run(tree, &["cat-file", "-e", &format!("{head}^{{commit}}")]).is_err()
+    {
+        return Ok(false);
+    }
+    crate::case::approvals_only(
+        tree,
+        revision,
+        head,
+        crate::case::story_of(case_dir)?.as_deref(),
+    )
+}
+
+/// How a summary names a head that carries the approval's commits above the revision; nothing
+/// for a head that is the revision.
+fn above(revision: &str, head: &str) -> String {
+    if head == revision {
+        String::new()
+    } else {
+        format!(
+            "; its head {} carries the approval's record above it",
+            short(head)
+        )
+    }
+}
+
 /// `pr.open`: pushes the case's branch through the forge and opens its one pull request, the
 /// head at the implementation revision; writes one `pull_request` record with the state the
 /// forge reports, `open` for a pull request just opened. At a later revision the branch is
 /// pushed again and the pull request's state read: one pull request per case. The tree's
-/// `HEAD` must be the revision, or the pull request's head would not be what the claim is
-/// about; and a number the case directory carries is trusted only once the forge reports the
-/// pull request's head as the case's branch at the revision, else no record is written. A case
+/// `HEAD` must be the revision, or the revision with only the approval's own commits above it
+/// ([`crate::case::approvals_only`]), which are pushed with it so the record of the grant
+/// reaches the base with the pull request; anything else would not be what the claim is
+/// about. A number the case directory carries is trusted only once the forge reports the pull
+/// request's head as the case's branch at the head pushed, else no record is written. A case
 /// with no base is refused before anything is pushed. The title is the intent's first line,
 /// the body the intent and the claims that hold; the forge passes both through `scan-text`
 /// before they leave the machine.
@@ -659,7 +697,8 @@ impl Validator for PrOpen {
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
         let dir = current(tree)?;
         // `HEAD` is the implementation revision, or the approval's own commits on top of it
-        // (`approvals_only`); what is pushed is the revision either way, never `HEAD`.
+        // (`approvals_only`); `HEAD` is what is pushed, so the pull request carries the
+        // approval's record to the base, and the record written is about the revision.
         let head = crate::git::head(tree)?;
         if head != revision
             && !crate::case::approvals_only(
@@ -721,19 +760,20 @@ impl Validator for PrOpen {
             }
         }
         self.forge
-            .push_revision(tree, &name, revision)
+            .push_revision(tree, &name, &head)
             .with_context(|| format!("push {name} through the forge {forge}"))?;
-        branch.pushed = Some(revision.to_owned());
+        branch.pushed = Some(head.clone());
+        let carried = above(revision, &head);
         let (state, summary) = match next {
             Next::Read(number) => {
                 let view = self.forge.pull_request(tree, number).with_context(|| {
                     format!("read pull request #{number} through the forge {forge}")
                 })?;
-                if view.head.branch == name && view.head.sha == revision {
+                if view.head.branch == name && view.head.sha == head {
                     (
                         Some(view.state),
                         format!(
-                            "{repaired}pushed {name} at {} through {forge}; pull request #{number} is {}",
+                            "{repaired}pushed {name} at {} through {forge}{carried}; pull request #{number} is {}",
                             short(revision),
                             view.state
                         ),
@@ -761,7 +801,7 @@ impl Validator for PrOpen {
                 (
                     Some(PullRequestState::Open),
                     format!(
-                        "{repaired}pushed {name} at {} through {forge} and opened pull request #{number}: open",
+                        "{repaired}pushed {name} at {} through {forge}{carried} and opened pull request #{number}: open",
                         short(revision)
                     ),
                 )
@@ -791,9 +831,9 @@ impl Validator for PrOpen {
 /// `ci.read`: reads the checks on the head of the case's pull request through the forge and
 /// writes one `ci_result` record, `pass` or `fail`. Pending checks write no record, because a
 /// claim that could not be observed stays unknown; so does a case with no pull request yet, or
-/// one whose pull request the forge does not report as the case's branch at the revision: a
-/// number the case directory carries is not trusted on its own. Nothing but the pull request
-/// head is read.
+/// one whose pull request the forge does not report as the case's branch at the head pushed,
+/// the revision or the revision with only the approval's own commits above it: a number the
+/// case directory carries is not trusted on its own. Nothing but the pull request head is read.
 pub struct CiRead {
     /// The forge the checks are read through.
     pub forge: Rc<dyn Forge>,
@@ -848,19 +888,22 @@ impl Validator for CiRead {
                     .to_owned(),
             ));
         };
-        if branch.pushed.as_deref() != Some(revision) {
-            return Ok(nothing(format!(
-                "the head of pull request #{number} is {}, not the implementation revision {}; nothing to read, the claim stays unknown",
-                branch.pushed.as_deref().map_or("not pushed", short),
-                short(revision)
-            )));
-        }
+        let pushed = match branch.pushed {
+            Some(pushed) if carries(tree, &dir, revision, &pushed)? => pushed,
+            pushed => {
+                return Ok(nothing(format!(
+                    "the head of pull request #{number} is {}, not the implementation revision {}; nothing to read, the claim stays unknown",
+                    pushed.as_deref().map_or("not pushed", short),
+                    short(revision)
+                )));
+            }
+        };
         let forge = self.forge.name();
         let view = self
             .forge
             .pull_request(tree, number)
             .with_context(|| format!("read pull request #{number} through the forge {forge}"))?;
-        if view.head.branch != name || view.head.sha != revision {
+        if view.head.branch != name || view.head.sha != pushed {
             return Ok(nothing(format!(
                 "pull request #{number} has the head {} at {}, not {name} at {}; nothing to read, the claim stays unknown",
                 view.head.branch,
@@ -914,10 +957,17 @@ impl Validator for CiRead {
 /// the forge is never authority. The grant authorises the implementation revision it was given
 /// at and no other, and the step checks that again itself: an open pull request at a revision
 /// the case holds no grant for is not merged. Nothing is merged unless the forge reports the
-/// pull request's head as the case's branch at the revision, and the merge names that head, so
-/// a head that moved meanwhile is refused by the forge rather than merged. A pull request
-/// already merged is recorded without a second merge; one the forge still reports open after
-/// the merge writes no record, because a claim that could not be observed stays unknown.
+/// pull request's head as the case's branch at the head last pushed, and that head carries the
+/// revision: it is the revision, or the revision with only the approval's own commits above it
+/// ([`crate::case::approvals_only`]), the record of the grant in the planning store, which so
+/// reaches the base with the merge. Any other head is not merged and not replaced. When the
+/// pull request's head is the revision and the case's branch holds the approval's commits
+/// above it, the branch is pushed first, so the head merged carries the record. The merge names
+/// the head, so a head that moved meanwhile is refused by the forge rather than merged. The
+/// record is about the revision the grant authorises; the head merged is retained beside it as
+/// `artifacts/merged-head-<seq>.json`. A pull request already merged is recorded without a
+/// second merge; one the forge still reports open after the merge writes no record, because a
+/// claim that could not be observed stays unknown.
 pub struct PrMerged {
     /// The forge the merge goes through and the state is read from.
     pub forge: Rc<dyn Forge>,
@@ -956,10 +1006,12 @@ impl Validator for PrMerged {
         "implementation"
     }
 
-    /// What the bot route keeps of the merge request it sent and the response it read.
+    /// The case's `branch.yaml`, when the approval's commits are pushed before the merge, and
+    /// what the bot route keeps of the merge request it sent and the response it read.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
         vec![
+            PathBuf::from(BRANCH_FILE),
             artifacts.join(BotRoute::MERGE_REQUEST),
             artifacts.join(BotRoute::MERGE_RESPONSE),
         ]
@@ -967,7 +1019,7 @@ impl Validator for PrMerged {
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
         let dir = current(tree)?;
-        let branch = Branch::read(&dir)?;
+        let mut branch = Branch::read(&dir)?;
         // The case's branch, from the case id: not the `name` of a file a harness can write.
         let name = branch_of(&dir)?;
         let forge = self.forge.name();
@@ -982,23 +1034,26 @@ impl Validator for PrMerged {
                     .to_owned(),
             ));
         };
-        if branch.pushed.as_deref() != Some(revision) {
-            return Ok(nothing(format!(
-                "the head of pull request #{number} is {}, not the implementation revision {}; nothing to merge, the claim stays unknown",
-                branch.pushed.as_deref().map_or("not pushed", short),
-                short(revision)
-            )));
-        }
-        let view = self
+        let pushed = match branch.pushed.clone() {
+            Some(pushed) if carries(tree, &dir, revision, &pushed)? => pushed,
+            pushed => {
+                return Ok(nothing(format!(
+                    "the head of pull request #{number} is {}, not the implementation revision {}; nothing to merge, the claim stays unknown",
+                    pushed.as_deref().map_or("not pushed", short),
+                    short(revision)
+                )));
+            }
+        };
+        let mut view = self
             .forge
             .pull_request(tree, number)
             .with_context(|| format!("read pull request #{number} through the forge {forge}"))?;
-        if view.head.branch != name || view.head.sha != revision {
+        if view.head.branch != name || view.head.sha != pushed {
             return Ok(nothing(format!(
                 "pull request #{number} has the head {} at {}, not {name} at {}; nothing to merge, the claim stays unknown",
                 view.head.branch,
                 short(&view.head.sha),
-                short(revision)
+                short(&pushed)
             )));
         }
         let (state, merged_now) = match view.state {
@@ -1025,8 +1080,33 @@ impl Validator for PrMerged {
                         self.action()
                     )));
                 }
+                // The approval's own commits above the revision go with the pull request, so the
+                // record of the grant reaches the base with the merge: a head still at the
+                // revision is brought up to the branch's `HEAD` when that carries the revision.
+                let local = crate::git::head(tree)?;
+                if view.head.sha == revision
+                    && local != revision
+                    && carries(tree, &dir, revision, &local)?
+                {
+                    self.forge
+                        .push_revision(tree, &name, &local)
+                        .with_context(|| format!("push {name} through the forge {forge}"))?;
+                    branch.pushed = Some(local.clone());
+                    branch.write(&dir)?;
+                    view = self.forge.pull_request(tree, number).with_context(|| {
+                        format!("read pull request #{number} through the forge {forge}")
+                    })?;
+                    if view.head.branch != name || view.head.sha != local {
+                        return Ok(nothing(format!(
+                            "pushed {name} at {} through {forge}, and pull request #{number} has the head {} at {}; nothing merged, the claim stays unknown",
+                            short(&local),
+                            view.head.branch,
+                            short(&view.head.sha)
+                        )));
+                    }
+                }
                 self.forge
-                    .merge(tree, &dir.join("artifacts"), number, revision)
+                    .merge(tree, &dir.join("artifacts"), number, &view.head.sha)
                     .with_context(|| {
                         format!("merge pull request #{number} through the forge {forge}")
                     })?;
@@ -1037,6 +1117,8 @@ impl Validator for PrMerged {
             }
             state => (state, false),
         };
+        let head = view.head.sha.clone();
+        let carried = above(revision, &head);
         let result = match state {
             PullRequestState::Merged => Some("merged"),
             PullRequestState::Closed => Some("closed"),
@@ -1044,11 +1126,11 @@ impl Validator for PrMerged {
         };
         let summary = match (state, merged_now) {
             (PullRequestState::Merged, true) => format!(
-                "merged pull request #{number} at {} through {forge}: merged",
+                "merged pull request #{number} at {} through {forge}: merged{carried}",
                 short(revision)
             ),
             (PullRequestState::Merged, false) => format!(
-                "pull request #{number} at {} is already merged, read through {forge}: merged",
+                "pull request #{number} at {} is already merged, read through {forge}: merged{carried}",
                 short(revision)
             ),
             (PullRequestState::Closed, _) => format!(
@@ -1072,10 +1154,25 @@ impl Validator for PrMerged {
                 )]
             })
             .unwrap_or_default();
+        // The record is about the revision the grant authorises; which head was merged, the
+        // revision or the revision with the approval's commits above it, is kept beside it.
+        let artifact = if state == PullRequestState::Merged {
+            let kept = serde_json::json!({
+                "pull_request": number,
+                "granted": revision,
+                "merged_head": head,
+            });
+            Some(Artifact {
+                name: format!("merged-head-{seq}.json"),
+                bytes: serde_json::to_vec_pretty(&kept).context("serialize the merged head")?,
+            })
+        } else {
+            None
+        };
         Ok(Observation {
             summary,
             records,
-            artifact: None,
+            artifact,
         })
     }
 }
