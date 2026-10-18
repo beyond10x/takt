@@ -1,0 +1,308 @@
+takt.work.CaseId|- name: takt.work.CaseId|crates/takt/src/run.rs|1	.unwrap_or_else(|| format!("takt-{}"
+takt.work.CaseId|- name: takt.work.CaseId|crates/takt/src/frontier.rs|1	pub fn case_id(&self, instant: &str) -> String { && instant.replace([':', '-'], "")
+takt.work.CaseId|- name: takt.work.CaseId|crates/takt/src/case.rs|1	doc.insert("id".into(), id.into());
+takt.work.CaseId|- name: takt.work.CaseId|crates/takt/src/case.rs|2	pub fn check_id(id: &str) -> Result<()> { && Some("it contains a path separator".to_owned())
+takt.work.RunId|- name: takt.work.RunId|crates/takt/src/run.rs|1	pub struct Run<'a> { && pub tokens: u64,
+takt.work.RunId|- name: takt.work.RunId|crates/takt/src/run.rs|2	.unwrap_or_else(|| format!("takt-{}"
+takt.work.RunId|- name: takt.work.RunId|crates/takt-cli/src/main.rs|1	"stopped: {stop}; steps {}, tokens {}, case {}", && run.case.dir.display()
+takt.work.RunId|- name: takt.work.RunId|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|1	store. The next `takt run` on the repository && A story has at most one open case.
+takt.work.ProtocolId|- name: takt.work.ProtocolId|crates/takt/src/protocol.rs|1	pub struct LoadedProtocol { && pub revision: u64,
+takt.work.ProtocolId|- name: takt.work.ProtocolId|crates/takt/src/protocol.rs|2	const EMBEDDED: && include_str!("../../../protocols/story-delivery/1.yaml"),
+takt.work.ProtocolName|- name: takt.work.ProtocolName|crates/takt/src/protocol.rs|1	/// The protocol name, `software.change`. && pub name: String,
+takt.work.ProtocolName|- name: takt.work.ProtocolName|crates/takt/src/case.rs|1	doc.insert("protocol".into(), protocol.name.as_str().into());
+takt.work.ProtocolSource|- name: takt.work.ProtocolSource|crates/takt/src/run.rs|1	/// The protocol id, `software.change/1`, or a `protocol/1` file path.
+takt.work.ProtocolSource|- name: takt.work.ProtocolSource|crates/takt/src/run.rs|2	let protocol = if Path::new(&options.protocol).is_file() { && LoadedProtocol::builtin(&options.protocol)?
+takt.work.ProtocolSource|- name: takt.work.ProtocolSource|crates/takt/src/protocol.rs|1	pub fn resolve(spec: &str) -> Result<Self> { && Self::builtin(spec)
+takt.work.StoryId|- name: takt.work.StoryId|docs/design/takt.md|1	unit     := intent | frontier(repo)
+takt.work.StoryId|- name: takt.work.StoryId|crates/takt/src/frontier.rs|1	/// The artifact id, `story:<name>`. && pub id: String,
+takt.work.StoryId|- name: takt.work.StoryId|.engineering/planning/story/takt-domain-model.md|1	- Story → Case: at most one open case per story
+takt.work.StoryStatus|- name: takt.work.StoryStatus|crates/takt/src/frontier.rs|1	pub const READY: &str = "proposed"; && pub const DONE: [&str; 2] = ["implemented", "archived"];
+takt.work.Unit|- name: takt.work.Unit|docs/design/takt.md|1	unit     := intent | frontier(repo)
+takt.work.Unit|- name: takt.work.Unit|crates/takt/src/frontier.rs|1	pub fn is_ready(story: &Listed, all: &[Listed]) -> bool { && .all(|r| {
+takt.work.Unit|- name: takt.work.Unit|crates/takt/src/frontier.rs|2	pub fn ready(all: &[Listed]) -> Vec<&Listed> {
+takt.work.Unit|- name: takt.work.Unit|crates/takt/src/run.rs|1	pub fn open_next( && Self::take_next(tree, options, frontier, harness, validators, out)
+takt.work.Unit|- name: takt.work.Unit|crates/takt/src/run.rs|2	pub fn take_next( && Ok(None)
+takt.work.Unit|- name: takt.work.Unit|crates/takt/src/run.rs|3	pub fn take_subject(story: &str) -> String { && format!("takt: take {story}")
+takt.work.ActionId|- name: takt.work.ActionId|crates/takt/src/protocol.rs|1	/// The declared action ids, in declaration order. && pub actions: Vec<String>,
+takt.work.EvidenceKindId|- name: takt.work.EvidenceKindId|crates/takt/src/validator.rs|1	/// The evidence kind it produces. && fn kind(&self) -> &str;
+takt.work.ArtifactId|- name: takt.work.ArtifactId|crates/takt/src/protocol.rs|1	/// The declared artifact ids, in declaration order. && pub artifacts: Vec<String>,
+takt.work.ArtifactId|- name: takt.work.ArtifactId|crates/takt/src/validator.rs|1	/// The artifact its records are about. && fn subject(&self) -> &str;
+takt.work.CapabilityId|- name: takt.work.CapabilityId|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|1	`takt approve <case> repository.merge` writes the case's `authority.yaml`
+takt.work.CapabilityId|- name: takt.work.CapabilityId|crates/takt/src/case.rs|1	fn required_capabilities(case_dir: &Path) && requirement["capability"].as_str().map(str::to_owned)
+takt.work.Grant|- name: takt.work.Grant|crates/takt/src/case.rs|1	pub enum Grant { && Denied,
+takt.work.Approval|- name: takt.work.Approval|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|1	`ApprovalRequired`. `takt approve <case> repository.merge` && store. The next `takt run`
+takt.work.Approval|- name: takt.work.Approval|crates/takt/src/case.rs|1	pub struct Approval { && pub revision: String,
+takt.work.Approval|- name: takt.work.Approval|crates/takt/src/frontier.rs|1	pub fn approve( && pending.write().with_context(|| match story {
+takt.work.Approval|- name: takt.work.Approval|crates/takt/src/frontier.rs|2	/// `evidence <story> --kind approval --source "takt approve <capability> --by <approver> at && &approval.granted_at,
+takt.work.Approval|- name: takt.work.Approval|crates/takt/src/frontier.rs|3	pub fn approve_subject(story: &str, capability: &str) -> String { && format!("takt: approve {story} {capability}")
+takt.work.Approval|- name: case|crates/takt/src/case.rs|1	pub fn reference(&self) -> String { && format!("{}/{AUTHORITY_FILE}", self.case)
+takt.work.Approval|- name: revision|crates/takt/src/case.rs|1	/// The implementation revision the grant authorises: the one the case reached the gate at.
+takt.work.OutcomeId|- name: takt.work.OutcomeId|crates/takt/src/run.rs|1	/// An outcome is legitimate: the case is complete through it. && Completed(String),
+takt.work.InputId|- name: takt.work.InputId|crates/takt/src/protocol.rs|1	/// The declared case inputs, in declaration order, each with its allowed values. && pub inputs: Vec<(String, Vec<String>)>,
+takt.work.InputId|- name: takt.work.InputId|crates/takt/src/case.rs|1	for (input, allowed) in &protocol.inputs { && doc.insert("inputs".into(), values.into());
+takt.work.HarnessName|- name: takt.work.HarnessName|crates/takt-cli/src/main.rs|1	struct NoHarness; && "no harness: a judgement step among {} is left",
+takt.work.HarnessName|- name: takt.work.HarnessName|crates/takt/src/harness.rs|1	pub trait Harness { && fn name(&self) -> &str;
+takt.work.HarnessName|- name: takt.work.HarnessName|crates/takt/src/harness.rs|2	"claude-code"
+takt.work.HarnessName|- name: takt.work.HarnessName|crates/takt/src/harness.rs|3	pub const ISOLATION: [&str; 4] = [ && r#"{"disableAllHooks":true}"#,
+takt.work.HarnessName|- name: takt.work.HarnessName|crates/takt/src/harness.rs|4	crate::forge::without_credentials(&mut command, |_| false);
+takt.work.HarnessName|- name: takt.work.HarnessName|crates/takt-cli/src/main.rs|2	"claude" => Ok(Box::new(ClaudeCode { && "none" => Ok(Box::new(NoHarness)),
+takt.work.ProducerName|- name: takt.work.ProducerName|crates/takt/src/validator.rs|1	/// The validator's name, the producer of its records. && fn name(&self) -> &str;
+takt.work.ProducerName|- name: takt.work.ProducerName|crates/takt/src/validator.rs|2	"takt.tests-run"
+takt.work.ProducerName|- name: takt.work.ProducerName|crates/takt/src/evidence.rs|1	pub producer: String,
+takt.work.EvidenceId|- name: takt.work.EvidenceId|crates/takt/src/evidence.rs|1	pub id: String,
+takt.work.EvidenceId|- name: takt.work.EvidenceId|crates/takt/src/validator.rs|1	format!("test-result-{seq}"),
+takt.work.EvidenceId|- name: takt.work.EvidenceId|crates/takt/src/case.rs|1	pub fn evaluations(&self) -> Result<usize> {
+takt.work.EvidenceId|- name: takt.work.EvidenceId|crates/takt/src/run.rs|1	let mut seq = self.case.evaluations()?;
+takt.work.Revision|- name: takt.work.Revision|crates/takt/src/case.rs|1	"intent" => format!("{:x}", Sha256::digest(intent.as_bytes())), && _ => "r0".to_owned(),
+takt.work.Revision|- name: takt.work.Revision|crates/takt/src/case.rs|2	case.doc["artifacts"]["implementation"]["revision"] = tip.into();
+takt.work.Revision|- name: takt.work.Revision|crates/takt/src/run.rs|1	run.case.set_revision("implementation", &head)?;
+takt.work.Revision|- name: takt.work.Revision|crates/takt/src/run.rs|2	self.case.set_revision("implementation", &head)?;
+takt.work.Revision|- name: takt.work.Revision|crates/takt/src/case.rs|3	if let Some(revision) = case.revision("implementation") && case.set_revision("implementation", &head)?;
+takt.work.Revision|- name: takt.work.Revision|crates/takt/src/case.rs|4	pub fn approvals_only( && Ok(false)
+takt.work.Revision|- name: takt.work.Revision|crates/takt/src/evidence.rs|1	pub subject_revision: String,
+takt.work.StepNumber|- name: takt.work.StepNumber|crates/takt/src/run.rs|1	/// Steps taken. && pub steps: u64,
+takt.work.StepNumber|- name: takt.work.StepNumber|crates/takt/src/run.rs|2	steps: 0,
+takt.work.StepNumber|- name: takt.work.StepNumber|crates/takt/src/run.rs|3	"step {}: {} ({})",
+takt.work.StepKey|- name: takt.work.StepKey|crates/takt/src/case.rs|1	pub fn evaluations(&self) -> Result<usize> {
+takt.work.StepKey|- name: takt.work.StepKey|crates/takt/src/run.rs|1	// One sequence per case, continued across its runs: no decision file is overwritten, && let mut seq = self.case.evaluations()?;
+takt.work.StepKey|- name: takt.work.StepKey|crates/takt/src/run.rs|2	steps: 0,
+takt.work.StepKey|- name: takt.work.StepKey|crates/takt/src/run.rs|3	"step {}: {} ({})",
+takt.work.StepKind|- name: takt.work.StepKind|crates/takt/src/run.rs|1	fn is_due( && observed_without_record.contains
+takt.work.StepKind|- name: takt.work.StepKind|docs/design/takt.md|1	judgement step: the harness performs ONE admissible action && deterministic step: a command
+takt.work.StepKind|- name: takt.work.StepKind|crates/takt/src/run.rs|2	// A deterministic step first: a validator due at this decision.
+takt.work.StepKind|- name: takt.work.StepKind|crates/takt/src/run.rs|3	// Then a judgement step among the offered actions.
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|1	/// Why a run stopped. && NoProgress,
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|2	return Ok(Stop::NoProgress);
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|3	let approvals = decision.approval_required(); && Stop::ApprovalRequired(approvals)
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|4	return Ok(Stop::ApprovalRequired(vec![report.action]));
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|5	"{} would observe {} with uncommitted changes: {}",
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|6	"{} wrote what its validator does not: {}",
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|7	last_idle = && (offered.is_empty()
+takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|1	Stop::Completed(_) => EXIT_DONE, && _ => EXIT_STOPPED,
+takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|2	const EXIT_CODES: &str = "Exit codes: && 5  stopped: error:
+takt.work.WorkflowPath|- name: takt.work.WorkflowPath|docs/design/takt.md|1	[--workflow <file>]
+takt.work.WorkflowPath|- name: takt.work.WorkflowPath|docs/design/takt.md|2	| M3 workflows |
+takt.work.ProtocolBlock|- name: takt.work.ProtocolBlock|docs/design/takt.md|1	| `protocol` | id, revision, inputs |
+takt.work.ProtocolBlock|- name: takt.work.ProtocolBlock|crates/takt/src/run.rs|1	pub struct RunOptions { && pub inputs: Vec<(String, String)>,
+takt.work.ProtocolBlock|- name: takt.work.ProtocolBlock|crates/takt/src/protocol.rs|1	/// The protocol name, `software.change`. && pub revision: u64,
+takt.work.DeterministicStep|- name: takt.work.DeterministicStep|crates/takt/src/validator.rs|1	pub struct PrMerged {
+takt.work.DeterministicStep|- name: takt.work.DeterministicStep|crates/takt/src/validator.rs|2	pub struct PrOpen {
+takt.work.DeterministicStep|- name: takt.work.DeterministicStep|crates/takt/src/validator.rs|3	pub struct CiRead {
+takt.work.DeterministicStep|- name: takt.work.DeterministicStep|crates/takt/src/validator.rs|4	pub struct GateRun {
+takt.work.DeterministicStep|- name: takt.work.DeterministicStep|docs/design/takt.md|1	| `step` deterministic | action, argv |
+takt.work.DeterministicStep|- name: takt.work.DeterministicStep|crates/takt/src/validator.rs|5	pub struct TestsRun { && pub command: Vec<String>,
+takt.work.DeterministicStep|- name: takt.work.DeterministicStep|crates/takt-cli/src/main.rs|1	/// The test command, split at white space, run without a shell. && test_cmd: String,
+takt.work.JudgementStep|- name: takt.work.JudgementStep|docs/design/takt.md|1	| `step` judgement | actions (a subset of the protocol's), brief |
+takt.work.JudgementStep|- name: takt.work.JudgementStep|crates/takt/src/run.rs|1	// The judgement actions: the admissible ones no validator owns. && .collect();
+takt.work.JudgementStep|- name: takt.work.JudgementStep|crates/takt/src/harness.rs|1	/// The intent the case was opened for. && pub intent: &'a str,
+takt.work.StepBlock|- name: takt.work.StepBlock|docs/design/takt.md|1	| `step` deterministic | && | `step` judgement |
+takt.work.ForgeName|- name: takt.work.ForgeName|crates/takt/src/forge.rs|1	pub trait Forge { && fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()>;
+takt.work.ForgeName|- name: takt.work.ForgeName|crates/takt/src/forge.rs|2	let document = serde_json::json!({ "sha": head });
+takt.work.ForgeName|- name: takt.work.ForgeName|crates/takt/src/forge.rs|3	pub const HOST: &str = "github.com"; && pub fn serves(host: &str) -> bool {
+takt.work.ForgeName|- name: takt.work.ForgeName|crates/takt/src/forge.rs|4	pub fn without_userinfo(url: &str) -> String {
+takt.work.PullRequestState|- name: takt.work.PullRequestState|crates/takt/src/forge.rs|1	/// What a pull request is. && /// The state as a record's result: `open`, `merged` or `closed`.
+takt.work.ChecksState|- name: takt.work.ChecksState|crates/takt/src/forge.rs|1	pub const NO_CHECKS_REPORTED: &str = "no checks reported";
+takt.work.ChecksState|- name: takt.work.ChecksState|crates/takt/src/forge.rs|2	/// What the checks on a pull request's head report && /// The checks as a record's result: `pass`, `fail` or `pending`.
+takt.work.BranchName|- name: takt.work.BranchName|crates/takt/src/case.rs|1	/// The prefix of a case's branch: `takt/<case id>`. && pub const BRANCH_PREFIX: &str = "takt/";
+takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|1	//! A Canon case on disk && //! and asks Canon. A case is opened once and resumed by every later run on it.
+takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|2	pub const CASES_DIR: &str = ".engineering/cases"; && pub const LOCK_FILE: &str = "run.lock";
+takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|3	crate::git::create_branch(tree, &branch.name, from.as_deref())?;
+takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|4	pub fn discard(self) -> Result<()> { && crate::git::leave_branch(&self.tree, &branch.name, branch.left.as_deref())
+takt.work.Case|- name: takt.work.Case|crates/takt/src/run.rs|1	if let Some(artifact) = &observation.artifact { && let path = dir.join(&artifact.name);
+takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|5	pub fn latest_decision(case_dir: &Path) -> Result<Option<Decision>> { && .map(Some)
+takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|6	pub fn resumable( && Ok(None)
+takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|7	pub fn resume(tree: &Path, id: &str) -> Result<Self> { && Ok(case)
+takt.work.Case|- name: takt.work.Case|crates/takt/src/run.rs|2	pub fn next_to_resume( && crate::case::resumable(tree, &active, out)
+takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|8	pub fn open( && opened.map_err(|error: anyhow::Error| {
+takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|9	"the tree {} has uncommitted work: {named}; a case opens only on a clean tree,
+takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|10	"the tree {} is on {name}, a case's branch with no base to fork from
+takt.work.Case|- name: takt.work.Case|crates/takt/src/run.rs|3	if validators.iter().any(|v| v.action() == "pr.open") && case.discard()?;
+takt.work.Case|- name: takt.work.Case|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|1	store. The next `takt run` on the repository && A story has at most one open case.
+takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|11	pub fn evaluate(&self, seq: usize) -> Result<Decision> { && Decision::from_json(&json)
+takt.work.Case|- name: dir|crates/takt/src/case.rs|1	pub const CASES_DIR: &str = ".engineering/cases";
+takt.work.Case|- name: dir|crates/takt/src/case.rs|2	/// `<tree>/.engineering/cases/<id>`. && pub dir: PathBuf,
+takt.work.Case|- name: protocol|crates/takt/src/case.rs|1	doc.insert("protocol".into(), protocol.name.as_str().into());
+takt.work.Case|- name: protocol|crates/takt/src/case.rs|2	std::fs::write(self.dir.join("protocol.ir.json"), &self.protocol.ir_json)?; && std::fs::write(self.dir.join("protocol.yaml"), &self.protocol.yaml)?;
+takt.work.Case|- name: protocol|crates/takt/src/case.rs|3	/// The protocol the case runs under. && pub protocol: LoadedProtocol,
+takt.work.Case|- name: protocol|crates/takt/src/case.rs|4	let protocol = LoadedProtocol::from_file(&dir.join("protocol.yaml"))?;
+takt.work.Case|- name: protocol|crates/takt/src/case.rs|5	case.doc["artifacts"]["implementation"]["revision"] = tip.into();
+takt.work.Case|- name: intent|crates/takt/src/case.rs|1	std::fs::write(self.dir.join("intent.md"), intent)?;
+takt.work.Case|- name: story|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|1	store. The next `takt run` on the repository && A story has at most one open case.
+takt.work.Case|- name: story|docs/design/takt.md|1	unit     := intent | frontier(repo) && case     := open(protocol, unit, worktree)
+takt.work.Case|- name: story|crates/takt/src/case.rs|1	pub fn story_of(case_dir: &Path) -> Result<Option<String>> { && Ok(Some(story.id))
+takt.work.Case|- name: story|crates/takt/src/run.rs|1	pub fn next_to_resume( && crate::case::resumable(tree, &active, out)
+takt.work.Case|- name: story|crates/takt/src/run.rs|2	"frontier: {id} not taken: the case {case} was opened for it already"
+takt.work.Case|- name: story|crates/takt/src/run.rs|3	&& let Err(error) = case.set_story(&story.id)
+takt.work.Case|- name: authority|crates/takt/src/case.rs|1	pub struct AuthorityDecision { && pub revision: Option<String>,
+takt.work.Case|- name: authority|crates/takt/src/case.rs|2	pub fn applies_at(&self, at: Option<&str>) -> bool { && Grant::Granted => self.revision.is_some()
+takt.work.Case|- name: authority|crates/takt/src/case.rs|3	pub fn canon(&self, at: Option<&str>) -> Result<String> { && .filter(|decision| decision.applies_at(at))
+takt.work.Case|- name: authority|crates/takt/src/case.rs|4	pub fn prepare_grant( && let held = Held::take(&dir, id)?;
+takt.work.Case|- name: authority|crates/takt/src/case.rs|5	let gate = decided_at(&latest);
+takt.work.Case|- name: authority|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|1	Option 2, with option 3's record && An unattended run never merges without a grant
+takt.work.Case|- name: authority|crates/takt/src/case.rs|6	let authority = Authority::read(&self.dir)? && .map(|authority| authority.canon(implementation.as_deref()))
+takt.work.Case|- name: authority|crates/takt/src/validator.rs|1	if !authority.grants_at(self.action(), revision) {
+takt.work.Case|- name: evidence_written|crates/takt/src/case.rs|1	/// Evidence records written so far. && written: usize,
+takt.work.Case|- name: evidence_written|crates/takt/src/case.rs|2	pub fn add_evidence(&mut self, record: &Record) -> Result<PathBuf> { && self.written += 1;
+takt.work.Case|- name: branch|crates/takt/src/case.rs|1	/// The case's branch, `takt/<id>`. && pub branch: String,
+takt.work.Case|- name: story|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|2	store. The next `takt run` on the repository && A story has at most one open case.
+takt.work.Case|- name: branch|crates/takt/src/case.rs|2	/// The directory of the case whose branch `tree` is on: && pub fn current(tree: &Path) -> Result<PathBuf> {
+takt.work.Case|- name: branch|crates/takt/src/case.rs|3	pub struct Branch { && pub pull_request: Option<u64>,
+takt.work.Case|lifecycle:|crates/takt/src/case.rs|1	pub fn is_finished(case_dir: &Path) -> Result<bool> { && Ok(latest_decision(case_dir)?.is_some_and(|decision| !decision.legitimate().is_empty()))
+takt.work.Story|- name: takt.work.Story|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|1	`ApprovalRequired`. `takt approve <case> repository.merge` && A story has at most one open case.
+takt.work.Story|- name: takt.work.Story|.engineering/planning/story/takt-domain-model.md|1	- Story → Case: at most one open case per story
+takt.work.Story|- name: takt.work.Story|crates/takt/src/frontier.rs|1	fn take(&self, repo: &Path, id: &str) -> Result<Take> { && &["move", id, "--to", TAKEN, "--executor", "agent:takt"],
+takt.work.Story|- name: open_case|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|1	store. The next `takt run` on the repository && A story has at most one open case.
+takt.work.Story|- name: approvals|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|1	`ApprovalRequired`. `takt approve <case> repository.merge` && store. The next `takt run`
+takt.work.Story|- name: approvals|crates/takt/src/frontier.rs|1	.record_approval(tree, story, pending.approval()) && commit_record(tree, &branch, story, capability)?;
+takt.work.Story|- name: open_case|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|2	A story has at most one open case.
+takt.work.Run|- name: takt.work.Run|crates/takt/src/run.rs|1	//! The loop: evaluate, frontier, one step && //! merge is then a deterministic step like any other.
+takt.work.Run|- name: takt.work.Run|crates/takt/src/run.rs|2	pub struct Run<'a> { && options: RunOptions,
+takt.work.Run|- name: takt.work.Run|crates/takt/src/run.rs|3	fn run_held(&mut self, out: &mut dyn Write) -> Result<Stop> { && self.case.set_revision("implementation", &head)?;
+takt.work.Run|- name: takt.work.Run|crates/takt/src/case.rs|1	pub const LOCK_FILE: &str = "run.lock";
+takt.work.Run|- name: takt.work.Run|crates/takt/src/case.rs|2	fn take_hold(case_dir: &Path, id: &str) -> Result<()> { && .create_new(true)
+takt.work.Run|- name: takt.work.Run|crates/takt/src/case.rs|3	let _held = Held::take(&dir, id)?;
+takt.work.Run|- name: takt.work.Run|crates/takt/src/run.rs|4	pub fn run(&mut self, out: &mut dyn Write) -> Result<Stop> { && released?;
+takt.work.Run|name: run_id|crates/takt/src/run.rs|1	/// The case. && pub case: CaseDir,
+takt.work.Run|name: run_id|crates/takt/src/run.rs|2	.unwrap_or_else(|| format!("takt-{}"
+takt.work.Run|name: run_id|crates/takt-cli/src/main.rs|1	"stopped: {stop}; steps {}, tokens {}, case {}", && run.case.dir.display()
+takt.work.Run|name: run_id|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|1	store. The next `takt run` on the repository && A story has at most one open case.
+takt.work.Run|- name: case_id|crates/takt/src/run.rs|1	pub fn resume( && let case = CaseDir::resume(tree, id)?;
+takt.work.Run|- name: case_id|crates/takt/src/run.rs|2	/// The case. && pub case: CaseDir,
+takt.work.Run|- name: case_id|crates/takt/src/run.rs|3	let case = CaseDir::open(tree, protocol, &id, &options.intent, &options.inputs)?;
+takt.work.Run|- name: tree|crates/takt/src/run.rs|1	/// The worktree. && pub tree: PathBuf,
+takt.work.Run|- name: unit|crates/takt/src/run.rs|1	/// What the run works on: the intent given, or the story the frontier took. && pub unit: Unit,
+takt.work.Run|- name: unit|docs/design/takt.md|1	unit     := intent | frontier(repo)
+takt.work.Run|- name: protocol|crates/takt/src/run.rs|1	/// The protocol id, `software.change/1`, or a `protocol/1` file path.
+takt.work.Run|- name: protocol|crates/takt/src/run.rs|2	let protocol = if Path::new(&options.protocol).is_file() { && LoadedProtocol::builtin(&options.protocol)?
+takt.work.Run|- name: protocol|crates/takt-cli/src/main.rs|1	let opening = match (&protocol, &intent) { && (None, None) => STORY_DELIVERY.to_owned(),
+takt.work.Run|- name: protocol|crates/takt-cli/src/main.rs|2	fn refuse_for_resume( && if own.ir_json != given.ir_json {
+takt.work.Run|- name: inputs|crates/takt/src/run.rs|1	/// Case inputs, `name=value`. && pub inputs: Vec<(String, String)>,
+takt.work.Run|- name: inputs|crates/takt-cli/src/main.rs|1	if opens_on.id == SOFTWARE_CHANGE { && ("affects_security_boundary", "false"),
+takt.work.Run|- name: inputs|crates/takt-cli/src/main.rs|2	"--input {name}: {} declares no input {name}; it declares {}",
+takt.work.Run|- name: inputs|crates/takt-cli/src/main.rs|3	"--input {name}: the case {id} is resumed, and a resumed case keeps the inputs it was opened with;
+takt.work.Run|- name: inputs|crates/takt/src/run.rs|2	options.inputs = case.inputs();
+takt.work.Run|- name: workflow|docs/design/takt.md|1	[--workflow <file>]
+takt.work.Run|- name: iterations|crates/takt/src/run.rs|1	/// Stop after this many steps. && pub iterations: Option<u64>,
+takt.work.Run|- name: hours|crates/takt/src/run.rs|1	/// Stop after this many hours. && pub hours: Option<f64>,
+takt.work.Run|- name: token_budget|crates/takt/src/run.rs|1	/// Stop once the harness reported this many tokens. && pub tokens: Option<u64>,
+takt.work.Run|- name: gate|crates/takt/src/run.rs|1	/// The approval gate: the one approval-required action the harness may request to end the && pub gate: Option<String>,
+takt.work.Run|- name: gate|crates/takt-cli/src/main.rs|1	/// The approval gate the harness may request to end the run. && gate: String,
+takt.work.Run|- name: harness|crates/takt/src/run.rs|1	/// The judgement actor. && pub harness: &'a dyn Harness,
+takt.work.Run|- name: validators|crates/takt/src/run.rs|1	/// The validators, one per deterministic action. && pub validators: &'a [Box<dyn Validator>],
+takt.work.Run|- name: validators|crates/takt-cli/src/main.rs|1	let mut validators: Vec<Box<dyn Validator>> = vec![Box::new(TestsRun::new(&looping.test_cmd)?)]; && validators.push(Box::new(gate));
+takt.work.Run|- name: forge|crates/takt-cli/src/main.rs|1	fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> { && Some("bot") => bot(repo)?,
+takt.work.Run|- name: started_at|crates/takt/src/run.rs|1	.unwrap_or_else(|| format!("takt-{}"
+takt.work.Run|- name: started_at|crates/takt/src/run.rs|2	options.case_id = Some(story.case_id(&crate::now()));
+takt.work.Run|- name: started_at|crates/takt-cli/src/main.rs|1	/// The case id; generated when absent. && case_id: Option<String>,
+takt.work.Run|- name: started_at|crates/takt/src/lib.rs|1	/// The instant now, as Canon writes one: `YYYY-MM-DDTHH:MM:SSZ`. && pub fn now() -> String {
+takt.work.Run|- name: started_at|crates/takt/src/case.rs|1	if let Err(error) = writeln!(file, "{}", crate::now()) {
+takt.work.Run|- name: started_at|crates/takt/src/run.rs|3	started: Instant,
+takt.work.Run|- name: started_at|crates/takt/src/run.rs|4	self.started.elapsed().as_secs_f64() >= h * 3600.0
+takt.work.Run|- name: steps|crates/takt/src/run.rs|1	/// Steps taken. && pub steps: u64,
+takt.work.Run|- name: tokens|crates/takt/src/run.rs|1	/// Tokens the harness reported. && pub tokens: u64,
+takt.work.Run|- name: tokens|crates/takt/src/run.rs|2	if let Some(tokens) = report.tokens { && self.tokens += tokens;
+takt.work.Run|- name: stop|crates/takt/src/run.rs|1	/// Why a run stopped. && NoProgress,
+takt.work.Run|- name: stop|crates/takt-cli/src/main.rs|1	"stopped: {stop}; steps {}, tokens {}, case {}",
+takt.work.Run|- name: case|crates/takt/src/run.rs|1	/// The case. && pub case: CaseDir,
+takt.work.Run|- name: case|crates/takt/src/run.rs|2	pub fn resume( && let case = CaseDir::resume(tree, id)?;
+takt.work.Run|- name: case|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|1	store. The next `takt run` on the repository && A story has at most one open case.
+takt.work.Run|- name: workflow|docs/design/takt.md|2	[--workflow <file>]
+takt.work.Run|- name: validators|crates/takt/src/run.rs|2	/// The validators, one per deterministic action. && pub validators: &'a [Box<dyn Validator>],
+takt.work.Run|- name: steps|crates/takt/src/run.rs|2	/// Steps taken. && pub steps: u64,
+takt.work.Run|- name: steps|crates/takt/src/run.rs|3	"step {}: {} ({})",
+takt.work.Workflow|- name: takt.work.Workflow|docs/design/takt.md|1	### Building blocks of `workflow/1` && | `approval` | capability, approver |
+takt.work.Workflow|- name: takt.work.Workflow|docs/design/takt.md|2	| M3 workflows |
+takt.work.Workflow|- name: format|docs/design/takt.md|1	### Building blocks of `workflow/1`
+takt.work.Workflow|- name: protocol|docs/design/takt.md|1	| `protocol` | id, revision, inputs |
+takt.work.Workflow|- name: steps|docs/design/takt.md|1	| `step` deterministic | && | `step` judgement |
+takt.work.Step|- name: takt.work.Step|crates/takt/src/run.rs|1	fn snapshot(dir: &Path) -> Result<BTreeMap<PathBuf, Entry>> { && Ok(entries)
+takt.work.Step|- name: takt.work.Step|docs/design/takt.md|1	loop     := evaluate → frontier → step && deterministic step: a command
+takt.work.Step|- name: takt.work.Step|crates/takt/src/run.rs|2	// What a validator runs may be code a model wrote && // `core.fsmonitor`).
+takt.work.Step|- name: takt.work.Step|crates/takt/src/run.rs|3	"{} wrote what its validator does not: {}",
+takt.work.Step|- name: takt.work.Step|crates/takt/src/run.rs|4	// The step is judged by what it did to the tree, against a checkpoint taken just && // ended; a step that touched it is refused.
+takt.work.Step|- name: takt.work.Step|crates/takt/src/run.rs|5	let overreach = if !git_dir.touched.is_empty() { && } else if !change.already_uncommitted.is_empty() {
+takt.work.Step|- name: takt.work.Step|crates/takt/src/run.rs|6	if approvals.contains(&report.action) { && return Ok(Stop::ApprovalRequired(vec![report.action]));
+takt.work.Step|- name: takt.work.Step|crates/takt/src/run.rs|7	let refusal = if !offered.contains(&report.action) { && Some(format!("tests.write changed a non-test path: {path}"))
+takt.work.Step|- name: takt.work.Step|crates/takt/src/run.rs|8	"step {}: the harness failed; everything the step changed was discarded",
+takt.work.Step|- name: takt.work.Step|crates/takt/src/run.rs|9	let head = match crate::git::commit_paths( && self.case.set_revision("implementation", &head)?;
+takt.work.Step|- name: takt.work.Step|crates/takt/src/harness.rs|1	pub struct StepContext<'a> { && fn step(&self, context: &StepContext<'_>) -> Result<StepReport>;
+takt.work.Step|name: key|crates/takt/src/run.rs|1	steps: 0,
+takt.work.Step|name: key|crates/takt/src/run.rs|2	/// Steps taken. && pub steps: u64,
+takt.work.Step|name: key|crates/takt/src/run.rs|3	"step {}: {} ({})",
+takt.work.Step|- name: run_id|crates/takt/src/run.rs|1	/// Steps taken. && pub steps: u64,
+takt.work.Step|- name: kind|crates/takt/src/run.rs|1	// A deterministic step first: a validator due at this decision.
+takt.work.Step|- name: kind|crates/takt/src/run.rs|2	// Then a judgement step among the offered actions.
+takt.work.Step|- name: action|crates/takt/src/run.rs|1	if let Some(validator) = due {
+takt.work.Step|- name: action|crates/takt/src/harness.rs|1	/// The actions the harness may choose among; nothing else is accepted. && pub approvals: &'a [String],
+takt.work.Step|- name: action|crates/takt/src/harness.rs|2	pub struct StepReport { && pub action: String,
+takt.work.Step|- name: action|crates/takt/src/run.rs|2	.filter(|a| self.options.gate.as_deref() == Some(a.as_str()))
+takt.work.Step|- name: action|crates/takt/src/run.rs|3	Some(format!("{} was not offered", report.action))
+takt.work.Step|- name: producer|crates/takt/src/run.rs|1	due = Some(validator);
+takt.work.Step|- name: producer|crates/takt/src/run.rs|2	"step {}: {} ({})", && self.harness.name()
+takt.work.Step|- name: summary|crates/takt/src/validator.rs|1	/// One line on what was observed. && pub summary: String,
+takt.work.Step|- name: summary|crates/takt/src/harness.rs|1	/// One line on what it did. && pub summary: String,
+takt.work.Step|- name: summary|crates/takt/src/run.rs|1	writeln!(out, "  effect: {}", observation.summary)?;
+takt.work.Step|- name: summary|crates/takt/src/run.rs|2	writeln!(out, "  said: {}", report.summary)?;
+takt.work.Step|- name: records|crates/takt/src/validator.rs|1	/// The evidence records the observation yields. && pub records: Vec<Record>,
+takt.work.Step|- name: records|crates/takt/src/run.rs|1	for record in &observation.records { && self.case.add_evidence(record)?;
+takt.work.Step|- name: records|docs/design/takt.md|1	The hard rule: the model never produces evidence. && to the revision it observed. What the harness says is a trace.
+takt.work.Step|- name: artifact|crates/takt/src/validator.rs|1	pub struct Observation { && pub bytes: Vec<u8>,
+takt.work.Step|- name: artifact|crates/takt/src/run.rs|1	if let Some(artifact) = &observation.artifact { && for record in &observation.records {
+takt.work.Step|- name: artifact|crates/takt/src/validator.rs|2	let artifact = format!("gate-result-{seq}.bundle.json");
+takt.work.Step|- name: tokens|crates/takt/src/harness.rs|1	/// Tokens the step used, when the harness reports them. && pub tokens: Option<u64>,
+takt.work.Step|- name: tokens|crates/takt/src/run.rs|1	if let Some(tokens) = report.tokens { && self.tokens += tokens;
+takt.work.Step|- name: committed|crates/takt/src/run.rs|1	let head = match crate::git::commit_paths( && self.case.set_revision("implementation", &head)?;
+takt.work.Step|- name: committed|crates/takt/src/git.rs|1	pub fn commit_paths(tree: &Path, paths: &[String], message: &str) -> Result<String> {
+takt.work.Step|- name: producer|crates/takt/src/run.rs|3	due = Some(validator);
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/validator.rs|1	impl Validator for PrMerged { && "merge_observation"
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/validator.rs|2	impl Validator for PrOpen { && "pull_request"
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/validator.rs|3	impl Validator for CiRead { && "ci_result"
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/validator.rs|4	/// `gate.run`: evaluates the repository's `engineering-gates/1` document through the && /// tree's source identity leaves out, and removed again before the observation ends.
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/validator.rs|5	fn base_revision(tree: &Path, case_dir: &Path) && return Ok(None);
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/validator.rs|6	"the gates document {document}: not run; what the project file {} admits differs from the base revision at {}: {}; no record, the claim stays unknown",
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/validator.rs|7	//! Validators: programs that turn an observation into evidence && //! `pr.open`, `ci.read` and `repository.merge`.
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/validator.rs|8	pub trait Validator { && fn writes(&self) -> Vec<PathBuf> {
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/validator.rs|9	impl Validator for TestsRun { && "implementation"
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/validator.rs|10	/// `tests.run`: runs the test command without a shell; exit 0 is `pass`, anything else `fail`. && /// which it is killed with what it started, and only a bounded tail of its output is kept.
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/validator.rs|11	let output = crate::forge::run_child(&mut command, self.limits) && let result = if output.success() { "pass" } else { "fail" };
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/forge.rs|1	pub fn run_child(command: &mut Command, limits: Limits) -> Result<Finished> { && .stdin(Stdio::null())
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/validator.rs|12	"--grep=^takt: take [^ ]+$",
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/validator.rs|13	if !authority.grants_at(self.action(), revision) {
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|docs/design/takt.md|1	The hard rule: the model never produces evidence. && to the revision it observed. What the harness says is a trace.
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|docs/design/takt.md|2	Traits in the library, one adapter each at first: && planning store; built: AEP), `Validator` (an evidence producer; five built)
+takt.work.EvidenceProducer|- name: action|crates/takt/src/validator.rs|1	/// The protocol action it performs. && fn action(&self) -> &str;
+takt.work.EvidenceProducer|- name: kind|crates/takt/src/validator.rs|1	/// The evidence kind it produces. && fn kind(&self) -> &str;
+takt.work.EvidenceProducer|- name: subject|crates/takt/src/validator.rs|1	/// The artifact its records are about. && fn subject(&self) -> &str;
+takt.work.EvidenceProducer|lifecycle:|crates/takt-cli/src/main.rs|1	let mut validators: Vec<Box<dyn Validator>> = vec![Box::new(TestsRun::new(&looping.test_cmd)?)]; && validators.push(Box::new(gate));
+takt.work.EvidenceProducer|lifecycle:|crates/takt-cli/src/main.rs|2	if let Some(forge) = &self.forge { && validators.push(Box::new(PrMerged::new(forge.clone())));
+takt.work.CaseBranch|- name: takt.work.CaseBranch|crates/takt/src/case.rs|1	pub fn name_of(id: &str) -> String { && format!("{BRANCH_PREFIX}{id}")
+takt.work.CaseBranch|- name: takt.work.CaseBranch|crates/takt/src/case.rs|2	/// The case's branch, recorded as `branch.yaml` under the case directory: created when the && pub pull_request: Option<u64>,
+takt.work.CaseBranch|- name: takt.work.CaseBranch|crates/takt/src/case.rs|3	// The case's branch forks from its base: the branch the tree is on, or, when the tree && Some((name, None)) => (Some(name.to_owned()), None),
+takt.work.CaseBranch|- name: takt.work.CaseBranch|crates/takt/src/validator.rs|1	fn branch_of(case_dir: &Path) -> Result<String> { && Ok(Branch::name_of(&id.to_string_lossy()))
+takt.work.CaseBranch|- name: takt.work.CaseBranch|crates/takt/src/validator.rs|2	format!("{BRANCH_FILE} named {was}, not the case's branch; set right; ")
+takt.work.CaseBranch|- name: base|crates/takt/src/case.rs|1	/// The pull request's base, the branch the case forked from: the branch the tree was on && pub base: Option<String>,
+takt.work.CaseBranch|- name: base_commit|crates/takt/src/case.rs|1	/// The commit the case's branch forked from, pinned when the case opened: what the gate && pub base_commit: Option<String>,
+takt.work.CaseBranch|- name: base_commit|crates/takt/src/validator.rs|1	let Some(pinned) = &branch.base_commit else { && return Ok(None);
+takt.work.CaseBranch|- name: left|crates/takt/src/case.rs|1	/// The branch the tree was on when the case opened, the one a discarded case returns the && pub left: Option<String>,
+takt.work.CaseBranch|- name: pushed|crates/takt/src/case.rs|1	/// The implementation revision last pushed, the pull request's head; absent until the && pub pushed: Option<String>,
+takt.work.CaseBranch|- name: pull_request|crates/takt/src/case.rs|1	/// The pull request's number; absent until it is opened. && pub pull_request: Option<u64>,
+takt.work.Step|- name: takt.work.Step|crates/takt/src/run.rs|10	// Every branch and tag is guarded beside && // base or its own branch.
+takt.work.EvidenceProducer|- name: takt.work.EvidenceProducer|crates/takt/src/forge.rs|2	impl Runner for Process { && let finished = run_child(&mut command, self.limits)
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|8	/// The run waited on the forge && budget: Option<Box<Stop>>,
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|9	// No validator is due, and one waits on the forge && return Ok(waiting(&awaited, None));
+takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|3	Stop::Waiting { .. } => EXIT_WAITING,
+takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|4	6  stopped: Waiting (
+takt.work.Waiting|- name: takt.work.Waiting|crates/takt/src/run.rs|1	Waiting { && on: Vec<String>, && budget: Option<Box<Stop>>,
+takt.work.FindingKey|- name: takt.work.FindingKey|.engineering/planning/design/recursive-self-improvement.md|1	- A finding also names the path && reference `finding:<key>`
+takt.work.FilingResult|- name: takt.work.FilingResult|protocols/self-improvement/1.yaml|1	finding_record: && its result is filed or malformed
+takt.work.ScenarioResult|- name: takt.work.ScenarioResult|protocols/self-improvement/1.yaml|1	scenario_result: && reproduced or not_reproduced
+takt.work.Finding|- name: takt.work.Finding|.engineering/planning/design/recursive-self-improvement.md|1	- A finding carries an `expected_before` predicate && reference `finding:<key>`
+takt.work.FindingKey|- name: takt.work.FindingKey|scripts/file-finding|1	[[ $key =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]
+takt.work.FindingKey|- name: takt.work.FindingKey|scripts/file-finding|2	# `aep plan artifact new` accepts a second artifact with the same reference && is filed already && exit 3
+takt.work.FilingResult|- name: takt.work.FilingResult|scripts/file-finding|1	printf 'malformed\n'
+takt.work.FilingResult|- name: takt.work.FilingResult|scripts/file-finding|2	printf 'filed\n'
+takt.work.ScenarioResult|- name: takt.work.ScenarioResult|scripts/check-finding|1	result=reproduced && result=not_reproduced && grep -qF -- "${predicate[output]}" && result=not_reproduced
+takt.work.Finding|- name: takt.work.Finding|scripts/file-finding|1	# The body is the artifact's whole markdown body && string is `expected_before` && #   scenario  the scenario's id && # `exit`, `output` or both
+takt.work.Finding|- name: takt.work.Finding|scripts/file-finding|2	scenario | command | exit | output | source) ;;
+takt.work.Finding|- name: takt.work.Finding|scripts/file-finding|3	[[ $kind == story || $kind == blocker ]]
+takt.work.Finding|- name: takt.work.Finding|scripts/check-finding|1	# Without includes, as takt reads it && config --no-includes --blob && story | seed) ;; && gives no \`seed\`

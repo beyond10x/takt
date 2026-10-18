@@ -9,6 +9,7 @@ tasks:
     desc: Specification, format, lint and test.
     cmds:
       - ess specify validate --path ess
+      - python3 -I scripts/check-citations
       - cargo fmt --all --check
       - cargo clippy --workspace --all-targets --locked -- -D warnings
       - cargo test --workspace --locked
