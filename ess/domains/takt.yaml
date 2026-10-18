@@ -493,7 +493,7 @@ types:
   # What a finding's predicate came to on its scenario with a takt built from one revision, the
   # result of a `scenario_result` record.
   # read from: protocols/self-improvement/1.yaml:45-48
-  # read from: scripts/check-finding:185-191
+  # read from: scripts/check-finding:207-213
   - name: takt.work.ScenarioResult
     kind: enum
     variants: [reproduced, not_reproduced]
@@ -1266,7 +1266,7 @@ entities:
   # read from: scripts/file-finding:11-32
   # read from: scripts/file-finding:93
   # read from: scripts/file-finding:156
-  # read from: scripts/check-finding:127-132
+  # read from: scripts/check-finding:127-154
   - name: takt.work.Finding
     naming:
       summary: >-

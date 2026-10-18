@@ -125,11 +125,33 @@ conf=.engineering/scenarios.conf
 git -C "$scenarios" cat-file -e "$declared_on:$conf" 2>/dev/null ||
     fail "$declared_on holds no $conf in $scenarios; the scenarios are declared there"
 # Without includes, as takt reads it (crates/takt/src/git.rs:204): a scenario declared only
-# through an include is none to `takt scenario run`, and an include is never opened.
-seed=$(git -C "$scenarios" config --no-includes --blob "$declared_on:$conf" --get "scenario.$scenario.seed") ||
-    fail "$conf at $declared_on declares no seed of scenario $scenario"
-story=$(git -C "$scenarios" config --no-includes --blob "$declared_on:$conf" --get "scenario.$scenario.story") ||
-    fail "$conf at $declared_on declares no story of scenario $scenario"
+# through an include is none to `takt scenario run`, and an include is never opened. The
+# section `scenario.<id>.` is held to takt's rules (crates/takt-cli/src/main.rs:714-753):
+# `story` and `seed` once each, with a value, and no other key.
+git -C "$scenarios" config --no-includes --blob "$declared_on:$conf" --list -z \
+    >"$run/scenarios.list" 2>"$run/scenarios.err" ||
+    fail "scenario $scenario: $conf at $declared_on does not read: $(head -n 1 "$run/scenarios.err")"
+story= seed= declared=
+while IFS= read -r -d '' entry; do
+    key=${entry%%$'\n'*}
+    [[ $key == "scenario.$scenario."* ]] || continue
+    declared=1
+    name=${key#"scenario.$scenario."}
+    case $name in
+    story | seed) ;;
+    *) fail "scenario $scenario: $conf at $declared_on gives \`$name\`, which takt does not read; a scenario gives \`story\` and \`seed\`" ;;
+    esac
+    value=
+    [[ $entry == *$'\n'* ]] && value=${entry#*$'\n'}
+    value=${value#"${value%%[![:space:]]*}"}
+    value=${value%"${value##*[![:space:]]}"}
+    [[ -n $value ]] || fail "scenario $scenario: $conf at $declared_on gives \`$name\` no value"
+    [[ -z ${!name} ]] || fail "scenario $scenario: $conf at $declared_on gives \`$name\` twice"
+    printf -v "$name" '%s' "$value"
+done <"$run/scenarios.list"
+[[ -n $declared ]] || fail "scenario $scenario: $conf at $declared_on declares no scenario $scenario"
+[[ -n $story ]] || fail "scenario $scenario: $conf at $declared_on gives no \`story\`"
+[[ -n $seed ]] || fail "scenario $scenario: $conf at $declared_on gives no \`seed\`"
 seed=$(git -C "$scenarios" rev-parse --verify --quiet "$seed^{commit}") ||
     fail "scenario $scenario: its seed $seed is no commit in $scenarios"
 
