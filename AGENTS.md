@@ -92,12 +92,13 @@ cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
 ## Roles
 
 From `design:recursive-self-improvement` § Roles, the owner's decision (2026-10-18). Each agent
-role's profile is `.agents/<role>-agent.md`, with a pointer stub under `.claude/agents/`.
+role's profile is `.agents/<role>-agent.md`, a frontmatter of `name` and `description` and then
+the profile; `.claude/agents/<role>-agent.md` is a relative symlink to it.
 
 | role | owns | never | runs as |
 |---|---|---|---|
 | owner (a person) | merge approval for judge surfaces, or its delegation to a named role on record; scorecard definitions; priorities | | a person |
-| planner | the main agent and orchestrator; the planning store: stories, priorities within the owner's, wave order with the developer; filing findings; deciding what the developer escalates; granting merges on a reviewer verdict, judge surfaces only under a delegation on record naming the planner; dispatching the reviewer and the doc-writer; reporting to the owner | writes takt code; grants without a reviewer verdict on that exact sha; grants a change that widens authority, its own or any other role's, even one that cites the owner's recorded decision: the owner grants that one | the main session |
+| planner | the main agent and orchestrator; the planning store: stories, priorities within the owner's, wave order with the developer; filing findings; deciding what the developer escalates; granting merges on a reviewer verdict, judge surfaces only under a delegation on record naming the planner; dispatching the reviewer and the doc-writer; reporting to the owner | writes takt code; grants without a reviewer verdict on that exact sha; grants a widening change without a reviewer verdict or without naming it to the owner (the owner's standing grant of 2026-10-18 covers widening changes) | the main session |
 | developer | moving stories to active, waves and their pages under `docs/waves/`, implementation, merges through the bot route, building and installing promoted binaries; README lines that document its own unit's change | marks its own fix verified; edits `docs/**` other than its wave pages, the site or the deck | its own long-running session |
 | reviewer | a verdict with cited findings on each `[GRANT? takt]` diff at its exact sha; independent code reviews (correctness, security, usability); adversarial passes on request; trials, scenario runs and verification runs (`scripts/check-finding`, `takt scenario run`); measurement against the baseline | writes takt code; grants; files to the store (it returns findings to the planner, who files them); reviews its own work | started by the planner per task, from its profile, and resumed by name |
 | doc-writer | `docs/**` but the wave pages: designs' prose under `docs/design/`, run records under `docs/runs/`, `docs/metrics/`, `docs/pitch/`; the structure of `README.md`; the public site on the `gh-pages` branch, published by a push of `gh-pages` only, never of `main` | writes takt code; changes the planning store; states a figure no record holds | started by the planner per task, from its profile, and resumed by name |
@@ -108,7 +109,8 @@ doc-writer, and the developer reports to it.
 ## Messages
 
 The store carries the content; a message only announces that the store changed. Its first line is
-one of these, and nothing else:
+one of these, and nothing else. This table is the contract; each profile under `.agents/` carries
+a copy of it, and a copy that differs from it is wrong:
 
 | first line | sent by | to | after |
 |---|---|---|---|

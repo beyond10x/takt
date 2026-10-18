@@ -20,8 +20,8 @@ DECK = os.path.join(HERE, os.pardir, "pitch", "index.html")
 BEGIN, END = "<!-- timeline.svg begin -->", "<!-- timeline.svg end -->"
 
 SCENARIO = "1"
-W, H = 960, 560
-L, R, T, B = 86, 70, 92, 128
+W, H = 960, 620
+L, R, T, B = 86, 70, 112, 168
 PW, PH = W - L - R, H - T - B
 GREY = "#8a9a95"
 
@@ -54,18 +54,26 @@ def build():
     turns = load(TURNS)
 
     first = waves[0]["wave"] if waves else "?"
-    slots = ["pre-wave-" + first] + [w["merge_sha"] for w in waves]
+    def at(w):
+        return w.get("measured_at") or w["merge_sha"]
+
+    slots = ["pre-wave-" + first] + [at(w) for w in waves]
     slot_label = {slots[0]: f"before wave {first}"}
     for w in waves:
-        slot_label[w["merge_sha"]] = w["merge_sha"]
+        slot_label[at(w)] = at(w)
 
+    candidate_of = {t["after"]["takt_revision"]: t for t in turns}
     takt = [r for r in runs if r["arm"] == "takt"]
     by_slot = {s: [] for s in slots}
     for r in sorted(takt, key=lambda r: r["date"]):
         s = r["takt_revision"] or slots[0]
         by_slot.setdefault(s, []).append(r)
         if s not in slots:
-            slots.append(s)
+            before = candidate_of[s]["before"]["takt_revision"] if s in candidate_of else None
+            if before in slots:
+                slots.insert(slots.index(before) + 1, s)
+            else:
+                slots.append(s)
             slot_label[s] = s
 
     refs = []
@@ -145,31 +153,42 @@ def build():
         o.append(f'<text x="{L + 6}" y="{y - 5:.1f}" font-size="11" fill="currentColor">'
                  f'{esc(name)}, median {thousands(int(v))} (n={n})</text>')
 
-    for w in waves:
-        if w["merge_sha"] not in slots:
-            continue
-        x = x_of(slots.index(w["merge_sha"])) - slot_w / 2
-        o.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{T - 30}" y2="{T + PH}" class="acc-s" '
+    shown = [w for w in waves if at(w) in slots]
+    for k, w in enumerate(shown):
+        x = x_of(slots.index(at(w))) - slot_w / 2
+        top = T - 46 if k % 2 == 0 else T - 20
+        o.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{top - 10}" y2="{T + PH}" class="acc-s" '
                  f'stroke-width="1.5" stroke-dasharray="3 3"/>')
-        o.append(f'<text x="{x + 5:.1f}" y="{T - 20}" font-size="11" font-weight="600" class="acc-t">'
-                 f'wave {esc(w["wave"])}</text>')
-        o.append(f'<text x="{x + 5:.1f}" y="{T - 7}" font-size="11" class="acc-t">'
-                 f'{esc(w.get("label") or ", ".join(w["stories"][:2]))}</text>')
+        o.append(f'<text x="{x + 5:.1f}" y="{top}" font-size="11" font-weight="600" class="acc-t">'
+                 f'wave {esc(w["wave"])}: <tspan font-weight="400">'
+                 f'{esc(w.get("label") or ", ".join(w["stories"][:2]))}</tspan></text>')
 
     for t in turns:
         before = t["before"]["takt_revision"]
         if before not in slots:
             continue
-        x = x_of(slots.index(before)) + slot_w * 0.4
+        after = t["after"]["takt_revision"]
+        if after in slots:
+            x = x_of(slots.index(after)) - slot_w / 2
+        else:
+            x = x_of(slots.index(before)) + slot_w * 0.4
         o.append(f'<line x1="{x:.1f}" x2="{x:.1f}" y1="{T + 8}" y2="{T + PH}" class="acc-s" '
                  f'stroke-width="2.5"/>')
         o.append(f'<circle cx="{x:.1f}" cy="{T + 8}" r="4" class="acc"/>')
         lines = [f'{t["id"]}: {t["finding"].replace("story:", "")}',
                  f'{t["before"]["result"]} at {before}',
-                 f'{t["after"]["result"]} at {t["after"]["takt_revision"]}',
-                 f'merged at {t["merged"]["sha"]}; promoted: {t["promoted_at"] or "not yet"}']
+                 f'{t["after"]["result"]} at {after}']
+        sc = t.get("scorecard")
+        if t.get("scorecard_result") and sc:
+            b, c = sc["baseline"]["tokens_median"], sc["candidate"]["tokens_median"]
+            lines.append(f'scorecard: {t["scorecard_result"]}, median tokens {(c - b) / b * 100:+.0f}% '
+                         f'(n={len(sc["candidate"]["runs"])})')
+        lines.append(f'merged at {t["merged"]["sha"]}; '
+                     + (f'promoted at {t["promoted_at"]}' if t.get("promoted_at") else 'not yet promoted'))
+        if t.get("outcome"):
+            lines.append(f'outcome: {t["outcome"]}')
         for k, line in enumerate(lines):
-            o.append(f'<text x="{x - 7:.1f}" y="{T + 12 + 13 * k}" text-anchor="end" font-size="10.5" '
+            o.append(f'<text x="{x + 7:.1f}" y="{T + 26 + 13 * k}" font-size="10" '
                      f'fill="currentColor">{esc(line)}</text>')
 
     for i, s in enumerate(slots):
@@ -186,8 +205,13 @@ def build():
                    f'resumes {r["resumes"]}, stop {r["stop"]}')
             if tok is not None:
                 y = y_tok(tok)
-                o.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" class="acc"><title>{esc(tip)}</title>'
-                         f'</circle>')
+                if s in candidate_of:
+                    o.append(f'<path d="M{x:.1f},{y - 6:.1f}L{x + 6:.1f},{y:.1f}L{x:.1f},{y + 6:.1f}'
+                             f'L{x - 6:.1f},{y:.1f}Z" class="acc" fill-opacity="0.25" stroke-width="1.8">'
+                             f'<title>{esc(tip)}</title></path>')
+                else:
+                    o.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" class="acc"><title>{esc(tip)}'
+                             f'</title></circle>')
                 o.append(f'<text x="{x:.1f}" y="{y - 9:.1f}" text-anchor="middle" font-size="9.5" '
                          f'fill="currentColor">r{r["resumes"]}</text>')
             if wall is not None:
@@ -211,9 +235,14 @@ def build():
         o.append(f'<text x="{cx:.1f}" y="{T + PH + 18}" text-anchor="middle" font-weight="600" '
                  f'fill="currentColor">{esc(slot_label.get(s, s))}</text>')
         o.append(f'<text x="{cx:.1f}" y="{T + PH + 33}" text-anchor="middle" font-size="10.5" '
-                 f'fill="{GREY}">runs {n}; tokens n={len(toks)}; timed n={len(walls)}</text>')
+                 f'fill="{GREY}">runs {n}, timed {len(walls)}</text>')
+        o.append(f'<text x="{cx:.1f}" y="{T + PH + 46}" text-anchor="middle" font-size="10.5" '
+                 f'fill="{GREY}">with tokens {len(toks)}</text>')
+        if s in candidate_of:
+            o.append(f'<text x="{cx:.1f}" y="{T + PH + 60}" text-anchor="middle" font-size="10.5" '
+                     f'class="acc-t">{esc(candidate_of[s]["id"])} candidate</text>')
 
-    ly = H - 62
+    ly = H - 80
     o.append(f'<circle cx="{L + 6}" cy="{ly}" r="5" class="acc"/>')
     o.append(f'<text x="{L + 16}" y="{ly + 4}" font-size="11" fill="currentColor">tokens, one run '
              f'(rN = resumes; bar = median)</text>')
@@ -227,13 +256,19 @@ def build():
              f'first step, no tokens</text>')
     o.append(f'<circle cx="{L + 668}" cy="{ly}" r="4" fill="none" stroke="{GREY}" stroke-width="1.5"/>')
     o.append(f'<text x="{L + 678}" y="{ly + 4}" font-size="11" fill="currentColor">no figure stated</text>')
+    if candidate_of:
+        y2 = ly + 18
+        o.append(f'<path d="M{L + 6},{y2 - 6}L{L + 12},{y2}L{L + 6},{y2 + 6}L{L},{y2}Z" class="acc" '
+                 f'fill-opacity="0.25" stroke-width="1.8"/>')
+        o.append(f'<text x="{L + 16}" y="{y2 + 4}" font-size="11" fill="currentColor">tokens, one run '
+                 f'of a candidate revision of an improvement turn, scored against the revision before the turn marker</text>')
 
     dates = sorted({r["date"][:10] for r in runs})
     span = dates[0] if len(dates) == 1 else f"{dates[0]} to {dates[-1]}"
-    o.append(f'<text x="{L}" y="{H - 34}" font-size="11" fill="{GREY}">Data: {span} (UTC), '
+    o.append(f'<text x="{L}" y="{H - 32}" font-size="11" fill="{GREY}">Data: {span} (UTC), '
              f'docs/metrics/scenario-runs.jsonl, {len(runs)} runs. One scenario, n per revision under '
              f'its label: first results, not a benchmark.</text>')
-    o.append(f'<text x="{L}" y="{H - 18}" font-size="11" fill="{GREY}">Untimed revisions have no wall '
+    o.append(f'<text x="{L}" y="{H - 15}" font-size="11" fill="{GREY}">Untimed revisions have no wall '
              f'time; tokens are summed over the invocations that reached the merge approval, resumes '
              f'included.</text>')
     o.append("</svg>")

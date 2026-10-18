@@ -1,0 +1,10 @@
+{
+  "format": "canon-evidence/1",
+  "id": "e4",
+  "kind": "scorecard_result",
+  "result": "no_regression",
+  "subject": "candidate",
+  "subject_revision": "447423c",
+  "observed_at": "2026-10-18T15:46:06Z",
+  "producer": "planner-run"
+}
