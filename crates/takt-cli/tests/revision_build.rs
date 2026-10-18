@@ -195,7 +195,8 @@ fn the_revision_is_the_commit_and_dirty_while_a_tracked_file_differs() {
 }
 
 /// An untracked file the build can compile in, one under the workspace's `crates/` (the crate's
-/// own or another's), makes the revision `-dirty`; an untracked file elsewhere does not, and
+/// own or another's) or `protocols/`, makes the revision `-dirty`; an untracked file elsewhere
+/// does not, and
 /// neither does an ignored one under `crates/`, nor an untracked `Cargo.lock`, which cargo
 /// writes itself on a build.
 #[test]
@@ -243,16 +244,29 @@ fn an_untracked_file_is_dirty_under_crates_and_clean_elsewhere() {
         format!("{head}-dirty"),
         "an untracked source of another crate of the workspace"
     );
+    fs::remove_dir_all(dir.join("crates/other")).expect("removed");
+    assert_eq!(build::revision(&crate_dir), head);
+
+    fs::create_dir_all(dir.join("protocols")).expect("a directory");
+    fs::write(dir.join("protocols/new.yaml"), "protocol: 1\n").expect("a document");
+    assert_eq!(
+        build::revision(&crate_dir),
+        format!("{head}-dirty"),
+        "an untracked document under protocols/, which the binary embeds"
+    );
 }
 
-/// The files watched in a repository: its HEAD, the branch ref HEAD names, its index, every
-/// tracked file and the `crates/` directory, where a new source may appear; every one exists,
-/// since cargo runs a build script whose watched file is missing on every build; nothing
-/// untracked outside `crates/`.
+/// The files watched in a repository: its HEAD, the branch ref HEAD names, its index, its
+/// `info/exclude`, every tracked file and the `crates/` and `protocols/` directories, where a
+/// new source may appear; every one exists, since cargo runs a build script whose watched file
+/// is missing on every build; nothing untracked outside them.
 #[test]
 fn the_watched_files_are_head_its_ref_the_index_the_tracked_tree_and_crates() {
     let dir = repository("watched");
     fs::write(dir.join("notes.txt"), "untracked\n").expect("a file");
+    fs::create_dir_all(dir.join("protocols")).expect("a directory");
+    fs::create_dir_all(dir.join(".git/info")).expect("a directory");
+    fs::write(dir.join(".git/info/exclude"), "draft.rs\n").expect("an exclude file");
     let root = fs::canonicalize(&*dir).expect("a path");
     let watched: Vec<PathBuf> = build::watched(&probe(&dir))
         .iter()
@@ -262,9 +276,11 @@ fn the_watched_files_are_head_its_ref_the_index_the_tracked_tree_and_crates() {
         ".git/HEAD",
         ".git/refs/heads/main",
         ".git/index",
+        ".git/info/exclude",
         "Cargo.toml",
         "README.md",
         "crates",
+        "protocols",
     ] {
         assert!(
             watched.contains(&root.join(expected)),
@@ -274,14 +290,30 @@ fn the_watched_files_are_head_its_ref_the_index_the_tracked_tree_and_crates() {
     assert!(!watched.contains(&root.join("notes.txt")), "{watched:?}");
 }
 
-/// Through cargo: a source added under `crates/` after a clean build builds the revision again
-/// as `-dirty`, and again clean once it is removed; a file added outside `crates/` leaves it
-/// clean.
+/// Whether a second plain build of the workspace at `root` leaves the probe as it was: the
+/// build script is not run again, by `target/` or anything else a build writes.
+fn probe_is_fresh(root: &Path) -> bool {
+    let built = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned()))
+        .args(["build", "--offline", "-v"])
+        .current_dir(root)
+        .env_remove("CARGO_TARGET_DIR")
+        .output()
+        .expect("cargo runs");
+    assert!(built.status.success());
+    String::from_utf8_lossy(&built.stderr).contains("Fresh probe")
+}
+
+/// Through cargo: a second build after a clean one is fresh, `target/` and an ignored file
+/// under `crates/` notwithstanding; a source added under `crates/` after a clean build builds
+/// the revision again as `-dirty`, and again clean once it is removed; a file added outside
+/// `crates/` leaves it clean.
 #[test]
 fn a_source_added_under_crates_after_a_build_builds_the_revision_again() {
     let dir = repository("rebuild");
     let head = git(&dir, &["rev-parse", "HEAD"]);
+    fs::write(probe(&dir).join("src/scratch.log"), "ignored\n").expect("an ignored file");
     assert_eq!(build_and_run(&dir), head);
+    assert!(probe_is_fresh(&dir), "a second build runs the script again");
 
     let extra = probe(&dir).join("src/extra.rs");
     fs::write(&extra, "pub fn f() {}\n").expect("a source");
@@ -294,17 +326,26 @@ fn a_source_added_under_crates_after_a_build_builds_the_revision_again() {
     assert_eq!(build_and_run(&dir), head);
 }
 
-/// A crate no checkout tracks has its own directory watched, so a `git init` there, or a file
-/// added to it, builds the revision again.
+/// A build that read no revision watches a path that does not exist, so cargo runs the script
+/// again on every build: a `git init` and a first commit anywhere above the crate are read on
+/// the next one. A build at a commit does not pay this.
 #[test]
-fn a_crate_no_checkout_tracks_watches_its_own_directory() {
+fn an_unknown_revision_is_read_again_on_every_build() {
     let dir = workspace("unknown-watched");
-    let crate_dir = fs::canonicalize(probe(&dir)).expect("a path");
-    let watched: Vec<PathBuf> = build::watched(&crate_dir)
-        .iter()
-        .map(|path| fs::canonicalize(path).expect("every watched path exists"))
-        .collect();
-    assert!(watched.contains(&crate_dir), "{watched:?}");
+    let watched = build::watched(&probe(&dir));
+    assert!(
+        watched.iter().any(|path| !path.exists()),
+        "nothing missing is watched: {watched:?}"
+    );
+
+    git(&dir, &["init", "-q", "-b", "main"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-q", "-m", "start"]);
+    let watched = build::watched(&probe(&dir));
+    assert!(
+        watched.iter().all(|path| path.exists()),
+        "a missing path is watched at a commit: {watched:?}"
+    );
 }
 
 /// In this repository's checkout, a linked worktree or not, the crate's manifest is watched,

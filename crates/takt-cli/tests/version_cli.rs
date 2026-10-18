@@ -1,7 +1,8 @@
 //! story:binary-embeds-revision through the binary: `takt --version` prints the git revision
 //! the binary was built from, `takt <version> (<sha>)`, with `-dirty` after the sha when the
-//! tree held uncommitted changes to tracked files or an untracked file under `crates/`, and
-//! `(unknown revision)` when the crate was not built from a git checkout that tracks it.
+//! tree held uncommitted changes to tracked files or an untracked file under `crates/` or
+//! `protocols/`, and `(unknown revision)` when the crate was not built from a git checkout
+//! that tracks it.
 
 use std::path::Path;
 use std::process::Command;
@@ -49,9 +50,9 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
 
 /// The revision this crate's tree is at, read here with git and not by the code under test:
 /// the commit's sha, `-dirty` after it while a tracked file differs from it or an untracked,
-/// unignored file other than a `Cargo.lock` lies under the workspace's `crates/`, or `unknown
-/// revision` when the crate is
-/// not tracked by a git checkout with a commit.
+/// unignored file other than a `Cargo.lock` lies under the workspace's `crates/` or
+/// `protocols/`, or `unknown revision` when the crate is not tracked by a git checkout with a
+/// commit.
 fn expected_revision() -> String {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     if git(crate_dir, &["ls-files", "--error-unmatch", "Cargo.toml"]).is_none() {
@@ -78,6 +79,7 @@ fn expected_revision() -> String {
             "--exclude-standard",
             "--",
             ":(top)crates",
+            ":(top)protocols",
             ".",
             ":(exclude,glob)**/Cargo.lock",
         ],

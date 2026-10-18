@@ -2,8 +2,9 @@
 //! the commit's sha, `-dirty` after it while a tracked file differs from the commit or an
 //! untracked file lies where the build can compile it in, or `unknown revision` when no git
 //! checkout with a commit tracks this crate, or git fails; never a guess. Cargo builds it again
-//! when HEAD, the ref it names, the index, a tracked file or the workspace's `crates/` changes,
-//! so a commit, a checkout, an edit or a new source is never left out.
+//! when HEAD, the ref it names, the index, the exclude file, a tracked file or the workspace's
+//! `crates/` or `protocols/` changes, so a commit, a checkout, an edit or a new source is never
+//! left out; and on every build while the revision is unknown.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -11,19 +12,29 @@ use std::process::Command;
 /// What a build prints in place of a revision it could not read.
 const UNKNOWN: &str = "unknown revision";
 
-/// The directory, from the top of the checkout, whose untracked files a build can compile in
-/// besides the crate's own: the workspace's crates.
-const CRATES: &str = "crates";
+/// The directories, from the top of the checkout, whose untracked files a build can compile in
+/// besides the crate's own: the workspace's crates, and the protocol documents the binary
+/// embeds (`crates/takt/src/protocol.rs`, `include_str!`).
+const COMPILED_IN: [&str; 2] = ["crates", "protocols"];
 
 /// The untracked file under [`compiled_in`] that does not make a revision dirty: a
 /// `Cargo.lock`, which cargo writes itself on a build from the committed manifests and which
 /// is not compiled in. A tracked one that differs is a change like any other.
 const NOT_COMPILED_IN: &str = ":(exclude,glob)**/Cargo.lock";
 
+/// The path in the crate's directory nothing writes, watched while the revision is unknown so
+/// that cargo, which runs a build script again whenever a watched path is missing, reads it
+/// again on every build: a `git init` and a first commit anywhere above the crate are seen by
+/// the next build. A build at a commit does not watch it.
+const NEVER_WRITTEN: &str = ".takt-unknown-revision";
+
 /// What every git this script runs is told on its command line, over any configuration: run
 /// no code from configuration (`core.fsmonitor`, which `status` runs, hooks, helpers, signing,
 /// automatic maintenance). The list of `crates/takt/src/git.rs`, copied: a build script cannot
-/// use the library its crate depends on.
+/// use the library its crate depends on. A clean filter, which `status` runs on a file whose
+/// stat differs from the index, is covered as far as [`NO_ATTRIBUTES`] reaches; a filter named
+/// in the repository's own `info/attributes`, or with a git that does not know
+/// `GIT_ATTR_SOURCE`, still runs.
 const NO_CONFIGURED_CODE: [&str; 18] = [
     "-c",
     "core.fsmonitor=false",
@@ -45,12 +56,25 @@ const NO_CONFIGURED_CODE: [&str; 18] = [
     "log.showSignature=false",
 ];
 
+/// What `status` is told so that it reads no attributes, and so names no filter driver to run:
+/// none from the work tree (`GIT_ATTR_SOURCE` at the empty tree), none from the user's
+/// attributes file and none from the system's. A file an attribute would have filtered or
+/// converted then reads as it is on disk: when its stat differs from the index and its bytes
+/// from the commit's, the revision is `-dirty` rather than read through the filter.
+const NO_ATTRIBUTES: [&str; 2] = ["-c", "core.attributesFile=/dev/null"];
+
+/// The empty tree's id, by the length of the repository's object ids: what `GIT_ATTR_SOURCE`
+/// points at.
+const EMPTY_TREE_SHA1: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const EMPTY_TREE_SHA256: &str = "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321";
+
 /// The variables of the build's environment that would point git elsewhere than the crate's
-/// checkout, or change how it reads a path or its configuration; none reaches a git this
-/// script runs. Git exports `GIT_DIR` to every hook, `rebase -x` command and `!` alias, so a
-/// build run from one would otherwise read another tree. The list of `crates/takt/src/git.rs`,
-/// with the namespace and the discovery ceiling.
-const REDIRECTING_ENV: [&str; 14] = [
+/// checkout, or change how it reads a path, its attributes or its configuration; none reaches a
+/// git this script runs. Git exports `GIT_DIR` to every hook, `rebase -x` command and `!`
+/// alias, so a build run from one would otherwise read another tree. The list of
+/// `crates/takt/src/git.rs`, with the namespace, the discovery ceiling and the attribute
+/// source.
+const REDIRECTING_ENV: [&str; 15] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_COMMON_DIR",
@@ -65,6 +89,7 @@ const REDIRECTING_ENV: [&str; 14] = [
     "GIT_LITERAL_PATHSPECS",
     "GIT_NAMESPACE",
     "GIT_CEILING_DIRECTORIES",
+    "GIT_ATTR_SOURCE",
 ];
 
 fn main() {
@@ -78,11 +103,17 @@ fn main() {
 /// `git <args>` run in `dir`, with no code from configuration and none of the redirecting
 /// environment: its standard output when it succeeds, else `None`.
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
+    git_with(dir, args, &[])
+}
+
+/// [`git`] with `env` set on top.
+fn git_with(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Option<String> {
     let mut command = Command::new("git");
     for name in REDIRECTING_ENV {
         command.env_remove(name);
     }
     let output = command
+        .envs(env.iter().copied())
         .args(NO_CONFIGURED_CODE)
         .args(args)
         .current_dir(dir)
@@ -101,16 +132,22 @@ fn tracked(dir: &Path) -> bool {
 }
 
 /// The top of the checkout `dir` lies in, and the pathspecs from there under which an
-/// untracked file can be compiled in: the workspace's `crates/`, and the crate's own
+/// untracked file can be compiled in: the directories of [`COMPILED_IN`], and the crate's own
 /// directory when it lies elsewhere.
 fn compiled_in(dir: &Path) -> Option<(PathBuf, Vec<String>)> {
     let root = PathBuf::from(git(dir, &["rev-parse", "--show-toplevel"])?.trim());
     let prefix = git(dir, &["rev-parse", "--show-prefix"])?;
     let own = prefix.trim().trim_end_matches('/');
-    let mut specs = vec![format!(":(literal){CRATES}")];
+    let mut specs: Vec<String> = COMPILED_IN
+        .iter()
+        .map(|path| format!(":(literal){path}"))
+        .collect();
+    let covered = COMPILED_IN
+        .iter()
+        .any(|path| own == *path || own.starts_with(&format!("{path}/")));
     if own.is_empty() {
         specs.push(".".to_owned());
-    } else if own != CRATES && !own.starts_with(&format!("{CRATES}/")) {
+    } else if !covered {
         specs.push(format!(":(literal){own}"));
     }
     Some((root, specs))
@@ -132,14 +169,22 @@ pub fn revision(dir: &Path) -> String {
     if !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
         return UNKNOWN.to_owned();
     }
-    let Some(status) = git(
+    let empty_tree = if sha.len() == 64 {
+        EMPTY_TREE_SHA256
+    } else {
+        EMPTY_TREE_SHA1
+    };
+    let mut args = NO_ATTRIBUTES.to_vec();
+    args.extend([
+        "--no-optional-locks",
+        "status",
+        "--porcelain",
+        "--untracked-files=no",
+    ]);
+    let Some(status) = git_with(
         dir,
-        &[
-            "--no-optional-locks",
-            "status",
-            "--porcelain",
-            "--untracked-files=no",
-        ],
+        &args,
+        &[("GIT_ATTR_SOURCE", empty_tree), ("GIT_ATTR_NOSYSTEM", "1")],
     ) else {
         return UNKNOWN.to_owned();
     };
@@ -161,15 +206,18 @@ pub fn revision(dir: &Path) -> String {
 
 /// The files whose change may change [`revision`] for `dir`: HEAD; the ref HEAD names, or
 /// its nearest existing directory while it is packed; `packed-refs` and `reftable` when they
-/// exist; the index; every tracked file; and the directories of [`compiled_in`], where a new
-/// source may appear ([`watch_tree`]). Paths into the git directory go through `git rev-parse
-/// --git-path`, so a linked worktree's HEAD and index and the shared refs are the ones named. A
-/// git file that does not exist is left out, since cargo runs a build script whose watched file
-/// is missing on every build; a tracked file deleted from the tree stays in, so every build
-/// reads the revision again until the file is back or its deletion committed. For a crate no
-/// checkout tracks: its own directory, where a `git init` would make one, and the HEAD and
-/// index of a repository it lies in, where an `add` and a commit would.
+/// exist; the index; `info/exclude` when it exists; every tracked file; and the directories of
+/// [`compiled_in`], where a new source may appear ([`watch_tree`]). Paths into the git
+/// directory go through `git rev-parse --git-path`, so a linked worktree's HEAD and index and
+/// the shared refs are the ones named. A git file that does not exist is left out, since cargo
+/// runs a build script whose watched file is missing on every build; a tracked file deleted
+/// from the tree stays in, so every build reads the revision again until the file is back or
+/// its deletion committed. The user's `core.excludesFile` is not watched. While the revision
+/// is unknown: only [`NEVER_WRITTEN`], so every build reads it again.
 pub fn watched(dir: &Path) -> Vec<PathBuf> {
+    if revision(dir) == UNKNOWN {
+        return vec![dir.join(NEVER_WRITTEN)];
+    }
     let git_path = |name: &str| {
         git(
             dir,
@@ -179,12 +227,7 @@ pub fn watched(dir: &Path) -> Vec<PathBuf> {
         .filter(|path| path.exists())
     };
     let mut paths = Vec::new();
-    if !tracked(dir) {
-        paths.push(dir.to_path_buf());
-        paths.extend(["HEAD", "index"].into_iter().filter_map(git_path));
-        return paths;
-    }
-    for name in ["HEAD", "index", "packed-refs", "reftable"] {
+    for name in ["HEAD", "index", "packed-refs", "reftable", "info/exclude"] {
         paths.extend(git_path(name));
     }
     if let Some(reference) = git(dir, &["symbolic-ref", "-q", "HEAD"])
@@ -209,48 +252,35 @@ pub fn watched(dir: &Path) -> Vec<PathBuf> {
     let Some((root, specs)) = compiled_in(dir) else {
         return paths;
     };
-    if let Some(files) = git(&root, &["ls-files", "-z"]) {
-        paths.extend(
-            files
-                .split('\0')
-                .filter(|file| !file.is_empty() && !file.contains('\n'))
-                .map(|file| root.join(file)),
-        );
-    }
-    let mut args = vec![
-        "ls-files",
-        "--others",
-        "--ignored",
-        "--exclude-standard",
-        "--directory",
-        "-z",
-        "--",
-    ];
-    args.extend(specs.iter().map(String::as_str));
-    let ignored: Vec<PathBuf> = git(&root, &args)
+    let files: Vec<PathBuf> = git(&root, &["ls-files", "-z"])
         .unwrap_or_default()
         .split('\0')
-        .filter(|path| !path.is_empty())
-        .map(|path| root.join(path.trim_end_matches('/')))
+        .filter(|file| !file.is_empty() && !file.contains('\n'))
+        .map(|file| root.join(file))
         .collect();
+    let out_dir = std::env::var_os("OUT_DIR").map(PathBuf::from);
     for spec in &specs {
         let scope = match spec.strip_prefix(":(literal)") {
             Some(path) => root.join(path),
             None => root.clone(),
         };
         if scope.is_dir() {
-            watch_tree(&scope, &ignored, &mut paths);
+            watch_tree(&scope, out_dir.as_deref(), &files, &mut paths);
         }
     }
+    paths.extend(files);
     paths
 }
 
-/// Watches `dir` whole when it holds no ignored path and no `.git`, else each of its entries
-/// that is neither, by the same rule: cargo watches a directory with everything in it, and an
-/// ignored one, a build directory above all, changes on every build, which would build the
-/// revision again every time.
-fn watch_tree(dir: &Path, ignored: &[PathBuf], paths: &mut Vec<PathBuf>) {
-    if !dir.join(".git").exists() && !ignored.iter().any(|path| path.starts_with(dir)) {
+/// Watches `dir` whole, ignored files and all, so that a file added anywhere in it runs the
+/// script again; unless it holds a `.git` or the build's own output directory `out_dir`, which
+/// change on every build and would run the script every time: then each of its entries by the
+/// same rule, but `.git` and the build directory (an entry that holds `out_dir` and no tracked
+/// file of `tracked`). A file added directly into such a directory, the top of a crate that is
+/// its own repository, is not seen.
+fn watch_tree(dir: &Path, out_dir: Option<&Path>, tracked: &[PathBuf], paths: &mut Vec<PathBuf>) {
+    let holds_output = |path: &Path| out_dir.is_some_and(|out| out.starts_with(path));
+    if !dir.join(".git").exists() && !holds_output(dir) {
         paths.push(dir.to_path_buf());
         return;
     }
@@ -259,11 +289,15 @@ fn watch_tree(dir: &Path, ignored: &[PathBuf], paths: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if entry.file_name() == ".git" || ignored.contains(&path) {
+        if entry.file_name() == ".git" {
             continue;
         }
         if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            watch_tree(&path, ignored, paths);
+            let build_directory =
+                holds_output(&path) && !tracked.iter().any(|file| file.starts_with(&path));
+            if !build_directory {
+                watch_tree(&path, out_dir, tracked, paths);
+            }
         } else {
             paths.push(path);
         }
