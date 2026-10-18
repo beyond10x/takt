@@ -832,7 +832,7 @@ impl Validator for PrOpen {
     }
 
     /// The case's `branch.yaml`, and what the bot route keeps of the request it sent, the text it
-    /// scanned as published, the commit messages and diff it scanned before the push and the
+    /// scanned as published, the commit messages and files it scanned before the push and the
     /// response it read.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
@@ -842,7 +842,7 @@ impl Validator for PrOpen {
             artifacts.join(BotRoute::RESPONSE),
             artifacts.join(BotRoute::PUBLISHED),
             artifacts.join(BotRoute::MESSAGES),
-            artifacts.join(BotRoute::DIFF),
+            artifacts.join(BotRoute::FILES),
         ]
     }
 
@@ -1274,14 +1274,14 @@ impl Validator for PrMerged {
     }
 
     /// The case's `branch.yaml`, when takt's riders are pushed before the merge, the commit
-    /// messages and diff the bot route scanned before that push, and what it keeps of the merge
+    /// messages and files the bot route scanned before that push, and what it keeps of the merge
     /// request it sent and the response it read.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
         vec![
             PathBuf::from(BRANCH_FILE),
             artifacts.join(BotRoute::MESSAGES),
-            artifacts.join(BotRoute::DIFF),
+            artifacts.join(BotRoute::FILES),
             artifacts.join(BotRoute::MERGE_REQUEST),
             artifacts.join(BotRoute::MERGE_RESPONSE),
         ]

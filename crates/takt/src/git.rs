@@ -90,11 +90,13 @@ fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
 
 /// Runs `git <args>` in `tree` as [`run`] does, with nothing on its standard input, and answers
 /// its standard output as text (invalid UTF-8 replaced, nothing trimmed), or `None` as soon as it
-/// passes `limit` bytes: git is killed then and nothing more is read. Exiting non-zero is an
-/// error naming what git said.
+/// passes `limit` bytes: git is killed then and nothing more is read. Git reads no replacement
+/// object (`GIT_NO_REPLACE_OBJECTS`): what it shows is what the repository holds, as a push sends
+/// it. Exiting non-zero is an error naming what git said.
 pub fn run_bounded(tree: &Path, args: &[&str], limit: usize) -> Result<Option<String>> {
     use std::io::Read as _;
     let mut child = command(tree, args)?
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1086,7 +1088,8 @@ fn unguarded_refs(tree: &Path, branch: Option<&str>, kept: &[String]) -> Result<
     Ok(refs)
 }
 
-/// The refs a checkpoint guards beside `HEAD`: every branch and tag of the repository, each with
+/// The refs a checkpoint guards beside `HEAD`: every branch, tag and remote-tracking ref of the
+/// repository (what the scan before a push reads as what a remote holds), each with
 /// the object it names, but those `unguarded` names ([`unguarded_refs`]).
 fn guarded_refs(tree: &Path, unguarded: &BTreeSet<String>) -> Result<BTreeMap<String, String>> {
     let listed = raw(
@@ -1096,6 +1099,7 @@ fn guarded_refs(tree: &Path, unguarded: &BTreeSet<String>) -> Result<BTreeMap<St
             "--format=%(objectname) %(refname)",
             "refs/heads/",
             "refs/tags/",
+            "refs/remotes/",
         ],
         None,
     )?;

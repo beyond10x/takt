@@ -532,7 +532,8 @@ fn the_push_alone_runs_with_https_as_the_one_transport() {
 
 /// Real git behind the push: the bot route's words dropped, `git push` runs as a forge child
 /// with what the forge starts the push with, and, as the bot route's git does, with no user or
-/// system configuration. `scan-text` goes to [`Gates`].
+/// system configuration. Any HTTPS it would open goes to a proxy on a closed local port, so
+/// nothing leaves the machine. `scan-text` goes to [`Gates`].
 struct RealPush(Rc<Gates>);
 
 impl Runner for RealPush {
@@ -549,6 +550,8 @@ impl Runner for RealPush {
             env.extend([
                 ("GIT_CONFIG_GLOBAL", "/dev/null"),
                 ("GIT_CONFIG_NOSYSTEM", "1"),
+                ("HTTPS_PROXY", "http://127.0.0.1:9"),
+                ("https_proxy", "http://127.0.0.1:9"),
             ]);
             return takt::forge::Process::default().run_env(tree, &git, &env);
         }
@@ -556,31 +559,21 @@ impl Runner for RealPush {
     }
 }
 
-/// A remote that would push over SSH, named so or rewritten so by the repository's own
-/// configuration: git refuses the transport before it starts `ssh`, and `pr.open` stops naming
-/// the remote, its push URL and the transport, with nothing pushed, opened or recorded.
+/// The push goes to the repository's HTTPS URL. A URL rewrite in the repository's own
+/// configuration that would send it over SSH (`insteadOf`, `pushInsteadOf`): git refuses the
+/// transport before it starts `ssh`, and `pr.open` stops naming the URL and the transport, with
+/// nothing pushed, opened or recorded.
 #[test]
-fn a_remote_that_would_push_over_ssh_is_refused_naming_it() {
-    for (n, (origin, rewrite, shown)) in [
-        (
-            "ssh://git@localhost/owner/repo.git",
-            None,
-            "ssh://localhost/owner/repo.git",
-        ),
-        (
-            "https://github.com/owner/repo.git",
-            Some("url.ssh://git@localhost/.insteadOf"),
-            "https://github.com/owner/repo.git",
-        ),
+fn a_rewrite_that_would_push_over_ssh_is_refused_naming_it() {
+    for (n, key) in [
+        "url.ssh://git@localhost/.insteadOf",
+        "url.ssh://git@localhost/.pushInsteadOf",
     ]
     .into_iter()
     .enumerate()
     {
         let tree = scratch(&format!("ssh-{n}"));
-        git(&tree, &["remote", "set-url", "origin", origin]);
-        if let Some(key) = rewrite {
-            git(&tree, &["config", key, "https://github.com/"]);
-        }
+        git(&tree, &["config", key, "https://github.com/"]);
         let gates = Rc::new(Gates::default());
         let forge = BotRoute::new(
             "owner/repo",
@@ -592,9 +585,10 @@ fn a_remote_that_would_push_over_ssh_is_refused_naming_it() {
             commit(tree, "work.txt", "work\n", "implementation.edit: work");
         });
         let error = ran.stop.as_ref().expect_err("the push is refused");
-        assert!(error.contains("the remote origin"), "{error}");
-        assert!(error.contains(shown), "{error}");
-        assert!(error.contains("would push over ssh"), "{error}");
+        assert!(
+            error.contains("the push to https://github.com/owner/repo.git would go over ssh"),
+            "{error}"
+        );
         assert!(error.contains("nothing was pushed"), "{error}");
         let argvs = gates.argvs();
         assert_eq!(argvs.len(), 1, "{argvs:#?}");
@@ -606,10 +600,26 @@ fn a_remote_that_would_push_over_ssh_is_refused_naming_it() {
     }
 }
 
-/// Messages and diff over what one scan is given are refused, not cut: nothing is scanned,
+/// A push goes to the repository's URL, not to the remote's name, so it moves no tracking ref:
+/// those are guarded from a validator as from a step, and the scan reads them as what the
+/// remote holds.
+#[test]
+fn the_push_names_the_repository_url_not_the_remote() {
+    let gates = Rc::new(Gates::default());
+    let forge = bot(&gates);
+    assert_eq!(
+        forge.push_argv("takt/c").join(" "),
+        "b10x-gates bot -- push https://github.com/owner/repo.git takt/c"
+    );
+    assert_eq!(
+        forge.push_revision_argv("takt/c", "abc").join(" "),
+        "b10x-gates bot -- push https://github.com/owner/repo.git abc:refs/heads/takt/c"
+    );
+}
+/// Messages and files over what one scan is given are refused, not cut: nothing is scanned,
 /// pushed, opened or recorded, and the refusal names the size and the limit.
 #[test]
-fn messages_and_diff_over_the_limit_are_refused_not_cut() {
+fn messages_and_files_over_the_limit_are_refused_not_cut() {
     let tree = scratch("large");
     let gates = Rc::new(Gates::default());
     let mut forge = bot(&gates);
@@ -633,8 +643,8 @@ fn messages_and_diff_over_the_limit_are_refused_not_cut() {
     );
 }
 
-/// What the one scan before the push read last: the diff of the commits.
-fn scanned_diff(gates: &Gates) -> String {
+/// What the one scan before the push read last: the files the commits add or change.
+fn scanned_files(gates: &Gates) -> String {
     gates
         .lines()
         .into_iter()
@@ -643,12 +653,12 @@ fn scanned_diff(gates: &Gates) -> String {
         .expect("a scan before the push")
 }
 
-/// A commit removes the line between two lines it keeps: in the diff the removed line stands
-/// between them, in the file they are next to each other. The diff is scanned as the file
-/// holds its lines, without the markers and without the removed line, so a literal wrapped
-/// across the two is next to itself for the scanner's wrapped rule.
+/// Every file a commit adds or changes is scanned whole, as the commit holds it, under a line
+/// naming it: no diff markers, no removed line between two the file holds next to each other,
+/// and no context bound, so a literal wrapped across those lines is next to itself for the
+/// scanner's wrapped rule.
 #[test]
-fn the_diff_is_scanned_as_the_files_hold_their_lines() {
+fn every_file_a_commit_changes_is_scanned_whole() {
     let (head, tail) = FORBIDDEN.split_at(6);
     let tree = scratch("lines");
     let gates = Rc::new(Gates::default());
@@ -667,13 +677,19 @@ fn the_diff_is_scanned_as_the_files_hold_their_lines() {
         );
     });
     assert_eq!(ran.stop, Ok(Stop::Iterations(1)), "{}", ran.text);
-    let diff = scanned_diff(&gates);
+    let files = scanned_files(&gates);
+    let second = git(&tree, &["rev-parse", "HEAD"]);
     assert!(
-        diff.contains(&format!("\nabout {head}\n{tail} tail\n")),
-        "{diff}"
+        files.contains(&format!(
+            "file notes.md at {second}\nabout {head}\n{tail} tail\n"
+        )),
+        "{files}"
     );
-    assert!(diff.contains("diff --git a/notes.md b/notes.md"), "{diff}");
-    assert!(!diff.contains("+about"), "{diff}");
+    assert!(
+        files.contains(&format!("about {head}\nmiddle\n{tail} tail\n")),
+        "{files}"
+    );
+    assert!(!files.contains("+about"), "{files}");
 }
 
 /// A file name that is not ASCII is scanned as git holds it, not octal-escaped.
@@ -685,15 +701,11 @@ fn a_file_name_is_scanned_as_it_is() {
         commit(tree, "grüße.txt", "hallo\n", "implementation.edit: greet");
     });
     assert_eq!(ran.stop, Ok(Stop::Iterations(1)), "{}", ran.text);
-    let diff = scanned_diff(&gates);
-    assert!(
-        diff.contains("diff --git a/grüße.txt b/grüße.txt"),
-        "{diff}"
-    );
+    let files = scanned_files(&gates);
+    assert!(files.contains("file grüße.txt at "), "{files}");
 }
-
-/// With no tracking ref of the remote, the base's commits no remote-tracking ref holds are
-/// scanned with the case's: a local commit on `main` the remote may not have is refused.
+/// With no tracking ref of the base on the remote, every commit of the head is scanned: a local
+/// commit on `main` the remote may not have is refused.
 #[test]
 fn with_no_tracking_ref_the_bases_own_commits_are_scanned() {
     let tree = scratch("untracked-base");
@@ -1024,5 +1036,79 @@ fn a_refused_scan_of_the_rider_push_pushes_and_merges_nothing() {
         !kinds(&dir).contains(&"merge_observation".to_owned()),
         "{:?}",
         kinds(&dir)
+    );
+}
+
+/// A harness whose step writes a file and moves a tracking ref and makes another: what the scan
+/// before a push reads as what the remote holds.
+struct Retracking;
+
+impl Harness for Retracking {
+    fn name(&self) -> &str {
+        "retracking"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
+        fs::write(context.tree.join("work.txt"), "work\n")?;
+        let head = git(context.tree, &["rev-parse", "HEAD"]);
+        git(
+            context.tree,
+            &["update-ref", "refs/remotes/origin/main", &head],
+        );
+        git(
+            context.tree,
+            &["update-ref", "refs/remotes/origin/planted", &head],
+        );
+        Ok(StepReport {
+            action: "implementation.edit".to_owned(),
+            summary: "acted".to_owned(),
+            tokens: None,
+        })
+    }
+}
+
+/// A step may not move or make a tracking ref: the checkpoint guards `refs/remotes/` as it
+/// guards branches and tags, so the step is refused, the ref it moved is put back and the one it
+/// made removed.
+#[test]
+fn a_step_that_moves_a_tracking_ref_is_refused_and_the_refs_put_back() {
+    let tree = scratch("retracking");
+    let start = git(&tree, &["rev-parse", "HEAD"]);
+    git(&tree, &["update-ref", "refs/remotes/origin/main", &start]);
+    let options = RunOptions {
+        protocol: "software.change/1".to_owned(),
+        intent: "make the change".to_owned(),
+        inputs: vec![
+            ("risk".to_owned(), "trivial".to_owned()),
+            ("change_kind".to_owned(), "feature".to_owned()),
+            ("affects_security_boundary".to_owned(), "false".to_owned()),
+        ],
+        iterations: Some(4),
+        hours: None,
+        tokens: None,
+        case_id: Some("retracking".to_owned()),
+        gate: Some("repository.merge".to_owned()),
+    };
+    let validators: Vec<Box<dyn Validator>> =
+        vec![Box::new(TestsRun::new("true").expect("a command"))];
+    let mut run = Run::open(&tree, options, &Retracking, &validators).expect("the case opens");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).expect("the run stops");
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        matches!(&stop, Stop::StepRefused(why) if why.contains("refs/remotes/origin/")),
+        "{stop:?}\n{text}"
+    );
+    assert_eq!(
+        git(
+            &tree,
+            &[
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+                "refs/remotes/"
+            ]
+        ),
+        format!("refs/remotes/origin/main {start}"),
+        "{text}"
     );
 }

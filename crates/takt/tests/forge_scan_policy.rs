@@ -347,12 +347,12 @@ fn with_a_policy_given_to_the_forge_pr_open_opens_the_pull_request() {
             artifacts.join("pull-request.request.json").display(),
             artifacts.join(PUBLISHED).display(),
             artifacts.join("push.messages.txt").display(),
-            artifacts.join("push.diff.txt").display()
+            artifacts.join("push.files.txt").display()
         ),
         "{lines:?}"
     );
     assert_eq!(
-        lines[1], "b10x-gates bot -- push origin takt/opens",
+        lines[1], "b10x-gates bot -- push https://github.com/owner/repo.git takt/opens",
         "{lines:?}"
     );
     assert_eq!(
@@ -457,7 +457,7 @@ fn a_scan_refusal_after_the_push_names_the_pushed_branch() {
     assert_eq!(lines.len(), 3, "{lines:?}\n{text}");
     assert!(lines[0].starts_with("b10x-gates scan-text "), "{lines:?}");
     assert_eq!(
-        lines[1], "b10x-gates bot -- push origin takt/refused",
+        lines[1], "b10x-gates bot -- push https://github.com/owner/repo.git takt/refused",
         "{lines:?}"
     );
     assert!(lines[2].starts_with("b10x-gates scan-text "), "{lines:?}");

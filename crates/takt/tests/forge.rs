@@ -601,7 +601,7 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
     assert_eq!(
         recording.lines.borrow().as_slice(),
         [
-            "b10x-gates bot -- push origin takt/c1".to_owned(),
+            "b10x-gates bot -- push https://github.com/owner/repo.git takt/c1".to_owned(),
             format!(
                 "b10x-gates scan-text --repository owner/repo --policy policy.yaml {} {}",
                 input.display(),
@@ -1433,7 +1433,7 @@ fn commit_gates(tree: &Path) {
 
 /// `pr.open` pushes the case's branch, `takt/<id>`: the branch the tree is on, the one `current`
 /// resolved the case from. It does not push the `name` field of a file the harness can write,
-/// because that field reaches `b10x-gates bot -- push origin <name>` as given: a refspec there
+/// because that field reaches `b10x-gates bot -- push <url> <name>` as given: a refspec there
 /// (`HEAD:main`, `:main`, `--all`) is what the bot credential then pushes.
 #[test]
 fn adv2_pr_open_pushes_the_case_branch_not_the_name_the_harness_wrote_into_branch_yaml() {

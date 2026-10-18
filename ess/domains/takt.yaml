@@ -729,38 +729,44 @@ types:
       judgement: takt.work.JudgementStep
 
   # The forge a run opens its pull request through. `bot` is the repository's bot route: the
-  # `b10x-gates` binary pushes the branch and opens the pull request under its own credential
+  # `b10x-gates` binary pushes the branch, to the repository's HTTPS URL and never to a remote's
+  # name, so no push moves a tracking ref, and opens the pull request under its own credential
   # (takt never holds a token) after its `scan-text` passed, under the same policy, what the push
-  # would publish: every commit of the head pushed that the remote's tracking refs do not hold
-  # (with no tracking ref of the remote, the commits since the base and the base's commits no
-  # remote-tracking ref holds), each with its author's and committer's name and email, its
-  # message and its diff, every file as text, file names as they are and the lines as the files
-  # hold them, without the diff's markers and its removed lines; and, when a pull request is
-  # opened, its title and body. More than one scan is given (32 MiB) is read no further and
-  # refused, never cut. The push is held to HTTPS as git's one transport, and a remote that would
-  # push over another is refused naming it; `gh` reads the state, the head and the checks, and the merge goes
-  # through `b10x-gates` with the head sha so a head that moved is refused; `none` opens
+  # would publish: every commit of the head pushed that the remote's tracking ref of the case's
+  # base does not hold (without that ref, every commit of the head; no other remote's refs
+  # count), each with its author's and committer's name and email and its message, and the whole
+  # content of every file each commit adds or changes (a merge's those that differ from every
+  # parent, the root commit's included), raw, file names as they are, as the objects the push
+  # sends whatever `refs/replace/` holds; and, when a pull request is opened, its title and body.
+  # More than one scan is given (32 MiB) is read no further and refused, never cut. A step cannot
+  # make or move a tracking ref (the checkpoint guards `refs/remotes/`); one the user left stale,
+  # naming a commit the remote no longer holds, hides that commit from the scan, a known limit.
+  # The push is held to HTTPS as git's one transport, and a URL rewrite that would send it over
+  # another is refused naming it; `gh` reads the state, the head and the checks, and the merge
+  # goes through `b10x-gates` with the head sha so a head that moved is refused; `none` opens
   # nothing and registers none of the three forge validators. The bot route is a GitHub forge: the
   # origin URL names a host and a repository, `bot` is the default only when the host is github.com
   # (compared case-insensitively), and `--forge bot` on another host is refused before any case
   # is opened. A remote URL is shown without its userinfo wherever takt prints one.
-  # read from: crates/takt/src/forge.rs:289-328
-  # read from: crates/takt/src/forge.rs:1463
-  # read from: crates/takt/src/forge.rs:872-881
-  # read from: crates/takt/src/forge.rs:1513
-  # read from: crates/takt/src/forge.rs:1325-1354
-  # read from: crates/takt/src/forge.rs:853
-  # read from: crates/takt/src/forge.rs:1065-1086
-  # read from: crates/takt/src/forge.rs:1131-1152
-  # read from: crates/takt/src/forge.rs:1178-1200
-  # read from: crates/takt/src/forge.rs:1214-1236
-  # read from: crates/takt/src/git.rs:95-130
+  # read from: crates/takt/src/forge.rs:291-330
+  # read from: crates/takt/src/forge.rs:1476
+  # read from: crates/takt/src/forge.rs:873-882
+  # read from: crates/takt/src/forge.rs:1526
+  # read from: crates/takt/src/forge.rs:1338-1367
+  # read from: crates/takt/src/forge.rs:854
+  # read from: crates/takt/src/forge.rs:1076-1083
+  # read from: crates/takt/src/forge.rs:1129-1155
+  # read from: crates/takt/src/forge.rs:1195-1209
+  # read from: crates/takt/src/forge.rs:1219-1287
+  # read from: crates/takt/src/git.rs:96-143
+  # read from: crates/takt/src/forge.rs:917-918
+  # read from: crates/takt/src/git.rs:1102
   - name: takt.work.ForgeName
     kind: enum
     variants: [bot, none]
 
   # What a pull request is, as the forge reports it and as a `pull_request` record's result.
-  # read from: crates/takt/src/forge.rs:31-41
+  # read from: crates/takt/src/forge.rs:32-42
   - name: takt.work.PullRequestState
     kind: enum
     variants: [open, merged, closed]
@@ -768,8 +774,8 @@ types:
   # What the checks on a pull request's head report, as a `ci_result` record's result; `pending`
   # writes no record. `gh` answering "no checks reported" for a head with no check run yet is
   # read as pending (its message as of gh 2.100.0, not yet verified live).
-  # read from: crates/takt/src/forge.rs:877
-  # read from: crates/takt/src/forge.rs:58-69
+  # read from: crates/takt/src/forge.rs:878
+  # read from: crates/takt/src/forge.rs:59-70
   - name: takt.work.ChecksState
     kind: enum
     variants: [pass, fail, pending]
@@ -1664,7 +1670,7 @@ entities:
       # `implementation` now names; absent when nothing changed, the step was refused, or the step
       # was deterministic.
       # read from: crates/takt/src/run.rs:4272-4287
-      # read from: crates/takt/src/git.rs:497
+      # read from: crates/takt/src/git.rs:499
       - name: committed
         type: Optional<takt.work.Revision>
     relations:
@@ -1746,12 +1752,12 @@ entities:
   # read from: crates/takt/src/validator.rs:231-245
   # read from: crates/takt/src/validator.rs:188-190
   # read from: crates/takt/src/validator.rs:278-280
-  # read from: crates/takt/src/forge.rs:628-646
+  # read from: crates/takt/src/forge.rs:630-648
   # read from: crates/takt/src/validator.rs:903
   # read from: crates/takt/src/validator.rs:1356
   # read from: docs/design/takt.md:47-49
   # read from: docs/design/takt.md:64-65
-  # read from: crates/takt/src/forge.rs:766-790
+  # read from: crates/takt/src/forge.rs:768-792
   # read from: crates/takt/src/validator.rs:112-123
   # read from: crates/takt/src/validator.rs:937-949
   # read from: crates/takt/src/validator.rs:1398-1416
