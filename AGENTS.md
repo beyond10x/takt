@@ -11,7 +11,7 @@ every step validated by Canon over evidence. This file is for agents working on 
 | `product-requirements:takt` (`aep plan artifact show product-requirements:takt`) | users, the five qualities and their order, requirements R1–R18 |
 | `docs/design/takt.md` | the design: foundations, shape, seams, milestones and what each has built |
 | `design:recursive-self-improvement` | how takt improves itself: roles, judge, scorecard, phases |
-| `.agents/operator-agent.md`, `.agents/developer-agent.md` | the two agent roles' profiles a fresh session starts from: what each reads, owns, watches and never does |
+| `.agents/planner-agent.md`, `.agents/developer-agent.md`, `.agents/reviewer-agent.md`, `.agents/doc-writer-agent.md` | the four agent roles' profiles a fresh session starts from: what each reads, owns, watches and never does |
 | `design:continuous-orchestration` | continuous work and orchestration: planning as a unit, a tree of cases, one deterministic dispatcher, build steps |
 | `aep plan artifact waves --kind story --status draft` | what can be worked next |
 
@@ -68,13 +68,15 @@ cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
   from story:judge-guard on, both are held in `.engineering/delegations.yaml`, read at the base
   revision, which is itself a judge surface. story:judge-guard enforces it. Adding a path to that
   list is itself a judge-surface change.
-- Two agent roles work on takt (`design:recursive-self-improvement` § Roles). The operator agent
-  runs takt, reviews, measures, files findings and verifies fixes; it writes no takt code. The
-  developer agent delivers stories in waves; it never marks its own fix verified.
+- Four agent roles work on takt (`design:recursive-self-improvement` § Roles): the planner, the
+  developer, the reviewer and the doc-writer. § Roles below says what each owns, what it never
+  does and how it runs. The planner plans and grants and writes no takt code; the developer
+  delivers stories in waves and never marks its own fix verified; the reviewer reviews, runs and
+  measures, and never grants or files; the doc-writer writes `docs/**` but the wave pages, the
+  README's structure and the public site, and writes no takt code.
 - A finding goes into the planning store with an `expected_before` predicate a machine can check.
-  Messages between the agents only announce a store change, with a first line
-  `[FINDING takt] <ids>`, `[IMPLEMENTED takt] <story> <sha>` or
-  `[VERIFIED takt] <story> <scenario> <before> -> <after>`.
+  Messages between the agents only announce a store change; their first lines are in § Messages
+  below.
 - Work in a managed worktree (`worktree create --purpose <what>`), build into its own `target/`.
 - Every commit, push, pull request and tag goes through the bot route (`b10x-gates bot -- <git
   args>`); API writes through `b10x-gates api`. Pull-request and release bodies pass
@@ -86,3 +88,36 @@ cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
 - Spec first: a story that introduces a noun declares it in `ess/` before code builds on it,
   checked with `ess specify validate --path ess`; every `read from:` citation there names the
   line that says it.
+
+## Roles
+
+From `design:recursive-self-improvement` § Roles, the owner's decision (2026-10-18). Each agent
+role's profile is `.agents/<role>-agent.md`, with a pointer stub under `.claude/agents/`.
+
+| role | owns | never | runs as |
+|---|---|---|---|
+| owner (a person) | merge approval for judge surfaces, or its delegation to a named role on record; scorecard definitions; priorities | | a person |
+| planner | the main agent and orchestrator; the planning store: stories, priorities within the owner's, wave order with the developer; filing findings; deciding what the developer escalates; granting merges on a reviewer verdict, judge surfaces only under a delegation on record naming the planner; dispatching the reviewer and the doc-writer; reporting to the owner | writes takt code; grants without a reviewer verdict on that exact sha; grants a change that widens authority, its own or any other role's, even one that cites the owner's recorded decision: the owner grants that one | the main session |
+| developer | moving stories to active, waves and their pages under `docs/waves/`, implementation, merges through the bot route, building and installing promoted binaries; README lines that document its own unit's change | marks its own fix verified; edits `docs/**` other than its wave pages, the site or the deck | its own long-running session |
+| reviewer | a verdict with cited findings on each `[GRANT? takt]` diff at its exact sha; independent code reviews (correctness, security, usability); adversarial passes on request; trials, scenario runs and verification runs (`scripts/check-finding`, `takt scenario run`); measurement against the baseline | writes takt code; grants; files to the store (it returns findings to the planner, who files them); reviews its own work | started by the planner per task, from its profile, and resumed by name |
+| doc-writer | `docs/**` but the wave pages: designs' prose under `docs/design/`, run records under `docs/runs/`, `docs/metrics/`, `docs/pitch/`; the structure of `README.md`; the public site on the `gh-pages` branch, published by a push of `gh-pages` only, never of `main` | writes takt code; changes the planning store; states a figure no record holds | started by the planner per task, from its profile, and resumed by name |
+
+Until takt drives this flow itself, the planner is the main agent: it starts the reviewer and the
+doc-writer, and the developer reports to it.
+
+## Messages
+
+The store carries the content; a message only announces that the store changed. Its first line is
+one of these, and nothing else:
+
+| first line | sent by | to | after |
+|---|---|---|---|
+| `[FINDING takt] <ids>` | planner | developer | filing findings in the store |
+| `[IMPLEMENTED takt] <story\|wave> <sha>` | developer | planner | merging a story's fix or a wave |
+| `[VERIFIED takt] <story> <scenario> <before> -> <after>` | planner | developer | a reviewer's verification run that moved the number |
+| `[WAVE takt] <wave> <units>` | developer | planner | opening a wave and its page under `docs/waves/` |
+| `[GRANT? takt] <story> <branch> <sha> <paths>` | developer | planner | a merge ready but for its grant; `<paths>` are the paths its diff touches |
+| `[GRANT takt] <story> <sha>` | planner | developer | granting that merge on the reviewer's verdict at that sha |
+| `[DECIDE takt] <topic>` | developer | planner | a question it escalates; the lines below the first give options A, B and C, a recommendation and a default |
+| `[DECIDED takt] <topic>: <option>` | planner | developer | recording the decision in the store |
+| `[ACK takt]` | any | the sender | receiving a message |

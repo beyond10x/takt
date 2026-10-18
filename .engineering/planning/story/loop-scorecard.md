@@ -21,7 +21,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/improvement_protocols.rs
-revision: 5
+revision: 6
 ---
 # Story: loop-scorecard
 
@@ -55,7 +55,7 @@ Derived 2026-10-18 by `story-scoper`. Every line is **cited** (read from the sto
 - **Primary surface:** `crates/takt` validators — cited, design § The loops as protocols: "the validators for these actions (Rust structs chosen by action name, `crates/takt/src/validator.rs`)"
 - **Files:** `crates/takt/src/validator.rs:46-56` (the `Validator` trait the three new structs implement, beside `TestsRun`/`GateRun`/`PrOpen`/`CiRead`/`PrMerged`) — cited
 - **Files:** `crates/takt/src/scorecard.rs` (the loop rows; the file does not exist on `fix/2026-10-18-review` and story:scorecard-reader creates it) — inferred
-- **Symbols:** actions `loop.measure`, `loop.definition.check`, `loop.compare`; evidence kinds `loop_measurement`, `definition_check`, `loop_comparison`; results `below_target`/`at_target`, `unchanged`/`dual_reported`/`redefined`, `improved`/`not_improved` — cited, `protocols/loop-improvement/1.yaml:27-48,107-149`
+- **Symbols:** actions `loop.measure`, `loop.definition.check`, `loop.compare`; evidence kinds `loop_measurement`, `definition_check`, `loop_comparison`; results `below_target`/`at_target`, `unchanged`/`dual_reported`/`redefined`, `improved`/`not_improved` — cited, `protocols/loop-improvement/1.yaml:29-50,109-153`
 - **Also likely:** `crates/takt-cli/src/main.rs:342-393` (every validator is registered here, unconditionally, into `validators`) — inferred
 - **Also likely:** `crates/takt/tests/improvement_protocols.rs:393-500` (the loop cases it drives today with hand-written `loop_measurement`/`definition_check`/`loop_comparison` records) — inferred, the story's Context names this file but its Acceptance does not say whether the test changes or a new test is added
 - **Documents:** `.agents/operator-agent.md` (the L2 turn: after three recorded L1 turns, then weekly; it names the lowest metric as the finding to file; the file does not exist yet and story:agent-profiles creates it) — cited, story Outcome and Ordering

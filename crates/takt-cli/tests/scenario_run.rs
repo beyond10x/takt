@@ -146,9 +146,15 @@ fn declare(repo: &Path, text: &str) {
 }
 
 /// The doubles in `bin`, their state in `state`. Every `b10x-gates` line is logged to
-/// `state/calls`. `b10x-gates bot -- fetch <remote> <refspec>` runs a real `git fetch` of the
-/// refspec from the bare `remote`, or does nothing when `state/no-fetch` exists; `b10x-gates bot
-/// -- push [options] <remote> <spec>` runs a real `git push` of the spec into `remote` with every
+/// `state/calls`. `b10x-gates bot -- fetch <remote> <refspec>` records the prompt settings, the
+/// SSH agent socket, its standard input, `GIT_ASKPASS` and `GIT_ALLOW_PROTOCOL` in
+/// `state/fetch-env`, then runs a real `git fetch` of
+/// the refspec from the bare `remote` (standing in for the HTTPS server, so without the
+/// HTTPS-only transport takt sets for the route's own git), or does nothing when `state/no-fetch` exists, sleeps 45 s
+/// and fails when `state/hang-fetch` exists, standing in for a fetch waiting on a prompt, and
+/// fails at once with git's access-rights message when `state/refuse-fetch` exists; `b10x-gates bot
+/// -- push [options] <remote> <spec>` appends its `GIT_ALLOW_PROTOCOL` to `state/push-env`, runs
+/// a real `git push` of the spec into `remote` with every
 /// option takt gave (`--porcelain`, `--force-with-lease`), its report on stdout as git prints it,
 /// keeps the commit pushed per branch (`pushed-<branch, / as _>`), or exits 1 when
 /// `state/refuse-push` exists; `scan-text` passes;
@@ -183,9 +189,25 @@ case "$1" in
     spec="$2"
     case "$verb" in
       fetch)
+        {{
+          printf 'GIT_TERMINAL_PROMPT=%s\n' "${{GIT_TERMINAL_PROMPT-unset}}"
+          printf 'GIT_SSH_COMMAND=%s\n' "${{GIT_SSH_COMMAND-unset}}"
+          printf 'SSH_AUTH_SOCK=%s\n' "${{SSH_AUTH_SOCK-unset}}"
+          printf 'stdin=%s\n' "$(readlink /proc/self/fd/0)"
+          printf 'GIT_ASKPASS=%s\n' "${{GIT_ASKPASS-unset}}"
+          printf 'GIT_ALLOW_PROTOCOL=%s\n' "${{GIT_ALLOW_PROTOCOL-unset}}"
+        }} > "$state/fetch-env"
+        if [ -e "$state/hang-fetch" ]; then sleep 45; exit 1; fi
+        if [ -e "$state/refuse-fetch" ]; then
+          echo "git@github.com: Permission denied (publickey)." >&2
+          echo "fatal: Could not read from remote repository." >&2
+          echo "Please make sure you have the correct access rights" >&2
+          exit 1
+        fi
         if [ -e "$state/no-fetch" ]; then exit 0; fi
-        git fetch -q "$remote" "$spec"; exit $? ;;
+        env -u GIT_ALLOW_PROTOCOL git fetch -q "$remote" "$spec"; exit $? ;;
       push)
+        printf 'GIT_ALLOW_PROTOCOL=%s\n' "${{GIT_ALLOW_PROTOCOL-unset}}" >> "$state/push-env"
         if [ -e "$state/refuse-push" ]; then echo "refused by the double" >&2; exit 1; fi
         branch="${{spec#*:refs/heads/}}"; revision="${{spec%%:*}}"
         if [ "$branch" = "$spec" ]; then revision="refs/heads/$spec"; fi
@@ -252,8 +274,14 @@ impl World {
     /// Runs the built `takt` binary with `args` in this world: the doubles first on the program
     /// path, no `b10x-gates` policy. The exit code, stdout and stderr.
     fn takt(&self, args: &[&str]) -> (i32, String, String) {
+        self.takt_env(args, &[])
+    }
+
+    /// [`Self::takt`] with `env` set in takt's own environment.
+    fn takt_env(&self, args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
         let output = Command::new(env!("CARGO_BIN_EXE_takt"))
             .args(args)
+            .envs(env.iter().copied())
             .env_remove("B10X_GATES_POLICY")
             .env(
                 "PATH",
@@ -596,8 +624,123 @@ fn a_seed_whose_story_is_not_proposed_is_refused_before_the_push() {
     assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
 }
 
-/// The line that fetches the remote's trial branches through the bot route.
-const FETCH_TRIALS: &str = "bot -- fetch origin +refs/heads/trial/*:refs/remotes/origin/trial/*";
+/// The line that fetches the remote's trial branches through the bot route: from the remote's
+/// HTTPS URL, whatever form `origin` has, so it goes under the bot route's HTTPS credential
+/// and never needs the user's SSH agent.
+const FETCH_TRIALS: &str = "bot -- fetch https://github.com/owner/repo.git +refs/heads/trial/*:refs/remotes/origin/trial/*";
+
+/// The story's acceptance, the route half: in a clone whose `origin` is an SSH URL, with the
+/// user's SSH agent loaded and a prompt allowed in takt's own environment, the trial fetch
+/// names the remote's HTTPS URL, and its child gets no agent socket, no git prompt, SSH in
+/// batch mode, standard input from `/dev/null`, an empty `GIT_ASKPASS` and HTTPS as the one
+/// transport git may use; the run proceeds to cut `trial/0`, and the push, which is not the
+/// fetch, is not held to HTTPS.
+#[test]
+fn the_trial_fetch_goes_over_https_with_no_user_credential_and_no_prompt() {
+    let world = world("https-fetch");
+    let agent = world.state.join("agent.sock");
+    let agent = agent.to_str().expect("utf-8");
+    let repo = world.repo.to_str().expect("utf-8");
+    let (code, out, err) = world.takt_env(
+        &["scenario", "run", "--repo", repo, "1", "--test-cmd", "true"],
+        &[
+            ("SSH_AUTH_SOCK", agent),
+            ("GIT_TERMINAL_PROMPT", "1"),
+            ("GIT_SSH_COMMAND", "ssh"),
+            ("GIT_ASKPASS", "/user/askpass"),
+        ],
+    );
+    let pushed = fs::read_to_string(world.state.join("push-env")).expect("a push ran");
+    assert!(
+        pushed
+            .lines()
+            .all(|line| line == "GIT_ALLOW_PROTOCOL=unset"),
+        "a push held to a transport: {pushed}"
+    );
+    let seen = fs::read_to_string(world.state.join("fetch-env")).expect("the fetch ran");
+    assert_eq!(
+        (
+            world.calls().first().cloned(),
+            seen.lines().collect::<Vec<_>>()
+        ),
+        (
+            Some(FETCH_TRIALS.to_owned()),
+            vec![
+                "GIT_TERMINAL_PROMPT=0",
+                "GIT_SSH_COMMAND=ssh -o BatchMode=yes",
+                "SSH_AUTH_SOCK=unset",
+                "stdin=/dev/null",
+                "GIT_ASKPASS=",
+                "GIT_ALLOW_PROTOCOL=https",
+            ]
+        ),
+        "the fetch line and what its child was started with"
+    );
+    assert_eq!(code, 4, "stdout {out} stderr {err}");
+    assert!(
+        out.contains("scenario 1: story:ready-one proposed on trial/0 at "),
+        "stdout {out} stderr {err}"
+    );
+}
+
+/// `origin` in each form git writes for a repository on github.com, SSH or HTTPS, with or
+/// without `.git`: the trial fetch names the one HTTPS URL. A fetch that cannot authenticate
+/// fails at once, the refusal naming that URL and git's reason, with nothing changed.
+#[test]
+fn every_origin_form_fetches_from_the_one_https_url_and_a_refusal_changes_nothing() {
+    let world = world("origin-forms");
+    fs::write(world.state.join("refuse-fetch"), "").expect("the double refuses the fetch");
+    let head = git_out(&world.repo, &["rev-parse", "HEAD"]);
+    for origin in [
+        "git@github.com:owner/repo.git",
+        "ssh://git@github.com/owner/repo.git",
+        "https://github.com/owner/repo.git",
+        "https://github.com/owner/repo",
+    ] {
+        git(&world.repo, &["remote", "set-url", "origin", origin]);
+        let _ = fs::remove_file(world.state.join("calls"));
+        let (code, out, err) = world.scenario_run("1", &[]);
+        assert_eq!(code, 1, "origin {origin}: stdout {out} stderr {err}");
+        assert_eq!(world.calls(), [FETCH_TRIALS], "origin {origin}");
+        assert!(
+            err.contains("fetch the remote's trial branches; nothing was changed")
+                && err.contains("https://github.com/owner/repo.git")
+                && err.contains("Please make sure you have the correct access rights"),
+            "origin {origin}: stderr {err}"
+        );
+        assert!(world.trial_branches().is_empty(), "origin {origin}");
+        assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
+        assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
+        assert!(!world.repo.join(".engineering/cases").exists());
+    }
+}
+
+/// A fetch that does not end, standing in for one waiting on a prompt no one answers, is
+/// killed within 30 s, not the forge's five minutes; the refusal names the remote and that it
+/// timed out, and nothing is changed.
+#[test]
+fn a_trial_fetch_that_does_not_end_is_killed_within_30_s() {
+    let world = world("hung-fetch");
+    fs::write(world.state.join("hang-fetch"), "").expect("the double hangs the fetch");
+    let head = git_out(&world.repo, &["rev-parse", "HEAD"]);
+    let started = std::time::Instant::now();
+    let (code, out, err) = world.scenario_run("1", &[]);
+    let took = started.elapsed();
+    assert!(
+        took < std::time::Duration::from_secs(35),
+        "the fetch took {took:?}: stdout {out} stderr {err}"
+    );
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(
+        err.contains("https://github.com/owner/repo.git") && err.contains("timed out after 30.0 s"),
+        "stderr {err}"
+    );
+    assert_eq!(world.calls(), [FETCH_TRIALS]);
+    assert!(world.trial_branches().is_empty());
+    assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
+    assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
+    assert!(!world.repo.join(".engineering/cases").exists());
+}
 
 /// The remote already holds `trial/0`, pushed by a run from another checkout that this one
 /// never fetched: the run fetches the remote's trial branches first and takes `trial/1`, its

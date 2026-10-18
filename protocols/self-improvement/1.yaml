@@ -148,7 +148,7 @@ actions:
       - evidence: scenario_result
   candidate.merge:
     description: >-
-      merge a candidate that touches no judge surface; an operator agent's grant suffices
+      merge a candidate that touches no judge surface; the planner's grant suffices
     effect: write
     precondition:
       all:
