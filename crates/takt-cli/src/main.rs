@@ -925,9 +925,12 @@ fn next_trial(repo: &Path) -> Result<u64> {
 
 /// Refuses `n` as the run's trial number when anything the run would create for it after the
 /// push is there already: the case `scenario-<id>-trial-<n>`, as a directory or as its branch
-/// `takt/<case>`. The trial branch itself is not, as `n` is past every one known.
+/// `takt/<case>`. The trial branch itself is not, as `n` is past every one known. A case id
+/// [`takt::case::check_id`] refuses (a scenario id long enough to take it past 250 bytes) is
+/// refused here, before any branch is cut or pushed.
 fn trial_free(repo: &Path, scenario: &str, n: u64) -> Result<String> {
     let case_id = format!("scenario-{scenario}-trial-{n}");
+    takt::case::check_id(&case_id)?;
     let refused = |what: String| {
         anyhow!(
             "scenario {scenario}: {what} exists already, though no trial/{n} branch is known: the case of trial/{n} would collide with it; nothing was pushed"
@@ -1215,8 +1218,11 @@ fn case_to_resume(
 }
 
 /// The protocol of the case `id` under `repo`, from its own `protocol.yaml`; `None` when its
-/// directory holds no case.
+/// directory holds no case. An `id` that is not one name under the cases directory, or not a
+/// case id at all, is refused by [`takt::case::check_id`] before it is joined to a path, so
+/// nothing outside the cases directory is read.
 fn case_protocol(repo: &Path, id: &str) -> Result<Option<LoadedProtocol>> {
+    takt::case::check_id(id)?;
     let dir = repo.join(takt::case::CASES_DIR).join(id);
     if !dir.join("case.yaml").is_file() {
         return Ok(None);
