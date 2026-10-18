@@ -11,6 +11,7 @@ refs:
   reference: test-cmd-checked-before-open
 relations:
 - informed_by: review-result:findings-hunt-33ab42c
+- decomposes: epic:composable-agentic-work
 revision: 1
 ---
 ## Outcome

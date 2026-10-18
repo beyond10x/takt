@@ -6,6 +6,7 @@ status: draft
 title: --hours bounds a validator step too
 relations:
 - depends_on: story:hours-bounds-a-harness-step
+- decomposes: epic:composable-agentic-work
 revision: 1
 ---
 ## Outcome

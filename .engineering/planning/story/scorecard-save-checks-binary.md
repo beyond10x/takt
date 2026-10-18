@@ -11,6 +11,8 @@ refs:
   reference: scorecard-save-checks-binary
 relations:
 - informed_by: review-result:findings-hunt-3fe3f21
+- depends_on: story:check-finding-builds-name-their-revision
+- decomposes: epic:recursive-self-improvement
 revision: 1
 ---
 ## Outcome

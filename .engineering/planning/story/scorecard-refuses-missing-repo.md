@@ -11,6 +11,7 @@ refs:
   reference: scorecard-refuses-missing-repo
 relations:
 - informed_by: review-result:findings-hunt-3fe3f21
+- decomposes: epic:recursive-self-improvement
 revision: 1
 ---
 ## Outcome
