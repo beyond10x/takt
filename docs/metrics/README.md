@@ -117,6 +117,41 @@ the time its binary was built; its crates are the same as at 97623a6.
 - Every arm streamed its events with arrival times (`agent.stream.tsv`, the shim's `started_at`),
   so all thirteen new lanes in `journey.svg` are timed.
 
+## After round 3: the promoted baseline and the turn-2 candidates (2026-10-18, 18:40 to 19:53 UTC)
+
+Fifteen takt runs and no free arm: T-14..18 at a0b8576, the binary the first turn promoted, as
+the baseline for the next turns; T-19..23 and T-24..28, the candidate of improvement turn 2
+(`story:case-id-is-a-valid-branch-name`) at 8d49743 and at 834205f. Every call of every run was
+claude-opus-5-5 (`modelUsage` per line of `steps.jsonl`), so the costs compare with rounds 1
+and 2. The runner's `--model claude-opus-5-5` is recorded for T-14..18; the candidate records do
+not say.
+
+| runs | revision | n | median tokens (min to max) | median wall time | median cost | steps | resumes | held-out check |
+|---|---|---|---|---|---|---|---|---|
+| T-14..18 | a0b8576 | 5 | 122,361 (107,205 to 138,160) | 127 s (123 to 129) | $0.25 ($0.23 to $0.26) | 18 each | 0 | 5/5 pass |
+| T-19..23 | 8d49743 | 5 | 122,202 (106,005 to 152,895) | 131 s (128 to 140) | $0.25 ($0.22 to $0.26) | 18 each | 0 | 5/5 pass |
+| T-24..28 | 834205f | 5 | 122,465 (122,095 to 153,345) | 135 s (126 to 158) | $0.25 ($0.25 to $0.28) | 18, and 19 for T-27 | T-27: 1 | 5/5 pass |
+
+- All fifteen stopped at the merge approval. The baseline is no cheaper than takt at 0a776d2
+  (122,438 tokens, 133 s, n=3) and still above the isolated arm (92,772 tokens, 55.5 s, n=6,
+  rounds 1 and 3); the isolated arm was not run again.
+- **T-27** stopped on `NoProgress` after a `repository.inspect` step (11 steps, 74,930 tokens,
+  exit 3), and one resume took it to the approval (8 steps, 59,898 tokens, exit 4): 134,828
+  tokens and 158 s in all. It is the only `NoProgress` of the fifteen
+  (`story:no-inspect-for-stateless-harness`, still `active`).
+- **T-19..23 are superseded.** Review moved the candidate from 8d49743 to 834205f, which was run
+  again; the records keep both.
+- **Where the revisions come from.** For T-14..18, the revision and the installed binary (sha256
+  `b7af9ec9f681d8c8...`) are the operator's run notes; the runs' own records name neither. For
+  T-19..28 the revision is the build directory of the binary named in `binary.txt`; the case's
+  `opened` event names that binary `unknown revision`.
+- Against the promotion rule decided on 2026-10-18 (`design:recursive-self-improvement`
+  § Scorecard: n=5; worse on tokens when the candidate's median is above the baseline's maximum),
+  834205f's median, 122,465, is below the baseline's maximum, 138,160. This is a reading of the
+  rows above, not a scorecard record: `improvement-turns.jsonl` holds no line for turn 2 yet.
+- The 15 lanes add to `journey.svg`; in each the CI runs a second time
+  (`story:pr-opens-when-change-is-done`).
+
 ## `improvement-turns.jsonl`
 
 | field | meaning |
