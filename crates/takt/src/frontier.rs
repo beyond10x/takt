@@ -176,11 +176,13 @@ pub enum Take {
     Refused(String),
 }
 
-/// What `takt approve <case> <capability> --by <approver>` does: writes the grant into the
-/// case's `authority.yaml` ([`crate::case::grant`]) and, for a case opened for a story, records
-/// it on the story through `frontier`. The grant is written first, because it is the operator's
-/// decision and the record is its trail in the store; a record the store refuses leaves the
-/// grant written and says so. A case opened on an intent has no story, and the grant is all.
+/// What `takt approve <case> <capability> --by <approver>` does: checks the grant and holds the
+/// case ([`crate::case::prepare_grant`]), records it on the story through `frontier` for a case
+/// opened for a story, then writes the grant into the case's `authority.yaml` at the revision
+/// the case reached the gate at. The record comes first, so a record the store refuses leaves
+/// no grant behind and the same approval can simply be given again; the case is held
+/// throughout, so no run starts between the record and the grant. A case opened on an intent
+/// has no story, and the grant is all.
 pub fn approve(
     tree: &Path,
     frontier: &dyn Frontier,
@@ -188,19 +190,25 @@ pub fn approve(
     capability: &str,
     approver: &str,
 ) -> Result<Approval> {
-    let approval = crate::case::grant(tree, case, capability, approver)?;
-    if let Some(story) = &approval.story {
+    let pending = crate::case::prepare_grant(tree, case, capability, approver)?;
+    if let Some(story) = &pending.approval().story {
         frontier
-            .record_approval(tree, story, &approval)
+            .record_approval(tree, story, pending.approval())
             .with_context(|| {
                 format!(
-                    "the grant is written to {}; recording it on {story} through the frontier {} failed",
-                    approval.reference(),
+                    "recording the approval on {story} through the frontier {} failed; no grant is written, give the approval again",
                     frontier.name()
                 )
             })?;
     }
-    Ok(approval)
+    let reference = pending.approval().reference();
+    let story = pending.approval().story.clone();
+    pending.write().with_context(|| match story {
+        Some(story) => format!(
+            "the approval is recorded on {story}, and the grant could not be written to {reference}"
+        ),
+        None => format!("the grant could not be written to {reference}"),
+    })
 }
 
 /// The adapter over the `aep` command line, run in the repository: `list` and `show` read the
