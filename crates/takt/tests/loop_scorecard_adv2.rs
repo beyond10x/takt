@@ -329,6 +329,16 @@ fn on_baseline(tree: &Path, id: &str, revision: &str) {
     fs::write(&path, text).expect("case.yaml");
 }
 
+/// Moves the turn `id`'s `finding` revision to `revision`.
+fn on_finding(tree: &Path, id: &str, revision: &str) {
+    let path = tree.join(".engineering/cases").join(id).join("case.yaml");
+    let text = fs::read_to_string(&path).expect("case.yaml").replace(
+        &format!("revision: f-{id}"),
+        &format!("revision: {revision}"),
+    );
+    fs::write(&path, text).expect("case.yaml");
+}
+
 /// `data` as a zlib stream of stored deflate blocks, as git reads a loose object.
 fn zlib_stored(data: &[u8]) -> Vec<u8> {
     let mut out = vec![0x78, 0x01];
@@ -480,7 +490,7 @@ fn a_shallow_file_a_step_writes_survives_the_restore_and_moves_filed_at() {
         }],
         &[],
     );
-    on_baseline(&tree, "turn-x", &base);
+    on_finding(&tree, "turn-x", &base);
     let filed = |tree: &Path| {
         LoopScorecard::read_at(tree, Some(&base))
             .expect("reads")
@@ -591,6 +601,7 @@ fn turns_after_the_merge_have_no_filed_at_so_finding_to_verified_can_never_impro
     for id in ["after-a", "after-b", "after-c"] {
         accepted(&tree, id, "2026-10-13T09:00:00Z", "2026-10-13T10:00:00Z");
         on_baseline(&tree, id, &git(&tree, &["rev-parse", "HEAD"]));
+        on_finding(&tree, id, &git(&tree, &["rev-parse", "HEAD"]));
     }
     let observation = LoopCompare.observe(&tree, &candidate, 3).expect("observes");
     assert_eq!(observation.records.len(), 1, "{}", observation.summary);

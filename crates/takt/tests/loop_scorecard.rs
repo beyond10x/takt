@@ -151,9 +151,9 @@ const CLAIMS: [&str; 6] = [
 const OUTCOMES: [&str; 4] = ["accepted", "declined", "unreproducible", "abandoned"];
 
 /// Writes a `self.improvement` case `id` under `tree`'s cases directory: its snapshot, its
-/// `baseline` at `tree`'s `HEAD` (which holds every finding filed so far), the story it was
-/// opened for (`story:<finding>`), its decisions in order, and a run record whose one step
-/// reported `tokens` when given.
+/// `finding` and `baseline` at `tree`'s `HEAD` (which holds every finding filed so far), the
+/// story it was opened for (`story:<finding>`), its decisions in order, and a run record whose
+/// one step reported `tokens` when given.
 fn turn(tree: &Path, id: &str, finding: Option<&str>, decisions: &[At<'_>], tokens: Option<u64>) {
     let dir = tree.join(".engineering/cases").join(id);
     fs::create_dir_all(dir.join("decisions")).expect("the case directory");
@@ -162,7 +162,7 @@ fn turn(tree: &Path, id: &str, finding: Option<&str>, decisions: &[At<'_>], toke
     fs::write(
         dir.join("case.yaml"),
         format!(
-            "format: canon-case/1\nid: {id}\nprotocol: self.improvement\nartifacts:\n  finding:\n    revision: f-{id}\n  baseline:\n    revision: {baseline}\n  candidate:\n    revision: c-{id}\n  promotion:\n    revision: p-{id}\ninputs:\n  surface: non_judge\n"
+            "format: canon-case/1\nid: {id}\nprotocol: self.improvement\nartifacts:\n  finding:\n    revision: {baseline}\n  baseline:\n    revision: {baseline}\n  candidate:\n    revision: c-{id}\n  promotion:\n    revision: p-{id}\ninputs:\n  surface: non_judge\n"
         ),
     )
     .expect("case.yaml");
@@ -841,10 +841,15 @@ fn merged(case: &mut CaseDir, at: &str) {
 
 /// Moves the turn `id`'s `baseline` revision to `revision`.
 fn on_baseline(tree: &Path, id: &str, revision: &str) {
+    at_revision(tree, id, "baseline", revision);
+}
+
+/// Moves the turn `id`'s `artifact` to `revision`.
+fn at_revision(tree: &Path, id: &str, artifact: &str, revision: &str) {
     let path = tree.join(".engineering/cases").join(id).join("case.yaml");
     let mut doc: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(&fs::read_to_string(&path).expect("case.yaml")).expect("yaml");
-    doc["artifacts"]["baseline"]["revision"] = revision.into();
+    doc["artifacts"][artifact]["revision"] = revision.into();
     fs::write(&path, serde_yaml_ng::to_string(&doc).expect("yaml")).expect("case.yaml");
 }
 
@@ -1542,4 +1547,47 @@ fn measure_and_compare_read_the_baseline_only_from_the_snapshot() {
         "{}",
         observation.summary
     );
+}
+
+/// A finding is filed after the baseline it was observed on and before the candidate that
+/// fixes it: its filing is read in the history the turn's `finding` artifact was opened at,
+/// or, while that names no commit, in the candidate's; never in the baseline's, which does not
+/// hold it.
+#[test]
+fn a_finding_filed_after_the_baseline_is_read_at_the_finding_or_the_candidate() {
+    let (tree, baseline) = scratch("filed-after-baseline", DEFINED);
+    file(&tree, "turn-a", "2026-10-18T09:30:00Z");
+    let filed = file(&tree, "turn-b", "2026-10-18T09:40:00Z");
+    file(&tree, "turn-c", "2026-10-18T09:50:00Z");
+    let candidate = commit(&tree, DEFINED, "the candidate");
+    let decided = [At {
+        at: "2026-10-18T10:00:00Z",
+        holds: &["finding.cited", "scenario.passes_after"],
+        legitimate: None,
+    }];
+    for id in ["turn-a", "turn-b", "turn-c"] {
+        turn(&tree, id, Some(id), &decided, None);
+        on_baseline(&tree, id, &baseline);
+    }
+    // turn-a: its finding opened at no commit (`r0`), its candidate after the filing.
+    at_revision(&tree, "turn-a", "finding", "r0");
+    at_revision(&tree, "turn-a", "candidate", &candidate);
+    // turn-b: its finding opened at the filing, its candidate at the baseline.
+    at_revision(&tree, "turn-b", "finding", &filed);
+    at_revision(&tree, "turn-b", "candidate", &baseline);
+    // turn-c: no finding commit, its candidate before the filing: nothing to read.
+    at_revision(&tree, "turn-c", "finding", "r0");
+    at_revision(&tree, "turn-c", "candidate", &baseline);
+    let card = LoopScorecard::read_at(&tree, Some(&candidate)).expect("reads");
+    let filed_at = |id: &str| {
+        card.rows
+            .iter()
+            .find(|row| row.turn == id)
+            .expect("the row")
+            .filed_at
+            .clone()
+    };
+    assert_eq!(filed_at("turn-a").as_deref(), Some("2026-10-18T09:30:00Z"));
+    assert_eq!(filed_at("turn-b").as_deref(), Some("2026-10-18T09:40:00Z"));
+    assert_eq!(filed_at("turn-c"), None);
 }

@@ -12,8 +12,8 @@
 //! when its finding was verified from the decisions Canon wrote for it; its tokens and wall
 //! time from its run record ([`crate::scorecard`]); its revisions from its snapshot; its
 //! finding from the story it was opened for, and when that was filed from the commit that
-//! added the finding to the store, read through git at the row's own baseline. What a record
-//! does not hold is absent, never guessed.
+//! added the finding to the store, read through git at the row's `finding` revision (else its
+//! candidate's). What a record does not hold is absent, never guessed.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -63,8 +63,9 @@ pub struct LoopScorecardRow {
     /// The wall time of the case's runs, in milliseconds; absent when it has no run record.
     pub wall_ms: Option<u64>,
     /// When the finding was filed: the time of the commit that added its artifact to the store,
-    /// read through git at the row's own `baseline` revision; absent when that cannot be read,
-    /// or when it comes after `verified_at`.
+    /// read through git at the row's `finding` revision, or at its candidate while that names no
+    /// commit (never at the baseline, which the filing comes after); absent when that cannot be
+    /// read, or when it comes after `verified_at`.
     pub filed_at: Option<String>,
     /// When the finding was verified gone: the instant of the first decision of the last
     /// unbroken run of decisions holding `scenario.passes_after`, when the latest holds it;
@@ -178,6 +179,12 @@ pub enum Found {
 /// it is never taken for an option.
 fn is_commit_id(revision: &str) -> bool {
     (7..=64).contains(&revision.len()) && revision.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Whether `revision` is a commit id ([`is_commit_id`]) of a commit `repo` holds.
+fn is_commit(repo: &Path, revision: &str) -> bool {
+    is_commit_id(revision)
+        && crate::git::run(repo, &["cat-file", "-e", &format!("{revision}^{{commit}}")]).is_ok()
 }
 
 impl Definitions {
@@ -508,8 +515,8 @@ impl LoopScorecard {
     /// The rows of the `self.improvement` cases under `repo`'s cases directory, in name order;
     /// none when the directory is absent. A case of another protocol is no turn. With `base`
     /// given (the revision the caller works at), each row's `filed_at` is read through git at
-    /// that row's own `baseline` revision, never at `base`; with none, no row has one. A
-    /// snapshot, a decision or a run record that does not read is an error naming it.
+    /// that row's `finding` revision, else its candidate's, never at `base`; with none, no row
+    /// has one. A snapshot, a decision or a run record that does not read is an error naming it.
     pub fn read_at(repo: &Path, base: Option<&str>) -> Result<Self> {
         let cases = repo.join(CASES_DIR);
         let mut names: Vec<String> = Vec::new();
@@ -561,10 +568,18 @@ impl LoopScorecard {
             let artifact = crate::case::story_of(&dir)?;
             let stored = artifact.as_deref().and_then(store_path);
             let baseline = revision("baseline")?;
-            // A filing later than the verification is no filing time: the store was committed
-            // after the run, and the time from finding to verified would come out negative.
+            let candidate = revision("candidate")?;
+            // The filing is read in the history the turn's `finding` artifact was opened at,
+            // the store as it stood when the finding was filed, or, while that names no commit
+            // of the repository (`r0`), in the candidate's: a finding is filed after the
+            // baseline it was observed on, so the baseline's history never holds it. A filing
+            // later than the verification is no filing time: the store was committed after the
+            // run, and the time from finding to verified would come out negative.
+            let source = revision_in(&doc, "finding")
+                .filter(|finding| is_commit(repo, finding))
+                .unwrap_or_else(|| candidate.clone());
             let filed_at = match (base, &stored) {
-                (Some(_), Some((_, path))) => added_at(repo, &baseline, path),
+                (Some(_), Some((_, path))) => added_at(repo, &source, path),
                 _ => None,
             }
             .filter(|filed| {
@@ -589,7 +604,7 @@ impl LoopScorecard {
                 turn: name.clone(),
                 finding: stored.map(|(key, _)| key),
                 baseline,
-                candidate: revision("candidate")?,
+                candidate,
                 verdict: latest.and_then(|decision| decision.legitimate().into_iter().next()),
                 promoted: latest.is_some_and(|decision| decision.holds("promoted")),
                 tokens: spend.filter(|_| counted).map(|case| case.tokens),

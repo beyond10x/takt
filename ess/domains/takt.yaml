@@ -898,8 +898,8 @@ types:
   # read from: .engineering/planning/story/loop-scorecard.md:51-53
   # read from: .engineering/planning/design/recursive-self-improvement.md:185-187
   # read from: crates/takt/src/scorecard.rs:58-84
-  # read from: crates/takt/src/loop_scorecard.rs:44-73
-  # read from: crates/takt/src/loop_scorecard.rs:502-602
+  # read from: crates/takt/src/loop_scorecard.rs:44-74
+  # read from: crates/takt/src/loop_scorecard.rs:509-617
   - name: takt.work.LoopScorecardRow
     kind: struct
     fields:
@@ -935,14 +935,17 @@ types:
       - name: wall_ms
         type: Optional<Integer>
       # When the finding was filed: the committer time of the commit that added its artifact's
-      # file to the planning store, read through git at the row's own `baseline` revision (not
-      # at the loop case's `loop_baseline`), never the case's first evaluation; absent when it
-      # cannot be read, and absent when it comes after `verified_at` (a store committed after
-      # the run), so the time from finding to verified is never negative.
+      # file to the planning store, read through git at the revision the turn's `finding`
+      # artifact was opened at (the store as it stood when the finding was filed), or at the
+      # turn's `candidate` while `finding` names no commit of the repository (`r0`); never at
+      # its `baseline`, which the finding was observed on and filed after, nor at the loop
+      # case's `loop_baseline`, nor the case's first evaluation; absent when it cannot be read,
+      # and absent when it comes after `verified_at` (a store committed after the run), so the
+      # time from finding to verified is never negative.
       # When it was verified: the instant of the first decision of the last unbroken run of
       # decisions holding `scenario.passes_after` when the latest holds it, so a verification a
       # later candidate undid is absent again.
-      # read from: crates/takt/src/loop_scorecard.rs:65-72
+      # read from: crates/takt/src/loop_scorecard.rs:65-73
       - name: filed_at
         type: Optional<Timestamp>
         summary: When the turn's finding was filed in the store; absent when that cannot be read.
@@ -959,8 +962,8 @@ types:
   # under each definition takt.work.LoopMetric holds.
   # read from: .engineering/planning/story/loop-scorecard.md:54
   # read from: .engineering/planning/story/loop-scorecard.md:98
-  # read from: crates/takt/src/loop_scorecard.rs:75-80
-  # read from: crates/takt/src/loop_scorecard.rs:611-637
+  # read from: crates/takt/src/loop_scorecard.rs:76-81
+  # read from: crates/takt/src/loop_scorecard.rs:626-652
   - name: takt.work.LoopScorecard
     kind: struct
     fields:
@@ -976,8 +979,8 @@ types:
   # figure with a target and no value is below target: no data fails closed.
   # `loop.measure` retains the figures it computed as an
   # observation beside its record; the rows stay the source.
-  # read from: crates/takt/src/loop_scorecard.rs:249-269
-  # read from: crates/takt/src/loop_scorecard.rs:332-398
+  # read from: crates/takt/src/loop_scorecard.rs:256-276
+  # read from: crates/takt/src/loop_scorecard.rs:339-405
   - name: takt.work.LoopFigure
     kind: struct
     fields:
@@ -1002,7 +1005,7 @@ types:
 
   # A loop metric's target: the figure at least, or at most, a value; exactly one of the two, and
   # a finite number (`.nan` or `.inf` is refused when the definitions are read).
-  # read from: crates/takt/src/loop_scorecard.rs:82-111
+  # read from: crates/takt/src/loop_scorecard.rs:83-112
   - name: takt.work.LoopTarget
     kind: struct
     fields:
@@ -1013,7 +1016,7 @@ types:
 
   # One definition of a loop metric: the version the code computes it under, what it is in words,
   # and its target; a metric without a target is never below it.
-  # read from: crates/takt/src/loop_scorecard.rs:113-124
+  # read from: crates/takt/src/loop_scorecard.rs:114-125
   - name: takt.work.LoopMetricDefinition
     kind: struct
     fields:
@@ -1038,8 +1041,8 @@ types:
   # verified at most 86400 s; none for the turns, and none yet for the median tokens per accepted
   # turn, set later from the first three accepted turns with a run record.
   # read from: protocols/loop-improvement/metrics.yaml
-  # read from: crates/takt/src/loop_scorecard.rs:126-162
-  # read from: crates/takt/src/loop_scorecard.rs:226-245
+  # read from: crates/takt/src/loop_scorecard.rs:127-163
+  # read from: crates/takt/src/loop_scorecard.rs:233-252
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
   - name: takt.work.LoopMetric
     kind: struct
@@ -1056,7 +1059,7 @@ types:
   # Fewer than three recorded turns, no snapshot of `loop_baseline`, or no definitions in it,
   # records nothing.
   # read from: protocols/loop-improvement/1.yaml:32-36
-  # read from: crates/takt/src/loop_scorecard.rs:762-770
+  # read from: crates/takt/src/loop_scorecard.rs:777-785
   - name: takt.work.LoopMeasurementResult
     kind: enum
     variants: [below_target, at_target]
@@ -1081,8 +1084,8 @@ types:
   # but the objects themselves are not guarded, and confining the step's writes closes that
   # (story:confinement-seam).
   # read from: protocols/loop-improvement/1.yaml:37-41
-  # read from: crates/takt/src/loop_scorecard.rs:854-867
-  # read from: crates/takt/src/loop_scorecard.rs:881-922
+  # read from: crates/takt/src/loop_scorecard.rs:869-882
+  # read from: crates/takt/src/loop_scorecard.rs:896-937
   - name: takt.work.DefinitionCheckResult
     kind: enum
     variants: [unchanged, dual_reported, redefined]
@@ -1097,7 +1100,7 @@ types:
   # direction, else `not_improved`; the targets are the baseline's as the case snapshotted them
   # when it opened. No measurement retained in the case, or no snapshot, records nothing.
   # read from: protocols/loop-improvement/1.yaml:44-47
-  # read from: crates/takt/src/loop_scorecard.rs:1120-1130
+  # read from: crates/takt/src/loop_scorecard.rs:1135-1145
   - name: takt.work.LoopComparisonResult
     kind: enum
     variants: [improved, not_improved]
@@ -1110,8 +1113,8 @@ types:
   # `loop.compare` judge against the baseline as it stood when the case opened. Nothing is
   # written while `loop_baseline` names no commit. Whoever sets the case's `loop_baseline` when
   # it opens calls it; until then a loop case records none of the three.
-  # read from: crates/takt/src/loop_scorecard.rs:682-735
-  # read from: crates/takt/src/loop_scorecard.rs:737-760
+  # read from: crates/takt/src/loop_scorecard.rs:697-750
+  # read from: crates/takt/src/loop_scorecard.rs:752-775
   - name: takt.work.LoopBaselineSnapshot
     kind: struct
     fields:
