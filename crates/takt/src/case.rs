@@ -86,12 +86,43 @@ fn is_unshowable(c: char) -> bool {
             .any(|&(first, last)| (first..=last).contains(&point))
 }
 
+/// The characters git refuses anywhere in a branch name, besides `\`, controls and spaces.
+const REFUSED_IN_A_BRANCH: &[char] = &['~', '^', ':', '?', '*', '['];
+
+/// Why git would refuse `takt/<id>` as a branch name, for an id [`check_id`] has already found
+/// one name with no `/`, `\`, `..`, control or whitespace character: git's `check-ref-format`
+/// rules for one component of a ref (no leading `.`, no trailing `.` or `.lock`, no `@{`, none
+/// of `~ ^ : ? * [`). `@` alone is refused too: git reads a lone `@` as `HEAD`, though it
+/// accepts `takt/@`.
+fn branch_refusal(id: &str) -> Option<String> {
+    if id == "@" {
+        return Some("it is `@` alone, which git reads as `HEAD`".to_owned());
+    }
+    let why = if id.starts_with('.') {
+        "it starts with `.`".to_owned()
+    } else if id.ends_with(".lock") {
+        "it ends with `.lock`".to_owned()
+    } else if id.ends_with('.') {
+        "it ends with `.`".to_owned()
+    } else if id.contains("@{") {
+        "it contains `@{`".to_owned()
+    } else {
+        let c = id.chars().find(|c| REFUSED_IN_A_BRANCH.contains(c))?;
+        format!("it contains `{c}`")
+    };
+    Some(format!(
+        "{why}, and git refuses {BRANCH_PREFIX}{id} as a branch name"
+    ))
+}
+
 /// Refuses a case id that is not one plain name under the cases directory: empty, `.`, a `..`
 /// anywhere, a leading `/`, a path separator, or a character that does not show as itself (a
-/// control, whitespace, separator or Unicode format character, named by its code point). Every
-/// id an operator gives (`takt approve`, `takt run --case`, `RunOptions.case_id`) passes here
-/// before it is joined to a path, so no id reaches outside `.engineering/cases`, nests a case
-/// inside another, or displays as another id in a message or a `takt/<id>` branch.
+/// control, whitespace, separator or Unicode format character, named by its code point); and an
+/// id whose branch `takt/<id>` git would not accept ([`branch_refusal`]). Every id an operator
+/// gives (`takt approve`, `takt run --case`, `RunOptions.case_id`) passes here before it is
+/// joined to a path, so no id reaches outside `.engineering/cases`, nests a case inside
+/// another, displays as another id in a message or a `takt/<id>` branch, or opens a case whose
+/// branch git cannot make.
 pub fn check_id(id: &str) -> Result<()> {
     let why = if id.is_empty() {
         Some("it is empty".to_owned())
@@ -103,13 +134,13 @@ pub fn check_id(id: &str) -> Result<()> {
         Some("it starts with `/`".to_owned())
     } else if id.contains(['/', '\\']) {
         Some("it contains a path separator".to_owned())
+    } else if let Some(c) = id.chars().find(|c| is_unshowable(*c)) {
+        Some(format!(
+            "it contains U+{:04X}, a control, whitespace, separator or format character",
+            u32::from(c)
+        ))
     } else {
-        id.chars().find(|c| is_unshowable(*c)).map(|c| {
-            format!(
-                "it contains U+{:04X}, a control, whitespace, separator or format character",
-                u32::from(c)
-            )
-        })
+        branch_refusal(id)
     };
     match why {
         Some(why) => bail!(
