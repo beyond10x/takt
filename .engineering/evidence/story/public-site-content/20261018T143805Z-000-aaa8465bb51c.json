@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-18T14:38:05Z",
+  "actor": "human:timo",
+  "artifact": "story:public-site-content",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "curl https://beyond10x.github.io/takt/ at gh-pages ef6b76a: HTTP 200, Roadmap 2 hits, scan-text clean",
+    "reference": "https://beyond10x.github.io/takt/"
+  }
+}

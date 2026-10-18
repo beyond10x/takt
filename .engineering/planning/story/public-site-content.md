@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:public-site-content
 kind: story
-status: draft
+status: implemented
 title: The public site says enough to decide whether to try takt
 summary: problem, how it works, status, measurements with n, timeline, roadmap and getting started on the static site
 relations:
@@ -12,7 +12,11 @@ relations:
 scope:
 - confidence: cited
   path: gh-pages:index.html
-revision: 3
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T14:38:04Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-18T14:38:04Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-18T14:38:05Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: public-site-content
 
