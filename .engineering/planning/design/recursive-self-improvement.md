@@ -8,7 +8,7 @@ summary: Three levels (work, takt, the loop), two agent roles, a pinned judge, a
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 2
+revision: 3
 ---
 # Design: recursive self-improvement of takt
 
@@ -36,13 +36,20 @@ takt; and improve the self-improvement.
 
 | role | owns | never |
 |---|---|---|
-| owner (a person) | merge approval for judge surfaces; scorecard definitions; priorities | |
-| operator agent | running takt (scenarios, trials), review, measurement, filing findings in this store, verification runs, approving non-judge merges under a recorded grant | writes takt code; grants on a diff that touches a judge surface |
+| owner (a person) | merge approval for judge surfaces, or its delegation to a named role on record; scorecard definitions; priorities | |
+| operator agent | running takt (scenarios, trials), review, measurement, filing findings in this store, verification runs, approving non-judge merges under a recorded grant, approving judge-surface merges while a delegation on record names its role | writes takt code; grants on a diff that touches a judge surface without a delegation on record naming its role |
 | developer agent | moving stories to active, waves, merges through the bot route, building and installing promoted binaries | marks its own fix verified |
 
-Grants are typed: `takt approve --by human:<id>` or `--by agent:<role>`. The judge refuses an
-`agent:` grant on a diff that touches a judge surface. Merge authority split by surface is the
-owner's decision (2026-10-18).
+Grants are typed: `takt approve --by human:<id>` or `--by agent:<role>`. The owner may delegate a
+grant reserved for the owner, judge surfaces included, to a named role. The delegation is a record
+held at the base revision, and it is revocable. The judge accepts a grant on a diff that touches a
+judge surface when it is the owner's, or when it is from a role a delegation on record names and
+that delegation was not revoked; it refuses every other grant there. story:judge-guard enforces
+it; until then the delegation is a record the wave cites (`docs/waves/wave-07.md`: four
+judge-surface merges under the operator role's grant on the owner's delegation). The target stays
+0 judge-surface merges without the grant the surface requires (`product-requirements:takt` § 3).
+Merge authority split by surface is the owner's decision (2026-10-18), and so is delegation on
+record (2026-10-18).
 
 The store carries the content between the agents. A message only says that something changed,
 with a fixed first line: `[FINDING takt] <ids>`, `[IMPLEMENTED takt] <story> <sha>`,
@@ -82,7 +89,8 @@ protocol and the store from the base and guard the merge.
 
 Judge surfaces are every path except an allow-list held at the base revision. The allow-list
 starts as `docs/**`, `README.md`, `CHANGELOG.md`; adding a path to it is a judge-surface change.
-The guard runs at merge time, in the pinned binary, over `base..head`.
+The guard runs at merge time, in the pinned binary, over `base..head`, and admits a judge-surface
+diff only under the owner's grant or a delegated role's (§ Roles).
 
 ## Scorecard
 
@@ -118,13 +126,14 @@ Both loops are `protocol/1` documents, validated and compiled by Canon like any 
 fix) and `promotion`, so claims about the baseline survive commits to the candidate. Its input
 `surface` (`judge` or `non_judge`) selects the merge action: `candidate.merge` requires the
 capability `repository.merge`, `candidate.merge_judge_surface` requires
-`repository.merge.judge_surface`, which only the owner holds. `scenario.passes_after` needs its
+`repository.merge.judge_surface`, which only the owner holds, or a role the owner delegated it to
+on record (§ Roles). `scenario.passes_after` needs its
 record from a producer independent of the case's work on `different_agent_run`: the run that
 delivered the fix cannot verify it.
 
 `loop.improvement/1` has artifacts `loop_baseline`, `loop_candidate` and `loop_finding`.
 `loop.merge` needs `loop.definition_honest` (no metric redefined without its previous figures
-beside it) and the owner's capability; `accepted` needs the metric improved under the candidate,
+beside it) and the owner's capability, or a delegated role's; `accepted` needs the metric improved under the candidate,
 again observed independently.
 
 `crates/takt/tests/improvement_protocols.rs` drives cases on both through their records: accepted
@@ -151,8 +160,8 @@ change is a judge-surface change.
 | phase | who delivers takt's stories | entry |
 |---|---|---|
 | R0 | the developer agent by waves; the operator agent reviews and runs trials | now |
-| R1 | takt runs the scratch repository's scenarios daily | story:story-done-end-to-end implemented |
-| R2 | takt delivers takt's non-judge stories under the pinned judge | the hardening stories implemented (story:validator-confinement, story:tree-hygiene, story:authority-hardening); a scorecard baseline recorded |
+| R1 | takt runs the scratch repository's scenarios daily | the first three-month outcome of `product-requirements:takt` § 5: scenario 1 accepted unattended, one invocation plus one grant, daily for a week; blockers story:ci-pending-waits, story:run-record-and-story-evidence |
+| R2 | takt delivers takt's non-judge stories under the pinned judge | the hardening stories implemented (story:validator-confinement, story:tree-hygiene, story:authority-hardening: done, wave 06); a scorecard baseline recorded |
 | R3 | takt proposes stories from its scorecards; the owner prioritises | two weeks of R2 with no regression |
 
 ## Agent profiles
