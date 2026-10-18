@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:frontier-next-ready-story
 kind: story
-status: draft
+status: active
 title: Pull the next ready story from the planning store as the unit of a run
 summary: The Frontier seam with an aep adapter and the ready rule as code; the story goes active when taken
 relations:
@@ -20,7 +20,10 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/tests/frontier.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T03:24:17Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-18T03:24:17Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
 ---
 # Story: frontier-next-ready-story
 
