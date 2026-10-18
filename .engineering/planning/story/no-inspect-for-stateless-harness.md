@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:no-inspect-for-stateless-harness
 kind: story
-status: draft
+status: active
 title: A stateless harness is not offered repository.inspect as a way forward
 summary: read-only actions are not offered to a memoryless harness, or the prompt says they end the run with NoProgress
 relations:
@@ -15,7 +15,10 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/tests/no_inspect_for_stateless_harness.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T18:27:21Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-18T18:27:21Z", actor: "human:timo", revision: 6}
 ---
 # Story: no-inspect-for-stateless-harness
 

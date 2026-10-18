@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:binary-embeds-revision
 kind: story
-status: draft
+status: active
 title: takt --version and every run record the revision the binary was built from
 summary: 'R9: the binary prints and records its git revision, so a promotion is checked against it, not a build note'
 relations:
@@ -15,7 +15,10 @@ scope:
   path: crates/takt-cli/src/main.rs
 - confidence: inferred
   path: crates/takt/src/events.rs
-revision: 3
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T18:27:20Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-18T18:27:20Z", actor: "human:timo", revision: 5}
 ---
 # Story: binary-embeds-revision
 
