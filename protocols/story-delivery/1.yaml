@@ -1,0 +1,161 @@
+format: protocol/1
+
+protocol:
+  id: story.delivery
+  revision: 1
+  description: >-
+    Deliver a planning-store story: implement it, verify the current implementation revision
+    with its tests and the repository's gate, open a pull request for it, read its continuous
+    integration, and merge it under authority. Accepted once the pull request is merged, or
+    abandoned on an explicit decision. Every claim is about the implementation at its current
+    revision, so a new commit returns all of them to unknown.
+
+case:
+  inputs:
+    risk:
+      description: how much proof the change must carry
+      values: [trivial, standard, elevated, critical]
+
+artifacts:
+  intent:
+    description: what the story is meant to achieve
+  plan:
+    description: the intended steps toward the intent
+  implementation:
+    description: a revision of the code that realizes the plan
+
+evidence_kinds:
+  test_result:
+    description: >-
+      the result of running tests against an implementation revision; its result is pass or fail
+  gate_result:
+    description: >-
+      the result of the repository's gate against an implementation revision; its result is pass
+      or fail
+  pull_request:
+    description: >-
+      a pull request whose head is an implementation revision; its result is open
+  ci_result:
+    description: >-
+      the result of continuous integration on an implementation revision; its result is pass or
+      fail
+  merge_observation:
+    description: >-
+      the observation that the pull request whose head is an implementation revision was merged;
+      its result is merged
+
+claims:
+  tests.pass:
+    description: the tests pass for the current implementation revision
+    true_when:
+      evidence:
+        kind: test_result
+        result: pass
+        subject: implementation
+  gate.green:
+    description: the repository's gate is green for the current implementation revision
+    true_when:
+      evidence:
+        kind: gate_result
+        result: pass
+        subject: implementation
+  pr.opened:
+    description: a pull request is open for the current implementation revision
+    true_when:
+      evidence:
+        kind: pull_request
+        result: open
+        subject: implementation
+  ci.green:
+    description: continuous integration passes for the current implementation revision
+    true_when:
+      evidence:
+        kind: ci_result
+        result: pass
+        subject: implementation
+  pr.merged:
+    description: the pull request for the current implementation revision is merged
+    true_when:
+      evidence:
+        kind: merge_observation
+        result: merged
+        subject: implementation
+
+obligations:
+  tests.required:
+    description: the tests pass for the current implementation revision
+    discharged_when:
+      claim: tests.pass
+  gate.required:
+    description: the repository's gate is green for the current implementation revision
+    discharged_when:
+      claim: gate.green
+  ci.required:
+    description: continuous integration passes for the current implementation revision
+    discharged_when:
+      claim: ci.green
+  merge.required:
+    description: the pull request for the current implementation revision is merged
+    discharged_when:
+      claim: pr.merged
+
+actions:
+  repository.inspect:
+    description: read the repository
+    effect: read
+  tests.write:
+    description: change the tests in the repository's working revision
+    effect: write
+  implementation.edit:
+    description: change the implementation in the repository's working revision
+    effect: write
+  tests.run:
+    description: run the tests against an implementation revision
+    effect: read
+    may_produce:
+      - evidence: test_result
+  gate.run:
+    description: run the repository's gate against an implementation revision
+    effect: read
+    may_produce:
+      - evidence: gate_result
+  pr.open:
+    description: >-
+      push the implementation revision and open its pull request through the repository's bot
+      route; needs the tests and the gate green
+    effect: write
+    precondition:
+      all:
+        - claim: tests.pass
+        - claim: gate.green
+    may_produce:
+      - evidence: pull_request
+  ci.read:
+    description: read the continuous integration result for the pull request's head
+    effect: read
+    may_produce:
+      - evidence: ci_result
+  repository.merge:
+    description: >-
+      merge the pull request into the repository's mainline; needs continuous integration green,
+      the pull request open and authority to merge, never only a connection to the repository
+      host
+    effect: write
+    precondition:
+      all:
+        - claim: ci.green
+        - claim: pr.opened
+    requires:
+      - capability: repository.merge
+    may_produce:
+      - evidence: merge_observation
+
+outcomes:
+  accepted:
+    description: the story closed with its pull request merged
+    requires:
+      claim: pr.merged
+  abandoned:
+    description: the story closed because it was explicitly abandoned
+    requires:
+      decision: explicitly_abandoned
