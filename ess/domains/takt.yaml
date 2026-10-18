@@ -256,7 +256,7 @@ types:
   # `takt.gate-run`). Carries
   # canon.protocol.Principal (protocol.yaml:241), an opaque principal Canon records as given.
   # read from: crates/takt/src/validator.rs:46-47
-  # read from: crates/takt/src/validator.rs:238
+  # read from: crates/takt/src/validator.rs:336
   # read from: crates/takt/src/evidence.rs:16
   - name: takt.work.ProducerName
     kind: newtype
@@ -265,7 +265,7 @@ types:
   # An evidence record's id, unique within the case (`test-result-<seq>`). Carries
   # canon.protocol.EvidenceId (protocol.yaml:538).
   # read from: crates/takt/src/evidence.rs:9
-  # read from: crates/takt/src/validator.rs:298
+  # read from: crates/takt/src/validator.rs:388
   # Takt's ids are `<kind>-<evaluation number>`, the number continued across the case's runs, so an
   # id is unique within a case.
   # read from: crates/takt/src/case.rs:1751
@@ -714,12 +714,12 @@ types:
   # `--test-cmd` split at white space; the `gate.run` validator over the gates document `--gates`
   # names, taken from the case's base commit; `pr.open`, `ci.read` and `repository.merge` through
   # the forge, the last admissible only under a recorded grant at the case's revision.
-  # read from: crates/takt/src/validator.rs:1225
-  # read from: crates/takt/src/validator.rs:721
-  # read from: crates/takt/src/validator.rs:1020
-  # read from: crates/takt/src/validator.rs:335
+  # read from: crates/takt/src/validator.rs:1315
+  # read from: crates/takt/src/validator.rs:811
+  # read from: crates/takt/src/validator.rs:1110
+  # read from: crates/takt/src/validator.rs:425
   # read from: docs/design/takt.md:56
-  # read from: crates/takt/src/validator.rs:197-199
+  # read from: crates/takt/src/validator.rs:198-200
   # read from: crates/takt-cli/src/main.rs:183-185
   - name: takt.work.DeterministicStep
     kind: struct
@@ -1358,7 +1358,7 @@ types:
 
   # One operation of a harness-neutral trace, named in the shared vocabulary whatever harness
   # produced it. Declared ahead of the code (story:normalized-harness-trace).
-  # read from: .engineering/planning/story/normalized-harness-trace.md:26
+  # read from: .engineering/planning/story/normalized-harness-trace.md:27
   # UNMAPPED: the vocabulary. The story lists intents (inspect, change, verify, research, wait,
   # coordinate) and operations (file reads, file modifications, commands, test runs, pull-request
   # and CI operations) without saying whether they are one enum or two levels, and the journey
@@ -1392,7 +1392,7 @@ types:
 
   # A benchmark run's id: the run's name in its source, as a scenario run's is. Declared ahead of
   # the code (story:bench-nouns-in-ess).
-  # read from: docs/metrics/README.md:32
+  # read from: docs/metrics/README.md:38
   # read from: .engineering/planning/design/benchmark-integration.md:36
   - name: takt.work.BenchRunId
     kind: newtype
@@ -1402,7 +1402,7 @@ types:
   # comparison and not a score: takt; Claude Code running free with the operator's full
   # configuration; Claude Code under takt's harness isolation plus a shell; Codex running free.
   # Spelled as the scenario records spell them.
-  # read from: docs/metrics/README.md:35
+  # read from: docs/metrics/README.md:44
   # read from: docs/metrics/journey.py:40
   # read from: .engineering/planning/design/benchmark-integration.md:35
   # Maps to bench.arm and bench.harness of the organization's benchmark instrument: an arm there is a treatment (`raw`,
@@ -1424,7 +1424,7 @@ types:
   # said of the finished task, `pass` or `fail` as a scenario run's held-out check does, and
   # `unknown` when they gave no answer, such as for a task stopped at its budget. Never taken
   # from takt's own claims.
-  # read from: docs/metrics/README.md:51
+  # read from: docs/metrics/README.md:60
   # read from: .engineering/planning/design/benchmark-integration.md:32
   # read from: .engineering/planning/story/bench-subset-and-budget.md:39
   # Maps to bench.fact of the organization's benchmark instrument with `source: hidden-test`: a hidden test that passes
@@ -1445,7 +1445,7 @@ types:
   # component and the cost the harness reported. A figure the source does not state is absent,
   # never 0; the token sum is computed from the four parts and not held.
   # read from: docs/metrics/README.md:19-22
-  # read from: docs/metrics/README.md:43-48
+  # read from: docs/metrics/README.md:52-57
   # read from: .engineering/planning/story/bench-run-export.md:42
   # Maps in part to bench.run of the organization's benchmark instrument, which holds the cost alone, as integer micro-USD
   # with its basis (`provider-reported`, `assumed`, `unknown`), and no token figure.
@@ -1592,7 +1592,7 @@ entities:
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/authority.rs:7-21
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/mod.rs:359-365
       # read from: crates/takt/src/case.rs:1995-1996
-      # read from: crates/takt/src/validator.rs:1345
+      # read from: crates/takt/src/validator.rs:1435
       - name: authority
         type: Map<takt.work.CapabilityId, takt.work.Grant>
       # read from: crates/takt/src/case.rs:1506-1507
@@ -2020,7 +2020,7 @@ entities:
   # read from: crates/takt/src/run.rs:2266-2277
   # read from: crates/takt/src/run.rs:165-181
   # read from: crates/takt/src/run.rs:4846-4915
-  # read from: crates/takt/src/validator.rs:1529-1580
+  # read from: crates/takt/src/validator.rs:1619-1670
   # read from: crates/takt/src/run.rs:112-118
   # read from: crates/takt/src/run.rs:662-671
   # read from: crates/takt/src/run.rs:3151-3153
@@ -2101,7 +2101,7 @@ entities:
       # every observation, record or not.
       # read from: crates/takt/src/validator.rs:16-32
       # read from: crates/takt/src/run.rs:4217-4230
-      # read from: crates/takt/src/validator.rs:619
+      # read from: crates/takt/src/validator.rs:709
       - name: artifact
         type: Optional<String>
         summary: The retained file's name under the case's `artifacts/`.
@@ -2196,30 +2196,30 @@ entities:
   # `definition_check`) and `takt.loop-compare` (`loop.compare`, `loop_comparison`), so none of
   # their kinds can be a choice kind. Each built-in validator defines its action and kind,
   # and the list the step choice reads is built from them.
-  # read from: crates/takt/src/validator.rs:1230-1234
+  # read from: crates/takt/src/validator.rs:1320-1324
   # read from: crates/takt/src/run.rs:108-110
-  # read from: crates/takt/src/validator.rs:726-730
-  # read from: crates/takt/src/validator.rs:1028-1032
-  # read from: crates/takt/src/validator.rs:321-333
-  # read from: crates/takt/src/validator.rs:352-356
-  # read from: crates/takt/src/validator.rs:528
+  # read from: crates/takt/src/validator.rs:816-820
+  # read from: crates/takt/src/validator.rs:1118-1122
+  # read from: crates/takt/src/validator.rs:411-423
+  # read from: crates/takt/src/validator.rs:442-446
+  # read from: crates/takt/src/validator.rs:618
   # read from: crates/takt/src/validator.rs:1-2
   # read from: crates/takt/src/validator.rs:45-76
-  # read from: crates/takt/src/validator.rs:236-250
+  # read from: crates/takt/src/validator.rs:334-348
   # read from: crates/takt/src/validator.rs:188-190
-  # read from: crates/takt/src/validator.rs:283-285
+  # read from: crates/takt/src/validator.rs:381-383
   # read from: crates/takt/src/forge.rs:596-614
-  # read from: crates/takt/src/validator.rs:913
-  # read from: crates/takt/src/validator.rs:1345
+  # read from: crates/takt/src/validator.rs:1003
+  # read from: crates/takt/src/validator.rs:1435
   # read from: docs/design/takt.md:47-49
   # read from: docs/design/takt.md:64-65
   # read from: crates/takt/src/forge.rs:735-755
   # read from: crates/takt/src/validator.rs:112-123
-  # read from: crates/takt/src/validator.rs:1594-1605
+  # read from: crates/takt/src/validator.rs:1684-1695
   # read from: crates/takt/src/git.rs:1471-1475
-  # read from: crates/takt/src/validator.rs:1633-1683
+  # read from: crates/takt/src/validator.rs:1723-1773
   # read from: crates/takt/src/git.rs:1502-1507
-  # read from: crates/takt/src/validator.rs:1566-1578
+  # read from: crates/takt/src/validator.rs:1656-1668
   - name: takt.work.EvidenceProducer
     naming:
       summary: >-
@@ -2261,8 +2261,8 @@ entities:
   # read from: crates/takt/src/case.rs:410-411
   # read from: crates/takt/src/case.rs:377-404
   # read from: crates/takt/src/case.rs:50-76
-  # read from: crates/takt/src/validator.rs:799-803
-  # read from: crates/takt/src/validator.rs:892
+  # read from: crates/takt/src/validator.rs:889-893
+  # read from: crates/takt/src/validator.rs:982
   - name: takt.work.CaseBranch
     naming:
       summary: >-
@@ -2283,7 +2283,7 @@ entities:
       # the gates document and the project file from, whatever the base branch names later.
       # Absent for a case opened before it was recorded, whose gate then writes no record.
       # read from: crates/takt/src/case.rs:389-393
-      # read from: crates/takt/src/validator.rs:355-356
+      # read from: crates/takt/src/validator.rs:445-446
       - name: base_commit
         type: Optional<takt.work.Revision>
       # The branch the tree was on when the case opened, what discarding the case returns to;
@@ -2692,8 +2692,8 @@ entities:
   # read from: .engineering/planning/design/benchmark-integration.md:36
   # read from: .engineering/planning/story/bench-run-export.md:23
   # read from: docs/metrics/README.md:4-5
-  # read from: docs/metrics/README.md:36
-  # read from: docs/metrics/README.md:38
+  # read from: docs/metrics/README.md:45
+  # read from: docs/metrics/README.md:47
   # Maps to bench.run of the organization's benchmark instrument, one arm of one case on one harness, once: takt exports
   # each run in bench's run shape, so bench's grader and fact table cover takt beside the other
   # harnesses.
@@ -2707,7 +2707,7 @@ entities:
   # one case and may span several invocations and resumes; whether a benchmark run references
   # its case or is owned by it is not said, and a free arm's run has neither.
   # read from: .engineering/planning/story/bench-run-export.md:42
-  # read from: docs/metrics/README.md:40
+  # read from: docs/metrics/README.md:49
   - name: takt.work.BenchRun
     naming:
       summary: >-
@@ -2750,15 +2750,15 @@ entities:
   # harness step takt drives and every run of a free-running harness in a comparison, with the
   # harness's raw usage record kept beside it unchanged as the only source of token and cost
   # figures. Declared ahead of the code (story:normalized-harness-trace).
-  # read from: .engineering/planning/story/normalized-harness-trace.md:26
-  # read from: .engineering/planning/story/normalized-harness-trace.md:50
+  # read from: .engineering/planning/story/normalized-harness-trace.md:27
+  # read from: .engineering/planning/story/normalized-harness-trace.md:51
   # UNMAPPED: the trace's relation to takt.work.Run: one per run (the story's title), but a
   # free-running harness's run is no takt Run, and whether a takt run's trace is kept under its
   # case (the story's expected-before looks there) and so owned, or stands apart, is not said.
-  # read from: .engineering/planning/story/normalized-harness-trace.md:40
+  # read from: .engineering/planning/story/normalized-harness-trace.md:41
   # UNMAPPED: whether takt reads an external normalizer's format, calls it, or carries its own
   # adapter, and so the raw usage record's format; `raw_usage` holds a path until then.
-  # read from: .engineering/planning/story/normalized-harness-trace.md:34
+  # read from: .engineering/planning/story/normalized-harness-trace.md:35
   - name: takt.work.Trace
     naming:
       summary: >-

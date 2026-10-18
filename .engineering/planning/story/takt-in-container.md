@@ -8,6 +8,7 @@ summary: a static takt binary and the harness CLI in the container; the login mo
 relations:
 - decomposes: epic:benchmark-integration
 - serves: vision:safe-agentic-coding
+- informed_by: story:prebuilt-binaries-in-ci
 scope:
 - confidence: inferred
   path: Taskfile.yml

@@ -110,17 +110,27 @@ Cadence, until takt drives the loop itself:
 - **Per turn**: `scripts/check-finding` at the baseline and at the candidate, then five candidate
   runs scored against that baseline under the promotion rule (design:recursive-self-improvement
   § Scorecard).
-- **Daily**: one scenario run at the promoted revision by the reviewer, recorded under
-  `docs/metrics/`; a stop or a figure outside the baseline's range becomes a finding.
-- **Weekly**: the L2 turn below.
+- **Variety, by hand, no schedule** (the owner, 2026-10-18): the reviewer runs many different
+  tasks at the promoted revision, not scenario 1 again: story-sized merged units of public
+  beyond10x repositories (seed = the merge's first parent, intent = the story body, hidden
+  acceptance = the unit's added tests applied after the run), the realistic scenario corpus, and a
+  common benchmark once it is integrated. Every run is recorded under `docs/metrics/` with its
+  repository; every failure of the hidden acceptance is diagnosed and becomes a finding. A
+  repeated weekly run comes later, when the owner says so.
 
 The planner dispatches every run: the reviewer and the doc-writer as agents started from their
 profiles, the developer by message.
 
+No idle slots. The owner allows three agents at once on the planner's side; while the developer
+works, those three run work that waits on nobody: a code review that hunts findings for the next
+turns, a scope pass on the next wave's stories, a docs or site refresh, a scheduled run. A watch on
+a ref is not work. The developer runs three implementors at once on stories whose scopes do not
+overlap, the improvement turn always one of them.
+
 A turn counts on the loop scorecard only as a `self.improvement` case under `.engineering/cases/`;
 a turn recorded elsewhere, such as an R0 case under `docs/runs/`, is copied there unchanged.
 
-**The L2 turn.** Once three improvement turns are recorded, and weekly after that, open a
+**The L2 turn.** Once three improvement turns are recorded, and after every three more, open a
 `loop.improvement/1` case with `loop_baseline` at the promoted revision. The validator
 `loop.measure` writes the loop scorecard's `loop_measurement`; its retained
 `loop-measurement-<n>.json` holds each figure with the turns it was computed from. File the metric
@@ -138,6 +148,13 @@ once at least three turns have been filed since the merge.
 - A message that puts a choice names its options, each with its cost, then a recommendation and
   a default.
 - In Slack, never `#` followed by a digit; a pull request or an issue is a full GitHub URL.
+- `b10x-gates scan-text` gates the commit: run it unpiped in a chain that stops on its exit
+  status (`set -eo pipefail`). A `| tail` after it hid a refusal on 2026-10-18 and a personal path
+  reached local main.
+- A store write can move lines that `ess/` cites (`relate` adds a frontmatter line). Before the
+  commit, run `python3 -I scripts/check-citations --require-digests`; on an unresolved line, run
+  `check-citations fix` and commit the re-point with the store change. On 2026-10-19 a `relate`
+  left main red with 5 unresolved citations.
 
 ## Intake
 

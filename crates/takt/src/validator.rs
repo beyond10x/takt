@@ -187,7 +187,8 @@ fn nothing_recorded(summary: String) -> Observation {
 
 /// `tests.run`: runs the test command without a shell; exit 0 is `pass`, anything else `fail`.
 /// The command is code from the tree: it gets no credential, no standard input, a timeout past
-/// which it is killed with what it started, and only a bounded tail of its output is kept.
+/// which it is killed with what it started, and only a bounded summary of its output is kept
+/// ([`summarise_tests`]).
 /// What decides it besides the code under test is on the run's judge surface, which no step
 /// changes: the cargo configuration, the toolchain, build scripts and the command's own script
 /// ([`crate::run::JudgeSurface`]). In a case, nothing is run and no record written while the
@@ -231,6 +232,103 @@ impl TestsRun {
         self.limits = limits;
         self
     }
+}
+
+/// What the test command's output says about its tests, for the step's summary. With one or
+/// more `test result:` lines (cargo's, one per test binary and doc-test run): passed, failed and
+/// ignored summed over every one, the number of such lines, and, when any failed, the failed
+/// tests by name from the `test <name> ... FAILED` lines in output order; so a workspace run
+/// whose last block is an empty doc-test run is not read as `0 passed`, and a block that failed
+/// is not hidden by a later one that passed. Without one: the first non-empty line beside the
+/// last four when the output has more than five, so a summary a command prints first is kept,
+/// else every non-empty line; lines joined by ` | `.
+fn summarise_tests(printed: &str, success: bool) -> String {
+    let lines: Vec<&str> = printed.lines().collect();
+    let kept: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let (mut passed, mut failed, mut ignored, mut results) = (0u64, 0u64, 0u64, 0usize);
+    for line in &lines {
+        let Some(rest) = line.trim_start().strip_prefix("test result:") else {
+            continue;
+        };
+        results += 1;
+        for part in rest.split(';') {
+            let mut words = part.split_whitespace();
+            let Some(count) = words.by_ref().find_map(|word| word.parse::<u64>().ok()) else {
+                continue;
+            };
+            // Saturating: a count a test command prints is not trusted to fit, and a sum that
+            // wraps would read a failure as none.
+            match words.next() {
+                Some("passed") => passed = passed.saturating_add(count),
+                Some("failed") => failed = failed.saturating_add(count),
+                Some("ignored") => ignored = ignored.saturating_add(count),
+                _ => {}
+            }
+        }
+    }
+    if results > 0 {
+        let plural = if results == 1 { "" } else { "s" };
+        let mut summary = format!(
+            "{passed} passed, {failed} failed, {ignored} ignored over {results} result line{plural}"
+        );
+        if failed > 0 {
+            // `test <name> ... FAILED` lines, or, under `cargo test --quiet`, which prints none,
+            // the names listed under the last `failures:` heading, one indented a line.
+            let mut names: Vec<&str> = lines
+                .iter()
+                .filter_map(|line| {
+                    line.trim()
+                        .strip_prefix("test ")?
+                        .strip_suffix(" ... FAILED")
+                })
+                .collect();
+            if names.is_empty()
+                && let Some(heading) = lines.iter().rposition(|line| line.trim() == "failures:")
+            {
+                names = lines[heading + 1..]
+                    .iter()
+                    .take_while(|line| line.starts_with("    ") || line.trim().is_empty())
+                    .map(|line| line.trim())
+                    .filter(|line| !line.is_empty())
+                    .collect();
+            }
+            if !names.is_empty() {
+                summary.push_str("; failed: ");
+                summary.push_str(&names.join(", "));
+            }
+        }
+        // A failure the result lines do not show (a binary killed by a signal, a runner whose
+        // `test result:` line carries no counts): the last line says what the counts cannot.
+        if !success
+            && failed == 0
+            && let Some(last) = kept.last()
+        {
+            summary.push_str(" | ");
+            summary.push_str(last.trim());
+        }
+        return summary;
+    }
+    if kept.len() <= 5 {
+        return kept.join(" | ");
+    }
+    let mut shown = vec![kept[0], "…"];
+    shown.extend_from_slice(&kept[kept.len() - 4..]);
+    shown.join(" | ")
+}
+
+/// `text` within `limit` characters: the whole of it, or its first `limit - 1` characters and
+/// `…`, so a cut summary says it was cut.
+fn bounded(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_owned();
+    }
+    let mut cut: String = text.chars().take(limit.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
 }
 
 impl Validator for TestsRun {
@@ -283,17 +381,9 @@ impl Validator for TestsRun {
         let output = crate::forge::run_child(&mut command, self.limits)
             .with_context(|| format!("run {}", self.command.join(" ")))?;
         let result = if output.success() { "pass" } else { "fail" };
-        let tail =
+        let printed =
             String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
-        let tail: String = tail
-            .lines()
-            .rev()
-            .take(5)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join(" | ");
+        let tail = summarise_tests(&printed, output.success());
         let record = Record::new(
             format!("test-result-{seq}"),
             self.kind(),
@@ -306,7 +396,7 @@ impl Validator for TestsRun {
             summary: format!(
                 "the test command exited {}: {result}; {}",
                 output.code.map_or("signal".to_owned(), |c| c.to_string()),
-                tail.chars().take(300).collect::<String>()
+                bounded(&tail, 300)
             ),
             records: vec![record],
             artifact: None,
