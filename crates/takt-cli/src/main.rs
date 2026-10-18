@@ -534,8 +534,9 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
     }
 }
 
-/// The validators that need no forge: the test command, and the gate when a gates document is
-/// given or at its default path in `repo`, with the project file likewise.
+/// The validators that need no forge: the test command, the gate when a gates document is
+/// given or at its default path in `repo`, with the project file likewise, and the loop
+/// scorecard's three.
 fn validators_of(repo: &Path, looping: &LoopArgs) -> Result<Vec<Box<dyn Validator>>> {
     let mut validators: Vec<Box<dyn Validator>> = vec![Box::new(TestsRun::new(&looping.test_cmd)?)];
     let gates = repository_file(repo, "gates", looping.gates.clone(), DEFAULT_GATES)?;
@@ -547,6 +548,11 @@ fn validators_of(repo: &Path, looping: &LoopArgs) -> Result<Vec<Box<dyn Validato
         }
         validators.push(Box::new(gate));
     }
+    // The loop scorecard's validators: due only in a `loop.improvement/1` case, whose
+    // protocol alone has their actions.
+    validators.push(Box::new(takt::loop_scorecard::LoopMeasure));
+    validators.push(Box::new(takt::loop_scorecard::LoopDefinitionCheck));
+    validators.push(Box::new(takt::loop_scorecard::LoopCompare));
     Ok(validators)
 }
 

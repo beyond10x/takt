@@ -14,6 +14,7 @@ pub mod forge;
 pub mod frontier;
 pub mod git;
 pub mod harness;
+pub mod loop_scorecard;
 pub mod protocol;
 pub mod run;
 pub mod scorecard;

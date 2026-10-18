@@ -45,7 +45,7 @@ types:
   # (`takt run --case <id>`) gives a case a second run, so a run is told apart from its case here.
   # read from: crates/takt/src/run.rs:2506-2520
   # read from: crates/takt/src/run.rs:2575
-  # read from: crates/takt-cli/src/main.rs:791-794
+  # read from: crates/takt-cli/src/main.rs:797-800
   # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
   - name: takt.work.RunId
     kind: newtype
@@ -331,11 +331,11 @@ types:
   # read from: crates/takt/src/run.rs:3307
   # read from: crates/takt/src/run.rs:3461
   # read from: crates/takt/src/run.rs:3562-3563
-  # read from: crates/takt-cli/src/main.rs:797-800
+  # read from: crates/takt-cli/src/main.rs:803-806
   # read from: crates/takt-cli/src/main.rs:244-250
   # read from: crates/takt/src/run.rs:70-79
   # read from: crates/takt/src/run.rs:3569-3577
-  # read from: crates/takt-cli/src/main.rs:799
+  # read from: crates/takt-cli/src/main.rs:805
   # read from: crates/takt-cli/src/main.rs:251
   - name: takt.work.Stop
     kind: union
@@ -838,21 +838,31 @@ types:
   # prints over the recorded `self.improvement/1` cases. Decided 2026-10-18: one row per turn,
   # its turn id (the turn is a case), its finding, its baseline and candidate revisions, its
   # verdict, whether it was promoted, and its tokens and wall time taken from the turn's records.
-  # The wall time is in milliseconds, as takt.work.ScorecardRow's. Declared ahead of the code.
+  # The wall time is in milliseconds, as takt.work.ScorecardRow's.
   # A turn whose case never reached an outcome gets a row too, its `verdict` absent, which means
   # open; and each row carries when its finding was filed and, once it was, verified. Decided
-  # 2026-10-18.
+  # 2026-10-18. A row comes from the turn's own records under `.engineering/cases/` and from
+  # nothing else (a case copied under `docs/` is not read): its revisions from its snapshot, its
+  # verdict, promotion and instants from the decisions Canon wrote for it, its tokens and wall
+  # time from its run record. A field no record holds is absent, never guessed: the first turn,
+  # recorded by hand, has no run record and no story record, so no tokens, wall time or finding.
   # read from: .engineering/planning/story/loop-scorecard.md:30-33
   # read from: .engineering/planning/story/loop-scorecard.md:48-50
   # read from: .engineering/planning/design/recursive-self-improvement.md:185-187
   # read from: crates/takt/src/scorecard.rs:58-84
+  # read from: crates/takt/src/loop_scorecard.rs:42-68
+  # read from: crates/takt/src/loop_scorecard.rs:428-505
   - name: takt.work.LoopScorecardRow
     kind: struct
     fields:
       - name: turn
         type: takt.work.CaseId
+      # The key of the story or blocker the turn's case was opened for (its `story.yaml`), filed
+      # as `<kind>:<key>` with the reference `finding:<key>`; absent when the case records none.
+      # read from: crates/takt/src/loop_scorecard.rs:47-49
+      # read from: scripts/file-finding:208
       - name: finding
-        type: takt.work.FindingKey
+        type: Optional<takt.work.FindingKey>
       - name: baseline
         type: takt.work.Revision
       - name: candidate
@@ -865,13 +875,20 @@ types:
         type: Optional<takt.work.OutcomeId>
       - name: promoted
         type: Boolean
+      # The tokens and the wall time of the case's runs, summed as takt.work.ScorecardCase sums
+      # them; absent when the case has no run record.
+      # read from: crates/takt/src/loop_scorecard.rs:58-61
       - name: tokens
-        type: Integer
+        type: Optional<Integer>
       - name: wall_ms
-        type: Integer
+        type: Optional<Integer>
+      # The instant of the first decision holding `finding.cited`, and of the first decision of
+      # the last unbroken run of decisions holding `scenario.passes_after` when the latest holds
+      # it, so a verification a later candidate undid is absent again.
+      # read from: crates/takt/src/loop_scorecard.rs:62-67
       - name: filed_at
-        type: Timestamp
-        summary: When the turn's finding was filed.
+        type: Optional<Timestamp>
+        summary: When the turn's finding was filed; absent before a decision holds it cited.
       - name: verified_at
         type: Optional<Timestamp>
         summary: When the finding was verified gone; absent until it is.
@@ -881,15 +898,119 @@ types:
   # turn, and the time from finding to verified, from each row's `filed_at` and `verified_at`)
   # are computed from the rows each time it is printed and never stored, so no field holds them.
   # Escaped defects are not among them: a later, human-sourced figure no validator observes.
-  # Decided 2026-10-18; declared ahead of the code (story:loop-scorecard).
+  # Decided 2026-10-18 (story:loop-scorecard). Each figure is takt.work.LoopFigure, computed
+  # under each definition takt.work.LoopMetric holds.
   # read from: .engineering/planning/story/loop-scorecard.md:51
   # read from: .engineering/planning/story/loop-scorecard.md:95
+  # read from: crates/takt/src/loop_scorecard.rs:70-75
+  # read from: crates/takt/src/loop_scorecard.rs:514-538
   - name: takt.work.LoopScorecard
     kind: struct
     fields:
       - name: rows
         type: List<takt.work.LoopScorecardRow>
         summary: One a recorded improvement turn.
+
+  # One figure of the loop scorecard: a metric under one version of its definition, computed from
+  # the rows it names and absent when no row counts towards it; a share prints as
+  # `<counted>/<all>`. A version the code does not compute is an error, so a definition cannot
+  # name a figure nothing computes. `loop.measure` retains the figures it computed as an
+  # observation beside its record; the rows stay the source.
+  # read from: crates/takt/src/loop_scorecard.rs:235-254
+  # read from: crates/takt/src/loop_scorecard.rs:317-370
+  - name: takt.work.LoopFigure
+    kind: struct
+    fields:
+      - name: metric
+        type: String
+      - name: version
+        type: Integer
+      - name: current
+        type: Boolean
+        summary: Whether the version is the metric's current definition; a previous one prints beside it.
+      - name: value
+        type: Optional<Decimal>
+      - name: shown
+        type: String
+      - name: target
+        type: Optional<takt.work.LoopTarget>
+      - name: below_target
+        type: Boolean
+      - name: cases
+        type: List<takt.work.CaseId>
+        summary: The turns the figure was computed from.
+
+  # A loop metric's target: the figure at least, or at most, a value; exactly one of the two.
+  # read from: crates/takt/src/loop_scorecard.rs:77-106
+  - name: takt.work.LoopTarget
+    kind: struct
+    fields:
+      - name: at_least
+        type: Optional<Decimal>
+      - name: at_most
+        type: Optional<Decimal>
+
+  # One definition of a loop metric: the version the code computes it under, what it is in words,
+  # and its target; a metric without a target is never below it.
+  # read from: crates/takt/src/loop_scorecard.rs:108-119
+  - name: takt.work.LoopMetricDefinition
+    kind: struct
+    fields:
+      - name: version
+        type: Integer
+      - name: definition
+        type: String
+      - name: target
+        type: Optional<takt.work.LoopTarget>
+
+  # A loop metric as `protocols/loop-improvement/metrics.yaml` (format `takt-loop-metrics/1`)
+  # holds it by id: its current definition and the previous ones whose figures print beside it.
+  # The file is read at a revision through git, never from the working tree: the baseline's at
+  # the case's `loop_baseline` revision, the candidate's at its `loop_candidate` revision. It is
+  # a judge surface, as every path outside the allow-list is, and the scorecard's definitions are
+  # the owner's; no target is set until the owner sets one.
+  # read from: crates/takt/src/loop_scorecard.rs:121-157
+  # read from: crates/takt/src/loop_scorecard.rs:212-231
+  # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
+  - name: takt.work.LoopMetric
+    kind: struct
+    fields:
+      - name: current
+        type: takt.work.LoopMetricDefinition
+      - name: previous
+        type: List<takt.work.LoopMetricDefinition>
+
+  # What `loop.measure` came to, the result of a `loop_measurement` record about `loop_baseline`:
+  # `below_target` when a current figure misses its target, else `at_target`. Fewer than three
+  # recorded turns, or no definitions at the baseline revision, records nothing.
+  # read from: protocols/loop-improvement/1.yaml:32-36
+  # read from: crates/takt/src/loop_scorecard.rs:593-599
+  - name: takt.work.LoopMeasurementResult
+    kind: enum
+    variants: [below_target, at_target]
+
+  # What `loop.definition.check` came to, the result of a `definition_check` record about
+  # `loop_candidate`, the worst over the baseline's metrics: `unchanged` when each is the
+  # candidate's current definition; `dual_reported` when one changed, took another version and
+  # keeps the baseline's as a previous one, so the figures of both print; `redefined` when one
+  # changed and only the new figure prints (the same version, the baseline's dropped, the metric
+  # or the file gone).
+  # read from: protocols/loop-improvement/1.yaml:37-41
+  # read from: crates/takt/src/loop_scorecard.rs:676-687
+  # read from: crates/takt/src/loop_scorecard.rs:701-730
+  - name: takt.work.DefinitionCheckResult
+    kind: enum
+    variants: [unchanged, dual_reported, redefined]
+
+  # What `loop.compare` came to, the result of a `loop_comparison` record about
+  # `loop_candidate`: the turns filed since the case recorded the candidate merged (at least
+  # three) against the turns filed before, on the metrics below their target before; `improved`
+  # when each is better after in its target's direction, else `not_improved`.
+  # read from: protocols/loop-improvement/1.yaml:44-47
+  # read from: crates/takt/src/loop_scorecard.rs:835-842
+  - name: takt.work.LoopComparisonResult
+    kind: enum
+    variants: [improved, not_improved]
 
   # A promotion's id. read from: .engineering/planning/design/recursive-self-improvement.md (§ The judge)
   - name: takt.work.PromotionId
@@ -958,7 +1079,7 @@ types:
 
   # A trial base's number, the `<n>` of `trial/<n>`: all digits, counted from 0, one past the
   # highest the checkout knows.
-  # read from: crates/takt-cli/src/main.rs:875-878
+  # read from: crates/takt-cli/src/main.rs:881-884
   - name: takt.work.TrialNumber
     kind: newtype
     of: Integer
@@ -1376,7 +1497,7 @@ entities:
       # run and the case are told apart here.
       # read from: crates/takt/src/run.rs:2509-2510
       # read from: crates/takt/src/run.rs:2575
-      # read from: crates/takt-cli/src/main.rs:791-794
+      # read from: crates/takt-cli/src/main.rs:797-800
       # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
       name: run_id
       type: takt.work.RunId
@@ -1402,7 +1523,7 @@ entities:
       # read from: crates/takt/src/run.rs:31
       # read from: crates/takt/src/run.rs:2567-2570
       # read from: crates/takt-cli/src/main.rs:374-377
-      # read from: crates/takt-cli/src/main.rs:1211-1225
+      # read from: crates/takt-cli/src/main.rs:1217-1231
       - name: protocol
         type: takt.work.ProtocolSource
         summary: The protocol id, `software.change/1`, or the path of a `protocol/1` file.
@@ -1413,7 +1534,7 @@ entities:
       # read from: crates/takt/src/run.rs:35-36
       # read from: crates/takt-cli/src/main.rs:420-424
       # read from: crates/takt-cli/src/main.rs:408
-      # read from: crates/takt-cli/src/main.rs:1235
+      # read from: crates/takt-cli/src/main.rs:1241
       # read from: crates/takt/src/run.rs:2648
       - name: inputs
         type: Map<takt.work.InputId, String>
@@ -1445,16 +1566,18 @@ entities:
         type: takt.work.HarnessName
         summary: The judgement actor that performs every judgement step of the run.
       # read from: crates/takt/src/run.rs:2515-2516
-      # read from: crates/takt-cli/src/main.rs:540-548
+      # read from: crates/takt-cli/src/main.rs:541-549
       - name: validators
         type: List<takt.work.ProducerName>
         summary: >-
           The validators, one per deterministic action: `takt.tests-run`; `takt.gate-run` when
           `--gates` names a document or `.engineering/gates.yaml` is a file; `takt.pr-open`,
-          `takt.ci-read` and `takt.pr-merged` when the forge is `bot`.
+          `takt.ci-read` and `takt.pr-merged` when the forge is `bot`; `takt.loop-measure`,
+          `takt.loop-definition-check` and `takt.loop-compare` always, due only in a
+          `loop.improvement/1` case.
       # The forge the run's pull request goes through: `bot` when asked for or when `origin` is
       # on github.com, `none` registers none of the three forge validators.
-      # read from: crates/takt-cli/src/main.rs:726-747
+      # read from: crates/takt-cli/src/main.rs:732-753
       - name: forge
         type: takt.work.ForgeName
       # The instant a case id is minted from, as `now()` writes one (`YYYY-MM-DDTHH:MM:SSZ`):
@@ -1466,7 +1589,7 @@ entities:
       # read from: crates/takt/src/run.rs:2575
       # read from: crates/takt/src/run.rs:2563
       # read from: crates/takt-cli/src/main.rs:155-157
-      # read from: crates/takt/src/lib.rs:31-33
+      # read from: crates/takt/src/lib.rs:32-34
       # read from: crates/takt/src/case.rs:160
       # read from: crates/takt/src/run.rs:2526
       # read from: crates/takt/src/run.rs:2857
@@ -1482,7 +1605,7 @@ entities:
         type: Integer
         summary: Tokens the harness reported, summed over its steps.
       # read from: crates/takt/src/run.rs:51-69
-      # read from: crates/takt-cli/src/main.rs:791
+      # read from: crates/takt-cli/src/main.rs:797
       - name: stop
         type: Optional<takt.work.Stop>
         summary: Why the run stopped; absent while it runs, and after a run that ended on an error.
@@ -1809,9 +1932,11 @@ entities:
         type: takt.work.ArtifactId
     # A validator is registered with the run that holds it; nothing moves it. The gate validator
     # is registered only when its document is a file; the three forge validators only when the
-    # forge is `bot`.
-    # read from: crates/takt-cli/src/main.rs:540-548
-    # read from: crates/takt-cli/src/main.rs:713-717
+    # forge is `bot`; the loop scorecard's three always, due only in a `loop.improvement/1` case,
+    # whose protocol alone has their actions.
+    # read from: crates/takt-cli/src/main.rs:541-549
+    # read from: crates/takt-cli/src/main.rs:719-723
+    # read from: crates/takt-cli/src/main.rs:551-555
     lifecycle:
       initial: Registered
       states: [Registered]
@@ -1882,8 +2007,8 @@ entities:
   # a key takt does not read, is refused: a scenario names exactly one story.
   # read from: crates/takt-cli/src/main.rs:97-99
   # read from: crates/takt-cli/src/main.rs:107-109
-  # read from: crates/takt-cli/src/main.rs:817-823
-  # read from: crates/takt-cli/src/main.rs:854-856
+  # read from: crates/takt-cli/src/main.rs:823-829
+  # read from: crates/takt-cli/src/main.rs:860-862
   - name: takt.work.Scenario
     naming:
       summary: >-
@@ -2108,9 +2233,9 @@ entities:
   # nothing is reset by a force-push: the next run cuts the
   # next number. The branch records neither its scenario nor its case; the case id names both.
   # read from: crates/takt-cli/src/main.rs:83-92
-  # read from: crates/takt-cli/src/main.rs:875-878
-  # read from: crates/takt-cli/src/main.rs:906-910
-  # read from: crates/takt-cli/src/main.rs:983-988
+  # read from: crates/takt-cli/src/main.rs:881-884
+  # read from: crates/takt-cli/src/main.rs:912-916
+  # read from: crates/takt-cli/src/main.rs:989-994
   # read from: .engineering/planning/design/recursive-self-improvement.md:93-95
   - name: takt.work.TrialBranch
     naming:
