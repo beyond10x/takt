@@ -100,6 +100,23 @@ deliver → verify → promote):
 
 Each wait is one blocking wait on a file or a ref, not a stream of empty turns.
 
+Cadence, until takt drives the loop itself:
+
+- **Every wave carries at least one improvement turn**: a finding from a run or a review, filed
+  with an `expected_before` predicate, delivered as its own unit and recorded as a
+  `self.improvement` case when it merges.
+- **Per promotion**: the reviewer runs scenario 1 five times at the newly promoted revision; those
+  runs are the baseline every turn until the next promotion is compared with.
+- **Per turn**: `scripts/check-finding` at the baseline and at the candidate, then five candidate
+  runs scored against that baseline under the promotion rule (design:recursive-self-improvement
+  § Scorecard).
+- **Daily**: one scenario run at the promoted revision by the reviewer, recorded under
+  `docs/metrics/`; a stop or a figure outside the baseline's range becomes a finding.
+- **Weekly**: the L2 turn below.
+
+The planner dispatches every run: the reviewer and the doc-writer as agents started from their
+profiles, the developer by message.
+
 A turn counts on the loop scorecard only as a `self.improvement` case under `.engineering/cases/`;
 a turn recorded elsewhere, such as an R0 case under `docs/runs/`, is copied there unchanged.
 
