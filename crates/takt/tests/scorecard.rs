@@ -520,13 +520,16 @@ fn against_a_saved_accepted_scenario_a_no_progress_row_is_worse() {
         text.contains("scenario-1-trial-3  scenario 1  accepted"),
         "{text}"
     );
+    // One case fewer at rank 4 (1 of 2 against 1 of 1) is within the margin of one; the median
+    // of tokens, 525, over the saved maximum, 500, is what makes the scenario worse.
     for line in [
-        "scenario 1  rank 4 or better (accepted): candidate 1/2 against saved 1/1",
-        "scenario 1  outcomes by rank  worse",
+        "rule  trials 5 a scenario  margin 1 case  tokens worse when the median exceeds the saved maximum",
+        "scenario 1  median tokens 525 exceeds the saved maximum 500",
+        "scenario 1  outcomes by rank held  tokens over  worse",
     ] {
         assert!(text.contains(line), "{line} in {text}");
     }
-    assert!(!text.contains("rank 1 or better"), "{text}");
+    assert!(!text.contains(" or better "), "{text}");
     assert!(
         text.contains("scenario 1  saved      n 1  tokens min 500 median 500 max 500"),
         "{text}"
@@ -540,8 +543,9 @@ fn against_a_saved_accepted_scenario_a_no_progress_row_is_worse() {
 
 /// Token totals of one scenario vary from run to run with no change, so with several runs a
 /// side the comparison prints, per scenario and side, n and the minimum, median and maximum of
-/// tokens, and the difference of the medians; tokens never mark a row worse, only its outcome
-/// does. The saved scorecard keeps every run's figures, so the spread can be read again.
+/// tokens, and the difference of the medians; a median within the saved maximum does not mark
+/// the scenario worse. The saved scorecard keeps every run's figures, so the spread can be read
+/// again.
 #[test]
 fn several_runs_a_side_print_the_token_spread_and_flag_no_row_on_tokens() {
     let accepted = |repo: &Path, trial: u64, tokens: u64| {
@@ -591,7 +595,7 @@ fn several_runs_a_side_print_the_token_spread_and_flag_no_row_on_tokens() {
     let text = String::from_utf8(out).expect("utf-8");
     assert_eq!(worse, 0, "{text}");
     assert!(
-        text.contains("scenario 1  outcomes by rank  not worse"),
+        text.contains("scenario 1  outcomes by rank held  tokens held  not worse"),
         "{text}"
     );
     assert!(!text.contains(" or better "), "{text}");

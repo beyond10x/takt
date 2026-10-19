@@ -10,6 +10,7 @@ relations:
 - depends_on: story:hours-bounds-a-harness-step
 - depends_on: story:promotion
 - serves: vision:safe-agentic-coding
+- depends_on: story:baseline-for-a-pre-revision-binary
 revision: 2
 ---
 ## Outcome

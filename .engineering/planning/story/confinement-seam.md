@@ -31,7 +31,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/confinement.rs
-revision: 16
+revision: 17
 ---
 # Story: confinement-seam
 
@@ -124,3 +124,11 @@ step-cannot-forge-its-validators keeps an ignored test for each, naming this sto
 - M19, from the reviewer's verdict on story:promotion at 2c6d2bf (observed): the test command runs files the harness wrote into the tree, unconfined, with `HOME` and `XDG_STATE_HOME` passed through (`crates/takt/src/validator.rs:275-279`); `takt run --harness none --test-cmd "sh probe_test.sh"` wrote a record into `$XDG_STATE_HOME/takt/promotions/`. A step can therefore plant a promotion baseline. Closed by running the test command (and a candidate takt in scenario runs) with a scratch HOME and XDG directories and no write access outside the tree.
 
 - M20, from the reviewer's verdict on story:loop-scorecard at b87db6d (observed): the test command of one case, which runs the candidate's code, writes a loose object over an existing blob id in `.git/objects/`; git does not re-hash on read, `.git/objects/` is neither guarded nor put back after a validator run, and the object survives into later cases. A loop case opened afterwards on the true baseline snapshotted the planted definitions (`at_least: 0.25`) and recorded `at_target` where the real target gives `below_target`; it also works when the real object is packed. story:loop-scorecard verifies commit, tree and blob ids from their bytes before its own reads; every other read of history by id stays open. Closed by running the test command with no write access to the repository's object store.
+
+## From the promotion review (2026-10-19)
+
+The reviewer's verdict on story:promotion at df9681a ("approve") found two more routes that need write access to the operator's store, which a candidate has only through M19:
+- C6: the chain protects every record but the newest (`chained()`, `crates/takt/src/promotion.rs:396-451@df9681a`). After the newest record's scorecard copy was rewritten to all `error` at 9M tokens, with `scorecard_sha256` updated, an all-`error` candidate passed `--dry-run`.
+- C8: after a trailing `.refused.json` was deleted, the refused revision was judged again.
+
+A digest of the newest record kept beside the installed binary does not close them: the same user can write there. Confinement closes them.

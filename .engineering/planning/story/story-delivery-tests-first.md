@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:story-delivery-tests-first
 kind: story
-status: draft
+status: active
 title: A story case writes its tests first and opens the pull request once
 tags:
 - priority:high
@@ -10,7 +10,17 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - informed_by: story:pr-opens-when-change-is-done
-revision: 2
+scope:
+- confidence: inferred
+  path: crates/takt/src/validator.rs
+- confidence: inferred
+  path: ess/domains/takt.yaml
+- confidence: inferred
+  path: protocols/story-delivery/2.yaml
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T00:42:13Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-19T00:42:13Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 

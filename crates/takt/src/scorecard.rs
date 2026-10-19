@@ -10,14 +10,16 @@
 //! completed with, else its last run's (a completed case is final); its other figures are its
 //! runs' summed, at most `u64::MAX` and flagged when a sum stopped there.
 //! Saved, the scorecard is `scorecard-<revision>.json`, the revision of takt under test, with
-//! every run's figures and the version of each metric's definition. Compared with a saved one,
-//! a scenario is worse when, for some outcome rank, the share of its cases at that rank or
-//! better is below the saved share, or when the saved scorecard has the scenario and the
-//! candidate has no run of it. Tokens are
-//! printed per scenario and side as n, minimum, median and maximum over cases with the
-//! difference of the medians, and never make a scenario worse. A metric whose definition
-//! changed between the two is printed with both figures; outcomes are compared under the
-//! current definition whatever the saved one's version.
+//! every run's figures, the version of each metric's definition and the rule it is compared
+//! under ([`Rule`]: the trials a scenario needs and the margin of cases). Compared with a saved
+//! one, a scenario is worse when, for some outcome rank, the candidate's cases at that rank or
+//! better fall short of the saved share of its own n by more than the margin (at equal n: more
+//! than `margin` cases fewer), when its median of tokens exceeds the saved maximum, or when the
+//! saved scorecard has the scenario and the candidate has no run of it. Tokens are printed per
+//! scenario and side as n, minimum, median and maximum over cases with the difference of the
+//! medians. A metric whose definition changed between the two is printed with both figures and
+//! does not make a scenario worse; outcomes are compared under the current definition whatever
+//! the saved one's version. The rule applied is printed with every comparison.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -156,6 +158,28 @@ impl Case {
     }
 }
 
+/// The rule a comparison applies, recorded with the scorecard so that a saved file says what
+/// it was judged under and a change to the rule is a change to a judge surface
+/// (design:recursive-self-improvement § Scorecard, decided 2026-10-18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rule {
+    /// The cases a scenario needs on the candidate's side for a promotion to read it; fewer is
+    /// a refusal, not a verdict.
+    pub trials: u32,
+    /// The cases a scenario may fall short by at any outcome rank before it is worse: one
+    /// flaky case passes, two cases worse at a rank fail.
+    pub margin: u32,
+}
+
+impl Default for Rule {
+    fn default() -> Self {
+        Self {
+            trials: 5,
+            margin: 1,
+        }
+    }
+}
+
 /// The scorecard of a repository's runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Scorecard {
@@ -167,6 +191,10 @@ pub struct Scorecard {
     pub named_by: Option<Named>,
     /// The version of each metric's definition the figures were taken under.
     pub metrics: BTreeMap<String, u32>,
+    /// The rule a comparison with this scorecard applies; a file saved before the rule had
+    /// fields reads with the default.
+    #[serde(default)]
+    pub rule: Rule,
     /// One row a run, in case order, each case's runs in the order they ran.
     pub rows: Vec<Row>,
     /// The cases that have no record.
@@ -439,6 +467,7 @@ impl Scorecard {
                 .iter()
                 .map(|(metric, version)| ((*metric).to_owned(), *version))
                 .collect(),
+            rule: Rule::default(),
             rows: Vec::new(),
             no_record: Vec::new(),
         };
@@ -603,15 +632,18 @@ impl Scorecard {
         Ok(card)
     }
 
-    /// Compares this scorecard with `saved`, scenario by scenario, over cases: each case and
-    /// its outcome; each side's n and the minimum, median and maximum of tokens, and the
-    /// difference of the medians; both figures of every metric whose definition's version
-    /// differs; each outcome rank at which the candidate falls short, with both shares; then the
-    /// verdict: worse when, for some rank, the share of the candidate's cases at that rank or
-    /// better is below the saved share, under the current definition, or when the saved
-    /// scorecard has the scenario and the candidate has no run of it (`no run`). A scorecard is
-    /// never worse than itself, and one case lowered with none raised always is. The number of
-    /// scenarios marked worse.
+    /// Compares this scorecard with `saved`, scenario by scenario, over cases, under this
+    /// scorecard's [`Rule`], printed first: each case and its outcome; each side's n and the
+    /// minimum, median and maximum of tokens, and the difference of the medians; both figures
+    /// of every metric whose definition's version differs; each outcome rank at which the
+    /// candidate falls short, with both counts; then the verdict. A scenario is worse when, for
+    /// some rank, the candidate's cases at that rank or better fall short of the saved share of
+    /// the candidate's n by more than the margin (at equal n: by more than `margin` cases),
+    /// under the current definition; when its median of tokens exceeds the saved maximum, the
+    /// token definition unchanged; or when the saved scorecard has the scenario and the
+    /// candidate has no run of it (`no run`). A scorecard is never worse than itself; one case
+    /// lowered is within a margin of one, two cases lowered in one scenario never are. The
+    /// number of scenarios marked worse.
     pub fn against(&self, saved: &Scorecard, out: &mut dyn Write) -> Result<usize> {
         let version = |card: &Scorecard, metric: &str| {
             card.metrics
@@ -628,6 +660,12 @@ impl Scorecard {
                 Some(Named::Head) => "HEAD of a repository",
                 None => "unnamed",
             }
+        )?;
+        let Rule { trials, margin } = self.rule;
+        writeln!(
+            out,
+            "rule  trials {trials} a scenario  margin {margin} case{}  tokens worse when the median exceeds the saved maximum",
+            if margin == 1 { "" } else { "s" }
         )?;
         let (candidates, baselines) = (self.cases(), saved.cases());
         let scenarios: BTreeSet<&str> = candidates
@@ -678,6 +716,7 @@ impl Scorecard {
             }
             let (saved_tokens, tokens) =
                 (median(&baseline, "tokens"), median(&candidate, "tokens"));
+            let mut over_tokens = false;
             if changed("tokens") {
                 writeln!(
                     out,
@@ -695,6 +734,16 @@ impl Scorecard {
                     if difference >= 0 { "+" } else { "" },
                     half(difference)
                 )?;
+                let saved_max = baseline.iter().map(|case| case.tokens).max().unwrap_or(0);
+                // The median is held doubled; so is the maximum for the comparison.
+                if tokens > 2 * i128::from(saved_max) {
+                    over_tokens = true;
+                    writeln!(
+                        out,
+                        "scenario {scenario}  median tokens {} exceeds the saved maximum {saved_max}",
+                        half(tokens)
+                    )?;
+                }
             }
             for (metric, _) in METRICS {
                 if metric != "tokens" && changed(metric) {
@@ -717,23 +766,32 @@ impl Scorecard {
             let (n, saved_n) = (candidate.len() as u64, baseline.len() as u64);
             let mut short = false;
             for (at, covers) in RANKS {
-                let (share, saved_share) = (at_least(&candidate, at), at_least(&baseline, at));
-                if u128::from(share) * u128::from(saved_n) < u128::from(saved_share) * u128::from(n)
+                let (count, saved_count) = (at_least(&candidate, at), at_least(&baseline, at));
+                // Short by more than the margin, the saved share scaled to the candidate's n
+                // and cross-multiplied so nothing is rounded: saved_count/saved_n * n exceeds
+                // count + margin.
+                if u128::from(saved_count) * u128::from(n)
+                    > (u128::from(count) + u128::from(margin)) * u128::from(saved_n)
                 {
                     short = true;
                     writeln!(
                         out,
-                        "scenario {scenario}  rank {at} or better ({covers}): candidate {share}/{n} against saved {saved_share}/{saved_n}"
+                        "scenario {scenario}  rank {at} or better ({covers}): candidate {count}/{n} against saved {saved_count}/{saved_n}, short by more than {margin}"
                     )?;
                 }
             }
-            let verdict = if short {
+            let verdict = if short || over_tokens {
                 worse += 1;
                 "worse"
             } else {
                 "not worse"
             };
-            writeln!(out, "scenario {scenario}  outcomes by rank  {verdict}")?;
+            writeln!(
+                out,
+                "scenario {scenario}  outcomes by rank {}  tokens {}  {verdict}",
+                if short { "short" } else { "held" },
+                if over_tokens { "over" } else { "held" }
+            )?;
         }
         for case in candidates.iter().filter(|case| case.scenario.is_none()) {
             writeln!(out, "{}  no scenario  not compared", case.case)?;

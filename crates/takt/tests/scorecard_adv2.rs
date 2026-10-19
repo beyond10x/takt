@@ -1,8 +1,10 @@
-//! Adversary pass 2 on story:scorecard-reader, after correction 1. The case is the unit of
-//! comparison and a scenario is worse when the median outcome rank of its cases is below the
-//! saved one's. Two properties are asked of that rule: a scorecard compared with itself is
-//! never worse, and a candidate strictly worse by outcome (no case better, one case worse)
-//! always is. Records are written through `takt::events`, as the run loop writes them.
+//! Adversary pass 2 on story:scorecard-reader, after correction 1, held to the rule
+//! story:promotion decided: the case is the unit of comparison and a scenario is worse when,
+//! at some outcome rank, its cases at that rank or better fall short of the saved share by more
+//! than a margin of one case, or when its median of tokens exceeds the saved maximum. Two
+//! properties are asked of that rule: a scorecard compared with itself is never worse, and a
+//! candidate worse by two cases of one scenario (none better) always is; one case worse is the
+//! margin. Records are written through `takt::events`, as the run loop writes them.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -157,19 +159,28 @@ fn one_saved_case_against_five_candidate_cases_two_regressed_is_worse() {
     );
 }
 
-/// An even count takes the mean of the two middles. Saved: three accepted and one error;
-/// the candidate turns one accepted trial into `NoProgress`. The middles stay 4 and 4.
+/// Saved: three accepted and one error. One accepted trial turned into `NoProgress` is within
+/// the rule's margin of one case (a flaky run); two turned are not.
 #[test]
-fn an_even_count_regression_off_the_middles_is_worse() {
+fn one_regressed_trial_is_within_the_margin_and_two_are_not() {
     let saved = trials("even-saved", &[ACCEPTED, ACCEPTED, ACCEPTED, "error"]);
-    let candidate = trials(
-        "even-candidate",
+    let one = trials(
+        "even-candidate-one",
         &[ACCEPTED, ACCEPTED, NO_PROGRESS, "error"],
     );
-    let (worse, text) = compare(&candidate, &saved, "even");
+    let (worse, text) = compare(&one, &saved, "even-one");
+    assert_eq!(
+        worse, 0,
+        "one trial went from accepted to NoProgress, within the margin of one:\n{text}"
+    );
+    let two = trials(
+        "even-candidate-two",
+        &[ACCEPTED, NO_PROGRESS, NO_PROGRESS, "error"],
+    );
+    let (worse, text) = compare(&two, &saved, "even-two");
     assert!(
         worse > 0,
-        "trial 3 went from accepted to NoProgress, nothing got better:\n{text}"
+        "two trials went from accepted to NoProgress, past the margin:\n{text}"
     );
 }
 
@@ -298,11 +309,12 @@ fn row(case: &str, outcome: &str) -> Row {
 }
 
 /// Property, seed 0x5eed: for random scenario sets (1 to 3 scenarios, 1 to 6 cases each, 1 to
-/// 3 runs a case), the scorecard saved and compared with itself is never worse; lowering one
-/// case to `error` (every run of it: a case that completed `accepted` in an earlier run stays
-/// `accepted` whatever its last run ended on), nothing else changed, always is.
+/// 3 runs a case), the scorecard saved and compared with itself is never worse; lowering two
+/// cases of one scenario to `error` (every run of each: a case that completed `accepted` in an
+/// earlier run stays `accepted` whatever its last run ended on), nothing else changed, always
+/// is, since the rule's margin is one case.
 #[test]
-fn self_is_never_worse_and_one_lowered_case_always_is() {
+fn self_is_never_worse_and_two_lowered_cases_always_are() {
     let empty = scratch("property-empty");
     let base = Scorecard::read(&empty).expect("an empty scorecard");
     let saves = scratch("property-saves");
@@ -328,26 +340,45 @@ fn self_is_never_worse_and_one_lowered_case_always_is() {
         let worse = card.against(&saved, &mut out).expect("prints");
         assert_eq!(worse, 0, "{}", String::from_utf8_lossy(&out));
 
+        // The last row of each case whose outcome ranks above an error, grouped by scenario.
         let lowerable: Vec<usize> = (0..card.rows.len())
             .filter(|&n| {
                 let last = n + 1 == card.rows.len() || card.rows[n + 1].case != card.rows[n].case;
                 last && rank(&card.rows[n].outcome) > 0
             })
             .collect();
-        if lowerable.is_empty() {
+        let scenario_of = |n: usize| card.rows[n].scenario.clone();
+        let pairs: Vec<(usize, usize)> = lowerable
+            .iter()
+            .flat_map(|&a| {
+                lowerable
+                    .iter()
+                    .filter(move |&&b| b > a && scenario_of(a) == scenario_of(b))
+                    .map(move |&b| (a, b))
+            })
+            .collect();
+        if pairs.is_empty() {
             continue;
         }
-        let at = lowerable[usize::try_from(rng.next(lowerable.len() as u64)).expect("small")];
+        let (first, second) = pairs[usize::try_from(rng.next(pairs.len() as u64)).expect("small")];
         let mut candidate = card.clone();
-        let lowered = candidate.rows[at].case.clone();
-        for run in candidate.rows.iter_mut().filter(|run| run.case == lowered) {
-            *run = row(&lowered, "error");
+        let lowered = [
+            candidate.rows[first].case.clone(),
+            candidate.rows[second].case.clone(),
+        ];
+        for run in candidate
+            .rows
+            .iter_mut()
+            .filter(|run| lowered.contains(&run.case))
+        {
+            *run = row(&run.case.clone(), "error");
         }
         let mut out = Vec::new();
         if candidate.against(&saved, &mut out).expect("prints") == 0 {
             missed.push(format!(
-                "trial {trial}: {} lowered to error\n{}",
-                candidate.rows[at].case,
+                "trial {trial}: {} and {} lowered to error\n{}",
+                lowered[0],
+                lowered[1],
                 String::from_utf8_lossy(&out)
             ));
         }
