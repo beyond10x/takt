@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T18:21:00Z",
+  "actor": "human:timo",
+  "artifact": "story:self-improvement-protocol",
+  "kind": "story",
+  "revision": 22,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "release 0.2.2 (task check on the tag) and the first real turn takt-20261019T180323Z: accepted on six validator records, candidate 7ae5b05b promoted by the installed takt 0.2.3 under the kept judge",
+    "reference": "f0728964"
+  }
+}

@@ -60,18 +60,24 @@ One open-source binary, Apache-2.0. Site: <https://beyond10x.github.io/takt/>.
 
 ## Status
 
-0.1.0 is the first release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
-`scorecard`, `trace`, `report` and `promote`, with `story.delivery/1` embedded, and prebuilt
-binaries for Linux (x86_64, aarch64) and macOS (aarch64). Open: no recorded run has yet taken a story from ready to merged
-with the grant as the only manual step; no operating-system sandbox holds the harness or the test
-command (the confinement seam is not built); and improvement turns are still recorded by hand.
+0.2.2 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+`scorecard`, `trace`, `report` and `promote`, with `story.delivery/1` and `self.improvement/1`
+embedded, and prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64). Since 0.1.0 it
+has gained the judge guard and the self-improvement protocol. A scorecard is now bound to the
+binary that made its runs, and the promotion chain is anchored. A finding's check runs confined.
+Promotions run one at a time. And a case is guarded against links in `.engineering/cases`,
+against changes in ignored directories, and against the test command reaching a login. Details:
+[`CHANGELOG.md`](CHANGELOG.md). Validators record an improvement turn's evidence now; the
+three turns so far were in scratch trials. Open: no recorded run has yet taken a story from
+ready to merged with the grant as the only manual step, and no operating-system sandbox holds
+the harness or the test command (the confinement seam is not built).
 
 | milestone | state |
 |---|---|
 | M1 one step validated | done 2026-10-18 (`docs/runs/2026-10-18-m1-scratch.md`) |
 | M2 a story end to end | built: the planning-store frontier, the story protocol, the gate validator, the pull request and CI through the bot route, the merge under a recorded grant, waits on pending checks (wave 08), the run recorded on the story (wave 09), those records reaching the base with the merge (wave 11). Not yet proven: no recorded run has taken a story from ready to merged with the grant as the only manual step |
 | unattended scenario 1 | next: accepted with one invocation plus one grant, daily for a week. Of 27 runs at 0a776d2 and later (T-1..9, T-11..28; not counted: T-fetchfail-1..3, refused at the trial fetch, and T-10, a runner race), 23 reached the merge approval in one invocation, 14 of the 15 after round 3 (`docs/metrics/`). Wave 12 merged the fixes for the three wastes those runs show (a second CI, a model step only for the approval, an inspect step before `NoProgress`) |
-| self-improvement | phase R0: three improvement turns were accepted on 2026-10-18 and 2026-10-19 from records written by hand (`docs/metrics/improvement-turns.jsonl`). Built: the scorecard reader (`takt scorecard`, wave 10), the binary naming its revision (wave 11), promotion (`takt promote`), the run trace and report (`takt trace`, `takt report`). Wave 12 merged the fixes of improvement turns 2 and 3. Not built: the judge guard and validators for `self.improvement/1`, in that order |
+| self-improvement | phase R0: three improvement turns were accepted on 2026-10-18 and 2026-10-19 from records written by hand (`docs/metrics/improvement-turns.jsonl`). Built: the scorecard reader (`takt scorecard`, wave 10), the binary naming its revision (wave 11), promotion (`takt promote`), the run trace and report (`takt trace`, `takt report`), the judge guard (wave 14), and `self.improvement/1` driven by validators: part 1 in 0.2.1 (a turn opens and ends `unreproducible` or `declined`), part 2 in 0.2.2 (a turn reaches `accepted` on validators' records, judged by the binary that opened it). On 2026-10-19 takt drove three turns to `accepted` and promoted their candidates, in scratch trials: a scratch promotion store and install root, `--forge none`, `main` fast-forwarded by the operator (`docs/runs/2026-10-19-self-improvement-trials/README.md`). Not yet: a turn promoted in the installed takt's own store, and reading the protocol and the planning store from the promoted base (`story:judge-reads-protocol-and-store-from-base`) |
 | M3 to M5 | workflows as `workflow/1` files, a second harness and the confinement seam, a week of daily runs: not built |
 | continuous runs | a run that plans its next stories and works a wave with parallel workers: designed, not built |
 

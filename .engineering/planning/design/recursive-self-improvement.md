@@ -8,7 +8,7 @@ summary: Three levels (work, takt, the loop), four agent roles, a pinned judge, 
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 13
+revision: 15
 ---
 # Design: recursive self-improvement of takt
 
@@ -116,7 +116,13 @@ diff only under the owner's grant or a delegated role's (§ Roles).
 Per scenario run: outcome, steps, tokens, refusals, `NoProgress` and errors, wall time. Tokens are
 read only from the run's events under the guarded `.engineering/cases/`, never from a `task_spend`
 file the candidate could plant. Each scenario is compared against the promoted revision's baseline
-for that scenario.
+for that scenario, and `takt promote` also against the start of the current series; every scenario
+must be on both sides
+(story:the-judge-requires-the-whole-corpus). A series starts at a baseline, or at a rebaseline under
+a newer metric definition; a rebaseline that only adds a scenario keeps the start, and the scenario
+it added is judged against it (story:promotion-judged-against-the-series-baseline, 2026-10-19), so
+one-case-worse steps cannot add up across back-to-back promotions. The `scorecard.compare`
+validator of a turn judges against the turn's baseline only.
 
 Promotion defaults, changeable by the owner: no scenario's outcome worse; the median of tokens at
 most the baseline plus 10 %; no daily cap: the owner removed the one-promotion-a-day default on 2026-10-19 so improvement trials run back to back (story:promotion-without-daily-cap), and a cap may return after 1.0. A metric's definition is a judge

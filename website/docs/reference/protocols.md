@@ -17,6 +17,7 @@ every site build.
 | id | from | a case is |
 |---|---|---|
 | `story.delivery/1` | this repository, embedded in the binary | one planning-store story |
+| `self.improvement/1` (from 0.2.2) | this repository, embedded in the binary | one improvement turn on takt |
 | `software.change/1` (listed as `software-change/1`) | `b10x-canon-engineering` | one intent |
 | `eval-gated-change/1`, `incident-response/1`, `ml-experiment/1`, `support-triage/1` | `b10x-canon-engineering` | see [Engineering protocols](https://beyond10x.github.io/engineering-protocols/) |
 
@@ -31,9 +32,13 @@ every site build.
 
 `takt run --protocol protocols/loop-improvement/1.yaml --intent "<text>" --input
 loop_baseline=<full commit id>` opens a `loop.improvement/1` case, and validators drive it (`loop.measure`,
-`loop.definition.check`, `loop.compare`). `self.improvement/1` has no validators yet
-(`story:self-improvement-protocol`): the agents perform its actions and record the evidence
-([The loop](../self-improvement/the-loop.md)).
+`loop.definition.check`, `loop.compare`).
+
+Validators drive a `self.improvement/1` turn too (`story:self-improvement-protocol`). From 0.2.0:
+`finding.file`, `scenario.reproduce`, `scenario.verify` and `scorecard.compare`, so a turn can
+end `unreproducible` or `declined`. From 0.2.2 there are also `candidate.merge`,
+`candidate.merge_judge_surface` and `binary.promote`, so a turn can reach `accepted`. How an
+operator runs one: [The loop](../self-improvement/the-loop.md#running-a-turn).
 
 Sources: `takt protocols`, `protocols/`, `crates/takt/src/protocol.rs`,
 `crates/takt-cli/src/main.rs` (`--input`), `crates/takt/src/loop_scorecard.rs`,

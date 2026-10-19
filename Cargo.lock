@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "b10x-takt"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "b10x-canon",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "b10x-takt-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "b10x-takt",

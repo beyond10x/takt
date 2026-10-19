@@ -49,8 +49,9 @@ enum Commands {
     #[command(subcommand)]
     Scenario(ScenarioCommands),
     /// Print, per run of a case under `.engineering/cases/`, its outcome, steps, tokens,
-    /// refusals, `NoProgress`, errors and wall time, read from the case's `events.jsonl` only;
-    /// a case without one is listed as `no record`. The binary a case's runs were made with is
+    /// refusals, `NoProgress`, errors and wall time, read from the case's `events.jsonl` and, for
+    /// a scenario run's outcome, from the held-out check beside it; a case without a record is
+    /// listed as `no record`. The binary a case's runs were made with is
     /// read from a `binary.txt` beside the record when the operator wrote one (first line
     /// `<path>\t<sha256>`, every further line a note), saved with each run as the operator's
     /// statement, never a figure. A scenario run's outcome comes from the held-out check the

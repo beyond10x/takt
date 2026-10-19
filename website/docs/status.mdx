@@ -1,6 +1,6 @@
 ---
 title: Status
-description: What takt 0.1.0 holds, what is open, and every implemented story, generated from the planning store.
+description: What takt holds, what is open, and every implemented story, generated from the planning store.
 ---
 
 import status from '@site/data/status.json';
@@ -8,16 +8,19 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-0.1.0 is the first release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+0.1.0 was the first release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
 `scorecard`, `trace`, `report` and `promote`, with `story.delivery/1` embedded, and prebuilt
-binaries for Linux (x86_64, aarch64) and macOS (aarch64).
+binaries for Linux (x86_64, aarch64) and macOS (aarch64). 0.2.1 published the 0.2 line: the judge
+guard, and `self.improvement/1` turns that end `unreproducible` or `declined`
+([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md)). 0.2.2 lets a turn reach
+`accepted` on validators' records.
 
 | milestone | state |
 |---|---|
 | M1 one step validated | done 2026-10-18 |
 | M2 a story end to end | built; not yet proven with the grant as the only manual step |
 | unattended scenario 1 | next: accepted with one invocation plus one grant, daily for a week |
-| self-improvement | phase R0: three turns accepted from records written by hand; the judge guard and validators for `self.improvement/1` are not built |
+| self-improvement | phase R0. Turns 1 to 3 were accepted from records written by hand (2026-10-18 and 2026-10-19). On 2026-10-19 takt drove three turns to `accepted` and promoted their candidates, every claim recorded by a validator, in scratch state under `--forge none` ([Turns](./self-improvement/turns.md)). Next: a turn promoted in the installed takt's own store |
 | M3 to M5 | workflows as `workflow/1` files, a second harness and the confinement seam, a week of daily runs: not built |
 | continuous runs | designed, not built |
 

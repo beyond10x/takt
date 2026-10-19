@@ -1,7 +1,7 @@
 # Metrics over time
 
 The figures takt is judged by, kept as a committed series so a later run can be compared with an
-earlier one. The data files are JSON Lines, one object per line. The three record files are
+earlier one. The data files are JSON Lines, one object per line. The four record files are
 appended to and never rewritten; `journeys.jsonl` is generated from them.
 
 | file | one line per |
@@ -9,7 +9,8 @@ appended to and never rewritten; `journeys.jsonl` is generated from them.
 | `scenario-runs.jsonl` | scenario run of any arm |
 | `improvement-turns.jsonl` | improvement turn: a finding checked before and after a fix |
 | `waves.jsonl` | wave merged into `main` |
-| `timeline.py` | (generator) draws `timeline.svg` from the three files above |
+| `events.jsonl` | dated event the timeline marks, with the run record it is read from |
+| `timeline.py` | (generator) draws `timeline.svg` from the four files above |
 | `journeys.jsonl` | operation of a run, in one vocabulary (generated, rewritten by `journey.py`) |
 | `journey.py` | (generator) writes `journeys.jsonl` and draws `journey.svg` from the raw records |
 | `badges.py` | (generator) rewrites the badge block at the top of `README.md` from the planning store, these files and the citation check |
@@ -236,6 +237,35 @@ n is 1 per task.
   commits by their ids before the history rewrite of 2026-10-19, and it maps them to the ids on
   `main`.
 
+## The first turns takt drove to `accepted` (2026-10-19)
+
+- Self-improvement trials 2, 3 and 4 each ran a `self.improvement/1` turn that reached `accepted`
+  with its candidate promoted, every claim recorded by a validator and none by hand. They ran
+  takt at 71f061c, 7a4d6b9 and 30bd2f0 on `impl/rsi-part-2`. Opened to accepted took 19 min 11 s,
+  4 min 17 s and 4 min 10 s. The run record is
+  `docs/runs/2026-10-19-self-improvement-trials/README.md`.
+- Everything ran in scratch: a promotion store and an install root per trial, `--forge none`, and
+  `main` fast-forwarded to the candidate by the operator. The installed takt has not yet promoted
+  a revision through a turn.
+- These turns have no line in `improvement-turns.jsonl`. That file holds the turns on takt's
+  `main`, and the badge in `README.md` counts it. None of the trials' candidates is on `main`.
+  Their 30 scenario runs have no line in `scenario-runs.jsonl` either: they stopped on
+  `NoProgress` after two resumes, in an origin with no forge, and not at the merge approval.
+- `events.jsonl` holds the timeline's mark for trial 2, the first of them.
+
+## `events.jsonl`
+
+One line per dated event the timeline marks: a result that is not a run, a turn or a wave. A
+later event, such as the first turn promoted in the installed takt's own store, is one more line.
+
+| field | meaning |
+|---|---|
+| `id` | the event's name |
+| `date` | when it happened, UTC; the marker goes at the right edge of the last column dated at or before it (a column's date is its earliest run, or its wave's merge) |
+| `label` | the text above the plot |
+| `text` | the line under the legend |
+| `source`, `notes` | the run record the event is read from, and how its date was taken |
+
 ## `improvement-turns.jsonl`
 
 | field | meaning |
@@ -264,8 +294,9 @@ an empty column at its merge commit, and a measured revision that is an ancestor
 
 `python3 -I docs/metrics/timeline.py` writes `timeline.svg`: for each scenario-1 takt run, tokens
 (left axis) and wall time where known (right axis) per takt revision, a run's resumes as a label
-where it had any, the waves and the improvement turns as markers above the plot, the counts per
-revision in rows under the axis, the turns' results under the legend, and the free-running
+where it had any, the waves, the improvement turns and the dated events as markers above the plot,
+the counts per revision in rows under the axis, the turns' results and the events under the
+legend, and the free-running
 medians as reference lines. If
 `docs/pitch/index.html` carries the `timeline.svg begin`/`end` markers, the script replaces the
 chart between them, so the deck needs no hand edit. Append a record and re-run it.

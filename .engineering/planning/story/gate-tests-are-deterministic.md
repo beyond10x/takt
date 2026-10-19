@@ -6,7 +6,7 @@ status: draft
 title: The gate's tests pass or fail on the code alone
 relations:
 - decomposes: epic:composable-agentic-work
-revision: 1
+revision: 2
 ---
 ## Outcome
 
@@ -29,3 +29,7 @@ Seen on 2026-10-18 in gate runs of unchanged trees, each passing on a rerun with
 ## Acceptance
 
 Each named test passes 20 of 20 runs of `task check` with two other `cargo build --release` jobs running beside it, and under `XDG_CACHE_HOME` set to an empty directory.
+
+Every test whose gate or merge validator can see the operator's `~/.cargo/bin` runs with a scratch
+`PATH` and `HOME`: on 2026-10-19 `approval_record_adv1` and the run-end gate test failed when another
+session replaced the installed takt during the run.

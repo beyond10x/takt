@@ -1,6 +1,6 @@
 ---
 title: Getting started
-description: Install takt 0.1.0, check what it needs, and run one validated step.
+description: Install takt 0.2.2, check what it needs, and run one validated step.
 ---
 
 # Getting started
@@ -13,7 +13,7 @@ Each version tag publishes `takt-<version>-<target>.tar.gz` for `x86_64-unknown-
 toolchain is needed.
 
 ```sh
-version=0.1.0 target=x86_64-unknown-linux-gnu
+version=0.2.2 target=x86_64-unknown-linux-gnu
 release=https://github.com/beyond10x/takt/releases/download/$version
 curl -fsSLO "$release/takt-$version-$target.tar.gz"
 curl -fsSLO "$release/SHA256SUMS"
