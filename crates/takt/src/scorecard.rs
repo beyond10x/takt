@@ -992,6 +992,12 @@ impl Scorecard {
     /// comparison is an error before any scenario. A case a run of which disagrees with its
     /// held-out check is named so beside its outcome. The number of scenarios marked worse.
     pub fn against(&self, saved: &Scorecard, out: &mut dyn Write) -> Result<usize> {
+        Ok(self.worse_against(saved, out)?.len())
+    }
+
+    /// [`Scorecard::against`], the scenarios marked worse by name, in order, rather than their
+    /// number.
+    pub fn worse_against(&self, saved: &Scorecard, out: &mut dyn Write) -> Result<Vec<String>> {
         let version = |card: &Scorecard, metric: &str| {
             card.metrics
                 .get(metric)
@@ -1025,7 +1031,7 @@ impl Scorecard {
                 "no scenario case on either side, so there is no corpus to compare; a comparison covers every scenario either side has and judges nothing on none"
             );
         }
-        let mut worse = 0;
+        let mut worse: Vec<String> = Vec::new();
         let mut too_few: Vec<String> = Vec::new();
         let mut unsaved: Vec<String> = Vec::new();
         for scenario in scenarios {
@@ -1169,7 +1175,7 @@ impl Scorecard {
                 }
             }
             let verdict = if short || over_tokens {
-                worse += 1;
+                worse.push(scenario.to_owned());
                 "worse"
             } else {
                 "not worse"

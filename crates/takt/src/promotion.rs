@@ -29,12 +29,15 @@
 //! binary of that revision, as its `opened` line names it, and every scenario run of which
 //! carries its held-out result), refuses a candidate with a scenario of fewer cases than the
 //! rule's trials, compares it with the baseline's copy in the store under takt's [`Rule`], and
-//! refuses a candidate that is worse, writing a `refused` record so the same revision, or the
+//! with the copy of the record that starts its series, the latest baseline or rebaseline, so
+//! steps each within the rule against the one before cannot add up past it; it refuses a
+//! candidate worse than either, naming the series start and the scenario when only that
+//! comparison finds it worse, writing a `refused` record so the same revision, or the
 //! same tree under another commit, is not judged again until the operator supplies a scorecard
 //! of new runs, none of whose cases is in a scorecard it was refused on (`--rejudge`), whose
 //! record names the refusal before it ([`Rejudged`]); a baseline saved under an older metric
 //! definition is replaced, nothing built or installed, by a scorecard of the same revision and
-//! cases under the newer one ([`rebaseline`], `--rebaseline`); a
+//! cases under the newer one ([`rebaseline`], `--rebaseline`), which starts a new series; a
 //! candidate that holds is built from a fresh
 //! clone of the exact commit, confined in bubblewrap ([`Confinement`]): only the clone, a
 //! scratch `CARGO_HOME` with the host's registry cache bound read-only, the toolchain takt
@@ -200,6 +203,12 @@ pub struct Promotion {
     /// the field.
     #[serde(default)]
     pub cases: Vec<String>,
+    /// On a promotion or a refusal, the record that starts the series the candidate was judged
+    /// in, by its file name in the store: the latest baseline or rebaseline before it, whose
+    /// scorecard it was also compared with; none on a baseline and a rebaseline, which start
+    /// one, and on a record written before it had the field.
+    #[serde(default)]
+    pub series_start: Option<String>,
 }
 
 /// The head of the chain of records: the latest record's file name in the store and that file's
@@ -2396,6 +2405,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         rejudges: None,
         replaces_sha256: None,
         cases: Vec::new(),
+        series_start: None,
     };
     let mut refusals: Vec<&Promotion> = Vec::new();
     for earlier in &existing {
@@ -2524,44 +2534,92 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         );
     };
     installed_names_latest(&installed, store, &base)?;
-    let base_copy = copy_path(store, &base);
-    let base_card = Scorecard::load(&base_copy)?;
-    if base_card.revision.as_deref() != Some(base.revision.as_str()) {
+    let Some(start) = existing
+        .iter()
+        .rfind(|record| matches!(record.kind, Kind::Baseline | Kind::Rebaseline))
+        .cloned()
+    else {
         bail!(
-            "the baseline's scorecard copy {} names {}, not the baseline revision {}",
-            base_copy.display(),
-            base_card.revision.as_deref().unwrap_or("no revision"),
-            base.revision
+            "the store {} holds no baseline or rebaseline record before {}, so no series starts there; the store is not read past this",
+            store.display(),
+            record_path(store, &base).display()
         );
-    }
-    if base_card.rule != Rule::default() {
-        bail!(
-            "the baseline's scorecard copy {} was saved under trials {} margin {}; this takt judges under trials {} margin {}",
-            base_copy.display(),
-            base_card.rule.trials,
-            base_card.rule.margin,
-            Rule::default().trials,
-            Rule::default().margin
-        );
-    }
-    known_metrics(&base_card, &base_copy)?;
+    };
+    let base_card = stored_card(store, &base, "baseline")?;
     enough_trials(&card, &base_card, request.scorecard)?;
+    let start_path = record_path(store, &start);
+    let start_card = if start_path == record_path(store, &base) {
+        None
+    } else {
+        let start_card = stored_card(store, &start, "series start")?;
+        enough_trials(&card, &start_card, request.scorecard)?;
+        Some(start_card)
+    };
+    record.series_start = Some(
+        start_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    );
     writeln!(
         out,
         "candidate {revision} against baseline {}",
         base.revision
     )?;
-    let worse = card.against(&base_card, out)?;
+    let worse_than_base = card.worse_against(&base_card, out)?;
+    let worse_than_start = match &start_card {
+        Some(start_card) => {
+            writeln!(
+                out,
+                "candidate {revision} against series start {} ({})",
+                start.revision,
+                start_path.display()
+            )?;
+            card.worse_against(start_card, out)?
+        }
+        None => Vec::new(),
+    };
+    let worse = worse_than_base
+        .iter()
+        .chain(&worse_than_start)
+        .collect::<BTreeSet<_>>()
+        .len();
     record.against = Some(base.revision.clone());
     record.worse = u32::try_from(worse).unwrap_or(u32::MAX);
     if worse > 0 {
         record.kind = Kind::Refused;
         record.cases = case_ids(&card).into_iter().collect();
-        writeln!(
-            out,
-            "verdict: refused, {worse} scenario{} worse than the baseline; nothing installed",
-            if worse == 1 { "" } else { "s" }
-        )?;
+        let plural = |n: usize| if n == 1 { "" } else { "s" };
+        let named = worse_than_start
+            .iter()
+            .map(|scenario| format!("scenario {scenario}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if worse_than_base.is_empty() {
+            writeln!(
+                out,
+                "verdict: refused, {} scenario{} worse than the series start {} ({}): {named}; nothing installed",
+                worse_than_start.len(),
+                plural(worse_than_start.len()),
+                start.revision,
+                start_path.display()
+            )?;
+        } else {
+            if !worse_than_start.is_empty() {
+                writeln!(
+                    out,
+                    "worse than the series start {} ({}): {named}",
+                    start.revision,
+                    start_path.display()
+                )?;
+            }
+            writeln!(
+                out,
+                "verdict: refused, {} scenario{} worse than the baseline; nothing installed",
+                worse_than_base.len(),
+                plural(worse_than_base.len())
+            )?;
+        }
         if request.dry_run {
             writeln!(
                 out,
@@ -2577,7 +2635,15 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         return Ok(Outcome::Regression(record));
     }
     record.kind = Kind::Promotion;
-    writeln!(out, "verdict: no scenario worse than the baseline")?;
+    writeln!(
+        out,
+        "verdict: no scenario worse than the baseline{}",
+        if start_card.is_some() {
+            " or the series start"
+        } else {
+            ""
+        }
+    )?;
     if request.dry_run {
         writeln!(
             out,
@@ -2635,6 +2701,34 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         None => {}
     }
     Ok(Outcome::Promoted(record))
+}
+
+/// The store's scorecard copy of `record`, the `what` a candidate is compared with (the
+/// baseline, or the series start): it must name the record's revision, have been saved under
+/// takt's rule and under metric definitions this takt knows; otherwise refused naming it.
+fn stored_card(store: &Path, record: &Promotion, what: &str) -> Result<Scorecard> {
+    let copy = copy_path(store, record);
+    let card = Scorecard::load(&copy)?;
+    if card.revision.as_deref() != Some(record.revision.as_str()) {
+        bail!(
+            "the {what}'s scorecard copy {} names {}, not the {what} revision {}",
+            copy.display(),
+            card.revision.as_deref().unwrap_or("no revision"),
+            record.revision
+        );
+    }
+    if card.rule != Rule::default() {
+        bail!(
+            "the {what}'s scorecard copy {} was saved under trials {} margin {}; this takt judges under trials {} margin {}",
+            copy.display(),
+            card.rule.trials,
+            card.rule.margin,
+            Rule::default().trials,
+            Rule::default().margin
+        );
+    }
+    known_metrics(&card, &copy)?;
+    Ok(card)
 }
 
 /// The case ids of `card`'s runs.
@@ -2799,6 +2893,7 @@ pub fn rebaseline(request: &Rebaseline<'_>, out: &mut dyn Write) -> Result<Outco
         rejudges: None,
         replaces_sha256: Some(base.scorecard_sha256.clone()),
         cases: Vec::new(),
+        series_start: None,
     };
     let mut why: Vec<String> = Vec::new();
     if newer {

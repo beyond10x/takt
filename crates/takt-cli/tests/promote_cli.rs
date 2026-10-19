@@ -1403,6 +1403,199 @@ fn two_revisions_promoted_one_after_the_other_both_hold_and_chain() {
     );
 }
 
+const ITERATIONS: &str = "Iterations";
+const NOTHING_ADMISSIBLE: &str = "NothingAdmissible";
+
+/// A scorecard of scenario 1's trials 11 to 15 stopping at `stops`, and with `scenario_2` also
+/// scenario 2's trials 11 to 15 at the approval, every run made with the binary of `revision`,
+/// tokens the baseline's; saved under `revision` in a directory of its own named by `label`.
+fn series_card(
+    world: &World,
+    label: &str,
+    revision: &str,
+    stops: [&str; 5],
+    scenario_2: bool,
+) -> PathBuf {
+    let cases = world.outer.join(format!("cases-{label}"));
+    for (n, (tokens, stop)) in BASELINE_TOKENS.iter().zip(stops).enumerate() {
+        let trial = n + 11;
+        run(
+            &cases,
+            &format!("scenario-1-trial-{trial}"),
+            *tokens,
+            stop,
+            Some(revision),
+        );
+        if scenario_2 {
+            run(
+                &cases,
+                &format!("scenario-2-trial-{trial}"),
+                *tokens,
+                APPROVAL,
+                Some(revision),
+            );
+        }
+    }
+    World::save(
+        &cases,
+        &world.outer.join(format!("saves-{label}")),
+        revision,
+    )
+}
+
+/// Two promotions back to back over the world's baseline (five cases at the approval), each one
+/// case one outcome rank worse than the one before on scenario 1 and within the rule against
+/// it and against the baseline: the approval to a budget stop, then that budget stop to
+/// another stop. The second revision and what its promotion printed.
+fn two_steps_down(world: &World) -> (String, String) {
+    let first_card = series_card(
+        world,
+        "first",
+        &world.revision,
+        [APPROVAL, APPROVAL, APPROVAL, APPROVAL, ITERATIONS],
+        false,
+    );
+    let (code, out, err) = world.promote(&first_card, &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    write(&world.repo.join("second.txt"), "second\n");
+    let second = world.commit("second");
+    let second_card = series_card(
+        world,
+        "second",
+        &second,
+        [APPROVAL, APPROVAL, APPROVAL, APPROVAL, NOTHING_ADMISSIBLE],
+        false,
+    );
+    let (code, out, err) = world.promote(&second_card, &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    (second, out)
+}
+
+/// story:promotion-judged-against-the-series-baseline: three promotions back to back, each one
+/// case worse than the one before on scenario 1 and within the rule against it; the third is
+/// two cases short at the approval rank against the baseline that starts the series, so it is
+/// refused naming that record and the scenario, the refusal recorded, nothing installed.
+#[test]
+fn a_third_step_one_case_worse_is_refused_against_the_series_start() {
+    let world = World::new("series", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let start = format!("{BASELINE_REVISION}.json");
+    let (second, second_out) = two_steps_down(&world);
+    write(&world.repo.join("third.txt"), "third\n");
+    let third = world.commit("third");
+    let card = series_card(
+        &world,
+        "third",
+        &third,
+        [APPROVAL, APPROVAL, APPROVAL, ITERATIONS, NOTHING_ADMISSIBLE],
+        false,
+    );
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 3, "{out}{err}");
+    for line in [
+        format!("candidate {second} against baseline {}", world.revision),
+        format!("candidate {second} against series start {BASELINE_REVISION}"),
+        "verdict: no scenario worse than the baseline".to_owned(),
+    ] {
+        assert!(second_out.contains(&line), "{line} in {second_out}");
+    }
+    for name in [format!("{}.json", world.revision), format!("{second}.json")] {
+        let record = world.record(&name);
+        assert!(
+            record.contains(&format!("\"series_start\": \"{start}\"")),
+            "{name} names the baseline as its series start: {record}"
+        );
+    }
+    for line in [
+        format!("candidate {third} against baseline {second}"),
+        "scenario 1  outcomes by rank held  tokens held  not worse".to_owned(),
+        format!("candidate {third} against series start {BASELINE_REVISION}"),
+        "rank 3 or better (ApprovalRequired or Waiting): candidate 3/5 against saved 5/5, short by more than 1".to_owned(),
+        format!(
+            "verdict: refused, 1 scenario worse than the series start {BASELINE_REVISION} ({}): scenario 1; nothing installed",
+            world.store.join(&start).display()
+        ),
+    ] {
+        assert!(out.contains(&line), "{line} in {out}");
+    }
+    let record = world.record(&format!("{third}.refused.json"));
+    for line in [
+        "\"kind\": \"refused\"".to_owned(),
+        format!("\"against\": \"{second}\""),
+        format!("\"series_start\": \"{start}\""),
+        "\"worse\": 1".to_owned(),
+    ] {
+        assert!(record.contains(&line), "{line} in {record}");
+    }
+    assert_eq!(
+        world.version(),
+        format!("takt 0.1.0 ({second})"),
+        "nothing is installed by the refusal"
+    );
+}
+
+/// story:promotion-judged-against-the-series-baseline: a rebaseline starts a new series, so after
+/// two steps down and a rebaseline of the second (adding scenario 2), the same third step is
+/// judged against the rebaseline alone and holds; its record names the rebaseline as its series
+/// start.
+#[test]
+fn a_rebaseline_starts_a_new_series() {
+    let world = World::new("series-rebaseline", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let (second, _) = two_steps_down(&world);
+    let joined = series_card(
+        &world,
+        "joined",
+        &second,
+        [APPROVAL, APPROVAL, APPROVAL, APPROVAL, NOTHING_ADMISSIBLE],
+        true,
+    );
+    let (code, out, err) = rebaseline(&world, &joined);
+    assert_eq!(code, 0, "{out}{err}");
+    let name = world
+        .records()
+        .into_iter()
+        .find(|name| name.contains(".rebaseline-") && !name.ends_with(".scorecard.json"))
+        .expect("the rebaseline record");
+    write(&world.repo.join("third.txt"), "third\n");
+    let third = world.commit("third");
+    let card = series_card(
+        &world,
+        "third",
+        &third,
+        [APPROVAL, APPROVAL, APPROVAL, ITERATIONS, NOTHING_ADMISSIBLE],
+        true,
+    );
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 0, "{out}{err}");
+    for line in [
+        format!("candidate {third} against baseline {second}"),
+        "verdict: no scenario worse than the baseline".to_owned(),
+        format!("\"series_start\": \"{name}\""),
+    ] {
+        assert!(out.contains(&line), "{line} in {out}");
+    }
+    assert!(
+        !out.contains(&format!("against series start {BASELINE_REVISION}")),
+        "the baseline before the rebaseline judges nothing: {out}"
+    );
+}
+
+/// story:promotion-judged-against-the-series-baseline: `takt promote --help` says what starts a
+/// series and names the refusal.
+#[test]
+fn help_names_the_series_rule() {
+    let (code, help, _) = takt(&["promote", "--help"], &[]);
+    assert_eq!(code, 0);
+    for text in [
+        "series start",
+        "the latest --baseline-only or --rebaseline record",
+        "a --rebaseline starts a new series",
+    ] {
+        assert!(help.contains(text), "{text} in {help}");
+    }
+}
+
 /// A link planted where `takt promote` keeps the binary it replaces, to a file holding that
 /// binary's bytes (which a link could later point elsewhere), is not kept: it is replaced by a
 /// regular file of its own.
