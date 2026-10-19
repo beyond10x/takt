@@ -6,6 +6,16 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-10-19
+
+- A Claude step is offered only the tools it may use: `claude` gets `--tools
+  Read,Edit,Write,Glob,Grep` beside `--allowedTools`, both from one constant in
+  `crates/takt/src/harness.rs` (<https://github.com/beyond10x/takt/pull/3>). Before, Claude Code
+  offered all 20 of its built-in tools. Measured on scenario 1 with one fixed prompt, the first
+  request of a step dropped from 12,554 prompt tokens to 5,550
+  (story:claude-step-offers-tools-it-never-allows).
+- `MultiEdit` is no longer in `--allowedTools`: Claude Code 2.1.303 has no such tool.
+
 ## [0.2.2] — 2026-10-19
 
 ### Improvement turns

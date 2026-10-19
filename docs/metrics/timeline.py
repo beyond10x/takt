@@ -1,5 +1,8 @@
 """Draw docs/metrics/timeline.svg from the metrics series.
 
+A dated event, one line of docs/metrics/events.jsonl, is drawn as a marker at the right edge of
+the last column dated at or before it, and spelled out under the legend.
+
 Run as `python3 -I docs/metrics/timeline.py` from the repository root, or from anywhere: paths are
 resolved from this file. Standard library only. When docs/pitch/index.html holds the markers
 <!-- timeline.svg begin --> and <!-- timeline.svg end -->, the SVG between them is replaced too, so
@@ -16,6 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RUNS = os.path.join(HERE, "scenario-runs.jsonl")
 WAVES = os.path.join(HERE, "waves.jsonl")
 TURNS = os.path.join(HERE, "improvement-turns.jsonl")
+EVENTS = os.path.join(HERE, "events.jsonl")
 OUT = os.path.join(HERE, "timeline.svg")
 DECK = os.path.join(HERE, os.pardir, "pitch", "index.html")
 BEGIN, END = "<!-- timeline.svg begin -->", "<!-- timeline.svg end -->"
@@ -76,8 +80,9 @@ def build():
     runs = [r for r in load(RUNS) if r["scenario"] == SCENARIO]
     waves = load(WAVES)
     turns = load(TURNS)
+    events = sorted(load(EVENTS), key=lambda e: e["date"]) if os.path.exists(EVENTS) else []
 
-    first = waves[0]["wave"] if waves else "?"
+    first =waves[0]["wave"] if waves else "?"
     def at(w):
         return w.get("measured_at") or w["merge_sha"]
 
@@ -157,11 +162,25 @@ def build():
         x = x_of(slots.index(after)) - slot_w / 2 if after in slots else x_of(slots.index(before)) + slot_w * 0.4
         turn_x[t["id"]] = x
         heads.append(dict(x=x, kind="turn", label=t["id"]))
+
+    # dated events (events.jsonl): a marker at the right edge of the last column dated at or
+    # before the event; a column's date is its earliest run, or its wave's merge
+    slot_date = {}
+    for w in waves:
+        slot_date[at(w)] = w["date"]
+    for s, rs in by_slot.items():
+        if rs:
+            slot_date[s] = min([r["date"] for r in rs] + ([slot_date[s]] if s in slot_date else []))
+    for e in events:
+        before = [i for i, s in enumerate(slots) if s in slot_date and slot_date[s] <= e["date"]]
+        x = x_of(before[-1]) + slot_w / 2 if before else L
+        x = min(max(x, L + 3), L + PW - 3)
+        heads.append(dict(x=x, kind="event", label=e["label"]))
     heads.sort(key=lambda h: h["x"])
     placed_heads = []
     for h in heads:
         text = f'wave {h["wave"]}: {h["label"]}' if h["kind"] == "wave" else h["label"]
-        wide = text_w(text, FS, bold=h["kind"] == "turn") + (text_w(f'wave {h["wave"]}: ', FS, True) -
+        wide = text_w(text, FS, bold=h["kind"] != "wave") +(text_w(f'wave {h["wave"]}: ', FS, True) -
                                                              text_w(f'wave {h["wave"]}: ', FS) if h["kind"] == "wave" else 0)
         x = h["x"]
         tx, anchor = (x - 5, "end") if x + 5 + wide > W - 4 else (x + 5, "start")
@@ -219,6 +238,12 @@ def build():
                      f'stroke-width="1.5" stroke-dasharray="3 3"/>')
             o.append(f'<text x="{h["tx"]:.1f}" y="{top}" text-anchor="{h["anchor"]}" font-weight="600" '
                      f'class="acc-t">wave {esc(h["wave"])}: <tspan font-weight="400">{esc(h["label"])}</tspan></text>')
+        elif h["kind"] == "event":
+            o.append(f'<line x1="{h["x"]:.1f}" x2="{h["x"]:.1f}" y1="{top - 10}" y2="{T + PH}" class="acc-s" '
+                     f'stroke-width="2.5" stroke-dasharray="8 3"/>')
+            o.append(f'<rect x="{h["x"] - 4.5:.1f}" y="{top - 14.5}" width="9" height="9" class="acc"/>')
+            o.append(f'<text x="{h["tx"]:.1f}" y="{top}" text-anchor="{h["anchor"]}" font-weight="700" '
+                     f'class="acc-t">{esc(h["label"])}</text>')
         else:
             o.append(f'<line x1="{h["x"]:.1f}" x2="{h["x"]:.1f}" y1="{top - 10}" y2="{T + PH}" class="acc-s" '
                      f'stroke-width="2.5"/>')
@@ -356,6 +381,8 @@ def build():
              ("ring", "no figure stated")]
     if candidate_of:
         items.append(("diamond", "tokens, one run of a candidate revision of an improvement turn"))
+    if events:
+        items.append(("event", "a dated event, after the last column dated before it"))
     x = L
     for mark, text in items:
         wide = 18 + text_w(text, FS) + 22
@@ -372,6 +399,8 @@ def build():
                      f'stroke="{GREY}" stroke-width="1.8"/>')
         elif mark == "ring":
             o.append(f'<circle cx="{cx_}" cy="{cy_}" r="4" fill="none" stroke="{GREY}" stroke-width="1.5"/>')
+        elif mark == "event":
+            o.append(f'<rect x="{cx_ - 4.5}" y="{cy_ - 4.5}" width="9" height="9" class="acc"/>')
         else:
             o.append(f'<path d="M{cx_},{cy_ - 6}L{cx_ + 6},{cy_}L{cx_},{cy_ + 6}L{cx_ - 6},{cy_}Z" class="acc" '
                      f'fill-opacity="0.25" stroke-width="1.8"/>')
@@ -402,12 +431,23 @@ def build():
             y += 16
         y -= 16
 
-    dates = sorted({r["date"][:10] for r in runs})
+    # the dated events, spelled out the same way
+    for e in events:
+        y += 22
+        head = f'{e["label"]} (dashed line, square)'
+        for k, line in enumerate(wrap(f'{head}, {e["date"][:10]}: {e["text"]}', W - L - 8, FS)):
+            o.append(f'<text x="{L}" y="{y}" fill="currentColor">'
+                     + (f'<tspan font-weight="700" class="acc-t">{esc(line[:len(e["label"])])}</tspan>'
+                        f'{esc(line[len(e["label"]):])}' if k == 0 else esc(line)) + '</text>')
+            y += 16
+        y -= 16
+
+    dates =sorted({r["date"][:10] for r in runs})
     span = dates[0] if len(dates) == 1 else f"{dates[0]} to {dates[-1]}"
     note = (f'Data: {span} (UTC), docs/metrics/scenario-runs.jsonl, {len(runs)} runs. One scenario, n per '
             f'revision in the rows under the axis: first results, not a benchmark. Untimed revisions have no '
             f'wall time; tokens are summed over the invocations that reached the merge approval, resumes '
-            f'included.')
+            f'included.' + (' Events: docs/metrics/events.jsonl, each with its run record.' if events else ''))
     y += 26
     for line in wrap(note, W - L - 8, FS):
         o.append(f'<text x="{L}" y="{y}" class="mut">{esc(line)}</text>')
@@ -418,7 +458,7 @@ def build():
             f'width="{W}" height="{H}" role="img" aria-labelledby="takt-timeline-title" '
             f'font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="{FS}">\n'
             '<title id="takt-timeline-title">takt on scenario 1: tokens and wall time per takt revision, '
-            'with waves, the improvement turn and the free-running medians</title>')
+            'with waves, the improvement turns, dated events and the free-running medians</title>')
     return "\n".join([head] + o + ["</svg>"]) + "\n"
 
 

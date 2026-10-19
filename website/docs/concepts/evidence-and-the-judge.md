@@ -40,16 +40,24 @@ the run stops on `ApprovalRequired`, exit 4.
 
 When takt improves takt, the judge is designed as a bundle: a promoted takt binary that names its
 revision in `--version`, and the protocol, the gates and the planning store, all read from the
-promoted base revision rather than from the candidate branch. 0.1.0 has the first parts: the
-binary names its revision, and `takt promote` installs a binary only when its scorecard shows no
-regression. Not built: reading the protocol and the store from the base
-(`story:judge-reads-protocol-and-store-from-base`), and the guard that refuses a judge-surface
-merge without the owner's grant or a delegation on record (`story:judge-guard`).
+promoted base revision rather than from the candidate branch. What is built:
+
+- the binary names its revision, and `takt promote` installs a binary only when its scorecard
+  shows no regression (0.1.0);
+- the judge guard (`story:judge-guard`, 0.2.0). It refuses a merge that touches a judge surface
+  unless the owner granted it, or a role the owner delegated it to in
+  `.engineering/delegations.yaml`, read at the merge target's tip;
+- a `self.improvement/1` turn is judged by one binary (0.2.2). The turn records the sha256 of the
+  promoted binary that opens it and refuses every resume by another, so the final resume runs
+  with the binary `takt promote` kept when it installed the candidate. The turn's judge-surface
+  merge uses the judge guard's rule.
+
+Not built: reading the protocol and the store from the base
+(`story:judge-reads-protocol-and-store-from-base`).
 
 Judge surfaces are every path except `docs/**`, `README.md` and `CHANGELOG.md`. A diff that
 touches one is merged under the owner's grant, or under the grant of a role the owner delegated
-it to on record. The delegation is revocable. Until `story:judge-guard` lands, the record is the
-owner's decision in the planning store, and takt does not enforce it ([Roles](./roles.md)).
+it to on record. The delegation is revocable, and a revoked one grants nothing ([Roles](./roles.md)).
 
 Sources: `AGENTS.md` § Rules, `crates/takt/tests/validator_confinement.rs`,
 `crates/takt/src/run.rs` (`CHOICE_PRODUCER`), `protocols/story-delivery/1.yaml`,

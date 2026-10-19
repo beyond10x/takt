@@ -171,6 +171,10 @@ fn describe(action: &str, protocol: &LoadedProtocol) -> String {
 }
 
 impl ClaudeCode {
+    /// The tools a step is offered (`--tools`) and allowed (`--allowedTools`), the same list:
+    /// the files of the tree, read and written, and nothing else.
+    pub const TOOLS: &str = "Read,Edit,Write,Glob,Grep";
+
     /// The arguments that keep the child from loading anything the tree or the user's own
     /// configuration supplies: `--restricted` ignores the user, project and local settings
     /// files (their hooks, plugins and permissions with them), confines the file tools to the
@@ -522,8 +526,13 @@ impl Harness for ClaudeCode {
             .arg("--verbose")
             .arg("--permission-mode")
             .arg("acceptEdits")
+            // The tools the model is offered are the tools it may use: a tool offered and never
+            // allowed costs its schema in every call's prompt. Claude Code 2.1.303 has no
+            // MultiEdit, so it is neither offered nor allowed.
+            .arg("--tools")
+            .arg(Self::TOOLS)
             .arg("--allowedTools")
-            .arg("Read,Edit,Write,Glob,Grep,MultiEdit")
+            .arg(Self::TOOLS)
             .arg("--disallowedTools")
             .arg("Bash,WebFetch,WebSearch,Agent,Task,NotebookEdit")
             .arg("--max-turns")

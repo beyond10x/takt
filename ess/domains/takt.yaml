@@ -254,9 +254,9 @@ types:
   # other judgement step it ends the run with an error.
   # read from: crates/takt-cli/src/main.rs:401-424
   # read from: crates/takt/src/harness.rs:68-70
-  # read from: crates/takt/src/harness.rs:471
-  # read from: crates/takt/src/harness.rs:181-185
-  # read from: crates/takt/src/harness.rs:548
+  # read from: crates/takt/src/harness.rs:475
+  # read from: crates/takt/src/harness.rs:185-189
+  # read from: crates/takt/src/harness.rs:557
   # read from: crates/takt-cli/src/main.rs:962-966
   - name: takt.work.HarnessName
     kind: newtype
@@ -537,11 +537,11 @@ types:
   # read from: crates/takt/src/run.rs:125-135
   # read from: crates/takt/src/harness.rs:42-51
   # read from: crates/takt/src/harness.rs:73-77
-  # read from: crates/takt/src/harness.rs:474-476
+  # read from: crates/takt/src/harness.rs:478-480
   # read from: crates/takt/src/harness.rs:53-65
   # read from: crates/takt/src/harness.rs:86-90
-  # read from: crates/takt/src/harness.rs:484-500
-  # read from: crates/takt/src/harness.rs:617-633
+  # read from: crates/takt/src/harness.rs:488-504
+  # read from: crates/takt/src/harness.rs:626-642
   - name: takt.work.RunStep
     kind: struct
     fields:
@@ -1720,7 +1720,7 @@ types:
   # call once one is recorded (none is today: the step's transcript holds its tool calls, and
   # the trace does not read it).
   # read from: crates/takt/src/trace.rs:91-110
-  # read from: crates/takt/src/harness.rs:514-516
+  # read from: crates/takt/src/harness.rs:518-520
   - name: takt.work.TraceKind
     kind: enum
     variants:
@@ -1860,7 +1860,7 @@ types:
 
   # A benchmark run's id: the run's name in its source, as a scenario run's is. Declared ahead of
   # the code (story:bench-nouns-in-ess).
-  # read from: docs/metrics/README.md:38
+  # read from: docs/metrics/README.md:39
   # read from: .engineering/planning/design/benchmark-integration.md:36
   - name: takt.work.BenchRunId
     kind: newtype
@@ -1870,7 +1870,7 @@ types:
   # comparison and not a score: takt; Claude Code running free with the operator's full
   # configuration; Claude Code under takt's harness isolation plus a shell; Codex running free.
   # Spelled as the scenario records spell them.
-  # read from: docs/metrics/README.md:44
+  # read from: docs/metrics/README.md:45
   # read from: docs/metrics/journey.py:40
   # read from: .engineering/planning/design/benchmark-integration.md:35
   # Maps to bench.arm and bench.harness of the organization's benchmark instrument: an arm there is
@@ -1892,7 +1892,7 @@ types:
   # said of the finished task, `pass` or `fail` as a scenario run's held-out check does, and
   # `unknown` when they gave no answer, such as for a task stopped at its budget. Never taken
   # from takt's own claims.
-  # read from: docs/metrics/README.md:60
+  # read from: docs/metrics/README.md:61
   # read from: .engineering/planning/design/benchmark-integration.md:32
   # read from: .engineering/planning/story/bench-subset-and-budget.md:31
   # Maps to bench.fact of the organization's benchmark instrument with `source: hidden-test`: a
@@ -1913,8 +1913,8 @@ types:
   # which sums the same records), unchanged and as a scenario record holds them: the tokens by
   # component and the cost the harness reported. A figure the source does not state is absent,
   # never 0; the token sum is computed from the four parts and not held.
-  # read from: docs/metrics/README.md:19-22
-  # read from: docs/metrics/README.md:52-57
+  # read from: docs/metrics/README.md:20-23
+  # read from: docs/metrics/README.md:53-58
   # read from: .engineering/planning/story/bench-run-export.md:29
   # Maps in part to bench.run of the organization's benchmark instrument, which holds the cost
   # alone, as integer micro-USD with its basis (`provider-reported`, `assumed`, `unknown`), and no
@@ -2004,10 +2004,10 @@ entities:
   # read from: crates/takt/src/case.rs:1558-1579
   # read from: crates/takt/src/harness.rs:91-93
   # read from: crates/takt/src/harness.rs:99-101
-  # read from: crates/takt/src/harness.rs:338-349
+  # read from: crates/takt/src/harness.rs:342-353
   # read from: crates/takt/src/run.rs:7573-7583
   # read from: crates/takt/src/run.rs:6960-6962
-  # read from: crates/takt/src/harness.rs:374-379
+  # read from: crates/takt/src/harness.rs:378-383
   - name: takt.work.Case
     naming:
       summary: >-
@@ -2697,7 +2697,7 @@ entities:
   # read from: crates/takt/src/run.rs:7078-7092
   # read from: crates/takt/src/run.rs:6411
   # read from: crates/takt/src/harness.rs:135
-  # read from: crates/takt/src/harness.rs:549-556
+  # read from: crates/takt/src/harness.rs:558-565
   # No git takt runs honours a replace ref, which would make a read at a revision (the base's
   # judge-surface list, its loop metric definitions) return another object's content: a ref a
   # step planted is a change the checkpoint names and its restore removes. Neither does a program
@@ -3826,8 +3826,8 @@ entities:
   # read from: .engineering/planning/design/benchmark-integration.md:36
   # read from: .engineering/planning/story/bench-run-export.md:23
   # read from: docs/metrics/README.md:4-5
-  # read from: docs/metrics/README.md:45
-  # read from: docs/metrics/README.md:47
+  # read from: docs/metrics/README.md:46
+  # read from: docs/metrics/README.md:48
   # Maps to bench.run of the organization's benchmark instrument, one arm of one case on one
   # harness, once: takt exports each run in bench's run shape, so bench's grader and fact table
   # cover takt beside the other harnesses.
@@ -3841,7 +3841,7 @@ entities:
   # one case and may span several invocations and resumes; whether a benchmark run references
   # its case or is owned by it is not said, and a free arm's run has neither.
   # read from: .engineering/planning/story/bench-run-export.md:48
-  # read from: docs/metrics/README.md:49
+  # read from: docs/metrics/README.md:50
   - name: takt.work.BenchRun
     naming:
       summary: >-
