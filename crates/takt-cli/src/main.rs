@@ -49,7 +49,52 @@ enum Commands {
     /// a case without one is listed as `no record`.
     #[command(after_help = SCORECARD_EXIT_CODES)]
     Scorecard(ScorecardArgs),
+    /// Promote a takt revision: compare its saved scorecard with the promoted baseline's under
+    /// the scorecard's rule and, when no scenario is worse, build a fresh clone of that
+    /// revision confined in bubblewrap (`bwrap`: only the clone, rustup's default toolchain
+    /// as its settings file names it, never one on PATH, the host's registry cache read-only
+    /// and the system directories visible, the environment cleared, `cargo build --locked
+    /// --offline`), install the binary with
+    /// `cargo install --locked --path crates/takt-cli`, record the promotion under
+    /// `$XDG_STATE_HOME/takt/promotions/` (`~/.local/state/takt/promotions/`), where the latest
+    /// record is the next baseline, and then move the binary into place. One promotion a UTC
+    /// day, one at a time under the store's lock; a refused candidate is recorded and not
+    /// judged again until it changes; the installed binary must name the latest record's
+    /// revision before anything is judged.
+    #[command(after_help = PROMOTE_EXIT_CODES)]
+    Promote(PromoteArgs),
 }
+
+#[derive(clap::Args)]
+struct PromoteArgs {
+    /// The takt checkout at the candidate revision, clean: `HEAD` must equal the scorecard's
+    /// revision and no tracked file may differ from it.
+    #[arg(long)]
+    repo: PathBuf,
+    /// The candidate's saved scorecard, `scorecard-<revision>.json` with a full commit id,
+    /// outside the repository.
+    #[arg(long, value_name = "FILE")]
+    scorecard: PathBuf,
+    /// Record the baseline only: the scorecard of the revision installed today, compared with
+    /// nothing; nothing is built or installed. Refused when the store holds a baseline already.
+    #[arg(long)]
+    baseline_only: bool,
+    /// Print the verdict and the record that would be written; write nothing, install nothing.
+    #[arg(long)]
+    dry_run: bool,
+    /// Where the binary is installed, `cargo install --root`; without it `CARGO_INSTALL_ROOT`,
+    /// else `CARGO_HOME`, else `~/.cargo`.
+    #[arg(long, value_name = "DIR")]
+    install_root: Option<PathBuf>,
+}
+
+/// What `takt promote --help` says about the exit codes.
+const PROMOTE_EXIT_CODES: &str = "Exit codes:
+  0  promoted and recorded; or the baseline recorded (--baseline-only); or, with --dry-run, the candidate would be promoted or the baseline would be recorded
+  1  refused, nothing written or installed: the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, was saved under another rule or metric definition; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree, or commits a rust-toolchain.toml with a `path`; bubblewrap (`bwrap`) or a toolchain is not found; another promotion holds the store's lock; no baseline is recorded; the installed binary does not name the latest record's revision (with --baseline-only, the revision recorded); the revision or its tree was refused or recorded already; a promotion was made this UTC day; a scenario has fewer cases than the rule's trials on either side; the store holds a file takt does not read, a record that disagrees with its name, instant or scorecard copy, or a chain of records with a gap; the record could not be written; the reason on stderr
+  2  the arguments do not parse
+  3  refused on the scorecard: a scenario is worse than the baseline's; the refusal is recorded (not with --dry-run), nothing installed
+  5  the candidate held but its clone, its confined build or its install failed, the built binary names another revision, or the binary names another revision or hashes differently once in place (then the binary before it is back in place and the record removed); nothing recorded, the installed binary unchanged";
 
 #[derive(clap::Args)]
 struct ScorecardArgs {
@@ -65,12 +110,14 @@ struct ScorecardArgs {
     #[arg(long, value_name = "SHA", requires = "save")]
     revision: Option<String>,
     /// Compare each scenario with the same scenario in a saved scorecard, over cases (a case's
-    /// outcome is the best a run of it completed with, else its last run's): worse when, for
-    /// some outcome rank (accepted, then ApprovalRequired or Waiting, then a budget stop, then
-    /// NoProgress and every other stop, then an error), the share of its cases at that rank or
-    /// better is below the saved share, each such rank printed with both shares, or when the
-    /// saved scorecard has the scenario and this one has no run of it; tokens as n, min, median
-    /// and max per scenario and side, and the difference of the medians, never worse.
+    /// outcome is the best a run of it completed with, else its last run's), under this
+    /// scorecard's rule, printed first (trials a scenario needs, margin of cases): worse when,
+    /// for some outcome rank (accepted, then ApprovalRequired or Waiting, then a budget stop,
+    /// then NoProgress and every other stop, then an error), its cases at that rank or better
+    /// fall short of the saved share of its n by more than the margin, each such rank printed
+    /// with both counts; when its median of tokens exceeds the saved maximum; or when the saved
+    /// scorecard has the scenario and this one has no run of it. Tokens are printed as n, min,
+    /// median and max per scenario and side, with the difference of the medians.
     #[arg(long, value_name = "FILE")]
     against: Option<PathBuf>,
 }
@@ -80,7 +127,7 @@ const SCORECARD_EXIT_CODES: &str = "Exit codes:
   0  printed (and saved); with --against, no scenario is worse than the saved one
   1  refused: the repository, a case's events.jsonl or the saved scorecard does not read; --save without --revision, onto a file that exists, or that cannot be written; the reason on stderr
   2  the arguments do not parse
-  3  with --against: a scenario is worse: at some outcome rank the share of its cases at that rank or better is below the saved share, or it has no run (tokens never make a scenario worse)";
+  3  with --against: a scenario is worse: at some outcome rank its cases at that rank or better fall short of the saved share by more than the rule's margin, its median of tokens exceeds the saved maximum, or it has no run";
 
 #[derive(Subcommand)]
 enum ScenarioCommands {
@@ -344,6 +391,47 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 out,
             )?;
             Ok(if worse > 0 { 3 } else { EXIT_DONE })
+        }
+        Commands::Promote(PromoteArgs {
+            repo,
+            scorecard,
+            baseline_only,
+            dry_run,
+            install_root,
+        }) => {
+            let repo = repo
+                .canonicalize()
+                .with_context(|| format!("--repo {}", repo.display()))?;
+            let store = takt::promotion::store()?;
+            let install_root = match install_root {
+                Some(root) => root,
+                None => takt::promotion::install_root()?,
+            };
+            let build_dir = takt::promotion::build_dir()?;
+            let request = takt::promotion::Request {
+                repo: &repo,
+                scorecard: &scorecard,
+                store: &store,
+                install_root: &install_root,
+                build_dir: &build_dir,
+                baseline_only,
+                dry_run,
+                clock: takt::now,
+            };
+            match takt::promotion::promote(&request, out) {
+                Ok(takt::promotion::Outcome::Regression(_))
+                | Ok(takt::promotion::Outcome::WouldRefuse(_)) => Ok(EXIT_STOPPED),
+                Ok(_) => Ok(EXIT_DONE),
+                Err(error)
+                    if error
+                        .downcast_ref::<takt::promotion::BuildFailed>()
+                        .is_some() =>
+                {
+                    eprintln!("takt: {error:#}");
+                    Ok(EXIT_ERROR)
+                }
+                Err(error) => Err(error),
+            }
         }
         Commands::Run(args) => {
             let RunArgs {
