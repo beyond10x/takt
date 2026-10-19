@@ -6,6 +6,64 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-10-19
+
+### Improvement turns
+
+- A `self.improvement/1` turn now reaches `accepted` on validators' records:
+  `candidate.merge` or `candidate.merge_judge_surface` records the candidate merged,
+  `scorecard.compare` no regression, and `binary.promote` the candidate promoted
+  (<https://github.com/beyond10x/takt/pull/2>).
+- `self.improvement/1` is built in (`--protocol self.improvement/1`, listed by `takt protocols`),
+  and a turn opens and resumes only on that embedded document; another document with its id is
+  refused. `candidate.deliver` is gone: the candidate is given at open.
+- The merge validators record `merged` when the case holds the action's grant and the candidate
+  is an ancestor of the mainline, `main` as the forge reports it or the local `main` under
+  `--forge none`; they observe the merge and do not make it. A `candidate.merge_judge_surface`
+  grant counts only as `repository.merge` does for a judge surface: the owner's (`human:<id>`),
+  or a role's that an unrevoked delegation in `.engineering/delegations.yaml` names, read at
+  that mainline tip.
+- `binary.promote` records `promoted` only from a promotion record of the candidate, no refusal,
+  whose `binary_sha256` equals the sha256 of `<install root>/bin/takt`, the install root
+  recorded when the turn opened.
+- The case input `surface` is computed at open, from the baseline's
+  `.engineering/judge-allow.yaml`, over baseline..candidate and each merge base..candidate. A
+  given `surface` that differs is refused, naming the first judge-surface path.
+- A turn records the sha256 of the binary that opens it, and every resume is refused before any
+  step unless the running binary hashes to it. `takt promote` keeps the binary it replaces at
+  `$XDG_STATE_HOME/takt/judges/<sha256>` and names it; the turn is finished with that binary.
+- `takt run --install-root <dir>` names where a turn reads the promoted binary (else
+  `CARGO_INSTALL_ROOT`, then `CARGO_HOME`, then `~/.cargo`). It is recorded canonical at open;
+  a root that is missing or no directory opens no turn, and a resumed case refuses the option.
+- A turn opened without `--intent` takes its finding's title as its intent. The finding is read
+  on the mainline, so one filed after the last promotion opens a turn. A turn writes nothing to
+  the planning store, and `takt approve` on a turn writes the case's grant only.
+
+### Run loop
+
+- `--gate` defaults to the protocol's first action that requires a capability and that the
+  case's inputs do not block for good: `repository.merge` for a delivery or a software change,
+  `candidate.merge` or `candidate.merge_judge_surface` for a turn.
+- A step's line in `events.jsonl`, its tokens included, is written before the revision update
+  that can end the run.
+
+### Findings
+
+- `scripts/check-finding` runs git with `GIT_NO_REPLACE_OBJECTS=1`, so a replace ref in a
+  scenario checkout cannot stand in for a seed.
+
+### Repository
+
+- The loop-case test's forged-commit precondition no longer depends on the host's commit-graph
+  or gc settings.
+
+### Known limits
+
+- A turn's judge check is the running binary checking itself: a binary built without it would
+  resume the turn and judge it.
+- Under `--forge none` the operator's local `main`, and the `.engineering/delegations.yaml` it
+  holds, are trusted: whoever moves `main` decides what counts as merged.
+
 ## [0.2.1] — 2026-10-19
 
 The first published release of the 0.2 line; its changes are those listed under 0.2.0.
