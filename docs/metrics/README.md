@@ -218,15 +218,18 @@ n is 1 per task.
 
 ## Turns 2 and 3 and the first promotion decided by the scorecard (2026-10-19)
 
-- `improvement-turns.jsonl` holds three turns, all accepted by Canon. Turn 2
-  (`story:case-id-is-a-valid-branch-name`) compared T-14..18 with T-24..28 at 98719c3: median
-  tokens 122,465 against the baseline's 122,361 (+0.1%). Turn 3
+- `improvement-turns.jsonl` holds three turns, all accepted by Canon on evidence recorded by hand
+  in phase R0, like turn 1's. Turn 2 (`story:case-id-is-a-valid-branch-name`) compared T-14..18
+  with T-24..28 at 98719c3: median tokens 122,465 against the baseline's 122,361 (+0.1%). Turn 3
   (`story:hours-bounds-a-harness-step`) compared them with T-39..43 at 9fb14cc: 122,151 (-0.2%).
-  Neither is worse on anything under the rule above.
-- One promotion serves both. `takt promote` ran T-44..48 at 44f96a4: 5/5 `ApprovalRequired`, 5/5
-  held-out pass, median 121,952 tokens against the baseline's maximum 138,160, verdict "no scenario
-  worse than the baseline". The scorecard decided it; the planner's `takt.promote` grant was
-  recorded in each case afterwards.
+  Neither is worse on anything under the rule above. Every candidate ran a debug build; the
+  baseline T-14..18 ran the installed release build of a0b8576 (sha256 `b7af9ec9…`,
+  operator-stated).
+- One promotion serves both. Five runs, T-44..48, of a debug build of 44f96a4 were scored by that
+  build's `takt scorecard`; `takt promote` compared the saved scorecard with a0b8576's: 5/5
+  `ApprovalRequired`, 5/5 held-out pass, median 121,952 tokens against the baseline's maximum
+  138,160, verdict "no scenario worse than the baseline". The scorecard decided it; the planner's
+  `takt.promote` grant was recorded in each case afterwards.
 - T-39..48 have no line in `scenario-runs.jsonl` yet, so the timeline and the journeys do not draw
   them.
 - The run record is `docs/runs/2026-10-19-improvement-turns-2-and-3/README.md`. Its case files name

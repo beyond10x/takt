@@ -5,7 +5,7 @@ a defect in takt, checked it before and after on scenario 1, compared the candid
 baseline on the scorecard and merged the fix under a grant. Both fixes then reached `main`, and
 `takt promote` installed `44f96a4`, which holds both fixes, once its own five runs showed no
 scenario worse than the baseline. That one promotion serves both cases' `promoted` claim. The
-scorecard's verdict decided it; the planner's `takt.promote` grant was recorded in each case after
+scorecard's verdict (computed by the candidate's own build) decided it; the planner's `takt.promote` grant was recorded in each case after
 the promotion. The turns ran in phase R0 like turn 1, so **the case records were written by hand** by
 the recorder program, not by a takt run.
 
@@ -30,7 +30,7 @@ rewrite's commit map (one `old new` pair per line) gives the id each has on `mai
 
 | in the case files | on `main` | what it is | named in |
 |---|---|---|---|
-| `0e5d555` | `33e8c01` | merge of the store change that filed turn 2's finding | turn 2: `case.yaml`, e1 |
+| `0e5d555` | `33e8c01` | merge of the store change that filed turn 2's finding | turn 2: `case.yaml`, e1, `notes.md` |
 | `0f8d8c2` | `8e041e6` | the commit that filed turn 2's finding | turn 2: `notes.md` |
 | `9922f12` | `333d369` | wave 10's merge into `main`, a second revision turn 2 reproduced at | turn 2: `notes.md` |
 | `8d49743` | `d74da0c` | turn 2's first candidate, measured before review and superseded | turn 2: `notes.md` |
@@ -39,6 +39,8 @@ rewrite's commit map (one `old new` pair per line) gives the id each has on `mai
 | `a9dd0d3` | `c220a80` | the store commit that retired `story:cli-small-fixes`, on `main` with turn 3's finding | turn 3: `case.yaml`, e1, `notes.md` |
 | `cfbf7e4` | `9fb14cc` | turn 3's candidate, "correction 3 after review" | turn 3: `case.yaml`, `authority.yaml` (both grants), e3 to e5, `notes.md` |
 | `3b0b748` | `76be9ed` | the merge of turn 3's candidate into `wave/2026-10-18-w12` | turn 3: `notes.md` |
+
+Each case's `decisions/*.json` files also name the case ids, in `computed_from`.
 
 `a0b8576`, the baseline, kept its id. `44f96a4`, the promotion, was written after the rewrite and is
 an id on `main`. `a53ac13` in each `branch.yaml` is the first commit of the recorder's scratch tree,
@@ -63,7 +65,7 @@ file has it, with its id on `main` in brackets where the two differ.
 
 e4 in figures, from `notes.md`: all ten runs stopped at the merge approval (exit 4) with the
 held-out acceptance PASS. Tokens: baseline 122,361 / 138,160 / 107,205 / 122,811 / 122,192 (median
-122,361, maximum 138,160); candidate 122,095 / 153,345 / 122,465 / 134,828 / 122,177 (median
+122,361, maximum 138,160); candidate (debug builds) 122,095 / 153,345 / 122,465 / 134,828 / 122,177 (median
 122,465). Under the promotion rule decided on 2026-10-18 (n=5 a side; tokens are worse when the
 candidate's median is above the baseline's maximum) the candidate is worse on nothing. T-27 stopped
 once on `NoProgress` and the runner resumed it once before it reached the approval; the baseline
@@ -75,14 +77,14 @@ runs had no resume. The candidate first measured, `8d49743` (`d74da0c`, runs T-1
 | record | kind and result | subject, revision | producer | observed at | source |
 |---|---|---|---|---|---|
 | e1 | `finding_record` filed | finding, `a9dd0d3` (`c220a80`) | `planner-run` | 10-18 18:34:15 | filed in `4fbdec6` (`0dd0b46`) at 18:31:07, on `main` at `a9dd0d3`; observed at is `a9dd0d3`'s commit time |
-| e2 | `scenario_result` reproduced | baseline, `a0b8576` | `planner-run` | 10-18 22:32:50 | `scripts/check-finding` at `a0b8576`: exit 0, "reproduced" |
-| e3 | `scenario_result` not_reproduced | candidate, `cfbf7e4` (`9fb14cc`) | `planner-run` | 10-18 23:32:28 | `scripts/check-finding` at `cfbf7e4`: exit 1, "not_reproduced" |
+| e2 | `scenario_result` reproduced | baseline, `a0b8576` | `planner-run` | 10-18 22:32:50 | `scripts/check-finding` at `a0b8576`: "reproduced", the predicate exiting 0 |
+| e3 | `scenario_result` not_reproduced | candidate, `cfbf7e4` (`9fb14cc`) | `planner-run` | 10-18 23:32:28 | `scripts/check-finding` at `cfbf7e4`: "not_reproduced", the predicate exiting 1 |
 | e4 | `scorecard_result` no_regression | candidate, `cfbf7e4` (`9fb14cc`) | `planner-run` | 10-18 23:40:27 | baseline runs T-14..18 at `a0b8576`, candidate runs T-39..43 at `cfbf7e4` |
 | e5 | `merge_observation` merged | candidate, `cfbf7e4` (`9fb14cc`) | `planner-run` | 10-19 05:03:03 | merged into `wave/2026-10-18-w12` at `3b0b748` (`76be9ed`) and with the wave into `main`; `git merge-base --is-ancestor 9fb14cc 44f96a4` exits 0 |
 | e6 | `promotion_record` promoted | promotion, `44f96a4` | `planner-run` | 10-19 05:03:03 | the same promotion as turn 2's e6 |
 
 e4 in figures, from `notes.md`: all ten runs reached the merge approval with the held-out acceptance
-PASS. Candidate tokens 122,243 / 122,151 / 122,055 / 121,884 / 153,293, median 122,151 against the
+PASS. Candidate (debug builds) tokens 122,243 / 122,151 / 122,055 / 121,884 / 153,293, median 122,151 against the
 baseline's maximum 138,160 (the same baseline runs as turn 2's): worse on nothing. The candidate
 binary's sha256 is `eaa32ab7…4018`, named in the measurement's summary.
 
@@ -132,18 +134,26 @@ not say why. The scorecard states no cost.
 ### The build and the install
 
 From [`promotion/promote.out`](promotion/promote.out), exit 0. `takt promote` cloned `44f96a4` into
-a fresh directory, then ran `cargo build --locked --offline --release -p b10x-takt-cli --bin takt`
-and `cargo install --locked --offline --force --path /work/crates/takt-cli`, each "confined in
-bwrap". It installed `~/.cargo/bin/takt` with sha256
+a fresh directory, then ran these two commands:
+
+```
+cargo build --locked --offline --release -p b10x-takt-cli --bin takt --target-dir /target (confined in bwrap)
+cargo install --locked --offline --force --path /work/crates/takt-cli --root /install --target-dir /target (confined in bwrap)
+```
+
+It installed `~/.cargo/bin/takt` with sha256
 `0146e9dcfcfbff0be5c5e7ff27ccb7824ad13bf935864dc5fbeb968649b5c269` and wrote the promotion record.
 
 The record ([`promotion/44f96a4….json`](promotion/44f96a48de6b0a89db6801fd1d85372896e98781.json))
 names the revision, its tree `0986f1f0…c29d` (the tree of `44f96a4` on `main`), the time
-2026-10-19T05:02:23Z, the baseline, the rule, `worse: 0`, the installed binary's sha256 and the
-sha256 of the binary it replaced, `d10dd5e1…58c5`. It ties the scorecard by sha256,
+2026-10-19T05:02:23Z, the baseline, the rule, `worse: 0` and the installed binary's sha256. Its
+`previous_sha256`, `d10dd5e1…58c5`, is the sha256 of the previous promotion record, `a0b8576`'s; it
+is not a binary. The binary it replaced is `a0b8576`'s, sha256 `b7af9ec9…`: the `binary_sha256` of
+`a0b8576`'s record, which `takt promote` checks the installed binary against before it installs. It
+ties the scorecard by sha256,
 `25b32aa6…c2a6`; [`promotion/44f96a4….scorecard.json`](promotion/44f96a48de6b0a89db6801fd1d85372896e98781.scorecard.json),
 the copy kept beside the record, is byte-identical to the candidate scorecard and has that hash.
-Its `revision_stated_by` is `null` and its `runs` list is empty.
+The record's `revision_stated_by` is `null` and its `runs` list is empty.
 
 On 2026-10-19, after the promotion, `sha256sum ~/.cargo/bin/takt` printed the same hash, and
 `takt --version` printed `takt 0.1.0 (44f96a48de6b0a89db6801fd1d85372896e98781)`.
@@ -192,10 +202,19 @@ before them has `accepted` blocked: turn 2's 0000 to 0008, turn 3's 0000 to 0007
 - **The producer of every record is the planner.** e1 to e6 are all `planner-run`, e5 and e6
   included, which turn 1 recorded as `developer-run`. The verifier identity is independent of the
   deliverer, `developer-run`; the role that ran the checks is not the one the design names.
-- **Turn 2's times are recording times.** Its e2 and e3 carry the time the recorder wrote them,
-  later than the checks' output files; turn 3's e2 to e4 carry the output files' times.
-- **The scorecard's runs used a debug build, not the installed binary.** T-44..48 ran a build whose
-  hash differs from the promoted binary's, and the scorecard's rows carry `binary: null`.
+- **Which time each record carries.** Turn 2's e1 to e4 carry the time the recorder wrote them.
+  Turn 3's e1 carries `a9dd0d3`'s commit time and its e2 to e4 the output files' times. e5 and e6 of
+  both turns carry the recording time, 05:03:03.
+- **Every candidate ran a debug build; the baseline and the installed binary are release builds.**
+  T-24..28, T-39..43 and T-44..48 ran dev-profile builds (`scripts/check-finding`'s `cargo build
+  --locked`, and a debug build of `44f96a4`). T-14..18 ran the installed release build of
+  `a0b8576`, sha256 `b7af9ec9…` (operator-stated). `takt promote` then installed a release build
+  confined in bwrap, sha256 `0146e9dc…`, which no scored run used. The scorecard's rows carry
+  `binary: null`.
+- **The candidate judged itself.** The scorecard was saved by `44f96a4`'s own debug build, and
+  `takt promote` was the candidate's own: the binary installed before it, `a0b8576`, has neither
+  command. The design's judge is the promoted binary (`story:judge-guard`). The held-out acceptance
+  (5/5 PASS) was read from the runner's `result.json`, independent of the candidate.
 - **The protocol copy is older than the repository's.** Each case holds
   `protocols/self-improvement/1.yaml` as it was when the case opened. At `44f96a4` four lines of
   that file's descriptions also allow a repository at a seed in place of a scenario; nothing else
