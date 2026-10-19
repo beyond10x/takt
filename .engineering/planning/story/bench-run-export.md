@@ -14,7 +14,7 @@ scope:
   path: crates/takt-cli/src/main.rs
 - confidence: inferred
   path: crates/takt/src/events.rs
-revision: 4
+revision: 6
 ---
 # Story: bench-run-export
 
@@ -24,7 +24,7 @@ Every takt run on a scenario or a benchmark task can be exported as a run record
 
 ## Context
 
-The organization's benchmark instrument judges runs in one vocabulary (`docs/design/bench-entities-v0.1.md` there); takt keeps its runs as case files and events. Depends on story:bench-nouns-in-ess for the mapping.
+the organization's benchmark instrument judges runs in one vocabulary (`docs/design/bench-entities-v0.1.md` there); takt keeps its runs as case files and events. Depends on story:bench-nouns-in-ess for the mapping.
 
 ## Expected before
 
