@@ -6957,6 +6957,9 @@ impl<'a> Run<'a> {
             .iter()
             .map(|(k, v)| format!("{k}={v}"))
             .collect();
+        // This run's number in the case, which names its step transcripts' directory: one
+        // more than the `opened` lines the case's record holds before this run writes its own.
+        let run_number = crate::harness::run_number(events.path())?;
         events.emit(
             self.steps,
             &Event::Opened {
@@ -7567,6 +7570,16 @@ impl<'a> Run<'a> {
                 self.harness.step(&context)
             }));
             let returned = Instant::now();
+            // The step's transcript is kept as `artifacts/run-<r>/step-<n>.jsonl` when this is
+            // dropped: on every way out of the step below, the panic's and the errors' too, after
+            // its change was kept or put back, so neither the cases directory's comparison nor
+            // its put-back sees it.
+            let _transcript = crate::harness::KeptOnDrop::new(
+                self.harness,
+                &self.case.dir,
+                run_number,
+                self.steps,
+            );
             // What the step left running (a writer in a process group of its own) is killed
             // before anything it did is looked at, so nothing lands after the step is judged.
             let swept = crate::forge::sweep_left();
