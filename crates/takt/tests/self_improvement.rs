@@ -211,6 +211,7 @@ fn promoted(state: &Path, revision: &str, tree: &Path, card: &Scorecard) {
         rejudges: None,
         replaces_sha256: None,
         cases: Vec::new(),
+        series_start: None,
     };
     fs::write(
         store.join(format!("{revision}.json")),
@@ -918,6 +919,7 @@ fn record(
         rejudges: None,
         replaces_sha256: None,
         cases: Vec::new(),
+        series_start: None,
     };
     let path = store.join(format!("{revision}.json"));
     fs::write(
