@@ -838,10 +838,10 @@ types:
   # read from: crates/takt/src/forge.rs:1331-1534
   # read from: crates/takt/src/git.rs:101-148
   # read from: crates/takt/src/forge.rs:918-919
-  # read from: crates/takt/src/git.rs:1699
+  # read from: crates/takt/src/git.rs:1702
   # read from: crates/takt/src/forge.rs:1267-1269
-  # read from: crates/takt/src/git.rs:1405-1410
-  # read from: crates/takt/src/git.rs:1048-1051
+  # read from: crates/takt/src/git.rs:1408-1413
+  # read from: crates/takt/src/git.rs:1051-1054
   # read from: crates/takt/src/forge.rs:928-939
   # read from: crates/takt/src/forge.rs:1249-1258
   # read from: crates/takt/src/git.rs:167-254
@@ -1368,7 +1368,7 @@ types:
   # read from: crates/takt/src/loop_scorecard.rs:1325-1338
   # read from: crates/takt/src/loop_scorecard.rs:1352-1393
   # read from: crates/takt/src/loop_scorecard.rs:192-501
-  # read from: crates/takt/src/git.rs:335-739
+  # read from: crates/takt/src/git.rs:338-742
   - name: takt.work.DefinitionCheckResult
     kind: enum
     variants: [unchanged, dual_reported, redefined]
@@ -1493,7 +1493,7 @@ types:
   # crash, a flag rejected, a command not found) or the predicate's `exit` without its `output`,
   # which makes no claim true.
   # read from: protocols/self-improvement/1.yaml:45-50
-  # read from: scripts/check-finding:514-528
+  # read from: scripts/check-finding:518-532
   - name: takt.work.ScenarioResult
     kind: enum
     variants: [reproduced, not_reproduced, error]
@@ -2069,7 +2069,7 @@ entities:
       # other protocol (story:self-improvement-protocol).
       # read from: protocols/self-improvement/1.yaml:24-26
       # read from: crates/takt/src/case.rs:1931-1968
-      # read from: crates/takt/src/improvement.rs:71-82
+      # read from: crates/takt/src/improvement.rs:68-79
       - name: independence
         type: Map<takt.work.ProducerName, List<String>>
     relations:
@@ -2243,7 +2243,7 @@ entities:
       # read from: crates/takt-cli/src/main.rs:701-729
       # read from: crates/takt-cli/src/main.rs:818-822
       # read from: crates/takt/src/case.rs:2224-2283
-      # read from: crates/takt/src/improvement.rs:47-62
+      # read from: crates/takt/src/improvement.rs:47-59
       - name: inputs
         type: Map<takt.work.InputId, String>
       # The workflow the run follows, when one is given; not built, the kernel takes none yet.
@@ -2611,10 +2611,10 @@ entities:
   # (`GIT_NO_LAZY_FETCH=1`): that fetch would run the repository's own
   # `remote.<name>.uploadpack` through a shell and outlive the git that started it; an object
   # not in the repository is missing.
-  # read from: crates/takt/src/git.rs:280-291
-  # read from: crates/takt/src/git.rs:1691-1701
+  # read from: crates/takt/src/git.rs:283-294
+  # read from: crates/takt/src/git.rs:1694-1704
   # read from: crates/takt/src/forge.rs:748-757
-  # read from: crates/takt/src/git.rs:1332-1349
+  # read from: crates/takt/src/git.rs:1335-1352
   # read from: crates/takt/src/run.rs:3970-3979
   - name: takt.work.Step
     naming:
@@ -2706,7 +2706,7 @@ entities:
       # `implementation` now names; absent when nothing changed, the step was refused, or the step
       # was deterministic.
       # read from: crates/takt/src/run.rs:7790-7805
-      # read from: crates/takt/src/git.rs:1036
+      # read from: crates/takt/src/git.rs:1039
       - name: committed
         type: Optional<takt.work.Revision>
     relations:
@@ -2820,12 +2820,15 @@ entities:
   # `takt.scenario-reproduce` (`scenario.reproduce`, about `baseline`) and
   # `takt.scenario-verify` (`scenario.verify`, about `candidate`), each `scenario_result` the
   # line the baseline's `scripts/check-finding` prints for the finding at that revision, run on
-  # a checkout of the baseline outside the case's tree, fetched from the case repository through
-  # git's transport with every object hashed and checked (as is the build's checkout), no record
-  # when it gives none; a kept build of the revision runs only while it is reached from the
-  # cache root without a link and its sha256 is the one the turn recorded under the case's
-  # `artifacts/` when it built it, else it is built again and recorded, a planted link unlinked
-  # and never followed; and
+  # a checkout of the baseline outside the case's tree, made with no template and fetched from
+  # the case repository through git's transport with every object hashed and checked (as is the
+  # build's checkout), no record when it gives none; a kept build of the revision runs only while
+  # its sha256 is the one the turn recorded under the case's `artifacts/` when it built it, else
+  # it is built again and recorded. Below the cache root `<cache>/takt` (which may be the
+  # operator's link, followed once) everything is reached through directory descriptors: a link
+  # at `improvement`, `check-finding` or `builds` refuses the check naming it, a link or a file
+  # at `builds/<revision>` or in it is unlinked as itself, a directory where a build's files
+  # belong refuses the check, and nothing is removed through a link; and
   # `takt.scorecard-compare` (`scorecard.compare`, `scorecard_result`,
   # about `candidate`), the candidate's saved scorecard at
   # `$XDG_STATE_HOME/takt/scorecards/scorecard-<candidate>.json` against the baseline's copy in
@@ -2853,9 +2856,9 @@ entities:
   # read from: crates/takt/src/forge.rs:767-791
   # read from: crates/takt/src/validator.rs:126-145
   # read from: crates/takt/src/validator.rs:2084-2098
-  # read from: crates/takt/src/git.rs:2085-2089
+  # read from: crates/takt/src/git.rs:2088-2092
   # read from: crates/takt/src/validator.rs:2126-2209
-  # read from: crates/takt/src/git.rs:2127-2133
+  # read from: crates/takt/src/git.rs:2130-2136
   # read from: crates/takt/src/validator.rs:565-573
   # read from: crates/takt/src/run.rs:6974-6997
   # read from: crates/takt/src/validator.rs:577-593
@@ -2866,12 +2869,12 @@ entities:
   # read from: crates/takt/src/validator.rs:358-383
   # read from: crates/takt/src/validator.rs:150
   # read from: crates/takt/src/validator.rs:2036-2048
-  # read from: crates/takt/src/improvement.rs:459-467
-  # read from: crates/takt/src/improvement.rs:610-616
-  # read from: crates/takt/src/improvement.rs:789-799
+  # read from: crates/takt/src/improvement.rs:480-488
+  # read from: crates/takt/src/improvement.rs:631-637
+  # read from: crates/takt/src/improvement.rs:810-820
   # read from: crates/takt/src/validator.rs:2051-2069
-  # read from: crates/takt/src/improvement.rs:280-345
-  # read from: crates/takt/src/improvement.rs:349-412
+  # read from: crates/takt/src/improvement.rs:300-367
+  # read from: crates/takt/src/improvement.rs:371-440
   - name: takt.work.EvidenceProducer
     naming:
       summary: >-
@@ -3346,8 +3349,8 @@ entities:
   # read from: scripts/file-finding:11-56
   # read from: scripts/file-finding:117
   # read from: scripts/file-finding:256
-  # read from: scripts/check-finding:209-429
-  # read from: scripts/check-finding:475-504
+  # read from: scripts/check-finding:211-433
+  # read from: scripts/check-finding:479-508
   # One predicate on one scenario or one repository: a body with a second `expected_before`
   # block, a block that gives a key twice, or one that gives both `scenario` and `repository`, or
   # neither, is malformed and nothing is filed. `seed` and `test` go with `repository` only: a

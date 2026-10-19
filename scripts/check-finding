@@ -26,8 +26,10 @@
 # from `--declared-on` with `git config --no-includes --blob`, as `takt scenario run` reads it;
 # or a `repository` (an `https://` URL) with the `seed` the task starts from and, optionally,
 # the task's `test` command. The revision is checked out into a build directory
-# of its own under the cache (a clone of this repository holding its own copy of the objects,
-# so a commit no branch holds builds too) and built with `cargo build --locked --offline`,
+# of its own under the cache (a repository made with no template that fetches the revision by
+# its id from this one through git's transport, every object hashed and checked as it is
+# received, so a commit no branch holds builds too and an object overwritten in this repository's
+# store is refused, naming it) and built with `cargo build --locked --offline`,
 # confined in bubblewrap (`bwrap`, on PATH) as `takt promote` builds a candidate
 # (crates/takt/src/promotion.rs): the environment cleared but for HOME, TMPDIR, PATH, LANG,
 # TERM when set, CARGO_HOME and RUSTC; an empty HOME and /tmp of its own; its own process and
@@ -302,8 +304,10 @@ toolchain_dir() {
 }
 
 # takt, built from the revision in a checkout of its own, once per revision, confined in
-# bubblewrap. The checkout is a repository of its own that fetches the revision, by its id, from
-# this one through git's transport, never a local copy of the object files: every object is
+# bubblewrap. The checkout is a repository of its own, made with no template (one could lend it
+# this repository's objects through `objects/info/alternates`, so the fetch would receive none),
+# that fetches the revision, by its id, from this one through git's transport, never a local
+# copy of the object files: every object is
 # hashed as it is received and checked (`transfer.fsckObjects`), so one overwritten in this
 # repository's store fails the build, git naming it, rather than building other content. It
 # holds its own copy of the objects (no hardlink and no alternate into this repository, which the
@@ -323,7 +327,7 @@ if [[ ! -x $takt || ! -f $root/builds/$sha/revision ]]; then
     work=$(mktemp -d "$root/builds/$sha.work-XXXXXX")
     trap 'rm -rf -- "$work"' EXIT
     mkdir -p "$work/target" "$work/cargo-home"
-    { git init --quiet -- "$work/src" &&
+    { git init --quiet --template= -- "$work/src" &&
         git -C "$work/src" -c transfer.fsckObjects=true fetch --quiet --no-tags -- "$repo" "$sha"; } >&2 ||
         fail "fetch $sha from $repo for the build, every object hashed and checked"
     git -C "$work/src" checkout --quiet --detach "$sha" >&2 ||

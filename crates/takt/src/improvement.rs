@@ -51,14 +51,11 @@ pub const SCORECARDS: &str = "takt/scorecards";
 /// confinement lives in that script alone, so no commit's ancestry stands in for it. A change to
 /// the script adds its digest here once it is reviewed (`tests/self_improvement.rs` holds this
 /// tree's script to the list).
-pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 2] = [
-    // f2a20e9, the last commit of story:check-finding-run-step-confined: descriptors above 2
-    // closed before bubblewrap, over the confinement of 7c8d831 and 1c905c7.
-    "d87db09ee62e424e721bba54199927411ee523397c7b09c6bcc18080bc7def8e",
-    // That script with its build's checkout fetched through git's transport, every object hashed
-    // and checked (`transfer.fsckObjects`), instead of a local clone (story:self-improvement-
-    // protocol, part 1): the run step's confinement unchanged.
-    "7fd6e3195dbf11d5ae4bc6f6264751f6ede047241d7584a9154829fedbcbeeb7",
+pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 1] = [
+    // The script of story:check-finding-run-step-confined (its last commit f2a20e9), its build's
+    // checkout a repository made with no template that fetches the revision through git's
+    // transport, every object hashed and checked (story:self-improvement-protocol, part 1).
+    "bbabc93c2678c3e5449d84a7620883caab6dd2130dd528aff429326608b585e5",
 ];
 
 /// The file under a turn's `artifacts/` holding the sha256 of the takt `scripts/check-finding`
@@ -226,16 +223,31 @@ pub fn finding_path(finding: &str) -> Option<String> {
     is_key.then(|| format!(".engineering/planning/story/{key}.md"))
 }
 
-/// The finding scripts as the case's base holds them, each read through git with every object
-/// on the way checked against its id, written executable into a directory of their own under
-/// the cache, which is removed when this is dropped.
+/// The cache root `<cache>/takt`, made when there is none, opened once and followed when it is
+/// a link (the operator's choice of where takt's cache lives); everything below it is reached
+/// relative to that descriptor and holds no link.
+fn cache_root(cache: &Path) -> Result<at::Dir> {
+    let root = cache.join("takt");
+    std::fs::create_dir_all(&root).with_context(|| format!("make {}", root.display()))?;
+    at::Dir::open(&root)
+}
+
+/// The finding scripts as the baseline holds them, each read through git with every object on
+/// the way checked against its id, written executable into a directory of their own under the
+/// cache root's `improvement/` (a link there refuses the check), made and, when this is dropped,
+/// removed through directory descriptors, nothing through a link.
 struct Scripts {
     dir: PathBuf,
+    /// The cache root's `improvement/`, held open.
+    parent: at::Dir,
+    /// The scripts' own directory, held open.
+    held: at::Dir,
+    name: std::ffi::OsString,
 }
 
 impl Scripts {
-    /// The scripts at `base` (the baseline) in `tree`, under `cache`; or what to say when it holds one
-    /// not.
+    /// The scripts at `base` (the baseline) in `tree`, under `cache`; or what to say when it
+    /// holds one not.
     fn at(
         tree: &Path,
         base: &str,
@@ -246,29 +258,37 @@ impl Scripts {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_nanos());
-        let dir = cache.join("takt/improvement").join(format!(
+        let name = std::ffi::OsString::from(format!(
             "scripts-{}-{}-{nanos}",
             std::process::id(),
             MADE.fetch_add(1, Ordering::Relaxed)
         ));
-        std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-        let scripts = Self { dir };
+        let parent = cache_root(cache)?.child_made("improvement".as_ref())?;
+        let held = parent.child_made(&name)?;
+        let scripts = Self {
+            dir: held.path.clone(),
+            parent,
+            held,
+            name,
+        };
         for path in [CHECK_FINDING, FILE_FINDING] {
             let Some(bytes) =
                 crate::loop_scorecard::verified_file_within(tree, base, path, deadline)?
             else {
                 return Ok(Err(format!("the baseline {} holds no {path}", short(base))));
             };
-            let to = scripts.path(path);
-            std::fs::write(&to, bytes).with_context(|| format!("write {}", to.display()))?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o700))
-                    .with_context(|| format!("make {} executable", to.display()))?;
-            }
+            scripts.create(
+                Path::new(path).file_name().unwrap_or(path.as_ref()),
+                &bytes,
+                0o700,
+            )?;
         }
         Ok(Ok(scripts))
+    }
+
+    /// Writes `bytes` as the new file `name` in the scripts' directory, through its descriptor.
+    fn create(&self, name: &std::ffi::OsStr, bytes: &[u8], mode: u32) -> Result<()> {
+        self.held.create(name, bytes, mode)
     }
 
     /// Where the script `path` (one of [`CHECK_FINDING`], [`FILE_FINDING`]) is.
@@ -286,9 +306,8 @@ impl Scripts {
     /// case repository's store (which no step's guard covers) is an error naming it, and nothing
     /// is checked on other content than the commits hold. The finding's file there is checked
     /// against its bytes at `baseline`, read with every object checked; one that differs is what
-    /// to say. It holds a branch at `baseline` and one at `revision`, the revision checked: the
-    /// older reviewed `check-finding` builds from a local clone of the checkout, which takes what
-    /// branches reach; the newer fetches the revision by its id.
+    /// to say. It holds a branch at `baseline` and one at `revision`, the revision checked, so a
+    /// script that clones the checkout rather than fetching by id reaches both.
     fn checkout(
         &self,
         tree: &Path,
@@ -303,7 +322,10 @@ impl Scripts {
         let source = source
             .to_str()
             .ok_or_else(|| anyhow!("the tree {} is no UTF-8 path", tree.display()))?;
-        crate::git::run(&self.dir, &["init", "--quiet", "--", "baseline"])?;
+        crate::git::run(
+            &self.dir,
+            &["init", "--quiet", "--template=", "--", "baseline"],
+        )?;
         crate::git::run(
             &repo,
             &[
@@ -346,81 +368,80 @@ impl Scripts {
     }
 }
 
-/// The directory of `revision`'s kept build under `check-finding`'s cache root `cache`, each
-/// component from `cache` down read with `lstat` and never followed: the directory when every
-/// component is a directory itself; else none, after removing the first component that is not
-/// (a link is unlinked as itself, a file removed), so `check-finding` builds the revision again
-/// on directories it makes. Nothing is removed through a link. None too when a component is
-/// missing.
-fn build_dir(cache: &Path, revision: &str) -> Result<Option<PathBuf>> {
-    let mut at = cache.to_path_buf();
-    for part in ["takt", "check-finding", "builds", revision] {
-        at.push(part);
-        match std::fs::symlink_metadata(&at) {
-            Ok(metadata) if metadata.is_dir() => {}
-            Ok(_) => {
-                std::fs::remove_file(&at)
-                    .with_context(|| format!("unlink the planted {}", at.display()))?;
-                return Ok(None);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error).with_context(|| format!("read {}", at.display())),
+/// The directory of `revision`'s kept build, `check-finding/builds/<revision>` under the cache
+/// root, held open and reached through descriptors: none while a component is missing. A link,
+/// or anything but a directory, at `check-finding` or `builds` is an error naming it, nothing
+/// removed. An entry at `builds/<revision>` that is a link or a file is no build: it is unlinked
+/// as itself (never what it names), and none answered, so `check-finding` builds the revision
+/// again.
+fn build_dir(cache: &Path, revision: &str) -> Result<Option<at::Dir>> {
+    let root = cache_root(cache)?;
+    let Some(checks) = root.child("check-finding".as_ref())? else {
+        return Ok(None);
+    };
+    let Some(builds) = checks.child("builds".as_ref())? else {
+        return Ok(None);
+    };
+    match builds.entry(revision.as_ref())? {
+        at::Entry::Missing => Ok(None),
+        at::Entry::Dir => builds.child(revision.as_ref()),
+        at::Entry::File | at::Entry::Link | at::Entry::Other => {
+            builds.unlink(revision.as_ref())?;
+            Ok(None)
         }
     }
-    Ok(Some(at))
 }
 
-/// The sha256 of `revision`'s kept build when it is a regular file reached without a link
-/// ([`build_dir`]); none for any other.
+/// The sha256 of `revision`'s kept build when it is a regular file reached through descriptors
+/// without a link ([`build_dir`]); none for any other.
 fn kept_build(cache: &Path, revision: &str) -> Result<Option<String>> {
+    use sha2::{Digest as _, Sha256};
     let Some(dir) = build_dir(cache, revision)? else {
         return Ok(None);
     };
-    let binary = dir.join("takt");
-    match std::fs::symlink_metadata(&binary) {
-        Ok(metadata) if metadata.is_file() => Ok(Some(sha256_of(&binary)?)),
-        _ => Ok(None),
-    }
+    Ok(dir
+        .regular("takt".as_ref())?
+        .map(|bytes| format!("{:x}", Sha256::digest(&bytes))))
 }
 
-/// Whether `revision`'s kept build under `check-finding`'s cache may run: only a regular file,
-/// reached from the cache root without a link ([`build_dir`]), whose sha256 is the one the turn
-/// recorded when it built it (`artifacts/`[`build_record`] under `case_dir`). Any other (none
-/// recorded, another digest, a link or a directory planted there) is removed with the `revision`
-/// file beside it, each a link unlinked as itself and a directory removed only when it is one
-/// itself, so `check-finding` builds the revision again.
+/// Whether `revision`'s kept build may run: only a regular file, reached through descriptors
+/// without a link ([`build_dir`]), whose sha256 is the one the turn recorded when it built it
+/// (`artifacts/`[`build_record`] under `case_dir`). Any other is removed with the `revision` file
+/// beside it, each a file or a link unlinked as itself relative to the build's directory, so
+/// `check-finding` builds the revision again; there is no removal by a path resolved again. A
+/// directory in either place is none a build makes: it is an error naming it, nothing removed.
 fn trust_build(cache: &Path, case_dir: &Path, revision: &str) -> Result<()> {
     let Some(dir) = build_dir(cache, revision)? else {
         return Ok(());
     };
+    for name in ["takt", "revision"] {
+        if matches!(dir.entry(name.as_ref())?, at::Entry::Dir | at::Entry::Other) {
+            bail!(
+                "{} is no file a build makes; the check is refused, and nothing is removed",
+                dir.path.join(name).display()
+            );
+        }
+    }
     let recorded = std::fs::read_to_string(case_dir.join("artifacts").join(build_record(revision)))
         .ok()
         .map(|text| text.trim().to_owned());
-    let kept = kept_build(cache, revision)?;
+    let kept = {
+        use sha2::{Digest as _, Sha256};
+        dir.regular("takt".as_ref())?
+            .map(|bytes| format!("{:x}", Sha256::digest(&bytes)))
+    };
     if kept.is_some() && kept == recorded {
         return Ok(());
     }
-    for path in [dir.join("takt"), dir.join("revision")] {
-        match std::fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(&path),
-            Ok(_) => std::fs::remove_file(&path),
-            Err(_) => continue,
-        }
-        .with_context(|| format!("remove the untrusted build {}", path.display()))?;
+    for name in ["takt", "revision"] {
+        dir.unlink(name.as_ref())?;
     }
     Ok(())
 }
 
-/// The sha256 of the file at `path`, lower-case hex.
-fn sha256_of(path: &Path) -> Result<String> {
-    use sha2::{Digest as _, Sha256};
-    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
-}
-
 impl Drop for Scripts {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        let _ = self.parent.remove(&self.name);
     }
 }
 
@@ -506,7 +527,7 @@ impl FindingFile {
             Err(why) => return Ok(nothing(format!("{why}; nothing recorded"))),
         };
         let body = scripts.dir.join("finding.md");
-        std::fs::write(&body, &text).with_context(|| format!("write {}", body.display()))?;
+        scripts.create("finding.md".as_ref(), &text, 0o600)?;
         let mut command = Command::new(scripts.path(FILE_FINDING));
         command
             .arg("--predicate")
@@ -1057,5 +1078,354 @@ impl Validator for ScorecardCompare {
         let waiting = matches!(&observed, Ok((_, true)));
         let observed = held_to(deadline, Self::ACTION, observed.map(|(o, _)| o))?;
         Ok((observed, waiting))
+    }
+}
+
+/// Directories held open by descriptor: every entry below one is read, opened and removed
+/// relative to it (`fstatat`, `openat` with `O_NOFOLLOW`, `unlinkat`), never by a path that is
+/// resolved again, so a link swapped in after a check is never followed and nothing is removed
+/// through one.
+#[cfg(unix)]
+mod at {
+    use std::ffi::{CString, OsStr, OsString};
+    use std::io::{Read as _, Write as _};
+    use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+    use std::path::{Path, PathBuf};
+
+    use anyhow::{Context as _, Result, anyhow, bail};
+
+    /// What an entry is, not followed.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum Entry {
+        Missing,
+        Dir,
+        File,
+        Link,
+        Other,
+    }
+
+    /// A directory held open, and the path it was reached by, for messages.
+    pub(super) struct Dir {
+        fd: OwnedFd,
+        pub(super) path: PathBuf,
+    }
+
+    /// `name` as one component for a call relative to a directory: no `/`, not `.` or `..`.
+    fn component(name: &OsStr) -> Result<CString> {
+        let bytes = name.as_bytes();
+        if bytes.is_empty() || bytes.contains(&b'/') || bytes == b"." || bytes == b".." {
+            bail!("{} is no single path component", name.to_string_lossy());
+        }
+        CString::new(bytes).map_err(|_| anyhow!("{} holds a NUL", name.to_string_lossy()))
+    }
+
+    fn errno() -> std::io::Error {
+        std::io::Error::last_os_error()
+    }
+
+    impl Dir {
+        /// The directory at `path`, following links: the operator's cache root.
+        pub(super) fn open(path: &Path) -> Result<Self> {
+            let c = CString::new(path.as_os_str().as_bytes())
+                .map_err(|_| anyhow!("{} holds a NUL", path.display()))?;
+            // SAFETY: `c` is a valid NUL-terminated string for the duration of the call.
+            let fd = unsafe {
+                libc::open(
+                    c.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                return Err(errno()).with_context(|| format!("open {}", path.display()));
+            }
+            // SAFETY: `fd` was just opened and is owned by nothing else.
+            Ok(Self {
+                fd: unsafe { OwnedFd::from_raw_fd(fd) },
+                path: path.to_path_buf(),
+            })
+        }
+
+        /// What the entry `name` is, not followed.
+        pub(super) fn entry(&self, name: &OsStr) -> Result<Entry> {
+            let c = component(name)?;
+            // SAFETY: a zeroed `stat` is a valid value for `fstatat` to fill.
+            let mut st: libc::stat = unsafe { std::mem::zeroed() };
+            // SAFETY: the descriptor is open, `c` is valid and `st` writable.
+            let done = unsafe {
+                libc::fstatat(
+                    self.fd.as_raw_fd(),
+                    c.as_ptr(),
+                    &raw mut st,
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            };
+            if done != 0 {
+                let error = errno();
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    return Ok(Entry::Missing);
+                }
+                return Err(error)
+                    .with_context(|| format!("read {}", self.path.join(name).display()));
+            }
+            Ok(match st.st_mode & libc::S_IFMT {
+                libc::S_IFDIR => Entry::Dir,
+                libc::S_IFREG => Entry::File,
+                libc::S_IFLNK => Entry::Link,
+                _ => Entry::Other,
+            })
+        }
+
+        /// The directory `name` under this one, opened without following a link; none when there
+        /// is none. A link, or anything but a directory, there is an error naming it: what is
+        /// below the cache root is takt's own and holds no link.
+        pub(super) fn child(&self, name: &OsStr) -> Result<Option<Self>> {
+            let c = component(name)?;
+            let path = self.path.join(name);
+            // SAFETY: the descriptor is open and `c` is valid.
+            let fd = unsafe {
+                libc::openat(
+                    self.fd.as_raw_fd(),
+                    c.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                let error = errno();
+                return match error.raw_os_error() {
+                    Some(libc::ENOENT) => Ok(None),
+                    // A link to a directory fails `O_DIRECTORY | O_NOFOLLOW` with `ENOTDIR`, not
+                    // `ELOOP`: what stands there, not followed, names it.
+                    Some(libc::ELOOP | libc::ENOTDIR) if self.entry(name)? == Entry::Link => bail!(
+                        "{} is a link; a link below the cache root refuses the check, and nothing is removed",
+                        path.display()
+                    ),
+                    Some(libc::ELOOP | libc::ENOTDIR) => bail!(
+                        "{} is no directory; the check is refused, and nothing is removed",
+                        path.display()
+                    ),
+                    _ => Err(error).with_context(|| format!("open {}", path.display())),
+                };
+            }
+            // SAFETY: `fd` was just opened and is owned by nothing else.
+            Ok(Some(Self {
+                fd: unsafe { OwnedFd::from_raw_fd(fd) },
+                path,
+            }))
+        }
+
+        /// [`Self::child`], the directory made (owner only) when there is none.
+        pub(super) fn child_made(&self, name: &OsStr) -> Result<Self> {
+            let c = component(name)?;
+            // SAFETY: the descriptor is open and `c` is valid.
+            let made = unsafe { libc::mkdirat(self.fd.as_raw_fd(), c.as_ptr(), 0o700) };
+            if made != 0 {
+                let error = errno();
+                if error.raw_os_error() != Some(libc::EEXIST) {
+                    return Err(error)
+                        .with_context(|| format!("make {}", self.path.join(name).display()));
+                }
+            }
+            self.child(name)?
+                .ok_or_else(|| anyhow!("{} is gone", self.path.join(name).display()))
+        }
+
+        /// The bytes of the regular file `name`, opened without following a link; none when it is
+        /// missing, a link, or anything but a regular file.
+        pub(super) fn regular(&self, name: &OsStr) -> Result<Option<Vec<u8>>> {
+            let c = component(name)?;
+            // SAFETY: the descriptor is open and `c` is valid.
+            let fd = unsafe {
+                libc::openat(
+                    self.fd.as_raw_fd(),
+                    c.as_ptr(),
+                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                let error = errno();
+                return match error.raw_os_error() {
+                    Some(libc::ENOENT | libc::ELOOP) => Ok(None),
+                    _ => Err(error)
+                        .with_context(|| format!("open {}", self.path.join(name).display())),
+                };
+            }
+            // SAFETY: `fd` was just opened and is owned by nothing else.
+            let mut file = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(fd) });
+            if !file.metadata()?.is_file() {
+                return Ok(None);
+            }
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)
+                .with_context(|| format!("read {}", self.path.join(name).display()))?;
+            Ok(Some(bytes))
+        }
+
+        /// Writes `bytes` as the new file `name` (mode `mode`), made here and never through a
+        /// link: one already there is an error.
+        pub(super) fn create(&self, name: &OsStr, bytes: &[u8], mode: u32) -> Result<()> {
+            let c = component(name)?;
+            // SAFETY: the descriptor is open and `c` is valid.
+            let fd = unsafe {
+                libc::openat(
+                    self.fd.as_raw_fd(),
+                    c.as_ptr(),
+                    libc::O_WRONLY
+                        | libc::O_CREAT
+                        | libc::O_EXCL
+                        | libc::O_NOFOLLOW
+                        | libc::O_CLOEXEC,
+                    mode,
+                )
+            };
+            if fd < 0 {
+                return Err(errno())
+                    .with_context(|| format!("make {}", self.path.join(name).display()));
+            }
+            // SAFETY: `fd` was just opened and is owned by nothing else.
+            let mut file = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(fd) });
+            file.write_all(bytes)
+                .with_context(|| format!("write {}", self.path.join(name).display()))
+        }
+
+        /// Unlinks the entry `name` as itself, a file or a link, never what a link names; none
+        /// there is no error. A directory is an error: it is removed only by [`Self::remove`].
+        pub(super) fn unlink(&self, name: &OsStr) -> Result<()> {
+            let c = component(name)?;
+            // SAFETY: the descriptor is open and `c` is valid.
+            if unsafe { libc::unlinkat(self.fd.as_raw_fd(), c.as_ptr(), 0) } != 0 {
+                let error = errno();
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    return Err(error)
+                        .with_context(|| format!("remove {}", self.path.join(name).display()));
+                }
+            }
+            Ok(())
+        }
+
+        /// The names in the directory, `.` and `..` left out.
+        pub(super) fn names(&self) -> Result<Vec<OsString>> {
+            // SAFETY: duplicating an open descriptor; the duplicate goes to `fdopendir`, which
+            // owns it and closes it with `closedir`.
+            let dup = unsafe { libc::fcntl(self.fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+            if dup < 0 {
+                return Err(errno()).with_context(|| format!("list {}", self.path.display()));
+            }
+            // SAFETY: `dup` is an open directory descriptor this call now owns.
+            let stream = unsafe { libc::fdopendir(dup) };
+            if stream.is_null() {
+                let error = errno();
+                // SAFETY: `fdopendir` failed, so `dup` is still ours to close.
+                unsafe { libc::close(dup) };
+                return Err(error).with_context(|| format!("list {}", self.path.display()));
+            }
+            // SAFETY: the stream starts where the shared offset is; rewind it to read it whole.
+            unsafe { libc::rewinddir(stream) };
+            let mut names = Vec::new();
+            loop {
+                // SAFETY: `stream` is an open directory stream.
+                let entry = unsafe { libc::readdir(stream) };
+                if entry.is_null() {
+                    break;
+                }
+                // SAFETY: `readdir` answers an entry whose `d_name` is NUL-terminated.
+                let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
+                let bytes = name.to_bytes();
+                if bytes != b"." && bytes != b".." {
+                    names.push(OsString::from_vec(bytes.to_vec()));
+                }
+            }
+            // SAFETY: closing the stream this call opened, which closes `dup`.
+            unsafe { libc::closedir(stream) };
+            Ok(names)
+        }
+
+        /// Removes the entry `name` as itself: a file or a link unlinked, a directory opened
+        /// without following a link, emptied the same way and removed. Nothing is removed through
+        /// a link, however the entries change meanwhile; none there is no error.
+        pub(super) fn remove(&self, name: &OsStr) -> Result<()> {
+            match self.child(name) {
+                Ok(Some(dir)) => {
+                    for entry in dir.names()? {
+                        dir.remove(&entry)?;
+                    }
+                    let c = component(name)?;
+                    // SAFETY: the descriptor is open and `c` is valid.
+                    if unsafe {
+                        libc::unlinkat(self.fd.as_raw_fd(), c.as_ptr(), libc::AT_REMOVEDIR)
+                    } != 0
+                    {
+                        let error = errno();
+                        match error.raw_os_error() {
+                            Some(libc::ENOENT) => {}
+                            Some(libc::ENOTDIR) => self.unlink(name)?,
+                            _ => {
+                                return Err(error).with_context(|| {
+                                    format!("remove {}", self.path.join(name).display())
+                                });
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+                Ok(None) => Ok(()),
+                Err(_) => self.unlink(name),
+            }
+        }
+    }
+}
+
+/// Elsewhere than on unix, nothing is reached through descriptors, and no check runs.
+#[cfg(not(unix))]
+mod at {
+    use std::ffi::{OsStr, OsString};
+    use std::path::{Path, PathBuf};
+
+    use anyhow::{Result, bail};
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum Entry {
+        Missing,
+        Dir,
+        File,
+        Link,
+        Other,
+    }
+
+    pub(super) struct Dir {
+        pub(super) path: PathBuf,
+    }
+
+    impl Dir {
+        pub(super) fn open(path: &Path) -> Result<Self> {
+            bail!(
+                "{}: a turn's checks run on a unix system only",
+                path.display()
+            )
+        }
+        pub(super) fn entry(&self, _: &OsStr) -> Result<Entry> {
+            bail!("unix only")
+        }
+        pub(super) fn child(&self, _: &OsStr) -> Result<Option<Self>> {
+            bail!("unix only")
+        }
+        pub(super) fn child_made(&self, _: &OsStr) -> Result<Self> {
+            bail!("unix only")
+        }
+        pub(super) fn regular(&self, _: &OsStr) -> Result<Option<Vec<u8>>> {
+            bail!("unix only")
+        }
+        pub(super) fn create(&self, _: &OsStr, _: &[u8], _: u32) -> Result<()> {
+            bail!("unix only")
+        }
+        pub(super) fn unlink(&self, _: &OsStr) -> Result<()> {
+            bail!("unix only")
+        }
+        pub(super) fn names(&self) -> Result<Vec<OsString>> {
+            bail!("unix only")
+        }
+        pub(super) fn remove(&self, _: &OsStr) -> Result<()> {
+            bail!("unix only")
+        }
     }
 }

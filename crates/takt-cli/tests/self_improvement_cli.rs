@@ -342,6 +342,16 @@ fn run(world: &World, inputs: &[String]) -> (i32, String, String) {
 
 /// [`run`], with `gate` the approval the harness may request.
 fn run_with_gate(world: &World, inputs: &[String], gate: &str) -> (i32, String, String) {
+    run_with_env(world, inputs, gate, &[])
+}
+
+/// [`run_with_gate`], with `env` added to the run's environment.
+fn run_with_env(
+    world: &World,
+    inputs: &[String],
+    gate: &str,
+    env: &[(&str, &Path)],
+) -> (i32, String, String) {
     let mut args: Vec<String> = [
         "run",
         "--gate",
@@ -375,6 +385,7 @@ fn run_with_gate(world: &World, inputs: &[String], gate: &str) -> (i32, String, 
         .args(&args)
         .env("XDG_STATE_HOME", &world.state)
         .env("XDG_CACHE_HOME", &world.cache)
+        .envs(env.iter().copied())
         .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
@@ -983,7 +994,32 @@ fn a_build_directory_planted_as_a_link_is_unlinked_never_followed() {
 /// the check is refused naming the object, and nothing says the defect is gone.
 #[test]
 fn a_poisoned_loose_object_of_the_candidate_is_refused() {
-    let mut world = world("poisoned", true, true);
+    let (world, blob) = poisoned("poisoned");
+    let (code, out, err) = run_with_gate(&world, &opening(&world), "candidate.merge");
+    refused_poison(&world, &blob, &(code, out, err));
+}
+
+/// Asserts that a turn on a poisoned world recorded nothing that says the defect is gone, did
+/// not stop for the merge, and named the poisoned object `blob`.
+fn refused_poison(world: &World, blob: &str, (code, out, err): &(i32, String, String)) {
+    assert!(
+        !records(&world.repo)
+            .iter()
+            .any(|record| field(record, "result") == "not_reproduced"),
+        "a candidate whose commit shows the defect was recorded not_reproduced:\n{out}\n{err}"
+    );
+    assert_ne!(*code, 4, "{out}\n{err}");
+    assert!(
+        out.contains(blob) || err.contains(blob),
+        "the refusal names the object {blob}:\n{out}\n{err}"
+    );
+}
+
+/// A world whose candidate keeps the defect in its own `main.rs`, the loose object of which is
+/// overwritten in the case repository's store with the bytes of an object holding the fixed
+/// text; the world and that object's id.
+fn poisoned(name: &str) -> (World, String) {
+    let mut world = world(name, true, true);
     git(&world.repo, &["checkout", "-q", "fix"]);
     let own = format!("{}// the candidate's own text\n", takt_main(true));
     fs::write(world.repo.join(TAKT_MAIN), &own).expect("the candidate's main.rs");
@@ -1009,18 +1045,130 @@ fn a_poisoned_loose_object_of_the_candidate_is_refused() {
         fs::read(loose(&other, &fixed)).expect("its object"),
     )
     .expect("poisoned");
+    (world, blob)
+}
+
+/// `GIT_TEMPLATE_DIR` names a template whose `objects/info/alternates` lends a new repository
+/// the case repository's (poisoned) objects, so a fetch into one made from it would find every
+/// object present and receive none. Takt and `check-finding` make their checkouts with no
+/// template, so the objects still come through the transport and are hashed: the check is
+/// refused naming the poisoned object.
+#[test]
+fn a_git_template_lending_objects_does_not_skip_the_rehash() {
+    let (world, blob) = poisoned("template");
+    let template = world.repo.parent().expect("a parent").join("template");
+    write(
+        &template.join("objects/info/alternates"),
+        &format!("{}\n", world.repo.join(".git/objects").display()),
+    );
+    let ran = run_with_env(
+        &world,
+        &opening(&world),
+        "candidate.merge",
+        &[("GIT_TEMPLATE_DIR", &template)],
+    );
+    refused_poison(&world, &blob, &ran);
+}
+
+/// An outside directory holding what a kept build directory would: a directory `takt` with a
+/// file in it, and a file `revision`.
+fn outside_build(at: &Path) {
+    write(&at.join("takt/precious.txt"), "keep me\n");
+    write(&at.join("revision"), "keep me too\n");
+}
+
+/// Whether [`outside_build`]'s files at `at` are all still there.
+fn outside_kept(at: &Path) -> bool {
+    at.join("takt/precious.txt").is_file() && at.join("revision").is_file()
+}
+
+/// The reviewer's RV-M, its outcome as ruled: `check-finding/builds` itself a link to an
+/// outside directory. A link below the cache root refuses the check, naming the path; the link
+/// stays, and nothing behind it is removed.
+#[test]
+fn a_link_at_the_builds_directory_refuses_the_check() {
+    let world = world("link-at-builds", true, true);
+    let outside = world
+        .repo
+        .parent()
+        .expect("a parent")
+        .join("outside-builds");
+    outside_build(&outside.join(&world.candidate));
+    outside_build(&outside.join(&world.baseline));
+    let builds = world.cache.join("takt/check-finding/builds");
+    fs::create_dir_all(builds.parent().expect("a parent")).expect("check-finding's cache");
+    std::os::unix::fs::symlink(&outside, &builds).expect("the link");
     let (code, out, err) = run_with_gate(&world, &opening(&world), "candidate.merge");
     assert!(
-        !records(&world.repo)
-            .iter()
-            .any(|record| field(record, "result") == "not_reproduced"),
-        "a candidate whose commit shows the defect was recorded not_reproduced:\n{out}\n{err}"
+        outside_kept(&outside.join(&world.candidate)),
+        "{out}\n{err}"
     );
-    assert_ne!(code, 4, "{out}\n{err}");
+    assert!(outside_kept(&outside.join(&world.baseline)), "{out}\n{err}");
     assert!(
-        out.contains(&blob) || err.contains(&blob),
-        "the refusal names the object {blob}:\n{out}\n{err}"
+        fs::symlink_metadata(&builds)
+            .expect("the link")
+            .file_type()
+            .is_symlink(),
+        "{out}\n{err}"
     );
+    assert_eq!(code, 5, "{out}\n{err}");
+    let named = format!("{} is a link", builds.display());
+    assert!(out.contains(&named) || err.contains(&named), "{out}\n{err}");
+}
+
+/// The reviewer's RV-N, inverted as ruled: the cache root `<cache>/takt` is the operator's link
+/// to another directory, which takt follows; under it, the candidate's kept-build directory
+/// holds a directory `takt`, which no build makes. The check is refused naming it: the
+/// operator's link, its target and everything in it stay.
+#[test]
+fn an_operators_linked_cache_root_stays_and_a_foreign_build_is_refused() {
+    let world = world("link-at-root", true, true);
+    let outside = world.repo.parent().expect("a parent").join("outside-takt");
+    let kept = outside.join("check-finding/builds").join(&world.candidate);
+    outside_build(&kept);
+    write(&outside.join("promote/keep.txt"), "another takt cache\n");
+    fs::create_dir_all(&world.cache).expect("the cache");
+    std::os::unix::fs::symlink(&outside, world.cache.join("takt")).expect("the link");
+    let (code, out, err) = run_with_gate(&world, &opening(&world), "candidate.merge");
+    assert!(outside_kept(&kept), "{out}\n{err}");
+    assert!(outside.join("promote/keep.txt").is_file(), "{out}\n{err}");
+    assert!(
+        fs::symlink_metadata(world.cache.join("takt"))
+            .expect("the link")
+            .file_type()
+            .is_symlink(),
+        "{out}\n{err}"
+    );
+    assert_eq!(code, 5, "{out}\n{err}");
+    let named = world
+        .cache
+        .join("takt/check-finding/builds")
+        .join(&world.candidate)
+        .join("takt")
+        .display()
+        .to_string();
+    assert!(out.contains(&named) || err.contains(&named), "{out}\n{err}");
+}
+
+/// The reviewer's RV-J: the candidate's kept build a link to a script that does not show the
+/// defect. The link is unlinked as itself, the candidate built from its source, and the turn
+/// ends `declined`.
+#[test]
+fn a_kept_build_that_is_a_link_is_rebuilt() {
+    let world = world("kept-link", true, true);
+    let built = world
+        .cache
+        .join("takt/check-finding/builds")
+        .join(&world.candidate);
+    let target = world.cache.join("planted-takt");
+    executable(&target, &build(false));
+    fs::create_dir_all(&built).expect("the build directory");
+    std::os::unix::fs::symlink(&target, built.join("takt")).expect("the link");
+    write(&built.join("revision"), &format!("{}\n", world.candidate));
+    let (code, out, err) = run_with_gate(&world, &opening(&world), "candidate.merge");
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("Completed (declined)"), "{out}\n{err}");
+    assert!(target.is_file(), "the link's target stays: {out}\n{err}");
 }
 
 /// A baseline whose `.gitattributes` has git rewrite the finding when it is checked out (CRLF
