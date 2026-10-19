@@ -176,7 +176,7 @@ function viewer() {
     return;
   }
   const app = join(repo, 'docs', 'site', 'protocols');
-  execFileSync('npm', ['ci', '--no-audit', '--no-fund'], {cwd: app, stdio: 'inherit'});
+  execFileSync('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], {cwd: app, stdio: 'inherit'});
   execFileSync('npm', ['run', 'build'], {cwd: app, stdio: 'inherit'});
   cpSync(join(app, 'dist'), target, {recursive: true});
   console.log('viewer: static/protocols/');

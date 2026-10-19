@@ -22,7 +22,7 @@ tasks:
   site-build:
     desc: Build the documentation site into website/build; its prebuild writes the status, the charts, the CLI reference and the protocol viewer from the records.
     cmds:
-      - npm --prefix website ci
+      - npm --prefix website ci --ignore-scripts
       - npm --prefix website run build
 
   site-check:

@@ -45,7 +45,7 @@ jobs:
           toolchain: stable
 
       - name: Build the Docusaurus site
-        run: npm --prefix website ci && npm --prefix website run build
+        run: npm --prefix website ci --ignore-scripts && npm --prefix website run build
 
       - name: Check every page at 1440 and 390 px
         run: npm --prefix website run site-check

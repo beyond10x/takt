@@ -1,5 +1,7 @@
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
+import path from 'node:path';
+import type {LoadContext, Plugin, PluginConfig, RouteConfig} from '@docusaurus/types';
 import {withProductSite} from '@beyond10x/docs-system/product-site';
 
 const config: Config = {
@@ -105,4 +107,54 @@ const config: Config = {
   } satisfies Preset.ThemeConfig,
 };
 
-export default withProductSite(config, {landing: './product.json', mark: 'Tk'});
+// The product layer hands Docusaurus two absolute build paths, the font directory and the landing
+// data module, and Docusaurus serializes both into the client bundle, where scan-text refuses them
+// as personal paths. Name them relative to the site and through the '@generated' alias instead,
+// as the connectors site does.
+type PluginFactory = (context: LoadContext, options: unknown) => Plugin;
+
+function portable(site: Config): Config {
+  const relative = (directory: string | undefined) =>
+    directory && path.isAbsolute(directory)
+      ? path.relative(__dirname, directory).split(path.sep).join('/')
+      : directory;
+  const aliased = (factory: PluginFactory): PluginFactory =>
+    function portableModules(context, options) {
+      const plugin = factory(context, options);
+      const contentLoaded = plugin.contentLoaded?.bind(plugin);
+      if (!contentLoaded) return plugin;
+      const alias = (module: unknown) =>
+        typeof module === 'string' && module.startsWith(context.generatedFilesDir)
+          ? '@generated/' + path.relative(context.generatedFilesDir, module).split(path.sep).join('/')
+          : module;
+      return {
+        ...plugin,
+        contentLoaded: ({content, actions}) =>
+          contentLoaded({
+            content,
+            actions: {
+              ...actions,
+              addRoute: (route: RouteConfig) =>
+                actions.addRoute({
+                  ...route,
+                  modules: Object.fromEntries(
+                    Object.entries(route.modules ?? {}).map(([name, module]) => [name, alias(module)]),
+                  ) as RouteConfig['modules'],
+                }),
+            },
+          }),
+      };
+    };
+  const plugins = (site.plugins ?? []) as unknown[];
+  return {
+    ...site,
+    staticDirectories: (site.staticDirectories ?? ['static']).map(relative) as string[],
+    plugins: plugins.map((entry) =>
+      Array.isArray(entry) && typeof entry[0] === 'function'
+        ? [aliased(entry[0] as PluginFactory), entry[1]]
+        : entry,
+    ) as PluginConfig[],
+  };
+}
+
+export default portable(withProductSite(config, {landing: './product.json', mark: 'Tk'}));
