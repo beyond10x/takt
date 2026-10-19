@@ -252,9 +252,10 @@ enum ScenarioCommands {
     /// for the story on `story.delivery/1`, whose pull request targets `trial/<n>`. The case is
     /// `scenario-<id>-trial-<n>`, refused before anything is cut when it or its branch exists;
     /// nothing of an earlier run is resumed. Without the bot route nothing is fetched or
-    /// pushed, and `<n>` is the instant to the second (UTC, `YYYYMMDDHHMMSS`) and a random
-    /// four-digit nonce, so runs from different checkouts very likely take different ones (two
-    /// runs in one second share one with a chance of 1 in 10,000), not consecutive ones. The
+    /// pushed, and `<n>` is 22 digits: the 14-digit instant to the second (UTC,
+    /// `YYYYMMDDHHMMSS`) and a random 8-digit nonce, so runs from different checkouts very
+    /// likely take different ones (two runs in one second share one with a chance of 1 in
+    /// 10^8), not consecutive ones. The
     /// hard guard is the checkout's own: a number it knows is passed over, and `git checkout -b`
     /// refuses a branch that exists. A refusal before the push removes the branch and
     /// puts the tree back.
@@ -1358,17 +1359,17 @@ fn trial_number(name: &str) -> Option<&str> {
 
 /// The trial base a scenario run cuts next: one past the highest `trial/<n>` the checkout
 /// knows, a local branch or a remote's (as last fetched), `0` when there is none. Names under
-/// `trial/` that are not all digits are not trial bases. A number too large for `u64`, or a
+/// `trial/` that are not all digits are not trial bases. A number too large for `u128`, or a
 /// highest number nothing follows, is refused: never skipped, never wrapped to a number in use.
 /// Only a run through the bot route numbers its trial so ([`unique_trial`] otherwise).
-fn next_trial(repo: &Path) -> Result<u64> {
+fn next_trial(repo: &Path) -> Result<u128> {
     let known = known_trials(repo)?;
-    let mut highest: Option<u64> = None;
+    let mut highest: Option<u128> = None;
     for name in &known {
         let Some(n) = trial_number(name) else {
             continue;
         };
-        let n: u64 = n.parse().map_err(|_| {
+        let n: u128 = n.parse().map_err(|_| {
             anyhow!("{name} numbers a trial past the largest a scenario run counts to; nothing was changed")
         })?;
         highest = Some(highest.map_or(n, |h| h.max(n)));
@@ -1386,7 +1387,7 @@ fn next_trial(repo: &Path) -> Result<u64> {
 /// `takt/<case>`. The trial branch itself is not, as `n` is past every one known. A case id
 /// [`takt::case::check_id`] refuses (a scenario id long enough to take it past 250 bytes) is
 /// refused here, before any branch is cut or pushed.
-fn trial_free(repo: &Path, scenario: &str, n: u64) -> Result<String> {
+fn trial_free(repo: &Path, scenario: &str, n: u128) -> Result<String> {
     let case_id = format!("scenario-{scenario}-trial-{n}");
     takt::case::check_id(&case_id)?;
     if let Some(what) = case_taken(repo, &case_id)? {
@@ -1410,31 +1411,33 @@ fn case_taken(repo: &Path, case_id: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-/// How many nonces a trial number without the bot route can take within one second: four
+/// How many nonces a trial number without the bot route can take within one second: eight
 /// digits.
-const TRIAL_NONCES: u64 = 10_000;
+const TRIAL_NONCES: u64 = 100_000_000;
 
 /// The trial number and case id of a scenario run without the bot route, which has no remote
 /// to reserve a number on: the instant `at` (`YYYY-MM-DDTHH:MM:SSZ`, as [`takt::now`] gives it)
-/// to the second, its digits, then a four-digit nonce, all digits, so runs from different
-/// checkouts very likely take different numbers (two runs in one second share one with a
-/// chance of 1 in 10,000) and their cases go into one scorecard; not consecutive ones. The
+/// to the second, its 14 digits, then an 8-digit nonce, 22 digits in all, past `u64`, so it
+/// is counted in `u128`. Runs from different checkouts very likely take different numbers (two
+/// runs in one second share one with a chance of 1 in 10^8) and their cases go into one
+/// scorecard; not consecutive ones. The
 /// nonce is `nonce` (random, [`trial_nonce`]) when that number is free in this checkout, else
 /// the next free one after it, wrapping: a number whose trial branch is known, local or a
 /// remote's, or whose case or case branch is there, is passed over. That, and `git checkout
 /// -b` refusing a branch that exists, is the hard guard; it holds within a checkout only. A
 /// case id [`takt::case::check_id`] refuses is refused, and so is a second whose every number
 /// is taken, before any branch is cut.
-fn unique_trial(repo: &Path, scenario: &str, at: &str, nonce: u64) -> Result<(u64, String)> {
+fn unique_trial(repo: &Path, scenario: &str, at: &str, nonce: u64) -> Result<(u128, String)> {
     let digits: String = at.chars().filter(char::is_ascii_digit).collect();
-    let second: u64 = match digits.len() {
+    let second: u128 = match digits.len() {
         14 => digits.parse().ok(),
         _ => None,
     }
     .ok_or_else(|| anyhow!("the instant {at} gives no second to number a trial by"))?;
     let known = known_trials(repo)?;
     for k in 0..TRIAL_NONCES {
-        let n = second * TRIAL_NONCES + (nonce % TRIAL_NONCES + k) % TRIAL_NONCES;
+        let n = second * u128::from(TRIAL_NONCES)
+            + u128::from((nonce % TRIAL_NONCES + k) % TRIAL_NONCES);
         let case_id = format!("scenario-{scenario}-trial-{n}");
         takt::case::check_id(&case_id)?;
         let digits = n.to_string();
@@ -2406,9 +2409,9 @@ mod tests {
     }
 
     /// story:trial-numbers-are-unique-across-checkouts: without the bot route a trial number is
-    /// the instant's fourteen digits, then the four-digit nonce; a number whose trial branch is
-    /// known (local, or a remote's), whose case is there, or whose case branch is, is passed
-    /// over for the next nonce, past 9999 to 0000.
+    /// the instant's fourteen digits, then the eight-digit nonce, 22 digits; a number whose
+    /// trial branch is known (local, or a remote's), whose case is there, or whose case branch
+    /// is, is passed over for the next nonce, past 99999999 to 00000000.
     #[test]
     fn a_trial_number_without_the_bot_route_is_the_instant_and_a_free_nonce() {
         let repo = repository("one-ready", "unique-trial");
@@ -2421,29 +2424,29 @@ mod tests {
         assert_eq!(
             super::unique_trial(&repo, "1", at, 42).expect("a trial number"),
             (
-                202_610_191_425_300_042,
-                "scenario-1-trial-202610191425300042".to_owned()
+                2_026_101_914_253_000_000_042,
+                "scenario-1-trial-2026101914253000000042".to_owned()
             )
         );
-        git(&repo, &["branch", "trial/202610191425300042"]);
+        git(&repo, &["branch", "trial/2026101914253000000042"]);
         git(
             &repo,
             &[
                 "update-ref",
-                "refs/remotes/origin/trial/202610191425300043",
+                "refs/remotes/origin/trial/2026101914253000000043",
                 "HEAD",
             ],
         );
-        fs::create_dir_all(repo.join(".engineering/cases/scenario-1-trial-202610191425300044"))
+        fs::create_dir_all(repo.join(".engineering/cases/scenario-1-trial-2026101914253000000044"))
             .expect("a case directory");
         git(
             &repo,
-            &["branch", "takt/scenario-1-trial-202610191425300045"],
+            &["branch", "takt/scenario-1-trial-2026101914253000000045"],
         );
-        assert_eq!(taken(42), 202_610_191_425_300_046);
-        assert_eq!(taken(9999), 202_610_191_425_309_999);
-        git(&repo, &["branch", "trial/202610191425309999"]);
-        assert_eq!(taken(9999), 202_610_191_425_300_000);
+        assert_eq!(taken(42), 2_026_101_914_253_000_000_046);
+        assert_eq!(taken(99_999_999), 2_026_101_914_253_099_999_999);
+        git(&repo, &["branch", "trial/2026101914253099999999"]);
+        assert_eq!(taken(99_999_999), 2_026_101_914_253_000_000_000);
     }
 
     /// The lines of `aep plan artifact history <id>` in `repo` that record an approval.

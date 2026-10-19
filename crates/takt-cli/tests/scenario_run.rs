@@ -553,6 +553,77 @@ fn the_next_trial_follows_the_highest_trial_branch_local_or_remote() {
     );
 }
 
+/// A run through the bot route in a checkout that holds a trial number a run without it took,
+/// 22 digits (a 14-digit instant and an 8-digit nonce, past `u64`), takes that number plus one:
+/// counted, not refused as too large.
+#[test]
+fn the_next_trial_follows_a_22_digit_trial_number() {
+    let world = world("numbering-22");
+    git(
+        &world.repo,
+        &["branch", "trial/2026101914253012345678", &world.seed],
+    );
+
+    let (code, out, err) = world.scenario_run("1", &["--iterations", "0"]);
+    assert_eq!(code, 3, "stdout {out} stderr {err}");
+    assert!(
+        out.contains("scenario 1: story:ready-one proposed on trial/2026101914253012345679 at "),
+        "stdout {out} stderr {err}"
+    );
+    assert_eq!(
+        world.pushed("trial/2026101914253012345679").as_deref(),
+        Some(world.seed.as_str())
+    );
+    assert_eq!(
+        git_out(&world.repo, &["branch", "--show-current"]),
+        "takt/scenario-1-trial-2026101914253012345679"
+    );
+}
+
+/// The top of the range a trial number is counted in, `u128` since a trial number without the
+/// bot route is 22 digits: a trial branch at the top has no number after it, and one past the
+/// top does not parse. Each is refused in one line naming it, after the fetch and before
+/// anything is cut or pushed: never wrapped to a number in use, never a panic.
+#[test]
+fn a_trial_number_at_the_top_of_u128_is_refused_not_wrapped() {
+    let world = world("numbering-top");
+    for (number, says) in [
+        (
+            "340282366920938463463374607431768211456",
+            "numbers a trial past the largest a scenario run counts to",
+        ),
+        (
+            "340282366920938463463374607431768211455",
+            "is the highest trial branch known, and no number follows it",
+        ),
+    ] {
+        let branch = format!("trial/{number}");
+        git(&world.repo, &["branch", &branch, &world.seed]);
+        let (code, out, err) = world.scenario_run("1", &["--iterations", "0"]);
+        assert!(
+            !err.contains("panicked"),
+            "takt panicked: exit {code}, stderr {err}"
+        );
+        assert_eq!(code, 1, "{number}: stdout {out} stderr {err}");
+        assert!(err.contains(number), "{number}: stderr {err}");
+        assert!(err.contains(says), "{number}: stderr {err}");
+        assert_eq!(
+            world.trial_branches(),
+            std::slice::from_ref(&branch),
+            "{number}"
+        );
+        assert!(
+            !world
+                .calls()
+                .iter()
+                .any(|call| call.starts_with("bot -- push")),
+            "{:?}",
+            world.calls()
+        );
+        git(&world.repo, &["branch", "-D", &branch]);
+    }
+}
+
 /// A scenario the declaration does not name is refused before anything is changed, naming
 /// where it was looked for.
 #[test]
@@ -1110,7 +1181,7 @@ fn five_runs_from_five_fresh_clones_get_five_trial_numbers_and_one_scorecard_tak
 /// The same five runs started at once, each in a PID namespace of its own (`bwrap
 /// --unshare-pid`), where every run has the same process id and host name: the nonce does not
 /// rest on either, so they still get five distinct trial numbers. Two runs in one second share
-/// a number with a chance of 1 in 10,000 per pair (about 1 in 1,000 for five). Bubblewrap is
+/// a number with a chance of 1 in 10^8 per pair (about 1 in 10^7 for five). Bubblewrap is
 /// required, never skipped: without it the case fails, naming it.
 #[test]
 fn five_runs_started_at_once_in_their_own_pid_namespaces_get_five_trial_numbers() {
