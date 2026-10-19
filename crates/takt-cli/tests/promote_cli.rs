@@ -1,9 +1,9 @@
 //! story:promotion through the binary: `takt promote` installs a takt built from a revision only
 //! when its saved scorecard shows no scenario worse than the promoted baseline's under the
 //! scorecard's rule (a margin of one case at any outcome rank, the median of tokens within the
-//! baseline's maximum), one promotion a UTC day, and writes a record under
-//! `$XDG_STATE_HOME/takt/promotions/` naming the revision the installed `takt --version`
-//! prints; a worse candidate is refused, recorded and not judged again; `--baseline-only`
+//! baseline's maximum), and writes a record under `$XDG_STATE_HOME/takt/promotions/` naming
+//! the revision the installed `takt --version` prints, as many a day as hold, one at a time;
+//! a worse candidate is refused, recorded and not judged again; `--baseline-only`
 //! records the first baseline and installs nothing; `--dry-run` writes and installs nothing.
 //! The build runs confined in bubblewrap, so nothing the commit runs reads a setting outside
 //! it, reaches the store or outlives the build; the record is written before the binary moves
@@ -1284,12 +1284,86 @@ fn a_candidate_within_the_rule_is_installed_and_recorded() {
             .all(|entry| entry.file_name() == "takt"),
         "the binary before it is not kept beside the new one"
     );
-    // A second promotion the same UTC day is refused, naming the first.
+    // The same revision promoted again is refused: it is recorded already.
     let (code, out, err) = world.promote(&card, &[]);
     assert_eq!(code, 1, "{out}{err}");
     assert!(
-        err.contains("recorded already") || err.contains("this UTC day already"),
-        "the first promotion is named: {err}"
+        err.contains(&format!("{} is recorded already", world.revision)),
+        "the revision is named as recorded: {err}"
+    );
+}
+
+/// story:promotion-without-daily-cap: a second promotion of another revision the same UTC day,
+/// whose scorecard holds against the first promotion as the baseline, is built, installed and
+/// recorded after it in the chain, and the head names it; the second revision promoted again
+/// is refused as recorded already.
+#[test]
+fn a_second_revision_the_same_day_is_promoted_after_the_first() {
+    let world = World::new("same-day", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card(
+        "first",
+        WITHIN_TOKENS,
+        [APPROVAL, APPROVAL, APPROVAL, APPROVAL, ERROR],
+    );
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    let first_name = format!("{}.json", world.revision);
+    let first = world.record(&first_name);
+    let first_digest = sha256(&world.store.join(&first_name));
+    write(&world.repo.join("second.txt"), "second\n");
+    let second = world.commit("second");
+    let second_card = world.passing_card("second", &second);
+    let (code, out, err) = world.promote(&second_card, &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(&format!(
+            "candidate {second} against baseline {}",
+            world.revision
+        )),
+        "the first promotion is the baseline: {out}"
+    );
+    assert!(
+        out.contains("verdict: no scenario worse than the baseline"),
+        "{out}"
+    );
+    assert_eq!(
+        world.version(),
+        format!("takt 0.1.0 ({second})"),
+        "the installed binary names the second revision"
+    );
+    let second_name = format!("{second}.json");
+    let record = world.record(&second_name);
+    for line in [
+        "\"kind\": \"promotion\"".to_owned(),
+        format!("\"revision\": \"{second}\""),
+        format!("\"against\": \"{}\"", world.revision),
+        format!("\"previous_sha256\": \"{first_digest}\""),
+    ] {
+        assert!(record.contains(&line), "{line} in {record}");
+    }
+    assert_eq!(
+        field(&record, "promoted_at").get(..10),
+        field(&first, "promoted_at").get(..10),
+        "both promotions fall on one UTC day"
+    );
+    assert_eq!(field(&record, "binary_sha256"), sha256(&world.installed()));
+    let text = fs::read_to_string(head(&world)).expect("the head");
+    assert!(
+        text.contains(&format!("\"{second_name}\""))
+            && text.contains(&sha256(&world.store.join(&second_name))),
+        "the head names the second promotion: {text}"
+    );
+    let (code, out, err) = world.promote(&second_card, &[]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains(&format!("{second} is recorded already")),
+        "the second revision is named as recorded: {err}"
+    );
+    assert_eq!(
+        world.version(),
+        format!("takt 0.1.0 ({second})"),
+        "nothing is installed by the refusal"
     );
 }
 
@@ -1999,9 +2073,7 @@ fn two_promotions_at_once_record_and_install_exactly_one() {
     let (code, _, err) = refused[0];
     assert_eq!(*code, 1, "{err}");
     assert!(
-        err.contains("holds the store lock")
-            || err.contains("this UTC day already")
-            || err.contains("recorded already"),
+        err.contains("holds the store lock") || err.contains("recorded already"),
         "{err}"
     );
     let records = world.records();
