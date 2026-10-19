@@ -58,7 +58,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::scorecard::{
-    BINARY_FILE, METRICS, Row, Rule, RunBinary, Scorecard, StatedBy, is_sha256, rank,
+    BINARY_FILE, METRICS, Row, Rule, RunBinary, Scorecard, StatedBy, is_sha256, names_no_revision,
+    rank, unnamed_in_a_mix,
 };
 
 /// The promotion record's format.
@@ -1750,14 +1751,22 @@ fn installed_hashes_to(installed: &Path, revision: &str, stated: &str) -> Result
 /// the operator: a run that states none, states it by anything but the operator, or states
 /// another digest, is a refusal naming it, so the scorecard recorded is the stated binary's and
 /// every statement the record copies is the operator's. A run whose `opened` line names a
-/// revision must name `revision`; only a run that names none (no `binary`, or `unknown
-/// revision`) is taken on its statement alone. The runs with their statements, for the record.
+/// revision must name `revision`; only a run that names none ([`names_no_revision`]: no
+/// `binary`, or `unknown revision`) is taken on its statement alone, and a run that names none
+/// beside one that names one ([`unnamed_in_a_mix`]) is refused, as a save refuses it. The runs
+/// with their statements, for the record.
 fn runs_stating(
     card: &Scorecard,
     stated: &str,
     revision: &str,
     shown: &Path,
 ) -> Result<Vec<RecordedRun>> {
+    if let Some((run, _)) = unnamed_in_a_mix(&card.rows) {
+        bail!(
+            "{}: run {run} names no revision, beside runs that name one; a scorecard's runs all name {revision} or all name none, so nothing is recorded",
+            shown.display()
+        );
+    }
     let mut runs = Vec::new();
     let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
     for row in &card.rows {
@@ -1765,7 +1774,7 @@ fn runs_stating(
         *n += 1;
         let run = format!("{}#{n}", row.case);
         if let Some(named) = row.opened_binary.as_deref()
-            && named != "unknown revision"
+            && !names_no_revision(Some(named))
             && named != revision
         {
             bail!(

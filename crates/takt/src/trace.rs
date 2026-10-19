@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::events::{EVENTS_FILE, Events, TokenUsage};
-use crate::scorecard::{instant, outcome_of, scenario_of};
+use crate::scorecard::{instant, names_no_revision, outcome_of, scenario_of};
 
 /// The trace's format.
 pub const FORMAT: &str = "takt-trace/1";
@@ -1085,7 +1085,7 @@ impl Builder {
         let revision = self
             .binary
             .as_deref()
-            .filter(|binary| *binary != "unknown revision" && !binary.is_empty())
+            .filter(|binary| !names_no_revision(Some(binary)))
             .map(str::to_owned);
         let wall_s = match (&self.t0, &self.last) {
             (Some((t0, _)), Some((last, _))) => Some(seconds(last - t0)),
