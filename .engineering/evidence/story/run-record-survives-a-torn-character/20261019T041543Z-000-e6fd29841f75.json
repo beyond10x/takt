@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T04:15:43Z",
+  "actor": "human:timo",
+  "artifact": "story:run-record-survives-a-torn-character",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check on the merged tree at 1bdd60e: 715 passed, 0 failed, 4 ignored; citations 509/509",
+    "reference": "1bdd60e"
+  }
+}

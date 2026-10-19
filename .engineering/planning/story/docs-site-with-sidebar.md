@@ -2,15 +2,16 @@
 format: aep.planning-md/3
 id: story:docs-site-with-sidebar
 kind: story
-status: proposed
+status: active
 title: The takt site is a beyond10x docs site with a sidebar, its pages generated from records
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - depends_on: story:main-history-names-no-private-repository
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T01:34:31Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-19T04:15:44Z", actor: "human:timo", revision: 5}
 ---
 ## Outcome
 
