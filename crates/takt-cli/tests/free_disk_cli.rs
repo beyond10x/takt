@@ -1,6 +1,6 @@
 //! story:runs-check-free-disk at the command line: `--min-free-gib` on `takt run` and `takt
 //! scenario run` sets the free space a step needs on the file system of the tree and of the build
-//! directory; under it the run stops `DiskLow` before any step, exit 3, naming the path checked.
+//! directory; under it the run stops `DiskLow` before any step, exit 8, naming the path checked.
 //! No reader is injected here: a threshold far above any disk stops every run. `0` turns the
 //! check off. The harness is a double on the program path that counts its calls; nothing reaches
 //! a network or a model, and no test fills a disk.
@@ -150,10 +150,10 @@ fn disk_low(repo: &Path) -> String {
     format!("stopped: DiskLow ({}: ", repo.display())
 }
 
-/// `takt run` with a threshold above any disk stops before its first step, exit 3, naming the
+/// `takt run` with a threshold above any disk stops before its first step, exit 8, naming the
 /// tree and the threshold; the harness is not called.
 #[test]
-fn takt_run_under_the_threshold_stops_disk_low_at_exit_3() {
+fn takt_run_under_the_threshold_stops_disk_low_at_exit_8() {
     let world = world("run");
     let repo = world.repo.to_str().expect("utf-8");
     let (code, out, err) = world.takt(&[
@@ -171,7 +171,7 @@ fn takt_run_under_the_threshold_stops_disk_low_at_exit_3() {
         "--min-free-gib",
         BEYOND_ANY_DISK,
     ]);
-    assert_eq!(code, 3, "stdout {out} stderr {err}");
+    assert_eq!(code, 8, "stdout {out} stderr {err}");
     assert!(
         out.contains(&disk_low(&world.repo)),
         "stdout {out} stderr {err}"
@@ -186,7 +186,7 @@ fn takt_run_under_the_threshold_stops_disk_low_at_exit_3() {
 
 /// `takt scenario run` likewise.
 #[test]
-fn takt_scenario_run_under_the_threshold_stops_disk_low_at_exit_3() {
+fn takt_scenario_run_under_the_threshold_stops_disk_low_at_exit_8() {
     let world = world("scenario");
     let repo = world.repo.to_str().expect("utf-8");
     let (code, out, err) = world.takt(&[
@@ -204,7 +204,7 @@ fn takt_scenario_run_under_the_threshold_stops_disk_low_at_exit_3() {
         "--min-free-gib",
         BEYOND_ANY_DISK,
     ]);
-    assert_eq!(code, 3, "stdout {out} stderr {err}");
+    assert_eq!(code, 8, "stdout {out} stderr {err}");
     assert!(
         out.contains(&disk_low(&world.repo)),
         "stdout {out} stderr {err}"
@@ -240,7 +240,8 @@ fn a_threshold_of_zero_turns_the_check_off() {
     assert!(!out.contains("DiskLow"), "{out}");
 }
 
-/// Both verbs document the flag, its default and the stop under exit 3.
+/// Both verbs document the flag, its default and the stop under exit 8, its own code, which the
+/// exit-3 line no longer lists; the flag's help names exit 8 too.
 #[test]
 fn the_help_documents_the_flag_and_the_stop() {
     let world = world("help");
@@ -253,6 +254,18 @@ fn the_help_documents_the_flag_and_the_stop() {
             .lines()
             .find(|line| line.trim_start().starts_with("3  stopped:"))
             .expect("an exit-3 line");
-        assert!(three.contains("DiskLow"), "{three}");
+        assert!(!three.contains("DiskLow"), "{three}");
+        let eight = help
+            .lines()
+            .find(|line| line.trim_start().starts_with("8  stopped:"))
+            .expect("an exit-8 line");
+        assert!(eight.contains("DiskLow"), "{eight}");
+        let flag = help
+            .split("--min-free-gib <GIB>")
+            .nth(1)
+            .and_then(|rest| rest.split("[default: 10]").next())
+            .expect("the flag's help");
+        assert!(flag.contains("exit 8"), "{flag}");
+        assert!(!flag.contains("exit 3"), "{flag}");
     }
 }

@@ -8,6 +8,9 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ### Changed
 
+- A run that stops `DiskLow` exits 8, for `takt run` and `takt scenario run`, not 3: a runner that
+  resumes a stopped case on 3 no longer resumes a trial that ran out of disk.
+
 - Every commit takt makes (the take, the store's writes on the case's branch, an approval's
   record, a step's change) carries one identity as author and committer: `--commit-identity
   '<name> <email>'`, else the one `.engineering/commit-identity.conf` names at the commit the case

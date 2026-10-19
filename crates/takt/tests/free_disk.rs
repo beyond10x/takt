@@ -507,7 +507,7 @@ fn resumed(
 }
 
 /// A case only a grant can move stops for the grant on a low disk too: no step would follow,
-/// so free space is not what stops it (exit 4, not 3), and the harness is not called.
+/// so free space is not what stops it (exit 4, not 8), and the harness is not called.
 #[test]
 fn a_case_only_a_grant_moves_stops_approval_required_on_a_low_disk() {
     let tree = gated("grant");
@@ -530,7 +530,7 @@ fn a_case_only_a_grant_moves_stops_approval_required_on_a_low_disk() {
 }
 
 /// A `--forge none` case at "ahead" stops `Unperformable` on a low disk too: no step would
-/// follow (exit 7, not 3).
+/// follow (exit 7, not 8).
 #[test]
 fn a_forge_none_case_at_ahead_stops_unperformable_on_a_low_disk() {
     let tree = gated("ahead");
