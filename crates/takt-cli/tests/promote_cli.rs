@@ -652,6 +652,19 @@ impl World {
         fs::read_to_string(self.store.join(name)).expect("the record")
     }
 
+    /// Points the head beside the store at the record `name` as its file now is, as a process
+    /// running as the same user can (story:promotion-chain-head-anchored's stated limit): a
+    /// store edited by hand to reach a check behind the head.
+    fn rehead(&self, name: &str) {
+        write(
+            &head(self),
+            &format!(
+                "{{\n  \"record\": \"{name}\",\n  \"sha256\": \"{}\"\n}}\n",
+                sha256(&self.store.join(name))
+            ),
+        );
+    }
+
     /// The store's files in name order, the lock aside.
     fn records(&self) -> Vec<String> {
         let mut names: Vec<String> = fs::read_dir(&self.store)
@@ -1867,6 +1880,11 @@ fn a_binary_that_changes_once_installed_is_rolled_back() {
     );
     world.assert_untouched();
     assert_eq!(world.records(), baseline_files(), "the record is removed");
+    let text = fs::read_to_string(head(&world)).expect("the head");
+    assert!(
+        text.contains(&format!("\"{BASELINE_REVISION}.json\"")),
+        "the head points back at the record before it: {text}"
+    );
     assert!(
         fs::read_dir(world.root.join("bin"))
             .expect("bin")
@@ -2012,6 +2030,98 @@ fn a_removed_record_is_noticed() {
             && err.contains("missing"),
         "the gap is named: {err}"
     );
+}
+
+/// The chain's head, beside the store: `<state>/takt/promotions.head`.
+fn head(world: &World) -> PathBuf {
+    world.outer.join("state/takt/promotions.head")
+}
+
+/// story:promotion-chain-head-anchored: after a refusal, the refusal deleted and the same
+/// revision promoted again without `--rejudge` exits 1 naming the missing record, `--dry-run`
+/// too; nothing is written or installed and the head is left as it was.
+#[test]
+fn a_removed_latest_refusal_is_refused_naming_it() {
+    let world = World::new("head-removed", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let worse = world.candidate_card("worse", WITHIN_TOKENS, TWO_WORSE);
+    let (code, out, err) = world.promote(&worse, &[]);
+    assert_eq!(code, 3, "{out}{err}");
+    let refusal = format!("{}.refused.json", world.revision);
+    fs::remove_file(world.store.join(&refusal)).expect("removed");
+    let passing = world.candidate_card("passing", BASELINE_TOKENS, FIVE_APPROVALS);
+    for extra in [&["--dry-run"][..], &[]] {
+        let (code, out, err) = world.promote(&passing, extra);
+        assert_eq!(code, 1, "{extra:?}: {out}{err}");
+        assert!(
+            err.contains(&refusal) && err.contains("promotions.head") && err.contains("missing"),
+            "{extra:?}: the missing record is named: {err}"
+        );
+    }
+    world.assert_untouched();
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// story:promotion-chain-head-anchored: after a refusal, the refusal's file replaced with an
+/// older record's bytes, the same revision promoted again exits 1 naming the record the head
+/// names, `--dry-run` too; nothing is written or installed.
+#[test]
+fn a_latest_refusal_replaced_by_an_older_records_bytes_is_refused_naming_it() {
+    let world = World::new("head-replaced", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let worse = world.candidate_card("worse", WITHIN_TOKENS, TWO_WORSE);
+    let (code, out, err) = world.promote(&worse, &[]);
+    assert_eq!(code, 3, "{out}{err}");
+    let refusal = format!("{}.refused.json", world.revision);
+    fs::copy(
+        world.store.join(format!("{BASELINE_REVISION}.json")),
+        world.store.join(&refusal),
+    )
+    .expect("replaced");
+    let passing = world.candidate_card("passing", BASELINE_TOKENS, FIVE_APPROVALS);
+    for extra in [&["--dry-run"][..], &[]] {
+        let (code, out, err) = world.promote(&passing, extra);
+        assert_eq!(code, 1, "{extra:?}: {out}{err}");
+        assert!(
+            err.contains(&refusal) && err.contains("promotions.head") && err.contains("replaced"),
+            "{extra:?}: the replaced record is named: {err}"
+        );
+    }
+    world.assert_untouched();
+    let mut expected = baseline_files();
+    expected.push(refusal);
+    expected.sort();
+    assert_eq!(world.records(), expected, "nothing recorded");
+}
+
+/// story:promotion-chain-head-anchored D2, D3: a store with records and no head is read once on
+/// trust, said on stderr; a dry run writes no head, a promotion writes it from the chain as it
+/// stands and then names each record it writes; a later read says nothing of trust.
+#[test]
+fn a_store_without_a_head_is_read_once_on_trust() {
+    let world = World::new("head-trust", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card("trust", WITHIN_TOKENS, TWO_WORSE);
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(err.contains("on trust"), "{err}");
+    assert!(!head(&world).exists(), "a dry run writes no head");
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(
+        err.contains("on trust") && err.contains(&format!("{BASELINE_REVISION}.json")),
+        "{err}"
+    );
+    let refused = world.store.join(format!("{}.refused.json", world.revision));
+    let text = fs::read_to_string(head(&world)).expect("the head");
+    assert!(
+        text.contains(&format!("{}.refused.json", world.revision))
+            && text.contains(&sha256(&refused)),
+        "the head names the latest record: {text}"
+    );
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(!err.contains("on trust"), "read on trust once: {err}");
 }
 
 /// story:promote-binds-scorecard-and-merge: a clean branch tip that is not an ancestor of
@@ -2478,6 +2588,7 @@ fn a_rejudges_naming_no_refusal_in_the_chain_refuses_the_store() {
         text.replace(&named, "\"record\": \"nothing.refused.json\""),
     )
     .expect("edited");
+    world.rehead(&second);
     let fresh = world.trials_card("fresh", 31, WITHIN_TOKENS, FIVE_APPROVALS);
     let (code, out, err) = world.promote(&fresh, &["--rejudge", "--dry-run"]);
     assert_eq!(code, 1, "{out}{err}");
@@ -2599,6 +2710,7 @@ fn refused_then_stale(name: &str) -> (World, String) {
         "previous_sha256",
         &sha256(&base),
     );
+    world.rehead(&refusal);
     (world, refusal)
 }
 
@@ -2705,6 +2817,7 @@ fn a_rebaseline_record_replacing_nothing_refuses_the_store() {
         .find(|name| name.contains(".rebaseline-") && !name.ends_with(".scorecard.json"))
         .expect("the rebaseline record");
     patch(&world.store.join(&name), "replaces_sha256", &"0".repeat(64));
+    world.rehead(&name);
     let card = world.candidate_card("candidate", BASELINE_TOKENS, FIVE_APPROVALS);
     let (code, out, err) = world.promote(&card, &["--dry-run"]);
     assert_eq!(code, 1, "{out}{err}");
