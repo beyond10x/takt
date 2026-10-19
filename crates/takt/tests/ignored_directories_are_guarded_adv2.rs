@@ -319,10 +319,11 @@ fn a_run_takes_no_set_aside_root_it_could_not_use() {
         done: std::cell::Cell::new(false),
     };
     let mut run = Run::open(&s.repo, options(protocol), &harness, &validators).expect("opens");
+    let resolved = |dir: &Path| takt::git::set_aside_root(dir, &s.repo).expect("usable");
     assert_eq!(
         Some(run.set_aside().to_path_buf()),
-        takt::run::default_set_aside(),
-        "a run given no set-aside root opens with the default"
+        takt::run::default_set_aside().map(|dir| resolved(&dir)),
+        "a run given no set-aside root opens with the default, resolved"
     );
     let default = run.set_aside().to_path_buf();
     fs::write(s.root.join("a-file"), "x").expect("a file");
@@ -342,7 +343,7 @@ fn a_run_takes_no_set_aside_root_it_could_not_use() {
         assert_eq!(run.set_aside(), default, "{}", refused.display());
     }
     run.set_aside_in(s.aside_root()).expect("taken");
-    assert_eq!(run.set_aside(), s.aside_root());
+    assert_eq!(run.set_aside(), resolved(&s.aside_root()));
 }
 
 /// R5: a refused tests.run: what it created under target/ is removed, what it rewrote stays,

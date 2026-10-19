@@ -1623,7 +1623,7 @@ pub struct Checkpoint {
     head_file: (PathBuf, Content),
     index_lock: (PathBuf, bool),
     git_dirs: Vec<GitDir>,
-    aside: Option<PathBuf>,
+    aside: Option<Aside>,
 }
 
 /// What a judgement step did to the tree, against its [`Checkpoint`].
@@ -1844,9 +1844,67 @@ pub struct SetAside {
     pub failed: Vec<(OsString, String)>,
 }
 
-/// `dir` when a set-aside root can be: absolute, outside `tree` (through any link on the way to
-/// either), and with a directory, not a file, where its way ends among what exists. Nothing is
-/// made; the error says which it is not.
+/// How many paths a refusal names before it counts the rest; a build inside an ignored
+/// directory changes thousands.
+const NAMED_AT_MOST: usize = 20;
+
+/// How a refusal names paths: the first [`NAMED_AT_MOST`], each as [`shown`] names it, and how
+/// many more.
+#[must_use]
+pub fn paths_named(paths: &[OsString]) -> String {
+    let mut named = paths
+        .iter()
+        .take(NAMED_AT_MOST)
+        .map(|path| shown(path))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if paths.len() > NAMED_AT_MOST {
+        named.push_str(&format!(" and {} more", paths.len() - NAMED_AT_MOST));
+    }
+    named
+}
+
+impl SetAside {
+    /// What every message about a discarded harness step adds for these files: where they went
+    /// and which they are, and which could not be moved and why, each path and each reason
+    /// escaped; nothing when there were none. The one place that says it, whichever way the
+    /// step was discarded, and the error a restore that could not finish ends on carries it too.
+    #[must_use]
+    pub fn named(&self) -> String {
+        let mut named = String::new();
+        if let Some(dir) = &self.dir
+            && !self.moved.is_empty()
+        {
+            named.push_str(&format!(
+                "; moved out of the tree, not deleted, into {}: {}",
+                shown(dir.as_os_str()),
+                paths_named(&self.moved)
+            ));
+        }
+        if !self.failed.is_empty() {
+            let mut failed = self
+                .failed
+                .iter()
+                .take(NAMED_AT_MOST)
+                .map(|(path, why)| format!("{} ({})", shown(path), crate::trace::escape(why)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if self.failed.len() > NAMED_AT_MOST {
+                failed.push_str(&format!(" and {} more", self.failed.len() - NAMED_AT_MOST));
+            }
+            named.push_str(&format!(
+                "; could not be moved out of the tree, left as the step left it: {failed}"
+            ));
+        }
+        named
+    }
+}
+
+/// `dir` resolved, when a set-aside root can be: absolute, outside `tree` (through any link on the
+/// way to either), and with a directory, not a file, where its way ends among what exists. The
+/// path returned holds no link: every link on the way that exists now is resolved, so a link
+/// planted on it later is refused, never followed ([`DirFd::open`]). Nothing is made; the error
+/// says which it is not.
 pub fn set_aside_root(dir: &Path, tree: &Path) -> Result<PathBuf> {
     if !dir.is_absolute() {
         bail!(
@@ -1860,7 +1918,11 @@ pub fn set_aside_root(dir: &Path, tree: &Path) -> Result<PathBuf> {
     while std::fs::symlink_metadata(base).is_err() {
         match (base.parent(), base.file_name()) {
             (Some(parent), Some(name)) => {
-                rest = Path::new(name).join(rest);
+                rest = if rest.as_os_str().is_empty() {
+                    PathBuf::from(name)
+                } else {
+                    Path::new(name).join(rest)
+                };
                 base = parent;
             }
             _ => break,
@@ -1884,66 +1946,170 @@ pub fn set_aside_root(dir: &Path, tree: &Path) -> Result<PathBuf> {
             tree.display()
         );
     }
-    Ok(dir.to_path_buf())
+    Ok(resolved)
 }
 
-/// `base`, or `base-2`, `base-3` and so on: the first that did not exist, made by this call, so
-/// that no two steps ever share one; the way to it made first.
-fn fresh_dir(base: &Path) -> Result<PathBuf> {
-    if let Some(parent) = base.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+/// Where discarding a harness step moves what it rewrote: the root [`set_aside_root`] accepted,
+/// resolved; the case's own directory under it; the step's directory under that, its name
+/// before a `-2`, `-3` is put after it ([`fresh_dir`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Aside {
+    root: PathBuf,
+    case: OsString,
+    step: String,
+}
+
+/// A directory, opened so that no link on the way to it was followed ([`Self::open`]): a harness
+/// step's rewrites are moved through these, never through a path the step could have turned
+/// into a link after it was checked.
+#[cfg(unix)]
+struct DirFd(std::os::fd::OwnedFd);
+
+/// `name` as the C string a system call takes.
+#[cfg(unix)]
+fn c_name(name: &OsStr) -> std::io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt as _;
+    std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+}
+
+#[cfg(unix)]
+impl DirFd {
+    /// `path`, absolute, opened from `/` one part at a time, each a directory opened without
+    /// following a link (`O_NOFOLLOW`); a part that does not exist is made first (`mkdirat`,
+    /// mode 0700) when `make`. A link, a file or anything else on the way is the error.
+    fn open(path: &Path, make: bool) -> std::io::Result<Self> {
+        use std::path::Component;
+        let mut dir = Self::at(libc::AT_FDCWD, OsStr::new("/"))?;
+        for part in path.components() {
+            match part {
+                Component::RootDir => {}
+                Component::Normal(name) => dir = dir.child(name, make)?,
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("{} is not a plain absolute path", path.display()),
+                    ));
+                }
+            }
+        }
+        Ok(dir)
     }
-    for n in 1..=10_000_u32 {
-        let dir = if n == 1 {
-            base.to_path_buf()
-        } else {
-            let mut name = base.as_os_str().to_owned();
-            name.push(format!("-{n}"));
-            PathBuf::from(name)
+
+    /// The directory `name` in `fd`, opened without following a link.
+    fn at(fd: libc::c_int, name: &OsStr) -> std::io::Result<Self> {
+        use std::os::fd::FromRawFd as _;
+        let name = c_name(name)?;
+        // SAFETY: a NUL-terminated name and a descriptor (or `AT_FDCWD`) that outlive the call.
+        let opened = unsafe {
+            libc::openat(
+                fd,
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
         };
-        match std::fs::create_dir(&dir) {
-            Ok(()) => return Ok(dir),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error).with_context(|| format!("create {}", dir.display())),
+        if opened < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: a descriptor this call opened, owned by nothing else.
+        Ok(Self(unsafe { std::os::fd::OwnedFd::from_raw_fd(opened) }))
+    }
+
+    fn raw(&self) -> libc::c_int {
+        use std::os::fd::AsRawFd as _;
+        self.0.as_raw_fd()
+    }
+
+    /// The directory `name` in this one, made first when it does not exist and `make`.
+    fn child(&self, name: &OsStr, make: bool) -> std::io::Result<Self> {
+        match Self::at(self.raw(), name) {
+            Err(error) if make && error.kind() == std::io::ErrorKind::NotFound => {
+                self.make(name)?;
+                Self::at(self.raw(), name)
+            }
+            opened => opened,
         }
     }
-    bail!("no new directory beside {} could be made", base.display())
+
+    /// Makes the directory `name` in this one: true when this call made it, false when
+    /// something was there already.
+    fn make(&self, name: &OsStr) -> std::io::Result<bool> {
+        let name = c_name(name)?;
+        // SAFETY: a NUL-terminated name and a descriptor that outlive the call.
+        if unsafe { libc::mkdirat(self.raw(), name.as_ptr(), 0o700) } == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            Ok(false)
+        } else {
+            Err(error)
+        }
+    }
+
+    /// Removes `name` in this one, a link as the link.
+    fn unlink(&self, name: &OsStr) -> std::io::Result<()> {
+        let name = c_name(name)?;
+        // SAFETY: a NUL-terminated name and a descriptor that outlive the call.
+        if unsafe { libc::unlinkat(self.raw(), name.as_ptr(), 0) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
 }
 
-/// Moves what is at `from` (a link as the link) to `to`, never over anything there: renamed
-/// without replacing, else copied ([`copy_aside`]) when the two are on different file systems.
-fn move_aside(from: &Path, to: &Path) -> Result<()> {
-    if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+/// `step`, or `step-2`, `step-3` and so on, in `case`: the first this call made, never one that
+/// was there, so that no two steps ever share one; its name and the directory, opened.
+#[cfg(unix)]
+fn fresh_dir(case: &DirFd, step: &str) -> std::io::Result<(String, DirFd)> {
+    for n in 1..=10_000_u32 {
+        let name = if n == 1 {
+            step.to_owned()
+        } else {
+            format!("{step}-{n}")
+        };
+        if case.make(OsStr::new(&name))? {
+            let dir = case.child(OsStr::new(&name), false)?;
+            return Ok((name, dir));
+        }
     }
-    match rename_no_replace(from, to) {
+    Err(std::io::Error::other(format!(
+        "no new directory beside {step} could be made"
+    )))
+}
+
+/// Moves what is at `from` (a link as the link) to `name` in `dir`, never over anything there:
+/// renamed without replacing, else copied ([`copy_into`]) when the two are on different file
+/// systems.
+#[cfg(unix)]
+fn move_into(from: &Path, dir: &DirFd, name: &OsStr) -> Result<()> {
+    let (source, target) = (c_name(from.as_os_str())?, c_name(name)?);
+    match rename_no_replace(&source, dir, &target) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => copy_aside(from, to),
-        Err(error) => {
-            Err(error).with_context(|| format!("move {} to {}", from.display(), to.display()))
-        }
+        Err(error) if error.raw_os_error() == Some(libc::EXDEV) => copy_into(from, dir, name),
+        Err(error) => Err(error).with_context(|| format!("move {} aside", from.display())),
     }
 }
 
-/// Renames `from` to `to`, failing with `AlreadyExists` when something is at `to`, never
-/// replacing it: `renameat2` with `RENAME_NOREPLACE`, else, where the file system or the kernel
-/// has no such flag, a hard link (which fails on what is there) and then the unlink.
-fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+/// Renames `from` to `name` in `dir`, failing when something is there, never replacing it:
+/// `renameat2` with `RENAME_NOREPLACE`, else, where the file system or the kernel has no such
+/// flag, a hard link (which fails on what is there) and then the unlink.
+#[cfg(unix)]
+fn rename_no_replace(
+    from: &std::ffi::CStr,
+    dir: &DirFd,
+    name: &std::ffi::CStr,
+) -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     {
-        use std::os::unix::ffi::OsStrExt as _;
-        let c = |path: &Path| {
-            std::ffi::CString::new(path.as_os_str().as_bytes())
-                .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
-        };
-        let (old, new) = (c(from)?, c(to)?);
-        // SAFETY: both are NUL-terminated paths that live across the call.
+        // SAFETY: NUL-terminated names and a descriptor that outlive the call.
         let done = unsafe {
             libc::renameat2(
                 libc::AT_FDCWD,
-                old.as_ptr(),
-                libc::AT_FDCWD,
-                new.as_ptr(),
+                from.as_ptr(),
+                dir.raw(),
+                name.as_ptr(),
                 libc::RENAME_NOREPLACE,
             )
         };
@@ -1955,15 +2121,25 @@ fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
             return Err(error);
         }
     }
-    std::fs::hard_link(from, to)?;
-    std::fs::remove_file(from)
+    // SAFETY: NUL-terminated names and a descriptor that outlive the call.
+    if unsafe { libc::linkat(libc::AT_FDCWD, from.as_ptr(), dir.raw(), name.as_ptr(), 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: a NUL-terminated name that outlives the call.
+    if unsafe { libc::unlink(from.as_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
-/// Copies the regular file `from` to `to`, which must not exist, then removes `from`: the
-/// bytes synced to disk, their count checked against the source's length, its mode and
-/// modification time kept. Anything but a regular file is refused; a copy that fails is
-/// removed, never left half made.
-fn copy_aside(from: &Path, to: &Path) -> Result<()> {
+/// Copies the regular file `from` to `name` in `dir`, which must not exist, then removes
+/// `from`: the bytes synced to disk, their count checked against the source's length, its mode
+/// and modification time kept. Anything but a regular file is refused, and so is a source that
+/// became a link; a copy that fails is removed, never left half made.
+#[cfg(unix)]
+fn copy_into(from: &Path, dir: &DirFd, name: &OsStr) -> Result<()> {
+    use std::os::fd::FromRawFd as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
     let meta =
         std::fs::symlink_metadata(from).with_context(|| format!("read {}", from.display()))?;
     if !meta.is_file() {
@@ -1972,13 +2148,27 @@ fn copy_aside(from: &Path, to: &Path) -> Result<()> {
             from.display()
         );
     }
-    let mut source =
-        std::fs::File::open(from).with_context(|| format!("open {}", from.display()))?;
-    let mut target = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(to)
-        .with_context(|| format!("create {}", to.display()))?;
+    let mut source = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(from)
+        .with_context(|| format!("open {}", from.display()))?;
+    let target_name = c_name(name)?;
+    // SAFETY: a NUL-terminated name and a descriptor that outlive the call.
+    let opened = unsafe {
+        libc::openat(
+            dir.raw(),
+            target_name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600 as libc::c_uint,
+        )
+    };
+    if opened < 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("make the copy of {}", from.display()));
+    }
+    // SAFETY: a descriptor this call opened, owned by nothing else.
+    let mut target = std::fs::File::from(unsafe { std::os::fd::OwnedFd::from_raw_fd(opened) });
     let copied = (|| -> Result<()> {
         let count = std::io::copy(&mut source, &mut target)?;
         if count != meta.len() {
@@ -1993,8 +2183,8 @@ fn copy_aside(from: &Path, to: &Path) -> Result<()> {
     })();
     drop(target);
     if let Err(error) = copied {
-        let _ = std::fs::remove_file(to);
-        return Err(error.context(format!("copy {} to {}", from.display(), to.display())));
+        let _ = dir.unlink(name);
+        return Err(error.context(format!("copy {} aside", from.display())));
     }
     std::fs::remove_file(from).with_context(|| format!("remove {}", from.display()))
 }
@@ -2069,9 +2259,10 @@ impl Checkpoint {
     /// named in [`GitDirPutBack::failed`] and the rest is still put back.
     pub fn put_back_git_dir(&self, tree: &Path) -> GitDirPutBack {
         let mut found = GitDirPutBack::default();
+        // Each path as [`shown`] names it: a name the step chose shapes no line of a refusal.
         let shown = |path: &Path| match path.strip_prefix(tree) {
-            Ok(inside) => inside.display().to_string(),
-            Err(_) => path.display().to_string(),
+            Ok(inside) => shown(inside.as_os_str()),
+            Err(_) => shown(path.as_os_str()),
         };
         let dot_git = tree.join(".git");
         match Content::of(&dot_git) {
@@ -2209,6 +2400,13 @@ impl Checkpoint {
                 }
             }
         }
+        // What went wrong quotes paths too; escaped once more, which changes nothing already
+        // escaped ([`crate::trace::escape`]).
+        found.failed = found
+            .failed
+            .iter()
+            .map(|failed| crate::trace::escape(failed))
+            .collect();
         found
     }
 
@@ -2289,13 +2487,15 @@ impl Checkpoint {
     }
 
     /// Where discarding the step moves what it rewrote inside an ignored directory
-    /// ([`StepChange::ignored_set_aside`]): `dir`, or, when something is there already as the
-    /// step is discarded, `dir-2`, `dir-3` and so on, each made new for this step and never
-    /// shared with another ([`fresh_dir`]). The caller names a directory under a root
-    /// [`set_aside_root`] accepted. None unless given; nothing is moved then.
+    /// ([`StepChange::ignored_set_aside`]): `<root>/<case>/<step>`, or, when something is there
+    /// already as the step is discarded, `<step>-2`, `<step>-3` and so on, each made new for
+    /// this step and never shared with another ([`fresh_dir`]). `root` is one
+    /// [`set_aside_root`] returned; every directory from `/` down is opened without following a
+    /// link ([`DirFd::open`]), so a link a step planted there since is refused, never followed.
+    /// None unless given; nothing is moved then.
     #[must_use]
-    pub fn setting_aside_in(mut self, dir: PathBuf) -> Self {
-        self.aside = Some(dir);
+    pub fn setting_aside_in(mut self, root: PathBuf, case: OsString, step: String) -> Self {
+        self.aside = Some(Aside { root, case, step });
         self
     }
 
@@ -2319,33 +2519,91 @@ impl Checkpoint {
 
     /// Moves each of `paths`, relative to `tree`, to the same relative path under a directory
     /// made new for this step ([`fresh_dir`]), every one attempted whatever became of the one
-    /// before; what could not be moved is named with why, and stays as the step left it.
+    /// before; what could not be moved is named with why, and stays as the step left it. When
+    /// the root or the case's directory is no longer a real directory (a link, a file), nothing
+    /// is moved, and each file is named with that.
+    #[cfg(unix)]
     fn set_aside_all(&self, tree: &Path, paths: &[OsString]) -> SetAside {
         let mut done = SetAside::default();
-        let Some(base) = self.aside.as_deref() else {
+        let Some(aside) = &self.aside else {
             return done;
         };
         if paths.is_empty() {
             return done;
         }
-        let dir = match fresh_dir(base) {
-            Ok(dir) => dir,
-            Err(error) => {
+        let case_path = aside.root.join(&aside.case);
+        let step = DirFd::open(&aside.root, true)
+            .map_err(|error| {
+                format!(
+                    "the set-aside directory {} is not a directory that can be reached without a link: {error}",
+                    aside.root.display()
+                )
+            })
+            .and_then(|root| {
+                root.child(&aside.case, true).map_err(|error| {
+                    format!(
+                        "the set-aside directory {} is not a directory that can be reached without a link: {error}",
+                        case_path.display()
+                    )
+                })
+            })
+            .and_then(|case| {
+                fresh_dir(&case, &aside.step).map_err(|error| {
+                    format!(
+                        "no directory for the step could be made in {}: {error}",
+                        case_path.display()
+                    )
+                })
+            });
+        let (name, step) = match step {
+            Ok(step) => step,
+            Err(why) => {
                 done.failed = paths
                     .iter()
-                    .map(|path| (path.clone(), format!("{error:#}")))
+                    .map(|path| (path.clone(), why.clone()))
                     .collect();
                 return done;
             }
         };
         for path in paths {
-            match move_aside(&at(tree, path), &dir.join(Path::new(path))) {
+            let moved = (|| -> Result<()> {
+                let relative = Path::new(path);
+                let file = relative
+                    .file_name()
+                    .ok_or_else(|| anyhow!("{} names no file", relative.display()))?;
+                let mut parent = DirFd::at(step.raw(), OsStr::new("."))?;
+                if let Some(dirs) = relative.parent() {
+                    for part in dirs.components() {
+                        parent = parent.child(part.as_os_str(), true)?;
+                    }
+                }
+                move_into(&at(tree, path), &parent, file)
+            })();
+            match moved {
                 Ok(()) => done.moved.push(path.clone()),
                 Err(error) => done.failed.push((path.clone(), format!("{error:#}"))),
             }
         }
-        done.dir = Some(dir);
+        done.dir = Some(case_path.join(name));
         done
+    }
+
+    /// Without a file system that opens a directory without following a link, nothing is moved
+    /// aside; each file is named with why and stays as the step left it.
+    #[cfg(not(unix))]
+    fn set_aside_all(&self, _tree: &Path, paths: &[OsString]) -> SetAside {
+        SetAside {
+            failed: paths
+                .iter()
+                .map(|path| {
+                    (
+                        path.clone(),
+                        "moving a file aside needs a unix file system".to_owned(),
+                    )
+                })
+                .collect(),
+            ..SetAside::default()
+        }
     }
 
     /// Puts the tree back to this checkpoint: everything the step did is discarded and
@@ -2424,7 +2682,10 @@ impl Checkpoint {
             || !left.refs.is_empty()
             || !left.ignored_added.is_empty()
         {
-            bail!("the tree could not be put back as it was before the step: {left:?}");
+            bail!(
+                "the tree could not be put back as it was before the step: {left:?}{}",
+                aside.named()
+            );
         }
         Ok(aside)
     }
@@ -2632,6 +2893,24 @@ mod tests {
         std::fs::create_dir_all(tree.join("sub")).expect("a directory");
         let outside = s.0.join("state/takt/set-aside");
         assert_eq!(set_aside_root(&outside, &tree).expect("accepted"), outside);
+        assert!(
+            !set_aside_root(&outside, &tree)
+                .expect("accepted")
+                .as_os_str()
+                .as_encoded_bytes()
+                .ends_with(b"/"),
+            "a root that does not exist yet is named without a `/` after it"
+        );
+        // A link on the way that is there now is resolved, so none is left to follow later.
+        #[cfg(unix)]
+        {
+            std::fs::create_dir_all(s.0.join("state")).expect("a directory");
+            std::os::unix::fs::symlink(s.0.join("state"), s.0.join("via")).expect("a link");
+            assert_eq!(
+                set_aside_root(&s.0.join("via/takt"), &tree).expect("accepted"),
+                s.0.join("state/takt")
+            );
+        }
         assert!(set_aside_root(Path::new("relative/aside"), &tree).is_err());
         // Relative, though its way starts where the test runs and exists.
         assert!(set_aside_root(Path::new("./aside"), &tree).is_err());
@@ -2649,31 +2928,62 @@ mod tests {
         assert!(set_aside_root(&s.0.join("a-file"), &tree).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_fresh_dir_is_never_one_that_exists() {
         let s = scratch("fresh");
-        let base = s.0.join("rv/step-2");
-        assert_eq!(fresh_dir(&base).expect("made"), base);
-        let second = fresh_dir(&base).expect("made");
-        assert_eq!(second, s.0.join("rv/step-2-2"));
+        let case = DirFd::open(&s.0.join("rv"), true).expect("the case directory");
+        assert_eq!(fresh_dir(&case, "step-2").expect("made").0, "step-2");
+        assert_eq!(fresh_dir(&case, "step-2").expect("made").0, "step-2-2");
         std::fs::write(s.0.join("rv/step-2-3"), "x").expect("a file in the way");
-        assert_eq!(fresh_dir(&base).expect("made"), s.0.join("rv/step-2-4"));
+        std::os::unix::fs::symlink(&s.0, s.0.join("rv/step-2-4")).expect("a link in the way");
+        assert_eq!(fresh_dir(&case, "step-2").expect("made").0, "step-2-5");
+        assert!(s.0.join("rv/step-2-5").is_dir());
     }
 
+    /// A link anywhere on the way, the last part or one before it, is refused, never followed;
+    /// a part that is not there is made only when asked.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_is_opened_without_following_a_link_on_the_way() {
+        let s = scratch("nofollow");
+        let real = s.0.join("real");
+        std::fs::create_dir_all(real.join("inner")).expect("a directory");
+        std::os::unix::fs::symlink(&real, s.0.join("link")).expect("a link");
+        assert!(DirFd::open(&s.0.join("link"), true).is_err());
+        assert!(DirFd::open(&s.0.join("link/inner"), true).is_err());
+        assert!(DirFd::open(&s.0.join("link/made"), true).is_err());
+        assert!(!real.join("made").exists(), "made through the link");
+        assert!(DirFd::open(&s.0.join("absent"), false).is_err());
+        assert!(!s.0.join("absent").exists());
+        DirFd::open(&s.0.join("made/deeper"), true).expect("made");
+        assert!(s.0.join("made/deeper").is_dir());
+        let dir = DirFd::open(&real, false).expect("opened");
+        assert!(dir.child(OsStr::new("inner"), false).is_ok());
+        std::os::unix::fs::symlink(&real, real.join("back")).expect("a link");
+        assert!(dir.child(OsStr::new("back"), true).is_err());
+    }
+
+    #[cfg(unix)]
     #[test]
     fn moving_aside_never_replaces_what_is_there() {
         let s = scratch("noreplace");
-        let (from, to) = (s.0.join("from.o"), s.0.join("aside/from.o"));
+        let from = s.0.join("from.o");
         std::fs::write(&from, "step").expect("a file");
-        std::fs::create_dir_all(s.0.join("aside")).expect("a directory");
-        std::fs::write(&to, "there").expect("a file");
-        assert!(move_aside(&from, &to).is_err());
+        let dir = DirFd::open(&s.0.join("aside"), true).expect("a directory");
+        std::fs::write(s.0.join("aside/from.o"), "there").expect("a file");
+        assert!(move_into(&from, &dir, OsStr::new("from.o")).is_err());
         assert_eq!(std::fs::read_to_string(&from).expect("kept"), "step");
-        assert_eq!(std::fs::read_to_string(&to).expect("kept"), "there");
-        std::fs::remove_file(&to).expect("removed");
-        move_aside(&from, &to).expect("moved");
+        assert_eq!(
+            std::fs::read_to_string(s.0.join("aside/from.o")).expect("kept"),
+            "there"
+        );
+        move_into(&from, &dir, OsStr::new("moved.o")).expect("moved");
         assert!(!from.exists());
-        assert_eq!(std::fs::read_to_string(&to).expect("moved"), "step");
+        assert_eq!(
+            std::fs::read_to_string(s.0.join("aside/moved.o")).expect("moved"),
+            "step"
+        );
     }
 
     #[cfg(unix)]
@@ -2681,7 +2991,9 @@ mod tests {
     fn a_copy_aside_keeps_bytes_mode_and_time_and_removes_the_source() {
         use std::os::unix::fs::PermissionsExt as _;
         let s = scratch("copy");
-        let (from, to) = (s.0.join("from.o"), s.0.join("to.o"));
+        let from = s.0.join("from.o");
+        let dir = DirFd::open(&s.0.join("aside"), true).expect("a directory");
+        let to = s.0.join("aside/to.o");
         std::fs::write(&from, "the operator's bytes").expect("a file");
         std::fs::set_permissions(&from, std::fs::Permissions::from_mode(0o640)).expect("a mode");
         let when = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
@@ -2691,7 +3003,7 @@ mod tests {
             .expect("opens")
             .set_modified(when)
             .expect("a time");
-        copy_aside(&from, &to).expect("copied");
+        copy_into(&from, &dir, OsStr::new("to.o")).expect("copied");
         assert!(!from.exists(), "the source is removed");
         let meta = std::fs::metadata(&to).expect("the copy");
         assert_eq!(
@@ -2702,7 +3014,7 @@ mod tests {
         assert_eq!(meta.modified().expect("a time"), when);
         // Never over what is there.
         std::fs::write(&from, "again").expect("a file");
-        assert!(copy_aside(&from, &to).is_err());
+        assert!(copy_into(&from, &dir, OsStr::new("to.o")).is_err());
         assert_eq!(std::fs::read_to_string(&from).expect("kept"), "again");
         assert_eq!(
             std::fs::read_to_string(&to).expect("kept"),
@@ -2715,23 +3027,24 @@ mod tests {
     fn a_copy_aside_takes_nothing_but_a_regular_file_and_leaves_no_half_copy() {
         use std::os::unix::fs::PermissionsExt as _;
         let s = scratch("copy-refused");
+        let dir = DirFd::open(&s.0.join("aside"), true).expect("a directory");
         // As long as the link's own target name, so only the kind tells them apart.
         std::fs::write(s.0.join("target.o"), "12345678").expect("a file");
         std::os::unix::fs::symlink("target.o", s.0.join("link.o")).expect("a link");
-        assert!(copy_aside(&s.0.join("link.o"), &s.0.join("to-link.o")).is_err());
+        assert!(copy_into(&s.0.join("link.o"), &dir, OsStr::new("to-link.o")).is_err());
         assert!(
             std::fs::symlink_metadata(s.0.join("link.o")).is_ok(),
             "the link stays"
         );
-        assert!(!s.0.join("to-link.o").exists());
+        assert!(std::fs::symlink_metadata(s.0.join("aside/to-link.o")).is_err());
         // A source that cannot be read: refused before anything is made.
         let locked = s.0.join("locked.o");
         std::fs::write(&locked, "x").expect("a file");
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("a mode");
-        let refused = copy_aside(&locked, &s.0.join("to-locked.o"));
+        let refused = copy_into(&locked, &dir, OsStr::new("to-locked.o"));
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o600)).expect("a mode");
         assert!(refused.is_err());
-        assert!(!s.0.join("to-locked.o").exists(), "no half copy");
+        assert!(!s.0.join("aside/to-locked.o").exists(), "no half copy");
         assert!(locked.exists());
     }
 
@@ -2741,9 +3054,9 @@ mod tests {
     #[test]
     fn a_copy_aside_whose_count_is_not_the_length_is_removed() {
         let s = scratch("copy-count");
-        let to = s.0.join("status.o");
-        assert!(copy_aside(Path::new("/proc/self/status"), &to).is_err());
-        assert!(!to.exists(), "no half copy");
+        let dir = DirFd::open(&s.0.join("aside"), true).expect("a directory");
+        assert!(copy_into(Path::new("/proc/self/status"), &dir, OsStr::new("status.o")).is_err());
+        assert!(!s.0.join("aside/status.o").exists(), "no half copy");
     }
 
     #[test]

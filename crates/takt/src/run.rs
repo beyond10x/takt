@@ -2995,60 +2995,9 @@ fn undo_step(
     Ok(aside)
 }
 
-/// How a refusal names ignored paths: the first twenty, each as [`crate::git::shown`] names it,
-/// and how many more; a build inside an ignored directory changes thousands.
+/// How a refusal names ignored paths ([`crate::git::paths_named`]).
 fn ignored_named(paths: &[std::ffi::OsString]) -> String {
-    const SHOWN: usize = 20;
-    let mut named = paths
-        .iter()
-        .take(SHOWN)
-        .map(|path| crate::git::shown(path))
-        .collect::<Vec<_>>()
-        .join(", ");
-    if paths.len() > SHOWN {
-        named.push_str(&format!(" and {} more", paths.len() - SHOWN));
-    }
-    named
-}
-
-/// What every message about a discarded harness step adds for the files inside an ignored
-/// directory that discarding it moved out of the tree ([`crate::git::SetAside`]): where they
-/// went and which they are, and which could not be moved and why; nothing when there were
-/// none. The one place that says it, whichever way the step was discarded.
-fn set_aside_named(aside: &crate::git::SetAside) -> String {
-    let mut named = String::new();
-    if let Some(dir) = &aside.dir
-        && !aside.moved.is_empty()
-    {
-        named.push_str(&format!(
-            "; moved out of the tree, not deleted, into {}: {}",
-            crate::git::shown(dir.as_os_str()),
-            ignored_named(&aside.moved)
-        ));
-    }
-    if !aside.failed.is_empty() {
-        const SHOWN: usize = 20;
-        let mut failed = aside
-            .failed
-            .iter()
-            .take(SHOWN)
-            .map(|(path, why)| {
-                format!(
-                    "{} ({})",
-                    crate::git::shown(path),
-                    crate::trace::escape(why)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        if aside.failed.len() > SHOWN {
-            failed.push_str(&format!(" and {} more", aside.failed.len() - SHOWN));
-        }
-        named.push_str(&format!(
-            "; could not be moved out of the tree, left as the step left it: {failed}"
-        ));
-    }
-    named
+    crate::git::paths_named(paths)
 }
 
 /// The set-aside root of a run on `tree` that is given none: [`default_set_aside`], checked
@@ -3538,8 +3487,11 @@ impl<'a> Run<'a> {
         let Some(id) = self.case.dir.file_name().filter(|_| harness) else {
             return Ok(checkpoint);
         };
-        let step = self.set_aside.join(id).join(format!("step-{}", self.steps));
-        Ok(checkpoint.setting_aside_in(step))
+        Ok(checkpoint.setting_aside_in(
+            self.set_aside.clone(),
+            id.to_owned(),
+            format!("step-{}", self.steps),
+        ))
     }
 
     /// The branches a checkpoint guards even when another worktree has them checked out: the
@@ -4646,13 +4598,13 @@ impl<'a> Run<'a> {
             let git_dir = checkpoint.put_back_git_dir(&self.tree);
             let tree = self.tree.clone();
             // Every way a harness step is discarded goes through here, and what it says of
-            // the files it moved aside ([`set_aside_named`]) is what every message about the
+            // the files it moved aside ([`crate::git::SetAside::named`]) is what every message about the
             // discard carries.
             let undo = || -> Result<String> {
                 let aside = undo_step(&tree, &checkpoint, &cases, &kept)?;
                 surface.put_back(&tree, &surface_kept)?;
                 outside_before.put_back(&tree)?;
-                Ok(set_aside_named(&aside))
+                Ok(aside.named())
             };
             let stepped = match stepped {
                 Ok(stepped) => stepped,
