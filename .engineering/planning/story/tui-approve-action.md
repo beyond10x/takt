@@ -19,7 +19,7 @@ scope:
   path: ess/http/takt.http.yaml
 - confidence: inferred
   path: ess/ui/takt.ui.yaml
-revision: 5
+revision: 6
 ---
 # Story: tui-approve-action
 
@@ -51,4 +51,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-From the approvals page, approving a case at `ApprovalRequired (repository.merge)` writes a grant at the case's bound revision with the launch identity, after which the next `takt run` on that case merges; a request without the launch credential, or naming another approver, is refused with nothing written; a test command in a story case that reads every `/proc/*/environ` and `/proc/*/cmdline` it can and posts to every 127.0.0.1 port it finds writes no grant; and `ess verify conform` covers the command.
+From the approvals page, approving a case at `ApprovalRequired (repository.merge)` writes a grant at the case's bound revision with the launch identity, after which the next `takt run` on that case merges; a request without the launch credential, or naming another approver, is refused with nothing written; and a test command in a story case that reads every `/proc/*/environ` and `/proc/*/cmdline` it can and posts to every 127.0.0.1 port it finds writes no grant. Each of these is a `cargo test -p b10x-takt-cli` test named in the change. (`ess verify conform` has no HTTP target in ESS 0.60.0 and is not part of this acceptance.)

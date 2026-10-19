@@ -12,6 +12,7 @@ relations:
 - depends_on: story:takt-serve-read-only
 - depends_on: story:judge-guard
 - depends_on: story:self-improvement-protocol
+- depends_on: story:docs-site-with-sidebar
 scope:
 - confidence: inferred
   path: AGENTS.md
@@ -24,8 +25,10 @@ scope:
 - confidence: inferred
   path: crates/takt-cli/src/main.rs
 - confidence: inferred
+  path: crates/takt-cli/tests/tui_served_equals_tested.rs
+- confidence: inferred
   path: crates/takt-tui
-revision: 5
+revision: 8
 ---
 # Story: takt-tui-crate
 
@@ -56,10 +59,17 @@ On takt at main, holds; after the change, fails:
 
 ## Scope
 
-- `crates/takt-tui/**` (generated) (inferred)
-- `crates/takt-cli/src/main.rs`: the `tui` command (inferred)
-- `Cargo.toml` (workspace member), `Cargo.lock`, `Taskfile.yml` (the regeneration check), `AGENTS.md` (install line) (inferred)
+- `crates/takt-tui/**` (generated), with its own `Cargo.lock`: the generated `Cargo.toml` declares its own `[workspace]` (beyond10x/ess 0.60.0 `crates/ui/ess-ui-tui/src/generate.rs:205`), so it is not a member of takt's workspace (inferred)
+- root `Cargo.toml`: `exclude = ["crates/takt-tui"]` beside `members = ["crates/*"]` (inferred)
+- `crates/takt-cli/src/main.rs`: the `tui` command (inferred; shared with story:judge-guard and story:self-improvement-protocol, ordered after both by `depends_on`)
+- `crates/takt-cli/tests/tui_served_equals_tested.rs`: the check that served data equals the UI fixtures (inferred)
+- `Taskfile.yml` (the regeneration check, the `takt-tui` build by `--manifest-path`), `AGENTS.md` (install line) (inferred; both shared with story:docs-site-with-sidebar, ordered after it by `depends_on`)
 
 ## Acceptance
 
-`takt tui --repo <scratch repository with recorded cases> --screen-once 120x40` prints one frame of the case list naming a recorded case and exits 0; `task check` fails when `crates/takt-tui` differs from a fresh `ess generate ui --target tui --model ess --path ess/ui/takt.ui.yaml` and when the local `ess` is not the release CI installs; with `takt-tui` absent, `takt tui` exits 1 naming the install command; and after the app quits, no `takt serve` process started by it is running (checked by its pid).
+- `takt tui --repo <the serve fixture repository> --screen-once 120x40` prints one frame of the case list naming a recorded case and exits 0;
+- `cargo test -p b10x-takt-cli --test tui_served_equals_tested` passes: for every view the UI document reads, the data `takt serve` answers over the fixture repository equals, as parsed values, the data `ess/ui/fixtures/` gives that view, so the pages tested on fixtures are the pages served;
+- `task check` fails when `crates/takt-tui` differs from `ess generate ui --target tui --model ess --path ess/ui/takt.ui.yaml --out <scratch dir>` (compared with `diff -r`), and when the local `ess` is not the release CI installs;
+- `cargo build --manifest-path crates/takt-tui/Cargo.toml --locked` exits 0, and the root `cargo build --workspace` does not build `crates/takt-tui`;
+- with `takt-tui` absent, `takt tui` exits 1 naming the install command;
+- after the app quits, no `takt serve` process started by it is running (checked by its pid).
