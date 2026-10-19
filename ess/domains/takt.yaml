@@ -904,7 +904,7 @@ types:
   # read from: .engineering/planning/design/recursive-self-improvement.md:185-187
   # read from: crates/takt/src/scorecard.rs:58-84
   # read from: crates/takt/src/loop_scorecard.rs:52-82
-  # read from: crates/takt/src/loop_scorecard.rs:881-1008
+  # read from: crates/takt/src/loop_scorecard.rs:923-1050
   - name: takt.work.LoopScorecardRow
     kind: struct
     fields:
@@ -972,7 +972,7 @@ types:
   # read from: .engineering/planning/story/loop-scorecard.md:54
   # read from: .engineering/planning/story/loop-scorecard.md:98
   # read from: crates/takt/src/loop_scorecard.rs:84-89
-  # read from: crates/takt/src/loop_scorecard.rs:1017-1043
+  # read from: crates/takt/src/loop_scorecard.rs:1059-1085
   - name: takt.work.LoopScorecard
     kind: struct
     fields:
@@ -988,8 +988,8 @@ types:
   # figure with a target and no value is below target: no data fails closed.
   # `loop.measure` retains the figures it computed as an
   # observation beside its record; the rows stay the source.
-  # read from: crates/takt/src/loop_scorecard.rs:624-644
-  # read from: crates/takt/src/loop_scorecard.rs:707-773
+  # read from: crates/takt/src/loop_scorecard.rs:667-687
+  # read from: crates/takt/src/loop_scorecard.rs:750-816
   - name: takt.work.LoopFigure
     kind: struct
     fields:
@@ -1054,7 +1054,7 @@ types:
   # turn, set later from the first three accepted turns with a run record.
   # read from: protocols/loop-improvement/metrics.yaml
   # read from: crates/takt/src/loop_scorecard.rs:135-171
-  # read from: crates/takt/src/loop_scorecard.rs:593-621
+  # read from: crates/takt/src/loop_scorecard.rs:636-664
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
   - name: takt.work.LoopMetric
     kind: struct
@@ -1072,7 +1072,7 @@ types:
   # records nothing. The measurement retains the rows it read beside its figures, so a later
   # comparison stands on them.
   # read from: protocols/loop-improvement/1.yaml:32-36
-  # read from: crates/takt/src/loop_scorecard.rs:1176-1184
+  # read from: crates/takt/src/loop_scorecard.rs:1218-1226
   - name: takt.work.LoopMeasurementResult
     kind: enum
     variants: [below_target, at_target]
@@ -1107,30 +1107,35 @@ types:
   # error the reader reads nothing more, and it kills and waits for its process when it is
   # done. Every commit the loop reads, in the validators and when a loop case opens, goes
   # through one checked history per call: no `git log`, `merge-base`,
-  # `rev-list` or `cat-file -e` answers any part of it. A commit's header is read by git's own
+  # `rev-list`, `rev-parse --verify` or `cat-file -e` answers any part of it; a revision is read
+  # only as a full id of the repository's format, and an abbreviated one is refused, naming
+  # it. A commit's header is read by git's own
   # rule: its tree first, its parents the `parent` lines directly after it, each line exact, no
   # carriage return stripped, so a `parent` line further down names no parent. The definitions
   # are read commit, tree by tree, blob. An ancestry is answered by walking from the tip through
   # the parents each commit's own checked header names, first parent first, every commit seen
   # once (a cycle a forged commit makes ends the walk), at most 100,000 commits (past them, an
-  # error naming the cap); a commit on the way that cannot be read or does not check out is an
+  # error naming the cap; the cap bounds the reads, not the time, and with `--hours` every read
+  # ends at the run's deadline); a commit on the way that cannot be read or does not check out is an
   # error naming it, never `false`, so a forged commit can neither add an ancestor nor hide
   # one; a commit the repository is shallow at ends its branch of the walk, and an ancestor not
   # found then is unknown, not an error. The figures come from the code in
   # `crates/takt/src/loop_scorecard.rs`, chosen by each metric's id and version, so the check
   # counts that code as part of the definitions: read at the baseline and at the candidate
   # through the checked history, any difference makes every metric `redefined`. Definitions
-  # holding a YAML anchor or alias are refused before they are read, naming the line: an alias
-  # expands without bound, and a file well under its cap could expand to gigabytes. The other
+  # holding a YAML anchor or alias are refused from the parser's own events, naming the line,
+  # before anything is deserialized: an alias expands without bound, and a file well under its
+  # cap could expand to gigabytes. So are the turns' `case.yaml` and `protocol.yaml` and the
+  # loop case's evidence records the loop validators read. The other
   # reads at a revision (the step guard's judge-surface list at the base, `judge_list_at`) still
   # read the object store a step could write unchecked: the checkpoint guards refs, replace
   # refs, `commondir`, `gitdir`, `shallow`, `objects/info/alternates` and the commit-graph, and
   # no git takt runs reads a commit-graph, but the objects themselves are not guarded, and
   # confining the step's writes closes that (story:confinement-seam).
   # read from: protocols/loop-improvement/1.yaml:37-41
-  # read from: crates/takt/src/loop_scorecard.rs:1283-1296
-  # read from: crates/takt/src/loop_scorecard.rs:1310-1351
-  # read from: crates/takt/src/loop_scorecard.rs:192-492
+  # read from: crates/takt/src/loop_scorecard.rs:1325-1338
+  # read from: crates/takt/src/loop_scorecard.rs:1352-1393
+  # read from: crates/takt/src/loop_scorecard.rs:192-501
   # read from: crates/takt/src/git.rs:165-569
   - name: takt.work.DefinitionCheckResult
     kind: enum
@@ -1149,7 +1154,7 @@ types:
   # direction, else `not_improved`; the targets are the baseline's as the case snapshotted them
   # when it opened. No measurement retained in the case, or no snapshot, records nothing.
   # read from: protocols/loop-improvement/1.yaml:44-47
-  # read from: crates/takt/src/loop_scorecard.rs:1575-1585
+  # read from: crates/takt/src/loop_scorecard.rs:1617-1627
   - name: takt.work.LoopComparisonResult
     kind: enum
     variants: [improved, not_improved]
@@ -1177,8 +1182,8 @@ types:
   # read from: crates/takt/src/case.rs:1904-1917
   # read from: crates/takt-cli/src/main.rs:416-430
   # read from: crates/takt-cli/src/main.rs:513-517
-  # read from: crates/takt/src/loop_scorecard.rs:1088-1129
-  # read from: crates/takt/src/loop_scorecard.rs:1131-1154
+  # read from: crates/takt/src/loop_scorecard.rs:1130-1171
+  # read from: crates/takt/src/loop_scorecard.rs:1173-1196
   - name: takt.work.LoopBaselineSnapshot
     kind: struct
     fields:

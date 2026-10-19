@@ -2030,6 +2030,200 @@ fn definitions_holding_yaml_aliases_are_refused_naming_the_line() {
     Definitions::parse(DEFINED).expect("definitions without anchors read");
 }
 
+/// The fourth review's hidden bomb (yaml_hidden.py, 32,000 aliases to a 128 KiB string, 259 KB
+/// in all, under the definitions' cap): the anchor and the aliases sit on one flow line after
+/// the plain scalar `a 'b`, whose `'` is no quote. A lexical scan took it for one and read on;
+/// the aliases expanded to an out-of-memory abort. Read from the parser's events, the first
+/// anchored node is refused, naming its line, within a second and before anything expands.
+/// Run in a child test process under a 1 GiB address-space cap, so a red run aborts the child
+/// and never exhausts the machine.
+#[test]
+fn the_hidden_alias_bomb_after_a_plain_scalar_quote_is_refused_within_a_second() {
+    if std::env::var_os("TAKT_YAML_HIDDEN_CHILD").is_none() {
+        use std::os::unix::process::CommandExt as _;
+        let mut command = Command::new(std::env::current_exe().expect("the test binary"));
+        command
+            .args([
+                "the_hidden_alias_bomb_after_a_plain_scalar_quote_is_refused_within_a_second",
+                "--exact",
+                "--test-threads",
+                "1",
+            ])
+            .env("TAKT_YAML_HIDDEN_CHILD", "1");
+        // SAFETY: setrlimit is async-signal-safe, and the closure touches nothing else. An
+        // abort under the cap leaves no core file in the tree.
+        unsafe {
+            command.pre_exec(|| {
+                for (resource, limit) in [(libc::RLIMIT_AS, 1 << 30), (libc::RLIMIT_CORE, 0)] {
+                    let cap = libc::rlimit {
+                        rlim_cur: limit,
+                        rlim_max: limit,
+                    };
+                    if libc::setrlimit(resource, &raw const cap) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+        let output = command.output().expect("the child test runs");
+        assert!(
+            output.status.success(),
+            "the child test failed ({}):\n{}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let big = "a".repeat(128 * 1024);
+    let aliases = vec!["*p"; 32_000].join(", ");
+    let bomb = format!(
+        "format: takt-loop-metrics/1\nmetrics:\n  turns: {{version: 1, definition: a 'b, previous: [&p {{version: 2, definition: {big}}}, {aliases}]}}\n"
+    );
+    assert!(bomb.len() < 256 * 1024, "{} bytes", bomb.len());
+    let started = std::time::Instant::now();
+    let error = Definitions::parse(&bomb).expect_err("the anchor is refused");
+    let took = started.elapsed();
+    let shown = format!("{error:#}");
+    assert!(shown.contains("line 3"), "{shown}");
+    assert!(took < std::time::Duration::from_secs(1), "{took:?}");
+}
+
+/// Every anchored node and every alias is refused as the parser reads it, naming its line,
+/// wherever it stands: after a plain scalar holding a quote of either kind, on a mapping, on a
+/// sequence, after a tag, an alias whose anchor is never defined, an anchor never aliased. A
+/// plain scalar holding `&` or `*` is text, not an anchor, and reads.
+#[test]
+fn every_anchor_and_alias_is_refused_from_the_parsers_events_naming_its_line() {
+    let head = "format: takt-loop-metrics/1\nmetrics:\n";
+    for (case, body, line) in [
+        (
+            "after a single quote in a plain scalar",
+            "  turns: {version: 1, definition: a 'b, previous: [&p {version: 2, definition: x}]}\n",
+            3,
+        ),
+        (
+            "after a double quote in a plain scalar",
+            "  turns: {version: 1, definition: a \"b, previous: [&p {version: 2, definition: x}]}\n",
+            3,
+        ),
+        (
+            "on a mapping",
+            "  turns:\n    version: 1\n    definition: x\n    target: &t\n      at_least: 1\n",
+            6,
+        ),
+        (
+            "on a sequence",
+            "  turns:\n    version: 2\n    definition: x\n    previous: &s\n      - {version: 1, definition: y}\n",
+            6,
+        ),
+        (
+            "after a tag",
+            "  turns:\n    version: 1\n    definition: !!str &d x\n",
+            5,
+        ),
+        (
+            "an alias to no anchor",
+            "  turns:\n    version: 1\n    definition: x\n    previous: [*nowhere]\n",
+            6,
+        ),
+        (
+            "an anchor never aliased",
+            "  turns:\n    version: 1\n    definition: &d x\n",
+            5,
+        ),
+    ] {
+        let text = format!("{head}{body}");
+        let error = Definitions::parse(&text).expect_err(case);
+        let shown = format!("{error:#}");
+        assert!(
+            shown.contains(&format!("YAML anchor or alias on line {line};")),
+            "{case}: {shown}"
+        );
+    }
+    let text =
+        format!("{head}  turns:\n    version: 1\n    definition: rows & cases *weighted, a 'b\n");
+    let definitions = Definitions::parse(&text).expect("a plain scalar holding & and * reads");
+    assert_eq!(
+        definitions.metrics["turns"].definition,
+        "rows & cases *weighted, a 'b"
+    );
+}
+
+/// Every other YAML file the loop validators read is held to the same rule as the definitions:
+/// a turn's `case.yaml` and `protocol.yaml`, and the loop case's evidence records, holding an
+/// anchor or an alias are refused, naming the file and the line, before anything expands.
+#[test]
+fn every_yaml_file_the_loop_reads_is_refused_with_an_anchor_naming_the_file_and_line() {
+    let (tree, head) = scratch("yaml-reads", DEFINED);
+    closed(
+        &tree,
+        "turn-a",
+        "2026-10-18T09:00:00Z",
+        "2026-10-18T10:00:00Z",
+        "accepted",
+        None,
+    );
+    for name in ["case.yaml", "protocol.yaml"] {
+        let path = tree.join(".engineering/cases/turn-a").join(name);
+        let original = fs::read_to_string(&path).expect("the file");
+        let line = original.lines().count() + 1;
+        fs::write(&path, format!("{original}extra: &x [1]\n")).expect("the anchor");
+        let error = LoopScorecard::read(&tree).expect_err(name);
+        let shown = format!("{error:#}");
+        assert!(shown.contains(name), "{shown}");
+        assert!(
+            shown.contains(&format!("YAML anchor or alias on line {line};")),
+            "{shown}"
+        );
+        fs::write(&path, original).expect("restored");
+    }
+    LoopScorecard::read(&tree).expect("the turn reads without the anchor");
+    let case = loop_case(&tree, "loop-yaml", &head, &head);
+    fs::write(
+        case.dir.join("evidence").join("zz.yaml"),
+        "kind: merge_observation\nresult: *nowhere\n",
+    )
+    .expect("a record");
+    let error = LoopCompare
+        .observe(&tree, &head, 1)
+        .expect_err("the record is refused");
+    let shown = format!("{error:#}");
+    assert!(shown.contains("zz.yaml"), "{shown}");
+    assert!(shown.contains("YAML anchor or alias on line 2;"), "{shown}");
+}
+
+/// An abbreviated commit id is refused, naming it, and never resolved by a git subprocess
+/// without the reader's deadline: a revision is read only as a full id of the repository's
+/// object format, through the checked reader. A full id the repository does not hold, an id of
+/// another format's length and a revision that is no id at all name no commit.
+#[test]
+fn an_abbreviated_revision_is_refused_naming_it() {
+    let (tree, head) = scratch("abbreviated", DEFINED);
+    let mut history = takt::loop_scorecard::History::open(&tree, None).expect("opens");
+    assert_eq!(
+        history.resolve(&head).expect("resolves").as_deref(),
+        Some(head.as_str())
+    );
+    for short in [&head[..7], &head[..12], &head[..39]] {
+        let error = history
+            .resolve(short)
+            .expect_err("an abbreviated id is refused");
+        let shown = format!("{error:#}");
+        assert!(shown.contains(short), "{shown}");
+        assert!(shown.contains("abbreviated"), "{shown}");
+        let error = Definitions::at(&tree, short).expect_err("an abbreviated id is refused");
+        assert!(format!("{error:#}").contains(short), "{error:#}");
+        let error = takt::loop_scorecard::verified_descends(&tree, short, &head)
+            .expect_err("an abbreviated ancestor is refused");
+        assert!(format!("{error:#}").contains(short), "{error:#}");
+    }
+    for none in ["0".repeat(40), "a".repeat(64), "r0".to_owned()] {
+        assert_eq!(history.resolve(&none).expect("reads"), None, "{none}");
+    }
+}
+
 /// The second review's medium finding on the definition check: the figures come from code
 /// chosen by each metric's id and version, so a candidate could change a figure without
 /// touching the YAML. The code counts as part of the definitions: a candidate that changes it

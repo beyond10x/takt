@@ -189,18 +189,26 @@ fn is_commit_id(revision: &str) -> bool {
     (7..=64).contains(&revision.len()) && revision.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// The full object id `revision` names in `tree`, resolved without reading the object (an
-/// abbreviated id's prefix looked up, a full id as given); none for no commit id, or an
-/// abbreviation git does not resolve.
-fn object_id(tree: &Path, revision: &str) -> Option<String> {
-    if !is_commit_id(revision) {
-        return None;
+/// The full object id `revision` names, for a repository whose ids are `hex` digits long:
+/// taken as given, lower-cased, never looked up by a git subprocess; none for a revision that
+/// is no commit id (`r0`), or longer than the repository's ids. An abbreviated id is an error
+/// naming it: resolving a prefix would take a lookup the reader's deadline does not hold.
+fn object_id(hex: usize, revision: &str) -> Result<Option<String>> {
+    if !is_commit_id(revision) || revision.len() > hex {
+        return Ok(None);
     }
-    crate::git::run(tree, &["rev-parse", "--verify", "--quiet", revision]).ok()
+    if revision.len() < hex {
+        bail!(
+            "{revision} is an abbreviated commit id; takt reads a commit only by its full {hex}-digit id"
+        );
+    }
+    Ok(Some(revision.to_ascii_lowercase()))
 }
 
 /// The most commits one walk of the history reads: a walk that would read more is refused,
-/// naming the cap, rather than reading a history without end.
+/// naming the cap, rather than reading a history without end. The cap bounds the reads, not
+/// the time: each read ends by its own 10 s, so a walk to the cap can outlast any budget; with
+/// `--hours`, every read ends at the run's deadline, and so does the walk.
 pub const MAX_WALK: usize = 100_000;
 
 /// A repository's history read through one checked reader ([`crate::git::ObjectReader`]):
@@ -261,9 +269,10 @@ impl History {
         Ok(header)
     }
 
-    /// The full id of the commit `revision` names; none when it names no commit.
+    /// The full id of the commit `revision` names, read through the checked reader; none when
+    /// it names no commit. An abbreviated id is an error naming it ([`object_id`]).
     pub fn resolve(&mut self, revision: &str) -> Result<Option<String>> {
-        let Some(id) = object_id(&self.tree, revision) else {
+        let Some(id) = object_id(self.hex, revision)? else {
             return Ok(None);
         };
         Ok(self.commit(&id)?.map(|_| id))
@@ -385,7 +394,7 @@ impl History {
                 && is_commit_id(ancestor)
                 && !self.shallow()?.is_empty() =>
             {
-                ancestor.to_owned()
+                ancestor.to_ascii_lowercase()
             }
             None => return Ok(Ancestry::No),
         };
@@ -491,54 +500,88 @@ pub fn verified_descends_within(
     Ok(History::open(tree, until)?.descends(ancestor, revision)? == Ancestry::Yes)
 }
 
-/// The first line of `text` on which a YAML anchor (`&name`) or alias (`*name`) may begin a
-/// node: an `&` or a `*` right after the start of a line, white space or one of `[{,:-?`,
-/// followed by no white space, outside a string quoted at a node's start, before a comment.
-/// The scan is conservative: it may name a line YAML would read without an anchor (a plain
-/// scalar like `rows *2`), never miss one, since an alias expands without bound when it is
-/// read: a definitions file well under its cap can expand to gigabytes.
-fn anchor_line(text: &str) -> Option<usize> {
-    for (n, line) in text.lines().enumerate() {
-        let bytes = line.as_bytes();
-        let mut quote: Option<u8> = None;
-        let mut before = b' ';
-        for (at, &byte) in bytes.iter().enumerate() {
-            let node = matches!(
-                before,
-                b' ' | b'\t' | b'[' | b'{' | b',' | b':' | b'-' | b'?'
-            ) || at == 0;
-            match quote {
-                Some(open) if byte == open => quote = None,
-                Some(_) => {}
-                None => {
-                    if byte == b'#' && node {
-                        break;
-                    }
-                    if (byte == b'"' || byte == b'\'') && node {
-                        quote = Some(byte);
-                    } else if (byte == b'&' || byte == b'*')
-                        && node
-                        && bytes
-                            .get(at + 1)
-                            .is_some_and(|next| !next.is_ascii_whitespace())
-                    {
-                        return Some(n + 1);
-                    }
-                }
-            }
-            before = byte;
+/// The first line, from one, on which the YAML parser reads an anchored node (`&name`) or an
+/// alias (`*name`) in `text`, from its own events: what YAML reads as an anchor is one, and
+/// what it reads as text (`rows *2`, `a 'b &c`) is not. The events are read one at a time and
+/// dropped, before anything is deserialized, so no alias expands: one would expand without
+/// bound once read, and a file well under its cap could expand to gigabytes. None when the
+/// stream holds none up to its end, or up to where it does not parse (the deserializer, on the
+/// same parser, then fails there before it builds anything). A parser that cannot be set up is
+/// an error.
+pub(crate) fn anchor_line(text: &str) -> Result<Option<usize>> {
+    use unsafe_libyaml as unsafe_yaml;
+    let size = u64::try_from(text.len()).context("the YAML text's size")?;
+    let mut parser = Box::<unsafe_yaml::yaml_parser_t>::new_uninit();
+    let parser = parser.as_mut_ptr();
+    // SAFETY: the parser lives in its own allocation, never moved, initialized before any other
+    // call and deleted after the last; the input outlives it. Each event is filled by
+    // `yaml_parser_parse` before it is read, its union read only under the variant its type
+    // names, and deleted before the next.
+    unsafe {
+        if unsafe_yaml::yaml_parser_initialize(parser).fail {
+            bail!("the YAML parser could not be set up");
         }
+        unsafe_yaml::yaml_parser_set_encoding(parser, unsafe_yaml::YAML_UTF8_ENCODING);
+        unsafe_yaml::yaml_parser_set_input_string(parser, text.as_ptr(), size);
+        let mut found = None;
+        let mut event = std::mem::MaybeUninit::<unsafe_yaml::yaml_event_t>::uninit();
+        loop {
+            let event = event.as_mut_ptr();
+            if unsafe_yaml::yaml_parser_parse(parser, event).fail {
+                break;
+            }
+            let anchored = match (*event).type_ {
+                unsafe_yaml::YAML_ALIAS_EVENT => true,
+                unsafe_yaml::YAML_SCALAR_EVENT => !(*event).data.scalar.anchor.is_null(),
+                unsafe_yaml::YAML_SEQUENCE_START_EVENT => {
+                    !(*event).data.sequence_start.anchor.is_null()
+                }
+                unsafe_yaml::YAML_MAPPING_START_EVENT => {
+                    !(*event).data.mapping_start.anchor.is_null()
+                }
+                _ => false,
+            };
+            let line = (*event).start_mark.line;
+            let end = (*event).type_ == unsafe_yaml::YAML_STREAM_END_EVENT;
+            unsafe_yaml::yaml_event_delete(event);
+            if anchored {
+                found = Some(
+                    usize::try_from(line)
+                        .unwrap_or(usize::MAX)
+                        .saturating_add(1),
+                );
+                break;
+            }
+            if end {
+                break;
+            }
+        }
+        unsafe_yaml::yaml_parser_delete(parser);
+        Ok(found)
     }
-    None
+}
+
+/// `text`, the file at `path`, read as YAML, of which a JSON record is one; one holding an
+/// anchor or an alias is refused, naming the file and its line, before anything is
+/// deserialized ([`anchor_line`]).
+fn read_yaml<T: serde::de::DeserializeOwned>(path: &Path, text: &str) -> Result<T> {
+    if let Some(line) = anchor_line(text)? {
+        bail!(
+            "{} holds a YAML anchor or alias on line {line}; it is read without them",
+            path.display()
+        );
+    }
+    serde_yaml_ng::from_str(text).with_context(|| format!("read {}", path.display()))
 }
 
 impl Definitions {
     /// Reads definitions from `text`: [`DEFINITIONS_FORMAT`], each target with exactly one
     /// bound, a finite number its metric's figures can take (a share's 0 to 1, any other's 0
     /// and above), and no version of a metric defined twice. Definitions holding a YAML anchor
-    /// or alias are refused before they are parsed, naming the line ([`anchor_line`]).
+    /// or alias are refused as the parser reads it, naming its line, before anything is
+    /// deserialized ([`anchor_line`]).
     pub fn parse(text: &str) -> Result<Self> {
-        if let Some(line) = anchor_line(text) {
+        if let Some(line) = anchor_line(text)? {
             bail!(
                 "the loop metric definitions hold a YAML anchor or alias on line {line}; they are read without them"
             );
@@ -825,7 +868,7 @@ fn snapshot(case_dir: &Path) -> Result<serde_yaml_ng::Value> {
     let path = case_dir.join("case.yaml");
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))
+    read_yaml(&path, &text)
 }
 
 /// The finding's key and its file in the planning store, for the store artifact `artifact` a
@@ -872,8 +915,7 @@ fn runs_turn_major(case_dir: &Path) -> Result<bool> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
     };
-    let doc: serde_yaml_ng::Value =
-        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    let doc: serde_yaml_ng::Value = read_yaml(&path, &text)?;
     Ok(doc["protocol"]["id"].as_str() == Some(TURN_PROTOCOL)
         && doc["protocol"]["revision"].as_u64() == Some(TURN_PROTOCOL_MAJOR))
 }
@@ -1529,7 +1571,7 @@ fn case_records(tree: &Path) -> Result<Vec<serde_yaml_ng::Value>> {
         .map(|path| {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("read {}", path.display()))?;
-            serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))
+            read_yaml(path, &text)
         })
         .collect()
 }
