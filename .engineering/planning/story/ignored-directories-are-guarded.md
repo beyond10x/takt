@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:ignored-directories-are-guarded
 kind: story
-status: draft
+status: active
 title: A step cannot change what an ignored directory already holds
 tags:
 - priority:high
@@ -10,7 +10,15 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-ae680d5-adversarial
-revision: 2
+scope:
+- confidence: cited
+  path: crates/takt/src/git.rs
+- confidence: cited
+  path: crates/takt/src/run.rs
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T07:39:18Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-19T07:39:19Z", actor: "human:timo", revision: 5}
 ---
 ## Outcome
 
