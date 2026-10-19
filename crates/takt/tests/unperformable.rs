@@ -423,3 +423,65 @@ fn the_stop_line_records_whether_the_stop_is_a_completion() {
         .expect("a stop line");
     assert!(stop.contains("\"completed\":false"), "{stop}");
 }
+
+/// Each run of the scenario case `case` under `repo`, the record written with
+/// [`stopped_runs`] and the held-out result `held` beside it, as the scorecard reads it.
+fn scenario_rows(repo: &Path, case: &str, stops: &[(&str, Option<bool>)], held: &str) -> Vec<Row> {
+    stopped_runs(repo, case, stops);
+    let dir = repo.join(".engineering/cases").join(case);
+    fs::write(
+        dir.join(takt::scorecard::HELD_OUT_FILE),
+        format!("{held}\n"),
+    )
+    .expect("the held-out result");
+    takt::scorecard::Scorecard::read(repo)
+        .expect("the scorecard reads")
+        .rows
+        .into_iter()
+        .filter(|row| row.case == case)
+        .collect()
+}
+
+/// A run whose stop names a completion disagrees with a held-out check that did not pass,
+/// whatever its own `completed` says: a candidate that writes `Completed (accepted)` with
+/// `completed: false` does not switch the disagreement off. With the check passed, nothing
+/// disagrees, and the run's own stop is its outcome.
+#[test]
+fn a_stop_naming_a_completion_disagrees_with_a_failed_check_whatever_its_completed_says() {
+    let repo = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("unperformable-{}-disagrees", std::process::id()));
+    let _ = fs::remove_dir_all(&repo);
+    let _scratch = Scratch(repo.clone());
+
+    let rows = scenario_rows(
+        &repo,
+        "scenario-a-trial-3",
+        &[("Completed (accepted)", Some(false))],
+        "FAIL: x",
+    );
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].outcome, "failed", "{rows:?}");
+    assert!(rows[0].disagrees(), "{rows:?}");
+
+    let rows = scenario_rows(
+        &repo,
+        "scenario-b-trial-0",
+        &[("Completed (accepted)", Some(false))],
+        "PASS",
+    );
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].outcome, "accepted", "{rows:?}");
+    assert!(!rows[0].disagrees(), "{rows:?}");
+}
+
+/// `Unperformable` ranks with the budget stops, where the same run ranked before the rule
+/// named it: a rule that only names the stop moves no comparison against an older baseline;
+/// below them it would read as worse, above them it would flatter the candidate.
+#[test]
+fn an_unperformable_stop_ranks_with_the_budget_stops() {
+    assert_eq!(takt::scorecard::rank("Unperformable"), 2);
+    assert_eq!(
+        takt::scorecard::rank("Unperformable"),
+        takt::scorecard::rank("Iterations")
+    );
+}

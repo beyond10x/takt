@@ -138,11 +138,14 @@ pub struct Row {
 }
 
 impl Row {
-    /// Whether the run's own stop claims a completion while its held-out check did not pass.
+    /// Whether the run's own stop claims a completion while its held-out check did not pass:
+    /// its stop line says it completed, or its stop is one a `Completed` stop named. Either
+    /// claim is enough: a run's `completed: false` beside `Completed (accepted)` does not take
+    /// the claim back.
     #[must_use]
     pub fn disagrees(&self) -> bool {
         self.held_out.as_ref().is_some_and(|held| !held.passed)
-            && self.completed.unwrap_or_else(|| is_completed(&self.stop))
+            && (self.completed == Some(true) || is_completed(&self.stop))
     }
 
     /// Whether the run's outcome is a completion: its stop line's own word when the outcome is
@@ -372,15 +375,18 @@ pub fn scenario_of(case: &str) -> Option<&str> {
 }
 
 /// An outcome's rank, higher better: `accepted`; an approval or a wait (`ApprovalRequired`,
-/// `Waiting`); a budget stop (`Iterations`, `Hours`, `Tokens`); `NoProgress`, and with it every
-/// other stop (`NothingAdmissible`, `StepRefused`, another outcome); an error, no stop, or a
-/// held-out check that did not pass ([`FAILED`]).
+/// `Waiting`); a budget stop (`Iterations`, `Hours`, `Tokens`) and `Unperformable`; `NoProgress`,
+/// and with it every other stop (`NothingAdmissible`, `StepRefused`, another outcome); an error,
+/// no stop, or a held-out check that did not pass ([`FAILED`]). `Unperformable` ranks with the
+/// budget stops, where the same run ranked before the rule named its stop: a rule that only
+/// names the stop moves no comparison against an older baseline, which below them would read
+/// as worse and above them would flatter the candidate.
 #[must_use]
 pub fn rank(outcome: &str) -> u8 {
     match outcome {
         "accepted" => 4,
         "ApprovalRequired" | "Waiting" => 3,
-        "Iterations" | "Hours" | "Tokens" => 2,
+        "Iterations" | "Hours" | "Tokens" | "Unperformable" => 2,
         "error" | "unfinished" | FAILED => 0,
         _ => 1,
     }
@@ -413,7 +419,7 @@ fn is_completed(outcome: &str) -> bool {
 const RANKS: [(u8, &str); 4] = [
     (4, "accepted"),
     (3, "ApprovalRequired or Waiting"),
-    (2, "a budget stop"),
+    (2, "a budget stop or Unperformable"),
     (1, "NoProgress or another stop"),
 ];
 

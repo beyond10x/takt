@@ -1,62 +1,72 @@
 //! `STOP_KINDS` names every stop but `Completed`: the scorecard counts an outcome as a
 //! completion only when it is not in that list, so a stop missing from it would score as
-//! completed. The match below is exhaustive and indexes the list: a variant added to `Stop`
-//! without an arm fails to compile, and an arm whose index the list does not reach is a constant
-//! index out of bounds, which fails to compile too.
+//! completed. One table below gives both the exhaustive match into the list and a stop of each
+//! variant, so neither can leave a variant out of the other: a variant added to `Stop` without a
+//! row fails to compile, a row whose index the list does not reach is a constant index out of
+//! bounds, which fails to compile too, and a row is one variant's match and that same variant's
+//! stop, checked. A row that reuses another's index names that kind twice, and fails.
 
 use std::collections::BTreeSet;
 
 use takt::Stop;
 use takt::run::STOP_KINDS;
 
-/// The name `STOP_KINDS` holds for `stop`; none for `Completed`, whose outcome is the one it
-/// names.
-fn kind(stop: &Stop) -> Option<&'static str> {
-    match stop {
-        Stop::Completed(_) => None,
-        Stop::ApprovalRequired(_) => Some(STOP_KINDS[0]),
-        Stop::NothingAdmissible => Some(STOP_KINDS[1]),
-        Stop::Iterations(_) => Some(STOP_KINDS[2]),
-        Stop::Hours(_) => Some(STOP_KINDS[3]),
-        Stop::Tokens(_) => Some(STOP_KINDS[4]),
-        Stop::StepRefused(_) => Some(STOP_KINDS[5]),
-        Stop::NoProgress => Some(STOP_KINDS[6]),
-        Stop::Waiting { .. } => Some(STOP_KINDS[7]),
-        Stop::Unperformable { .. } => Some(STOP_KINDS[8]),
-    }
+/// From one row per variant, `pattern => its name in STOP_KINDS (none for Completed), a stop of
+/// it`: [`kind`], the exhaustive match, and [`every_stop`], each stop with whether it matches
+/// its own row's pattern.
+macro_rules! stops {
+    ($($pattern:pat => $kind:expr, $stop:expr;)*) => {
+        /// The name `STOP_KINDS` holds for `stop`; none for `Completed`, whose outcome is the
+        /// one it names.
+        fn kind(stop: &Stop) -> Option<&'static str> {
+            match stop {
+                $($pattern => $kind,)*
+            }
+        }
+
+        /// A stop of each row, with whether it is of the variant its row matches.
+        fn every_stop() -> Vec<(Stop, bool)> {
+            vec![$({
+                let stop = $stop;
+                let own = matches!(stop, $pattern);
+                (stop, own)
+            }),*]
+        }
+    };
 }
 
-/// One stop of each variant.
-fn every_stop() -> Vec<Stop> {
-    vec![
-        Stop::Completed("accepted".to_owned()),
-        Stop::ApprovalRequired(vec!["repository.merge".to_owned()]),
-        Stop::NothingAdmissible,
-        Stop::Iterations(3),
-        Stop::Hours(1.5),
-        Stop::Tokens(10),
-        Stop::StepRefused("why".to_owned()),
-        Stop::NoProgress,
-        Stop::Waiting {
-            on: vec!["ci.read".to_owned()],
-            budget: None,
-            local: Vec::new(),
-        },
-        Stop::Unperformable {
-            claim: "pr.opened".to_owned(),
-            performer: "the forge".to_owned(),
-        },
-    ]
+stops! {
+    Stop::Completed(_) => None, Stop::Completed("accepted".to_owned());
+    Stop::ApprovalRequired(_) => Some(STOP_KINDS[0]),
+        Stop::ApprovalRequired(vec!["repository.merge".to_owned()]);
+    Stop::NothingAdmissible => Some(STOP_KINDS[1]), Stop::NothingAdmissible;
+    Stop::Iterations(_) => Some(STOP_KINDS[2]), Stop::Iterations(3);
+    Stop::Hours(_) => Some(STOP_KINDS[3]), Stop::Hours(1.5);
+    Stop::Tokens(_) => Some(STOP_KINDS[4]), Stop::Tokens(10);
+    Stop::StepRefused(_) => Some(STOP_KINDS[5]), Stop::StepRefused("why".to_owned());
+    Stop::NoProgress => Some(STOP_KINDS[6]), Stop::NoProgress;
+    Stop::Waiting { .. } => Some(STOP_KINDS[7]),
+        Stop::Waiting { on: vec!["ci.read".to_owned()], budget: None, local: Vec::new() };
+    Stop::Unperformable { .. } => Some(STOP_KINDS[8]),
+        Stop::Unperformable { claim: "pr.opened".to_owned(), performer: "the forge".to_owned() };
 }
 
-/// Each stop's display opens with its name in the list, every name in the list belongs to
-/// exactly one variant, and `Completed` is not in it.
+/// A stop of every variant, one per row and each of its own row's variant; each display opens
+/// with its name in the list; the names are distinct, one per variant but `Completed`, and are
+/// the whole list.
 #[test]
 fn stop_kinds_names_every_stop_but_completed_by_the_word_its_display_opens_with() {
+    let stops = every_stop();
+    assert_eq!(
+        stops.len(),
+        STOP_KINDS.len() + 1,
+        "one row per variant: every name in the list and Completed"
+    );
     let mut named = BTreeSet::new();
-    for stop in every_stop() {
+    for (stop, own) in &stops {
         let shown = stop.to_string();
-        match kind(&stop) {
+        assert!(own, "{shown} is not of its own row's variant");
+        match kind(stop) {
             None => assert!(shown.starts_with("Completed ("), "{shown}"),
             Some(kind) => {
                 assert_eq!(
@@ -64,7 +74,7 @@ fn stop_kinds_names_every_stop_but_completed_by_the_word_its_display_opens_with(
                     Some(kind),
                     "{shown} is listed as {kind}"
                 );
-                assert!(named.insert(kind), "{kind} twice");
+                assert!(named.insert(kind), "{kind} twice: two rows share an index");
             }
         }
     }
