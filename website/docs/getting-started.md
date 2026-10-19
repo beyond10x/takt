@@ -28,8 +28,7 @@ On macOS, where `sha256sum` may be missing:
 grep " takt-$version-$target.tar.gz\$" SHA256SUMS | shasum -a 256 --check
 ```
 
-`takt --version` prints the version and the commit the binary was built from. The archive also
-holds `LICENSE`, `README.md` and `CHANGELOG.md`.
+`takt --version` prints the version and the commit the binary was built from.
 
 From source:
 
@@ -51,9 +50,10 @@ cargo install --locked --path crates/takt-cli
 :::warning[macOS]
 
 bubblewrap is Linux only, so on macOS a promotion refuses with exit 1 before it judges;
-`--dry-run` and `--baseline-only`, which build nothing, still run. A run on macOS also kills only what a child process left in its own process group; on
-Linux takt adopts and kills what the child orphaned outside it as well. No command sandboxes the
-harness or the test command on either system yet.
+`--dry-run` and `--baseline-only`, which build nothing, still run. A run on macOS also kills only
+what a child process left in its own process group; on Linux takt adopts and kills what the child
+orphaned outside it as well. No command sandboxes the harness or the test command on either
+system yet.
 
 :::
 
@@ -65,11 +65,11 @@ On a repository with one failing test:
 takt run --repo . --intent "make the failing test pass" --iterations 8 --input risk=trivial
 ```
 
-The case opens on `software.change/1`. The first time this ran, on a scratch crate with one
-failing test, it stopped after 4 steps on `ApprovalRequired (repository.merge)`: the tests
-validator recorded the failure, the harness edited the code, the validator recorded the pass,
-and the merge waited for a grant. The run record is
+The case opens on `software.change/1`. The first time this ran, it stopped after 4 steps on
+`ApprovalRequired (repository.merge)`: the tests validator recorded the failure, the harness
+edited the code, the validator recorded the pass, and the merge waited for a grant. The run
+record is
 [`docs/runs/2026-10-18-m1-scratch.md`](https://github.com/beyond10x/takt/blob/main/docs/runs/2026-10-18-m1-scratch.md).
 
-Next: [run a story](./guides/run-a-story.md) from the planning store, and
-[approve and resume](./guides/approve-and-resume.md) it.
+Next: [run a story](./guides/run-a-story.md) from the planning store, then
+[approve and resume](./guides/run-a-story.md#approve-and-resume) it.

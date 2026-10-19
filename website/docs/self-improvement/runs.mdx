@@ -4,14 +4,14 @@ description: Every recorded scenario and variety run, by arm and revision, with 
 ---
 
 import Chart from '@site/src/components/Chart';
-import {journey} from '@site/src/generated/charts';
+import {journey, timeline} from '@site/src/generated/charts';
 
 # Runs
 
 All runs are from 2026-10-18 (UTC). Each is one line of
 [`docs/metrics/scenario-runs.jsonl`](https://github.com/beyond10x/takt/blob/main/docs/metrics/scenario-runs.jsonl),
-68 lines, naming the raw usage record it was read from. A figure the source does not state is
-`null`, never 0. First results, not a benchmark.
+68 lines, naming the raw usage record it was read from. How the figures are read:
+[Methodology](./methodology.md).
 
 ## Scenario 1
 
@@ -46,24 +46,40 @@ each harness reported them. Under each median, the lowest and the highest run.
 **The result.** The isolated free agent was cheaper and faster. Against its six runs, takt at
 0a776d2 cost about 1.8x as much and took 2.4x the wall time; the promoted binary a0b8576 took 1.3x
 the tokens and 2.3x the time. Against Claude Code with its full configuration, takt used 4.7x
-fewer tokens, and nearly all of that gap is the isolation, not the protocol. The hypothesis
+fewer tokens in round 1; nearly all of that gap comes from the isolation. The hypothesis
 "cheaper per accepted unit" is not supported on this scenario.
 
 Caveats:
 
-- One toy scenario. Every scenario 1 run with a result passed (45 of 45), so the held-out check
+- Every scenario 1 run with a result passed (45 of 45), so the held-out check
   does not tell the arms apart.
 - Not counted: `T-10`, refused before its first step because a concurrent free-arm run had taken
   its trial branch; `I-modefail-1..3`, refused at start by a runner configuration error;
   `T-fetchfail-1..3`, takt at 0a776d2 without an https-origin workaround for a bug in its trial
   fetch, fixed in wave 10.
 - `T-27` stopped on `NoProgress` after a `repository.inspect` step and needed one resume.
-- Token totals include cache reads, billed at about 1/20 of input. Cost is the API list price the
-  harness reports: notional.
+
+## Timeline
+
+takt's own runs of scenario 1 per takt revision: tokens on the left axis, wall time where known on
+the right, the waves that changed takt and the improvement turns as markers above the plot, and
+the free-running medians as reference lines. Drawn by `docs/metrics/timeline.py`.
+
+<Chart svg={timeline} />
+
+What it shows:
+
+- Before wave 08, three of the four trials that reached the merge approval needed one or two
+  resumes; none was timed. From 0a776d2 on, takt reached the merge approval in one invocation in
+  most runs.
+- Tokens did not fall after that. The promoted binary a0b8576 ran at a median of 122,361 tokens
+  over 5 runs, against 122,438 at 0a776d2 over 3.
+- The 56d1b70 column ran mostly on claude-fable-5-1, with no model pinned.
+- A wave no measured revision contains yet gets an empty column at its merge commit.
 
 ## Scenarios 2 to 6 and the variety runs
 
-Ten takt runs at a0b8576, one on each task, n = 1 each.
+Ten takt runs at a0b8576, one on each task.
 
 | run | task | stop, exit | steps | resumes | tokens | cost | wall | held-out check |
 |---|---|---|---|---|---|---|---|---|
@@ -93,15 +109,12 @@ Ten takt runs at a0b8576, one on each task, n = 1 each.
 
 ## Every scenario 1 run, one lane each
 
-Drawn by `docs/metrics/journey.py` from the raw records each run names, in one vocabulary of
-operations. No token or cost figure is read from the journeys. Lanes marked "order only" have no
-times in their records.
+Drawn by `docs/metrics/journey.py`.
 
-<Chart svg={journey} caption="Every recorded scenario 1 run, grouped by arm and then by takt revision. The chart keeps its size so its text stays readable; on a narrow screen, scroll it sideways." />
+<Chart svg={journey} caption="Grouped by arm, then by takt revision." />
 
-What the lanes expose, as waste takt has filed against itself:
-
-Counted over the 31 takt lanes of scenario 1 that reached the merge approval (`journeys.jsonl`):
+Waste takt has filed against itself, counted over the 31 takt lanes of scenario 1 that reached
+the merge approval (`journeys.jsonl`):
 
 | waste | seen in | story |
 |---|---|---|
@@ -110,7 +123,10 @@ Counted over the 31 takt lanes of scenario 1 that reached the merge approval (`j
 | `repository.inspect` offered to a harness with no memory between steps, then `NoProgress` and a resume | 7 of 31: three early trials, T-5, T-7, T-9 and T-27 | `story:no-inspect-for-stateless-harness` |
 | the trial-branch fetch hanging until its 300 s timeout | `T-fetchfail-1..3` | `story:trial-fetch-needs-no-user-ssh`, fixed in wave 10 |
 
-Wave 12 merged the fixes for the first three rows (`docs/waves/wave-12.md`). No scenario run has
-measured them yet.
+Wave 12 merged the fixes for the first three rows (`docs/waves/wave-12.md`). T-44..48, the
+promotion's five runs at 44f96a4, which holds that merge (7e9b2ef), each reached the merge
+approval in 13 steps against 18 at a0b8576, at a median of 121,952 tokens; the records do not say
+why. They have no line in `scenario-runs.jsonl` yet ([run record](https://github.com/beyond10x/takt/blob/main/docs/runs/2026-10-19-improvement-turns-2-and-3/README.md)).
 
-Sources: `docs/metrics/scenario-runs.jsonl`, `docs/metrics/README.md`, `docs/metrics/journey.svg`.
+Sources: `docs/metrics/scenario-runs.jsonl`, `docs/metrics/README.md`, `docs/metrics/journey.svg`,
+`docs/metrics/timeline.svg`, `docs/runs/2026-10-19-improvement-turns-2-and-3/README.md`.

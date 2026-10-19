@@ -1,6 +1,6 @@
 ---
 title: Run a story
-description: Let takt take the next ready story from the planning store and deliver it through a pull request.
+description: Let takt take the next ready story from the planning store, deliver it through a pull request, and merge it under a grant.
 ---
 
 # Run a story
@@ -16,12 +16,9 @@ are done.
 
 ## Before the first run
 
-- The repository has an AEP planning store (`.engineering/project.yaml`) with at least one ready
-  story, and `aep` is on the `PATH`.
-- The tree is clean: a case opens only on a clean tree.
-- For the pull request: `origin` is on github.com, `b10x-gates` and `gh` are on the `PATH`, and
-  `B10X_GATES_POLICY` names the gates policy. With another host, or with `--forge none`, no pull
-  request is opened.
+- What [Getting started](../getting-started.md#what-it-needs) lists for story runs and pull
+  requests.
+- The tree is clean.
 - The tests are `--test-cmd` (default `cargo test --quiet`, split at white space, run without a
   shell). `.engineering/gates.yaml`, when the repository has one, adds the gate.
 
@@ -33,20 +30,46 @@ are done.
 3. The tests and the gate run as validators on the implementation revision.
 4. Once both are green, `pr.open` pushes the branch and opens the pull request through the bot
    route; `ci.read` reads its checks, waiting while they are pending.
-5. With CI green, `repository.merge` needs a grant. The run stops on `ApprovalRequired`, exit 4.
-   See [Approve and resume](./approve-and-resume.md).
-6. After the grant, the next run merges, records the evidence on the story, moves it to
-   `implemented` and stops on `Completed`, exit 0. The records reach the base with the merge.
+5. With CI green, `repository.merge` needs a grant. The run stops on `ApprovalRequired`, exit 4
+   ([Approve and resume](#approve-and-resume)).
+6. After the grant, the next run commits the evidence and the move to `implemented` on the case's
+   branch, then merges, so both reach the base with the merge; it stops on `Completed`, exit 0.
 
-## Bounds
+## Approve and resume
 
-`--iterations` (steps), `--hours` and `--tokens` stop the run on a budget, exit 3. A run that waits
-on the forge until its budget ends stops with exit 6; the next run resumes the case.
+```sh
+takt approve --repo <path> <case> repository.merge --by <who>
+takt run --repo <path>
+```
+
+`takt approve` writes the grant into the case's `authority.yaml` and records the approval on the
+case's story in the planning store; that record is committed on the case's branch, so the tree
+must be on that branch and clean. `--by` names who grants. The next `takt run` resumes the case
+and merges under the grant.
+
+A grant binds to the revision of the artifact its action is about, so a commit after the grant
+needs a new one. Above the granted revision, only takt's records for the story may ride to the
+base: one approval per grant, one `test_result` and the move to `implemented`.
+
+## Bounds and resuming after a stop
+
+`--iterations` (steps), `--hours` and `--tokens` bound the run.
+
+| stop | exit | what the next run does |
+|---|---|---|
+| `ApprovalRequired` | 4 | merges under the grant once one is recorded |
+| `Waiting` on the forge until the budget ended | 6 | reads the forge again |
+| an error once the case was open | 5 | resumes the open case |
+| a budget, `NothingAdmissible`, `StepRefused`, `NoProgress` | 3 | resumes the open case of the story |
+
+`--case <id>` resumes a named case instead.
 
 ## What is not proven yet
 
 No recorded run has yet taken a story from ready to merged with the grant as the only manual
-step. Scenario 1 reached `accepted` on 2026-10-18, but with more invocations than that allows
+step. Scenario 1 reached `accepted` on 2026-10-18, but with 4 invocations where 2 were required
 (`docs/design/takt.md` § 4).
 
-Sources: `takt run --help`, `README.md` § Use, `docs/design/takt.md` § 4.
+Sources: `takt run --help`, `takt approve --help`, `crates/takt/src/case.rs` (`approvals_only`),
+`crates/takt/src/frontier.rs`, `docs/design/takt.md` § 4, the stories `authority-hardening`,
+`grant-binds-to-action-subject` and `approval-riders-are-grants`.

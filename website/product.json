@@ -25,8 +25,8 @@
     {
       "kind": "features",
       "eyebrow": "What you get",
-      "title": "Done is computed, not claimed.",
-      "lede": "A coding agent running free decides when it is done and says so in text. takt keeps the model's choice of how to do the work and takes away its say over whether the work counts.",
+      "title": "Done is computed from validator records.",
+      "lede": "A coding agent running free decides when it is done and says so in text.",
       "items": [
         {
           "title": "Evidence bound to a revision",
@@ -40,7 +40,7 @@
           "description": "A merge waits for a grant recorded for the exact revision (takt approve); without one it is refused.",
           "status": "shipped",
           "icon": "action",
-          "href": "/docs/guides/approve-and-resume"
+          "href": "/docs/guides/run-a-story#approve-and-resume"
         },
         {
           "title": "A replayable case record",
@@ -58,7 +58,7 @@
         },
         {
           "title": "A measured self-improvement loop",
-          "description": "takt improves takt in turns. A fix counts when a check reproduced the defect before it and not after it. The first turn was recorded by hand; validators that drive a turn are not built.",
+          "description": "takt improves takt in turns. A fix counts when a check reproduced the defect before it and not after it. Three turns were recorded by hand; validators that drive a turn are not built.",
           "status": "decided",
           "icon": "obligation",
           "href": "/docs/self-improvement/the-loop"
@@ -75,7 +75,7 @@
       "kind": "flow",
       "eyebrow": "One run",
       "title": "Evaluate, step, observe, record.",
-      "lede": "The loop is in the binary and the truth is Canon's. A run ends when an outcome is legitimate, an approval is needed, a budget is spent or nothing is admissible.",
+      "lede": "The loop runs in the binary; Canon decides the outcome. A run ends on a named stop.",
       "steps": [
         {"label": "takt", "title": "Open", "description": "An intent or the next ready story opens a case on a protocol."},
         {"label": "Canon", "title": "Evaluate", "description": "Claims, obligations and the admissible actions, over the evidence."},
@@ -88,7 +88,7 @@
     {
       "kind": "status",
       "eyebrow": "Status",
-      "title": "Early. Here is exactly what exists.",
+      "title": "Early. What exists today.",
       "lede": "Shipped means the story is implemented in the planning store. Decided means it is in an open wave. Generated from .engineering/planning at build time.",
       "items": "data/status.json"
     },
