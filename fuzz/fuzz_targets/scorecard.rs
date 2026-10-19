@@ -105,8 +105,16 @@ fuzz_target!(|data: &[u8]| {
             candidate.push((outcome, tokens, said));
         }
     }
-    let short = saved.is_empty() || candidate.is_empty();
     let (saved, candidate) = (card(&saved, margin), card(&candidate, margin));
+    // The cases a side's scenario counts: a `DiskLow` trial that never completed is no
+    // measurement and belongs to no scenario.
+    let measured = |card: &Scorecard| {
+        card.cases()
+            .iter()
+            .filter(|case| case.scenario.is_some())
+            .count()
+    };
+    let short = measured(&saved) == 0 || measured(&candidate) == 0;
     // Fewer cases on a side than the rule's one trial gives no verdict, and says so; with no
     // case on the saved side there is no scenario to judge and nothing is worse.
     if short {
@@ -114,7 +122,7 @@ fuzz_target!(|data: &[u8]| {
         match candidate.against(&saved, &mut out) {
             Err(error) => assert!(error.to_string().contains("too few cases"), "{error:#}"),
             Ok(worse) => assert!(
-                saved.rows.is_empty() && worse == 0,
+                measured(&saved) == 0 && worse == 0,
                 "a side with no case gave a verdict: {worse}"
             ),
         }

@@ -392,16 +392,273 @@ fn the_default_reader_reads_the_file_system_holding_the_path() {
     assert_eq!(later.device, free.device);
 }
 
-/// `DiskLow` ranks with the budget stops and `Unperformable`, the planner's ruling for a stop
-/// that only names why the run could not go on: above `NoProgress`, below a wait.
+/// A gates document whose one assertion is true in a repository with a manifest.
+const GATES: &str = "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: manifest\n    \
+                     text: The repository has its manifest.\n    assertions:\n      \
+                     - 'fs.file.exists(\"Cargo.toml\")'\n";
+
+/// A committed scratch repository with a manifest and a gates document.
+fn gated(name: &str) -> Scratch {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("free-disk-{}-{name}", std::process::id()));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
+    }
+    fs::create_dir_all(dir.join(".engineering")).expect("scratch dir");
+    fs::write(dir.join("Cargo.toml"), "[package]\nname = \"scratch\"\n").expect("a file");
+    fs::write(dir.join(".engineering/gates.yaml"), GATES).expect("a file");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-q", "-m", "start"]);
+    Scratch(dir)
+}
+
+/// Edits `work.txt` once, then hands the change over when offered, and requests the gate when
+/// one is pending; counts its calls.
+#[derive(Default)]
+struct Editing {
+    calls: Cell<usize>,
+}
+
+impl Harness for Editing {
+    fn name(&self) -> &str {
+        "editing"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> anyhow::Result<StepReport> {
+        self.calls.set(self.calls.get() + 1);
+        if let Some(gate) = context.approvals.first() {
+            return Ok(StepReport {
+                action: gate.clone(),
+                summary: "approval".to_owned(),
+                tokens: Some(1),
+            });
+        }
+        let work = context.tree.join("work.txt");
+        if work.exists() && context.offered.iter().any(|a| a == "change.handover") {
+            return Ok(StepReport {
+                action: "change.handover".to_owned(),
+                summary: "handover".to_owned(),
+                tokens: Some(1),
+            });
+        }
+        fs::write(&work, format!("edit {}\n", self.calls.get())).expect("an edit");
+        Ok(StepReport {
+            action: "implementation.edit".to_owned(),
+            summary: "edit".to_owned(),
+            tokens: Some(1),
+        })
+    }
+}
+
+/// The delivery's validators with its gates document, and the forge's three when given one.
+fn delivery_validators(forge: Option<Rc<dyn takt::Forge>>) -> Vec<Box<dyn Validator>> {
+    let mut validators: Vec<Box<dyn Validator>> = vec![
+        Box::new(TestsRun::new("true").expect("a command")),
+        Box::new(ChangeRead),
+        Box::new(takt::validator::GateRun::new(".engineering/gates.yaml")),
+    ];
+    if let Some(forge) = forge {
+        validators.push(Box::new(takt::validator::PrOpen::new(forge.clone())));
+        validators.push(Box::new(takt::validator::CiRead::new(forge.clone())));
+        validators.push(Box::new(takt::validator::PrMerged::new(forge)));
+    }
+    validators
+}
+
+/// Opens the case `name` with no approval gate given and runs it to its first stop, as the CLI
+/// does (`stop_when_unperformable`), the disk not checked.
+fn first_run(tree: &Path, name: &str, validators: &[Box<dyn Validator>], harness: &dyn Harness) {
+    let mut options = options(name);
+    options.iterations = Some(12);
+    options.gate = None;
+    let mut run = Run::open(tree, options, harness, validators).expect("the case opens");
+    run.stop_when_unperformable();
+    run.run(&mut Vec::new())
+        .expect("the run stops without an error");
+}
+
+/// Resumes the case `name` as the CLI does, with the disk under the threshold when `low`: its
+/// stop as printed and its output.
+fn resumed(
+    tree: &Path,
+    name: &str,
+    validators: &[Box<dyn Validator>],
+    harness: &dyn Harness,
+    low: bool,
+) -> (String, String) {
+    let mut options = options(name);
+    options.iterations = Some(12);
+    options.gate = None;
+    let mut run = Run::resume(tree, options, name, harness, validators).expect("the case resumes");
+    run.stop_when_unperformable();
+    if low {
+        run.stop_when_disk_below(10 * GIB, None);
+        run.read_free_space_with(|_| {
+            Ok(FreeSpace {
+                device: 1,
+                bytes: GIB,
+            })
+        });
+    }
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).expect("the run stops without an error");
+    (stop.to_string(), String::from_utf8(out).expect("utf-8"))
+}
+
+/// A case only a grant can move stops for the grant on a low disk too: no step would follow,
+/// so free space is not what stops it (exit 4, not 3), and the harness is not called.
 #[test]
-fn a_disk_low_stop_ranks_with_the_budget_stops() {
-    use takt::scorecard::rank;
-    assert_eq!(rank("DiskLow"), 2);
-    assert_eq!(rank("DiskLow"), rank("Iterations"));
-    assert_eq!(rank("DiskLow"), rank("Unperformable"));
-    assert!(rank("DiskLow") > rank("NoProgress"));
-    assert!(rank("DiskLow") < rank("Waiting"));
+fn a_case_only_a_grant_moves_stops_approval_required_on_a_low_disk() {
+    let tree = gated("grant");
+    let forge: Rc<dyn takt::Forge> = Rc::new(takt::forge::Memory {
+        checks: takt::forge::Checks::Pass,
+        ..takt::forge::Memory::default()
+    });
+    let validators = delivery_validators(Some(forge));
+    let harness = Editing::default();
+    first_run(&tree, "grant", &validators, &harness);
+    let (fine, text) = resumed(&tree, "grant", &validators, &harness, false);
+    assert!(
+        fine.starts_with("ApprovalRequired ("),
+        "the premise: {fine}\n{text}"
+    );
+    let calls = harness.calls.get();
+    let (low, text) = resumed(&tree, "grant", &validators, &harness, true);
+    assert_eq!(low, fine, "{text}");
+    assert_eq!(harness.calls.get(), calls, "{text}");
+}
+
+/// A `--forge none` case at "ahead" stops `Unperformable` on a low disk too: no step would
+/// follow (exit 7, not 3).
+#[test]
+fn a_forge_none_case_at_ahead_stops_unperformable_on_a_low_disk() {
+    let tree = gated("ahead");
+    let validators = delivery_validators(None);
+    let harness = Editing::default();
+    first_run(&tree, "ahead", &validators, &harness);
+    let (fine, text) = resumed(&tree, "ahead", &validators, &harness, false);
+    assert_eq!(
+        fine, "Unperformable (pr.opened; nothing performs it without the forge)",
+        "the premise: {text}"
+    );
+    let (low, text) = resumed(&tree, "ahead", &validators, &harness, true);
+    assert_eq!(low, fine, "{text}");
+}
+
+/// Writes the scenario trial `case` under `repo`: one run per stop line, each with whether it
+/// is a completion, and the held-out check's first line.
+fn trial(repo: &Path, case: &str, stops: &[(&str, bool)], held: &str) {
+    let dir = repo.join(".engineering/cases").join(case);
+    fs::create_dir_all(&dir).expect("a case directory");
+    let mut text = String::new();
+    for (n, (stop, completed)) in stops.iter().enumerate() {
+        let at = format!("2026-10-19T10:0{n}:00.000000Z");
+        text.push_str(&format!(
+            "{{\"at\":\"{at}\",\"step\":0,\"event\":\"opened\",\"case\":\"{case}\",\"protocol\":\"story.delivery/1\",\"inputs\":[]}}\n"
+        ));
+        text.push_str(&format!(
+            "{{\"at\":\"{at}\",\"step\":1,\"event\":\"stop\",\"stop\":\"{stop}\",\"steps\":1,\"tokens\":10,\"completed\":{completed}}}\n"
+        ));
+    }
+    fs::write(dir.join("events.jsonl"), text).expect("the record");
+    fs::write(dir.join("held-out.txt"), format!("{held}\n")).expect("the held-out result");
+}
+
+/// A stop line a `DiskLow` run writes.
+const DISK_LOW: &str =
+    "DiskLow (/srv/tree: 1073741824 bytes (1.00 GiB) free, under 10737418240 bytes (10.00 GiB))";
+
+/// Scenario `s` with two trials: the first accepted, the second accepted unless `low`, which
+/// stopped `DiskLow` with its held-out check failed.
+fn card(name: &str, low: bool) -> (Scratch, takt::scorecard::Scorecard) {
+    let repo = scratch(name);
+    trial(
+        &repo,
+        "scenario-s-trial-0",
+        &[("Completed (accepted)", true)],
+        "PASS",
+    );
+    if low {
+        trial(
+            &repo,
+            "scenario-s-trial-1",
+            &[(DISK_LOW, false)],
+            "FAIL: no pull request",
+        );
+    } else {
+        trial(
+            &repo,
+            "scenario-s-trial-1",
+            &[("Completed (accepted)", true)],
+            "PASS",
+        );
+    }
+    let mut card = takt::scorecard::Scorecard::read(&repo).expect("the scorecard reads");
+    card.rule = takt::scorecard::Rule {
+        trials: 2,
+        margin: 0,
+    };
+    (repo, card)
+}
+
+/// The planner's ruling: a `DiskLow` trial is no measurement, since disk fullness measures the
+/// machine, not takt. The scorecard leaves it out of its scenario, so on the candidate's side
+/// the scenario is short of the rule's trials and gets no verdict ("too few cases"), not a
+/// worse rank.
+#[test]
+fn a_disk_low_trial_on_the_candidate_side_is_too_few_cases_not_worse() {
+    let (_saved_repo, saved) = card("saved-fine", false);
+    let (_repo, candidate) = card("candidate-low", true);
+    let low = candidate
+        .cases()
+        .into_iter()
+        .find(|case| case.case == "scenario-s-trial-1")
+        .expect("the trial is listed");
+    assert_eq!(low.scenario, None, "{low:?}");
+    let mut out = Vec::new();
+    let compared = candidate.against(&saved, &mut out);
+    let text = String::from_utf8(out).expect("utf-8");
+    assert!(
+        text.contains("scenario s  too few cases (1 of 2)"),
+        "{text}"
+    );
+    let error = compared.expect_err("no verdict on too few cases");
+    assert!(format!("{error:#}").contains("too few cases"), "{error:#}");
+}
+
+/// The same on the saved side: a baseline whose trial stopped `DiskLow` is short of the rule's
+/// trials and judges nothing, as a baseline with too few cases does.
+#[test]
+fn a_disk_low_trial_on_the_saved_side_is_too_few_cases_there() {
+    let (_saved_repo, saved) = card("saved-low", true);
+    let (_repo, candidate) = card("candidate-fine", false);
+    let mut out = Vec::new();
+    let compared = candidate.against(&saved, &mut out);
+    let text = String::from_utf8(out).expect("utf-8");
+    assert!(
+        text.contains("scenario s  too few cases on the saved side (1 of 2)"),
+        "{text}"
+    );
+    assert!(compared.is_err(), "{text}");
+}
+
+/// A `DiskLow` trial resumed on a disk with room, and completed, is a measurement again: it is
+/// the trial's last run, not its first, that says whether the machine ended it.
+#[test]
+fn a_disk_low_trial_completed_later_counts_in_its_scenario() {
+    let repo = scratch("resumed-trial");
+    trial(
+        &repo,
+        "scenario-s-trial-0",
+        &[(DISK_LOW, false), ("Completed (accepted)", true)],
+        "PASS",
+    );
+    let cases = takt::scorecard::Scorecard::read(&repo)
+        .expect("the scorecard reads")
+        .cases();
+    assert_eq!(cases[0].scenario.as_deref(), Some("s"), "{cases:?}");
+    assert_eq!(cases[0].outcome, "accepted", "{cases:?}");
 }
 
 /// The scorecard counts a `DiskLow` run as no completion.

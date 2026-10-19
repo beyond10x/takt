@@ -28,7 +28,9 @@
 //! one, a scenario is worse when, for some outcome rank, the candidate's cases at that rank or
 //! better fall short of the saved share of its own n by more than the margin (at equal n: more
 //! than `margin` cases fewer), or when its median of tokens exceeds the saved maximum; a side
-//! with fewer cases than the rule's trials, none included, gets no verdict. Tokens are printed per
+//! with fewer cases than the rule's trials, none included, gets no verdict; a trial whose last
+//! run stopped `DiskLow` and that never completed is no measurement and counts on neither side
+//! ([`Case::scenario`]). Tokens are printed per
 //! scenario and side as n, minimum, median and maximum over cases with the difference of the
 //! medians. A metric whose definition changed between the two is printed with both figures and
 //! does not make a scenario worse; outcomes are compared under the current definition whatever
@@ -56,6 +58,11 @@ pub const HELD_OUT_FILE: &str = "held-out.txt";
 
 /// The outcome of a scenario run whose held-out check did not pass, whatever its stop said.
 pub const FAILED: &str = "failed";
+
+/// The stop of a run that stopped before a step for want of free disk ([`crate::Stop::DiskLow`]):
+/// a case whose last run stopped so, none of its runs completed, is no measurement of takt and
+/// belongs to no scenario ([`Case::scenario`]).
+pub const DISK_LOW: &str = "DiskLow";
 
 /// The operator's statement of the binary a case's runs were made with, in the case directory
 /// beside its record: the first line `<path>\t<sha256>`, the path as the operator wrote it
@@ -254,7 +261,8 @@ fn stated_binary(dir: &Path) -> std::result::Result<Option<RunBinary>, String> {
 pub struct Case {
     /// The case.
     pub case: String,
-    /// Its scenario, as [`Row::scenario`].
+    /// Its scenario, as [`Row::scenario`]; none for a trial that is no measurement
+    /// ([`DISK_LOW`]), so neither side of a comparison nor a promotion counts it.
     pub scenario: Option<String>,
     /// The best outcome a run of it completed with, else its last run's.
     pub outcome: String,
@@ -303,9 +311,13 @@ impl Case {
             sum(|run| run.errors),
             sum(|run| run.wall_ms),
         );
+        // A trial whose last run stopped `DiskLow`, none of its runs completed, measured the
+        // machine's disk, not takt: it is left out of its scenario, on either side, so a scenario
+        // it leaves short of the rule's trials gets no verdict (the planner's ruling).
+        let measured = last.stop != DISK_LOW || runs.iter().any(|run| run.completes());
         Some(Self {
             case: last.case.clone(),
-            scenario: last.scenario.clone(),
+            scenario: last.scenario.clone().filter(|_| measured),
             no_progress: u64::from(outcome == "NoProgress"),
             outcome,
             runs: runs.len() as u64,
@@ -375,24 +387,25 @@ pub fn scenario_of(case: &str) -> Option<&str> {
 }
 
 /// An outcome's rank, higher better: `accepted`; an approval or a wait (`ApprovalRequired`,
-/// `Waiting`); a budget stop (`Iterations`, `Hours`, `Tokens`), `Unperformable` and `DiskLow`;
+/// `Waiting`); a budget stop (`Iterations`, `Hours`, `Tokens`) and `Unperformable`;
 /// `NoProgress`, and with it every other stop (`NothingAdmissible`, `StepRefused`, another
 /// outcome); an error, no stop, or a held-out check that did not pass ([`FAILED`]).
 ///
-/// The planner's ruling: a stop that only names why the run could not go on ranks with the
-/// budget stops, `Unperformable` and `DiskLow` both. A run that used to end on its budget ranks
-/// where it did, so naming its stop moves no comparison against an older baseline, which below
-/// the budget stops would read as worse and above them would flatter the candidate. Not every
-/// such run ranked there: a `--forge none` run that used to stop `NoProgress` (rank 1) now ranks
-/// one higher (`Unperformable`, 2) against an older baseline. Real promotions measure with the
-/// GitHub forge, where `Unperformable` does not fire, so that lift affects only `--forge none`
-/// trial comparisons.
+/// The planner's ruling: `Unperformable`, a stop that only names why the run could not go on,
+/// ranks with the budget stops. A run that used to end on its budget ranks where it did, so
+/// naming its stop moves no comparison against an older baseline, which below the budget stops
+/// would read as worse and above them would flatter the candidate. Not every such run ranked
+/// there: a `--forge none` run that used to stop `NoProgress` (rank 1) now ranks one higher
+/// (`Unperformable`, 2) against an older baseline. Real promotions measure with the GitHub forge
+/// and a gates document, where `Unperformable` does not fire, so that lift affects only
+/// `--forge none` trial comparisons. `DiskLow` takes no rank in a comparison: a trial that ended
+/// on it measured the machine's disk, not takt, and belongs to no scenario ([`Case::scenario`]).
 #[must_use]
 pub fn rank(outcome: &str) -> u8 {
     match outcome {
         "accepted" => 4,
         "ApprovalRequired" | "Waiting" => 3,
-        "Iterations" | "Hours" | "Tokens" | "Unperformable" | "DiskLow" => 2,
+        "Iterations" | "Hours" | "Tokens" | "Unperformable" => 2,
         "error" | "unfinished" | FAILED => 0,
         _ => 1,
     }
@@ -425,7 +438,7 @@ fn is_completed(outcome: &str) -> bool {
 const RANKS: [(u8, &str); 4] = [
     (4, "accepted"),
     (3, "ApprovalRequired or Waiting"),
-    (2, "a budget stop, Unperformable or DiskLow"),
+    (2, "a budget stop or Unperformable"),
     (1, "NoProgress or another stop"),
 ];
 

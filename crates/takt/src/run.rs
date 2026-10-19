@@ -99,10 +99,11 @@ pub enum Stop {
     },
     /// The file system holding the case's tree, or the one holding the build directory, has
     /// less free space than the run was given as the least a step needs: read before every step
-    /// the run offers or runs, never at open, and the run stops before the step instead of
-    /// failing in it for want of space. The case stays open. Only a run given a threshold stops
-    /// so ([`Run::stop_when_disk_below`]): the CLI gives one for every run, `--min-free-gib`; the
-    /// library's default reads nothing.
+    /// the run offers or runs, once one follows (a stop that takes no step, for a grant, a
+    /// missing performer or nothing admissible, comes first), never at open, and the run stops
+    /// before the step instead of failing in it for want of space. The case stays open. Only a
+    /// run given a threshold stops so ([`Run::stop_when_disk_below`]): the CLI gives one for
+    /// every run, `--min-free-gib`; the library's default reads nothing.
     DiskLow {
         /// The path whose file system was read: the tree, or the build directory.
         path: PathBuf,
@@ -7364,12 +7365,6 @@ impl<'a> Run<'a> {
                     waiting(&awaited, Some(stop))
                 });
             }
-            // Before any step is offered or run: a file system under the threshold stops the
-            // run here rather than a step failing in it for want of space
-            // ([`Run::stop_when_disk_below`]).
-            if let Some(stop) = self.disk_low(out)? {
-                return Ok(stop);
-            }
             let admissible = decision.admissible();
             // The judgement actions: the admissible ones no validator owns, but none whose evidence
             // only a validator writes ([`Shape::for_harness`]). A harness that keeps nothing
@@ -7396,6 +7391,12 @@ impl<'a> Run<'a> {
                 }
             }
             if let Some(validator) = due {
+                // A deterministic step follows: a file system under the threshold stops the run
+                // here rather than the step failing in it for want of space
+                // ([`Run::stop_when_disk_below`]).
+                if let Some(stop) = self.disk_low(out)? {
+                    return Ok(stop);
+                }
                 // The story's records in the store, once a run, just before the step its grant
                 // authorises: they ride to the base with the merge, and without both of them the
                 // step is not taken.
@@ -7784,6 +7785,12 @@ impl<'a> Run<'a> {
                 } else {
                     Stop::ApprovalRequired(approvals)
                 });
+            }
+            // A judgement step follows, every stop that takes none checked first (a grant, no
+            // performer, nothing admissible): a file system under the threshold stops the run
+            // here ([`Run::stop_when_disk_below`]).
+            if let Some(stop) = self.disk_low(out)? {
+                return Ok(stop);
             }
             self.steps += 1;
             let approvals: Vec<String> = decision
