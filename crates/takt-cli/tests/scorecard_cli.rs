@@ -358,29 +358,22 @@ fn save_under(repo: &Path, saves: &Path, revision: &str) -> (i32, String, String
 }
 
 /// story:scorecard-save-checks-binary: a save under a revision another than the one a run's
-/// `opened` line names (another sha, `<sha>-dirty`, or the revision abbreviated) is refused,
-/// exit 1, naming that run and both revisions, and writes nothing.
+/// `opened` line names (another sha, `<sha>-dirty`) is refused, exit 1, naming that run and
+/// both revisions, and writes nothing.
 #[test]
 fn save_under_a_revision_other_than_a_runs_binary_is_refused_naming_the_run() {
     let dirty = format!("{ZEROS}-dirty");
-    for (label, binary, revision) in [
-        ("other", OTHER_BUILD, ZEROS),
-        ("dirty", dirty.as_str(), ZEROS),
-        ("abbreviated", ZEROS, "0000000"),
-    ] {
+    for (label, binary) in [("other", OTHER_BUILD), ("dirty", dirty.as_str())] {
         let repo = repository(&format!("made-{label}"), &[]);
         run_made_with(&repo, "scenario-1-trial-1", 5, "NoProgress", Some(ZEROS));
         run_made_with(&repo, "scenario-1-trial-2", 5, "NoProgress", Some(binary));
         let saves = scratch(&format!("made-{label}-saves"));
-        let (code, text, stderr) = save_under(&repo, &saves, revision);
+        let (code, text, stderr) = save_under(&repo, &saves, ZEROS);
         assert_eq!(code, 1, "{label}: {text}{stderr}");
-        let named = if label == "abbreviated" {
-            "scenario-1-trial-1#1"
-        } else {
-            "scenario-1-trial-2#1"
-        };
         assert!(
-            stderr.contains(named) && stderr.contains(binary) && stderr.contains(revision),
+            stderr.contains("scenario-1-trial-2#1")
+                && stderr.contains(binary)
+                && stderr.contains(ZEROS),
             "{label}: the run and both revisions are named: {stderr}"
         );
         assert!(!text.contains("saved:"), "{label}: {text}");
@@ -434,6 +427,33 @@ fn save_under_the_revision_every_run_was_made_with_succeeds() {
         )),
         "{text}"
     );
+}
+
+/// story:scorecard-save-checks-binary, decision D3: `--revision` for a save is the full commit
+/// id, 40 lower-case hex digits; an abbreviated one, or a longer one, is refused, exit 1, before
+/// any run is read against it, whatever the runs name, and nothing is written.
+#[test]
+fn save_under_anything_but_a_full_commit_id_is_refused() {
+    let sha256 = "0".repeat(64);
+    for (label, binary) in [("none", None), ("own", Some(ZEROS))] {
+        let repo = repository(&format!("short-{label}"), &[]);
+        run_made_with(&repo, "scenario-1-trial-1", 5, "NoProgress", binary);
+        for revision in ["abcdef0", "0000000", &ZEROS[..39], sha256.as_str()] {
+            let saves = scratch(&format!("short-{label}-saves"));
+            let (code, text, stderr) = save_under(&repo, &saves, revision);
+            assert_eq!(code, 1, "{label} {revision}: {text}{stderr}");
+            assert!(
+                stderr.contains("40 lower-case hex digits"),
+                "{label} {revision}: {stderr}"
+            );
+            assert!(!text.contains("saved:"), "{label} {revision}: {text}");
+            assert_eq!(
+                fs::read_dir(&*saves).expect("the directory").count(),
+                0,
+                "{label} {revision}: nothing is written"
+            );
+        }
+    }
 }
 
 /// story:scorecard-save-checks-binary, decision D2 and the planner's ruling on it: a run whose

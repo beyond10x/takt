@@ -1045,6 +1045,32 @@ fn a_save_by_any_caller_checks_each_runs_binary() {
     }
 }
 
+/// story:scorecard-save-checks-binary, decision D3: a save by any caller is named by the full
+/// commit id, 40 lower-case hex digits, checked before anything else: over runs that name no
+/// revision too, an abbreviated or longer id is refused and nothing is written.
+#[test]
+fn a_save_needs_the_full_commit_id() {
+    let repo = scratch("save-full-id");
+    two_scenario_one_runs(&repo);
+    let card = Scorecard::read(&repo).expect("the scorecard reads");
+    assert!(card.rows.iter().all(|row| row.opened_binary.is_none()));
+    let sha256 = "a".repeat(64);
+    for revision in ["abcdef0", "abcdef1234567", &sha256[..41], sha256.as_str()] {
+        for named in [Named::Build, Named::Head] {
+            let saves = scratch("save-full-id-saves");
+            let refused = card
+                .clone()
+                .save(&saves, revision, named)
+                .expect_err("an id that is not the full commit id is refused");
+            assert!(
+                format!("{refused:#}").contains("40 lower-case hex digits"),
+                "{revision}: {refused:#}"
+            );
+            assert_eq!(fs::read_dir(&*saves).expect("the directory").count(), 0);
+        }
+    }
+}
+
 /// Runs `git <args>` in `tree`; its trimmed standard output.
 fn git(tree: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
