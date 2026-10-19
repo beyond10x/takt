@@ -420,8 +420,8 @@ types:
   # read from: crates/takt/src/run.rs:7689-7699
   # read from: crates/takt/src/validator.rs:72-80
   # read from: crates/takt/src/improvement.rs:1104-1108
-  # read from: crates/takt/src/improvement.rs:1617-1621
-  # read from: crates/takt/src/improvement.rs:1829-1833
+  # read from: crates/takt/src/improvement.rs:1640-1644
+  # read from: crates/takt/src/improvement.rs:1852-1856
   # read from: crates/takt/src/run.rs:100-114
   # read from: crates/takt/src/run.rs:130
   # read from: crates/takt/src/run.rs:6728-6736
@@ -1719,13 +1719,14 @@ types:
   # by a committer date, which the committer sets and a fast-forward takes from the candidate.
   # The refusal names the merge, the first commit of the mainline's first-parent chain at that
   # tip that holds the candidate, with its committer date, labelled the committer's clock, and
-  # the grant's instant. A grant that records no tip, or whose tip does not arrive from the
-  # repository as its id, records nothing either. `candidate.merge` shares the validator and
+  # the grant's instant. A grant that records no tip, whose tip does not arrive from the
+  # repository as its id, or whose tip is not on the mainline now (neither its tip nor an
+  # ancestor of it), records nothing either. `candidate.merge` shares the validator and
   # is not held to it. Decided by the planner
   # (story:a-judge-surface-candidate-merges-after-its-grant, 2026-10-19).
-  # read from: crates/takt/src/improvement.rs:1341-1352
+  # read from: crates/takt/src/improvement.rs:1341-1353
   # read from: crates/takt/src/improvement.rs:1411-1420
-  # read from: crates/takt/src/improvement.rs:1521-1522
+  # read from: crates/takt/src/improvement.rs:1544-1545
   # read from: crates/takt/src/case.rs:1045-1050
   - name: takt.work.Approver
     kind: union
@@ -2267,7 +2268,7 @@ entities:
       # on the way, and a root that is not there opens no turn. Absent for a case under any other protocol (story:self-improvement-
       # protocol, part 2, correction 2).
       # read from: crates/takt/src/case.rs:2313-2319
-      # read from: crates/takt/src/improvement.rs:1754-1762
+      # read from: crates/takt/src/improvement.rs:1777-1785
       - name: install_root
         type: Optional<String>
       # The forge an improvement turn reads the mainline through, `bot` or `none` (the local
@@ -3194,7 +3195,7 @@ entities:
   # read from: crates/takt/src/forge.rs:548-566
   # read from: crates/takt/src/validator.rs:224-227
   # read from: crates/takt/src/validator.rs:292-303
-  # read from: crates/takt/src/improvement.rs:1521-1522
+  # read from: crates/takt/src/improvement.rs:1544-1545
   - name: takt.work.EvidenceProducer
     naming:
       summary: >-

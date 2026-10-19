@@ -810,9 +810,16 @@ fn judge_grant(turn: &Turn, granted_at: &str, tip: Option<&str>) {
     fs::write(dir.join("authority.yaml"), text).expect("the authority is written");
 }
 
-/// A commit of the tree `tree` with `parents` and `message`, committed at `date` by the
-/// committer's clock; its id.
-fn commit_tree(turn: &Turn, tree: &str, parents: &[&str], message: &str, date: &str) -> String {
+/// A commit of the tree `tree` with `parents` and `message`, committed at `committed` by the
+/// committer's clock and authored at `authored` by the author's; its id.
+fn commit_tree(
+    turn: &Turn,
+    tree: &str,
+    parents: &[&str],
+    message: &str,
+    committed: &str,
+    authored: &str,
+) -> String {
     let mut args = vec!["commit-tree", tree];
     for parent in parents {
         args.extend(["-p", parent]);
@@ -821,8 +828,8 @@ fn commit_tree(turn: &Turn, tree: &str, parents: &[&str], message: &str, date: &
     let output = Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
         .args(&args)
-        .env("GIT_COMMITTER_DATE", date)
-        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_COMMITTER_DATE", committed)
+        .env("GIT_AUTHOR_DATE", authored)
         .current_dir(&turn.tree)
         .output()
         .expect("git runs");
@@ -862,7 +869,7 @@ fn a_candidate_merged_before_the_grant_is_refused_naming_both_instants() {
 /// A candidate merged into `main` by a merge commit, `main` then moved on by one more commit, all
 /// before the grant: the refusal names the merge commit, the first commit of `main`'s
 /// first-parent chain that holds the candidate, not the tip and not the candidate, with the
-/// merge commit's committer date.
+/// merge commit's committer date, not its author date, which differs.
 #[test]
 fn the_refusal_names_the_first_commit_of_mains_first_parent_chain_that_holds_the_candidate() {
     let turn = turn(
@@ -881,18 +888,32 @@ fn the_refusal_names_the_first_commit_of_mains_first_parent_chain_that_holds_the
         &[&turn.baseline, &turn.candidate],
         "merge the candidate",
         "2026-10-19T18:02:18Z",
+        "2026-10-19T09:30:00Z",
     );
-    let after = commit_tree(&turn, &tree, &[&merge], "after", "2026-10-19T18:04:00Z");
+    let after = commit_tree(
+        &turn,
+        &tree,
+        &[&merge],
+        "after",
+        "2026-10-19T18:04:00Z",
+        "2026-10-19T09:45:00Z",
+    );
     git(&turn.tree, &["branch", "-f", "main", &after]);
     judge_grant(&turn, "2026-10-19T18:05:26Z", Some(&after));
     let (results, waiting, summary) = observed(&validator, &turn);
     assert!(results.is_empty() && !waiting, "{summary}");
     assert!(summary.contains(&merge[..8]), "the merge commit: {summary}");
     let committed = git(&turn.tree, &["log", "-1", "--format=%cI", &merge]);
+    let authored = git(&turn.tree, &["log", "-1", "--format=%aI", &merge]);
     assert!(committed.starts_with("2026-10-19T18:02:18"), "{committed}");
+    assert!(authored.starts_with("2026-10-19T09:30:00"), "{authored}");
     assert!(
         summary.contains(&committed),
         "the merge's committer date {committed}: {summary}"
+    );
+    assert!(
+        !summary.contains(&authored),
+        "not its author date {authored}: {summary}"
     );
     assert!(summary.contains("2026-10-19T18:05:26Z"), "{summary}");
 }
@@ -942,6 +963,33 @@ fn a_judge_surface_grant_whose_mainline_tip_cannot_be_fetched_is_refused() {
     let (results, waiting, summary) = observed(&validator, &turn);
     assert!(results.is_empty() && !waiting, "{summary}");
     assert!(summary.contains(&missing[..8]), "{summary}");
+}
+
+/// A judge-surface grant whose recorded tip of `main` is not on `main` now, neither its tip nor
+/// an ancestor of it (here a commit with no parent, which holds no candidate), authorises no
+/// merge: nothing is recorded though `main` moved to the candidate, naming the recorded tip.
+#[test]
+fn a_judge_surface_grant_whose_mainline_tip_is_off_the_mainline_is_refused() {
+    let turn = turn("merge-anchor-off-main", &finding("docs/runs/trial-1.md"));
+    let validator =
+        takt::improvement::CandidateMerged::judge_surface(takt::improvement::Mainline::Local);
+    let tree = git(
+        &turn.tree,
+        &["rev-parse", &format!("{}^{{tree}}", turn.baseline)],
+    );
+    let orphan = commit_tree(
+        &turn,
+        &tree,
+        &[],
+        "orphan",
+        "2026-10-19T18:00:00Z",
+        "2026-10-19T18:00:00Z",
+    );
+    judge_grant(&turn, "2026-10-19T18:05:26Z", Some(&orphan));
+    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert!(results.is_empty() && !waiting, "{summary}");
+    assert!(summary.contains(&orphan[..8]), "{summary}");
 }
 
 /// The turn's records up to the judge-surface merge's gate, as its validators write them, and

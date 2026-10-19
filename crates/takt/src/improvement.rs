@@ -1347,9 +1347,15 @@ fn judge_surface_refusal(
 /// merge, the first commit of the mainline's first-parent chain at that tip that holds the
 /// candidate (the candidate itself for a fast-forward), with its committer date, labelled as the
 /// committer's clock, and the grant's instant. Decided by ancestry against the tip takt read,
-/// never by a date: the committer sets the date, and a fast-forward carries the candidate's own;
-/// none when the tip at the grant does not hold the candidate.
-fn merged_before_grant(dir: &Path, tree: &Path, revision: &str) -> Result<Option<String>> {
+/// never by a date: the committer sets the date, and a fast-forward carries the candidate's own.
+/// A tip at the grant that is not on the mainline at `now`, neither `now` nor an ancestor of it,
+/// is refused too; none when the tip at the grant is on it and does not hold the candidate.
+fn merged_before_grant(
+    dir: &Path,
+    tree: &Path,
+    now: &str,
+    revision: &str,
+) -> Result<Option<String>> {
     let capability = crate::validator::JUDGE_SURFACE_CAPABILITY;
     let main = crate::promotion::MAINLINE;
     let authority = crate::case::Authority::read(dir)?.unwrap_or_default();
@@ -1368,33 +1374,27 @@ fn merged_before_grant(dir: &Path, tree: &Path, revision: &str) -> Result<Option
             tip.escape_debug()
         )));
     }
-    let mirror = match crate::git::Mirror::of(tree, &[tip, revision])? {
+    let mirror = match crate::git::Mirror::of(tree, &[tip, revision, now])? {
         Ok(mirror) => mirror,
         Err(why) => {
             return Ok(Some(format!(
-                "{main} at the grant given at {granted_at}, {}, and the candidate {} do not arrive from this repository as their ids, every object hashed again ({why})",
+                "{main} at the grant given at {granted_at}, {}, {main} now, {}, and the candidate {} do not arrive from this repository as their ids, every object hashed again ({why})",
                 short(tip),
+                short(now),
                 short(revision)
             )));
         }
     };
-    let ancestry = mirror.output(&[
-        "merge-base",
-        "--is-ancestor",
-        "--end-of-options",
-        revision,
-        tip,
-    ])?;
-    match ancestry.status.code() {
-        Some(1) => return Ok(None),
-        Some(0) => {}
-        _ => bail!(
-            "git merge-base --is-ancestor {} {} on the judge's copy exited {}: {}",
-            short(revision),
+    // The tip recorded is the mainline's only while the mainline now is it or descends from it.
+    if !is_ancestor(&mirror, tip, now)? {
+        return Ok(Some(format!(
+            "{main} at the grant given at {granted_at}, {}, is not on {main} now, {}, neither its tip nor an ancestor of it, so the tip recorded with the grant is not the mainline's",
             short(tip),
-            ancestry.status,
-            String::from_utf8_lossy(&ancestry.stderr).trim()
-        ),
+            short(now)
+        )));
+    }
+    if !is_ancestor(&mirror, revision, tip)? {
+        return Ok(None);
     }
     // The commits holding the candidate are the newest stretch of the first-parent chain: the
     // oldest of them is where the candidate reached the mainline.
@@ -1421,6 +1421,29 @@ fn merged_before_grant(dir: &Path, tree: &Path, revision: &str) -> Result<Option
         short(tip),
         short(&merge)
     )))
+}
+
+/// Whether `ancestor` is `descendant` or an ancestor of it, read on `mirror`; any answer of git
+/// but yes or no is an error.
+fn is_ancestor(mirror: &crate::git::Mirror, ancestor: &str, descendant: &str) -> Result<bool> {
+    let ancestry = mirror.output(&[
+        "merge-base",
+        "--is-ancestor",
+        "--end-of-options",
+        ancestor,
+        descendant,
+    ])?;
+    match ancestry.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => bail!(
+            "git merge-base --is-ancestor {} {} on the judge's copy exited {}: {}",
+            short(ancestor),
+            short(descendant),
+            ancestry.status,
+            String::from_utf8_lossy(&ancestry.stderr).trim()
+        ),
+    }
 }
 
 /// `candidate.merge` and `candidate.merge_judge_surface`, one type for both: observes, never
@@ -1519,7 +1542,7 @@ impl CandidateMerged {
             ));
         }
         if self.action == Self::JUDGE_SURFACE_ACTION
-            && let Some(why) = merged_before_grant(&dir, tree, revision)?
+            && let Some(why) = merged_before_grant(&dir, tree, &tip, revision)?
         {
             return Ok((
                 nothing(format!(
