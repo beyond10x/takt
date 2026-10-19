@@ -29,6 +29,88 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   the forge was recorded), whose tip cannot be fetched, or whose tip is not on the mainline now
   is refused too.
 
+## [0.3.0] — 2026-10-20
+
+The minor version moves because `takt promote` now refuses scorecards that 0.2.x accepted.
+
+### Changed
+
+- `takt promote` judges a candidate against the latest record and also against the start of
+  its series: the latest `--baseline-only` record, or the latest `--rebaseline` under a newer
+  metric definition. A scenario worse than either is refused, exit 3, naming the record and the
+  scenario. In 0.2.x each promotion was judged only against the one before it, so promotions
+  that were each one case worse could add up. A `--rebaseline` that only adds a scenario keeps
+  the series start, and the added scenario is judged against that `--rebaseline`
+  (story:promotion-judged-against-the-series-baseline).
+- `takt promote`, `takt scorecard --against` and `scorecard.compare` cover every scenario
+  either side has. Two sides with no scenario case (`no scenario case`) and a scenario only the
+  candidate has (`not in the saved scorecard`) are refused, and `scorecard.compare` records
+  nothing for them. In 0.2.x both counted as no regression. A new scenario joins the corpus only
+  through `takt promote --rebaseline`, with a scorecard that holds every case of the stored one
+  and adds the new scenario whole. `--baseline-only` refuses a scorecard with no scenario case
+  (story:the-judge-requires-the-whole-corpus).
+- A run whose open obligation can only be decided by an action nobody performs in it (`pr.open`
+  and the merge under `--forge none`, `gate.green` with no gates document) now stops
+  `Unperformable`, exit 7, instead of stopping `NothingAdmissible` with exit 3 or offering the
+  model edits until `NoProgress`.
+- A wait on something local (a saved scorecard, a promoted binary, a merge into the local
+  `main`) stops `Waiting`, exit 6, right after the step that observed it, naming the file it
+  reads. 0.2.x polled every 30 s and wrote a decision record for each poll. Waits on the forge
+  still poll. Under `--forge none` the merge validators name the local `main` and say nothing
+  of a forge (story:a-local-wait-exits-waiting).
+- `takt run --install-root` on a resumed turn is accepted when it names the root the turn was
+  opened with; another root is still refused. In 0.2.x any `--install-root` on a resume was
+  refused.
+
+### Added
+
+- The `Unperformable` stop, `stopped: Unperformable (<claim>; nothing performs it without <the
+  forge, the gates document>)`. No judgement step is taken and the case stays open. In a
+  scorecard it ranks with the budget stops
+  (story:forge-none-stops-when-only-forge-actions-remain,
+  story:delivery-refuses-an-obligation-nobody-performs).
+- A run's stop line in `events.jsonl` records `completed`, whether its stop is a completion. A
+  scorecard takes that word for a stop it does not know, so an unknown stop never counts as
+  completed. A line without the field is scored by the stops the reading binary knows.
+- `takt run` and `takt scenario run` check free space before every step on the file system of
+  the tree and, when `CARGO_TARGET_DIR` is set, of that directory. Under `--min-free-gib`
+  (default 10, `0` turns the check off) the run stops `DiskLow`, exit 3, naming the path, its
+  free space and the threshold; the case stays open. A scenario with a `DiskLow` trial on
+  either side gets no verdict until a fresh set without one is saved
+  (story:runs-check-free-disk).
+- Each harness step's transcript is kept as
+  `$XDG_STATE_HOME/takt/transcripts/<repo>/<case>/run-<r>/step-<n>.jsonl`, outside the case
+  directory, mode `0600`, capped at 16 MiB (head and tail kept, the cut marked), also for a step
+  that errors. Nothing is overwritten. The step's line in `events.jsonl` names the path relative
+  to the transcripts directory, or why none was kept. No validator reads a transcript. Claude
+  now runs with `--output-format stream-json --verbose` (story:step-transcripts-are-kept).
+- takt's repository has a gates document, `.engineering/gates.yaml`, with four gates
+  (specification, citations, format, lint) whose commands run through `scripts/gate-exec`. A
+  `story.delivery/1` run on takt can now reach `gate.green` and `pr.open`
+  (story:takt-has-a-gates-document).
+
+### Fixed
+
+- `takt scenario run` without the bot route numbers a trial with 22 digits: the instant to the
+  second and a random 8-digit nonce, passing over a number the checkout knows. Runs from fresh
+  clones of one origin no longer all cut `trial/0`, so their cases go into one scorecard. With
+  the bot route the number is still one past the highest `trial/<n>` known
+  (story:trial-numbers-are-unique-across-checkouts).
+- `takt scorecard --help` names the held-out check, not `events.jsonl` alone, as where a
+  scenario run's outcome is read from.
+
+### Repository
+
+- The wall-clock tests that failed only on a loaded host hold under load, each bound still below
+  the time its mutant takes (story:timing-tests-hold-under-load).
+
+### Known limits
+
+- `Unperformable` ranks with the budget stops, so a `--forge none` run that stopped `NoProgress`
+  under 0.2.x ranks one higher against an older baseline.
+- The `lint` gate runs `cargo clippy`, which compiles and runs build code a step wrote; the gate
+  cannot vouch for that code, and the merge of such a change stays guarded by the owner.
+
 ## [0.2.3] — 2026-10-19
 
 - A Claude step is offered only the tools it may use: `claude` gets `--tools
