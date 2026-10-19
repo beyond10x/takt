@@ -2496,6 +2496,12 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
             None => installed_names_revision(&installed, &revision)?,
         }
         enough_trials(&card, &card, request.scorecard)?;
+        if card.rows.iter().all(|row| row.scenario.is_none()) {
+            bail!(
+                "{}: no scenario case, so a baseline of it would judge nothing; a comparison covers every scenario either side has, and a baseline needs at least one",
+                request.scorecard.display()
+            );
+        }
         if let Some(digest) = &stated {
             writeln!(
                 out,

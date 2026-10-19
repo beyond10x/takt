@@ -2901,6 +2901,7 @@ fn help_names_the_corpus_refusals() {
         "no scenario case",
         "not in the saved scorecard",
         "a scenario it adds whole",
+        "--baseline-only with a scorecard holding no scenario case",
     ] {
         assert!(help.contains(refusal), "{refusal} in {help}");
     }
@@ -2981,6 +2982,118 @@ fn a_rebaseline_adding_a_case_to_a_stored_scenario_is_refused_naming_it() {
         "{err}"
     );
     assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// story:the-judge-requires-the-whole-corpus, correction 1: a scenario a rebaseline adds needs
+/// the rule's trials as every baseline scenario does, so one added with a single case is
+/// refused naming it and the trials; nothing written.
+#[test]
+fn a_rebaseline_adding_a_scenario_with_fewer_cases_than_the_trials_is_refused() {
+    let world = World::new("rebaseline-one-case", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let cases = world.outer.join("cases-one");
+    for (n, tokens) in BASELINE_TOKENS.iter().enumerate() {
+        run(
+            &cases,
+            &format!("scenario-1-trial-{}", n + 1),
+            *tokens,
+            APPROVAL,
+            Some(BASELINE_REVISION),
+        );
+    }
+    run(
+        &cases,
+        "scenario-2-trial-1",
+        100,
+        APPROVAL,
+        Some(BASELINE_REVISION),
+    );
+    let card = World::save(&cases, &world.outer.join("saves-one"), BASELINE_REVISION);
+    let (code, out, err) = rebaseline(&world, &card);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("scenario 2") && err.contains("needs 5"),
+        "{err}"
+    );
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// story:the-judge-requires-the-whole-corpus, correction 1: the store is read under the same rule
+/// a rebaseline is written under, so a rebaseline copy edited to hold a case added to a stored
+/// scenario, its record and the head re-pointed to it, refuses the next promotion naming the
+/// case.
+#[test]
+fn a_rebaseline_copy_holding_a_case_added_to_a_stored_scenario_refuses_the_store() {
+    let world = World::new("chain-extra-case", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let cases = world.outer.join("cases-joined");
+    two_scenarios(&cases, 1, APPROVAL, APPROVAL, BASELINE_REVISION);
+    let joined = World::save(&cases, &world.outer.join("saves-joined"), BASELINE_REVISION);
+    let (code, out, err) = rebaseline(&world, &joined);
+    assert_eq!(code, 0, "{out}{err}");
+    // The same rebaseline with scenario-1-trial-6 added, put in its place by hand.
+    let extra = world.outer.join("cases-extra");
+    two_scenarios(&extra, 1, APPROVAL, APPROVAL, BASELINE_REVISION);
+    run(
+        &extra,
+        "scenario-1-trial-6",
+        1,
+        APPROVAL,
+        Some(BASELINE_REVISION),
+    );
+    let forged = World::save(&extra, &world.outer.join("saves-extra"), BASELINE_REVISION);
+    let name = world
+        .records()
+        .into_iter()
+        .find(|name| name.contains(".rebaseline-") && !name.ends_with(".scorecard.json"))
+        .expect("the rebaseline record");
+    let (old_digest, new_digest) = (sha256(&joined), sha256(&forged));
+    let copy = |digest: &str| {
+        world.store.join(format!(
+            "{BASELINE_REVISION}.rebaseline-{digest}.scorecard.json"
+        ))
+    };
+    fs::remove_file(copy(&old_digest)).expect("the copy removed");
+    fs::copy(&forged, copy(&new_digest)).expect("the forged copy");
+    let text = world.record(&name).replace(&old_digest, &new_digest);
+    let renamed = name.replace(&old_digest, &new_digest);
+    fs::remove_file(world.store.join(&name)).expect("the record removed");
+    write(&world.store.join(&renamed), &text);
+    world.rehead(&renamed);
+    let candidate_cases = world.outer.join("cases-candidate");
+    two_scenarios(&candidate_cases, 11, APPROVAL, APPROVAL, &world.revision);
+    let candidate = World::save(
+        &candidate_cases,
+        &world.outer.join("saves-candidate"),
+        &world.revision,
+    );
+    let (code, out, err) = world.promote(&candidate, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("scenario-1-trial-6") && err.contains("the store is not read past this"),
+        "{err}"
+    );
+}
+
+/// story:the-judge-requires-the-whole-corpus, correction 1: `--baseline-only` with a scorecard
+/// holding no scenario case would record a baseline that judges nothing, so it is refused saying
+/// so, `--dry-run` too; nothing is recorded and the installed binary is untouched.
+#[test]
+fn baseline_only_with_no_scenario_case_is_refused() {
+    let world = World::new("baseline-empty", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.install_stand_in(&world.revision);
+    let empty = empty_card(&world, "empty", &world.revision);
+    for extra in [&["--baseline-only", "--dry-run"][..], &["--baseline-only"]] {
+        let (code, out, err) = world.promote(&empty, extra);
+        assert_eq!(code, 1, "an empty baseline {extra:?}: {out}{err}");
+        assert!(err.contains("no scenario case"), "{err}");
+    }
+    assert!(world.records().is_empty(), "{:?}", world.records());
+    assert_eq!(
+        fs::read_to_string(world.installed()).expect("the installed binary"),
+        stand_in(&world.revision),
+        "the installed binary is untouched"
+    );
 }
 
 /// story:promotion-refusal-is-not-final, correction 1: `--rejudge` judges new runs only, so a
