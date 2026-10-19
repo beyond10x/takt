@@ -160,11 +160,17 @@ pub enum Event {
     /// The line `line`, from 1, was cut short, without its end, and is skipped on read; written
     /// with the next event, which ends the torn line first.
     Skipped { line: usize, reason: String },
-    /// The run stopped: why, with the steps taken and the tokens reported.
+    /// The run stopped: why, with the steps taken and the tokens reported, and whether the stop
+    /// is a completion (`Completed`), as the binary that stopped knows its own stops: a reader
+    /// that does not know the stop's kind takes this word for it. A run always writes it; `None`
+    /// writes no field, as a line from before it had one, which a reader scores by the stops it
+    /// knows.
     Stop {
         stop: String,
         steps: u64,
         tokens: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        completed: Option<bool>,
     },
 }
 

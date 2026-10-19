@@ -128,6 +128,7 @@ fn run_made_with(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Optio
                 stop: stop.to_owned(),
                 steps: 1,
                 tokens,
+                completed: None,
             },
         ),
     ] {

@@ -79,6 +79,7 @@ fn run(case: &str, outcome: &str) -> Vec<Event> {
             stop: outcome.to_owned(),
             steps: 1,
             tokens: 100,
+            completed: None,
         }
     };
     vec![opened(case), judged(100), last]
@@ -362,6 +363,7 @@ fn row(case: &str, outcome: &str) -> Row {
         stop: outcome.to_owned(),
         held_out: None,
         opened_binary: None,
+        completed: None,
     }
 }
 

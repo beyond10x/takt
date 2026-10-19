@@ -74,6 +74,7 @@ fn stop(stop: &str, steps: u64, tokens: u64) -> Event {
         stop: stop.to_owned(),
         steps,
         tokens,
+        completed: None,
     }
 }
 

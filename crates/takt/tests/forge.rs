@@ -352,6 +352,7 @@ fn with_checks_pending_no_ci_result_is_written_and_ci_green_stays_unknown() {
         Stop::Waiting {
             on: vec!["ci.read".to_owned()],
             budget: Some(Box::new(Stop::Iterations(2))),
+            local: Vec::new(),
         },
         "{}",
         outcome.text

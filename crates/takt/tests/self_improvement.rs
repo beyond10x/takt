@@ -177,6 +177,7 @@ fn scorecard(revision: &str, outcome: &str, binary: &str) -> Scorecard {
                 saturated: false,
                 binary: None,
                 opened_binary: Some(binary.to_owned()),
+                completed: None,
             })
             .collect(),
         no_record: Vec::new(),

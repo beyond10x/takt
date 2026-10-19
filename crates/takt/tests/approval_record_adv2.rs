@@ -761,6 +761,7 @@ fn adv2_checks_answering_for_the_head_before_the_push_do_not_end_the_run_in_an_e
         Ok(Stop::Waiting {
             on: vec!["repository.merge".to_owned()],
             budget: Some(Box::new(Stop::Iterations(8))),
+            local: Vec::new(),
         }),
         "{first_text}"
     );
