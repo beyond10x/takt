@@ -1075,7 +1075,7 @@ types:
   # the sha256 of that file, kept in one file beside the record directory,
   # `<state>/takt/promotions.head`, outside it, and written with every record under the store's
   # lock. Decided 2026-10-19 (story:promotion-chain-head-anchored).
-  # read from: .engineering/planning/story/promotion-chain-head-anchored.md:50
+  # read from: .engineering/planning/story/promotion-chain-head-anchored.md:51
   # read from: crates/takt/src/promotion.rs:205-213
   - name: takt.work.PromotionHead
     kind: struct
@@ -1569,7 +1569,7 @@ types:
   # read from: .engineering/planning/design/recursive-self-improvement.md:37-43
   # UNMAPPED: whether `agent:<role>` must name one of the four (an enum) or may name any role (a
   # name, as declared); story:judge-guard's acceptance grants as `agent:planner`.
-  # read from: .engineering/planning/story/judge-guard.md:112-115
+  # read from: .engineering/planning/story/judge-guard.md:113-116
   - name: takt.work.AgentRole
     kind: newtype
     of: String
@@ -1578,12 +1578,12 @@ types:
   # `takt approve --by` takes nothing else, on a story's case and an intent's alike, and
   # takt.work.Approval's `approver` carries it as given.
   # read from: .engineering/planning/design/recursive-self-improvement.md:50
-  # read from: .engineering/planning/story/judge-guard.md:52
-  # read from: .engineering/planning/story/judge-guard.md:75
+  # read from: .engineering/planning/story/judge-guard.md:53
+  # read from: .engineering/planning/story/judge-guard.md:76
   # read from: crates/takt-cli/src/main.rs:285-287
   # Decided by the planner (story:judge-guard, D5): an untyped approver such as `operator`
   # grants nothing at a judge-surface merge and reads as before on any other merge.
-  # read from: .engineering/planning/story/judge-guard.md:144
+  # read from: .engineering/planning/story/judge-guard.md:145
   # read from: crates/takt/src/case.rs:918-920
   # read from: crates/takt/src/validator.rs:2212-2218
   - name: takt.work.Approver
@@ -1600,7 +1600,7 @@ types:
   # keys are these fields' names; an entry admits an `agent:` grant only when its owner is
   # `human:`, its role is exactly the approver, its capability is the judge-surface merge and it
   # holds no revocation.
-  # read from: .engineering/planning/story/judge-guard.md:57-61
+  # read from: .engineering/planning/story/judge-guard.md:58-62
   # read from: .engineering/planning/design/recursive-self-improvement.md:50-54
   # read from: crates/takt/src/validator.rs:1806-1826
   - name: takt.work.Delegation
@@ -3308,8 +3308,8 @@ entities:
   # head. Accepted limit, stated with the decision: the head detects a record removed or
   # replaced by accident or by a tool; a process running as the same user can rewrite both, and
   # a store whose head was removed is read on trust again.
-  # read from: .engineering/planning/story/promotion-chain-head-anchored.md:28
-  # read from: .engineering/planning/story/promotion-chain-head-anchored.md:50-53
+  # read from: .engineering/planning/story/promotion-chain-head-anchored.md:29
+  # read from: .engineering/planning/story/promotion-chain-head-anchored.md:51-54
   # read from: crates/takt/src/promotion.rs:315-459
   # read from: crates/takt/src/promotion.rs:554-588
   # read from: crates/takt/src/promotion.rs:1163-1215
@@ -3588,8 +3588,8 @@ entities:
   # candidate's tree, so a candidate's own edit of it counts for nothing. The file is itself a
   # judge surface: adding, widening or revoking a delegation is a change only the owner's grant
   # merges. One that is absent or does not read delegates nothing.
-  # read from: .engineering/planning/story/judge-guard.md:57-63
-  # read from: .engineering/planning/story/judge-guard.md:121
+  # read from: .engineering/planning/story/judge-guard.md:58-64
+  # read from: .engineering/planning/story/judge-guard.md:122
   # Decided by the planner (story:judge-guard, D3, D7): both files are read at the merge target's
   # tip as the forge reports it; a forge that cannot report it merges nothing.
   # read from: crates/takt/src/validator.rs:1740-1742
@@ -3638,8 +3638,8 @@ entities:
   # before the merge, a base other than the one judged merging nothing.
   # Decided by the planner (story:judge-guard, R4-R7, 2026-10-19).
   # read from: .engineering/planning/design/recursive-self-improvement.md:109-110
-  # read from: .engineering/planning/story/judge-guard.md:86
-  # read from: .engineering/planning/story/judge-guard.md:121
+  # read from: .engineering/planning/story/judge-guard.md:87
+  # read from: .engineering/planning/story/judge-guard.md:122
   # read from: .engineering/judge-allow.yaml
   # read from: crates/takt/src/validator.rs:1736-1738
   # read from: crates/takt/src/run.rs:4206-4214
