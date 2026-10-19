@@ -1020,9 +1020,9 @@ types:
   # read from: .engineering/planning/story/judge-guard.md:47
   # read from: .engineering/planning/story/judge-guard.md:70
   # read from: crates/takt-cli/src/main.rs:128-130
-  # UNMAPPED: whether a grant or a store record written before the type, free text such as
-  # `operator`, still reads once grants are typed. Open for the owner.
-  # read from: .engineering/planning/story/judge-guard.md:92
+  # Decided by the planner (story:judge-guard, D5): an untyped approver such as `operator`
+  # grants nothing at a judge-surface merge and reads as before on any other merge.
+  # read from: .engineering/planning/story/judge-guard.md:135
   - name: takt.work.Approver
     kind: union
     tag: kind
@@ -1282,7 +1282,7 @@ entities:
       # any other protocol. Declared ahead of the code (story:self-improvement-protocol), decided
       # 2026-10-18.
       # read from: protocols/self-improvement/1.yaml:28-32
-      # read from: .engineering/planning/story/self-improvement-protocol.md:54
+      # read from: .engineering/planning/story/self-improvement-protocol.md:55
       - name: finding
         type: Optional<takt.work.FindingKey>
     relations:
@@ -1307,7 +1307,7 @@ entities:
       # `finding` artifact is the finding the turn verifies. Decided 2026-10-18: an improvement
       # case references exactly one finding, and a finding may have many cases (a retried or
       # re-opened turn); many-to-one, the case side references.
-      # read from: .engineering/planning/story/self-improvement-protocol.md:52-54
+      # read from: .engineering/planning/story/self-improvement-protocol.md:53-55
       # read from: protocols/self-improvement/1.yaml:28-32
       - name: finding
         kind: references
