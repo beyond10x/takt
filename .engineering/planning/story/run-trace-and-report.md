@@ -2,16 +2,32 @@
 format: aep.planning-md/3
 id: story:run-trace-and-report
 kind: story
-status: active
+status: implemented
 title: takt trace writes one takt-trace/1 file per run; takt report prints where its time and tokens went
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 - depends_on: story:step-records-per-call-usage
-revision: 3
+scope:
+- confidence: inferred
+  path: crates/takt-cli/src/main.rs
+- confidence: inferred
+  path: crates/takt/src/lib.rs
+- confidence: inferred
+  path: crates/takt/src/report.rs
+- confidence: inferred
+  path: crates/takt/src/trace.rs
+- confidence: inferred
+  path: crates/takt/tests/trace.rs
+- confidence: inferred
+  path: docs/metrics/README.md
+- confidence: cited
+  path: ess/domains/takt.yaml
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T02:00:18Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 
@@ -32,4 +48,4 @@ From the owner's ask of 2026-10-19 (several reporters over one trace, the journe
 
 ## Acceptance
 
-On trial 1's case `takt report` prints validators 107 s, model calls 130 s and other 5 s, the figures of `docs/runs/2026-10-18-trial-1-worktree.md`; on T-24's case the trace holds 18 operations, 2 `idle` operations of 30 s and 3 model calls with four token components; for both, the trace's token sum equals `takt scorecard`'s for the same case; no trace line contains a home-directory path.
+On trial 1's case `takt report` prints validators 107 s, model calls 130 s and other 5 s, the figures of `docs/runs/2026-10-18-trial-1-worktree.md`; on T-24's case the trace holds 18 step operations, 2 `idle` operations of 30 s, one stop and 3 model calls with four token components; for both, the trace's token sum equals `takt scorecard`'s for the same case; no trace line contains a home-directory path.

@@ -61,7 +61,7 @@ A step that changes `.cargo/config.toml`, the test command's script or a file un
 
 ## Landed (wave 10)
 
-Read from `git diff --stat 22ad614^1 22ad614` (the unit's merge into the wave branch) at the close of wave 10 (wave branch head 8858b49). A judgement step that changes the judge surface (default list plus .engineering/judge-surface.yaml at the base; cargo manifests by a fail-closed scanner and cargo metadata; pytest configuration; cargo config and toolchain files above the tree) is refused and put back; links on the way to it lock steps out; processes a step leaves are killed. Four correction rounds; the last granted on the reviewer's approve. Routes only confinement closes (a PATH wrapper, a writer rejoining takt's process group, a link above the tree across runs) are carried by story:confinement-seam.
+Read from `git diff --stat 22ad614^1 22ad614` (the unit's merge into the wave branch) at the close of wave 10 (wave branch head c34246a). A judgement step that changes the judge surface (default list plus .engineering/judge-surface.yaml at the base; cargo manifests by a fail-closed scanner and cargo metadata; pytest configuration; cargo config and toolchain files above the tree) is refused and put back; links on the way to it lock steps out; processes a step leaves are killed. Four correction rounds; the last granted on the reviewer's approve. Routes only confinement closes (a PATH wrapper, a writer rejoining takt's process group, a link above the tree across runs) are carried by story:confinement-seam.
 
 - `crates/takt-cli/src/main.rs`
 - `crates/takt/src/forge.rs`

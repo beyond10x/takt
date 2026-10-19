@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T04:04:07Z",
+  "actor": "human:timo",
+  "artifact": "story:no-model-step-for-approval",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check",
+    "reference": "wave/2026-10-18-w12 at 8d7c194: task check exit 0: 814 passed, 0 failed, 6 ignored; citations 578 of 578 (a timing case of hours_bounds_a_harness_step_adv1 failed once at load 87 and passed alone, 5 of 5)"
+  }
+}

@@ -11,7 +11,7 @@ refs:
   reference: harness-sees-what-failed
 relations:
 - decomposes: epic:composable-agentic-work
-revision: 1
+revision: 2
 ---
 ## Outcome
 
@@ -19,7 +19,7 @@ When the last test or gate run failed, the prompt of the next judgement step nam
 
 ## Context
 
-From the planner's operator-path variety round on takt at a29d8c7 (`.engineering/planning/review-result/variety-ops-a29d8c7.md`). The prompt gives the step only `tests.pass: false` (`crates/takt/src/harness.rs:117-157`), and the step may not run commands (`:149`), so on a red base or after a breaking edit the model guesses. The `tests.run` record keeps the last 5 lines of output (`crates/takt/src/validator.rs:281-305`), which in unittest or cargo are the summary, not the failure. Run H (a red base) stopped NoProgress after 9 steps with every test and gate run failing. This bears on the token cost the scorecard measures: a step that cannot see the failure spends a call finding it.
+From the planner's operator-path variety round on takt at 12cffde (`.engineering/planning/review-result/variety-ops-a29d8c7.md`). The prompt gives the step only `tests.pass: false` (`crates/takt/src/harness.rs:117-157`), and the step may not run commands (`:149`), so on a red base or after a breaking edit the model guesses. The `tests.run` record keeps the last 5 lines of output (`crates/takt/src/validator.rs:281-305`), which in unittest or cargo are the summary, not the failure. Run H (a red base) stopped NoProgress after 9 steps with every test and gate run failing. This bears on the token cost the scorecard measures: a step that cannot see the failure spends a call finding it.
 
 ```expected_before
 scenario: 1
@@ -38,3 +38,13 @@ source: .engineering/planning/review-result/variety-ops-a29d8c7.md
 ## Acceptance
 
 With `done()` broken on scenario 1, the next judgement step's prompt contains `test_done_marks_one_item` and the assertion line; a passing run's prompt is unchanged; the prompt's failure section is bounded in bytes.
+
+## From the review of test-summary-keeps-the-totals (merged at 5ac726f)
+
+Three low findings, never filed before, folded here because this story reads the same test output:
+
+- Only the last `failures:` list of the test output is read; a run whose earlier binaries failed names only the last binary's tests.
+- The doc comment at `crates/takt/src/validator.rs:232-239@5ac726f` no longer describes what the summary keeps.
+- Under `--no-fail-fast`, when a test binary aborts, the kept line is the target name, not a failing test.
+
+Acceptance, added: with cargo output holding two `failures:` lists, the step is told the failing tests of both; with an aborted binary under `--no-fail-fast`, it is told the abort and the binary.

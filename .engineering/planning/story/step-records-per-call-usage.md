@@ -2,15 +2,27 @@
 format: aep.planning-md/3
 id: story:step-records-per-call-usage
 kind: story
-status: active
+status: implemented
 title: A harness step's record carries its model, cost, duration and turns
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+scope:
+- confidence: cited
+  path: crates/takt/src/events.rs
+- confidence: cited
+  path: crates/takt/src/harness.rs
+- confidence: inferred
+  path: crates/takt/src/run.rs
+- confidence: inferred
+  path: docs/metrics/README.md
+- confidence: inferred
+  path: ess/domains/takt.yaml
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T02:00:17Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 

@@ -2,7 +2,7 @@
 
 Read-only analysis, 2026-10-18. Records: the baseline runner's run directories T-14..18, T-24..28 and I-4..6.
 Code cited at **a0b8576**, the revision T-14..18 ran (read from an export of that revision;
-HEAD 55145dd differs: run.rs +2829 lines, so HEAD lines are given where they moved). Representative runs:
+HEAD 7f28c08 differs: run.rs +2829 lines, so HEAD lines are given where they moved). Representative runs:
 **T-16** (127 s, 107,205 tokens, 18 steps, 3 claude processes) and **I-4** (53 s, 93,003 tokens, 1 process, 8 turns).
 Scratch scripts kept outside the repository. GitHub Actions timings read with `gh run list` (read-only).
 
@@ -136,4 +136,4 @@ cached prefix at process 3 is (the same run's processes 1-2 having written the d
 - The per-turn tool calls inside takt's processes (steps.jsonl holds only the final `--output-format json` result).
 - Token count of the takt prompt and the composition of the 3,938 created tokens at a 1-turn process.
 - Whether the T arm's larger prefix (+5.9k) comes from more tool schemas or from something else in the system prompt.
-- Sub-second timings of validator steps (events.jsonl has 1 s granularity at a0b8576; T-24..28 at 834205f have microseconds).
+- Sub-second timings of validator steps (events.jsonl has 1 s granularity at a0b8576; T-24..28 at 98719c3 have microseconds).

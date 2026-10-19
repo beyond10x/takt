@@ -24,7 +24,7 @@ A `--repo` that does not exist is refused with exit 1, and nothing is saved.
 
 ```expected_before
 scenario: 1
-command: "$TAKT" scorecard --repo ./no-such-repo --save "$HOME/scorecards" --revision 3fe3f21
+command: "$TAKT" scorecard --repo ./no-such-repo --save "$HOME/scorecards" --revision 8378cb2
 exit: 0
 output: saved: 
 source: .engineering/planning/review-result/findings-hunt-3fe3f21.md

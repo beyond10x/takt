@@ -1,0 +1,10 @@
+/node_modules/
+/build/
+/.docusaurus/
+/.cache-loader/
+/.site-check/
+/data/
+/src/generated/
+/static/protocols/
+/docs/reference/cli.md
+/docs/reference/exit-codes.md

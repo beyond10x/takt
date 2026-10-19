@@ -67,7 +67,7 @@ From the reviewer's verdict on story:approval-riders-are-grants at cc8a4e3 (appr
 
 ## Landed (wave 11)
 
-Read from `git diff --stat 290c366^1 290c366` (the unit's merge into the wave branch) at the close of wave 11 (wave branch head 75e27e9). The story's test_result and its move to implemented are written just before the merge and ride above the granted revision, each byte-equal to the record kept for that revision at its path; the merge is not taken while either is missing; a story's approver is human:<name> or agent:<role>, never takt's own actor. Granted at e46d9d0 and, for the wave merges, c889e98. Low reviewer findings carried by story:wave11-review-follow-ups.
+Read from `git diff --stat e916cb5^1 e916cb5` (the unit's merge into the wave branch) at the close of wave 11 (wave branch head 4bdc0c5). The story's test_result and its move to implemented are written just before the merge and ride above the granted revision, each byte-equal to the record kept for that revision at its path; the merge is not taken while either is missing; a story's approver is human:<name> or agent:<role>, never takt's own actor. Granted at e46d9d0 and, for the wave merges, 6754f15. Low reviewer findings carried by story:wave11-review-follow-ups.
 
 - `crates/takt-cli/src/main.rs`
 - `crates/takt-cli/tests/integration_adv1.rs`

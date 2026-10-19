@@ -8,6 +8,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, SystemTime};
 
 #[allow(dead_code)]
 #[path = "../build.rs"]
@@ -254,6 +255,77 @@ fn an_untracked_file_is_dirty_under_crates_and_clean_elsewhere() {
         format!("{head}-dirty"),
         "an untracked document under protocols/, which the binary embeds"
     );
+}
+
+/// An untracked `.cargo/` at the workspace's root is compiled in like `crates/`: cargo reads its
+/// `config.toml` on a build from the root (`rustflags`, `[patch]`, `[env]`), so such a file
+/// makes the revision `-dirty`, read by the script and printed by the binary; the directory is
+/// watched while it exists.
+#[test]
+fn an_untracked_root_cargo_config_makes_the_revision_dirty() {
+    let dir = repository("root-cargo");
+    let head = git(&dir, &["rev-parse", "HEAD"]);
+    fs::create_dir_all(dir.join(".cargo")).expect("a directory");
+    fs::write(
+        dir.join(".cargo/config.toml"),
+        "[env]\nPROBE_CONFIGURED = \"1\"\n",
+    )
+    .expect("a cargo configuration");
+    assert_eq!(build::revision(&probe(&dir)), format!("{head}-dirty"));
+    assert_eq!(build_and_run(&dir), format!("{head}-dirty"));
+    let root = fs::canonicalize(&*dir).expect("a path");
+    let watched: Vec<PathBuf> = build::watched(&probe(&dir))
+        .iter()
+        .filter_map(|path| fs::canonicalize(path).ok())
+        .collect();
+    assert!(watched.contains(&root.join(".cargo")), "{watched:?}");
+}
+
+/// A filter driver named in the repository's own `info/attributes`, which neither
+/// `GIT_ATTR_SOURCE` nor the attributes files the script turns off reach, runs none of its
+/// commands while a build reads the revision: not `clean`, not `process`, whatever the
+/// driver's name, though `status` reads a tracked file whose stat differs from the index. The
+/// file is then read as it is on disk, and an unchanged one leaves the revision clean.
+#[test]
+fn a_build_runs_no_command_of_a_filter_named_in_info_attributes() {
+    let dir = repository("info-attributes");
+    let head = git(&dir, &["rev-parse", "HEAD"]);
+    let ran = dir.join("filter-ran.txt");
+    fs::create_dir_all(dir.join(".git/info")).expect("a directory");
+    fs::write(
+        dir.join(".git/info/attributes"),
+        "*.md filter=probe\n*.toml filter=other.driver\n",
+    )
+    .expect("the repository's own attributes");
+    for (key, what) in [
+        ("filter.probe.clean", "clean"),
+        ("filter.probe.smudge", "smudge"),
+        ("filter.other.driver.process", "process"),
+    ] {
+        git(
+            &dir,
+            &[
+                "config",
+                key,
+                &format!("echo {what} >> '{}'; cat", ran.display()),
+            ],
+        );
+    }
+    for tracked in ["README.md", "Cargo.toml", "crates/probe/Cargo.toml"] {
+        fs::File::options()
+            .write(true)
+            .open(dir.join(tracked))
+            .expect("a tracked file")
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000))
+            .expect("its mtime is set");
+    }
+    let printed = build_and_run(&dir);
+    assert!(
+        !ran.exists(),
+        "a configured filter ran during the build: {:?} (printed {printed})",
+        fs::read_to_string(&ran)
+    );
+    assert_eq!(printed, head);
 }
 
 /// The files watched in a repository: its HEAD, the branch ref HEAD names, its index, its

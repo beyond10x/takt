@@ -584,11 +584,48 @@ def revision_order(waves, turns, revs):
 
 
 # --- drawing ---------------------------------------------------------------------------------
+#
+# The chart is drawn at its own size, 960 px wide, with every text at 12 px or more: a page shows it
+# at 1:1 and scrolls it sideways on a narrow screen rather than shrinking it. The patterns
+# mark_patterns finds are drawn as marks in the lane's own headroom, named in the legend, so no
+# label reaches into the lane above.
 
-W = 1100
-X0, X1 = 260, 1070
-LANE = 21
-TOP = 86
+W = 960
+X0, X1 = 236, 936
+LANE = 24
+FS = 12
+MARKS = {"seed pr.open": "seed", "2nd CI": "ci2", "inspect, then NoProgress": "inspect"}
+MARK_TEXT = {"seed": "seed pr.open: a pr.open step before any file changed",
+             "ci2": "2nd CI: the run's second passing CI read",
+             "inspect": "inspect, then NoProgress: a harness step that only read, then the NoProgress stop"}
+
+
+def text_w(s, size=FS, bold=False):
+    """An estimate of a label's width in Inter, on the wide side."""
+    wide = sum(0.66 if c.isupper() or c in "mwMW%" else 0.3 if c in " .,:;il1()'|" else 0.58 for c in s)
+    return wide * size * (1.06 if bold else 1.0)
+
+
+def wrap(text, width, size=FS):
+    lines, line = [], ""
+    for word in text.split(" "):
+        cand = f"{line} {word}" if line else word
+        if line and text_w(cand, size) > width:
+            lines.append(line)
+            line = word
+        else:
+            line = cand
+    return lines + [line] if line else lines
+
+
+def mark(kind, x, y):
+    """A pattern mark centred at x, its foot at y."""
+    if kind == "seed":
+        return f'<path d="M{x - 4:.1f},{y - 5:.1f}L{x + 4:.1f},{y - 5:.1f}L{x:.1f},{y:.1f}Z" class="mark"/>'
+    if kind == "ci2":
+        return f'<circle cx="{x:.1f}" cy="{y - 2.8:.1f}" r="2.8" class="mark"/>'
+    return (f'<path d="M{x - 3:.1f},{y - 6:.1f}L{x + 3:.1f},{y:.1f}M{x - 3:.1f},{y:.1f}L{x + 3:.1f},{y - 6:.1f}" '
+            f'class="mark-s" stroke-width="1.6"/>')
 
 
 def draw(lanes, legend_kinds, data_dates):
@@ -602,26 +639,32 @@ def draw(lanes, legend_kinds, data_dates):
     def xs(t):
         return X0 + (X1 - X0) * t / tmax
 
+    intro = ('Timed lanes share the axis: seconds from the run\'s start. Lanes marked "order only" have no '
+             'times in their records and show their operations as equal steps in order.')
+    intro_lines = wrap(intro, W - 40)
+    top = 44 + 16 * len(intro_lines) + 26
+
     rows = []
-    y = TOP
+    y = top
     last_arm = last_rev = object()
     for l in lanes:
         if l["arm"] != last_arm:
-            y += 8
+            y += 10
             rows.append(("arm", y, ARM_NAME.get(l["arm"], l["arm"])))
-            y += 18
+            y += 22
             last_arm, last_rev = l["arm"], object()
         if l["arm"] == "takt" and l["revision"] != last_rev:
             rows.append(("rev", y, l["revision_label"]))
-            y += 15
+            y += 18
             last_rev = l["revision"]
         rows.append(("lane", y, l))
         y += LANE
     plot_bottom = y
-    H = plot_bottom + 150
 
-    css = [".takt-journey{color:#26332f}", ".takt-journey .grid{stroke:#8a9a95;stroke-opacity:.22}"]
-    dark = [".takt-journey{color:#d5dfdb}"]
+    css = [".takt-journey{color:#26332f}", ".takt-journey .grid{stroke:#8a9a95;stroke-opacity:.22}",
+           ".takt-journey .mut{fill:#4f625d}", ".takt-journey .mark{fill:currentColor}",
+           ".takt-journey .mark-s{stroke:currentColor;fill:none}"]
+    dark = [".takt-journey{color:#d5dfdb}", ".takt-journey .mut{fill:#a8b8b3}"]
     for k, (light, darkc) in COLOURS.items():
         css.append(f".takt-journey .k-{k}{{fill:{light};stroke:{light}}}")
         dark.append(f".takt-journey .k-{k}{{fill:{darkc};stroke:{darkc}}}")
@@ -631,36 +674,30 @@ def draw(lanes, legend_kinds, data_dates):
     style = "".join(css) + "@media (prefers-color-scheme: dark){" + "".join(dark) + "}" + \
         "@media print{" + "".join(css) + "}"
 
-    o = [f'<svg class="takt-journey" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" role="img" '
-         f'aria-labelledby="takt-journey-title" font-family="Inter, ui-sans-serif, system-ui, sans-serif" '
-         f'font-size="11">',
-         '<title id="takt-journey-title">Every recorded scenario 1 run, one lane each, in one vocabulary of '
+    o = ['<title id="takt-journey-title">Every recorded scenario 1 run, one lane each, in one vocabulary of '
          'operations</title>', f"<style>{style}</style>",
          f'<text x="20" y="24" font-size="15" font-weight="600" fill="currentColor">Scenario 1: every '
-         f'recorded run, one lane each</text>',
-         f'<text x="20" y="42" font-size="11" fill="currentColor" fill-opacity=".75">Timed lanes share the '
-         f'axis: seconds from the run\'s start. Lanes marked "order only" have no times in their records and '
-         f'show their operations as equal steps in order.</text>']
+         f'recorded run, one lane each</text>']
+    for k, line in enumerate(intro_lines):
+        o.append(f'<text x="20" y="{44 + 16 * k}" class="mut">{esc(line)}</text>')
     for k in range(0, int(tmax // tick) + 1):
         x = xs(k * tick)
-        o.append(f'<text x="{x:.1f}" y="{TOP - 8}" text-anchor="middle" font-size="10" fill="currentColor" '
-                 f'fill-opacity=".7">{k * tick} s</text>')
+        o.append(f'<text x="{x:.1f}" y="{top - 8}" text-anchor="middle" class="mut">{k * tick} s</text>')
+    used_marks = []
     for kind_row, y, val in rows:
         if kind_row == "arm":
-            o.append(f'<text x="20" y="{y + 12}" font-size="12" font-weight="600" fill="currentColor">'
+            o.append(f'<text x="20" y="{y + 13}" font-size="13" font-weight="600" fill="currentColor">'
                      f'{esc(val)}</text>')
-            o.append(f'<line x1="20" x2="{X1}" y1="{y + 16}" y2="{y + 16}" class="grid"/>')
+            o.append(f'<line x1="20" x2="{X1}" y1="{y + 18}" y2="{y + 18}" class="grid"/>')
             continue
         if kind_row == "rev":
-            o.append(f'<text x="30" y="{y + 10}" font-size="10.5" font-style="italic" fill="currentColor" '
-                     f'fill-opacity=".8">{esc(val)}</text>')
+            o.append(f'<text x="30" y="{y + 12}" font-style="italic" class="mut">{esc(val)}</text>')
             continue
         l = val
         cy = y + LANE / 2
         tag = {"order only": "order only", "partly timed": "model calls timed", "timed": ""}[l["mode"]]
         o.append(f'<text x="40" y="{cy + 4:.1f}" fill="currentColor">{esc(l["run"])}'
-                 f'{" <tspan font-size=\"9.5\" fill-opacity=\".7\">" + esc(tag) + "</tspan>" if tag else ""}'
-                 f'</text>')
+                 f'{" <tspan class=\"mut\">" + esc(tag) + "</tspan>" if tag else ""}</text>')
         if l["mode"] != "order only":
             for k in range(0, int(tmax // tick) + 1):
                 x = xs(k * tick)
@@ -692,7 +729,6 @@ def draw(lanes, legend_kinds, data_dates):
                     gap = list(range(prev_known + 1, next_known))
                     t = lo + (hi - lo) * (gap.index(i) + 1) / (len(gap) + 1)
                     pos.append((xs(t) - 2.5, xs(t) + 2.5, True))
-        label_end = -1e9
         for e, (xa, xb, placed) in zip(evs, pos):
             cls = [f"k-{e['kind']}"]
             if e.get("effect") in ("nothing", "unchanged"):
@@ -706,55 +742,69 @@ def draw(lanes, legend_kinds, data_dates):
                 tip += f' ({e["action"]})'
             if e.get("effect"):
                 tip += f', {e["effect"]}'
+            if e.get("label"):
+                tip += f'; {e["label"]}'
             if e["t_end"] is not None or e["t_start"] is not None:
                 tip += f', {e["t_start"]}-{e["t_end"]} s'
             if e["kind"] == "resume":
-                o.append(f'<line x1="{xa:.1f}" x2="{xa:.1f}" y1="{y + 1}" y2="{y + LANE - 1}" '
+                o.append(f'<line x1="{xa:.1f}" x2="{xa:.1f}" y1="{y + 2}" y2="{y + LANE - 2}" '
                          f'class="{" ".join(cls)}" stroke-width="2"><title>{esc(tip)}</title></line>')
                 if xb - xa > 4 and not placed:
-                    o.append(f'<line x1="{xa:.1f}" x2="{xb:.1f}" y1="{cy:.1f}" y2="{cy:.1f}" class="k-resume" '
-                             f'stroke-width="1" stroke-dasharray="2 2"/>')
+                    o.append(f'<line x1="{xa:.1f}" x2="{xb:.1f}" y1="{cy + 1:.1f}" y2="{cy + 1:.1f}" '
+                             f'class="k-resume" stroke-width="1" stroke-dasharray="2 2"/>')
                 continue
-            o.append(f'<rect x="{xa:.1f}" y="{y + 4.5}" width="{max(xb - xa, 1.5):.1f}" height="{LANE - 9}" '
+            o.append(f'<rect x="{xa:.1f}" y="{y + 7}" width="{max(xb - xa, 1.5):.1f}" height="{LANE - 12}" '
                      f'rx="1.5" class="{" ".join(cls)}"><title>{esc(tip)}</title></rect>')
-            if e.get("label"):
-                lx = max(xa, label_end + 6)
-                if lx > xa + 1:
-                    o.append(f'<line x1="{xa + 1:.1f}" x2="{lx:.1f}" y1="{y + 4}" y2="{y + 1}" '
-                             f'stroke="currentColor" stroke-opacity=".5" stroke-width=".7"/>')
-                o.append(f'<text x="{lx:.1f}" y="{y + 3}" font-size="8.5" fill="currentColor">'
-                         f'{esc(e["label"])}</text>')
-                label_end = lx + 4.6 * len(e["label"])
+            if e.get("label") in MARKS:
+                k = MARKS[e["label"]]
+                if k not in used_marks:
+                    used_marks.append(k)
+                o.append(mark(k, (xa + xb) / 2, y + 6))
         if l["mode"] == "order only" and l.get("wall_seconds") is not None:
             xe = pos[-1][1] if pos else X0
-            o.append(f'<text x="{xe + 6:.1f}" y="{cy + 3.5:.1f}" font-size="9.5" fill="currentColor" '
-                     f'fill-opacity=".7">{len(evs)} operations; {l["wall_seconds"]} s in all</text>')
+            o.append(f'<text x="{xe + 6:.1f}" y="{cy + 5:.1f}" class="mut">{len(evs)} operations; '
+                     f'{l["wall_seconds"]} s in all</text>')
 
-    ly = plot_bottom + 22
-    for i, k in enumerate(legend_kinds):
-        x = 20 + (i % 7) * 152
-        yy = ly + (i // 7) * 18
-        o.append(f'<rect x="{x}" y="{yy - 8}" width="12" height="9" rx="1.5" class="k-{k}"/>')
-        o.append(f'<text x="{x + 17}" y="{yy}" fill="currentColor">{k.replace("_", " ")}</text>')
-    yy = ly + 2 * 18 + 6
-    o.append(f'<rect x="20" y="{yy - 8}" width="12" height="9" rx="1.5" class="k-pr_open noop"/>')
-    o.append(f'<text x="37" y="{yy}" fill="currentColor">hollow: the step changed nothing</text>')
-    o.append(f'<rect x="268" y="{yy - 8}" width="12" height="9" rx="1.5" class="k-edit call"/>')
-    o.append(f'<text x="285" y="{yy}" fill="currentColor">outlined: a takt step taken by the harness '
+    # legend: the operation kinds, flowing and wrapping at the chart's width, then the drawing
+    # conventions and the pattern marks one to a line
+    y = plot_bottom + 30
+    x = 20
+    for k in legend_kinds:
+        text = k.replace("_", " ")
+        wide = 17 + text_w(text) + 24
+        if x + wide > W - 10:
+            x, y = 20, y + 20
+        o.append(f'<rect x="{x}" y="{y - 10}" width="12" height="10" rx="1.5" class="k-{k}"/>')
+        o.append(f'<text x="{x + 17}" y="{y}" fill="currentColor">{text}</text>')
+        x += wide
+    y += 26
+    o.append(f'<rect x="20" y="{y - 10}" width="12" height="10" rx="1.5" class="k-pr_open noop"/>')
+    o.append(f'<text x="37" y="{y}" fill="currentColor">hollow: the step changed nothing</text>')
+    o.append(f'<rect x="300" y="{y - 10}" width="12" height="10" rx="1.5" class="k-edit call"/>')
+    o.append(f'<text x="317" y="{y}" fill="currentColor">outlined: a takt step taken by the harness '
              f'(one model call)</text>')
-    o.append(f'<rect x="620" y="{yy - 8}" width="6" height="9" rx="1.5" class="k-test placed"/>')
-    o.append(f'<text x="632" y="{yy}" fill="currentColor">dashed: no time recorded, placed in order '
-             f'between timed operations</text>')
+    y += 20
+    o.append(f'<rect x="23" y="{y - 10}" width="6" height="10" rx="1.5" class="k-test placed"/>')
+    o.append(f'<text x="37" y="{y}" fill="currentColor">dashed: no time recorded, placed in order between '
+             f'timed operations</text>')
+    for k in used_marks:
+        y += 20
+        o.append(mark(k, 26, y - 2))
+        o.append(f'<text x="37" y="{y}" fill="currentColor">{esc(MARK_TEXT[k])}</text>')
     span = data_dates[0] if len(set(data_dates)) == 1 else f"{min(data_dates)} to {max(data_dates)}"
-    o.append(f'<text x="20" y="{yy + 26}" font-size="10.5" fill="currentColor" fill-opacity=".7">Data: '
-             f'{span} (UTC), docs/metrics/journeys.jsonl from the raw records each run in '
-             f'docs/metrics/scenario-runs.jsonl names. No token or cost figure is read from the journeys.'
-             f'</text>')
-    o.append(f'<text x="20" y="{yy + 42}" font-size="10.5" fill="currentColor" fill-opacity=".7">Free '
-             f'and isolated runs without a stream record only a turn count (Claude Code) or their items in order '
-             f'(Codex); runs with a stream are timed. First results, not a benchmark.</text>')
-    o.append("</svg>")
-    return "\n".join(o) + "\n"
+    note = (f'Data: {span} (UTC), docs/metrics/journeys.jsonl from the raw records each run in '
+            f'docs/metrics/scenario-runs.jsonl names. No token or cost figure is read from the journeys. '
+            f'Free and isolated runs without a stream record only a turn count (Claude Code) or their items '
+            f'in order (Codex); runs with a stream are timed. First results, not a benchmark.')
+    y += 30
+    for line in wrap(note, W - 40):
+        o.append(f'<text x="20" y="{y}" class="mut">{esc(line)}</text>')
+        y += 16
+    H = int(y + 4)
+    head = (f'<svg class="takt-journey" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
+            f'width="{W}" height="{H}" role="img" aria-labelledby="takt-journey-title" '
+            f'font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="{FS}">')
+    return "\n".join([head] + o + ["</svg>"]) + "\n"
 
 
 def main():

@@ -15,9 +15,12 @@ pub mod frontier;
 pub mod git;
 pub mod harness;
 pub mod loop_scorecard;
+pub mod promotion;
 pub mod protocol;
+pub mod report;
 pub mod run;
 pub mod scorecard;
+pub mod trace;
 pub mod validator;
 
 pub use case::CaseDir;

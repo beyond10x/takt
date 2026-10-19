@@ -1,0 +1,15 @@
+/* The site check refuses text under 11 px (story:docs-site-with-sidebar). The docs-system sets
+   these small-caps labels between 9.6 and 10.9 px; they are raised to 12 px here. `html` makes
+   each rule win over the docs-system's, which loads after this file. */
+html .theme-doc-sidebar-item-category-level-1 .menu__link--sublist,
+html [class*='categoryLinkLabel'],
+html .markdown table th,
+html .b10x-status-table table .b10x-status-table__area th,
+html .markdown table th code,
+html .b10x-status--shipped,
+html .b10x-status--decided,
+html .b10x-status--planned,
+html .b10x-flow__label,
+html .b10x-status-strip__group-title {
+  font-size: 0.75rem;
+}

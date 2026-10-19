@@ -1,0 +1,36 @@
+| run | protocol | story | outcome | wall s | steps | model calls | turns | tokens | cost $ | validator s | forge s | idle s | human s | harness s | api s | other s | ci reads | s per ci read |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| takt-20261018T205520Z | software.change/1 | - | ApprovalRequired | 242 | 6 | 3 | 33 | 592698 | 0.849 | 107 | 0 | 0 | 0 | 130 | 128 | 5 | 0 | - |
+
+### takt-20261018T205520Z
+
+harness claude-code; model claude-opus-5-5; 1 invocation, 0 resumes; 2026-10-18T20:55:20Z to 2026-10-18T20:59:22Z; stop ApprovalRequired (repository.merge)
+
+| actor | seconds | share |
+|---|---|---|
+| harness | 130 | 54% |
+| validator | 107 | 44% |
+| forge | 0 | 0% |
+| idle | 0 | 0% |
+| human | 0 | 0% |
+| takt | 5 | 2% |
+
+harness seconds: the harness's own duration, 3 of 3 calls; api 128 s; takt: the remainder (commits, decisions, process starts, gaps)
+tokens 592698: input 48, output 12596, cache read 518400, cache write 61654; cost $0.849
+ci reads: 0
+ci cycles: 0
+seconds per ci read: -; 0.0 s over 0 reads; waits on ci.read between them: 0, 0.0 s
+
+| step | actor | action | seconds | harness s | turns | tokens | cost $ |
+|---|---|---|---|---|---|---|---|
+| 1 | validator | tests.run | 19.0 | - | - | - | - |
+| 2 | harness | tests.write | 44.0 | 41.9 | 7 | 109895 | 0.279 |
+| 3 | validator | tests.run | 26.0 | - | - | - | - |
+| 4 | harness | implementation.edit | 66.0 | 64.7 | 19 | 369169 | 0.407 |
+| 5 | validator | tests.run | 62.0 | - | - | - | - |
+| 6 | harness | repository.merge | 25.0 | 23.6 | 7 | 113634 | 0.164 |
+
+defects:
+- step 6: approval-only call (25.0 s, 113634 tokens, $0.164)
+not recorded: acceptance; takt revision
+sources: events.jsonl (steps, times, tokens); steps.jsonl: model, cost_usd, turns, duration_ms, api_ms, token components for 3 of 3 calls

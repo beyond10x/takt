@@ -48,10 +48,83 @@ enum Commands {
     Scenario(ScenarioCommands),
     /// Print, per run of a case under `.engineering/cases/`, its outcome, steps, tokens,
     /// refusals, `NoProgress`, errors and wall time, read from the case's `events.jsonl` only;
-    /// a case without one is listed as `no record`.
+    /// a case without one is listed as `no record`. The binary a case's runs were made with is
+    /// read from a `binary.txt` beside the record when the operator wrote one (first line
+    /// `<path>\t<sha256>`, every further line a note), saved with each run as the operator's
+    /// statement, never a figure.
     #[command(after_help = SCORECARD_EXIT_CODES)]
     Scorecard(ScorecardArgs),
+    /// Write a case's run record as one `takt-trace/1` file: a header line on the run, then
+    /// one line per operation (a step, a wait on the forge, a refusal, a stop, the resume
+    /// after one) in one vocabulary, read from the case's `events.jsonl`; token and cost
+    /// figures from the harness's raw usage only, summaries never copied.
+    #[command(after_help = TRACE_EXIT_CODES)]
+    Trace(TraceArgs),
+    /// Print where runs' time and tokens went: one table across the runs given (wall time
+    /// split by actor, steps, model calls, turns, tokens, cost), then per run the actors'
+    /// shares, a row per step, the defects and what the sources did not record.
+    #[command(after_help = REPORT_EXIT_CODES)]
+    Report(ReportArgs),
+    /// Promote a takt revision: compare its saved scorecard with the promoted baseline's under
+    /// the scorecard's rule and, when no scenario is worse, build a fresh clone of that
+    /// revision confined in bubblewrap (`bwrap`: only the clone, rustup's default toolchain
+    /// as its settings file names it, never one on PATH, the host's registry cache read-only
+    /// and the system directories visible, the environment cleared, `cargo build --locked
+    /// --offline`), install the binary with
+    /// `cargo install --locked --path crates/takt-cli`, record the promotion under
+    /// `$XDG_STATE_HOME/takt/promotions/` (`~/.local/state/takt/promotions/`), where the latest
+    /// record is the next baseline, and then move the binary into place. One promotion a UTC
+    /// day, one at a time under the store's lock; a refused candidate is recorded and not
+    /// judged again until it changes; the installed binary must name the latest record's
+    /// revision before anything is judged.
+    #[command(after_help = PROMOTE_EXIT_CODES)]
+    Promote(PromoteArgs),
 }
+
+#[derive(clap::Args)]
+struct PromoteArgs {
+    /// The takt checkout at the candidate revision, clean: `HEAD` must equal the scorecard's
+    /// revision and no tracked file may differ from it.
+    #[arg(long)]
+    repo: PathBuf,
+    /// The candidate's saved scorecard, `scorecard-<revision>.json` with a full commit id,
+    /// outside the repository.
+    #[arg(long, value_name = "FILE")]
+    scorecard: PathBuf,
+    /// Record the baseline only: the scorecard of the revision installed today, compared with
+    /// nothing; nothing is built or installed. Refused when the store holds a baseline already.
+    #[arg(long)]
+    baseline_only: bool,
+    /// With --baseline-only: the revision the installed binary was built from, a full commit
+    /// id equal to the scorecard's, for a binary built before `--version` named its revision;
+    /// the record marks it as stated by the operator. Refused without --baseline-only.
+    #[arg(long, value_name = "SHA")]
+    revision: Option<String>,
+    /// With --baseline-only and --revision: the installed binary's sha256, lower-case hex.
+    /// `<root>/bin/takt` must name no revision and hash to it, and every run of the scorecard
+    /// must state the same digest in a `binary.txt` beside its record
+    /// (`.engineering/cases/<case>/binary.txt`, first line `<path>\t<sha256>`, every further
+    /// line the operator's note, copied into the record); otherwise refused naming the binary's
+    /// digest or the run, nothing written. Refused when the binary's `--version` names a
+    /// revision, and without --baseline-only or --revision.
+    #[arg(long, value_name = "HEX")]
+    binary_sha256: Option<String>,
+    /// Print the verdict and the record that would be written; write nothing, install nothing.
+    #[arg(long)]
+    dry_run: bool,
+    /// Where the binary is installed, `cargo install --root`; without it `CARGO_INSTALL_ROOT`,
+    /// else `CARGO_HOME`, else `~/.cargo`.
+    #[arg(long, value_name = "DIR")]
+    install_root: Option<PathBuf>,
+}
+
+/// What `takt promote --help` says about the exit codes.
+const PROMOTE_EXIT_CODES: &str = "Exit codes:
+  0  promoted and recorded; or the baseline recorded (--baseline-only); or, with --dry-run, the candidate would be promoted or the baseline would be recorded
+  1  refused, nothing written or installed: the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, was saved under another rule or metric definition; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree, or commits a rust-toolchain.toml with a `path`; bubblewrap (`bwrap`) or a toolchain is not found; another promotion holds the store's lock; no baseline is recorded; the installed binary does not name the latest record's revision, or names none and hashes to another digest than the record's binary_sha256, or to none it records (with --baseline-only, the revision recorded); --revision or --binary-sha256 without --baseline-only, --binary-sha256 without --revision, a --revision that is no full commit id or not the scorecard's, a --binary-sha256 that is no sha256; with --binary-sha256, an installed binary whose --version names a revision or that hashes to another digest (both named), or a run of the scorecard that states no binary or another (the run named); the revision or its tree was refused or recorded already; a promotion was made this UTC day; a scenario has fewer cases than the rule's trials on either side; the store holds a file takt does not read, a record that disagrees with its name, instant or scorecard copy, or a chain of records with a gap; the record could not be written; the reason on stderr
+  2  the arguments do not parse
+  3  refused on the scorecard: a scenario is worse than the baseline's; the refusal is recorded (not with --dry-run), nothing installed
+  5  the candidate held but its clone, its confined build or its install failed, the built binary names another revision, or the binary names another revision or hashes differently once in place (then the binary before it is back in place and the record removed); nothing recorded, the installed binary unchanged";
 
 #[derive(clap::Args)]
 struct ScorecardArgs {
@@ -67,12 +140,14 @@ struct ScorecardArgs {
     #[arg(long, value_name = "SHA", requires = "save")]
     revision: Option<String>,
     /// Compare each scenario with the same scenario in a saved scorecard, over cases (a case's
-    /// outcome is the best a run of it completed with, else its last run's): worse when, for
-    /// some outcome rank (accepted, then ApprovalRequired or Waiting, then a budget stop, then
-    /// NoProgress and every other stop, then an error), the share of its cases at that rank or
-    /// better is below the saved share, each such rank printed with both shares, or when the
-    /// saved scorecard has the scenario and this one has no run of it; tokens as n, min, median
-    /// and max per scenario and side, and the difference of the medians, never worse.
+    /// outcome is the best a run of it completed with, else its last run's), under this
+    /// scorecard's rule, printed first (trials a scenario needs, margin of cases): worse when,
+    /// for some outcome rank (accepted, then ApprovalRequired or Waiting, then a budget stop,
+    /// then NoProgress and every other stop, then an error), its cases at that rank or better
+    /// fall short of the saved share of its n by more than the margin, each such rank printed
+    /// with both counts; when its median of tokens exceeds the saved maximum; or when the saved
+    /// scorecard has the scenario and this one has no run of it. Tokens are printed as n, min,
+    /// median and max per scenario and side, with the difference of the medians.
     #[arg(long, value_name = "FILE")]
     against: Option<PathBuf>,
 }
@@ -80,9 +155,55 @@ struct ScorecardArgs {
 /// What `takt scorecard --help` says about the exit codes.
 const SCORECARD_EXIT_CODES: &str = "Exit codes:
   0  printed (and saved); with --against, no scenario is worse than the saved one
-  1  refused: the repository, a case's events.jsonl or the saved scorecard does not read; --save without --revision, onto a file that exists, or that cannot be written; the reason on stderr
+  1  refused: the repository, a case's events.jsonl, or the saved scorecard does not read (a binary.txt that does not read leaves its case's runs stating no binary, the case listed with the reason); --save without --revision, onto a file that exists, or that cannot be written; the reason on stderr
   2  the arguments do not parse
-  3  with --against: a scenario is worse: at some outcome rank the share of its cases at that rank or better is below the saved share, or it has no run (tokens never make a scenario worse)";
+  3  with --against: a scenario is worse: at some outcome rank its cases at that rank or better fall short of the saved share by more than the rule's margin, its median of tokens exceeds the saved maximum, or it has no run";
+
+#[derive(clap::Args)]
+struct TraceArgs {
+    /// The case directory, holding `events.jsonl`.
+    #[arg(long)]
+    case: PathBuf,
+    /// A runner shim's `steps.jsonl` beside the record: one `claude --output-format json`
+    /// result per harness call, with `started_at` and `recorded_at`; read for the model, cost,
+    /// turns, durations and token components a record written before takt recorded them
+    /// lacks. The trace's notes say what it supplied.
+    #[arg(long, value_name = "FILE")]
+    steps: Option<PathBuf>,
+    /// The run's name in the trace; the case id without it.
+    #[arg(long)]
+    run: Option<String>,
+    /// Write the trace there instead of standard output; a file there is replaced.
+    #[arg(long, value_name = "FILE")]
+    out: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+#[command(group(clap::ArgGroup::new("input").required(true).multiple(true).args(["case", "trace"])))]
+struct ReportArgs {
+    /// A case directory, holding `events.jsonl`; repeatable.
+    #[arg(long, value_name = "DIR")]
+    case: Vec<PathBuf>,
+    /// A runner shim's `steps.jsonl` for the --case given at the same position; repeatable,
+    /// never more often than --case.
+    #[arg(long, value_name = "FILE")]
+    steps: Vec<PathBuf>,
+    /// A `takt-trace/1` file `takt trace` wrote; repeatable.
+    #[arg(long, value_name = "FILE")]
+    trace: Vec<PathBuf>,
+}
+
+/// What `takt trace --help` says about the exit codes.
+const TRACE_EXIT_CODES: &str = "Exit codes:
+  0  written
+  1  refused: the case has no events.jsonl, the record or the steps file does not read, or the output cannot be written; the reason on stderr
+  2  the arguments do not parse";
+
+/// What `takt report --help` says about the exit codes.
+const REPORT_EXIT_CODES: &str = "Exit codes:
+  0  printed
+  1  refused: a case has no events.jsonl, a record, steps file or trace does not read, or --steps is given more often than --case; the reason on stderr
+  2  the arguments do not parse, or neither --case nor --trace is given";
 
 #[derive(Subcommand)]
 enum ScenarioCommands {
@@ -358,6 +479,95 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 out,
             )?;
             Ok(if worse > 0 { 3 } else { EXIT_DONE })
+        }
+        Commands::Trace(TraceArgs {
+            case,
+            steps,
+            run,
+            out: file,
+        }) => {
+            let trace = takt::trace::Trace::from_case(&case, steps.as_deref(), run.as_deref())?;
+            match file {
+                Some(path) => {
+                    trace.save(&path)?;
+                    writeln!(
+                        out,
+                        "written: {} ({} operations, {})",
+                        path.display(),
+                        trace.ops.len(),
+                        takt::trace::FORMAT
+                    )?;
+                }
+                None => trace.write(out)?,
+            }
+            Ok(EXIT_DONE)
+        }
+        Commands::Report(ReportArgs { case, steps, trace }) => {
+            if steps.len() > case.len() {
+                return Err(anyhow!(
+                    "--steps is given {} times for {} --case: give at most one per case, in the same order",
+                    steps.len(),
+                    case.len()
+                ));
+            }
+            let mut traces = Vec::new();
+            for (n, dir) in case.iter().enumerate() {
+                traces.push(takt::trace::Trace::from_case(
+                    dir,
+                    steps.get(n).map(PathBuf::as_path),
+                    None,
+                )?);
+            }
+            for path in &trace {
+                traces.push(takt::trace::Trace::load(path)?);
+            }
+            takt::report::print(&traces, out)?;
+            Ok(EXIT_DONE)
+        }
+        Commands::Promote(PromoteArgs {
+            repo,
+            scorecard,
+            baseline_only,
+            revision,
+            binary_sha256,
+            dry_run,
+            install_root,
+        }) => {
+            let repo = repo
+                .canonicalize()
+                .with_context(|| format!("--repo {}", repo.display()))?;
+            let store = takt::promotion::store()?;
+            let install_root = match install_root {
+                Some(root) => root,
+                None => takt::promotion::install_root()?,
+            };
+            let build_dir = takt::promotion::build_dir()?;
+            let request = takt::promotion::Request {
+                repo: &repo,
+                scorecard: &scorecard,
+                store: &store,
+                install_root: &install_root,
+                build_dir: &build_dir,
+                baseline_only,
+                revision: revision.as_deref(),
+                binary_sha256: binary_sha256.as_deref(),
+                dry_run,
+                clock: takt::now,
+            };
+            match takt::promotion::promote(&request, out) {
+                Ok(takt::promotion::Outcome::Regression(_))
+                | Ok(takt::promotion::Outcome::WouldRefuse(_)) => Ok(EXIT_STOPPED),
+                Ok(_) => Ok(EXIT_DONE),
+                Err(error)
+                    if error
+                        .downcast_ref::<takt::promotion::BuildFailed>()
+                        .is_some() =>
+                {
+                    eprintln!("takt: {error:#}");
+                    Ok(EXIT_ERROR)
+                }
+                Err(error) => Err(error),
+            }
         }
         Commands::Run(args) => {
             let RunArgs {
