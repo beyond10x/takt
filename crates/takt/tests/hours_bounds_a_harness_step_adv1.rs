@@ -190,10 +190,10 @@ impl Harness for FailsEarly {
 /// 4567), not after the sweep, the put-back of the git directory and the snapshots that follow
 /// it. Decision 1 of the brief: a step the budget kills stops on `Hours`; one that fails by
 /// itself is "the harness failed". This case runs under a 10 s budget of its own, so the setup
-/// has room under load and the margin before the end stays small enough to catch a deadline
-/// judged after the cleanup.
+/// has room under load.
 #[test]
-fn a_harness_that_fails_by_itself_before_the_budget_ends_is_reported_as_the_hour_budget() {
+fn a_harness_that_fails_by_itself_before_the_budget_ends_reports_its_own_error_not_the_hour_budget()
+{
     let tree = repository("early", "#!/bin/sh\nexit 1\n");
     let harness = FailsEarly {
         fail_at: Cell::new(None),
