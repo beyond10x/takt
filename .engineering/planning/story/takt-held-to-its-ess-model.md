@@ -9,7 +9,7 @@ relations:
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-fe93286-areas
 - informed_by: story:property-and-fuzz-tests
-revision: 1
+revision: 2
 ---
 ## Outcome
 
@@ -28,3 +28,7 @@ Owner question of 2026-10-19, after review-result:main-fe93286-areas: ESS alread
 ## Acceptance
 
 `task check` runs a synthesized conformance suite over at least the case, grant and promotion entities against takt and fails when a mutant that drops the "pull request base equals case base" rule survives `ess verify conform mutate`.
+
+## The Rust route (ESS's answer, 2026-10-19)
+
+ESS has a documented Rust runner, which the `synthesize --target` help did not name (ESS adds that line in 0.63.0): `ess verify conform synthesize --path ess --out suite.json` (`--target ir`), then a cargo test depending on the `ess-conformance` crate from the ESS repository at the pinned tag (not on crates.io), implementing `ess_conformance::target::ConformanceTarget` (identity, begin/end scenario, execute_command, query_view, observe_events, configure_external_outcome, redeliver_event; the rest default to unsupported) and running the crate's `Runner`. `ess verify conform mutate --emit/--collect` works with that suite. Guide: https://beyond10x.github.io/ess/docs/start/runners/rust. The Scope's "a runner or an adapter" is therefore a `ConformanceTarget` implementation over takt's CLI and case files.
