@@ -7,6 +7,8 @@ title: takt run opens a loop.improvement/1 case its validators can drive
 relations:
 - depends_on: story:loop-scorecard
 - decomposes: epic:recursive-self-improvement
+- depends_on: story:promotion
+- serves: vision:safe-agentic-coding
 revision: 1
 ---
 ## Outcome

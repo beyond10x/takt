@@ -151,10 +151,19 @@ once at least three turns have been filed since the merge.
 - `b10x-gates scan-text` gates the commit: run it unpiped in a chain that stops on its exit
   status (`set -eo pipefail`). A `| tail` after it hid a refusal on 2026-10-18 and a personal path
   reached local main.
-- A store write can move lines that `ess/` cites (`relate` adds a frontmatter line). Before the
-  commit, run `python3 -I scripts/check-citations --require-digests`; on an unresolved line, run
-  `check-citations fix` and commit the re-point with the store change. On 2026-10-19 a `relate`
-  left main red with 5 unresolved citations.
+- A store write or a merge into main can move lines that `ess/` cites (`relate` adds a
+  frontmatter line; a `docs/**` merge moves a cited generator line). Local `main` only receives a
+  tree whose citations resolve: in the managed worktree, after the store commit (for a `docs/**`
+  branch, after merging it into a worktree cut from `main`), run `python3 -I
+  scripts/check-citations --require-digests` unpiped in the same `set -eo pipefail` chain as
+  scan-text, and merge into `main` only when it exits 0 and the worktree contains `main`'s tip
+  (`git merge-base --is-ancestor main HEAD`); if `main` moved, merge it into the worktree and run
+  the check again, so the `--no-ff` merge into `main` has the checked tree. On an unresolved line, run
+  `check-citations fix` outside that chain (it exits 1 even when it re-pointed every line), then
+  run the check again: when it exits 0, commit the re-point in the worktree as its own commit and
+  merge; when it does not (the cited text changed, or a needle matches twice), merge nothing and
+  report it to the owner. On 2026-10-19 a `relate` left main red with 5 unresolved citations,
+  and a `docs/**` merge with 1.
 
 ## Intake
 
