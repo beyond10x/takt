@@ -274,6 +274,9 @@ fn command(tree: &Path, args: &[&str]) -> Result<Command> {
     for name in REDIRECTING_ENV {
         command.env_remove(name);
     }
+    // Nor a template directory, which a repository git makes is filled from (an
+    // `objects/info/alternates` among it would lend it another store's objects unchecked).
+    command.env_remove("GIT_TEMPLATE_DIR");
     if let Some(parent) = tree.parent() {
         command.env("GIT_CEILING_DIRECTORIES", parent);
     }

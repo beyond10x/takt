@@ -313,12 +313,18 @@ struct RunArgs {
     /// before the case is resumed: the case keeps the inputs it was opened with. A
     /// `loop.improvement/1` case requires `loop_baseline=<full commit id>`, the promoted revision
     /// its baseline is, a commit of the repository: it opens the case's baseline and is no case
-    /// input.
+    /// input. A `self.improvement/1` turn requires `finding=<story id>`, a finding the planning
+    /// store holds, and `candidate=<full commit id>`, the candidate delivered outside the case;
+    /// its baseline is the promotion store's latest promoted revision. Neither is a case input.
     #[arg(long = "input", value_name = "NAME=VALUE")]
     inputs: Vec<String>,
     /// The case id; generated when absent.
     #[arg(long)]
     case_id: Option<String>,
+    /// The checkout of the scenario repository a `self.improvement/1` turn's finding names its
+    /// scenario in, handed to `scripts/check-finding --scenarios`; not read by any other case.
+    #[arg(long)]
+    scenarios: Option<PathBuf>,
     #[command(flatten)]
     looping: LoopArgs,
 }
@@ -630,6 +636,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 protocol,
                 inputs,
                 case_id,
+                scenarios,
                 looping,
             } = *args;
             looping.check()?;
@@ -691,6 +698,36 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 } else {
                     None
                 };
+            // An improvement turn opens with its finding and its candidate, `--input
+            // finding=<story id>` and `--input candidate=<full commit id>`, no case inputs of the
+            // protocol, taken out of the inputs and checked here with the promoted baseline, so
+            // a missing or wrong one is refused before anything is written.
+            let turn =
+                if case.is_none() && resuming.is_none() && opens_on.id == takt::case::TURN_PROTOCOL
+                {
+                    let mut taken = |name: &str| {
+                        inputs
+                            .iter()
+                            .position(|(given, _)| given == name)
+                            .map(|at| inputs.remove(at).1)
+                    };
+                    let finding = taken(takt::case::TURN_FINDING);
+                    let candidate = taken(takt::case::TURN_CANDIDATE);
+                    // The binary that judges the turn is this one, which must be the promoted.
+                    let binary = std::env::current_exe().context("this binary's path")?;
+                    Some(takt::case::turn_opening(
+                        &repo,
+                        finding.as_deref(),
+                        candidate.as_deref(),
+                        &takt::promotion::store()?,
+                        &takt::case::Judge {
+                            revision: REVISION,
+                            binary: &binary,
+                        },
+                    )?)
+                } else {
+                    None
+                };
             // A case keeps only the inputs its protocol declares: one it does not declare would
             // be dropped without a word, so a case to be opened refuses it before anything is.
             if case.is_none()
@@ -726,7 +763,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             let options = looping.options(opening, inputs, case_id);
             let harness = harness_of(&looping)?;
             let harness = harness.as_ref();
-            let mut validators = validators_of(&repo, &looping)?;
+            let mut validators = validators_of(&repo, &looping, scenarios)?;
             let forge = forge_of(&repo, looping.forge.as_deref())?;
             forge.register(&mut validators);
             let forge_line = forge.line;
@@ -777,6 +814,11 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // before any step.
             if let Some(baseline) = &loop_baseline {
                 run.case.open_loop_baseline(&repo, baseline)?;
+            }
+            // The turn just opened gets its revisions, its finding and its validators'
+            // independence before any step.
+            if let Some(turn) = &turn {
+                run.case.open_turn(turn)?;
             }
             // A story's case that terminates accepted records its test result and its move
             // in the store; an intent's run has no story and writes nothing there.
@@ -836,8 +878,13 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
 
 /// The validators that need no forge: the test command, `change.read`, the gate when a gates
 /// document is given or at its default path in `repo`, with the project file likewise, and
-/// the loop scorecard's three.
-fn validators_of(repo: &Path, looping: &LoopArgs) -> Result<Vec<Box<dyn Validator>>> {
+/// the loop scorecard's three, and an improvement turn's four, `scenarios` the scenario
+/// repository's checkout its scenario checks are given.
+fn validators_of(
+    repo: &Path,
+    looping: &LoopArgs,
+    scenarios: Option<PathBuf>,
+) -> Result<Vec<Box<dyn Validator>>> {
     let mut validators: Vec<Box<dyn Validator>> = vec![
         Box::new(TestsRun::new(&looping.test_cmd)?),
         Box::new(ChangeRead),
@@ -856,6 +903,15 @@ fn validators_of(repo: &Path, looping: &LoopArgs) -> Result<Vec<Box<dyn Validato
     validators.push(Box::new(takt::loop_scorecard::LoopMeasure));
     validators.push(Box::new(takt::loop_scorecard::LoopDefinitionCheck));
     validators.push(Box::new(takt::loop_scorecard::LoopCompare));
+    // An improvement turn's validators: due only in a `self.improvement/1` case, whose
+    // protocol alone has their actions. The merge and promotion validators are not here yet.
+    let checking = takt::improvement::Checking::from_env().with_scenarios(scenarios);
+    validators.push(Box::new(takt::improvement::FindingFile(checking.clone())));
+    validators.push(Box::new(takt::improvement::ScenarioReproduce(
+        checking.clone(),
+    )));
+    validators.push(Box::new(takt::improvement::ScenarioVerify(checking)));
+    validators.push(Box::new(takt::improvement::ScorecardCompare::from_env()));
     Ok(validators)
 }
 
@@ -1346,7 +1402,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         // Everything read before the push: the story's text and the gates and the project file,
         // the seed's, read on the trial branch.
         let story = Aep::default().show(&repo, &scenario.story)?;
-        let mut validators = validators_of(&repo, &looping)?;
+        let mut validators = validators_of(&repo, &looping, None)?;
         forge.register(&mut validators);
         if let Some(trials) = &forge.trials {
             trials.create(&repo, &trial).with_context(|| {
