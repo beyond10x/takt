@@ -124,14 +124,15 @@ fn short(revision: &str) -> &str {
 
 /// Who took a step, with what its event records of it: a validator, and the revision it
 /// observed when it observed; or the harness, the tokens it reported, their components and
-/// what it reported about the call besides them, and the path of the transcript takt kept.
+/// what it reported about the call besides them, and the path of the transcript takt kept or
+/// why it kept none.
 enum SteppedBy<'r> {
     Validator(Option<&'r str>),
     Harness(
         Option<u64>,
         Option<crate::events::TokenUsage>,
         Option<crate::harness::CallReport>,
-        Option<String>,
+        Option<std::result::Result<String, String>>,
     ),
 }
 
@@ -6050,10 +6051,11 @@ pub struct Run<'a> {
     /// opens, unless [`Run::set_aside_in`] gives another; none when nothing names one, and then
     /// no harness step is taken. A validator's observation moves nothing aside.
     set_aside: Option<PathBuf>,
-    /// Where each harness step's transcript is kept ([`crate::harness::keep_transcript`]): none
-    /// until [`Run::transcripts_in`] gives one (`takt run` gives [`default_transcripts`]), and
-    /// then no transcript is kept.
-    transcripts: Option<PathBuf>,
+    /// Where each harness step's transcript is kept ([`crate::harness::keep_transcript`]), with
+    /// the repository's key there ([`crate::harness::repo_key`]): none until
+    /// [`Run::transcripts_in`] gives one (`takt run` gives [`default_transcripts`]), and then no
+    /// transcript is kept.
+    transcripts: Option<(PathBuf, String)>,
     /// The planning store a story's run records its test result and its move in; none until
     /// [`Run::record_on`] gives one, and only a story's run writes to it.
     store: Option<&'a dyn Frontier>,
@@ -6202,17 +6204,19 @@ impl<'a> Run<'a> {
     /// Where each harness step's transcript is kept; none until [`Run::transcripts_in`].
     #[must_use]
     pub fn transcripts(&self) -> Option<&Path> {
-        self.transcripts.as_deref()
+        self.transcripts.as_ref().map(|(root, _)| root.as_path())
     }
 
-    /// Keeps each harness step's transcript under `dir` ([`crate::harness::keep_transcript`]),
-    /// once it is accepted as a set-aside root is ([`crate::git::set_aside_root`]): absolute,
-    /// outside the tree, and makeable, every link on the way resolved now; else the error, and
-    /// the run keeps what it had.
+    /// Keeps each harness step's transcript under `dir`, in the tree's own segment
+    /// ([`crate::harness::keep_transcript`], [`crate::harness::repo_key`]), once `dir` is
+    /// accepted as a set-aside root is ([`crate::git::set_aside_root`]): absolute, outside the
+    /// tree, and makeable, every link on the way resolved now; else the error, and the run
+    /// keeps what it had.
     pub fn transcripts_in(&mut self, dir: PathBuf) -> Result<()> {
         let root = crate::git::set_aside_root(&dir, &self.tree)
             .with_context(|| format!("the transcripts directory {}", dir.display()))?;
-        self.transcripts = Some(root);
+        let key = crate::harness::repo_key(&self.tree)?;
+        self.transcripts = Some((root, key));
         Ok(())
     }
 
@@ -6958,11 +6962,16 @@ impl<'a> Run<'a> {
         action: &str,
         summary: &str,
     ) -> Result<()> {
-        let (by, tokens, usage, revision, call, transcript) = match by {
+        let (by, tokens, usage, revision, call, kept) = match by {
             SteppedBy::Validator(revision) => ("validator", None, None, revision, None, None),
-            SteppedBy::Harness(tokens, usage, call, transcript) => {
-                ("harness", tokens, usage, None, call, transcript)
+            SteppedBy::Harness(tokens, usage, call, kept) => {
+                ("harness", tokens, usage, None, call, kept)
             }
+        };
+        let (transcript, transcript_refused) = match kept {
+            Some(Ok(path)) => (Some(path), None),
+            Some(Err(why)) => (None, Some(why)),
+            None => (None, None),
         };
         let call = call.unwrap_or_default();
         events.emit(
@@ -6982,6 +6991,7 @@ impl<'a> Run<'a> {
                 turns: call.turns,
                 started_at: call.started_at,
                 transcript,
+                transcript_refused,
             },
         )
     }
@@ -7610,15 +7620,18 @@ impl<'a> Run<'a> {
             // The step's transcript is kept now, before any way out of the step below, the
             // panic's and the errors' too: under the transcripts directory, outside the tree
             // and every case directory ([`Run::transcripts_in`]), so no snapshot of the step
-            // reads it and no put-back takes it along. The step's line names it.
+            // reads it and no put-back takes it along. The step's line names it, or why none
+            // was kept: a file at its path is never overwritten, and the run goes on.
             let transcript = crate::harness::keep_step_transcript(
                 self.harness,
-                self.transcripts.as_deref(),
+                self.transcripts
+                    .as_ref()
+                    .map(|(root, key)| (root.as_path(), key.as_str())),
                 &self.case.id,
                 run_number,
                 self.steps,
             )
-            .map(|path| path.display().to_string());
+            .map(|kept| kept.map(|path| path.display().to_string()));
             // What the step left running (a writer in a process group of its own) is killed
             // before anything it did is looked at, so nothing lands after the step is judged.
             let swept = crate::forge::sweep_left();

@@ -2,7 +2,8 @@
 //! which. The first adapter is Claude Code (`claude -p`), given file tools only: it reads and
 //! edits; takt runs the tests and writes the evidence. It runs on the user's claude.ai login:
 //! an `ANTHROPIC_API_KEY` in the environment is dropped, never spent. Each step's stream is
-//! kept as `<transcripts>/<case>/run-<r>/step-<n>.jsonl`, outside the case ([`keep_transcript`]).
+//! kept as `<transcripts>/<repo>/<case>/run-<r>/step-<n>.jsonl`, outside the case
+//! ([`keep_transcript`]).
 
 use std::path::Path;
 use std::process::Command;
@@ -89,8 +90,8 @@ pub trait Harness {
         None
     }
     /// The last step's transcript, the bytes takt keeps as
-    /// `<transcripts>/<case>/run-<r>/step-<n>.jsonl` ([`keep_transcript`]): the prompt and
-    /// what the harness printed, whether the step succeeded, failed or was killed; none by
+    /// `<transcripts>/<repo>/<case>/run-<r>/step-<n>.jsonl` ([`keep_transcript`]): the prompt
+    /// and what the harness printed, whether the step succeeded, failed or was killed; none by
     /// default.
     fn last_transcript(&self) -> Option<Vec<u8>> {
         None
@@ -352,18 +353,36 @@ fn bounded(mut front: Vec<u8>, omitted: u64, back: &[u8], cap: usize) -> Vec<u8>
     front
 }
 
-/// Writes `bytes` as `<root>/<case>/run-<run>/step-<step>.jsonl`, `root` the transcripts
-/// directory (`$XDG_STATE_HOME/takt/transcripts` for `takt run`, outside every repository and
-/// every case directory: [`crate::run::default_transcripts`]) and `run` the run's number in the
-/// case (1 for the run that opened it), so a resumed case keeps every run's; readable and
-/// writable by its owner only (`0600`, the case's and the run's directories `0700`): a
-/// transcript can carry what the model read. Every part of the way from `/` is a directory
-/// that is no link: a part that is not there is made (`0700`), and a link or a file on the way
-/// is refused. What is at the file's own path is replaced, never written through: a link there
-/// is removed, not followed. A case id that is not one plain name is refused. No validator
-/// reads the file.
+/// The segment of the transcripts directory that is `tree`'s own ([`keep_transcript`]): the
+/// first 16 hex digits of the sha256 over its canonical path, so two repositories whose cases
+/// share an id keep their transcripts apart. An error when the path does not resolve.
+pub fn repo_key(tree: &Path) -> Result<String> {
+    use sha2::Digest as _;
+    use std::os::unix::ffi::OsStrExt as _;
+    let canonical =
+        std::fs::canonicalize(tree).with_context(|| format!("resolve {}", tree.display()))?;
+    let digest = format!(
+        "{:x}",
+        sha2::Sha256::digest(canonical.as_os_str().as_bytes())
+    );
+    Ok(digest[..16].to_owned())
+}
+
+/// Writes `bytes` as `<root>/<repo>/<case>/run-<run>/step-<step>.jsonl`, `root` the
+/// transcripts directory (`$XDG_STATE_HOME/takt/transcripts` for `takt run`, outside every
+/// repository and every case directory: [`crate::run::default_transcripts`]), `repo` the
+/// repository's key ([`repo_key`]) and `run` the run's number in the case (1 for the run that
+/// opened it), so a resumed case keeps every run's; readable and writable by its owner only
+/// (`0600`, the repository's, the case's and the run's directories `0700`): a transcript can
+/// carry what the model read. Every part of the way from `/` is a directory that is no link: a
+/// part that is not there is made (`0700`), and a link or a file on the way is refused. The
+/// file is created only where nothing is (`O_EXCL`, `O_NOFOLLOW`): a file or a link already at
+/// its path is a clash, refused naming the path, and nothing is overwritten or written
+/// through. A key or case id that is not one plain name is refused. No validator reads the
+/// file.
 pub fn keep_transcript(
     root: &Path,
+    repo: &str,
     case: &str,
     run: u64,
     step: u64,
@@ -378,36 +397,42 @@ pub fn keep_transcript(
             root.display()
         );
     }
-    let mut parts = Path::new(case).components();
-    if !matches!(
-        (parts.next(), parts.next()),
-        (Some(Component::Normal(_)), None)
-    ) {
-        bail!("the case id {case:?} is not one plain name; no transcript is written for it");
+    for (what, name) in [("repository key", repo), ("case id", case)] {
+        let mut parts = Path::new(name).components();
+        if !matches!(
+            (parts.next(), parts.next()),
+            (Some(Component::Normal(_)), None)
+        ) {
+            bail!("the {what} {name:?} is not one plain name; no transcript is written for it");
+        }
     }
     let mut way: Vec<&Path> = root.ancestors().collect();
     way.reverse();
     for part in way {
         plain_dir(part, None)?;
     }
-    let case_dir = root.join(case);
+    let repo_dir = root.join(repo);
+    plain_dir(&repo_dir, Some(0o700))?;
+    let case_dir = repo_dir.join(case);
     plain_dir(&case_dir, Some(0o700))?;
     let dir = case_dir.join(format!("run-{run}"));
     plain_dir(&dir, Some(0o700))?;
     let path = dir.join(format!("step-{step}.jsonl"));
-    match std::fs::remove_file(&path) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-            return Err(error).with_context(|| format!("remove {}", path.display()));
-        }
-        _ => {}
-    }
-    std::fs::OpenOptions::new()
+    let mut file = match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(&path)
-        .and_then(|mut file| file.write_all(bytes))
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => bail!(
+            "{} is there already; nothing is overwritten and no transcript is written",
+            path.display()
+        ),
+        Err(error) => return Err(error).with_context(|| format!("create {}", path.display())),
+    };
+    file.write_all(bytes)
         .with_context(|| format!("write {}", path.display()))?;
     Ok(path)
 }
@@ -469,20 +494,25 @@ fn plain_dir(dir: &Path, mode: Option<u32>) -> Result<()> {
 }
 
 /// Keeps what `harness` reports as its last step's transcript ([`keep_transcript`]) under
-/// `root`, for step `step` of run `run` of the case `case`, and answers its path; none when no
-/// root is given, the harness reports none, or the write fails, which is told on standard
-/// error and changes nothing about how the step ends.
+/// `root` (the transcripts directory and the repository's key), for step `step` of run `run`
+/// of the case `case`: its path, or why it was not kept (a clash at its path, a link on the
+/// way), which the step's line names and standard error tells too; none when no root is given
+/// or the harness reports none. Neither answer changes how the step ends.
 pub(crate) fn keep_step_transcript(
     harness: &dyn Harness,
-    root: Option<&Path>,
+    root: Option<(&Path, &str)>,
     case: &str,
     run: u64,
     step: u64,
-) -> Option<std::path::PathBuf> {
-    let (root, bytes) = root.zip(harness.last_transcript())?;
-    keep_transcript(root, case, run, step, &bytes)
-        .map_err(|error| eprintln!("step {step}: its transcript was not kept: {error:#}"))
-        .ok()
+) -> Option<std::result::Result<std::path::PathBuf, String>> {
+    let ((root, repo), bytes) = root.zip(harness.last_transcript())?;
+    Some(
+        keep_transcript(root, repo, case, run, step, &bytes).map_err(|error| {
+            let why = format!("{error:#}");
+            eprintln!("step {step}: its transcript was not kept: {why}");
+            why
+        }),
+    )
 }
 
 impl Harness for ClaudeCode {

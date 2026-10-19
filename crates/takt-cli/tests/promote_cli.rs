@@ -268,6 +268,7 @@ fn emit_run(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Option<&st
                 turns: None,
                 started_at: None,
                 transcript: None,
+                transcript_refused: None,
             },
         ),
         (

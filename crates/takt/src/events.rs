@@ -88,8 +88,10 @@ pub enum Event {
     /// what the harness reported about the call, each absent when it did not state it, never
     /// 0: the model, the cost in dollars, the call's duration and its time in the API in
     /// milliseconds, the turns, and the instant the call started, which precedes the line's
-    /// `at`; and the path of its transcript, when takt kept one
-    /// ([`crate::harness::keep_transcript`]).
+    /// `at`; and the path of its transcript, `<transcripts>/<repo>/<case>/run-<r>/step-<n>.jsonl`,
+    /// when takt kept one ([`crate::harness::keep_transcript`]), or why it kept none
+    /// (`transcript_refused`: a file already at that path, which is never overwritten, or a link
+    /// on the way).
     Step {
         by: String,
         name: String,
@@ -115,6 +117,8 @@ pub enum Event {
         started_at: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         transcript: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        transcript_refused: Option<String>,
     },
     /// What a judgement step changed: the paths committed and the implementation revision they
     /// were committed as; no path and no revision when it changed no file.

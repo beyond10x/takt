@@ -1,6 +1,6 @@
 //! story:step-transcripts-are-kept, where `takt run` keeps them: each harness step's transcript
-//! under `$XDG_STATE_HOME/takt/transcripts/<case>/run-<r>/step-<n>.jsonl`, outside the
-//! repository and its cases directory, its directories `0700` and the file `0600`, and the
+//! under `$XDG_STATE_HOME/takt/transcripts/<repo-key>/<case>/run-<r>/step-<n>.jsonl`, outside
+//! the repository and its cases directory, its directories `0700` and the file `0600`, and the
 //! step's line in the run record naming it. The test gives takt its own `XDG_STATE_HOME`. The
 //! `claude` is a double; nothing reaches a model.
 
@@ -72,13 +72,13 @@ fn mode(path: &Path) -> u32 {
 }
 
 /// `takt run --harness claude` with its own `XDG_STATE_HOME` keeps the harness's step (step 2,
-/// after the test command's) at `<state>/takt/transcripts/<case>/run-1/step-2.jsonl`: the
-/// case's and the run's directories `0700`, the file `0600`, the prompt first and then exactly
-/// what the harness printed; the case's `artifacts/` holds no transcript; and the step's line
-/// names the file. The init event the double printed lists the five file tools takt offered:
-/// that proves takt passes `--tools Read,Edit,Write,Glob,Grep` and that the transcript keeps
-/// the init event; it does not prove that Claude Code itself offers no other tool, which only a
-/// live `claude` shows.
+/// after the test command's) at `<state>/takt/transcripts/<repo-key>/<case>/run-1/step-2.jsonl`:
+/// the repository's, the case's and the run's directories `0700`, the file `0600`, the prompt
+/// first and then exactly what the harness printed; the case's `artifacts/` holds no
+/// transcript; and the step's line names the file. The init event the double printed lists
+/// the five file tools takt offered: that proves takt passes `--tools Read,Edit,Write,Glob,Grep`
+/// and that the transcript keeps the init event; it does not prove that Claude Code itself
+/// offers no other tool, which only a live `claude` shows.
 #[test]
 fn takt_run_keeps_each_step_transcript_under_the_state_home() {
     let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
@@ -139,7 +139,17 @@ fn takt_run_keeps_each_step_transcript_under_the_state_home() {
     assert_eq!(cases.len(), 1, "{said}");
     let case = cases[0].file_name().expect("a name").to_owned();
     let real_state = fs::canonicalize(&state).expect("the state home resolves");
-    let case_dir = real_state.join("takt/transcripts").join(&case);
+    let real_repo = fs::canonicalize(&repo).expect("the repository resolves");
+    let digest = Command::new("sh")
+        .args(["-c", "printf '%s' \"$1\" | sha256sum", "sh"])
+        .arg(&real_repo)
+        .output()
+        .expect("sha256sum runs");
+    let repo_key = String::from_utf8_lossy(&digest.stdout)[..16].to_owned();
+    let case_dir = real_state
+        .join("takt/transcripts")
+        .join(&repo_key)
+        .join(&case);
     let path = case_dir.join("run-1").join("step-2.jsonl");
     assert!(
         path.is_file(),
@@ -147,6 +157,10 @@ fn takt_run_keeps_each_step_transcript_under_the_state_home() {
         path.display()
     );
     assert_eq!(mode(&case_dir), 0o700, "{}", case_dir.display());
+    assert_eq!(
+        mode(case_dir.parent().expect("the repository's directory")),
+        0o700
+    );
     assert_eq!(mode(&case_dir.join("run-1")), 0o700);
     assert_eq!(mode(&path), 0o600);
     let kept = fs::read_to_string(&path).expect("the transcript");

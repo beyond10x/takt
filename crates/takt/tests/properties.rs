@@ -85,6 +85,7 @@ fn event() -> impl Strategy<Value = Event> {
                 turns: None,
                 started_at: None,
                 transcript: None,
+                transcript_refused: None,
             }),
         (text(), text()).prop_map(|(by, reason)| Event::Refusal { by, reason }),
         text().prop_map(|error| Event::Error { error }),

@@ -87,6 +87,7 @@ fn judged(usage: TokenUsage) -> Event {
         turns: None,
         started_at: None,
         transcript: None,
+        transcript_refused: None,
     }
 }
 
@@ -106,6 +107,7 @@ fn observed() -> Event {
         turns: None,
         started_at: None,
         transcript: None,
+        transcript_refused: None,
     }
 }
 

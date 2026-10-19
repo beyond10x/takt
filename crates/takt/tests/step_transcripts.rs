@@ -135,11 +135,28 @@ fn root(scripts: &Path) -> PathBuf {
         .join("transcripts")
 }
 
+/// The repository's segment of the transcripts directory: the first 16 hex digits of the
+/// sha256 over its canonical path.
+fn repo_key(tree: &Path) -> String {
+    use sha2::Digest as _;
+    use std::os::unix::ffi::OsStrExt as _;
+    let canonical = fs::canonicalize(tree).expect("the tree resolves");
+    let digest = format!(
+        "{:x}",
+        sha2::Sha256::digest(canonical.as_os_str().as_bytes())
+    );
+    digest[..16].to_owned()
+}
+
+/// The directory of the case `id` of `tree` under the transcripts directory `root`.
+fn case_dir_in(root: &Path, tree: &Path, id: &str) -> PathBuf {
+    root.join(repo_key(tree)).join(id)
+}
+
 /// The transcript of step `n` of the case's run `run` (1 for the run that opened it) of the
-/// case `id`, under the transcripts directory of `scripts`.
-fn transcript(scripts: &Path, id: &str, run: usize, n: usize) -> PathBuf {
-    root(scripts)
-        .join(id)
+/// case `id` of `tree`, under the transcripts directory of `scripts`.
+fn transcript(tree: &Path, scripts: &Path, id: &str, run: usize, n: usize) -> PathBuf {
+    case_dir_in(&root(scripts), tree, id)
         .join(format!("run-{run}"))
         .join(format!("step-{n}.jsonl"))
 }
@@ -156,7 +173,23 @@ fn assert_kept(
     scripts: &Path,
     text: &str,
 ) {
-    let path = transcript(scripts, id, run, n);
+    assert_kept_in(&root(scripts), tree, id, (run, n, call), scripts, text);
+}
+
+/// [`assert_kept`] under the transcripts directory `root`; the repository's directory there
+/// is only its owner's too.
+fn assert_kept_in(
+    root: &Path,
+    tree: &Path,
+    id: &str,
+    (run, n, call): (usize, usize, usize),
+    scripts: &Path,
+    text: &str,
+) {
+    let case_dir = case_dir_in(root, tree, id);
+    let path = case_dir
+        .join(format!("run-{run}"))
+        .join(format!("step-{n}.jsonl"));
     let meta = fs::symlink_metadata(&path).unwrap_or_else(|error| {
         panic!(
             "run {run} step {n}'s transcript {}: {error}\n{text}",
@@ -165,7 +198,8 @@ fn assert_kept(
     });
     for dir in [
         path.parent().expect("its run directory"),
-        &root(scripts).join(id),
+        &case_dir,
+        case_dir.parent().expect("its repository's directory"),
     ] {
         let meta = fs::symlink_metadata(dir).expect("the directory");
         assert!(meta.is_dir(), "a plain directory: {}", dir.display());
@@ -257,7 +291,7 @@ fn every_harness_step_keeps_the_stream_it_printed() {
         );
     }
     assert!(
-        !transcript(&scripts, "kept", 1, 3).exists(),
+        !transcript(&tree, &scripts, "kept", 1, 3).exists(),
         "no step 3 ran"
     );
     let lines = Events::new(&run.case.dir).read().expect("the run record");
@@ -267,7 +301,11 @@ fn every_harness_step_keeps_the_stream_it_printed() {
         .map(|line| line["transcript"].as_str().unwrap_or("none"))
         .collect();
     let paths: Vec<String> = (1..=2)
-        .map(|n| transcript(&scripts, "kept", 1, n).display().to_string())
+        .map(|n| {
+            transcript(&tree, &scripts, "kept", 1, n)
+                .display()
+                .to_string()
+        })
         .collect();
     assert_eq!(named, paths, "each step's line names its transcript");
 }
@@ -317,7 +355,7 @@ fn a_resumed_case_keeps_the_transcripts_of_every_run() {
     let text = String::from_utf8_lossy(&out).into_owned();
     stop.unwrap_or_else(|error| panic!("the opening run runs: {error:#}\n{text}"));
     assert_kept(&tree, "resumed", (1, 1, 1), &scripts, &text);
-    let first = fs::read(transcript(&scripts, "resumed", 1, 1)).expect("run 1's transcript");
+    let first = fs::read(transcript(&tree, &scripts, "resumed", 1, 1)).expect("run 1's transcript");
     drop(opened);
     let mut resumed = Run::resume(
         &tree,
@@ -340,13 +378,14 @@ fn a_resumed_case_keeps_the_transcripts_of_every_run() {
     );
     assert_kept(&tree, "resumed", (2, 1, 2), &scripts, &text);
     assert_eq!(
-        fs::read(transcript(&scripts, "resumed", 1, 1)).expect("run 1's transcript, still there"),
+        fs::read(transcript(&tree, &scripts, "resumed", 1, 1))
+            .expect("run 1's transcript, still there"),
         first,
         "the resumed run left the opening run's transcript as it was"
     );
     assert_ne!(
         first,
-        fs::read(transcript(&scripts, "resumed", 2, 1)).expect("run 2's transcript"),
+        fs::read(transcript(&tree, &scripts, "resumed", 2, 1)).expect("run 2's transcript"),
         "each run's step 1 has its own transcript"
     );
 }
@@ -468,13 +507,15 @@ fn a_step_the_hour_budget_ends_keeps_what_it_printed() {
     assert_kept(&tree, "hours", (1, 1, 1), &scripts, &text);
 }
 
-/// Acceptance 3: the transcript is on no validator's read path. Evidence records that would
-/// make every claim pass and a grant, planted in the case's `artifacts/step-1.jsonl` and at
-/// the transcript's own path before the step, leave the decision as it was; the step's own
-/// transcript replaces the file at its path, and one planted there as a link is replaced too,
-/// the file it led to not written.
+/// Acceptance 3, and ruling 2 of correction 2: the transcript is on no validator's read path,
+/// and a step file is created only where none is. Evidence records that would make every
+/// claim pass and a grant, planted in the case's `artifacts/step-1.jsonl` and at the
+/// transcript's own path before the step, leave the decision as it was. The file planted at
+/// the transcript's path is not overwritten, nor is one planted there as a link, nor the file
+/// it leads to; no transcript is written for the step, its line names none, and it names the
+/// clash with the path; the run goes on and ends as it would have.
 #[test]
-fn a_planted_transcript_decides_nothing_and_is_replaced() {
+fn a_planted_step_file_is_not_overwritten_and_the_step_line_names_the_clash() {
     for (name, link) in [("planted-file", false), ("planted-link", true)] {
         let tree = repository(&format!("{name}-tree"));
         let scripts = directory(&format!("{name}-scripts"));
@@ -511,14 +552,14 @@ fn a_planted_transcript_decides_nothing_and_is_replaced() {
         let in_case = run.case.dir.join("artifacts");
         fs::create_dir_all(&in_case).expect("artifacts/");
         fs::write(in_case.join("step-1.jsonl"), &forged).expect("a planted file in the case");
-        let planted = transcript(&scripts, name, 1, 1);
+        let planted = transcript(&tree, &scripts, name, 1, 1);
         fs::create_dir_all(planted.parent().expect("a parent")).expect("its run directory");
         let target = outside.join("led-to.jsonl");
         if link {
             fs::write(&target, &forged).expect("the file the link leads to");
             std::os::unix::fs::symlink(&target, &planted).expect("a planted link");
         } else {
-            fs::write(&planted, &forged).expect("a planted transcript");
+            fs::write(&planted, &forged).expect("a planted step file");
         }
         let after = run.case.evaluate(901).expect("the case evaluates");
         assert_eq!(
@@ -530,20 +571,90 @@ fn a_planted_transcript_decides_nothing_and_is_replaced() {
                 "{:?} {:?} {:?} {:?}",
                 after.claims, after.obligations, after.actions, after.outcomes
             ),
-            "{name}: a planted transcript changes no decision"
+            "{name}: a planted file changes no decision"
         );
         let mut out = Vec::new();
         let stop = run.run(&mut out);
         let text = String::from_utf8_lossy(&out).into_owned();
-        stop.unwrap_or_else(|error| panic!("{name}: the run runs: {error:#}\n{text}"));
-        assert_kept(&tree, name, (1, 1, 1), &scripts, &text);
+        stop.unwrap_or_else(|error| panic!("{name}: the run goes on: {error:#}\n{text}"));
+        assert!(text.contains("step 1: tests.write"), "{name}: {text}");
         if link {
+            assert!(
+                fs::symlink_metadata(&planted)
+                    .expect("the planted link")
+                    .file_type()
+                    .is_symlink(),
+                "{name}: the link stays"
+            );
             assert_eq!(
-                fs::read_to_string(&target).expect("the file the link led to"),
+                fs::read_to_string(&target).expect("the file the link leads to"),
                 forged,
                 "{name}: nothing is written through a planted link"
             );
+        } else {
+            assert_eq!(
+                fs::read_to_string(&planted).expect("the planted step file"),
+                forged,
+                "{name}: the planted step file is not overwritten"
+            );
         }
+        let lines = Events::new(&run.case.dir).read().expect("the run record");
+        let step = lines
+            .iter()
+            .find(|line| line["event"] == "step" && line["by"] == "harness")
+            .unwrap_or_else(|| panic!("{name}: a harness step in {lines:#?}"));
+        assert!(
+            step.get("transcript").is_none(),
+            "{name}: no transcript is named: {step}"
+        );
+        let clash = step["transcript_refused"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{name}: the step's line names the clash: {step}"));
+        assert!(
+            clash.contains(&planted.display().to_string()),
+            "{name}: the clash names the path {}: {clash}",
+            planted.display()
+        );
+    }
+}
+
+/// Ruling 1 of correction 2: two repositories that open a case of the same id, their runs
+/// given one transcripts directory, each keep their own transcript under their own
+/// repository's segment (the first 16 hex digits of the sha256 over its canonical path); the
+/// second does not replace the first.
+#[test]
+fn two_repositories_with_the_same_case_id_keep_their_own_transcripts() {
+    let shared = directory("twin-shared");
+    let shared = fs::canonicalize(&*shared)
+        .expect("the shared directory resolves")
+        .join("transcripts");
+    let mut kept = Vec::new();
+    for (side, said) in [("a", "wrote a test"), ("b", "wrote the other test")] {
+        let tree = repository(&format!("twin-{side}-tree"));
+        let scripts = directory(&format!("twin-{side}-scripts"));
+        let end = EDITS.replace("wrote a test", said);
+        let harness = fake_claude(&scripts, &end);
+        let validators: Vec<Box<dyn Validator>> = Vec::new();
+        let mut run = Run::open(&tree, options("twin", 1, None), &harness, &validators)
+            .expect("the case opens");
+        run.transcripts_in(shared.clone())
+            .expect("a transcripts directory");
+        let mut out = Vec::new();
+        let stop = run.run(&mut out);
+        let text = String::from_utf8_lossy(&out).into_owned();
+        stop.unwrap_or_else(|error| panic!("{side}: the run runs: {error:#}\n{text}"));
+        assert_kept_in(&shared, &tree, "twin", (1, 1, 1), &scripts, &text);
+        kept.push((tree, scripts, said));
+    }
+    assert_ne!(repo_key(&kept[0].0), repo_key(&kept[1].0));
+    for (tree, _, said) in &kept {
+        let path = case_dir_in(&shared, tree, "twin").join("run-1/step-1.jsonl");
+        let text = fs::read_to_string(&path).expect("its own transcript");
+        assert!(
+            text.contains(said),
+            "{} holds its own run's reply: {text}",
+            path.display()
+        );
     }
 }
 
@@ -590,7 +701,7 @@ fn a_run_directory_planted_as_a_link_is_not_written_through() {
         .expect("the case opens");
     run.transcripts_in(root(&scripts))
         .expect("a transcripts directory");
-    let planted = transcript(&scripts, "run-link", 1, 1);
+    let planted = transcript(&tree, &scripts, "run-link", 1, 1);
     let run_dir = planted.parent().expect("its run directory").to_path_buf();
     fs::create_dir_all(run_dir.parent().expect("its case directory")).expect("its case directory");
     std::os::unix::fs::symlink(&*outside, &run_dir).expect("a planted link");
