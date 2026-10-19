@@ -11,22 +11,23 @@
 use std::collections::BTreeMap;
 
 use libfuzzer_sys::fuzz_target;
+use takt::run::STOP_KINDS;
 use takt::scorecard::{FORMAT, METRICS, Row, Rule, Scorecard, rank};
 
-const OUTCOMES: [&str; 12] = [
-    "accepted",
-    "merged",
-    "ApprovalRequired",
-    "Waiting",
-    "Iterations",
-    "Hours",
-    "Tokens",
-    "NothingAdmissible",
-    "StepRefused",
-    "NoProgress",
-    "error",
-    "unfinished",
-];
+/// Two outcomes a `Completed` stop names, every other stop's kind, an error and no stop.
+const OUTCOMES: [&str; STOP_KINDS.len() + 4] = {
+    let mut all = [""; STOP_KINDS.len() + 4];
+    all[0] = "accepted";
+    all[1] = "merged";
+    let mut at = 0;
+    while at < STOP_KINDS.len() {
+        all[at + 2] = STOP_KINDS[at];
+        at += 1;
+    }
+    all[at + 2] = "error";
+    all[at + 3] = "unfinished";
+    all
+};
 
 fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
     Scorecard {
@@ -56,6 +57,7 @@ fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
                 stop: (*outcome).to_owned(),
                 held_out: None,
                 opened_binary: None,
+                completed: None,
             })
             .collect(),
         no_record: Vec::new(),

@@ -79,7 +79,33 @@ pub enum Stop {
         /// The budget spent; `None` for a run with no step or hour budget, which does not wait.
         budget: Option<Box<Stop>>,
     },
+    /// No offered or due action produces evidence an open obligation's claim reads, and an
+    /// admissible action nobody in the run performs is the only producer of a claim that does
+    /// not hold: no step can move the case, and none is taken. The case stays open. Only a run
+    /// that turned it on stops so ([`Run::stop_when_unperformable`]): the CLI does, for every
+    /// run; the library's default is off.
+    Unperformable {
+        /// The claim only the missing performer decides.
+        claim: String,
+        /// What the run lacks to perform it: the forge, the gates document.
+        performer: String,
+    },
 }
+
+/// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
+/// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
+/// and fails to compile when one is added without its name here.
+pub const STOP_KINDS: [&str; 9] = [
+    "ApprovalRequired",
+    "NothingAdmissible",
+    "Iterations",
+    "Hours",
+    "Tokens",
+    "StepRefused",
+    "NoProgress",
+    "Waiting",
+    "Unperformable",
+];
 
 impl std::fmt::Display for Stop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -98,6 +124,10 @@ impl std::fmt::Display for Stop {
                 Some(budget) => write!(f, "Waiting ({}; {budget})", on.join(", ")),
                 None => write!(f, "Waiting ({}; no step or hour budget)", on.join(", ")),
             },
+            Stop::Unperformable { claim, performer } => write!(
+                f,
+                "Unperformable ({claim}; nothing performs it without {performer})"
+            ),
         }
     }
 }
@@ -193,6 +223,8 @@ struct Shape {
     /// The actions whose precondition the case's inputs make false for good: false whatever any
     /// claim or evidence becomes.
     blocked_for_good: BTreeSet<String>,
+    /// The kinds each obligation's discharge reads, directly or through the claims it tests.
+    discharges: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// The value of `predicate` from the case's `inputs` alone, every claim and every evidence
@@ -628,12 +660,23 @@ impl Shape {
                 );
             }
         }
+        let discharges = model
+            .obligations
+            .iter()
+            .map(|(id, obligation)| {
+                (
+                    id.as_str().to_owned(),
+                    kinds_read(&obligation.discharged_when, &reads),
+                )
+            })
+            .collect();
         Ok(Self {
             effects,
             produces,
             reads,
             choices,
             blocked_for_good,
+            discharges,
         })
     }
 
@@ -712,6 +755,68 @@ impl Shape {
             behind.extend(producers);
         }
         (!behind.is_empty()).then(|| behind.into_iter().collect())
+    }
+
+    /// The claim no step can move the case past, with the action that alone would decide it,
+    /// when none of the `offered` actions produces a kind an open obligation reads, and some
+    /// claim that does not hold is decided only by built-in actions the run has no validator for
+    /// (`performed` false), one of them admissible. An edit produces nothing and only moves the
+    /// revision. `None` while an offered action could still move an open obligation, or every
+    /// claim left has a performer or waits on an action not yet admissible: `--forge none` works
+    /// up to `pr.open` admissible, its change read ahead, before this names `pr.opened`.
+    fn unperformable(
+        &self,
+        decision: &crate::Decision,
+        offered: &[String],
+        performed: impl Fn(&str) -> bool,
+    ) -> Option<(String, String)> {
+        let open: BTreeSet<&String> = decision
+            .obligations
+            .iter()
+            .filter(|(_, status)| status.as_str() == "open")
+            .filter_map(|(id, _)| self.discharges.get(id))
+            .flatten()
+            .collect();
+        if offered.iter().any(|action| {
+            self.produces
+                .get(action)
+                .is_some_and(|produced| produced.iter().any(|kind| open.contains(kind)))
+        }) {
+            return None;
+        }
+        let admissible = decision.admissible();
+        for (claim, value) in &decision.claims {
+            if value == "true" {
+                continue;
+            }
+            let producers = self.producers(claim);
+            if producers.is_empty()
+                || producers.iter().any(|action| {
+                    !crate::validator::is_built_in_action(action) || performed(action)
+                })
+            {
+                continue;
+            }
+            if let Some(action) = producers.iter().find(|action| admissible.contains(action)) {
+                return Some((claim.clone(), action.clone()));
+            }
+        }
+        None
+    }
+}
+
+/// What a run lacks to perform the built-in `action`, as [`Stop::Unperformable`] names it.
+fn performer_of(action: &str) -> String {
+    let validator = crate::validator::BUILT_IN
+        .iter()
+        .find(|built_in| built_in.action == action)
+        .map(|built_in| built_in.validator);
+    match validator {
+        Some("GateRun") => "the gates document".to_owned(),
+        Some("PrOpen" | "CiRead" | "PrMerged") => "the forge".to_owned(),
+        Some("TestsRun") => "a test command".to_owned(),
+        Some(validator) => format!("its validator {validator}"),
+        None => format!("a validator for {action}"),
     }
 }
 
@@ -6012,7 +6117,9 @@ fn to_base(tree: &Path) -> Result<()> {
     Ok(())
 }
 
-/// A run over one case.
+/// A run over one case. Its stop [`Stop::Unperformable`] is off by default in the library: a
+/// library caller opts in with [`Run::stop_when_unperformable`], and the CLI turns it on for
+/// every run in its `finish`, so the library's default is not the product's behaviour.
 pub struct Run<'a> {
     /// The worktree.
     pub tree: PathBuf,
@@ -6053,6 +6160,8 @@ pub struct Run<'a> {
     /// The module names no step may put in an import directory, kept with the case
     /// ([`Modules::of_case`]).
     modules: Modules,
+    /// Whether the run stops [`Stop::Unperformable`]; off until [`Run::stop_when_unperformable`].
+    stops_unperformable: bool,
 }
 
 impl<'a> Run<'a> {
@@ -6151,6 +6260,7 @@ impl<'a> Run<'a> {
             outside_dirs,
             options,
             modules,
+            stops_unperformable: false,
         })
     }
 
@@ -6235,6 +6345,7 @@ impl<'a> Run<'a> {
             outside_dirs,
             options,
             modules,
+            stops_unperformable: false,
         })
     }
 
@@ -6476,6 +6587,14 @@ impl<'a> Run<'a> {
         }
     }
 
+    /// Stops the run [`Stop::Unperformable`] at the first step no step can move the case past:
+    /// a claim left is decided only by an admissible built-in action no validator of the run
+    /// performs (no forge, no gates document). The CLI turns it on for every run; a library
+    /// caller opts in here, and without this call a run offers the harness its step as before.
+    pub fn stop_when_unperformable(&mut self) {
+        self.stops_unperformable = true;
+    }
+
     /// How long the run waits on the forge before it observes again: [`Run::poll`], cut to
     /// what is left of the hour budget. `None` for a run with neither a step nor an hour
     /// budget: it has nothing to wait in, and a wait without a bound would never end. What is
@@ -6617,6 +6736,7 @@ impl<'a> Run<'a> {
                 stop: stop.to_string(),
                 steps: self.steps,
                 tokens: self.tokens,
+                completed: Some(matches!(stop, Stop::Completed(_))),
             },
         )
     }
@@ -7427,6 +7547,21 @@ impl<'a> Run<'a> {
                 && let Some(behind) = shape.only_behind(&decision, &waiting_for_grant)
             {
                 return Ok(Stop::ApprovalRequired(behind));
+            }
+            // No judgement step when no step can move the case: nothing offered produces what
+            // an open obligation reads, and a claim left is decided only by an admissible action
+            // the run has no performer for (no forge, no gates document). Checked at each step,
+            // never at open, so a `--forge none` run works up to its change read ahead first.
+            // On when the caller asked for it ([`Run::stop_when_unperformable`]): the CLI does.
+            if self.stops_unperformable
+                && let Some((claim, action)) = shape.unperformable(&decision, &offered, |action| {
+                    self.validators.iter().any(|v| v.action() == action)
+                })
+            {
+                return Ok(Stop::Unperformable {
+                    claim,
+                    performer: performer_of(&action),
+                });
             }
             // Then a judgement step among the offered actions.
             if offered.is_empty() {

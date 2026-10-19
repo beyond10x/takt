@@ -100,6 +100,7 @@ fn scenario_one_with_its_grant(repo: &Path, case: &str) {
                 stop: "ApprovalRequired (repository.merge)".to_owned(),
                 steps: 1,
                 tokens: 900,
+                completed: None,
             },
         ),
         (0, opened()),
@@ -109,6 +110,7 @@ fn scenario_one_with_its_grant(repo: &Path, case: &str) {
                 stop: "Completed (accepted)".to_owned(),
                 steps: 0,
                 tokens: 0,
+                completed: None,
             },
         ),
     ] {

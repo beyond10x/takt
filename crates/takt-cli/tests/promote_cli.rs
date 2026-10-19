@@ -275,6 +275,7 @@ fn emit_run(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Option<&st
                 stop: stop.to_owned(),
                 steps: 1,
                 tokens,
+                completed: None,
             },
         ),
     ] {

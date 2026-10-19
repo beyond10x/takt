@@ -439,6 +439,9 @@ const EXIT_APPROVAL: u8 = 4;
 const EXIT_ERROR: u8 = 5;
 /// Exit 6: the run waited on the forge and its budget ended first, `stopped: Waiting`.
 const EXIT_WAITING: u8 = 6;
+/// Exit 7: no step can move the case, a claim left decided only by an action the run has no
+/// performer for, `stopped: Unperformable`.
+const EXIT_UNPERFORMABLE: u8 = 7;
 
 /// What `takt run --help` says about the exit codes; each line opens with its code.
 const EXIT_CODES: &str = "Exit codes:
@@ -448,7 +451,8 @@ const EXIT_CODES: &str = "Exit codes:
   3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
-  6  stopped: Waiting (<actions>; <the budget spent> or no step or hour budget): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; nothing recorded for it, the case stays open and the next run resumes it";
+  6  stopped: Waiting (<actions>; <the budget spent> or no step or hour budget): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; nothing recorded for it, the case stays open and the next run resumes it
+  7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open";
 
 /// What `takt scenario run --help` says about the exit codes: [`EXIT_CODES`] without `frontier:
 /// nothing ready`, which only `takt run` prints; a scenario whose story is not ready is exit 1.
@@ -459,7 +463,8 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
-  6  stopped: Waiting (<actions>; <the budget spent> or no step or hour budget): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case";
+  6  stopped: Waiting (<actions>; <the budget spent> or no step or hour budget): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
+  7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open";
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -486,6 +491,7 @@ fn main() -> ExitCode {
 /// | 4 | `ApprovalRequired`: `takt approve` is the next step |
 /// | 5 | `stopped: error:`, the run ended on an error once its case was open: a forge that refused, a validator or the harness that failed |
 /// | 6 | `Waiting`: the run waited on the forge until its budget ended; the next run resumes the case |
+/// | 7 | `Unperformable`: no step can move the case; a claim left is decided only by an action the run has no performer for |
 fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
     match cli.command {
         Commands::Protocols => {
@@ -1227,13 +1233,15 @@ fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
 /// Runs the open case `run` to its stop, `forge_line` said first, the run given this binary's
 /// [`REVISION`] to record; the exit code. An error the loop ends on once the case is open, a
 /// forge that refused the pull request among them, is a stop like any other: one line on
-/// stdout, its own code.
+/// stdout, its own code. Every run the CLI makes stops `Unperformable` when no step can move
+/// its case ([`Run::stop_when_unperformable`], off in the library until a caller turns it on).
 fn finish(run: &mut Run<'_>, forge_line: Option<&str>, out: &mut dyn Write) -> Result<u8> {
     if let Some(line) = forge_line {
         writeln!(out, "{line}")?;
     }
     run.binary = Some(REVISION.to_owned());
     run.take_default_gate();
+    run.stop_when_unperformable();
     let stop = match run.run(out) {
         Ok(stop) => stop,
         Err(error) => {
@@ -1259,6 +1267,7 @@ fn finish(run: &mut Run<'_>, forge_line: Option<&str>, out: &mut dyn Write) -> R
         Stop::Completed(_) => EXIT_DONE,
         Stop::ApprovalRequired(_) => EXIT_APPROVAL,
         Stop::Waiting { .. } => EXIT_WAITING,
+        Stop::Unperformable { .. } => EXIT_UNPERFORMABLE,
         _ => EXIT_STOPPED,
     })
 }
@@ -2068,8 +2077,8 @@ mod tests {
 
     /// Without a gates document no validator owns `gate.run`, and it only reads: a harness that
     /// keeps no state, `--harness none` among them, is not offered it
-    /// (story:no-inspect-for-stateless-harness). Nothing else is left, so the run stops
-    /// `NothingAdmissible`, exit 3, with no step taken.
+    /// (story:no-inspect-for-stateless-harness). `gate.green` is decided only by it, so the run
+    /// stops `Unperformable` naming the claim and the gates document, exit 7, with no step taken.
     #[test]
     fn without_a_gates_document_gate_run_is_left_to_no_one() {
         let repo = gated_repository("gates-none", None);
@@ -2088,10 +2097,12 @@ mod tests {
             "--test-cmd",
             "true",
         ]);
-        assert_eq!(code, 3, "{out}");
+        assert_eq!(code, 7, "{out}");
         assert!(out.contains("frontier: gate.run (admissible)"), "{out}");
         assert!(
-            out.contains("stopped: NothingAdmissible; steps 0, tokens 0"),
+            out.contains(
+                "stopped: Unperformable (gate.green; nothing performs it without the gates document); steps 0, tokens 0"
+            ),
             "{out}"
         );
     }
@@ -2125,11 +2136,10 @@ mod tests {
     }
 
     /// Without `--forge` and without an origin, neither forge validator is registered: no
-    /// `forge:` line, no `pr.open` or `ci.read` step. After `tests.run` the none harness hands the
-    /// work over as it stands, `change.read` finds nothing a merge into the base would change, so
-    /// `pr.open` stays blocked, and the edits are the judgement steps left (`gate.run` and
-    /// `ci.read` only read and record no choice, and are not offered to a harness that keeps no
-    /// state).
+    /// `forge:` line, no `pr.open` or `ci.read` step. The repository has no gates document
+    /// either: after `tests.run` nothing offered moves an open obligation and `gate.run`, which
+    /// alone decides `gate.green`, has no performer, so the run stops `Unperformable`, exit 7,
+    /// before any judgement step.
     #[test]
     fn without_an_origin_the_forge_is_none_and_no_forge_step_is_taken() {
         let repo = gated_repository("forge-default-none", None);
@@ -2138,16 +2148,15 @@ mod tests {
             "default-none",
             &[],
         ));
-        assert_eq!(code, 5, "a judgement step is left: {out}");
+        assert_eq!(code, 7, "{out}");
         assert!(!out.contains("forge:"), "{out}");
         assert!(!out.contains("pr.open {}"), "{out}");
         assert!(!out.contains("ci.read {}"), "{out}");
-        assert!(out.contains("step 2: change.handover (none)"), "{out}");
-        assert!(out.contains("evidence: change_record none"), "{out}");
+        assert!(!out.contains("(none)"), "a judgement step: {out}");
         assert!(out.contains("step 1: tests.run {}"), "{out}");
         assert!(
             out.contains(
-                "stopped: error: step 4: the harness failed; everything the step changed was discarded: no harness: a judgement step among implementation.edit, tests.write is left"
+                "stopped: Unperformable (gate.green; nothing performs it without the gates document); steps 1, tokens 0"
             ),
             "{out}"
         );
@@ -2165,15 +2174,14 @@ mod tests {
             "none",
             &["--forge", "none"],
         ));
-        assert_eq!(code, 5, "a judgement step is left: {out}");
+        assert_eq!(code, 7, "{out}");
         assert!(!out.contains("forge:"), "{out}");
         assert!(!out.contains("pr.open {}"), "{out}");
         assert!(!out.contains("ci.read {}"), "{out}");
-        assert!(out.contains("step 2: change.handover (none)"), "{out}");
-        assert!(out.contains("evidence: change_record none"), "{out}");
+        assert!(!out.contains("(none)"), "a judgement step: {out}");
         assert!(
             out.contains(
-                "stopped: error: step 4: the harness failed; everything the step changed was discarded: no harness: a judgement step among implementation.edit, tests.write is left"
+                "stopped: Unperformable (gate.green; nothing performs it without the gates document); steps 1, tokens 0"
             ),
             "{out}"
         );

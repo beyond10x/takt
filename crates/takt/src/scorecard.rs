@@ -129,13 +129,30 @@ pub struct Row {
     /// the line names none.
     #[serde(default)]
     pub opened_binary: Option<String>,
+    /// Whether the run's stop is a completion, as its stop line records it, written by the
+    /// binary that stopped; none for a line from before it had the field, a run with no stop,
+    /// and a file saved before it had the field, which are scored by the stops this binary
+    /// knows ([`NOT_COMPLETED`]).
+    #[serde(default)]
+    pub completed: Option<bool>,
 }
 
 impl Row {
     /// Whether the run's own stop claims a completion while its held-out check did not pass.
     #[must_use]
     pub fn disagrees(&self) -> bool {
-        self.held_out.as_ref().is_some_and(|held| !held.passed) && is_completed(&self.stop)
+        self.held_out.as_ref().is_some_and(|held| !held.passed)
+            && self.completed.unwrap_or_else(|| is_completed(&self.stop))
+    }
+
+    /// Whether the run's outcome is a completion: its stop line's own word when the outcome is
+    /// its stop, else (a held-out check that did not pass, an error, no stop) by the outcomes
+    /// this binary knows.
+    fn completes(&self) -> bool {
+        match self.completed {
+            Some(completed) if self.outcome == self.stop => completed,
+            _ => is_completed(&self.outcome),
+        }
     }
 }
 
@@ -263,7 +280,7 @@ impl Case {
         let outcome = runs
             .iter()
             .enumerate()
-            .filter(|(_, run)| is_completed(&run.outcome))
+            .filter(|(_, run)| run.completes())
             .max_by_key(|(n, run)| (rank(&run.outcome), *n))
             .map_or(&last.outcome, |(_, run)| &run.outcome)
             .clone();
@@ -369,23 +386,25 @@ pub fn rank(outcome: &str) -> u8 {
     }
 }
 
-/// The outcomes that are no completion: a stop's kind, an error, no stop, a held-out check
+/// The outcomes that are no completion: every stop's kind but `Completed`'s
+/// ([`crate::run::STOP_KINDS`], which lists every variant), an error, no stop, a held-out check
 /// that did not pass. Any other outcome is one a `Completed` stop named.
-const NOT_COMPLETED: [&str; 11] = [
-    "ApprovalRequired",
-    "Waiting",
-    "Iterations",
-    "Hours",
-    "Tokens",
-    "NothingAdmissible",
-    "StepRefused",
-    "NoProgress",
-    "error",
-    "unfinished",
-    FAILED,
-];
+const NOT_COMPLETED: [&str; crate::run::STOP_KINDS.len() + 3] = {
+    let mut all = [""; crate::run::STOP_KINDS.len() + 3];
+    let mut at = 0;
+    while at < crate::run::STOP_KINDS.len() {
+        all[at] = crate::run::STOP_KINDS[at];
+        at += 1;
+    }
+    all[at] = "error";
+    all[at + 1] = "unfinished";
+    all[at + 2] = FAILED;
+    all
+};
 
-/// Whether `outcome` is one a `Completed` stop named: the case completed with it.
+/// Whether `outcome` is one a `Completed` stop named: the case completed with it. Read for a run
+/// whose stop line does not say ([`Row::completed`]): a kind not in [`NOT_COMPLETED`] counts as
+/// a completion there.
 fn is_completed(outcome: &str) -> bool {
     !NOT_COMPLETED.contains(&outcome)
 }
@@ -449,6 +468,7 @@ struct Span {
     errors: u64,
     saturated: bool,
     stop: Option<String>,
+    completed: Option<bool>,
     binary: Option<String>,
 }
 
@@ -489,6 +509,7 @@ impl Span {
             saturated: self.saturated || too_long,
             binary: None,
             opened_binary: self.binary,
+            completed: self.stop.and(self.completed),
         }
     }
 }
@@ -531,7 +552,10 @@ fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
             ),
             Some("refusal") => count(&mut span.refusals, 1, &mut span.saturated),
             Some("error") => count(&mut span.errors, 1, &mut span.saturated),
-            Some("stop") => span.stop = Some(line["stop"].as_str().unwrap_or("").to_owned()),
+            Some("stop") => {
+                span.stop = Some(line["stop"].as_str().unwrap_or("").to_owned());
+                span.completed = line["completed"].as_bool();
+            }
             _ => {}
         }
     }
