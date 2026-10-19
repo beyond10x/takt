@@ -6,10 +6,12 @@
 //! binary names it, confined in bubblewrap so the build reads nothing of the caller's home or
 //! environment and writes nothing outside its own build directory, runs the predicate on a
 //! fresh checkout of the scenario's seed, or of the repository and seed the predicate names
-//! itself, and prints `reproduced`, `not_reproduced` (only when the command ended with the exit
-//! the predicate names as the healthy one) or `error`, the results of the `scenario_result`
-//! evidence kind (`protocols/self-improvement/1.yaml`). The scratch takt is a workspace with no
-//! dependencies, so each build takes seconds; nothing reaches a network.
+//! itself, with every host path read-only but its own run directory, the caller's home hidden
+//! and a PID namespace of its own, and prints `reproduced`, `not_reproduced` (only when the
+//! command ended with the exit the predicate names as the healthy one) or `error`, the results
+//! of the `scenario_result` evidence kind (`protocols/self-improvement/1.yaml`). The scratch
+//! takt is a workspace with no dependencies, so each build takes seconds; nothing reaches a
+//! network.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -875,7 +877,7 @@ fn main() {
     attempt("other-build", std::fs::write("@OTHER@/takt", "build.rs\n"), &mut out);
     attempt("other-build-planted", std::fs::write("@OTHER@/planted", "build.rs\n"), &mut out);
     for (name, value) in std::env::vars() {
-        writeln!(out, "env {name}={value}").unwrap();
+        writeln!(out, "env {name}={value:?}").unwrap();
     }
     let dir = std::env::var("OUT_DIR").unwrap();
     std::fs::write(format!("{dir}/probe.txt"), out).unwrap();
@@ -1137,8 +1139,9 @@ fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
 
 /// A bubblewrap that forks the command's process and then fails its mount setup never runs the
 /// command, and its own exit 1 is not the command's: a predicate naming 1 as the defect's exit,
-/// or as the healthy one, gets no result, and the check names bubblewrap's error. The status
-/// file names the command's pid in both cases; only its `exit-code` line says the command ran.
+/// or as the healthy one, gets no result, and the check names bubblewrap's error. Bubblewrap's
+/// status names the command's pid in both cases; only an `exit-code` line, its last, says that
+/// bubblewrap ran the command to its end.
 #[test]
 fn a_bubblewrap_that_fails_before_the_command_runs_gives_no_result() {
     use std::os::unix::fs::PermissionsExt;
@@ -1191,6 +1194,179 @@ fn a_bubblewrap_that_fails_before_the_command_runs_gives_no_result() {
             "{key}: a result was recorded"
         );
     }
+}
+
+/// A process a predicate leaves running: it leaves `started` in its own run directory
+/// (`$HOME/..`), then waits for another check's bubblewrap status file holding the command's
+/// pid and no exit, appends `{ "exit-code": 1 }` to it and ends; it gives up after 30 seconds.
+/// Half a second in, it leaves `alive` in its own run directory.
+const STALE: &str = r#"own=$(dirname "$HOME")
+runs=$(dirname "$own")
+: >"$own/started"
+i=0
+while [ "$i" -lt 600 ]; do
+    [ "$i" -eq 10 ] && : >"$own/alive"
+    for f in "$runs"/*/bwrap-status; do
+        [ -f "$f" ] && [ "$f" != "$own/bwrap-status" ] || continue
+        grep -q exit-code "$f" && continue
+        grep -q child-pid "$f" || continue
+        printf '{ "exit-code": 1 }\n' >>"$f"
+        exit 0
+    done
+    sleep 0.05
+    i=$((i + 1))
+done
+"#;
+
+/// story:check-finding-run-step-confined, the review's finding A: a process one check's
+/// predicate leaves running dies with that check (the command runs in a PID namespace of its
+/// own), and bubblewrap's status reaches the check through a pipe, never a file another check's
+/// process can append to. The next check, whose bubblewrap fails its mount setup after a
+/// second's delay and so never runs its command, gives no result, though its predicate names
+/// the 1 bubblewrap exits with. The command waits until the process it leaves has started, and
+/// the caller's home is one of the scratch's, so the process's script is in sight.
+#[test]
+fn a_process_left_running_by_one_check_cannot_change_the_next_checks_result() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let world = world("stale-process");
+    let (_, env) = callers_home(&world);
+    let env: Vec<(&str, &str)> = env
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
+    let stale = world.outer.0.join("stale.sh");
+    write(&stale, STALE);
+    let filed = file(
+        &world.takt,
+        "leaves-a-process",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version; sh {} </dev/null >/dev/null 2>&1 & i=0; while [ ! -e \"$HOME/../started\" ] && [ $i -lt 500 ]; do sleep 0.01; i=$((i + 1)); done\nexit: 0\noutput: takt 0.1.0\nsource: {SOURCE}\n",
+            stale.display()
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let filed = file(
+        &world.takt,
+        "exit-one",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version\nexit: 1\nsource: {SOURCE}\n"
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let first = world.check("story:leaves-a-process", &world.defect, &env);
+    assert_eq!(
+        String::from_utf8_lossy(&first.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&first)
+    );
+    let real = Command::new("sh")
+        .args(["-c", "command -v bwrap"])
+        .output()
+        .expect("sh runs");
+    let real = String::from_utf8_lossy(&real.stdout).trim().to_owned();
+    assert!(!real.is_empty(), "bubblewrap is on PATH");
+    let bin = world.outer.0.join("bin-slow-failing-bwrap");
+    write(
+        &bin.join("bwrap"),
+        &format!(
+            "#!/bin/sh\ncase \" $* \" in *' --json-status-fd '*) {real} --ro-bind /nonexistent-check-finding /srv/absent \"$@\"; s=$?; sleep 1; exit $s;; esac\nexec {real} \"$@\"\n"
+        ),
+    );
+    fs::set_permissions(bin.join("bwrap"), fs::Permissions::from_mode(0o755)).expect("executable");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").expect("a PATH")
+    );
+    let mut with_path = env.clone();
+    with_path.push(("PATH", &path));
+    let second = world.check("story:exit-one", &world.defect, &with_path);
+    assert_eq!(second.status.code(), Some(1), "{}", shown(&second));
+    assert!(second.stdout.is_empty(), "{}", shown(&second));
+    assert!(
+        String::from_utf8_lossy(&second.stderr)
+            .contains("bwrap: Can't find source path /nonexistent-check-finding"),
+        "the check names bubblewrap's error: {}",
+        shown(&second)
+    );
+    assert!(
+        record(&first).join("started").exists(),
+        "the first check's predicate started no process"
+    );
+    assert!(
+        !record(&first).join("alive").exists(),
+        "the process the first check's predicate left was still running a second later"
+    );
+}
+
+/// The command's exit is bubblewrap's only when the last line bubblewrap writes on its status
+/// pipe is `{ "exit-code": N }` and N is the status bubblewrap exited with. A bubblewrap that
+/// exits 1 after its command ended 0 gives no result for a predicate naming 1 (the review's
+/// mutant M8b, the line read but not compared, takes the 1 as the command's); an `exit-code`
+/// line written ahead of bubblewrap's own is not the one read (M8d, the first line for the
+/// last, reads it).
+#[test]
+fn only_the_last_line_bubblewrap_writes_gives_the_commands_exit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let world = world("bwrap-last-word");
+    let real = Command::new("sh")
+        .args(["-c", "command -v bwrap"])
+        .output()
+        .expect("sh runs");
+    let real = String::from_utf8_lossy(&real.stdout).trim().to_owned();
+    assert!(!real.is_empty(), "bubblewrap is on PATH");
+    let filed = file(
+        &world.takt,
+        "exit-one",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version\nexit: 1\nsource: {SOURCE}\n"
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let wrapper = |name: &str, predicate_call: &str| {
+        let bin = world.outer.0.join(name);
+        write(
+            &bin.join("bwrap"),
+            &format!(
+                "#!/bin/sh\ncase \" $* \" in *' --json-status-fd '*) {predicate_call};; esac\nexec {real} \"$@\"\n"
+            ),
+        );
+        fs::set_permissions(bin.join("bwrap"), fs::Permissions::from_mode(0o755))
+            .expect("executable");
+        format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").expect("a PATH")
+        )
+    };
+
+    let path = wrapper("bin-exits-otherwise", &format!("{real} \"$@\"; exit 1"));
+    let output = world.check("story:exit-one", &world.defect, &[("PATH", &path)]);
+    assert_eq!(output.status.code(), Some(1), "M8b: {}", shown(&output));
+    assert!(output.stdout.is_empty(), "M8b: {}", shown(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("(exit 1, the command ended 0)"),
+        "M8b: the check names both statuses: {}",
+        shown(&output)
+    );
+
+    let path = wrapper(
+        "bin-leading-line",
+        &format!("printf '{{ \"exit-code\": 1 }}\\n' >&3; exec {real} \"$@\""),
+    );
+    let output = world.check("story:exit-one", &world.defect, &[("PATH", &path)]);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "not_reproduced\n",
+        "M8d: {}",
+        shown(&output)
+    );
 }
 
 /// The binary kept for a revision is the one cargo reports building, never a file the revision
@@ -1313,6 +1489,160 @@ fn the_predicate_cannot_write_the_callers_protocol_sources() {
     assert!(
         fs::symlink_metadata(&sources).is_ok_and(|meta| meta.is_dir()),
         "the caller's protocol sources are still a directory"
+    );
+}
+
+/// The caller's home a check is run with, holding a planted secret and a `.cache`; the
+/// variables that let the check find the toolchain and the registry caches without it.
+fn callers_home(world: &World) -> (PathBuf, Vec<(&'static str, String)>) {
+    let real_home = std::env::var("HOME").expect("HOME");
+    let rustup = std::env::var("RUSTUP_HOME").unwrap_or_else(|_| format!("{real_home}/.rustup"));
+    let cargo = std::env::var("CARGO_HOME").unwrap_or_else(|_| format!("{real_home}/.cargo"));
+    let home = world.outer.0.join("callers-home");
+    write(&home.join(".secret"), "PLANTED-HOME-SECRET\n");
+    fs::create_dir_all(home.join(".cache")).expect("a directory");
+    let env = vec![
+        ("HOME", home.to_str().expect("UTF-8").to_owned()),
+        ("RUSTUP_HOME", rustup),
+        ("CARGO_HOME", cargo),
+    ];
+    (home, env)
+}
+
+/// What a predicate tries on the host, by real path: `@HOME@` the caller's home, `@REPO@` this
+/// repository, `@SOURCES@` the caller's protocol sources. Each write is recorded as `done` or
+/// `refused: <the shell's error>`; the secret planted in the caller's home as `read` or
+/// `refused`. Run from the command line of a predicate as `sh <this file>`.
+const RUN_PROBE: &str = r#"attempt() {
+    if { printf 'written by the predicate\n' >"$2"; } 2>"$HOME/attempt.err"; then
+        echo "$1: done"
+    else
+        echo "$1: refused: $(cat "$HOME/attempt.err")"
+    fi
+}
+attempt callers-cache "@HOME@/.cache/canary"
+attempt repository "@REPO@/planted"
+attempt repository-file "@REPO@/Cargo.toml"
+attempt kept-binary "$TAKT"
+attempt kept-build "${TAKT%/takt}/planted"
+attempt protocol-source "@SOURCES@/abc/protocol.yaml"
+if grep -q PLANTED "@HOME@/.secret" 2>/dev/null; then
+    echo "callers-home-secret: read"
+else
+    echo "callers-home-secret: refused"
+fi
+echo probe-ran
+"#;
+
+/// story:check-finding-run-step-confined: the predicate's command runs with every host path
+/// read-only but the check's own directory, and the caller's home hidden. In the default
+/// layout (no XDG_CACHE_HOME, the cache under the caller's home), a command that writes into
+/// the caller's `~/.cache`, this repository, the kept `builds/<sha>/takt` beside a file of its
+/// own, and a protocol source by its real path is refused with a read-only error on each, and
+/// one that reads a secret planted in the caller's home does not see it; the check still gives
+/// its result.
+#[test]
+fn the_predicate_writes_no_host_path_and_reads_nothing_of_the_callers_home() {
+    let world = world("run-confined");
+    let (home, env) = callers_home(&world);
+    let sources = home.join(".cache/aep/protocol-sources");
+    let original = "kind: protocol\n";
+    write(&sources.join("abc/protocol.yaml"), original);
+    let manifest = fs::read(world.takt.join("Cargo.toml")).expect("the repository's manifest");
+    let probe = world.outer.0.join("run-probe.sh");
+    write(
+        &probe,
+        &RUN_PROBE
+            .replace("@HOME@", home.to_str().expect("UTF-8"))
+            .replace("@REPO@", world.takt.to_str().expect("UTF-8"))
+            .replace("@SOURCES@", sources.to_str().expect("UTF-8")),
+    );
+    let filed = file(
+        &world.takt,
+        "run-probe",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; sh {}\nexit: 0\noutput: probe-ran\nsource: {SOURCE}\n",
+            probe.display()
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = Command::new(Path::new(SCRIPTS).join("check-finding"))
+        .args([
+            "--scenarios",
+            world.scenarios.to_str().expect("UTF-8"),
+            "story:run-probe",
+            &world.defect,
+        ])
+        .current_dir(&world.takt)
+        .env_remove("XDG_CACHE_HOME")
+        .envs(env.iter().map(|(name, value)| (*name, value.as_str())))
+        .output()
+        .expect("check-finding runs");
+    let ran = fs::read_to_string(record(&output).join("output")).unwrap_or_default();
+    let builds = home
+        .join(".cache/takt/check-finding/builds")
+        .join(&world.defect);
+    assert!(
+        !home.join(".cache/canary").exists(),
+        "the predicate wrote into the caller's ~/.cache:\n{ran}"
+    );
+    assert!(
+        !world.takt.join("planted").exists(),
+        "the predicate wrote into the repository:\n{ran}"
+    );
+    assert_eq!(
+        fs::read(world.takt.join("Cargo.toml")).expect("the repository's manifest"),
+        manifest,
+        "the predicate changed a file of the repository:\n{ran}"
+    );
+    let version = Command::new(builds.join("takt"))
+        .arg("--version")
+        .output()
+        .map(|version| String::from_utf8_lossy(&version.stdout).into_owned())
+        .unwrap_or_default();
+    assert_eq!(
+        version,
+        format!("takt 0.1.0 ({})\n", world.defect),
+        "the predicate overwrote the kept binary:\n{ran}"
+    );
+    assert!(
+        !builds.join("planted").exists(),
+        "the predicate wrote beside the kept binary:\n{ran}"
+    );
+    assert_eq!(
+        fs::read_to_string(sources.join("abc/protocol.yaml")).expect("the caller's source"),
+        original,
+        "the predicate wrote a protocol source by its real path:\n{ran}"
+    );
+    for attempt in [
+        "callers-cache",
+        "repository",
+        "repository-file",
+        "kept-binary",
+        "kept-build",
+        "protocol-source",
+    ] {
+        let line = ran
+            .lines()
+            .find(|line| line.starts_with(&format!("{attempt}: ")))
+            .unwrap_or_default();
+        assert!(
+            line.starts_with(&format!("{attempt}: refused: "))
+                && line.contains("Read-only file system"),
+            "{attempt} gets a read-only error:\n{ran}"
+        );
+    }
+    assert!(
+        ran.lines()
+            .any(|line| line == "callers-home-secret: refused"),
+        "the predicate read the caller's home:\n{ran}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "the check still gives its result: {}",
+        shown(&output)
     );
 }
 

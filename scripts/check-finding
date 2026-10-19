@@ -60,14 +60,19 @@
 # PATH, LANG, TAKT, SCENARIO, TEST and HOME, and HOME is a fresh directory of the check's own,
 # never the caller's, so no credential of the caller reaches it, neither from the environment
 # nor from a file a tool reads under HOME (git's credential store, a CLI's login). The command
-# runs under bubblewrap with the whole filesystem bound as it is and, over it, the caller's
-# cache of the public protocol sources `aep` reads bound read-only at the home's
-# `.cache/aep/protocol-sources`, so `aep` needs no network there and a write through it fails;
-# bubblewrap adds no other isolation (network, processes and every other path as before), and
-# without it no predicate runs. The command still runs as the caller's user: this is
-# no sandbox against a path it names outright. The script's own git reads and writes name their
-# repository by path, so a `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE` of the caller (a
-# hook's environment) is unset before any of them.
+# runs under bubblewrap with every host path read-only but the check's own run directory, which
+# holds the clone and the predicate's home: the repository, the kept `builds/<sha>/takt` and
+# the caller's protocol sources by their real paths cannot be written, and the caller's home,
+# the directory HOME names, is an empty read-only directory there, so nothing under it is read
+# or written but what the check binds into it; devices, /proc and /tmp are its own. The caller's
+# cache of the public protocol sources `aep` reads is bound read-only at the home's
+# `.cache/aep/protocol-sources`, so `aep` needs no network there. The command runs in a PID
+# namespace of its own, so every process it leaves is killed when it ends, and bubblewrap's
+# status reaches the script on a pipe, so no process of an earlier check reaches this one's
+# result. It keeps the network and the caller's user, and without bubblewrap no predicate
+# runs. The script's own git reads and writes name their repository by path, so a `GIT_DIR`,
+# `GIT_WORK_TREE` or `GIT_INDEX_FILE` of the caller (a hook's environment) is unset before any
+# of them.
 # The cache is `$XDG_CACHE_HOME/takt/check-finding`, `~/.cache/takt/check-finding` without it:
 # `builds/<sha>/takt` and `builds/<sha>/revision`, and one directory per check under `runs/`
 # holding the finding, the clone, the predicate's home, the command's output and the result,
@@ -83,8 +88,9 @@
 # started, a flag rejected, or any status the predicate does not name as the healthy one. An
 # `error` verifies nothing. All three exit 0. A check that cannot run its predicate (no such
 # finding, a predicate that does not parse, a revision that names no commit, a scenario not
-# declared, no bubblewrap or no toolchain for a build, a build that fails, a bubblewrap that
-# did not run the command to its end, its error named on standard error, a command past
+# declared, no bubblewrap or no toolchain for a build, a build that fails, a HOME that names
+# no directory to hide, a bubblewrap that did not run the command to its end, its error named
+# on standard error, its status pipe's last line not the exit it gave, a command past
 # CHECK_FINDING_TIMEOUT seconds, 900 by default) prints nothing on standard output and exits 1;
 # a usage error, a CHECK_FINDING_TIMEOUT that is no whole number of seconds among them, exits 64.
 set -euo pipefail
@@ -408,25 +414,42 @@ clone_git -C "$clone" config user.email check-finding@example.invalid
 say "$finding: $where, takt at ${sha:0:12}: $command"
 environment=(PATH="$PATH" HOME="$home" LANG="${LANG:-C.UTF-8}" TAKT="$takt" SCENARIO="$clone")
 [[ -z $test_command ]] || environment+=(TEST="$test_command")
-# Under bubblewrap only for the bind: the whole filesystem bound as it is, devices included
-# (`--dev-bind / /`), then the protocol sources read-only over it; no namespace but the mount
-# namespace bwrap needs for that, so the command reaches the network, the processes and every
-# path it reached before, as the caller's user. `--die-with-parent`, so the command dies with
-# bwrap when `timeout` kills it. bwrap clears nothing of the environment `env -i` gives it.
-# Its status file names the command's pid as soon as bwrap forked, before its mount setup, so
-# that line proves nothing; the `exit-code` line it writes once the command ended does. Without
-# it, or with one that is not the status bwrap exited with, the exit is bwrap's own (a mount
-# setup that failed exits 1, the status a predicate may name), not the command's, and there is
-# no result.
+# The caller's home, hidden from the command: the directory HOME names, by its real path. A
+# HOME that names no directory, or names the root, is no home to hide, and nothing runs.
+callers_home=$(cd "${HOME:-}" 2>/dev/null && pwd -P) && [[ -n ${HOME:-} && $callers_home != / ]] ||
+    fail "HOME=${HOME:-} names no directory other than the root; the command runs with the caller's home hidden, never without"
+# The run step's sandbox. Every host path read-only (`--ro-bind / /`), but the check's own run
+# directory (the clone, the predicate's home, the command's output), bound writable at its
+# path; devices, /proc and /tmp of its own; the caller's home an empty read-only directory
+# (a tmpfs, remounted read-only once the paths below are bound into it), so nothing under it
+# is read and a write there fails; the kept binary and the caller's protocol sources bound
+# read-only at the paths they have on the host, which may lie under that home, and the
+# sources once more at the predicate's home (`binds`). Its own PID namespace
+# (`--unshare-pid`): when the command ends, bwrap's init, pid 1 there, ends, and the kernel
+# kills every process the command left, so none outlives the check. The network and the
+# caller's user stay as they are. `--die-with-parent`, so the command dies with bwrap when
+# `timeout` kills it. bwrap clears nothing of the environment `env -i` gives it.
+sandbox=("$bwrap" --die-with-parent --unshare-pid --json-status-fd 3
+    --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --tmpfs "$callers_home"
+    --bind "$run" "$run" --ro-bind "$takt" "$takt")
+[[ ! -d $sources ]] || sandbox+=(--ro-bind "$sources" "$sources")
+sandbox+=("${binds[@]}" --remount-ro "$callers_home" --chdir "$clone")
+# bwrap's status reaches the check on a pipe (fd 3, standard output of the substitution),
+# never a file on disk another process could write; bwrap keeps that descriptor to its own
+# process outside the namespace (bubblewrap 0.12.0: neither the command nor pid 1 holds it).
+# It writes `{ "child-pid": … }` once it has forked, before its mount setup, and its last line,
+# `{ "exit-code": N }`, only once the setup held, `sh` started and then ended with N: a mount
+# that fails, or an exec that fails, leaves no such line and exits 1, a status a predicate may
+# name. So the command's exit is bwrap's status only when the last line is `exit-code` and N
+# is that status; else bwrap did not run the command to its end, and there is no result. N
+# says how `sh -c` ended, nothing of what the command did on the way.
 set +e
-(cd "$clone" && env -i "${environment[@]}" timeout --kill-after=10 "$limit" \
-    "$bwrap" --die-with-parent --json-status-fd 3 --dev-bind / / "${binds[@]}" --chdir "$clone" \
-    -- sh -c "$command" 3>"$run/bwrap-status") \
-    >"$run/output" 2>&1 </dev/null
+reported=$(cd "$clone" && env -i "${environment[@]}" timeout --kill-after=10 "$limit" \
+    "${sandbox[@]}" -- sh -c "$command" 3>&1 >"$run/output" 2>&1 </dev/null)
 status=$?
 set -e
 ((status != 124 && status != 137)) || fail "the command ran past $limit seconds"
-ended=$(sed -n 's/^{ *"exit-code": *\([0-9][0-9]*\) *}$/\1/p' "$run/bwrap-status" | tail -n 1)
+ended=$(printf '%s\n' "$reported" | tail -n 1 | sed -n 's/^{ *"exit-code": *\([0-9][0-9]*\) *}$/\1/p')
 if [[ -z $ended ]] || ((10#$ended != status)); then
     error=$({ grep '^bwrap: ' "$run/output" || true; } | tail -n 1)
     fail "bubblewrap did not run the command to its end (exit $status${ended:+, the command ended $ended}): ${error:-bubblewrap printed no error}"

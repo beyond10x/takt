@@ -1468,7 +1468,7 @@ types:
   # crash, a flag rejected, a command not found) or the predicate's `exit` without its `output`,
   # which makes no claim true.
   # read from: protocols/self-improvement/1.yaml:45-50
-  # read from: scripts/check-finding:440-454
+  # read from: scripts/check-finding:463-477
   - name: takt.work.ScenarioResult
     kind: enum
     variants: [reproduced, not_reproduced, error]
@@ -3149,7 +3149,11 @@ entities:
   # `aep plan artifact new`, refusing a key the store holds and a predicate that does not parse,
   # with nothing written; `scripts/check-finding` runs the predicate in a clone of the scenario's
   # seed, or of the repository at its seed, with a takt built from a given revision in a checkout
-  # of it, so the binary names that revision.
+  # of it, so the binary names that revision. The predicate's command runs under bubblewrap
+  # with every host path read-only but the check's own run directory, the caller's home hidden,
+  # in a PID namespace of its own, so no process it leaves outlives it; bubblewrap's status
+  # reaches the check on a pipe, and its exit is the command's only when its last line is the
+  # `exit-code` of that same status.
   # read from: .engineering/planning/design/recursive-self-improvement.md:81-86
   # read from: .engineering/planning/story/finding-intake.md (§ Domain relations)
   # read from: .engineering/planning/story/finding-on-any-repository.md (§ Outcome)
@@ -3157,7 +3161,8 @@ entities:
   # read from: scripts/file-finding:11-56
   # read from: scripts/file-finding:117
   # read from: scripts/file-finding:256
-  # read from: scripts/check-finding:184-399
+  # read from: scripts/check-finding:190-405
+  # read from: scripts/check-finding:432-453
   # One predicate on one scenario or one repository: a body with a second `expected_before`
   # block, a block that gives a key twice, or one that gives both `scenario` and `repository`, or
   # neither, is malformed and nothing is filed. `seed` and `test` go with `repository` only: a
