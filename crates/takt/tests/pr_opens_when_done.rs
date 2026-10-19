@@ -557,6 +557,30 @@ fn the_built_in_list_is_every_built_in_validator_with_its_own_action_and_kind() 
             Box::new(takt::loop_scorecard::LoopDefinitionCheck),
         ),
         ("LoopCompare", Box::new(takt::loop_scorecard::LoopCompare)),
+        (
+            "FindingFile",
+            Box::new(takt::improvement::FindingFile(
+                takt::improvement::Checking::new(PathBuf::from("/srv/cache")),
+            )),
+        ),
+        (
+            "ScenarioReproduce",
+            Box::new(takt::improvement::ScenarioReproduce(
+                takt::improvement::Checking::new(PathBuf::from("/srv/cache")),
+            )),
+        ),
+        (
+            "ScenarioVerify",
+            Box::new(takt::improvement::ScenarioVerify(
+                takt::improvement::Checking::new(PathBuf::from("/srv/cache")),
+            )),
+        ),
+        (
+            "ScorecardCompare",
+            Box::new(takt::improvement::ScorecardCompare::in_state(Path::new(
+                "/srv/state",
+            ))),
+        ),
     ];
     for (name, instance) in &instances {
         let built_in = takt::validator::BUILT_IN

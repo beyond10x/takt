@@ -1928,6 +1928,46 @@ impl CaseDir {
         Ok(())
     }
 
+    /// Opens an improvement turn, before any step: `finding` at the commit the case's branch
+    /// forked from (its `base_commit`), `baseline` and `promotion` at the promoted baseline (the
+    /// installed binary's revision when the turn opens), `candidate` at the candidate given,
+    /// `story.yaml` naming the finding, and `independence` in `case.yaml` declaring each turn
+    /// validator ([`crate::improvement::PRODUCERS`]) independent on
+    /// [`crate::improvement::INDEPENDENT_ON`]: a validator is no agent run, so its record is
+    /// another run's than the one that delivered the candidate. Nothing else declares
+    /// independence.
+    pub fn open_turn(&mut self, opening: &TurnOpening) -> Result<()> {
+        let Some(base) = Branch::read(&self.dir)?.base_commit else {
+            bail!(
+                "the turn {} pins no base commit, which its finding artifact is",
+                self.id
+            );
+        };
+        for (artifact, revision) in [
+            ("finding", base.as_str()),
+            ("baseline", opening.baseline.as_str()),
+            ("candidate", opening.candidate.as_str()),
+            ("promotion", opening.baseline.as_str()),
+        ] {
+            let entry = self
+                .doc
+                .get_mut("artifacts")
+                .and_then(|a| a.get_mut(artifact))
+                .ok_or_else(|| anyhow!("the case declares no artifact {artifact}"))?;
+            entry["revision"] = revision.into();
+        }
+        let mut independence = serde_yaml_ng::Mapping::new();
+        for producer in crate::improvement::PRODUCERS {
+            independence.insert(
+                producer.into(),
+                vec![crate::improvement::INDEPENDENT_ON].into(),
+            );
+        }
+        self.doc["independence"] = independence.into();
+        self.write()?;
+        self.set_story(&opening.finding)
+    }
+
     /// Moves `artifact` to `revision`; evidence about the old revision no longer applies.
     pub fn set_revision(&mut self, artifact: &str, revision: &str) -> Result<()> {
         let entry = self
@@ -2042,4 +2082,126 @@ impl CaseDir {
         )?;
         Decision::from_json(&json)
     }
+}
+
+/// The protocol of an improvement turn, which opens with its finding, its candidate and the
+/// promoted baseline: `self.improvement/1`.
+pub const TURN_PROTOCOL: &str = "self.improvement/1";
+
+/// The name `takt run` reads a turn's finding from, `--input finding=<story id>`, which the
+/// protocol declares as no case input.
+pub const TURN_FINDING: &str = "finding";
+
+/// The name `takt run` reads a turn's candidate from, `--input candidate=<full commit id>`,
+/// which the protocol declares as no case input.
+pub const TURN_CANDIDATE: &str = "candidate";
+
+/// What an improvement turn opens with, each checked by [`turn_opening`] before anything is
+/// written: the finding it verifies (`story:<key>`), the candidate revision delivered outside
+/// the case, and the baseline, the revision of the latest promotion record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnOpening {
+    /// The finding, `story:<key>`.
+    pub finding: String,
+    /// The candidate, a full commit id.
+    pub candidate: String,
+    /// The baseline, the latest promoted revision.
+    pub baseline: String,
+}
+
+/// Whether `value` is a full commit id: 40 or 64 lower-case hexadecimal digits.
+fn is_full_commit_id(value: &str) -> bool {
+    matches!(value.len(), 40 | 64)
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// What a turn on `tree` opens with, from `--input finding=<story id>` and `--input
+/// candidate=<full commit id>` and the promotion store `store`: the finding a story the planning
+/// store holds at the commit the case forks from (`.engineering/planning/story/<key>.md`), the
+/// candidate a full commit id of a commit `tree` holds, and the baseline the revision of the
+/// store's latest record that is no refusal ([`crate::promotion::baseline`]), a commit `tree`
+/// holds. A missing or wrong value, or a store with no such record, is refused, naming why,
+/// before anything is written. The candidate is delivered outside the case, so it is given here.
+pub fn turn_opening(
+    tree: &Path,
+    finding: Option<&str>,
+    candidate: Option<&str>,
+    store: &Path,
+) -> Result<TurnOpening> {
+    let Some(finding) = finding else {
+        bail!(
+            "{TURN_PROTOCOL} opens with --input {TURN_FINDING}=<story id>, the finding the turn verifies; none was given; nothing was written"
+        );
+    };
+    let Some(path) = crate::improvement::finding_path(finding) else {
+        bail!(
+            "--input {TURN_FINDING}={finding}: a finding is a story of the planning store, `story:<key>`; nothing was written"
+        );
+    };
+    let (_, _, from) = opening_base(tree)?;
+    let at = crate::git::run(
+        tree,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{}^{{commit}}", from.as_deref().unwrap_or("HEAD")),
+        ],
+    )
+    .with_context(|| format!("--input {TURN_FINDING}={finding}: the commit the case forks from"))?;
+    let filed = crate::loop_scorecard::verified_file(tree, &at, &path)
+        .with_context(|| format!("--input {TURN_FINDING}={finding}; nothing was written"))?;
+    if filed.is_none() {
+        bail!(
+            "--input {TURN_FINDING}={finding}: the planning store at {} holds no {path}; file the finding before the turn opens; nothing was written",
+            &at[..8.min(at.len())]
+        );
+    }
+    let Some(candidate) = candidate else {
+        bail!(
+            "{TURN_PROTOCOL} opens with --input {TURN_CANDIDATE}=<full commit id>, the candidate delivered outside the case; none was given; nothing was written"
+        );
+    };
+    let mut history = crate::loop_scorecard::History::open(tree, None)
+        .with_context(|| format!("--input {TURN_CANDIDATE}={candidate}; nothing was written"))?;
+    if !is_full_commit_id(candidate)
+        || history
+            .resolve(candidate)
+            .with_context(|| format!("--input {TURN_CANDIDATE}={candidate}; nothing was written"))?
+            .as_deref()
+            != Some(candidate)
+    {
+        bail!(
+            "--input {TURN_CANDIDATE}={candidate}: a turn's candidate is the full commit id (40 or 64 lower-case hexadecimal digits) of a commit of {}; nothing was written",
+            tree.display()
+        );
+    }
+    let Some(promoted) = crate::promotion::baseline(store, &crate::now())
+        .with_context(|| format!("the promotion store {}", store.display()))?
+    else {
+        bail!(
+            "{TURN_PROTOCOL}: the promotion store {} holds no baseline or promotion record, the turn's baseline; record the installed revision with `takt promote --baseline-only`; nothing was written",
+            store.display()
+        );
+    };
+    let baseline = promoted.revision;
+    if history
+        .resolve(&baseline)
+        .with_context(|| format!("the promoted baseline {baseline}; nothing was written"))?
+        .as_deref()
+        != Some(baseline.as_str())
+    {
+        bail!(
+            "{TURN_PROTOCOL}: the promoted baseline {baseline} ({}) is no commit of {}; nothing was written",
+            store.display(),
+            tree.display()
+        );
+    }
+    Ok(TurnOpening {
+        finding: finding.to_owned(),
+        candidate: candidate.to_owned(),
+        baseline,
+    })
 }
