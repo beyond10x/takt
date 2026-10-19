@@ -532,6 +532,20 @@ fn help_lists_the_exit_codes() {
     }
 }
 
+/// story:scorecard-help-names-the-held-out-check: the help names the held-out check beside the
+/// record as where a scenario run's outcome is read from, and no longer says `events.jsonl` only.
+#[test]
+fn help_names_the_held_out_check_as_a_scenario_runs_outcome() {
+    let (code, text, stderr) = takt(&["scorecard", "--help"]);
+    assert_eq!(code, 0, "{stderr}");
+    let help = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(!help.contains("events.jsonl` only"), "{text}");
+    assert!(
+        help.contains("read from the case's `events.jsonl` and, for a scenario run's outcome, from the held-out check beside it"),
+        "{text}"
+    );
+}
+
 /// story:scorecard-against-needs-the-trials: against a saved 5/5 baseline under the default
 /// rule, a candidate with one case (outcome error) gets no verdict: the scenario is printed as
 /// `too few cases (1 of 5)` and the command exits non-zero, as promotion refuses; with five
