@@ -125,7 +125,8 @@ enum Judged {
 /// tests ([`crate::run::manifest_build_changes`]) and of `pyproject.toml`'s pytest tables, the
 /// surface extended by the repository's own list ([`crate::run::JUDGE_LIST`]) read at the base,
 /// which records nothing when it does not parse, and by the caller's folded globs `extra`; with
-/// `lints`, the lint tables of every cargo manifest besides ([`lint_changes`]). A change no step
+/// `gate`, the tool configuration by name, a link there included ([`is_tool_config`]), and the
+/// lint tables of every cargo manifest ([`lint_changes`]) besides. A change no step
 /// could make, because the step guard refuses it, but one that reached the branch by another
 /// route (a commit made outside the loop) would decide the verdict all the same. The store is
 /// guarded at the step too, but it decides no test and no check, and takt itself writes it on
@@ -136,7 +137,7 @@ fn judged(
     revision: &str,
     runs: &[String],
     extra: Vec<String>,
-    lints: bool,
+    gate: bool,
 ) -> Result<Judged> {
     let Some((base, at)) = base_revision(tree, dir)? else {
         return Ok(Judged::NoBase);
@@ -170,7 +171,9 @@ fn judged(
             let Some((meta, path)) = entry.split_once('\t') else {
                 continue;
             };
-            if meta.starts_with("120000 ") && surface.reads_through(path) {
+            if meta.starts_with("120000 ")
+                && (surface.reads_through(path) || (gate && is_tool_config(path)))
+            {
                 let named = format!("{path} (a link)");
                 if !paths.contains(&named) {
                     paths.push(named);
@@ -198,6 +201,7 @@ fn judged(
         // In a directory on `PATH` an entry the base held executable is a program a lookup
         // finds, as one executable now is.
         if surface.contains(path)
+            || (gate && is_tool_config(path))
             || (surface.guards_programs() && program_at(tree, &at, path)?)
             || (surface.in_a_path_dir(path) && executable_at(tree, &at, path)?)
         {
@@ -216,7 +220,7 @@ fn judged(
                     "{path}: a line the manifest scanner cannot read with certainty, {line}"
                 )),
             }
-            if lints && crate::run::is_manifest(path) {
+            if gate && crate::run::is_manifest(path) {
                 match lint_changes(&before, &after) {
                     Ok(keys) => {
                         for key in keys {
@@ -892,17 +896,38 @@ fn argument_paths(project: &str) -> Result<Vec<String>> {
     Ok(inside_tree(&paths))
 }
 
-/// The tool configuration a gate's commands read from the tree, at any depth: cargo's, clippy's,
-/// rustfmt's and task's. The toolchain file is on every judge surface already.
-const GATE_TOOL_CONFIG: [&str; 7] = [
-    "**/.cargo/config",
-    "**/.cargo/config.toml",
-    "**/clippy.toml",
-    "**/.clippy.toml",
-    "**/rustfmt.toml",
-    "**/.rustfmt.toml",
-    "**/Taskfile.yml",
+/// The tool configuration a gate's commands read from the tree, by file name at any depth:
+/// cargo's (in a `.cargo` directory), clippy's, rustfmt's and task's. The toolchain file is on
+/// every judge surface already.
+const GATE_TOOL_CONFIG: [&str; 10] = [
+    ".cargo/config",
+    ".cargo/config.toml",
+    "clippy.toml",
+    ".clippy.toml",
+    "rustfmt.toml",
+    ".rustfmt.toml",
+    "Taskfile.yml",
+    "Taskfile.yaml",
+    "Taskfile.dist.yml",
+    "Taskfile.dist.yaml",
 ];
+
+/// Whether `path`, relative to the tree, is tool configuration ([`GATE_TOOL_CONFIG`]): its last
+/// part (its last two for cargo's) is one of the names, whatever its case. Matched by name and
+/// not by a glob, so a link elsewhere in the tree is not on the way to it.
+fn is_tool_config(path: &str) -> bool {
+    let fold = |text: &str| -> String {
+        text.chars()
+            .flat_map(char::to_lowercase)
+            .map(|c| if c == '\u{17f}' { 's' } else { c })
+            .collect()
+    };
+    let folded = fold(path.trim_end_matches('/'));
+    GATE_TOOL_CONFIG.iter().any(|name| {
+        let name = fold(name);
+        folded == name || folded.ends_with(&format!("/{name}"))
+    })
+}
 
 /// The parts of the TOML key `key` (`a.b`, `"a".'b'`): bare, or quoted without an escape. `None`
 /// for anything else, which the caller does not read with certainty.
@@ -1174,16 +1199,16 @@ impl GateRun {
         // What the gate's commands run or read from the tree: a file the case's branch changed
         // would let a model's edit decide the gate the base revision defines. Compared at the
         // base as the test command's surface is ([`judged`]), with what the project file admits
-        // (its executables and catalogs), every file its commands take as an argument and the
-        // tool configuration ([`GATE_TOOL_CONFIG`]) added, and every manifest's lint tables
-        // ([`lint_changes`]). A directory the base holds at an argument is the data a command
-        // checks, not code it runs, and is not compared; a name the glob dialect cannot hold as
-        // written is compared as a path by itself. Nothing is run and no record written while
-        // one differs, is added or is deleted. Without a project file the gate admits no
-        // command, and runs nothing from the tree.
+        // (its executables and catalogs) and every file its commands take as an argument added
+        // as globs, and the tool configuration by name ([`is_tool_config`]) and every manifest's
+        // lint tables ([`lint_changes`]) besides. A directory the base holds at an argument is
+        // the data a command checks, not code it runs, and is not compared; a name the glob
+        // dialect cannot hold as written is compared as a path by itself. Nothing is run and no
+        // record written while one differs, is added or is deleted. Without a project file the
+        // gate admits no command, and runs nothing from the tree.
         if let Some((path, text)) = &project {
             let read = || format!("read the project file {}", path.display());
-            let mut globs: Vec<String> = GATE_TOOL_CONFIG.iter().map(|g| (*g).to_owned()).collect();
+            let mut globs: Vec<String> = Vec::new();
             let mut changed = Vec::new();
             let mut files = admitted_files(text).with_context(read)?;
             for argument in argument_paths(text).with_context(read)? {

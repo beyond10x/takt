@@ -76,6 +76,16 @@ fn write(dir: &Path, path: &str, text: &str) {
 /// A committed repository whose gate passes: `scripts/check-citations` exits 0. With `listed`,
 /// the repository's own judge-surface list names `scripts/**`.
 fn repository(name: &str, listed: bool) -> Scratch {
+    repository_with(name, listed, &[], &[])
+}
+
+/// [`repository`] with `files` (path, text) and `links` (path, target) committed besides.
+fn repository_with(
+    name: &str,
+    listed: bool,
+    files: &[(&str, &str)],
+    links: &[(&str, &str)],
+) -> Scratch {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("gate-tool-config-{}-{name}", std::process::id()));
     if dir.exists() {
@@ -101,6 +111,14 @@ fn repository(name: &str, listed: bool) -> Scratch {
     write(&dir, "crates/widget/Cargo.toml", WIDGET);
     if listed {
         write(&dir, ".engineering/judge-surface.yaml", "- scripts/**\n");
+    }
+    for (path, text) in files {
+        write(&dir, path, text);
+    }
+    for (path, target) in links {
+        let path = dir.join(path);
+        fs::create_dir_all(path.parent().expect("a parent")).expect("a parent directory");
+        std::os::unix::fs::symlink(target, &path).expect("a link");
     }
     git(&dir, &["init", "-q", "-b", "main"]);
     git(&dir, &["add", "-A"]);
@@ -371,6 +389,101 @@ fn a_clippy_toml_added_in_a_crate_keeps_the_gate_from_running() {
         )],
     );
     refused(&observation, "crates/widget/.clippy.toml");
+}
+
+/// A tracked link that is no compared path (`docs/alias.md`, as takt's `.claude/agents/*` are)
+/// leaves the gate running: the tool configuration is matched by name, not by a glob every link
+/// lies on the way to.
+#[test]
+fn an_unrelated_tracked_link_lets_the_gate_run_and_record() {
+    let tree = repository_with(
+        "unrelated-link",
+        false,
+        &[],
+        &[("docs/alias.md", "../README.md")],
+    );
+    let observation = observed(
+        &tree,
+        "unrelated-link",
+        &[Change::Write("README.md", "a story, edited\n")],
+    );
+    recorded(&observation);
+}
+
+/// A link at a compared path, unchanged since the base, still keeps the gate from running.
+#[test]
+fn a_link_at_a_tool_config_path_keeps_the_gate_from_running() {
+    let tree = repository_with(
+        "config-link",
+        false,
+        &[("shared/rustfmt.toml", "max_width = 100\n")],
+        &[("crates/widget/rustfmt.toml", "../../shared/rustfmt.toml")],
+    );
+    let observation = observed(
+        &tree,
+        "config-link",
+        &[Change::Write("README.md", "a story, edited\n")],
+    );
+    refused(&observation, "crates/widget/rustfmt.toml (a link)");
+}
+
+/// Every name task reads its Taskfile under.
+#[test]
+fn every_taskfile_name_keeps_the_gate_from_running() {
+    for (k, name) in ["Taskfile.yaml", "Taskfile.dist.yml", "Taskfile.dist.yaml"]
+        .into_iter()
+        .enumerate()
+    {
+        let id = format!("taskfile-name-{k}");
+        let tree = repository(&id, false);
+        let observation = observed(
+            &tree,
+            &id,
+            &[Change::Write(
+                name,
+                "version: '3'\ntasks:\n  check:\n    cmds:\n      - 'true'\n",
+            )],
+        );
+        refused(&observation, name);
+    }
+}
+
+#[test]
+fn a_dot_rustfmt_toml_added_on_the_branch_keeps_the_gate_from_running() {
+    let tree = repository("dot-rustfmt", false);
+    let observation = observed(
+        &tree,
+        "dot-rustfmt",
+        &[Change::Write(
+            "crates/widget/.rustfmt.toml",
+            "max_width = 200\n",
+        )],
+    );
+    refused(&observation, "crates/widget/.rustfmt.toml");
+}
+
+/// A lint entry the base held, removed on the branch, is a change as an added one is.
+#[test]
+fn a_lint_entry_removed_from_a_crate_manifest_keeps_the_gate_from_running() {
+    let linted = format!("{WIDGET}\n[lints.clippy]\nall = \"deny\"\npedantic = \"deny\"\n");
+    let tree = repository_with(
+        "lints-removed",
+        false,
+        &[("crates/widget/Cargo.toml", &linted)],
+        &[],
+    );
+    let observation = observed(
+        &tree,
+        "lints-removed",
+        &[Change::Write(
+            "crates/widget/Cargo.toml",
+            &format!("{WIDGET}\n[lints.clippy]\nall = \"deny\"\n"),
+        )],
+    );
+    refused(
+        &observation,
+        "crates/widget/Cargo.toml: lints.clippy.pedantic",
+    );
 }
 
 /// A change outside every list: the gate runs and records as before.
