@@ -107,7 +107,7 @@ fn describe(action: &str, protocol: &LoadedProtocol) -> String {
     let known = match action {
         "repository.inspect" => "read files to understand the code; change nothing",
         "tests.write" => {
-            "add or change test files only (paths under tests/ or test/, or named *_test.*, test_*.*, *.test.*, *.spec.*)"
+            "add or change test files only (paths under tests/ or test/, or named *_test.*, test_*.*, *.test.*, *.spec.*, *_spec.*)"
         }
         "implementation.edit" => "change the implementation so the intent holds",
         "plan.edit" => "write or change the plan",
@@ -319,7 +319,10 @@ impl Harness for ClaudeCode {
     }
 }
 
-/// Whether `path` is a test path, by the same patterns the prompt names.
+/// Whether `path` is a test path, by the same patterns the prompt names: under a `tests/` or
+/// `test/` directory, or a file name `test_*`, `*_test.*`, `*.test.*`, `*.spec.*` or
+/// `*_spec.*`. The one rule: what a `tests.write` step may change, and what `change.read`
+/// tells a test path from an implementation path by (`crate::validator::ChangeRead`).
 #[must_use]
 pub fn is_test_path(path: &str) -> bool {
     let parts: Vec<&str> = path.split('/').collect();
@@ -337,6 +340,7 @@ pub fn is_test_path(path: &str) -> bool {
         || stem.starts_with("test_")
         || stem.ends_with(".test")
         || stem.ends_with(".spec")
+        || stem.ends_with("_spec")
 }
 
 #[cfg(test)]
@@ -353,6 +357,7 @@ mod tests {
             "src/test_foo.py",
             "web/app.test.ts",
             "web/app.spec.ts",
+            "lib/user_spec.rb",
             "tests/a b.rs",
             "tests/ü.rs",
         ] {
@@ -364,6 +369,8 @@ mod tests {
             "Cargo.toml",
             "src/testing.rs",
             "tester/x.rs",
+            "spec/helper.rb",
+            "src/specimen.rs",
             "rc/lib.rs",
             "ests/a.rs",
             "\"tests/a b.rs\"",

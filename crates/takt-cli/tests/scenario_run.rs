@@ -110,6 +110,13 @@ fn world(name: &str) -> World {
     copy_dir(&Path::new(FIXTURES).join("one-ready"), &repo);
     fs::write(repo.join("Cargo.toml"), "[package]\nname = \"scratch\"\n").expect("a file");
     fs::write(repo.join(".engineering/gates.yaml"), GATES).expect("a file");
+    // The story's tests, as the test command runs them: red while the test the harness writes
+    // is there and the work it tests is not, green otherwise (at the seed, and once done).
+    fs::write(
+        repo.join("check.sh"),
+        "#!/bin/sh\nif [ -e tests/work_test.txt ] && ! [ -e work.txt ]; then exit 1; fi\nexit 0\n",
+    )
+    .expect("a file");
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "seed"]);
@@ -160,10 +167,12 @@ fn declare(repo: &Path, text: &str) {
 /// `state/refuse-push` exists; `scan-text` passes;
 /// `api --method POST` keeps the request as `pr-<k>.json` and answers pull request `k`,
 /// counting from 1. `gh pr view` reports the pull request open with the head it was opened
-/// for, at the commit last pushed for it; `gh pr checks` one check, passing. `claude` appends a
-/// line to `work.txt` and answers `implementation.edit`, or, once an approval is offered,
-/// answers `repository.merge`, or, once its `work.txt` exists and `change.handover` is offered,
-/// takes it, changing nothing.
+/// for, at the commit last pushed for it; `gh pr checks` one check, passing. `claude` plays
+/// scenario 1's developer in the order the protocol offers: once an approval is offered it
+/// answers `repository.merge`; once `tests/work_test.txt` and `work.txt` both exist and
+/// `change.handover` is offered it takes it, changing nothing; offered `implementation.edit`
+/// it appends a line to `work.txt`; offered `tests.write` it appends a line to
+/// `tests/work_test.txt`.
 fn doubles(bin: &Path, state: &Path, remote: &Path) {
     fs::create_dir_all(bin).expect("a stub directory");
     let state = state.display().to_string();
@@ -262,13 +271,14 @@ exit 2
         bin,
         "claude",
         r#"#!/bin/sh
-case "$2" in
-  *"These need an approval"*) action=repository.merge ;;
-  *"- change.handover:"*)
-    if [ -e work.txt ]; then action=change.handover;
-    else echo "the work" >> work.txt; action=implementation.edit; fi ;;
-  *) echo "the work" >> work.txt; action=implementation.edit ;;
-esac
+prompt="$2"
+offered() { case "$prompt" in *"$1"*) return 0 ;; esac; return 1; }
+if offered "These need an approval"; then action=repository.merge
+elif offered "- change.handover:" && [ -e work.txt ] && [ -e tests/work_test.txt ]; then action=change.handover
+elif offered "- implementation.edit:"; then echo "the work" >> work.txt; action=implementation.edit
+elif offered "- tests.write:"; then mkdir -p tests; echo "the test" >> tests/work_test.txt; action=tests.write
+else action=change.handover
+fi
 printf '{"result":"{\\"action\\": \\"%s\\", \\"summary\\": \\"the double\\"}","usage":{"input_tokens":1}}' "$action"
 "#,
     );
@@ -304,7 +314,8 @@ impl World {
         )
     }
 
-    /// `takt scenario run --repo <repo> <scenario> --test-cmd true`, `extra` last.
+    /// `takt scenario run --repo <repo> <scenario> --test-cmd "sh check.sh"` (the seed's own
+    /// check, red between the test written and the work done), `extra` last.
     fn scenario_run(&self, scenario: &str, extra: &[&str]) -> (i32, String, String) {
         let repo = self.repo.to_str().expect("utf-8");
         let mut args = vec![
@@ -314,7 +325,7 @@ impl World {
             repo,
             scenario,
             "--test-cmd",
-            "true",
+            "sh check.sh",
         ];
         args.extend_from_slice(extra);
         self.takt(&args)
@@ -404,7 +415,7 @@ fn two_scenario_runs_in_a_row_each_open_their_pull_request_against_their_own_tri
     );
     assert!(out.contains("frontier: took story:ready-one"), "{out}");
     assert!(
-        out.contains("case scenario-1-trial-0 on story.delivery/1"),
+        out.contains("case scenario-1-trial-0 on story.delivery/2"),
         "{out}"
     );
     assert!(out.contains("evidence: pull_request open"), "{out}");
@@ -448,7 +459,7 @@ fn two_scenario_runs_in_a_row_each_open_their_pull_request_against_their_own_tri
     assert!(!out.contains("frontier: resumed"), "{out}");
     assert!(out.contains("frontier: took story:ready-one"), "{out}");
     assert!(
-        out.contains("case scenario-1-trial-1 on story.delivery/1"),
+        out.contains("case scenario-1-trial-1 on story.delivery/2"),
         "{out}"
     );
     assert!(

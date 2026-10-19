@@ -293,15 +293,19 @@ fn approve_then_the_resumed_run_merges() {
         out.contains("frontier: took story:ready-one"),
         "stdout {out} stderr {err}"
     );
-    assert!(out.contains(" on story.delivery/1 in "), "{out}");
+    assert!(out.contains(" on story.delivery/2 in "), "{out}");
     assert!(out.contains("forge: bot (owner/repo)"), "{out}");
     let id = git_out(&repo, &["branch", "--show-current"])
         .strip_prefix("takt/")
         .expect("the tree is on the case's branch")
         .to_owned();
 
+    // The work committed by hand is complete: its test and its implementation, which
+    // `story.delivery/2` asks of a change before its pull request opens.
+    fs::create_dir_all(repo.join("tests")).expect("a directory");
+    fs::write(repo.join("tests/feature_test.txt"), "the test\n").expect("a file");
     fs::write(repo.join("feature.txt"), "the work\n").expect("a file");
-    git(&repo, &["add", "feature.txt"]);
+    git(&repo, &["add", "tests/feature_test.txt", "feature.txt"]);
     git(&repo, &["commit", "-q", "-m", "the work"]);
     let worked = git_out(&repo, &["rev-parse", "HEAD"]);
 

@@ -399,6 +399,12 @@ impl Shape {
         use b10x_canon::model::Predicate;
         let model = b10x_canon::model::parse(&protocol.yaml)
             .map_err(|error| anyhow::anyhow!("read the protocol {}: {error}", protocol.id))?;
+        // One `change_record` carries one result: a protocol that reads it as `ahead` and as the
+        // shape of the change asks the validator for two, and is refused before a case opens.
+        crate::validator::ChangeRead::vocabulary(
+            &protocol.results_read(crate::validator::ChangeRead::KIND)?,
+        )
+        .map_err(|error| anyhow::anyhow!("the protocol {}: {error}", protocol.id))?;
         let mut effects = BTreeMap::new();
         let mut produces: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for (id, action) in model.actions.iter() {

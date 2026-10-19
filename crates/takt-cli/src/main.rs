@@ -92,7 +92,7 @@ enum ScenarioCommands {
     /// unless the store there shows the scenario's story ready (`proposed`, nothing blocking
     /// it, its dependencies done), push it through the bot route with a lease that only lets
     /// it create the branch, and refuse unless the push reports it created, then open a case
-    /// for the story on `story.delivery/1`, whose pull request targets `trial/<n>`. The case is
+    /// for the story on `story.delivery/2`, whose pull request targets `trial/<n>`. The case is
     /// `scenario-<id>-trial-<n>`, refused before anything is cut when it or its branch exists;
     /// nothing of an earlier run is resumed. A refusal before the push removes the branch and
     /// puts the tree back.
@@ -148,7 +148,7 @@ struct RunArgs {
     #[arg(long)]
     case: Option<String>,
     /// The protocol: a built-in id (`takt protocols`) or a `protocol/1` file. Not given, a story
-    /// the planning store gives opens on `story.delivery/1`, an --intent on `software.change/1`,
+    /// the planning store gives opens on `story.delivery/2`, an --intent on `software.change/1`,
     /// and a resumed case runs on its own. Given for a resumed case, it must be the case's own:
     /// another is refused before the run, nothing changed.
     #[arg(long)]
@@ -1176,7 +1176,7 @@ fn take_story<'a>(
 }
 
 /// The protocol a store story opens on when `--protocol` is not given.
-const STORY_DELIVERY: &str = "story.delivery/1";
+const STORY_DELIVERY: &str = "story.delivery/2";
 /// The protocol an `--intent` opens on when `--protocol` is not given.
 const SOFTWARE_CHANGE: &str = "software.change/1";
 

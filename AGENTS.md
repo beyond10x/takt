@@ -22,7 +22,7 @@ every step validated by Canon over evidence. This file is for agents working on 
 | `crates/takt` | the library `b10x-takt` (`use takt::…`): protocol loading (`protocol`), case files and evaluation (`case`, `decision`, `evidence`), the loop (`run`), the seams and their first adapters (`harness`, `frontier`, `validator`, `forge`), the git reads and writes (`git`) |
 | `crates/takt/tests`, `crates/takt-cli/tests` | integration tests and their fixtures |
 | `crates/takt-cli` | the binary `takt` |
-| `protocols/` | this repository's `protocol/1` documents: story delivery (embedded in the binary as `story.delivery/1`), self-improvement, loop improvement |
+| `protocols/` | this repository's `protocol/1` documents: story delivery (`story.delivery/1` and `/2`, both embedded in the binary; a new story case opens on `/2`, which holds tests-first order by preconditions, and a case keeps the revision it opened on), self-improvement, loop improvement |
 | `ess/` | the ESS specification of takt's nouns and their relations |
 | `docs/design/` | design documents |
 | `docs/waves/`, `docs/runs/`, `docs/handoff/` | wave pages, recorded runs, handoff notes |

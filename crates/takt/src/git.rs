@@ -1453,6 +1453,49 @@ pub fn trees_differ_outside(tree: &Path, from: &str, to: &str, outside: &str) ->
     }
 }
 
+/// The paths outside the directory `outside` (relative to the tree) at which the trees of the
+/// commits or tree objects `from` and `to` differ, in git's order: `git diff --name-only`, with
+/// renames not detected (a rename names both its paths), no external diff, no text conversion,
+/// and no code from configuration ([`NO_CONFIGURED_CODE`]). Empty when nothing outside differs;
+/// a path that is not UTF-8 is an error naming it.
+pub fn trees_differing_outside(
+    tree: &Path,
+    from: &str,
+    to: &str,
+    outside: &str,
+) -> Result<Vec<String>> {
+    let exclude = format!(":(exclude){outside}");
+    let listed = raw(
+        tree,
+        &[
+            "diff",
+            "-z",
+            "--name-only",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            from,
+            to,
+            "--",
+            ".",
+            exclude.as_str(),
+        ],
+        None,
+    )?;
+    listed
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            String::from_utf8(path.to_vec()).map_err(|_| {
+                anyhow!(
+                    "git diff named a path that is not UTF-8: {}",
+                    String::from_utf8_lossy(path)
+                )
+            })
+        })
+        .collect()
+}
+
 /// The tree merging `revision` into `base` would leave: `git merge-tree --write-tree`, which
 /// writes the merge's tree object and touches neither the work tree nor the index, with no code
 /// from configuration ([`NO_CONFIGURED_CODE`]). A merge with conflicts still answers its tree,

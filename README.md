@@ -82,8 +82,13 @@ takt protocols
 
 The first form opens a case on `software.change/1`. The second resumes the open case of a story
 being worked, or else takes the next ready story from the repository's planning store and opens
-its case on `story.delivery/1`, which is embedded in the binary: tests, gate, pull request, CI and
-merge as claims about the implementation revision, `accepted` once the pull request is merged. A
+its case on `story.delivery/2`, which is embedded in the binary (so is `/1`, for the cases opened
+on it): the story's tests first, run red at that revision, then the implementation, then one pull
+request for the complete change (a test path and an implementation path both changed, tests and
+gate green at one revision), CI and merge, each a claim about the implementation revision,
+`accepted` once the pull request is merged. A test path is one under `tests/` or `test/`, or
+named `test_*`, `*_test.*`, `*.test.*`, `*.spec.*` or `*_spec.*`; every other path outside
+`.engineering/` is an implementation path. A
 case opens only on a clean tree. `--protocol` takes a built-in id or a `protocol/1` file, read
 from the directory you run `takt` in. Bounds: `--iterations`, `--hours`, `--tokens`. The tests are
 `--test-cmd` (default `cargo test --quiet`); `.engineering/gates.yaml`, when the repository has

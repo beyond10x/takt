@@ -10,6 +10,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use crate::case::{BRANCH_FILE, Branch, current};
 use crate::evidence::Record;
 use crate::forge::{BotRoute, Checks, Forge, Limits, PullRequest, PullRequestState};
+use crate::harness::is_test_path;
 
 /// What a validator observed, and the records it wrote from it.
 #[derive(Debug)]
@@ -1760,24 +1761,115 @@ pub fn is_built_in_kind(kind: &str) -> bool {
     BUILT_IN.iter().any(|built_in| built_in.kind == kind)
 }
 
-/// `change.read`: observes whether the implementation revision's tree differs from the case's
-/// base outside `.engineering/` (the planning store and the cases, which takt's own take,
-/// approval and records change), by content, not by its commits or their messages, and writes
-/// one `change_record`: `ahead` when merging the revision into the tip, now, of the base branch
-/// `branch.yaml` names (`git merge-tree`, nothing checked out) would change that tip's tree
-/// outside `.engineering/`, `none` when it would not: the same content landed on the base by
-/// another commit, with or without more beside it, is no change to publish. When the base
-/// branch is not there, the revision's tree is compared with the commit pinned when the case
-/// opened instead; a case with neither writes no record. It reads git only, with no code from
-/// configuration: nothing is run from the tree and nothing leaves the machine.
+/// `change.read`: observes what merging the implementation revision into the tip, now, of the
+/// base branch `branch.yaml` names (`git merge-tree`, nothing checked out) would change in that
+/// tip's tree outside `.engineering/` (the planning store and the cases, which takt's own take,
+/// approval and records change), by content, not by its commits or their messages: the same
+/// content landed on the base by another commit, with or without more beside it, is no change
+/// to publish. When the base branch is not there, the revision's tree is compared with the
+/// commit pinned when the case opened instead; a case with neither writes no record. It writes
+/// one `change_record`, whose result is in the vocabulary the case's own `protocol.yaml` reads
+/// ([`ChangeVocabulary`]): one record carries one result, and Canon leaves a claim unknown when
+/// records of a kind at one revision disagree, so a protocol is answered in the words it asks
+/// in. For a protocol that reads `ahead` (`story.delivery/1`): `ahead` when the merge would
+/// change the tip, `none` when it would not. For one that reads the shape
+/// (`story.delivery/2`): `none` (no path), `tests` (test paths only), `implementation`
+/// (implementation paths only) or `complete` (both), a test path told by
+/// [`crate::harness::is_test_path`], the rule `tests.write` is held to. It reads git and the
+/// case's protocol only, with no code from configuration: nothing is run from the tree and
+/// nothing leaves the machine.
 #[derive(Debug, Clone, Default)]
 pub struct ChangeRead;
+
+/// The result vocabulary a `change_record` is written in, chosen by the results the case's
+/// protocol reads the kind for ([`ChangeRead::vocabulary`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeVocabulary {
+    /// `ahead` or `none`: whether there is a change to publish.
+    Published,
+    /// `none`, `tests`, `implementation` or `complete`: which kinds of path the change has.
+    Shape,
+}
 
 impl ChangeRead {
     /// The action it performs.
     pub const ACTION: &str = "change.read";
     /// The evidence kind it writes.
     pub const KIND: &str = "change_record";
+    /// The results of the published vocabulary.
+    pub const PUBLISHED: [&str; 2] = ["ahead", "none"];
+    /// The results of the shape vocabulary.
+    pub const SHAPE: [&str; 4] = ["none", "tests", "implementation", "complete"];
+
+    /// The vocabulary for a protocol that reads `change_record` for the results `read`
+    /// ([`crate::protocol::LoadedProtocol::results_read`]): the shape when it reads a shape
+    /// result other than `none`, else the published one (`ahead`, `none`, or no result at all).
+    /// A protocol that reads `ahead` beside a shape result asks one record for two results and
+    /// is refused, before a case opens on it ([`crate::run`]) and at every observation.
+    pub fn vocabulary(read: &std::collections::BTreeSet<String>) -> Result<ChangeVocabulary> {
+        let shape: Vec<&str> = read
+            .iter()
+            .map(String::as_str)
+            .filter(|result| *result != "none" && Self::SHAPE.contains(result))
+            .collect();
+        match (read.contains("ahead"), shape.is_empty()) {
+            (true, false) => bail!(
+                "the protocol reads {} as `ahead` and as the shape of the change ({}): one record carries one result",
+                Self::KIND,
+                shape.join(", ")
+            ),
+            (false, false) => Ok(ChangeVocabulary::Shape),
+            _ => Ok(ChangeVocabulary::Published),
+        }
+    }
+
+    /// The vocabulary the case at `dir` is answered in: what its own `protocol.yaml` reads.
+    fn vocabulary_of(dir: &Path) -> Result<ChangeVocabulary> {
+        let path = dir.join("protocol.yaml");
+        let yaml =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let read = crate::protocol::results_read_in(&yaml, Self::KIND)
+            .with_context(|| format!("read {}", path.display()))?;
+        Self::vocabulary(&read)
+    }
+
+    /// The result for the paths a merge would change, in `vocabulary`, with how it was read.
+    fn result_of(vocabulary: ChangeVocabulary, paths: &[String]) -> (&'static str, String) {
+        match vocabulary {
+            ChangeVocabulary::Published => {
+                if paths.is_empty() {
+                    (
+                        "none",
+                        "leaves its tree outside .engineering/ as it is".to_owned(),
+                    )
+                } else {
+                    (
+                        "ahead",
+                        format!(
+                            "changes its tree outside .engineering/ at {} path(s)",
+                            paths.len()
+                        ),
+                    )
+                }
+            }
+            ChangeVocabulary::Shape => {
+                let tests = paths.iter().filter(|path| is_test_path(path)).count();
+                let implementation = paths.len() - tests;
+                let result = match (tests > 0, implementation > 0) {
+                    (false, false) => "none",
+                    (true, false) => "tests",
+                    (false, true) => "implementation",
+                    (true, true) => "complete",
+                };
+                (
+                    result,
+                    format!(
+                        "changes {tests} test path(s) and {implementation} implementation path(s) outside .engineering/"
+                    ),
+                )
+            }
+        }
+    }
 }
 
 impl Validator for ChangeRead {
@@ -1815,30 +1907,22 @@ impl Validator for ChangeRead {
             .filter(|tip| !tip.is_empty())
             .map(|tip| (name, tip))
         });
-        let (differs, summary) = if let Some((name, tip)) = tip {
+        let (paths, compared) = if let Some((name, tip)) = tip {
             let merged = crate::git::merged_tree(tree, &tip, revision)?;
-            let differs = crate::git::trees_differ_outside(tree, &tip, &merged, ".engineering")?;
             (
-                differs,
+                crate::git::trees_differing_outside(tree, &tip, &merged, ".engineering")?,
                 format!(
-                    "merging {} into {name} at {}, its tip now, {} its tree outside .engineering/",
+                    "merging {} into {name} at {}, its tip now,",
                     short(revision),
-                    short(&tip),
-                    if differs {
-                        "changes"
-                    } else {
-                        "leaves as it is"
-                    }
+                    short(&tip)
                 ),
             )
         } else if let Some((shown, base)) = pinned {
-            let differs = crate::git::trees_differ_outside(tree, &base, revision, ".engineering")?;
             (
-                differs,
+                crate::git::trees_differing_outside(tree, &base, revision, ".engineering")?,
                 format!(
-                    "the base branch is not there to merge into; the tree of {} {} the tree of {shown} outside .engineering/",
-                    short(revision),
-                    if differs { "differs from" } else { "is" }
+                    "the base branch is not there to merge into; against the tree of {shown}, the tree of {}",
+                    short(revision)
                 ),
             )
         } else {
@@ -1849,9 +1933,10 @@ impl Validator for ChangeRead {
                 artifact: None,
             });
         };
-        let result = if differs { "ahead" } else { "none" };
+        let vocabulary = Self::vocabulary_of(&dir)?;
+        let (result, read) = Self::result_of(vocabulary, &paths);
         Ok(Observation {
-            summary: format!("{summary}: {result}"),
+            summary: format!("{compared} {read}: {result}"),
             records: vec![Record::new(
                 format!("change-record-{seq}"),
                 self.kind(),

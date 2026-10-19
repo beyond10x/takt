@@ -29,16 +29,24 @@ pub struct LoadedProtocol {
 
 /// The protocols this crate ships beside the engineering protocols' built-ins, `(name, major,
 /// document)`: the `protocol/1` files of this repository's `protocols/`, embedded so that a
-/// repository a story is delivered in need not carry them.
-const EMBEDDED: &[(&str, u32, &str)] = &[(
-    "story.delivery",
-    1,
-    include_str!("../../../protocols/story-delivery/1.yaml"),
-)];
+/// repository a story is delivered in need not carry them. Both revisions of story delivery
+/// ship: a case keeps the one it was opened on, and a new story case opens on `/2`.
+const EMBEDDED: &[(&str, u32, &str)] = &[
+    (
+        "story.delivery",
+        1,
+        include_str!("../../../protocols/story-delivery/1.yaml"),
+    ),
+    (
+        "story.delivery",
+        2,
+        include_str!("../../../protocols/story-delivery/2.yaml"),
+    ),
+];
 
 impl LoadedProtocol {
     /// A built-in, by `name/major` (`software.change/1`): one this crate embeds
-    /// (`story.delivery/1`), else one of the engineering protocols.
+    /// (`story.delivery/1`, `story.delivery/2`), else one of the engineering protocols.
     pub fn builtin(id: &str) -> Result<Self> {
         let (name, major) = split_id(id)?;
         // An embedded protocol answers to its own id, `story.delivery`, and to its directory's
@@ -254,6 +262,50 @@ impl LoadedProtocol {
             )
             .collect()
     }
+
+    /// The results the protocol reads a record of `kind` for: every `result` an evidence match
+    /// of that kind names in a claim, an obligation, a precondition or an outcome, in order.
+    /// What a validator writing `kind` is asked for; empty when the protocol reads the kind
+    /// without a result, or not at all.
+    pub fn results_read(&self, kind: &str) -> Result<std::collections::BTreeSet<String>> {
+        results_read_in(&self.yaml, kind)
+    }
+}
+
+/// [`LoadedProtocol::results_read`] over a `protocol/1` document, parsed and not compiled: what
+/// a validator reads of the case's own `protocol.yaml` at each observation.
+pub fn results_read_in(yaml: &str, kind: &str) -> Result<std::collections::BTreeSet<String>> {
+    use b10x_canon::model::Predicate;
+    let model = b10x_canon::model::parse(yaml).map_err(|error| anyhow!("{error}"))?;
+    let mut results = std::collections::BTreeSet::new();
+    let mut note = |predicate: &Predicate| {
+        if let Predicate::Evidence(matched) = predicate
+            && matched.kind.as_str() == kind
+            && let Some(result) = &matched.result
+        {
+            results.insert(result.clone());
+        }
+    };
+    for (_, claim) in model.claims.iter() {
+        claim.true_when.visit(&mut note);
+    }
+    for (_, obligation) in model.obligations.iter() {
+        obligation.discharged_when.visit(&mut note);
+        if let Some(applicable) = &obligation.applicable_when {
+            applicable.visit(&mut note);
+        }
+    }
+    for (_, action) in model.actions.iter() {
+        if let Some(precondition) = &action.precondition {
+            precondition.visit(&mut note);
+        }
+    }
+    for (_, outcome) in model.outcomes.iter() {
+        if let Some(predicate) = outcome.requires.predicate() {
+            predicate.visit(&mut note);
+        }
+    }
+    Ok(results)
 }
 
 #[cfg(test)]
@@ -271,27 +323,58 @@ mod tests {
         assert!(protocol.ir_json.contains("canon-ir/1"));
     }
 
-    /// The story-delivery protocol ships embedded, byte for byte the repository's file, under
-    /// both spellings, and is listed among the built-ins.
+    /// Both revisions of the story-delivery protocol ship embedded, each byte for byte the
+    /// repository's file, under both spellings, and are listed among the built-ins; a revision
+    /// that is not there is refused.
     #[test]
     fn the_story_delivery_builtin_is_embedded() {
-        let file = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../protocols/story-delivery/1.yaml"
-        ))
-        .expect("the repository's file");
-        for id in ["story.delivery/1", "story-delivery/1"] {
-            let protocol = LoadedProtocol::builtin(id).expect("a built-in");
-            assert_eq!(protocol.id, "story.delivery/1");
-            assert_eq!(protocol.yaml, file);
-            assert!(protocol.actions.contains(&"pr.open".to_owned()));
+        for major in [1u32, 2] {
+            let file = std::fs::read_to_string(format!(
+                "{}/../../protocols/story-delivery/{major}.yaml",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .expect("the repository's file");
+            for id in [
+                format!("story.delivery/{major}"),
+                format!("story-delivery/{major}"),
+            ] {
+                let protocol = LoadedProtocol::builtin(&id).expect("a built-in");
+                assert_eq!(protocol.id, format!("story.delivery/{major}"));
+                assert_eq!(protocol.revision, u64::from(major));
+                assert_eq!(protocol.yaml, file);
+                assert!(protocol.actions.contains(&"pr.open".to_owned()));
+            }
+            assert!(
+                LoadedProtocol::builtins()
+                    .iter()
+                    .any(|(name, listed)| name == "story.delivery" && *listed == major)
+            );
         }
-        assert!(LoadedProtocol::builtin("story.delivery/2").is_err());
-        assert!(
-            LoadedProtocol::builtins()
-                .iter()
-                .any(|(name, major)| name == "story.delivery" && *major == 1)
+        assert!(LoadedProtocol::builtin("story.delivery/3").is_err());
+    }
+
+    /// The results a protocol reads a kind for are the ones its predicates name, wherever they
+    /// stand: `/1` asks `change_record` for `ahead`, `/2` for the shape, and neither for a
+    /// result of `handover`.
+    #[test]
+    fn results_read_are_the_results_the_predicates_name() {
+        let one = LoadedProtocol::builtin("story.delivery/1").expect("a built-in");
+        let two = LoadedProtocol::builtin("story.delivery/2").expect("a built-in");
+        let read = |protocol: &LoadedProtocol, kind: &str| -> Vec<String> {
+            protocol
+                .results_read(kind)
+                .expect("the document parses")
+                .into_iter()
+                .collect()
+        };
+        assert_eq!(read(&one, "change_record"), ["ahead"]);
+        assert_eq!(
+            read(&two, "change_record"),
+            ["complete", "implementation", "tests"]
         );
+        assert_eq!(read(&two, "test_result"), ["fail", "pass"]);
+        assert!(read(&two, "handover").is_empty());
+        assert!(read(&two, "no_such_kind").is_empty());
     }
 
     /// A protocol given as an id or as a file resolves to the same protocol.
