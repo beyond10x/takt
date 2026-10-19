@@ -8,7 +8,7 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-fe93286-areas
-revision: 2
+revision: 3
 ---
 ## Outcome
 
@@ -56,3 +56,9 @@ Each item above has a commit with a test that fails before it, or a line in this
 - `crates/takt/src/report.rs:583-605@df179c9`: a `|` in a case id or run name adds a markdown table column; failing input `"case":"case|x"`.
 - `crates/takt/src/trace.rs` (`escape`): only the current `$HOME` becomes `~`; a record made under another home keeps its home path (`HOME=/nonexistent takt report` printed 3 lines with a home path).
 - `crates/takt/src/trace.rs` (`escape`): Cf format characters such as U+202E are not escaped (inferred from `char::is_control`, not run).
+
+## From the review of scan-before-push at 2e099b8 (2026-10-19, granted)
+
+- warning `crates/takt/src/forge.rs:1020@2e099b8`: when the remote's base has moved past `refs/remotes/origin/<base>`, every push is refused, the merge push included, though the dry-run fetch has already downloaded the remote base's commit. Decision: exclude what is reachable from the fetched remote sha instead of refusing.
+- note `forge.rs:1422-1444`: a byte-order mark is looked for at byte 0 only; a mid-file or odd-offset UTF-16 literal passes (same reader as the documented no-mark limit).
+- note `forge.rs:973-987`: a force-pushed remote base fails closed with gates' generic refusal, not the two shas.
