@@ -124,11 +124,18 @@ fn stop(stop: &str, steps: u64, tokens: u64) -> Event {
     }
 }
 
+/// The held-out result a runner writes beside a scenario case's record.
+const HELD_OUT: &str = takt::scorecard::HELD_OUT_FILE;
+
 /// Writes `runs` to the case `case`'s record under `repo`, each run's steps numbered from 1 as
-/// the loop numbers them; the case directory.
+/// the loop numbers them, and, for a scenario case, a held-out result that passed beside it; the
+/// case directory.
 fn record(repo: &Path, case: &str, runs: &[Vec<Event>]) -> PathBuf {
     let dir = repo.join(CASES_DIR).join(case);
     fs::create_dir_all(&dir).expect("a case directory");
+    if takt::scorecard::scenario_of(case).is_some() {
+        fs::write(dir.join(HELD_OUT), "PASS\n").expect("the held-out result");
+    }
     let events = Events::new(&dir);
     for run in runs {
         let mut step = 0;
@@ -602,6 +609,80 @@ fn a_malformed_binary_txt_leaves_its_case_unstated_and_listed_with_the_reason() 
     }
 }
 
+/// story:scorecard-outcome-from-held-out-check: a scenario run's outcome comes from the
+/// held-out check the runner wrote beside its record, never from the run's own stop: a case
+/// whose stop says `Completed (accepted)` but whose held-out result says FAIL is scored as
+/// failed, its own stop printed beside, and named as a disagreement; a result that is no pass
+/// (`no pull request`) fails too; a pass leaves the stop's outcome. A case that is no scenario
+/// needs none; a scenario case with no held-out result is refused naming the case.
+#[test]
+fn a_scenario_runs_outcome_comes_from_the_held_out_check() {
+    let repo = scratch("held-out");
+    let one_run = |case: &str, stopped: &str| {
+        record(
+            &repo,
+            case,
+            &[vec![
+                opened(case),
+                judged(usage(5, 6, 7, 8)),
+                stop(stopped, 1, 26),
+            ]],
+        )
+    };
+    let claimed = one_run("scenario-1-trial-1", "Completed (accepted)");
+    let reason = "FAIL: after remove 2 the list is: 1. [ ] first";
+    fs::write(claimed.join(HELD_OUT), format!("{reason}\n")).expect("the held-out result");
+    one_run("scenario-1-trial-2", "ApprovalRequired (repository.merge)");
+    let no_pr = one_run("scenario-1-trial-3", "Completed (accepted)");
+    fs::write(no_pr.join(HELD_OUT), "no pull request\n").expect("the held-out result");
+    one_run("takt-20261019T100000Z", "Completed (accepted)");
+    let card = Scorecard::read(&repo).expect("the scorecard reads");
+    let outcomes: Vec<(&str, &str)> = card
+        .rows
+        .iter()
+        .map(|row| (row.case.as_str(), row.outcome.as_str()))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            ("scenario-1-trial-1", "failed"),
+            ("scenario-1-trial-2", "ApprovalRequired"),
+            ("scenario-1-trial-3", "failed"),
+            ("takt-20261019T100000Z", "accepted"),
+        ]
+    );
+    let text = print(&card);
+    let run = &printed(&text, "scenario-1-trial-1")[0];
+    assert!(
+        run.contains(&"failed") && run.contains(&"accepted"),
+        "the run's own stop is printed beside the outcome: {text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.contains("scenario-1-trial-1#1")
+                && line.contains("disagree")
+                && line.contains(reason)),
+        "{text}"
+    );
+    assert!(
+        !text
+            .lines()
+            .any(|line| line.contains("scenario-1-trial-2") && line.contains("disagree")),
+        "{text}"
+    );
+
+    let missing = one_run("scenario-1-trial-4", "Completed (accepted)");
+    fs::remove_file(missing.join(HELD_OUT)).expect("removed");
+    let error = format!(
+        "{:#}",
+        Scorecard::read(&repo).expect_err("a scenario case with no held-out result is refused")
+    );
+    assert!(
+        error.contains("scenario-1-trial-4") && error.contains(HELD_OUT),
+        "{error}"
+    );
+}
+
 /// The first check: a planted `task_spend` evidence file in the candidate tree, under the case
 /// and anywhere else, changes no number the scorecard prints.
 #[test]
@@ -674,7 +755,10 @@ fn against_a_saved_accepted_scenario_a_no_progress_row_is_worse() {
             stop("Completed (accepted)", 1, 350),
         ]],
     );
-    let card = Scorecard::read(&candidate).expect("the scorecard reads");
+    let mut card = Scorecard::read(&candidate).expect("the scorecard reads");
+    // Two cases: compared under a rule of one trial, since this case is about the ranks and
+    // the tokens, and five trials are story:scorecard-against-needs-the-trials'.
+    card.rule.trials = 1;
     let mut out = Vec::new();
     let worse = card
         .against(
@@ -695,7 +779,7 @@ fn against_a_saved_accepted_scenario_a_no_progress_row_is_worse() {
     // One case fewer at rank 4 (1 of 2 against 1 of 1) is within the margin of one; the median
     // of tokens, 525, over the saved maximum, 500, is what makes the scenario worse.
     for line in [
-        "rule  trials 5 a scenario  margin 1 case  tokens worse when the median exceeds the saved maximum",
+        "rule  trials 1 a scenario  margin 1 case  tokens worse when the median exceeds the saved maximum",
         "scenario 1  median tokens 525 exceeds the saved maximum 500",
         "scenario 1  outcomes by rank held  tokens over  worse",
     ] {
@@ -759,9 +843,12 @@ fn several_runs_a_side_print_the_token_spread_and_flag_no_row_on_tokens() {
     for (trial, tokens) in [(4, 160_000), (5, 120_000), (6, 140_250)] {
         accepted(&candidate, trial, tokens);
     }
+    let mut card = Scorecard::read(&candidate).expect("the scorecard reads");
+    // Three cases a side: compared under a rule of one trial, since this case is about the
+    // token spread.
+    card.rule.trials = 1;
     let mut out = Vec::new();
-    let worse = Scorecard::read(&candidate)
-        .expect("the scorecard reads")
+    let worse = card
         .against(&Scorecard::load(&saved).expect("reads"), &mut out)
         .expect("the comparison prints");
     let text = String::from_utf8(out).expect("utf-8");
@@ -827,7 +914,9 @@ fn a_changed_metric_definition_prints_both_figures_for_one_cycle() {
         ]],
     );
     let saves = scratch("definition-saves");
-    let card = Scorecard::read(&repo).expect("the scorecard reads");
+    let mut card = Scorecard::read(&repo).expect("the scorecard reads");
+    // One case: compared under a rule of one trial, since this case is about the definitions.
+    card.rule.trials = 1;
     let current = card.metrics["tokens"];
     let saved = card
         .clone()

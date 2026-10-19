@@ -74,10 +74,11 @@ fn takt(args: &[&str]) -> (i32, String, String) {
 }
 
 /// One run of `case` in `repo`: a judgement step that reported `tokens` (all of them input),
-/// then `stop`.
+/// then `stop`; the held-out check beside the record passed.
 fn run(repo: &Path, case: &str, tokens: u64, stop: &str) {
     let dir = repo.join(CASES_DIR).join(case);
     fs::create_dir_all(&dir).expect("a case directory");
+    fs::write(dir.join(takt::scorecard::HELD_OUT_FILE), "PASS\n").expect("the held-out result");
     let events = Events::new(&dir);
     let usage = TokenUsage {
         input: tokens,
@@ -198,14 +199,28 @@ fn scorecard_prints_each_runs_tokens_and_ignores_a_planted_task_spend() {
 const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
 /// `--save` with `--revision` writes the scorecard named by that revision, and says so;
-/// `--against` it a scenario whose only case stopped `NoProgress` is worse, exit 3; one whose
-/// case was accepted is not, exit 0.
+/// `--against` it, five cases a side as the rule needs, a scenario one of whose cases stopped
+/// `NoProgress` and whose median of tokens is over the saved maximum is worse, exit 3; one whose
+/// cases were accepted under it is not, exit 0.
 #[test]
 fn save_then_against_marks_a_worse_scenario_and_exits_3() {
-    let baseline = repository(
-        "baseline",
-        &[("scenario-1-trial-1", 500, "Completed (accepted)")],
-    );
+    /// Five scenario 1 cases from trial `from`, each at `tokens`, the last stopped `last` and
+    /// the others accepted.
+    fn five(from: usize, tokens: u64, last: &'static str) -> Vec<(String, u64, &'static str)> {
+        (from..from + 5)
+            .map(|n| {
+                let stop = if n == from + 4 { last } else { ACCEPTED };
+                (format!("scenario-1-trial-{n}"), tokens, stop)
+            })
+            .collect()
+    }
+    fn borrowed<'a>(runs: &'a [(String, u64, &'static str)]) -> Vec<(&'a str, u64, &'static str)> {
+        runs.iter()
+            .map(|(case, tokens, stop)| (case.as_str(), *tokens, *stop))
+            .collect()
+    }
+    const ACCEPTED: &str = "Completed (accepted)";
+    let baseline = repository("baseline", &borrowed(&five(1, 500, ACCEPTED)));
     let saves = scratch("saves");
     let (code, text, stderr) = takt(&[
         "scorecard",
@@ -228,7 +243,7 @@ fn save_then_against_marks_a_worse_scenario_and_exits_3() {
     );
     assert_ne!(REVISION, git(&baseline, &["rev-parse", "HEAD"]));
 
-    let candidate = repository("candidate", &[("scenario-1-trial-2", 650, "NoProgress")]);
+    let candidate = repository("candidate", &borrowed(&five(6, 650, "NoProgress")));
     let (code, text, stderr) = takt(&[
         "scorecard",
         "--repo",
@@ -248,10 +263,7 @@ fn save_then_against_marks_a_worse_scenario_and_exits_3() {
     }
     assert!(text.contains("scenario 1  median tokens +150"), "{text}");
 
-    let better = repository(
-        "better",
-        &[("scenario-1-trial-3", 400, "Completed (accepted)")],
-    );
+    let better = repository("better", &borrowed(&five(11, 400, ACCEPTED)));
     let (code, text, stderr) = takt(&[
         "scorecard",
         "--repo",
@@ -345,4 +357,149 @@ fn help_lists_the_exit_codes() {
     for line in ["Exit codes:", "  0  ", "  1  ", "  2  ", "  3  "] {
         assert!(text.contains(line), "{line} in {text}");
     }
+}
+
+/// story:scorecard-against-needs-the-trials: against a saved 5/5 baseline under the default
+/// rule, a candidate with one case (outcome error) gets no verdict: the scenario is printed as
+/// `too few cases (1 of 5)` and the command exits non-zero, as promotion refuses; with five
+/// cases the verdict is given as before.
+#[test]
+fn against_gives_no_verdict_on_fewer_cases_than_the_trials() {
+    let names: Vec<String> = (1..=10).map(|n| format!("scenario-1-trial-{n}")).collect();
+    fn accepted(cases: &[String]) -> Vec<(&str, u64, &str)> {
+        cases
+            .iter()
+            .map(|case| (case.as_str(), 500, "Completed (accepted)"))
+            .collect()
+    }
+    let baseline = repository("trials-baseline", &accepted(&names[..5]));
+    let saves = scratch("trials-saves");
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &baseline.display().to_string(),
+        "--save",
+        &saves.display().to_string(),
+        "--revision",
+        REVISION,
+    ]);
+    assert_eq!(code, 0, "{text}{stderr}");
+    let saved = saves.join(format!("scorecard-{REVISION}.json"));
+
+    let one = repository("trials-one", &[("scenario-1-trial-6", 500, "error")]);
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &one.display().to_string(),
+        "--against",
+        &saved.display().to_string(),
+    ]);
+    assert_ne!(code, 0, "{text}{stderr}");
+    assert!(
+        text.contains("scenario 1  too few cases (1 of 5)"),
+        "{text}{stderr}"
+    );
+    assert!(
+        !text.contains("scenario 1  outcomes by rank"),
+        "no verdict: {text}"
+    );
+    assert!(stderr.contains("too few cases"), "{stderr}");
+
+    let five = repository("trials-five", &accepted(&names[5..]));
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &five.display().to_string(),
+        "--against",
+        &saved.display().to_string(),
+    ]);
+    assert_eq!(code, 0, "{text}{stderr}");
+    assert!(
+        text.contains("scenario 1  outcomes by rank held  tokens held  not worse"),
+        "{text}"
+    );
+    assert!(!text.contains("too few"), "{text}");
+}
+
+/// story:scorecard-against-needs-the-trials, review N7: `--against` applies the trials as a
+/// promotion does: a saved side with fewer cases than the rule's trials, and a scenario only the
+/// candidate has with fewer, get no verdict, and the command exits non-zero naming them.
+#[test]
+fn against_applies_the_trials_to_the_saved_side_and_to_new_scenarios() {
+    let names: Vec<String> = (1..=13).map(|n| format!("scenario-1-trial-{n}")).collect();
+    fn accepted(cases: &[String]) -> Vec<(&str, u64, &str)> {
+        cases
+            .iter()
+            .map(|case| (case.as_str(), 500, "Completed (accepted)"))
+            .collect()
+    }
+    let thin = repository("trials-thin", &accepted(&names[..3]));
+    let saves = scratch("trials-thin-saves");
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &thin.display().to_string(),
+        "--save",
+        &saves.display().to_string(),
+        "--revision",
+        REVISION,
+    ]);
+    assert_eq!(code, 0, "{text}{stderr}");
+    let saved = saves.join(format!("scorecard-{REVISION}.json"));
+    let five = repository("trials-five-cases", &accepted(&names[3..8]));
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &five.display().to_string(),
+        "--against",
+        &saved.display().to_string(),
+    ]);
+    assert_ne!(code, 0, "{text}{stderr}");
+    assert!(
+        text.contains("scenario 1  too few cases on the saved side (3 of 5)"),
+        "{text}{stderr}"
+    );
+    assert!(
+        !stderr.contains("on the candidate's side") && stderr.contains("on each side"),
+        "the saved side is not the candidate's: {stderr}"
+    );
+    let (code, help, _) = takt(&["scorecard", "--help"]);
+    assert_eq!(code, 0);
+    assert!(
+        !help.contains("it has no run"),
+        "no exit 3 for a missing run: {help}"
+    );
+    assert!(
+        !text.contains("scenario 1  outcomes by rank"),
+        "no verdict: {text}"
+    );
+
+    let full = repository("trials-full", &accepted(&names[8..13]));
+    let saves = scratch("trials-full-saves");
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &full.display().to_string(),
+        "--save",
+        &saves.display().to_string(),
+        "--revision",
+        REVISION,
+    ]);
+    assert_eq!(code, 0, "{text}{stderr}");
+    let saved = saves.join(format!("scorecard-{REVISION}.json"));
+    let mut runs = accepted(&names[3..8]);
+    runs.push(("scenario-2-trial-1", 500, "Completed (accepted)"));
+    let new = repository("trials-new-scenario", &runs);
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &new.display().to_string(),
+        "--against",
+        &saved.display().to_string(),
+    ]);
+    assert_ne!(code, 0, "{text}{stderr}");
+    assert!(
+        text.contains("scenario 2  too few cases (1 of 5)") && stderr.contains("scenario 2"),
+        "{text}{stderr}"
+    );
 }
