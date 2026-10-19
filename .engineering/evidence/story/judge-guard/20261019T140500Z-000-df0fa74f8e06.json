@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T14:05:00Z",
+  "actor": "human:timo",
+  "artifact": "story:judge-guard",
+  "kind": "story",
+  "revision": 26,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check on the release commit 3ed8573 (tag 0.2.0, main 9ccd683): 1197 passed, 0 failed, 6 ignored; wave 14 close gate at 94b8f30: task check 0, --no-fail-fast 1197/0/6, task fuzz no crash",
+    "reference": "3ed8573"
+  }
+}

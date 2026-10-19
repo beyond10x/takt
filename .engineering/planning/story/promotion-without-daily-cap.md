@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:promotion-without-daily-cap
 kind: story
-status: active
+status: implemented
 title: takt promote allows more than one promotion a UTC day
 summary: the same-day refusal removed; lock, recorded-already, no-regression and the chain stay
 relations:
@@ -20,10 +20,11 @@ scope:
   path: ess/domains/takt.yaml
 - confidence: cited
   path: website/docs/self-improvement/scorecard.md
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T11:02:04Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-19T11:02:04Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-19T14:11:45Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: promotion-without-daily-cap
 

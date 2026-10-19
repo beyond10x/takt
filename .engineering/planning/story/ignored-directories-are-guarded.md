@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:ignored-directories-are-guarded
 kind: story
-status: active
+status: implemented
 title: A step cannot change what an ignored directory already holds
 tags:
 - priority:high
@@ -15,10 +15,11 @@ scope:
   path: crates/takt/src/git.rs
 - confidence: cited
   path: crates/takt/src/run.rs
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T07:39:18Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-19T07:39:19Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-19T14:11:45Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 
