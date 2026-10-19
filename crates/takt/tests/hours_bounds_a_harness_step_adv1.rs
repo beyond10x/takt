@@ -184,11 +184,14 @@ impl Harness for FailsEarly {
     }
 }
 
-/// A harness that fails for a reason of its own (not logged in) half the budget before it is
-/// spent, its step having changed 20000 files, is reported as the hour budget: the run checks
-/// `time_left() == 0` after the sweep, the put-back of the git directory and the snapshots
-/// (run.rs:3939), not whether the budget is what ended the step. Decision 1 of the brief: a
-/// step the budget kills stops on `Hours`; one that fails by itself is "the harness failed".
+/// A harness that fails for a reason of its own (not logged in) 250 ms before the budget is
+/// spent, its step having changed 20000 files, ends the run with its own error, not on `Hours`:
+/// the run judges the deadline by when the step returned (`returned >= deadline`, run.rs around
+/// 4567), not after the sweep, the put-back of the git directory and the snapshots that follow
+/// it. Decision 1 of the brief: a step the budget kills stops on `Hours`; one that fails by
+/// itself is "the harness failed". This case runs under a 10 s budget of its own, so the setup
+/// has room under load and the margin before the end stays small enough to catch a deadline
+/// judged after the cleanup.
 #[test]
 fn a_harness_that_fails_by_itself_before_the_budget_ends_is_reported_as_the_hour_budget() {
     let tree = repository("early", "#!/bin/sh\nexit 1\n");
@@ -197,10 +200,15 @@ fn a_harness_that_fails_by_itself_before_the_budget_ends_is_reported_as_the_hour
         failed_at: Cell::new(None),
     };
     let validators: Vec<Box<dyn Validator>> = Vec::new();
-    let mut run = Run::open(&tree, options("adv-early"), &harness, &validators).expect("opens");
+    let hours = 10.0 / 3600.0;
+    let mut options = options("adv-early");
+    options.hours = Some(hours);
+    let mut run = Run::open(&tree, options, &harness, &validators).expect("opens");
     let after_open = Instant::now();
-    let run_end = after_open + budget();
-    harness.fail_at.set(Some(run_end - budget() / 2));
+    let run_end = after_open + Duration::from_secs_f64(hours * 3600.0);
+    harness
+        .fail_at
+        .set(Some(run_end - Duration::from_millis(250)));
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out);
