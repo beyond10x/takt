@@ -787,6 +787,19 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // The forge, read before the turn, whose mainline it reads: the forge's `main`, or the
             // local `main` with none.
             let forge = forge_of(&repo, looping.forge.as_deref())?;
+            // A resumed turn reads the mainline through the forge it recorded when it opened,
+            // as `takt approve` does: a run through another is refused before anything is
+            // written.
+            if let Some(resuming) = &resuming {
+                let run_forge = forge.forge.as_ref().map_or("none", |forge| forge.name());
+                if let Some(why) = takt::case::turn_forge_refusal(
+                    &repo.join(takt::case::CASES_DIR).join(&resuming.id),
+                    &resuming.id,
+                    run_forge,
+                )? {
+                    return Err(anyhow!(why));
+                }
+            }
             // The identity a case opened here commits with: the one given, else the one the
             // repository configures at the commit the case forks from, required when the run
             // pushes its commits. A resumed case keeps its own, and is refused here when it has

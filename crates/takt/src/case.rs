@@ -2449,6 +2449,24 @@ pub fn turn_forge(case_dir: &Path) -> Result<Option<String>> {
     }
 }
 
+/// Why a resume of the case `id` at `case_dir` by a run whose forge is `run_forge` (`bot`, or
+/// `none` for the local `main`, [`crate::improvement::Mainline::forge`]) is refused before
+/// anything is written, or none: a turn reads the mainline through the forge it recorded when it
+/// opened ([`turn_forge`]), `takt approve` at a judge-surface grant and the merge validators
+/// alike, so a run through another forge would read another `main`. A case that recorded no
+/// forge, any case but a turn and a turn opened before turns recorded one, is not refused here.
+pub fn turn_forge_refusal(case_dir: &Path, id: &str, run_forge: &str) -> Result<Option<String>> {
+    let Some(recorded) = turn_forge(case_dir)? else {
+        return Ok(None);
+    };
+    if recorded == run_forge {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{TURN_PROTOCOL}: the turn {id} recorded the forge `{recorded}` when it opened, and this run's forge is `{run_forge}`; a turn reads the mainline through the forge it opened with, `takt approve` and the merge validators alike, so resume it with `--forge {recorded}`; nothing was resumed"
+    )))
+}
+
 /// The case input a turn's judge surface is, `surface`.
 pub const TURN_SURFACE: &str = "surface";
 
