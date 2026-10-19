@@ -51,7 +51,7 @@ impl Scratch {
         let bare = self.0.join(name);
         if !bare.exists() {
             fs::create_dir_all(&bare).expect("a bare dir");
-            git(&bare, &["init", "-q", "--bare"]);
+            git(&bare, &["init", "-q", "-b", "main", "--bare"]);
         }
         bare
     }
