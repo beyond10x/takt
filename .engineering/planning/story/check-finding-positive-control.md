@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:check-finding-positive-control
 kind: story
-status: draft
+status: active
 title: check-finding says not_reproduced only when the command reached the scenario
 tags:
 - priority:high
@@ -10,7 +10,17 @@ relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-fe93286-areas
-revision: 2
+scope:
+- confidence: inferred
+  path: crates/takt-cli/tests/finding_scripts.rs
+- confidence: cited
+  path: scripts/check-finding
+- confidence: inferred
+  path: scripts/file-finding
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T01:21:29Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-19T01:21:29Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 
