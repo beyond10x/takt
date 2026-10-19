@@ -1802,6 +1802,40 @@ impl CaseDir {
         }
     }
 
+    /// Checks that every part of the way from the tree down to the case's directory, the
+    /// directory itself included, is a real directory, each read with `symlink_metadata` and
+    /// never followed: a link on it (one a step left at `.engineering` when its undo failed)
+    /// would take a write, an append or a removal under the case wherever it points. A run
+    /// writes, appends to and removes nothing under the case directory, its event log and its
+    /// hold among them, until this holds ([`crate::Run::run`]).
+    pub fn check_way(&self) -> Result<()> {
+        let mut way = PathBuf::new();
+        for part in Path::new(CASES_DIR).join(&self.id).components() {
+            way.push(part);
+            let at = self.tree.join(&way);
+            let meta =
+                std::fs::symlink_metadata(&at).with_context(|| format!("read {}", at.display()))?;
+            if meta.file_type().is_symlink() {
+                let target = std::fs::read_link(&at)
+                    .with_context(|| format!("read the link {}", at.display()))?;
+                bail!(
+                    "{} is a link to {}; nothing under the case {} is written through it",
+                    way.display(),
+                    target.display(),
+                    self.id
+                );
+            }
+            if !meta.is_dir() {
+                bail!(
+                    "{} is not a directory; nothing under the case {} is written there",
+                    way.display(),
+                    self.id
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// The number of the latest evaluation written under the case, the highest `n` of its
     /// `decisions/<n>.json`; 0 before the first. One sequence per case, continued across its
     /// runs: a run numbers its evaluations, and the records its validators write, from here.

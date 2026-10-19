@@ -3599,16 +3599,23 @@ impl<'a> Run<'a> {
     /// is kept. Every run's record ends on its `stop` line, or on an `error` line when the run
     /// ends on an error, a failing `out` among them. The run holds the case while it runs
     /// (`run.lock` under the case directory), so no grant lands and no second run starts on it
-    /// meanwhile; it lets go at every stop and on error.
+    /// meanwhile; it lets go at every stop and on error. Nothing under the case directory is
+    /// written, appended to or removed while a part of the way to it is not a real directory
+    /// ([`CaseDir::check_way`], read before the hold, before the stop and before the error
+    /// line): a run that ends that way records nothing and keeps its hold, says on standard
+    /// error what it could not record, and ends on the error.
     pub fn run(&mut self, out: &mut dyn Write) -> Result<Stop> {
+        self.case.check_way()?;
         self.case.hold()?;
         let events = Events::new(&self.case.dir);
         // A panic in the loop (a harness or a validator that broke) is recorded as the run's
         // `error` line and the case let go before the panic goes on: the record ends, and the
         // case is not left held.
         let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_held(&events, out)
-                .and_then(|stop| self.close(&events, &stop, out).map(|()| stop))
+            self.run_held(&events, out).and_then(|stop| {
+                self.case.check_way()?;
+                self.close(&events, &stop, out).map(|()| stop)
+            })
         })) {
             Ok(outcome) => outcome,
             Err(panic) => {
@@ -3617,36 +3624,55 @@ impl<'a> Run<'a> {
                     .map(|text| (*text).to_owned())
                     .or_else(|| panic.downcast_ref::<String>().cloned())
                     .unwrap_or_else(|| "a panic with no message".to_owned());
-                let _ = events.emit(
-                    self.steps,
-                    &Event::Error {
-                        error: format!("the run panicked: {what}"),
-                    },
-                );
-                let _ = self.case.release();
+                let error = format!("the run panicked: {what}");
+                match self.case.check_way() {
+                    Ok(()) => {
+                        let _ = events.emit(self.steps, &Event::Error { error });
+                        let _ = self.case.release();
+                    }
+                    Err(way) => self.unrecorded(&error, &way),
+                }
                 std::panic::resume_unwind(panic);
             }
         };
         let outcome = match outcome {
             Ok(stop) => Ok(stop),
-            Err(error) => Err(
-                match events.emit(
-                    self.steps,
-                    &Event::Error {
-                        error: format!("{error:#}"),
+            Err(error) => {
+                if let Err(way) = self.case.check_way() {
+                    self.unrecorded(&format!("{error:#}"), &way);
+                    return Err(error.context(format!(
+                        "nothing of the run was recorded and the case was not let go: {way:#}"
+                    )));
+                }
+                Err(
+                    match events.emit(
+                        self.steps,
+                        &Event::Error {
+                            error: format!("{error:#}"),
+                        },
+                    ) {
+                        Ok(()) => error,
+                        Err(unrecorded) => error.context(format!(
+                            "and the error could not be recorded: {unrecorded:#}"
+                        )),
                     },
-                ) {
-                    Ok(()) => error,
-                    Err(unrecorded) => error.context(format!(
-                        "and the error could not be recorded: {unrecorded:#}"
-                    )),
-                },
-            ),
+                )
+            }
         };
         let released = self.case.release();
         let stop = outcome?;
         released?;
         Ok(stop)
+    }
+
+    /// Says on standard error what a run that ended on `error` did not record because the way to
+    /// its case directory is not a real directory (`way`, [`CaseDir::check_way`]): the steps and
+    /// the tokens it took, the refusal, and the error. Its record and its hold stay as they are.
+    fn unrecorded(&self, error: &str, way: &anyhow::Error) {
+        eprintln!(
+            "takt: case {}: nothing of this run was recorded and the case was not let go: {way:#}; the run took {} step(s) and {} token(s); it ended on: {error}",
+            self.case.id, self.steps, self.tokens
+        );
     }
 
     /// After the loop stopped: the store's writes of a story's case that terminated

@@ -1029,3 +1029,182 @@ fn nothing_is_put_back_through_a_link_on_the_way_to_the_cases_directory() {
         "the refusal names the link\n{text}"
     );
 }
+
+/// A step that leaves `.engineering` a link to a copy beside the tree and makes its undo fail
+/// (the reset fails, the judge surface cannot be read, so the link stays): the run ends on the
+/// error and records nothing through the link. The copy's event log gets no error line, its
+/// hold is not removed, and the error says nothing was recorded, naming the link.
+#[test]
+fn a_failed_undo_records_nothing_through_an_engineering_link() {
+    let id = "err-link";
+    let scratch = repository(id, &[("src/a", "a\n")]);
+    let (stop, text, _) = step(
+        &scratch,
+        id,
+        format!(
+            "cp -r .engineering ../eng && rm ../eng/cases/{id}/case.yaml && rm -rf .engineering && ln -s ../eng .engineering && {SURFACE_UNREADABLE} && {RESET_FAILS}"
+        ),
+    );
+    let copy = scratch.0.join("eng/cases").join(id);
+    let events = fs::read_to_string(copy.join("events.jsonl")).unwrap_or_default();
+    assert!(
+        !events.contains("\"error\""),
+        "the run's error line was written through the link to {}\n{text}",
+        copy.join("events.jsonl").display()
+    );
+    assert!(
+        copy.join("run.lock").exists(),
+        "the hold beside the tree, {}, was removed through the link\n{text}",
+        copy.join("run.lock").display()
+    );
+    let Err(error) = stop else {
+        panic!("the run ends on the error\n{text}");
+    };
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("nothing of the run was recorded")
+            && error.contains(".engineering is a link to ../eng"),
+        "the error says nothing was recorded, naming the link: {error}"
+    );
+}
+
+/// After such a half-undone run the tree still has `.engineering` a link: no case is opened
+/// through it, the half-undone case is not resumed, and nothing is written beside the tree.
+#[test]
+fn a_half_undone_tree_opens_and_resumes_no_case_through_the_link() {
+    let id = "half";
+    let scratch = repository(id, &[("src/a", "a\n")]);
+    let (_, text, _) = step(
+        &scratch,
+        id,
+        format!(
+            "cp -r .engineering ../eng && rm -rf .engineering && ln -s ../eng .engineering && {SURFACE_UNREADABLE} && {RESET_FAILS}"
+        ),
+    );
+    let tree = scratch.tree();
+    assert!(
+        fs::symlink_metadata(tree.join(".engineering"))
+            .is_ok_and(|meta| meta.file_type().is_symlink()),
+        "precondition: the link stays after the failed undo\n{text}"
+    );
+    let validators: Vec<Box<dyn Validator>> =
+        vec![Box::new(TestsRun::new("true").expect("a command"))];
+    let harness = Swaps::running("true".to_owned());
+    assert!(
+        Run::open(&tree, options("next", 1), &harness, &validators).is_err(),
+        "a case was opened under the linked .engineering\n{text}"
+    );
+    assert!(
+        Run::resume(&tree, options(id, 1), id, &harness, &validators).is_err(),
+        "the half-undone case was resumed\n{text}"
+    );
+    assert_eq!(harness.calls.get(), 0, "no step was taken");
+    assert!(
+        fs::symlink_metadata(scratch.0.join("eng/cases/next")).is_err(),
+        "a case was written beside the tree\n{text}"
+    );
+}
+
+/// The undo's error joins every part's: a step that leaves a file on the judge surface and a
+/// cargo configuration beside the tree, each in a directory it made read-only so neither can be
+/// removed, ends on an error that names both removals.
+#[test]
+fn a_failed_undo_names_the_surface_and_the_outside_errors() {
+    let id = "joined";
+    let scratch = repository(id, &[]);
+    let (stop, text, _) = step(
+        &scratch,
+        id,
+        "mkdir -p .github && echo x > .github/planted.yml && chmod 555 .github && mkdir -p ../.cargo && echo '[build]' > ../.cargo/config.toml && chmod 555 ../.cargo".to_owned(),
+    );
+    let Err(error) = stop else {
+        panic!("the run ends on the undo's error\n{text}");
+    };
+    let error = format!("{error:#}");
+    let real = fs::canonicalize(scratch.tree()).expect("the tree's real path");
+    let surface = format!("remove {}", real.join(".github/planted.yml").display());
+    assert!(
+        error.contains(&surface),
+        "the surface's error, {surface}, is named: {error}"
+    );
+    // The step made `.cargo` beside the tree, so putting it back removes that directory whole.
+    let outside = format!("remove {}:", scratch.0.join(".cargo").display());
+    assert!(
+        error.contains(&outside),
+        "the outside error, {outside}, is named: {error}"
+    );
+}
+
+/// A case opened in the tree whose `.engineering` is then moved beside it and replaced by a link
+/// before the run starts: the run takes no hold and no step, and writes nothing beside the tree.
+#[test]
+fn a_run_takes_no_hold_through_a_link_on_the_way_to_its_case() {
+    let id = "hold-link";
+    let scratch = repository(id, &[]);
+    let tree = scratch.tree();
+    let validators: Vec<Box<dyn Validator>> =
+        vec![Box::new(TestsRun::new("true").expect("a command"))];
+    let harness = Swaps::running("true".to_owned());
+    let mut run = Run::open(&tree, options(id, 1), &harness, &validators).expect("the case opens");
+    sh(&tree, "mv .engineering ../eng && ln -s ../eng .engineering");
+    let before = files(&scratch.0.join("eng"));
+    let mut out = Vec::new();
+    let Err(error) = run.run(&mut out) else {
+        panic!("the run went on through the link");
+    };
+    assert!(
+        format!("{error:#}").contains(".engineering is a link to ../eng"),
+        "{error:#}"
+    );
+    assert_eq!(harness.calls.get(), 0, "no step was taken");
+    assert_eq!(
+        files(&scratch.0.join("eng")),
+        before,
+        "nothing written beside the tree"
+    );
+}
+
+/// A harness whose first step runs `script` and then panics.
+struct PanicsAfter(String);
+
+impl Harness for PanicsAfter {
+    fn name(&self) -> &str {
+        "panics-after"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> anyhow::Result<StepReport> {
+        sh(context.tree, &self.0);
+        panic!("the harness broke");
+    }
+}
+
+/// A harness that leaves `.engineering` a link to a copy beside the tree, makes its undo fail,
+/// then panics: the panic goes on, and the run records nothing through the link on its way out,
+/// no error line in the copy's event log and its hold not removed.
+#[test]
+fn a_panic_after_a_failed_undo_records_nothing_through_an_engineering_link() {
+    let id = "panic-link";
+    let scratch = repository(id, &[("src/a", "a\n")]);
+    let tree = scratch.tree();
+    let validators: Vec<Box<dyn Validator>> =
+        vec![Box::new(TestsRun::new("true").expect("a command"))];
+    let harness = PanicsAfter(format!(
+        "cp -r .engineering ../eng && rm ../eng/cases/{id}/case.yaml && rm -rf .engineering && ln -s ../eng .engineering && {SURFACE_UNREADABLE} && {RESET_FAILS}"
+    ));
+    let mut run = Run::open(&tree, options(id, 4), &harness, &validators).expect("the case opens");
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut out = Vec::new();
+        let _ = run.run(&mut out);
+    }));
+    assert!(panicked.is_err(), "the harness's panic goes on");
+    let copy = scratch.0.join("eng/cases").join(id);
+    let events = fs::read_to_string(copy.join("events.jsonl")).unwrap_or_default();
+    assert!(
+        !events.contains("\"error\""),
+        "the panic's error line was written through the link: {events}"
+    );
+    assert!(
+        copy.join("run.lock").exists(),
+        "the hold beside the tree was removed through the link"
+    );
+}
