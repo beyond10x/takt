@@ -2490,3 +2490,244 @@ fn a_saved_outcome_disagreeing_with_its_held_out_result_is_refused() {
         "{err}"
     );
 }
+
+/// Replaces `"<key>": "<old>"` by `"<key>": "<new>"` in the file at `path`, exactly once.
+fn patch(path: &Path, key: &str, new: &str) {
+    let text = fs::read_to_string(path).expect("read");
+    let prefix = format!("\"{key}\": \"");
+    let mut done = 0;
+    let out: Vec<String> = text
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with(&prefix) {
+                done += 1;
+                let indent = &line[..line.len() - line.trim_start().len()];
+                let comma = if line.trim_end().ends_with(',') {
+                    ","
+                } else {
+                    ""
+                };
+                format!("{indent}\"{key}\": \"{new}\"{comma}")
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect();
+    assert_eq!(done, 1, "{key} in {}: {text}", path.display());
+    fs::write(path, out.join("\n") + "\n").expect("patched");
+}
+
+/// The scorecard of five scenario 1 cases with these trial numbers, tokens and stops, each run
+/// opened by `binary`, saved under `revision` in a directory of its own; the file.
+fn card_of_ids(
+    world: &World,
+    label: &str,
+    revision: &str,
+    ids: [usize; 5],
+    tokens: [u64; 5],
+    stops: [&str; 5],
+    binary: &str,
+) -> PathBuf {
+    let cases = world.outer.join(format!("cases-{label}"));
+    for n in 0..5 {
+        run(
+            &cases,
+            &format!("scenario-1-trial-{}", ids[n]),
+            tokens[n],
+            stops[n],
+            Some(binary),
+        );
+    }
+    World::save(
+        &cases,
+        &world.outer.join(format!("saves-{label}")),
+        revision,
+    )
+}
+
+/// A world whose baseline is current, a candidate refused on it (cases 11 to 15), and then the
+/// stored copy put back to outcome definition 1 with the chain's digests re-pointed, as a takt
+/// one definition older would have left the store; the world and the refusal's file name.
+fn refused_then_stale(name: &str) -> (World, String) {
+    let world = World::new(name, BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let worse = world.candidate_card("worse", WITHIN_TOKENS, TWO_WORSE);
+    let (code, out, err) = world.promote(&worse, &[]);
+    assert_eq!(code, 3, "{out}{err}");
+    let refusal = format!("{}.refused.json", world.revision);
+    let copy = world
+        .store
+        .join(format!("{BASELINE_REVISION}.scorecard.json"));
+    let v1 = outcome_v1(&world, &copy, "stale", &[]);
+    fs::copy(&v1, &copy).expect("downgraded");
+    let base = world.store.join(format!("{BASELINE_REVISION}.json"));
+    patch(&base, "scorecard_sha256", &sha256(&copy));
+    patch(
+        &world.store.join(&refusal),
+        "previous_sha256",
+        &sha256(&base),
+    );
+    (world, refusal)
+}
+
+/// Correction 2, item 1: `--rebaseline` binds each run to the stored one, so a scorecard with
+/// the baseline's case ids but other runs (five errors at ten times the tokens) is refused,
+/// naming the run and the field; nothing is written.
+#[test]
+fn a_rebaseline_of_other_runs_under_the_same_ids_is_refused() {
+    let world = World::new("rebaseline-other-runs", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline_of(&outcome_v1(&world, &world.baseline, "v1", &[]));
+    let lowered = card_of_ids(
+        &world,
+        "lowered",
+        BASELINE_REVISION,
+        [1, 2, 3, 4, 5],
+        [1_500_000; 5],
+        [ERROR; 5],
+        BASELINE_REVISION,
+    );
+    let (code, out, err) = rebaseline(&world, &lowered);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("run scenario-1-trial-1#1 ") && err.contains("the stored run"),
+        "{err}"
+    );
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// Correction 2, item 1: the same case ids with another number of runs each are refused, naming
+/// the case and both counts.
+#[test]
+fn a_rebaseline_with_more_runs_a_case_is_refused() {
+    let world = World::new("rebaseline-more-runs", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline_of(&outcome_v1(&world, &world.baseline, "v1", &[]));
+    let cases = world.outer.join("cases-multi");
+    for n in 1..=5 {
+        let case = format!("scenario-1-trial-{n}");
+        run(
+            &cases,
+            &case,
+            BASELINE_TOKENS[n - 1],
+            APPROVAL,
+            Some(BASELINE_REVISION),
+        );
+        run(&cases, &case, 2_000_000, ERROR, Some(BASELINE_REVISION));
+    }
+    let card = World::save(&cases, &world.outer.join("saves-multi"), BASELINE_REVISION);
+    let (code, out, err) = rebaseline(&world, &card);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("case scenario-1-trial-1 has 2 runs") && err.contains("1 stored"),
+        "{err}"
+    );
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// Correction 2, item 1: a lowered rebaseline after a refusal is refused, so the refused
+/// candidate's new runs, as worse as before, stay refused; an honest one is accepted, chains onto
+/// the refusal and judges them the same.
+#[test]
+fn a_rebaseline_cannot_turn_a_refused_candidate_into_a_pass() {
+    let (world, refusal) = refused_then_stale("rebaseline-flip");
+    let lowered = card_of_ids(
+        &world,
+        "lowered",
+        BASELINE_REVISION,
+        [1, 2, 3, 4, 5],
+        BASELINE_TOKENS,
+        TWO_WORSE,
+        BASELINE_REVISION,
+    );
+    let (code, out, err) = rebaseline(&world, &lowered);
+    assert_eq!(code, 1, "the lowered rebaseline is refused: {out}{err}");
+    let (code, out, err) = rebaseline(&world, &world.baseline);
+    assert_eq!(code, 0, "the honest one is accepted: {out}{err}");
+    let name = world
+        .records()
+        .into_iter()
+        .find(|name| name.contains(".rebaseline-") && !name.ends_with(".scorecard.json"))
+        .expect("the rebaseline record");
+    assert!(
+        world.record(&name).contains(&format!(
+            "\"previous_sha256\": \"{}\"",
+            sha256(&world.store.join(&refusal))
+        )),
+        "it chains onto the refusal"
+    );
+    let again = world.trials_card("again", 21, WITHIN_TOKENS, TWO_WORSE);
+    let (code, out, err) = world.promote(&again, &["--rejudge", "--dry-run"]);
+    assert_eq!(code, 3, "the refused candidate stays refused: {out}{err}");
+}
+
+/// Correction 2, item 2: a rebaseline record is checked on read: one whose `replaces_sha256`
+/// names no scorecard of the record it replaces refuses the store, naming it.
+#[test]
+fn a_rebaseline_record_replacing_nothing_refuses_the_store() {
+    let world = World::new("rebaseline-replaces", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline_of(&outcome_v1(&world, &world.baseline, "v1", &[]));
+    let (code, out, err) = rebaseline(&world, &world.baseline);
+    assert_eq!(code, 0, "{out}{err}");
+    let name = world
+        .records()
+        .into_iter()
+        .find(|name| name.contains(".rebaseline-") && !name.ends_with(".scorecard.json"))
+        .expect("the rebaseline record");
+    patch(&world.store.join(&name), "replaces_sha256", &"0".repeat(64));
+    let card = world.candidate_card("candidate", BASELINE_TOKENS, FIVE_APPROVALS);
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains(&name) && err.contains(&"0".repeat(64)),
+        "{err}"
+    );
+}
+
+/// Correction 2, item 3: `--rebaseline` refuses a file not named `scorecard-<revision>.json`.
+#[test]
+fn a_rebaseline_file_not_named_by_its_revision_is_refused() {
+    let world = World::new("rebaseline-name", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline_of(&outcome_v1(&world, &world.baseline, "v1", &[]));
+    let odd = world.outer.join("saves-odd").join("whatever.json");
+    write(&odd, &fs::read_to_string(&world.baseline).expect("read"));
+    let (code, out, err) = rebaseline(&world, &odd);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains(&format!("scorecard-{BASELINE_REVISION}.json")),
+        "{err}"
+    );
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// Correction 2, item 4: a held-out result's `passed` is derived from its `result` on load, so a
+/// saved scorecard with `passed` flipped over a failing result is refused, naming the run.
+#[test]
+fn a_held_out_passed_flag_contradicting_its_result_is_refused() {
+    let world = World::new("passed-flipped", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let cases = world.outer.join("cases-passed-flipped");
+    for (n, tokens) in BASELINE_TOKENS.iter().enumerate() {
+        let case = format!("scenario-1-trial-{}", n + 11);
+        run(&cases, &case, *tokens, APPROVAL, Some(&world.revision));
+        write(
+            &cases.join(CASES_DIR).join(&case).join(HELD_OUT),
+            "FAIL: x\n",
+        );
+    }
+    let card = World::save(
+        &cases,
+        &world.outer.join("saves-passed-flipped"),
+        &world.revision,
+    );
+    let text = fs::read_to_string(&card).expect("read");
+    let edited = text
+        .replace(
+            "\"outcome\": \"failed\"",
+            "\"outcome\": \"ApprovalRequired\"",
+        )
+        .replace("\"passed\": false", "\"passed\": true");
+    assert_ne!(edited, text);
+    fs::write(&card, edited).expect("edited");
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("scenario-1-trial-11#1"), "{err}");
+}

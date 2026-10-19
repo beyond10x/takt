@@ -27,8 +27,8 @@
 //! cases). Compared with a saved
 //! one, a scenario is worse when, for some outcome rank, the candidate's cases at that rank or
 //! better fall short of the saved share of its own n by more than the margin (at equal n: more
-//! than `margin` cases fewer), when its median of tokens exceeds the saved maximum, or when the
-//! saved scorecard has the scenario and the candidate has no run of it. Tokens are printed per
+//! than `margin` cases fewer), or when its median of tokens exceeds the saved maximum; a side
+//! with fewer cases than the rule's trials, none included, gets no verdict. Tokens are printed per
 //! scenario and side as n, minimum, median and maximum over cases with the difference of the
 //! medians. A metric whose definition changed between the two is printed with both figures and
 //! does not make a scenario worse; outcomes are compared under the current definition whatever
@@ -862,6 +862,20 @@ impl Scorecard {
             let Some(held) = &row.held_out else {
                 continue;
             };
+            if held.passed != (held.result == "PASS") {
+                bail!(
+                    "{}: run {}#{n} has the held-out result {:?}, which {}, but the file says passed {}; whether a run passed is read from its result, so the scorecard is not read",
+                    path.display(),
+                    row.case,
+                    held.result,
+                    if held.result == "PASS" {
+                        "passed"
+                    } else {
+                        "did not pass"
+                    },
+                    held.passed
+                );
+            }
             let expected = if held.passed {
                 row.stop.as_str()
             } else {
@@ -888,8 +902,7 @@ impl Scorecard {
     /// some rank, the candidate's cases at that rank or better fall short of the saved share of
     /// the candidate's n by more than the margin (at equal n: by more than `margin` cases),
     /// under the current definition; when its median of tokens exceeds the saved maximum, the
-    /// token definition unchanged; or when the saved scorecard has the scenario and the
-    /// candidate has no run of it (`no run`). A scorecard is never worse than itself; one case
+    /// token definition unchanged. A scorecard is never worse than itself; one case
     /// lowered is within a margin of one, two cases lowered in one scenario never are. The
     /// trials apply as a promotion applies them: a scenario the saved scorecard has with fewer
     /// cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), and
@@ -952,7 +965,8 @@ impl Scorecard {
                     None => writeln!(out, "{}  scenario {scenario}  {}", case.case, case.outcome)?,
                 }
             }
-            let needed = usize::try_from(trials).unwrap_or(usize::MAX);
+            // A rule of no trials still needs one case a side: there is no verdict on none.
+            let needed = usize::try_from(trials).unwrap_or(usize::MAX).max(1);
             if !baseline.is_empty() && baseline.len() < needed {
                 writeln!(
                     out,
@@ -979,11 +993,6 @@ impl Scorecard {
             }
             if baseline.is_empty() {
                 writeln!(out, "scenario {scenario}  no baseline")?;
-                continue;
-            }
-            if candidate.is_empty() {
-                worse += 1;
-                writeln!(out, "scenario {scenario}  no run  worse")?;
                 continue;
             }
             let median = |cases: &[Case], metric: &str| {
@@ -1089,7 +1098,7 @@ impl Scorecard {
         }
         if !too_few.is_empty() {
             bail!(
-                "too few cases for a verdict: {}; the rule needs {trials} cases a scenario on the candidate's side, so run each again before comparing",
+                "too few cases for a verdict: {}; the rule needs {trials} cases a scenario on each side, so run the short side again before comparing",
                 too_few.join(", ")
             );
         }

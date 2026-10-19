@@ -57,7 +57,9 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::scorecard::{BINARY_FILE, METRICS, Rule, RunBinary, Scorecard, StatedBy, is_sha256};
+use crate::scorecard::{
+    BINARY_FILE, METRICS, Row, Rule, RunBinary, Scorecard, StatedBy, is_sha256,
+};
 
 /// The promotion record's format.
 pub const FORMAT: &str = "takt-promotion/1";
@@ -525,7 +527,129 @@ pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
     });
     let ordered = chained(store, records)?;
     rejudges_in_chain(store, &ordered)?;
+    rebaselines_in_chain(store, &ordered)?;
     Ok(ordered)
+}
+
+/// Every rebaseline in the chain `records` replaces the baseline before it: its
+/// `replaces_sha256` is the scorecard digest of the latest record before it that is no refusal,
+/// of its revision, and the case ids of its scorecard copy are that record's copy's. One that
+/// replaces anything else is an error naming it.
+fn rebaselines_in_chain(store: &Path, records: &[Promotion]) -> Result<()> {
+    for (n, record) in records.iter().enumerate() {
+        if record.kind != Kind::Rebaseline {
+            continue;
+        }
+        let path = record_path(store, record);
+        let replaced = records[..n]
+            .iter()
+            .rfind(|earlier| earlier.kind != Kind::Refused)
+            .filter(|earlier| {
+                Some(&earlier.scorecard_sha256) == record.replaces_sha256.as_ref()
+                    && earlier.revision == record.revision
+            });
+        let Some(replaced) = replaced else {
+            bail!(
+                "{}: its replaces_sha256 {} is not the scorecard of a baseline of {} before it in the chain; the store is not read past this",
+                path.display(),
+                record.replaces_sha256.as_deref().unwrap_or("(none)"),
+                record.revision
+            );
+        };
+        let (copy, replaced_copy) = (copy_path(store, record), copy_path(store, replaced));
+        if case_ids(&Scorecard::load(&copy)?) != case_ids(&Scorecard::load(&replaced_copy)?) {
+            bail!(
+                "{}: the case ids of its scorecard {} are not those of the scorecard it replaces, {}; the store is not read past this",
+                path.display(),
+                copy.display(),
+                replaced_copy.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Every run of `card` is the run of `stored` of the same case at the same position, re-derived
+/// under newer definitions and nothing else: each case has as many runs as stored, and every
+/// field whose definition did not change is equal: the steps, tokens, refusals, `NoProgress`,
+/// errors and wall time under unchanged metric versions, the outcome when its definition is
+/// unchanged, and always the stop (the stored outcome under the outcome definition of version 1,
+/// which was the stop) and the revision the run's `opened` line names. The first run that is
+/// not is the refusal, named with the field and both figures.
+fn runs_bound(
+    card: &Scorecard,
+    stored: &Scorecard,
+    shown: &Path,
+    stored_path: &Path,
+) -> Result<()> {
+    let runs_of = |card: &'_ Scorecard| {
+        let mut runs: BTreeMap<String, Vec<Row>> = BTreeMap::new();
+        for row in &card.rows {
+            runs.entry(row.case.clone()).or_default().push(row.clone());
+        }
+        runs
+    };
+    let (runs, stored_runs) = (runs_of(card), runs_of(stored));
+    let unchanged = |metric: &str| card.metrics.get(metric) == stored.metrics.get(metric);
+    for (case, now) in &runs {
+        let then = stored_runs.get(case).map_or(&[][..], Vec::as_slice);
+        if now.len() != then.len() {
+            bail!(
+                "{}: case {case} has {} runs, {} stored ({}); --rebaseline re-scores the stored runs and no other",
+                shown.display(),
+                now.len(),
+                then.len(),
+                stored_path.display()
+            );
+        }
+        for (n, (run, was)) in now.iter().zip(then).enumerate() {
+            let stored_stop = if stored.metrics.get("outcome") == Some(&1) {
+                &was.outcome
+            } else {
+                &was.stop
+            };
+            let mut fields: Vec<(&str, String, String)> =
+                vec![("stop", run.stop.clone(), stored_stop.clone())];
+            if unchanged("outcome") {
+                fields.push(("outcome", run.outcome.clone(), was.outcome.clone()));
+            }
+            for (metric, field, figure, stored_figure) in [
+                ("steps", "steps", run.steps, was.steps),
+                ("tokens", "tokens", run.tokens, was.tokens),
+                ("refusals", "refusals", run.refusals, was.refusals),
+                (
+                    "no_progress",
+                    "no_progress",
+                    run.no_progress,
+                    was.no_progress,
+                ),
+                ("errors", "errors", run.errors, was.errors),
+                ("wall", "wall_ms", run.wall_ms, was.wall_ms),
+            ] {
+                if unchanged(metric) {
+                    fields.push((field, figure.to_string(), stored_figure.to_string()));
+                }
+            }
+            let revision = |row: &Row| {
+                row.opened_binary
+                    .clone()
+                    .unwrap_or_else(|| "(none)".to_owned())
+            };
+            fields.push(("opened_binary", revision(run), revision(was)));
+            if let Some((field, figure, stored_figure)) = fields
+                .into_iter()
+                .find(|(_, figure, stored)| figure != stored)
+            {
+                bail!(
+                    "{}: run {case}#{} gives {field} {figure:?}, the stored run {stored_figure:?} ({}); --rebaseline re-derives what a newer definition changes and nothing else",
+                    shown.display(),
+                    n + 1,
+                    stored_path.display()
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Every record that judges a candidate again names, in `rejudges`, a refusal before it in the
@@ -2212,6 +2336,17 @@ pub fn rebaseline(request: &Rebaseline<'_>, out: &mut dyn Write) -> Result<Outco
             shown.display()
         );
     };
+    let named = shown
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("scorecard-"))
+        .and_then(|name| name.strip_suffix(".json"));
+    if named != Some(revision.as_str()) {
+        bail!(
+            "{}: the file is not named by its revision {revision} (`scorecard-{revision}.json`)",
+            shown.display()
+        );
+    }
     let store = request.store;
     let _lock = if request.dry_run {
         None
@@ -2286,6 +2421,7 @@ pub fn rebaseline(request: &Rebaseline<'_>, out: &mut dyn Write) -> Result<Outco
             base_copy.display()
         );
     }
+    runs_bound(&card, &stored, shown, &base_copy)?;
     let runs = match (base.revision_stated_by, &base.binary_sha256) {
         (Some(_), Some(digest)) => {
             runs_judged(&card, None, shown)?;

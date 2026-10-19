@@ -175,8 +175,8 @@ struct ScorecardArgs {
     /// for some outcome rank (accepted, then ApprovalRequired or Waiting, then a budget stop,
     /// then NoProgress and every other stop, then an error), its cases at that rank or better
     /// fall short of the saved share of its n by more than the margin, each such rank printed
-    /// with both counts; when its median of tokens exceeds the saved maximum; or when the saved
-    /// scorecard has the scenario and this one has no run of it. Tokens are printed as n, min,
+    /// with both counts; or when its median of tokens exceeds the saved maximum. A side with fewer
+    /// cases than the rule's trials, none included, gets no verdict. Tokens are printed as n, min,
     /// median and max per scenario and side, with the difference of the medians.
     #[arg(long, value_name = "FILE")]
     against: Option<PathBuf>,
@@ -187,7 +187,7 @@ const SCORECARD_EXIT_CODES: &str = "Exit codes:
   0  printed (and saved); with --against, no scenario is worse than the saved one
   1  refused: the repository, a case's events.jsonl, or the saved scorecard does not read (a binary.txt that does not read leaves its case's runs stating no binary, the case listed with the reason); a scenario case has no held-out.txt beside its record, or one that does not read or states no result (the case named); --save without --revision, onto a file that exists, or that cannot be written; with --against, a scenario the saved scorecard has with fewer cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), or any scenario with fewer on this side, none included (`too few cases (<n> of <trials>)`): no verdict given, as a promotion refuses; a saved scorecard with a run whose outcome disagrees with its held-out result; the reason on stderr
   2  the arguments do not parse
-  3  with --against: a scenario is worse: at some outcome rank its cases at that rank or better fall short of the saved share by more than the rule's margin, its median of tokens exceeds the saved maximum, or it has no run";
+  3  with --against: a scenario is worse: at some outcome rank its cases at that rank or better fall short of the saved share by more than the rule's margin, or its median of tokens exceeds the saved maximum (a scenario with no run on this side is exit 1, too few cases)";
 
 #[derive(clap::Args)]
 struct TraceArgs {

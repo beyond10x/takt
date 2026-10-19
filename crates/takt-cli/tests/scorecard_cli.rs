@@ -460,6 +460,16 @@ fn against_applies_the_trials_to_the_saved_side_and_to_new_scenarios() {
         "{text}{stderr}"
     );
     assert!(
+        !stderr.contains("on the candidate's side") && stderr.contains("on each side"),
+        "the saved side is not the candidate's: {stderr}"
+    );
+    let (code, help, _) = takt(&["scorecard", "--help"]);
+    assert_eq!(code, 0);
+    assert!(
+        !help.contains("it has no run"),
+        "no exit 3 for a missing run: {help}"
+    );
+    assert!(
         !text.contains("scenario 1  outcomes by rank"),
         "no verdict: {text}"
     );
