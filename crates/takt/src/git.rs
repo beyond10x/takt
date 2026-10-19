@@ -2983,6 +2983,20 @@ impl Isolated {
     /// Runs `git <args>` with `extra` set in its environment, as the type says; answers what it
     /// printed, whatever its exit status.
     fn git(&self, extra: &[(&str, &Path)], args: &[&str]) -> Result<Output> {
+        let extra: Vec<(&str, &OsStr)> = extra
+            .iter()
+            .map(|(name, value)| (*name, value.as_os_str()))
+            .collect();
+        self.git_with(&extra, args, None)
+    }
+
+    /// [`Isolated::git`], `input` on git's standard input when given.
+    fn git_with(
+        &self,
+        extra: &[(&str, &OsStr)],
+        args: &[&str],
+        input: Option<&[u8]>,
+    ) -> Result<Output> {
         let mut command = Command::new("git");
         crate::forge::without_credentials(&mut command, |_| false);
         for name in REDIRECTING_ENV {
@@ -3010,11 +3024,185 @@ impl Isolated {
                 "core.commitGraph=false",
             ])
             .args(args)
-            .current_dir(&self.dir)
-            .stdin(Stdio::null())
-            .output()
+            .current_dir(&self.dir);
+        let Some(input) = input else {
+            return command
+                .stdin(Stdio::null())
+                .output()
+                .with_context(|| format!("run git {} isolated", args.join(" ")));
+        };
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("run git {} isolated", args.join(" ")))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(input)
+                .with_context(|| format!("write to git {} isolated", args.join(" ")))?;
+        }
+        child
+            .wait_with_output()
             .with_context(|| format!("run git {} isolated", args.join(" ")))
     }
+
+    /// Runs `git <args>` for the repository of `tree`, whose object directory is `objects`, as
+    /// [`isolated_output`] does, with `env` set and `input` on its standard input; its standard
+    /// output trimmed, or an error naming what git said when it exits non-zero.
+    fn run_on(
+        &self,
+        objects: &Path,
+        env: &[(&str, &str)],
+        args: &[&str],
+        input: Option<&[u8]>,
+    ) -> Result<String> {
+        let mut extra: Vec<(&str, &OsStr)> = vec![
+            ("GIT_DIR", self.repository.as_os_str()),
+            ("GIT_OBJECT_DIRECTORY", objects.as_os_str()),
+        ];
+        extra.extend(env.iter().map(|(name, value)| (*name, OsStr::new(*value))));
+        let output = self.git_with(&extra, args, input)?;
+        if !output.status.success() {
+            bail!(
+                "git {} isolated exited {}: {}",
+                args.join(" "),
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    }
+}
+
+/// The object directory of the repository of `tree`, absolute.
+fn objects_of(tree: &Path) -> Result<PathBuf> {
+    Ok(PathBuf::from(run(
+        tree,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?)
+    .join("objects"))
+}
+
+/// What [`replay`] made of a list of commits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Replayed {
+    /// Every commit replayed: the last commit made, the replay's tip.
+    Made(String),
+    /// The commit whose change does not apply on what was replayed before it, and the paths
+    /// its merge conflicts at; nothing was named, and the commits made before it are named by
+    /// no ref.
+    Conflict {
+        /// The commit, as it was given.
+        commit: String,
+        /// The paths it conflicts at.
+        paths: Vec<String>,
+    },
+}
+
+/// The `<seconds> <zone>` of the header line `field` (`author`, `committer`) of a commit's
+/// `header`, as git records it, read from the end of the line so a name holding spaces is no
+/// part of it.
+fn header_date(header: &str, field: &str) -> Option<String> {
+    let line = header
+        .lines()
+        .find_map(|line| line.strip_prefix(field)?.strip_prefix(' '))?;
+    let mut words = line.rsplitn(3, ' ');
+    let zone = words.next()?;
+    let seconds = words.next()?;
+    (seconds.bytes().all(|b| b.is_ascii_digit())
+        && !seconds.is_empty()
+        && zone.len() == 5
+        && zone.starts_with(['+', '-']))
+    .then(|| format!("@{seconds} {zone}"))
+}
+
+/// Replays `commits` of `tree`'s repository, in order, on `onto`: each one's change against
+/// its one parent applied with `git merge-tree --write-tree --merge-base=<parent>` to what was
+/// replayed before it, and committed with `git commit-tree` on it, keeping the commit's message
+/// byte for byte and its author and committer dates, with `identity` as its author and
+/// committer. Every git runs isolated ([`Isolated`]: no configured code, no attribute, no merge
+/// driver) on the repository's own objects, so the commits land in its store and neither the
+/// work tree, the index nor any ref is touched. The same commits on the same `onto` with the
+/// same identity give the same commits, whenever it runs. A commit with no parent or more than
+/// one is an error naming it; a change that conflicts answers [`Replayed::Conflict`].
+pub fn replay(
+    tree: &Path,
+    onto: &str,
+    commits: &[String],
+    identity: &CommitIdentity,
+) -> Result<Replayed> {
+    let objects = objects_of(tree)?;
+    let isolated = Isolated::new(tree)?;
+    let mut tip = onto.to_owned();
+    for commit in commits {
+        let bytes = raw(tree, &["cat-file", "commit", commit], None)?;
+        let header_end = bytes
+            .windows(2)
+            .position(|pair| pair == b"\n\n")
+            .ok_or_else(|| anyhow!("the commit {commit} has no message"))?;
+        let parsed = parse_commit(commit, &bytes, commit.len())?;
+        let [parent] = parsed.parents.as_slice() else {
+            bail!(
+                "the commit {commit} has {} parents; only a commit with one is replayed",
+                parsed.parents.len()
+            );
+        };
+        let header = String::from_utf8_lossy(&bytes[..header_end]);
+        let dated = |field: &str| {
+            header_date(&header, field)
+                .ok_or_else(|| anyhow!("the commit {commit} gives no {field} date git reads"))
+        };
+        let (authored, committed) = (dated("author")?, dated("committer")?);
+        // `commit-tree` records its message as UTF-8: one in another encoding would change.
+        if let Some(encoding) = header
+            .lines()
+            .find_map(|line| line.strip_prefix("encoding "))
+            .filter(|encoding| !encoding.eq_ignore_ascii_case("utf-8"))
+        {
+            bail!("the commit {commit} is encoded in {encoding}, not UTF-8; it is not replayed");
+        }
+        let merge_base = format!("--merge-base={parent}");
+        let args = [
+            "merge-tree",
+            "--write-tree",
+            "-z",
+            "--name-only",
+            "--no-messages",
+            merge_base.as_str(),
+            tip.as_str(),
+            commit.as_str(),
+        ];
+        let output = isolated.git_with(
+            &[
+                ("GIT_DIR", isolated.repository.as_os_str()),
+                ("GIT_OBJECT_DIRECTORY", objects.as_os_str()),
+            ],
+            &args,
+            None,
+        )?;
+        let merged = read_merged(&args, &output, &tree.display().to_string())?;
+        if !merged.conflicted.is_empty() {
+            return Ok(Replayed::Conflict {
+                commit: commit.clone(),
+                paths: merged.conflicted,
+            });
+        }
+        tip = isolated.run_on(
+            &objects,
+            &[
+                ("GIT_AUTHOR_NAME", identity.name.as_str()),
+                ("GIT_AUTHOR_EMAIL", identity.email.as_str()),
+                ("GIT_AUTHOR_DATE", authored.as_str()),
+                ("GIT_COMMITTER_NAME", identity.name.as_str()),
+                ("GIT_COMMITTER_EMAIL", identity.email.as_str()),
+                ("GIT_COMMITTER_DATE", committed.as_str()),
+            ],
+            &["commit-tree", &merged.tree, "-p", &tip],
+            Some(&bytes[header_end + 2..]),
+        )?;
+    }
+    Ok(Replayed::Made(tip))
 }
 
 /// Runs `git <args>` for the repository of `tree` in an [`Isolated`] bare repository whose
