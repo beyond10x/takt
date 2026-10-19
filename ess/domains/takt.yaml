@@ -996,7 +996,7 @@ types:
   # What a promotion record is, its `kind`: `baseline` for one `takt promote --baseline-only`
   # wrote, which installed nothing, `promotion` for one that installed a binary. Declared ahead of
   # the code (story:promotion), decided 2026-10-18.
-  # read from: .engineering/planning/story/promotion.md:58
+  # read from: .engineering/planning/story/promotion.md:62
   - name: takt.work.PromotionKind
     kind: enum
     variants: [baseline, promotion]
@@ -2018,22 +2018,22 @@ entities:
   # a scenario's outcome is worse than the baseline's (dominance, one case of margin, n=5), a
   # scenario's median of tokens exceeds the baseline's maximum, or another promotion was made the
   # same UTC day, naming it.
-  # read from: .engineering/planning/story/promotion.md:35-40
-  # read from: .engineering/planning/story/promotion.md:47-49
-  # read from: .engineering/planning/story/promotion.md:98
+  # read from: .engineering/planning/story/promotion.md:39-44
+  # read from: .engineering/planning/story/promotion.md:51-53
+  # read from: .engineering/planning/story/promotion.md:102
   # Where it is kept, decided 2026-10-18: one JSON file per promotion at
   # `$XDG_STATE_HOME/takt/promotions/<revision>.json` (`~/.local/state/takt/promotions/` without
   # `XDG_STATE_HOME`), outside every repository a candidate changes, which the scorecard-reader
   # review asked for; the latest record by `promoted_at` is the baseline. `promoted_at` is the
   # instant the one-a-UTC-day rule reads, and `kind` tells a `--baseline-only` record (`baseline`)
   # from one that installed a binary (`promotion`).
-  # read from: .engineering/planning/story/promotion.md:55-58
-  # read from: .engineering/planning/story/promotion.md:79
-  # read from: .engineering/planning/story/promotion.md:109
+  # read from: .engineering/planning/story/promotion.md:59-62
+  # read from: .engineering/planning/story/promotion.md:83
+  # read from: .engineering/planning/story/promotion.md:113
   # One scorecard backs at most one promotion, decided 2026-10-18: one-to-one, the promotion
   # referencing its scorecard. A relation entry carries no bound on the scorecard's side, so the
   # bound is stated here.
-  # read from: .engineering/planning/story/promotion.md:53
+  # read from: .engineering/planning/story/promotion.md:57
   # The rule's parameters, n and the margin, are recorded with the scorecard; their fields are
   # declared with the code (story:promotion).
   # read from: .engineering/planning/design/recursive-self-improvement.md:132-138
