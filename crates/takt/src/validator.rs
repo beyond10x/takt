@@ -138,8 +138,8 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
     // A link is never followed: one the base or the revision holds on the surface, or on the
     // way to a script, is named, and nothing is recorded while it is there.
     for commit in [at.as_str(), revision] {
-        let listed = crate::git::run(tree, &["ls-tree", "-r", "-z", "--full-tree", commit])?;
-        for entry in listed.split('\0') {
+        let listed = crate::git::bytes(tree, &["ls-tree", "-r", "-z", "--full-tree", commit])?;
+        for entry in nul_fields(&listed, "ls-tree", true)? {
             let Some((meta, path)) = entry.split_once('\t') else {
                 continue;
             };
@@ -151,7 +151,8 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
             }
         }
     }
-    let diff = crate::git::run(
+    // Paths, read byte for byte: the first path's leading white space is part of it.
+    let diff = crate::git::bytes(
         tree,
         &[
             "diff-tree",
@@ -164,7 +165,7 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
             "--",
         ],
     )?;
-    for path in diff.split('\0').filter(|path| !path.is_empty()) {
+    for path in nul_fields(&diff, "diff-tree", false)? {
         if surface.contains(path) {
             paths.push(path.to_owned());
         } else if crate::run::is_manifest(path) || crate::run::is_pyproject(path) {
@@ -188,6 +189,33 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
     } else {
         Judged::Changed { base, paths }
     })
+}
+
+/// The NUL-terminated fields of `listed`, what `git <command> -z` printed, each decoded as
+/// UTF-8. A field that is not UTF-8 is never decoded to a stand-in, which could read as another
+/// path: it is the error, naming the path with its bytes escaped (after the first tab when
+/// `after_tab`, as `ls-tree` prints the mode, type and object before it).
+fn nul_fields<'a>(listed: &'a [u8], command: &str, after_tab: bool) -> Result<Vec<&'a str>> {
+    listed
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .map(|field| {
+            std::str::from_utf8(field).map_err(|_| {
+                let path = if after_tab {
+                    field
+                        .splitn(2, |byte| *byte == b'\t')
+                        .last()
+                        .unwrap_or(field)
+                } else {
+                    field
+                };
+                anyhow!(
+                    "git {command} named a path that is not UTF-8: {}",
+                    path.escape_ascii()
+                )
+            })
+        })
+        .collect()
 }
 
 /// An observation that recorded nothing, its summary `summary`.
@@ -809,7 +837,10 @@ fn above(revision: &str, head: &str) -> String {
 /// base with the pull request; anything else would not be what the claim is about, and nothing
 /// is pushed. A number the case directory carries is trusted only once the forge reports the pull
 /// request's head as the case's branch at the head pushed, else no record is written. A case
-/// with no base is refused before anything is pushed. The title is the intent's first line,
+/// with no base is refused before anything is pushed. Before a pull request is opened, a case
+/// whose base branch (`refs/heads/<base>`, never a tag of its name) is not there, or whose
+/// branch has no commit beyond it but the take, pushes nothing and writes no record, the
+/// summary saying why. The title is the intent's first line,
 /// the body the intent and the claims that hold; the forge passes both through `scan-text`
 /// before they leave the machine.
 pub struct PrOpen {
@@ -997,6 +1028,34 @@ impl Validator for PrOpen {
         // the story's status, not the work. Nothing is pushed and no record written; a commit
         // moves the revision and makes `pr.open` due again.
         if let Next::Open(request) = &next {
+            // The base is the branch, `refs/heads/<base>`, never a tag or a remote ref of its
+            // name; with the branch gone there is nothing to count against, and nothing to open
+            // a pull request against, as for a case with no commit beyond its base.
+            let Some(base_tip) = crate::git::run(
+                tree,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "--end-of-options",
+                    &format!("refs/heads/{}^{{commit}}", request.base),
+                ],
+            )
+            .ok()
+            .filter(|tip| !tip.is_empty()) else {
+                return Ok((
+                    Observation {
+                        summary: format!(
+                            "{name} at {}: the base branch {} is not there; nothing pushed, no pull request; the claim stays unknown",
+                            short(revision),
+                            request.base
+                        ),
+                        records: Vec::new(),
+                        artifact: None,
+                    },
+                    false,
+                ));
+            };
             let ahead = crate::git::run(
                 tree,
                 &[
@@ -1005,7 +1064,7 @@ impl Validator for PrOpen {
                     "--invert-grep",
                     "--extended-regexp",
                     "--grep=^takt: take [^ ]+$",
-                    &format!("{}..{revision}", request.base),
+                    &format!("{base_tip}..{revision}"),
                 ],
             )?;
             if ahead.trim() == "0" {
@@ -1676,10 +1735,13 @@ pub fn is_built_in_kind(kind: &str) -> bool {
 /// one `change_record`: `ahead` when merging the revision into the tip, now, of the base branch
 /// `branch.yaml` names (`git merge-tree`, nothing checked out) would change that tip's tree
 /// outside `.engineering/`, `none` when it would not: the same content landed on the base by
-/// another commit, with or without more beside it, is no change to publish. When the base
-/// branch is not there, the revision's tree is compared with the commit pinned when the case
-/// opened instead; a case with neither writes no record. It reads git only, with no code from
-/// configuration: nothing is run from the tree and nothing leaves the machine.
+/// another commit, with or without more beside it, is no change to publish; a merge that
+/// conflicts at any path outside `.engineering/` is `ahead`, whatever tree git writes for it,
+/// and the summary names the conflicted paths. When the base branch is not there, the revision's tree is
+/// compared with the commit pinned when the case opened instead; a case with neither writes no
+/// record. It reads git only, with no code from configuration: nothing is run from the tree and
+/// nothing leaves the machine, so it compares with the local base branch as it stands, and a
+/// forge's base that moved without a fetch is not seen.
 #[derive(Debug, Clone, Default)]
 pub struct ChangeRead;
 
@@ -1726,21 +1788,54 @@ impl Validator for ChangeRead {
             .map(|tip| (name, tip))
         });
         let (differs, summary) = if let Some((name, tip)) = tip {
+            // A merge that conflicts at any path outside `.engineering/` is `ahead`, by the paths
+            // merge-tree names: the tree it writes may keep the base's side (a file the case
+            // deleted that the base changed, a binary file both changed), and there is a change
+            // to publish all the same. A conflict only inside `.engineering/` is no change
+            // outside it; the summary names the conflicted paths either way.
             let merged = crate::git::merged_tree(tree, &tip, revision)?;
-            let differs = crate::git::trees_differ_outside(tree, &tip, &merged, ".engineering")?;
-            (
-                differs,
-                format!(
-                    "merging {} into {name} at {}, its tip now, {} its tree outside .engineering/",
-                    short(revision),
-                    short(&tip),
-                    if differs {
-                        "changes"
-                    } else {
-                        "leaves as it is"
-                    }
-                ),
-            )
+            let outside: Vec<&str> = merged
+                .conflicted
+                .iter()
+                .map(String::as_str)
+                .filter(|path| *path != ".engineering" && !path.starts_with(".engineering/"))
+                .collect();
+            let head = format!(
+                "merging {} into {name} at {}, its tip now,",
+                short(revision),
+                short(&tip)
+            );
+            if outside.is_empty() {
+                let differs =
+                    crate::git::trees_differ_outside(tree, &tip, &merged.tree, ".engineering")?;
+                let conflicts = if merged.conflicted.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " conflicts only inside .engineering/ at {} and",
+                        merged.conflicted.join(", ")
+                    )
+                };
+                (
+                    differs,
+                    format!(
+                        "{head}{conflicts} {} its tree outside .engineering/",
+                        if differs {
+                            "changes"
+                        } else {
+                            "leaves as it is"
+                        }
+                    ),
+                )
+            } else {
+                (
+                    true,
+                    format!(
+                        "{head} conflicts outside .engineering/ at {}, a change to publish",
+                        outside.join(", ")
+                    ),
+                )
+            }
         } else if let Some((shown, base)) = pinned {
             let differs = crate::git::trees_differ_outside(tree, &base, revision, ".engineering")?;
             (

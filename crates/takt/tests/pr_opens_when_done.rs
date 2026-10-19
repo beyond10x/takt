@@ -14,7 +14,7 @@ use takt::case::CASES_DIR;
 use takt::evidence::Record;
 use takt::forge::{Checks, Forge, Memory};
 use takt::harness::{Harness, StepContext, StepReport};
-use takt::validator::{ChangeRead, CiRead, Observation, PrOpen, Validator};
+use takt::validator::{ChangeRead, CiRead, Observation, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
 const PROTOCOL: &str = concat!(
@@ -849,4 +849,233 @@ fn change_read_reads_none_once_the_base_tip_has_the_same_content() {
         second.summary
     );
     assert!(second.summary.contains("its tip now"), "{}", second.summary);
+}
+
+/// A case `name` opened on `main` with `pr.open` over `memory`, one edit of `README.md` to
+/// `text` committed on its branch and made its implementation revision; the tree and the
+/// revision.
+fn edited(name: &str, memory: &Rc<Memory>, text: &str) -> (Scratch, String) {
+    let tree = scratch(name);
+    let forge: Rc<dyn Forge> = memory.clone();
+    let validators: Vec<Box<dyn Validator>> = vec![Box::new(PrOpen::new(forge))];
+    let options = RunOptions {
+        protocol: PROTOCOL.to_owned(),
+        intent: "deliver".to_owned(),
+        inputs: Vec::new(),
+        iterations: Some(1),
+        hours: None,
+        tokens: None,
+        case_id: Some(name.to_owned()),
+        gate: None,
+    };
+    let harness = Scripted::new(&[]);
+    let mut run = Run::open(&tree, options, &harness, &validators).expect("the case opens");
+    fs::write(tree.join("README.md"), text).expect("an edit");
+    git(&tree, &["commit", "-q", "-am", "the fix"]);
+    let revision = git(&tree, &["rev-parse", "HEAD"]);
+    run.case
+        .set_revision("implementation", &revision)
+        .expect("the revision moves");
+    drop(run);
+    (tree, revision)
+}
+
+/// `pr.open` counts the commits beyond the base branch, `refs/heads/<base>`: a tag of the same
+/// name, which git would resolve first for the bare name, is never taken for it. A tag `main`
+/// at the revision does not make the case's branch look as if it had nothing beyond its base.
+#[test]
+fn pr_open_counts_commits_beyond_the_base_branch_not_a_tag_of_its_name() {
+    let memory = Rc::new(Memory::default());
+    let (tree, revision) = edited("tag-named-main", &memory, "a story\nthe fix\n");
+    git(&tree, &["tag", "main", &revision]);
+    let observed = PrOpen::new(memory.clone())
+        .observe(&tree, &revision, 1)
+        .expect("observes");
+    assert_eq!(
+        memory.opened.borrow().len(),
+        1,
+        "no pull request opened: {}",
+        observed.summary
+    );
+    assert_eq!(observed.records.len(), 1, "{}", observed.summary);
+}
+
+/// With the base branch deleted after the case opened, `change.read` and `pr.open` observe
+/// without an error, each as its other missing-base path does: `change.read` compares with the
+/// base pinned at open, and `pr.open` pushes nothing, records nothing and says the base branch
+/// is not there, the claim staying unknown.
+#[test]
+fn with_the_base_branch_gone_change_read_and_pr_open_observe_without_an_error() {
+    let memory = Rc::new(Memory::default());
+    let (tree, revision) = edited("base-gone", &memory, "a story\nthe fix\n");
+    git(&tree, &["branch", "-q", "-D", "main"]);
+    let read = ChangeRead
+        .observe(&tree, &revision, 1)
+        .map_err(|error| format!("{error:#}"))
+        .expect("change.read observes");
+    assert_eq!(
+        read.records[0].result.as_deref(),
+        Some("ahead"),
+        "{}",
+        read.summary
+    );
+    assert!(read.summary.contains("not there"), "{}", read.summary);
+    let opened = PrOpen::new(memory.clone())
+        .observe(&tree, &revision, 2)
+        .map_err(|error| format!("{error:#}"))
+        .expect("pr.open observes");
+    assert!(opened.records.is_empty(), "{}", opened.summary);
+    assert!(
+        opened.summary.contains("main is not there"),
+        "{}",
+        opened.summary
+    );
+    assert!(memory.pushed.borrow().is_empty(), "{}", opened.summary);
+    assert!(memory.opened.borrow().is_empty(), "{}", opened.summary);
+}
+
+/// A revision whose merge into the base branch's tip conflicts is `ahead`: there is a change to
+/// publish. The summary says the merge conflicts.
+#[test]
+fn change_read_reads_ahead_and_says_so_when_the_merge_into_the_base_conflicts() {
+    let memory = Rc::new(Memory::default());
+    let (tree, revision) = edited("conflict", &memory, "a story\nmine\n");
+    let other = tree.with_extension("other");
+    let _ = fs::remove_dir_all(&other);
+    git(
+        &tree,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            other.to_str().expect("utf-8"),
+            "main",
+        ],
+    );
+    fs::write(other.join("README.md"), "a story\ntheirs\n").expect("a conflicting edit");
+    git(&other, &["commit", "-q", "-am", "a conflicting change"]);
+    git(
+        &tree,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            other.to_str().expect("utf-8"),
+        ],
+    );
+    let read = ChangeRead.observe(&tree, &revision, 1).expect("observes");
+    assert_eq!(
+        read.records[0].result.as_deref(),
+        Some("ahead"),
+        "{}",
+        read.summary
+    );
+    assert!(read.summary.contains("conflicts"), "{}", read.summary);
+}
+
+/// A merge that conflicts only inside `.engineering/`, here a planning note both sides change,
+/// is no change to publish outside it: `none`, and the summary names the conflicted path.
+#[test]
+fn change_read_reads_none_and_names_a_conflict_only_inside_engineering() {
+    let tree = scratch("conflict-inside");
+    fs::create_dir_all(tree.join(".engineering")).expect("a directory");
+    fs::write(tree.join(".engineering/notes.md"), "a note\n").expect("a note");
+    git(&tree, &["add", "--", ".engineering/notes.md"]);
+    git(&tree, &["commit", "-q", "-m", "a note"]);
+    let memory = Rc::new(Memory::default());
+    let forge: Rc<dyn Forge> = memory;
+    let validators: Vec<Box<dyn Validator>> = vec![Box::new(PrOpen::new(forge))];
+    let options = RunOptions {
+        protocol: PROTOCOL.to_owned(),
+        intent: "deliver".to_owned(),
+        inputs: Vec::new(),
+        iterations: Some(1),
+        hours: None,
+        tokens: None,
+        case_id: Some("conflict-inside".to_owned()),
+        gate: None,
+    };
+    let harness = Scripted::new(&[]);
+    let mut run = Run::open(&tree, options, &harness, &validators).expect("the case opens");
+    fs::write(tree.join(".engineering/notes.md"), "a note, mine\n").expect("an edit");
+    git(
+        &tree,
+        &["commit", "-q", "-m", "mine", "--", ".engineering/notes.md"],
+    );
+    let revision = git(&tree, &["rev-parse", "HEAD"]);
+    run.case
+        .set_revision("implementation", &revision)
+        .expect("the revision moves");
+    drop(run);
+    let other = tree.with_extension("other");
+    let _ = fs::remove_dir_all(&other);
+    git(
+        &tree,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            other.to_str().expect("utf-8"),
+            "main",
+        ],
+    );
+    fs::write(other.join(".engineering/notes.md"), "a note, theirs\n").expect("an edit");
+    git(&other, &["commit", "-q", "-am", "theirs"]);
+    git(
+        &tree,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            other.to_str().expect("utf-8"),
+        ],
+    );
+    let read = ChangeRead.observe(&tree, &revision, 1).expect("observes");
+    assert_eq!(
+        read.records[0].result.as_deref(),
+        Some("none"),
+        "{}",
+        read.summary
+    );
+    assert!(
+        read.summary.contains("conflicts") && read.summary.contains(".engineering/notes.md"),
+        "{}",
+        read.summary
+    );
+}
+
+/// `tests.run` and `ci.read` compare what the case's branch changed with its base on the judge
+/// surface, reading the paths git lists byte for byte. A path that is not UTF-8 is never
+/// decoded to a stand-in, which could read as off the surface: the observation is an error
+/// naming it, its bytes escaped, and the test command is not run.
+#[cfg(unix)]
+#[test]
+fn tests_run_refuses_a_path_that_is_not_utf8_on_the_case_branch_naming_it() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt as _;
+    let memory = Rc::new(Memory::default());
+    let (tree, _) = edited("not-utf8", &memory, "a story\nthe fix\n");
+    let ran = tree.join("ran.txt");
+    fs::write(tree.join(OsStr::from_bytes(b"r\xff.txt")), "a file\n").expect("a file");
+    git(&tree, &["add", "--", ":(glob)r*.txt"]);
+    git(&tree, &["commit", "-q", "-m", "a path that is not utf-8"]);
+    let revision = git(&tree, &["rev-parse", "HEAD"]);
+    let command = format!("touch {}", ran.display());
+    let observed = TestsRun::new(&command)
+        .expect("a command")
+        .observe(&tree, &revision, 1);
+    let error = match observed {
+        Ok(observation) => panic!(
+            "observed with the path decoded: {} ({:?})",
+            observation.summary,
+            observation
+                .records
+                .iter()
+                .map(|record| record.result.clone())
+                .collect::<Vec<_>>()
+        ),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(error.contains("r\\xff.txt"), "{error}");
+    assert!(!ran.exists(), "the test command ran: {error}");
 }

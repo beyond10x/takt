@@ -90,7 +90,10 @@ fn git_accepts(dir: &Path, id: &str) -> bool {
 const STORY_EXAMPLES: &[(&str, &str)] = &[
     ("a~b", "`~`"),
     ("foo.", "ends with `.`"),
-    ("a..b", "`..`"),
+    (
+        "a..b",
+        "`..`, which a path reads as the directory above, and git refuses takt/a..b as a branch name",
+    ),
     ("a@{b", "`@{`"),
     ("x.lock", "ends with `.lock`"),
 ];
