@@ -14,6 +14,7 @@ relations:
 - depends_on: story:validator-confinement
 - depends_on: story:loop-scorecard
 - depends_on: story:scorecard-save-checks-binary
+- informed_by: story:confinement-seam
 scope:
 - confidence: cited
   path: crates/takt-cli/src/main.rs
@@ -27,7 +28,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: cited
   path: crates/takt/tests/improvement_protocols.rs
-revision: 13
+revision: 14
 ---
 # Story: self-improvement-protocol
 
@@ -103,12 +104,15 @@ Recording the first turn (story:first-recorded-improvement-turn); the loop proto
 
 ## Planner decisions
 
-The planner's decisions on what the 2026-10-19 scope left open:
+The planner's decisions on what the 2026-10-19 scope left open (revised after the reviewer's verdict on them, 2026-10-19):
 
 - D1, revisions and independence: at open, the kernel sets `baseline` to the revision of story:promotion's latest record and `candidate` to the case input's revision, and writes `independence` into `case.yaml`, one entry per validator name, since a validator is no agent run. A case opened with no promotion record stops at open naming it.
 - D2, the candidate's scorecard: `scorecard.compare` reads a `takt scorecard --save` file named in the case's inputs, refuses one whose runs' binary is not the candidate revision (story:scorecard-save-checks-binary), and compares it with the baseline's scorecard copy in the promotion store under the promotion rule.
 - D3, `binary.promote`: the validator runs `takt promote` in a clean managed checkout at the candidate revision, so `HEAD` equals the candidate (`crates/takt-cli/src/main.rs:69-73@df9681a`); it writes no promotion record itself.
 - D4, `finding.file`: it checks a finding filed before the case, named in the case's inputs; it writes nothing to the planning store.
-- D5, `scripts/check-finding` as a judge: the validators run the copy at the case's pinned `base_commit` (`git show <base_commit>:scripts/check-finding`), never the tree's, under `observe_within`.
-- D6, the merge: one merge validator taking the action and the subject from the protocol serves `candidate.merge`, `candidate.merge_judge_surface` and `loop.merge`; `PrMerged`'s fixed `repository.merge` about `implementation` becomes one configuration of it.
+- D5, the judge's scripts and finding: the validators run `scripts/check-finding` and every script it calls (`scripts/file-finding`, `check-finding:85@3e87bca`) from a checkout of the case's base at `base_commit`, and read the finding from the planning store there, never from the candidate's tree (`check-finding:143-146@3e87bca` reads `--repo`'s working tree today), under `observe_within`.
+- D6, the merge: one merge validator taking the action and the subject from the protocol serves `candidate.merge`, `candidate.merge_judge_surface` and `loop.merge`; `PrMerged`'s fixed `repository.merge` about `implementation` becomes one configuration of it, and story:judge-guard's guard sits in it.
 - D7, placement: the new validators live in `crates/takt/src/improvement.rs`, as story:loop-scorecard's live in `loop_scorecard.rs`, so `validator.rs` changes only at `BUILT_IN` and the merge validator.
+- D8, candidate code cannot write the judge's records: every validator that runs candidate code (`scenario.verify`, the candidate's scenario runs) runs it under the bubblewrap profile story:promotion builds with (the real home, the promotion store and the install root absent), so the routes M19 and C6 (story:confinement-seam) are closed for these validators without waiting for the general seam. D1 and D2 read the promotion store only from the validator's own process.
+
+Acceptance, added: with a candidate whose `scenario.verify` run tries to rewrite the newest promotion record's scorecard copy (the reviewer's C6 on story:promotion), the record is unchanged and `scorecard.compare` judges against the original; with a candidate tree whose `scripts/file-finding --predicate` emits another predicate, `scenario.verify` still runs the base's copy and reports `reproduced` for an unfixed defect.

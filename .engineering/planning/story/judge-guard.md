@@ -36,7 +36,7 @@ scope:
   path: crates/takt/tests/authority_adv1.rs
 - confidence: inferred
   path: crates/takt/tests/merge_under_authority.rs
-revision: 18
+revision: 19
 ---
 # Story: judge-guard
 
@@ -126,12 +126,12 @@ From the reviewer verdict on story:grant-binds-to-action-subject at 938cc5a (app
 
 ## Planner decisions
 
-The planner's decisions on the questions the 2026-10-19 scope left open, inside the design this story states:
+The planner's decisions on the questions the 2026-10-19 scope left open, inside the design this story states (revised after the reviewer's verdict on them, 2026-10-19):
 
-- D1, the guarded range: the guard diffs `base_commit..<granted revision>`, the range `judged` already computes (`validator.rs:140-152@3e87bca`), not `base..head` of the merged branch. takt's own riders (`.engineering/planning/`, `.engineering/evidence/`, the case directory) are written after the grant and are not the candidate's change; a grant is bound to one revision (story:authority-hardening), so the range it judges ends there.
+- D1, the guarded range: the guard diffs `base_commit..<granted revision>`, the range `judged` already computes (`validator.rs:140-152@3e87bca`). This is the design's `base..head` (`recursive-self-improvement.md:111`) split at the grant: `granted..head` may carry only approval records, which `carries`/`approvals_only` already enforce (`validator.rs:1374,1437-1442@3e87bca`, `case.rs:1067@3e87bca`), so the guard need not judge it. A path in `granted..head` that `approvals_only` does not admit stops the merge as today.
 - D2, allow-list and deny-list: `.engineering/judge-allow.yaml` gates only the merge; the existing deny-list `.engineering/judge-surface.yaml` keeps gating what steps and validators may write. Neither replaces the other.
-- D3, which base: the allow-list and `.engineering/delegations.yaml` are read at the case's pinned `base_commit`; "the promoted takt" means the binary named by story:promotion's latest record, which runs the case; the planning store is read at `base_commit` too.
-- D4, a moved base: the guard refuses the merge when `base_commit` is not an ancestor of the granted revision, or differs from the value pinned at open. Whether a step can repoint `base_commit` today (`branch.yaml` under `.engineering/cases/**`, off the step judge surface, `run.rs:357@3e87bca`) is not verified; the acceptance below holds either way.
+- D3, which revision the lists are read at: the allow-list and `.engineering/delegations.yaml` are read at the merge target's tip as the forge reports it when the merge is decided, never at `base_commit` and never from the tree. "The promoted takt" is the binary named by story:promotion's latest record, which runs the case.
+- D4, the base: the guard refuses the merge when `base_commit` is not an ancestor of the merge target's tip as the forge reports it. `branch.yaml` is the only copy of `base_commit` (`case.rs:1427@3e87bca`), so no comparison with "the value pinned at open" is possible; the target's tip is the independent fact.
 - D5, untyped approvers: an `authority.yaml` approver that is neither `human:` nor `agent:` grants nothing at a judge-surface merge; on any other merge it reads as before.
 
-Acceptance, added: a case whose step rewrites `base_commit` in `branch.yaml` to the granted revision's parent is refused at the merge naming the base; a case whose only change outside the allow-list is takt's own riders merges under an `agent:planner` grant with no delegation.
+Acceptance, added: a case whose `base_commit` is set, outside the loop, to a candidate commit that adds `crates/**` to `.engineering/judge-allow.yaml` is refused at the merge naming the base, under an `agent:planner` grant with no delegation; a case whose `granted..head` holds only approval records merges as before.
