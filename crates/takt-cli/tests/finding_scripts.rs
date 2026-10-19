@@ -1692,10 +1692,13 @@ fn the_predicate_writes_no_host_path_and_reads_nothing_of_the_callers_home() {
             .lines()
             .find(|line| line.starts_with(&format!("{attempt}: ")))
             .unwrap_or_default();
+        // The shell's own words for a path whose directory is not there differ: bash prints
+        // the system's "No such file or directory", dash "Directory nonexistent".
+        let none_such =
+            line.contains("No such file or directory") || line.contains("Directory nonexistent");
         assert!(
             line.starts_with(&format!("{attempt}: refused: "))
-                && (line.contains("Read-only file system")
-                    || hidden && line.contains("No such file or directory")),
+                && (line.contains("Read-only file system") || hidden && none_such),
             "{attempt} gets a read-only error{}:\n{ran}",
             if hidden { ", or none such" } else { "" }
         );
