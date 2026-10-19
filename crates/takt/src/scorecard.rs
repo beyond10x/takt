@@ -252,7 +252,7 @@ const RANKS: [(u8, &str); 4] = [
 
 /// An event line's instant as nanoseconds since the epoch: `YYYY-MM-DDTHH:MM:SS[.f...]Z`,
 /// whole seconds as a run wrote them before instants had a fraction.
-fn instant(at: &str) -> Option<i128> {
+pub(crate) fn instant(at: &str) -> Option<i128> {
     let at = at.strip_suffix('Z')?;
     let (whole, fraction) = at.split_once('.').unwrap_or((at, ""));
     let bytes = whole.as_bytes();
@@ -303,16 +303,23 @@ struct Span {
     stop: Option<String>,
 }
 
+/// A run's outcome from its stop: a `Completed` stop's outcome (`accepted`), else the stop's
+/// kind (`ApprovalRequired`, `NoProgress`, ...); `error` for a run that ended on an error
+/// without a stop, `unfinished` for one with neither.
+pub(crate) fn outcome_of(stop: Option<&str>, errors: u64) -> String {
+    match stop {
+        Some(stop) => match stop.strip_prefix("Completed (") {
+            Some(rest) => rest.strip_suffix(')').unwrap_or(rest).to_owned(),
+            None => stop.split([' ', '(']).next().unwrap_or(stop).to_owned(),
+        },
+        None if errors > 0 => "error".to_owned(),
+        None => "unfinished".to_owned(),
+    }
+}
+
 impl Span {
     fn row(self, case: &str) -> Row {
-        let outcome = match &self.stop {
-            Some(stop) => match stop.strip_prefix("Completed (") {
-                Some(rest) => rest.strip_suffix(')').unwrap_or(rest).to_owned(),
-                None => stop.split([' ', '(']).next().unwrap_or(stop).to_owned(),
-            },
-            None if self.errors > 0 => "error".to_owned(),
-            None => "unfinished".to_owned(),
-        };
+        let outcome = outcome_of(self.stop.as_deref(), self.errors);
         let (wall_ms, too_long) = match (self.first, self.last) {
             (Some(first), Some(last)) => u64::try_from((last - first).max(0) / 1_000_000)
                 .map_or((u64::MAX, true), |ms| (ms, false)),

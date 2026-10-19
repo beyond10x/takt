@@ -49,6 +49,17 @@ enum Commands {
     /// a case without one is listed as `no record`.
     #[command(after_help = SCORECARD_EXIT_CODES)]
     Scorecard(ScorecardArgs),
+    /// Write a case's run record as one `takt-trace/1` file: a header line on the run, then
+    /// one line per operation (a step, a wait on the forge, a refusal, a stop, the resume
+    /// after one) in one vocabulary, read from the case's `events.jsonl`; token and cost
+    /// figures from the harness's raw usage only, summaries never copied.
+    #[command(after_help = TRACE_EXIT_CODES)]
+    Trace(TraceArgs),
+    /// Print where runs' time and tokens went: one table across the runs given (wall time
+    /// split by actor, steps, model calls, turns, tokens, cost), then per run the actors'
+    /// shares, a row per step, the defects and what the sources did not record.
+    #[command(after_help = REPORT_EXIT_CODES)]
+    Report(ReportArgs),
     /// Promote a takt revision: compare its saved scorecard with the promoted baseline's under
     /// the scorecard's rule and, when no scenario is worse, build a fresh clone of that
     /// revision confined in bubblewrap (`bwrap`: only the clone, rustup's default toolchain
@@ -128,6 +139,52 @@ const SCORECARD_EXIT_CODES: &str = "Exit codes:
   1  refused: the repository, a case's events.jsonl or the saved scorecard does not read; --save without --revision, onto a file that exists, or that cannot be written; the reason on stderr
   2  the arguments do not parse
   3  with --against: a scenario is worse: at some outcome rank its cases at that rank or better fall short of the saved share by more than the rule's margin, its median of tokens exceeds the saved maximum, or it has no run";
+
+#[derive(clap::Args)]
+struct TraceArgs {
+    /// The case directory, holding `events.jsonl`.
+    #[arg(long)]
+    case: PathBuf,
+    /// A runner shim's `steps.jsonl` beside the record: one `claude --output-format json`
+    /// result per harness call, with `started_at` and `recorded_at`; read for the model, cost,
+    /// turns, durations and token components a record written before takt recorded them
+    /// lacks. The trace's notes say what it supplied.
+    #[arg(long, value_name = "FILE")]
+    steps: Option<PathBuf>,
+    /// The run's name in the trace; the case id without it.
+    #[arg(long)]
+    run: Option<String>,
+    /// Write the trace there instead of standard output; a file there is replaced.
+    #[arg(long, value_name = "FILE")]
+    out: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+#[command(group(clap::ArgGroup::new("input").required(true).multiple(true).args(["case", "trace"])))]
+struct ReportArgs {
+    /// A case directory, holding `events.jsonl`; repeatable.
+    #[arg(long, value_name = "DIR")]
+    case: Vec<PathBuf>,
+    /// A runner shim's `steps.jsonl` for the --case given at the same position; repeatable,
+    /// never more often than --case.
+    #[arg(long, value_name = "FILE")]
+    steps: Vec<PathBuf>,
+    /// A `takt-trace/1` file `takt trace` wrote; repeatable.
+    #[arg(long, value_name = "FILE")]
+    trace: Vec<PathBuf>,
+}
+
+/// What `takt trace --help` says about the exit codes.
+const TRACE_EXIT_CODES: &str = "Exit codes:
+  0  written
+  1  refused: the case has no events.jsonl, the record or the steps file does not read, or the output cannot be written; the reason on stderr
+  2  the arguments do not parse";
+
+/// What `takt report --help` says about the exit codes.
+const REPORT_EXIT_CODES: &str = "Exit codes:
+  0  printed
+  1  refused: a case has no events.jsonl, a record, steps file or trace does not read, or --steps is given more often than --case; the reason on stderr
+  2  the arguments do not parse, or neither --case nor --trace is given";
 
 #[derive(Subcommand)]
 enum ScenarioCommands {
@@ -391,6 +448,50 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 out,
             )?;
             Ok(if worse > 0 { 3 } else { EXIT_DONE })
+        }
+        Commands::Trace(TraceArgs {
+            case,
+            steps,
+            run,
+            out: file,
+        }) => {
+            let trace = takt::trace::Trace::from_case(&case, steps.as_deref(), run.as_deref())?;
+            match file {
+                Some(path) => {
+                    trace.save(&path)?;
+                    writeln!(
+                        out,
+                        "written: {} ({} operations, {})",
+                        path.display(),
+                        trace.ops.len(),
+                        takt::trace::FORMAT
+                    )?;
+                }
+                None => trace.write(out)?,
+            }
+            Ok(EXIT_DONE)
+        }
+        Commands::Report(ReportArgs { case, steps, trace }) => {
+            if steps.len() > case.len() {
+                return Err(anyhow!(
+                    "--steps is given {} times for {} --case: give at most one per case, in the same order",
+                    steps.len(),
+                    case.len()
+                ));
+            }
+            let mut traces = Vec::new();
+            for (n, dir) in case.iter().enumerate() {
+                traces.push(takt::trace::Trace::from_case(
+                    dir,
+                    steps.get(n).map(PathBuf::as_path),
+                    None,
+                )?);
+            }
+            for path in &trace {
+                traces.push(takt::trace::Trace::load(path)?);
+            }
+            takt::report::print(&traces, out)?;
+            Ok(EXIT_DONE)
         }
         Commands::Promote(PromoteArgs {
             repo,
