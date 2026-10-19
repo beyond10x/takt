@@ -2,13 +2,16 @@
 format: aep.planning-md/3
 id: story:the-judge-requires-the-whole-corpus
 kind: story
-status: draft
+status: active
 title: A comparison missing a corpus scenario is refused, never no_regression
 summary: 'trial 2: empty against empty exits 0'
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T15:58:58Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-19T15:58:58Z", actor: "human:timo", revision: 3}
 ---
 # Story: the-judge-requires-the-whole-corpus
 

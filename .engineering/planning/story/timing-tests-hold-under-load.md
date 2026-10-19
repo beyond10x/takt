@@ -2,13 +2,16 @@
 format: aep.planning-md/3
 id: story:timing-tests-hold-under-load
 kind: story
-status: draft
+status: active
 title: task check does not fail on wall-clock bounds under load
 summary: three timing tests failed at load 63-69 and passed alone
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 3}
 ---
 # Story: timing-tests-hold-under-load
 
