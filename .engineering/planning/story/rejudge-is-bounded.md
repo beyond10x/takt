@@ -7,6 +7,7 @@ title: A revision is judged again at most twice
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
+- depends_on: story:promotion-chain-head-anchored
 revision: 1
 ---
 ## Outcome

@@ -2,14 +2,24 @@
 format: aep.planning-md/3
 id: story:check-finding-run-step-confined
 kind: story
-status: draft
+status: active
 title: check-finding runs the predicate with the host read-only
 tags:
 - priority:high
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 2
+scope:
+- confidence: cited
+  path: crates/takt-cli/tests/finding_scripts.rs
+- confidence: inferred
+  path: ess/domains/takt.citations.tsv
+- confidence: cited
+  path: scripts/check-finding
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T06:11:34Z", actor: "human:timo", revision: 6}
+- {from: "proposed", to: "active", at: "2026-10-19T06:11:34Z", actor: "human:timo", revision: 7}
 ---
 ## Outcome
 
@@ -21,8 +31,17 @@ From the grant reviews of story:check-finding-builds-confined (wave 13, E1, 2026
 
 ## Scope
 
-- `scripts/check-finding`: the run step's bwrap arguments and the status channel (cited)
-- `crates/takt-cli/tests/finding_scripts.rs`: the new cases and the assertion message (cited)
+Derived 2026-10-19 by `story-scoper`, read-only at `wave/2026-10-19-w13` bbe5bdb (`scripts/check-finding`, `finding_scripts.rs` identical to 3224311). Every line is **cited** (read from the story or the tree) or **inferred** (a reading that could be wrong).
+
+- **Primary surface:** `scripts/check-finding`, the run step — cited
+- **Files:** `scripts/check-finding:409-433@3224311` (environment 409-410, comment 411-420, bwrap with `--dev-bind / /` and `--json-status-fd 3` to `$run/bwrap-status` 421-425, status read 426-433) — cited
+- **Files:** `scripts/check-finding:361-376@3224311` (fresh home, the protocol-sources bind of the caller's real path) and the header comment at 44-70, which describes the run step as not confined — cited
+- **Files:** `crates/takt-cli/tests/finding_scripts.rs:1013-1018@3224311` (`attempts` keeps lines 2+ of a multi-line `env` value); new cases beside `a_bubblewrap_that_fails_before_the_command_runs_gives_no_result` (1141-1199) and `the_predicate_cannot_write_the_callers_protocol_sources` (1267) — cited
+- **Symbols:** `environment`, `binds`, `bound`, `status`, `ended` — cited
+- **Also likely:** `ess/domains/takt.citations.tsv`: the `takt.work.Finding` citation spans `check-finding:184-399`, which covers the bind block at 361-376 — inferred
+- **Confidence:** high
+- **Would collide with:** any unit touching `scripts/check-finding` or `crates/takt-cli/tests/finding_scripts.rs`
+- **Safety fact:** the kept `builds/<sha>/takt` runs only through `$TAKT` in the run step (`check-finding:409,421-425`); the build step runs cargo, never the binary — level 2, unproven
 
 ## Acceptance
 
