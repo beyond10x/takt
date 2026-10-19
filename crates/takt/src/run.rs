@@ -874,7 +874,16 @@ fn put_back_file(at: &Path, bytes: &[u8], executable: bool) -> Result<()> {
 /// order, so a link or file the step put in place of a directory is gone before anything is
 /// written below it. Something in `dir`'s own place (a link, as the link itself, or a file) is
 /// removed first and every path of `before` put back: nothing is ever put back through it.
-fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -> Result<()> {
+/// `dir` lies under `root`, the tree, and before anything is removed or written each part of the
+/// way from `root` down is read with `symlink_metadata`: a link on the way, which would take the
+/// write wherever it points, refuses it, naming the link.
+fn restore(
+    root: &Path,
+    dir: &Path,
+    before: &BTreeMap<PathBuf, Entry>,
+    changed: &[PathBuf],
+) -> Result<()> {
+    no_link_on_the_way(root, dir)?;
     let all: Vec<PathBuf>;
     let changed = match std::fs::symlink_metadata(dir) {
         Ok(meta) if !meta.is_dir() => {
@@ -886,6 +895,7 @@ fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -
     };
     for path in changed {
         let full = dir.join(path);
+        no_link_on_the_way(root, &full)?;
         if let Ok(meta) = std::fs::symlink_metadata(&full) {
             if meta.is_dir() {
                 std::fs::remove_dir_all(&full)
@@ -905,6 +915,19 @@ fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -
             Some(Entry::Link(target)) => make_link(target, &full)?,
             Some(Entry::Other(_)) | None => {}
         }
+    }
+    Ok(())
+}
+
+/// Refuses a write at `at` when a part of the way from `root` down to it, `at` itself left out,
+/// is a link ([`Outside::link_on_the_way`]): the refusal names the link, relative to `root`.
+fn no_link_on_the_way(root: &Path, at: &Path) -> Result<()> {
+    if let Some(link) = Outside::link_on_the_way(root, at) {
+        bail!(
+            "{} is a link on the way to {}; nothing is put back through it",
+            link.strip_prefix(root).unwrap_or(&link).display(),
+            at.strip_prefix(root).unwrap_or(at).display()
+        );
     }
     Ok(())
 }
@@ -2266,7 +2289,7 @@ impl JudgeSurface {
         if !again.is_empty() {
             let real = std::fs::canonicalize(tree)
                 .with_context(|| format!("resolve {}", tree.display()))?;
-            restore(&real, kept, &again)?;
+            restore(&real, &real, kept, &again)?;
         }
         Ok(())
     }
@@ -2981,28 +3004,52 @@ fn surface_refusal(action: &str, touched: &[String]) -> String {
     format!("{action} {}", parts.join("; and "))
 }
 
-/// Discards everything a judgement step did, back to `checkpoint`, then puts the cases directory
-/// back to `kept`, after the reset, which can remove a case file the step had staged, and
-/// whether or not the reset succeeded: neither part is skipped for the other's error, the
-/// reset's reported first.
-fn undo_step(
-    tree: &Path,
-    checkpoint: &crate::git::Checkpoint,
-    cases: &Path,
-    kept: &BTreeMap<PathBuf, Entry>,
-) -> Result<()> {
-    let reset = checkpoint
+/// What a judgement step or an observation is checked against and put back to when it is
+/// discarded: the checkpoint, the cases directory, the judge surface and what lies outside the
+/// tree, each as it was just before.
+struct Kept<'k> {
+    checkpoint: &'k crate::git::Checkpoint,
+    cases: &'k Path,
+    cases_kept: &'k BTreeMap<PathBuf, Entry>,
+    surface: &'k JudgeSurface,
+    surface_kept: &'k BTreeMap<PathBuf, Entry>,
+    outside: &'k Outside,
+}
+
+/// Discards everything a judgement step or an observation did, in this order: the reset to the
+/// checkpoint; the judge surface put back, which removes a link the step put at `.engineering`
+/// as the link itself; the cases directory put back, after the reset, which can remove a case
+/// file the step had staged; and what lies outside the tree. Every part is attempted whatever
+/// another part's error, and the errors are joined in that order. Answers the paths outside the
+/// tree left as they were, their way crossing a link.
+fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Vec<PathBuf>> {
+    let reset = kept
+        .checkpoint
         .restore(tree)
         .context("discard the step's change");
-    let put_back = snapshot(cases).and_then(|now| {
-        let again = differing(kept, &now);
+    let surface = kept.surface.put_back(tree, kept.surface_kept);
+    let cases = snapshot(kept.cases).and_then(|now| {
+        let again = differing(kept.cases_kept, &now);
         if again.is_empty() {
             Ok(())
         } else {
-            restore(cases, kept, &again)
+            restore(tree, kept.cases, kept.cases_kept, &again)
         }
     });
-    reset.and(put_back)
+    let outside = kept.outside.put_back(tree);
+    let mut errors: Vec<String> = [reset, surface, cases]
+        .into_iter()
+        .filter_map(|part| part.err().map(|error| format!("{error:#}")))
+        .collect();
+    let left = outside.unwrap_or_else(|error| {
+        errors.push(format!("{error:#}"));
+        Vec::new()
+    });
+    if errors.is_empty() {
+        Ok(left)
+    } else {
+        bail!("{}", errors.join("; and "))
+    }
 }
 
 /// The paths of the cases directory `cases` a step or an observation changed, as a refusal names
@@ -4186,27 +4233,40 @@ impl<'a> Run<'a> {
                 if let Err(error) = swept {
                     planted.push(format!("processes still running: {error:#}"));
                 }
-                // What the observation left on the judge surface; a read that fails (a file
-                // the run may not read) discards everything it did before the run ends on the
+                // What the observation left: on the judge surface, in the cases directory, in the
+                // tree as git sees it and outside the tree. A read that fails (a file the run may
+                // not read) discards everything the observation did before the run ends on the
                 // error.
-                let on_surface = match surface.snapshot(&self.tree) {
-                    Ok(now) => differing(&surface_kept, &now),
+                let kept_all = Kept {
+                    checkpoint: &checkpoint,
+                    cases: &cases,
+                    cases_kept: &kept,
+                    surface: &surface,
+                    surface_kept: &surface_kept,
+                    outside: &outside_kept,
+                };
+                let seen = (|| -> Result<_> {
+                    let on_surface = differing(&surface_kept, &surface.snapshot(&self.tree)?);
+                    let touched = differing(&kept, &snapshot(&cases)?);
+                    let change = checkpoint.change(&self.tree)?;
+                    let moved = outside_kept.differing(&Outside::read(&self.tree)?);
+                    Ok((on_surface, touched, change, moved))
+                })();
+                let (on_surface, touched, change, outside_moved) = match seen {
+                    Ok(seen) => seen,
                     Err(error) => {
-                        let undone = undo_step(&self.tree, &checkpoint, &cases, &kept)
-                            .and_then(|()| surface.put_back(&self.tree, &surface_kept));
-                        return Err(match undone {
-                            Ok(()) => error.context(format!(
-                                "{}: what the observation left on the judge surface could not be read; everything it changed was discarded",
+                        return Err(match undo_step(&self.tree, &kept_all) {
+                            Ok(_) => error.context(format!(
+                                "{}: what the observation left could not be read; everything it changed was discarded",
                                 validator.action()
                             )),
                             Err(undo) => error.context(format!(
-                                "{}: what the observation left on the judge surface could not be read, and its change could not be discarded: {undo:#}",
+                                "{}: what the observation left could not be read, and its change could not be discarded: {undo:#}",
                                 validator.action()
                             )),
                         });
                     }
                 };
-                let touched = differing(&kept, &snapshot(&cases)?);
                 let own: Vec<PathBuf> = match self.case.dir.file_name() {
                     Some(id) => validator
                         .writes()
@@ -4217,7 +4277,6 @@ impl<'a> Run<'a> {
                 };
                 let mut foreign =
                     cases_named(&cases, touched.iter().filter(|path| !own.contains(path)));
-                let change = checkpoint.change(&self.tree)?;
                 let mut outside: Vec<String> = planted;
                 outside.extend(change.paths.iter().cloned());
                 if change.staged {
@@ -4244,21 +4303,9 @@ impl<'a> Run<'a> {
                         outside.push(path);
                     }
                 }
-                outside.extend(
-                    outside_kept
-                        .differing(&Outside::read(&self.tree)?)
-                        .iter()
-                        .map(|path| path.display().to_string()),
-                );
+                outside.extend(outside_moved.iter().map(|path| path.display().to_string()));
                 if !foreign.is_empty() || !outside.is_empty() {
-                    // Every part is put back whatever another part's error: the reset first, then
-                    // the cases directory, the judge surface and what lies outside the tree.
-                    let undone = undo_step(&self.tree, &checkpoint, &cases, &kept);
-                    let surface_back = surface.put_back(&self.tree, &surface_kept);
-                    let left = outside_kept.put_back(&self.tree);
-                    undone?;
-                    surface_back?;
-                    let left = left?;
+                    let left = undo_step(&self.tree, &kept_all)?;
                     foreign.extend(outside);
                     foreign.extend(left.iter().map(|path| {
                         format!("not put back, its way crosses a link: {}", path.display())
@@ -4294,7 +4341,7 @@ impl<'a> Run<'a> {
                     && self.deadline().is_some_and(|deadline| returned >= deadline)
                     && let Some(h) = self.options.hours
                 {
-                    restore(&cases, &kept, &touched)?;
+                    restore(&self.tree, &cases, &kept, &touched)?;
                     let why = format!(
                         "step {}: the hour budget ran out during {}; nothing recorded: {error:#}",
                         self.steps,
@@ -4571,14 +4618,15 @@ impl<'a> Run<'a> {
             // not put back is named in the refusal below.
             let git_dir = checkpoint.put_back_git_dir(&self.tree);
             let tree = self.tree.clone();
-            // Every part is put back whatever another part's error: the reset first, then the
-            // cases directory, the judge surface and what lies outside the tree.
-            let undo = || -> Result<()> {
-                let undone = undo_step(&tree, &checkpoint, &cases, &kept);
-                let surface_back = surface.put_back(&tree, &surface_kept);
-                let outside_back = outside_before.put_back(&tree).map(|_| ());
-                undone.and(surface_back).and(outside_back)
+            let kept_all = Kept {
+                checkpoint: &checkpoint,
+                cases: &cases,
+                cases_kept: &kept,
+                surface: &surface,
+                surface_kept: &surface_kept,
+                outside: &outside_before,
             };
+            let undo = || -> Result<()> { undo_step(&tree, &kept_all).map(|_| ()) };
             let stepped = match stepped {
                 Ok(stepped) => stepped,
                 Err(panic) => {

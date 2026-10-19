@@ -2,7 +2,9 @@
 //! like any other foreign write: the link is removed, the directory put back from the snapshot
 //! taken before it, `HEAD` and every ref rolled back, nothing written through the link, and the
 //! run stops naming the link. A case whose cases directory, or whose own directory, is a link is
-//! never resumed: the run refuses before its first step.
+//! never resumed: the run refuses before its first step. Every part of a discarded step or
+//! observation is put back whatever another part's error, and nothing is put back through a link
+//! on the way from the tree down.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -85,7 +87,13 @@ impl Scratch {
 }
 
 impl Drop for Scratch {
+    /// Gives every directory and file back its owner's permissions first: a step below makes
+    /// some read-only or unreadable.
     fn drop(&mut self) {
+        let _ = Command::new("chmod")
+            .args(["-R", "u+rwx"])
+            .arg(&self.0)
+            .status();
         if let Err(error) = fs::remove_dir_all(&self.0) {
             let message = format!("remove the scratch tree {}: {error}", self.0.display());
             if std::thread::panicking() {
@@ -312,11 +320,24 @@ fn a_step_that_replaces_the_cases_directory_with_a_link_is_undone() {
 
 /// A harness that writes `tests/case.sh` on its first step, so the test command the validator
 /// runs next is the model's: it copies the cases directory to `../seen` and the refs to
-/// `../refs` as it finds them, then runs [`swap`] to `link`. Any later step ends the run with an
-/// error.
+/// `../refs` as it finds them, then runs `body` ([`swap`] to `link` for
+/// [`WritesTest::swapping`]). Any later step ends the run with an error.
 struct WritesTest {
-    link: &'static str,
+    body: String,
     calls: Cell<usize>,
+}
+
+impl WritesTest {
+    fn swapping(link: &str) -> Self {
+        Self::running(swap(link))
+    }
+
+    fn running(body: String) -> Self {
+        Self {
+            body,
+            calls: Cell::new(0),
+        }
+    }
 }
 
 impl Harness for WritesTest {
@@ -335,7 +356,7 @@ impl Harness for WritesTest {
             &script,
             format!(
                 "#!/bin/sh\nset -e\ncp -r .engineering/cases ../seen\ngit rev-parse HEAD > ../refs\ngit for-each-ref --format='%(refname) %(objectname)' >> ../refs\n{}\n",
-                swap(self.link)
+                self.body
             ),
         )?;
         Ok(StepReport {
@@ -360,24 +381,58 @@ fn a_test_command_that_replaces_the_cases_directory_with_a_link_is_undone() {
                 "#!/bin/sh\nexec sh \"$(dirname \"$0\")/case.sh\" \"$@\"\n",
             )],
         );
-        let tree = scratch.tree();
-        let validators: Vec<Box<dyn Validator>> = vec![Box::new(
-            TestsRun::new("sh tests/run.sh").expect("a command"),
-        )];
-        let harness = WritesTest {
-            link,
-            calls: Cell::new(0),
-        };
-        let mut run =
-            Run::open(&tree, options(&id, 8), &harness, &validators).expect("the case opens");
-        let mut out = Vec::new();
-        let stop = run.run(&mut out);
-        let text = format!("{link}\n{}", String::from_utf8(out).expect("utf-8"));
+        let (stop, text) = observe(&scratch, &id, WritesTest::swapping(link));
+        let text = format!("{link}\n{text}");
         let seen = files(&scratch.0.join("seen"));
-        let refs_before = fs::read_to_string(scratch.0.join("refs"))
-            .unwrap_or_else(|_| panic!("the test command ran\n{text}"));
-        assert_undone(&scratch, &stop, &seen, refs_before.trim_end(), &text);
+        assert_undone(&scratch, &stop, &seen, &refs_seen(&scratch, &text), &text);
     }
+}
+
+/// A committed repository whose test command runs `tests/case.sh`, which the harness writes.
+fn repository_with_test(name: &str, files: &[(&str, &str)]) -> Scratch {
+    let mut all = vec![(
+        "tests/run.sh",
+        "#!/bin/sh\nexec sh \"$(dirname \"$0\")/case.sh\" \"$@\"\n",
+    )];
+    all.extend_from_slice(files);
+    repository(name, &all)
+}
+
+/// The run of the case `id` in `scratch` with `harness`, whose test command is `sh tests/run.sh`;
+/// its stop and its output.
+fn observe(scratch: &Scratch, id: &str, harness: WritesTest) -> (anyhow::Result<Stop>, String) {
+    let validators: Vec<Box<dyn Validator>> = vec![Box::new(
+        TestsRun::new("sh tests/run.sh").expect("a command"),
+    )];
+    let mut run =
+        Run::open(&scratch.tree(), options(id, 8), &harness, &validators).expect("the case opens");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = format!("{stop:?}\n{}", String::from_utf8_lossy(&out));
+    (stop, text)
+}
+
+/// `HEAD` and the refs as the test command found them, from `../refs`.
+fn refs_seen(scratch: &Scratch, text: &str) -> String {
+    fs::read_to_string(scratch.0.join("refs"))
+        .unwrap_or_else(|_| panic!("the test command ran\n{text}"))
+        .trim_end()
+        .to_owned()
+}
+
+/// The run of the case `id` in `scratch` whose one judgement step runs `script`, with `true` as
+/// the test command; its stop, its output and the harness, which holds what the step found.
+fn step(scratch: &Scratch, id: &str, script: String) -> (anyhow::Result<Stop>, String, Swaps) {
+    let validators: Vec<Box<dyn Validator>> =
+        vec![Box::new(TestsRun::new("true").expect("a command"))];
+    let harness = Swaps::running(script);
+    let mut run =
+        Run::open(&scratch.tree(), options(id, 4), &harness, &validators).expect("the case opens");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    drop(run);
+    let text = format!("{stop:?}\n{}", String::from_utf8_lossy(&out));
+    (stop, text, harness)
 }
 
 /// A case opened and left, its run over, the tree back on `main`.
@@ -501,5 +556,476 @@ fn a_case_is_not_opened_under_a_linked_cases_directory() {
     assert!(
         files(&scratch.copy()).is_empty(),
         "nothing written through it"
+    );
+}
+
+/// The script line that commits on the case's branch and makes the branch `planted`, so `HEAD`
+/// and the refs move.
+const COMMITS: &str = "git -c user.name=t -c user.email=t@localhost commit -q --allow-empty -m planted && git branch planted";
+
+/// The script line that makes the reset fail: a tracked file changed in a directory made
+/// read-only, which `git reset --hard` cannot write.
+const RESET_FAILS: &str = "echo b > src/a && chmod 555 src";
+
+/// A step that puts a link to a copy of `.engineering` beside the tree in its place, the copy
+/// differing from the tree in one case file, and makes the reset fail writes nothing outside the
+/// tree through the link: no case file is put back there.
+#[test]
+fn an_engineering_link_with_a_failing_reset_writes_nothing_outside() {
+    let id = "eng-reset";
+    let scratch = repository(id, &[("src/a", "a\n")]);
+    let (_, text, _) = step(
+        &scratch,
+        id,
+        format!(
+            "cp -r .engineering ../eng && rm ../eng/cases/{id}/case.yaml && rm -rf .engineering && ln -s ../eng .engineering && {RESET_FAILS}"
+        ),
+    );
+    let outside = scratch.0.join("eng/cases").join(id).join("case.yaml");
+    assert!(
+        fs::symlink_metadata(&outside).is_err(),
+        "{} was written through the link\n{text}",
+        outside.display()
+    );
+    // The judge surface is put back before the cases directory, so the link at `.engineering`
+    // is gone, as itself, by the time the case is written again, in the tree.
+    let tree = scratch.tree();
+    assert!(
+        fs::symlink_metadata(tree.join(".engineering")).is_ok_and(|meta| meta.is_dir()),
+        "{text}"
+    );
+    assert!(
+        tree.join(".engineering/cases")
+            .join(id)
+            .join("case.yaml")
+            .is_file(),
+        "{text}"
+    );
+}
+
+/// The same link with a reset that succeeds: `.engineering` is a directory again with the case in
+/// it, nothing is written outside the tree, and `HEAD` and the refs are as before the step.
+#[test]
+fn an_engineering_link_is_undone() {
+    let id = "eng-ok";
+    let scratch = repository(id, &[]);
+    let (_, text, harness) = step(
+        &scratch,
+        id,
+        format!(
+            "cp -r .engineering ../eng && rm ../eng/cases/{id}/case.yaml && rm -rf .engineering && ln -s ../eng .engineering"
+        ),
+    );
+    let tree = scratch.tree();
+    assert!(
+        fs::symlink_metadata(tree.join(".engineering")).is_ok_and(|meta| meta.is_dir()),
+        "{text}"
+    );
+    assert!(
+        tree.join(".engineering/cases")
+            .join(id)
+            .join("case.yaml")
+            .is_file(),
+        "{text}"
+    );
+    assert!(
+        fs::symlink_metadata(scratch.0.join("eng/cases").join(id).join("case.yaml")).is_err(),
+        "{text}"
+    );
+    assert_eq!(refs(&tree), *harness.refs.borrow(), "{text}");
+}
+
+/// `.engineering` replaced by a link to an identical copy beside the tree, git tracking a file in
+/// it or ignoring it: refused, and `.engineering` a directory again with the case in it.
+#[test]
+fn an_engineering_tracked_or_ignored_replaced_by_a_link_to_a_copy_is_undone() {
+    for (id, file) in [
+        ("eng-tracked", (".engineering/planning/x.md", "x\n")),
+        ("eng-ignored", (".gitignore", ".engineering\n")),
+    ] {
+        let scratch = repository(id, &[file]);
+        let (stop, text, _) = step(
+            &scratch,
+            id,
+            "cp -r .engineering ../eng && rm -rf .engineering && ln -s ../eng .engineering"
+                .to_owned(),
+        );
+        let tree = scratch.tree();
+        assert!(matches!(stop, Ok(Stop::StepRefused(_))), "{text}");
+        assert!(
+            fs::symlink_metadata(tree.join(".engineering")).is_ok_and(|meta| meta.is_dir()),
+            "{text}"
+        );
+        assert!(
+            tree.join(".engineering/cases")
+                .join(id)
+                .join("case.yaml")
+                .is_file(),
+            "{text}"
+        );
+    }
+}
+
+/// The cases directory replaced by a file, a FIFO, a dangling link or a link to itself, or
+/// `.engineering` by a link to itself: each refused, the cases directory a directory again with
+/// the case in it, and `HEAD` and the refs as before the step.
+#[test]
+fn a_cases_directory_replaced_by_another_kind_is_undone() {
+    for (n, swap) in [
+        "rm -rf .engineering/cases && echo f > .engineering/cases",
+        "rm -rf .engineering/cases && mkfifo .engineering/cases",
+        "rm -rf .engineering/cases && ln -s /nonexistent/nowhere .engineering/cases",
+        "rm -rf .engineering/cases && ln -s cases .engineering/cases",
+        "cp -r .engineering ../eng && rm -rf .engineering && ln -s .engineering .engineering",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = format!("kind-{n}");
+        let scratch = repository(&id, &[]);
+        let (stop, text, harness) = step(&scratch, &id, swap.to_owned());
+        let tree = scratch.tree();
+        assert!(matches!(stop, Ok(Stop::StepRefused(_))), "{swap}\n{text}");
+        assert!(
+            fs::symlink_metadata(tree.join(".engineering/cases")).is_ok_and(|meta| meta.is_dir()),
+            "{swap}\n{text}"
+        );
+        assert!(
+            tree.join(".engineering/cases")
+                .join(&id)
+                .join("case.yaml")
+                .is_file(),
+            "{swap}\n{text}"
+        );
+        assert_eq!(refs(&tree), *harness.refs.borrow(), "{swap}\n{text}");
+    }
+}
+
+/// A case file replaced by a link to a file beside the tree: refused, the case's files there
+/// again, and the file the link leads to not written.
+#[test]
+fn a_case_file_replaced_by_a_link_is_undone() {
+    let id = "file-link";
+    let scratch = repository(id, &[]);
+    let (stop, text, _) = step(
+        &scratch,
+        id,
+        format!(
+            "cp .engineering/cases/{id}/events.jsonl ../outside && cp ../outside ../outside.before && rm .engineering/cases/{id}/events.jsonl && ln -s ../../../../outside .engineering/cases/{id}/events.jsonl"
+        ),
+    );
+    let tree = scratch.tree();
+    assert!(matches!(stop, Ok(Stop::StepRefused(_))), "{text}");
+    assert!(
+        fs::symlink_metadata(tree.join(".engineering/cases").join(id).join("case.yaml"))
+            .is_ok_and(|meta| meta.is_file()),
+        "{text}"
+    );
+    assert_eq!(
+        fs::read(scratch.0.join("outside")).expect("the file outside"),
+        fs::read(scratch.0.join("outside.before")).expect("its copy"),
+        "{text}"
+    );
+}
+
+/// A case file replaced by a hard link to an identical file beside the tree: whatever the run
+/// does next, the file beside the tree is not written.
+#[test]
+fn a_case_file_replaced_by_a_hard_link_is_not_written_through() {
+    let id = "hard-link";
+    let scratch = repository(id, &[]);
+    let (_, text, _) = step(
+        &scratch,
+        id,
+        format!(
+            "cp -p .engineering/cases/{id}/case.yaml ../outside && cp -p ../outside ../outside.before && rm .engineering/cases/{id}/case.yaml && ln ../outside .engineering/cases/{id}/case.yaml"
+        ),
+    );
+    assert_eq!(
+        fs::read_to_string(scratch.0.join("outside")).unwrap_or_default(),
+        fs::read_to_string(scratch.0.join("outside.before")).unwrap_or_default(),
+        "a case file was written through a hard link\n{text}"
+    );
+}
+
+/// Every error after the observation goes through the full undo first: a test command that
+/// commits, makes a branch and leaves an unreadable file in its case, so reading the cases
+/// directory fails, still leaves `HEAD` and the refs as it found them.
+#[test]
+fn a_test_command_that_leaves_an_unreadable_case_file_is_still_reset() {
+    let id = "unreadable";
+    let scratch = repository_with_test(id, &[]);
+    let (_, text) = observe(
+        &scratch,
+        id,
+        WritesTest::running(format!(
+            "{COMMITS}\necho z > .engineering/cases/{id}/secret && chmod 000 .engineering/cases/{id}/secret"
+        )),
+    );
+    assert_eq!(refs(&scratch.tree()), refs_seen(&scratch, &text), "{text}");
+}
+
+/// The same on the judgement path: a step that commits, makes a branch and leaves an unreadable
+/// file in its case leaves `HEAD` and the refs as it found them.
+#[test]
+fn a_step_that_leaves_an_unreadable_case_file_is_still_reset() {
+    let id = "unreadable-step";
+    let scratch = repository(id, &[]);
+    let (_, text, harness) = step(
+        &scratch,
+        id,
+        format!(
+            "{COMMITS} && echo z > .engineering/cases/{id}/secret && chmod 000 .engineering/cases/{id}/secret"
+        ),
+    );
+    assert_eq!(refs(&scratch.tree()), *harness.refs.borrow(), "{text}");
+}
+
+/// A case whose event log is a link to a file beside the tree: a run resumed on it, refused or
+/// not, writes nothing to that file.
+#[test]
+fn a_resumed_run_writes_nothing_through_a_linked_case_file() {
+    let id = "resume-file";
+    let scratch = repository(id, &[]);
+    let tree = scratch.tree();
+    drop(step(&scratch, id, "true".to_owned()));
+    git(&tree, &["checkout", "-q", "main"]);
+    sh(
+        &tree,
+        &format!(
+            "cp .engineering/cases/{id}/events.jsonl ../outside && rm .engineering/cases/{id}/events.jsonl && ln -s ../../../../outside .engineering/cases/{id}/events.jsonl"
+        ),
+    );
+    let before = fs::read(scratch.0.join("outside")).expect("the file outside");
+    let validators: Vec<Box<dyn Validator>> =
+        vec![Box::new(TestsRun::new("true").expect("a command"))];
+    let harness = Swaps::running("true".to_owned());
+    let text = match Run::resume(&tree, options(id, 1), id, &harness, &validators) {
+        Ok(mut run) => {
+            let mut out = Vec::new();
+            let stop = run.run(&mut out);
+            format!("resumed: {stop:?}\n{}", String::from_utf8_lossy(&out))
+        }
+        Err(error) => format!("refused: {error:#}"),
+    };
+    assert_eq!(
+        fs::read(scratch.0.join("outside")).expect("the file outside"),
+        before,
+        "{text}"
+    );
+}
+
+/// A case under an `.engineering` that is a link is not resumed either.
+#[test]
+fn a_case_under_a_linked_engineering_directory_is_not_resumed() {
+    let id = "eng-resume";
+    let scratch = repository(id, &[]);
+    opened(&scratch, id);
+    sh(
+        &scratch.tree(),
+        "mv .engineering ../eng && ln -s ../eng .engineering",
+    );
+    assert_not_resumed(&scratch, id, ".engineering");
+}
+
+/// The cases directory replaced by a link to a copy beside the tree, and the reset made to fail:
+/// the link is removed as itself, nothing is written through it, and the cases directory is put
+/// back in the tree.
+#[test]
+fn a_cases_link_with_a_failing_reset_writes_nothing_outside() {
+    let id = "cases-reset";
+    let scratch = repository(id, &[("src/a", "a\n")]);
+    let (_, text, _) = step(
+        &scratch,
+        id,
+        format!(
+            "cp -r .engineering/cases ../c && rm ../c/{id}/case.yaml && rm -rf .engineering/cases && ln -s ../../c .engineering/cases && {RESET_FAILS}"
+        ),
+    );
+    assert!(
+        fs::symlink_metadata(scratch.0.join("c").join(id).join("case.yaml")).is_err(),
+        "written through the link\n{text}"
+    );
+    assert!(
+        scratch
+            .tree()
+            .join(".engineering/cases")
+            .join(id)
+            .join("case.yaml")
+            .is_file(),
+        "{text}"
+    );
+}
+
+/// A step that rewrites its case's file and makes the reset fail: the case's file is put back
+/// all the same.
+#[test]
+fn a_case_file_is_put_back_when_the_reset_fails() {
+    let id = "putback-reset";
+    let scratch = repository(id, &[("src/a", "a\n")]);
+    let (_, text, _) = step(
+        &scratch,
+        id,
+        format!(
+            "cp .engineering/cases/{id}/case.yaml ../case.before && echo forged > .engineering/cases/{id}/case.yaml && {RESET_FAILS}"
+        ),
+    );
+    assert_eq!(
+        fs::read(
+            scratch
+                .tree()
+                .join(".engineering/cases")
+                .join(id)
+                .join("case.yaml")
+        )
+        .expect("case.yaml"),
+        fs::read(scratch.0.join("case.before")).expect("its copy"),
+        "{text}"
+    );
+}
+
+/// What the step or the observation below does besides making the reset fail: a file on the
+/// judge surface, a file in its case and a cargo configuration beside the tree, which cargo reads
+/// for it.
+fn writes_everywhere(id: &str) -> String {
+    format!(
+        "mkdir -p .github && echo x > .github/planted.yml && echo forged > .engineering/cases/{id}/authority.yaml && mkdir -p ../.cargo && echo '[build]' > ../.cargo/config.toml && {RESET_FAILS}"
+    )
+}
+
+/// After a reset that failed, every other part was put back all the same.
+fn assert_every_part_put_back(scratch: &Scratch, id: &str, text: &str) {
+    let tree = scratch.tree();
+    assert!(
+        fs::symlink_metadata(tree.join(".github/planted.yml")).is_err(),
+        "the judge surface is put back\n{text}"
+    );
+    assert!(
+        fs::symlink_metadata(
+            tree.join(".engineering/cases")
+                .join(id)
+                .join("authority.yaml")
+        )
+        .is_err(),
+        "the cases directory is put back\n{text}"
+    );
+    assert!(
+        fs::symlink_metadata(scratch.0.join(".cargo/config.toml")).is_err(),
+        "what cargo reads outside the tree is put back\n{text}"
+    );
+}
+
+/// A discarded step whose reset fails still has its judge surface, its cases directory and what
+/// lies outside the tree put back: no part of the undo is skipped for another's error.
+#[test]
+fn every_part_of_a_discarded_step_is_put_back_when_the_reset_fails() {
+    let id = "every-part-step";
+    let scratch = repository(id, &[("src/a", "a\n")]);
+    let (_, text, _) = step(&scratch, id, writes_everywhere(id));
+    assert_every_part_put_back(&scratch, id, &text);
+}
+
+/// The same for a discarded observation: a test command that makes the reset fail still has the
+/// rest of what it did put back.
+#[test]
+fn every_part_of_a_discarded_observation_is_put_back_when_the_reset_fails() {
+    let id = "every-part-observation";
+    let scratch = repository_with_test(id, &[("src/a", "a\n")]);
+    let (_, text) = observe(&scratch, id, WritesTest::running(writes_everywhere(id)));
+    assert_every_part_put_back(&scratch, id, &text);
+}
+
+/// An observation that leaves a file on the judge surface the run cannot read ends the run on
+/// that error, but only after the full undo: `HEAD` and the refs as the test command found them,
+/// its case file removed and what cargo reads beside the tree put back.
+#[test]
+fn an_observation_whose_judge_surface_cannot_be_read_is_undone_whole() {
+    let id = "surface-unreadable";
+    let scratch = repository_with_test(id, &[]);
+    let (_, text) = observe(
+        &scratch,
+        id,
+        WritesTest::running(format!(
+            "{COMMITS}\necho forged > .engineering/cases/{id}/authority.yaml\nmkdir -p ../.cargo && echo '[build]' > ../.cargo/config.toml\nmkdir -p .github && echo z > .github/secret && chmod 000 .github/secret"
+        )),
+    );
+    let tree = scratch.tree();
+    assert_eq!(refs(&tree), refs_seen(&scratch, &text), "{text}");
+    assert!(
+        fs::symlink_metadata(
+            tree.join(".engineering/cases")
+                .join(id)
+                .join("authority.yaml")
+        )
+        .is_err(),
+        "the cases directory is put back\n{text}"
+    );
+    assert!(
+        fs::symlink_metadata(scratch.0.join(".cargo/config.toml")).is_err(),
+        "what cargo reads outside the tree is put back\n{text}"
+    );
+}
+
+/// The script line that leaves a file on the judge surface the run cannot read, so putting the
+/// surface back fails (with [`RESET_FAILS`], `git clean` never removes it).
+const SURFACE_UNREADABLE: &str =
+    "mkdir -p .github && echo z > .github/secret && chmod 000 .github/secret";
+
+/// A discarded step whose reset fails and whose judge surface cannot be put back still has its
+/// cases directory and what lies outside the tree put back: the undo goes on past the surface's
+/// error.
+#[test]
+fn the_undo_goes_on_past_a_judge_surface_that_cannot_be_put_back() {
+    let id = "surface-fails";
+    let scratch = repository(id, &[("src/a", "a\n")]);
+    let (_, text, _) = step(
+        &scratch,
+        id,
+        format!(
+            "echo forged > .engineering/cases/{id}/authority.yaml && mkdir -p ../.cargo && echo '[build]' > ../.cargo/config.toml && {SURFACE_UNREADABLE} && {RESET_FAILS}"
+        ),
+    );
+    let tree = scratch.tree();
+    assert!(
+        fs::symlink_metadata(
+            tree.join(".engineering/cases")
+                .join(id)
+                .join("authority.yaml")
+        )
+        .is_err(),
+        "the cases directory is put back\n{text}"
+    );
+    assert!(
+        fs::symlink_metadata(scratch.0.join(".cargo/config.toml")).is_err(),
+        "what cargo reads outside the tree is put back\n{text}"
+    );
+}
+
+/// A link at `.engineering` that the judge surface's put-back cannot remove (the reset fails and
+/// the surface cannot be read): putting the cases directory back is refused naming the link, and
+/// nothing is written through it.
+#[test]
+fn nothing_is_put_back_through_a_link_on_the_way_to_the_cases_directory() {
+    let id = "way-link";
+    let scratch = repository(id, &[("src/a", "a\n")]);
+    let (stop, text, _) = step(
+        &scratch,
+        id,
+        format!(
+            "cp -r .engineering ../eng && rm ../eng/cases/{id}/case.yaml && rm -rf .engineering && ln -s ../eng .engineering && {SURFACE_UNREADABLE} && {RESET_FAILS}"
+        ),
+    );
+    let outside = scratch.0.join("eng/cases").join(id).join("case.yaml");
+    assert!(
+        fs::symlink_metadata(&outside).is_err(),
+        "{} was written through the link\n{text}",
+        outside.display()
+    );
+    let Err(error) = stop else {
+        panic!("the run ends on the undo's error\n{text}");
+    };
+    assert!(
+        format!("{error:#}").contains(".engineering is a link on the way to .engineering/cases"),
+        "the refusal names the link\n{text}"
     );
 }
