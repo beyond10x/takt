@@ -254,9 +254,9 @@ types:
   # other judgement step it ends the run with an error.
   # read from: crates/takt-cli/src/main.rs:401-424
   # read from: crates/takt/src/harness.rs:67-69
-  # read from: crates/takt/src/harness.rs:237
-  # read from: crates/takt/src/harness.rs:163-167
-  # read from: crates/takt/src/harness.rs:295
+  # read from: crates/takt/src/harness.rs:241
+  # read from: crates/takt/src/harness.rs:167-171
+  # read from: crates/takt/src/harness.rs:304
   # read from: crates/takt-cli/src/main.rs:962-966
   - name: takt.work.HarnessName
     kind: newtype
@@ -537,11 +537,11 @@ types:
   # read from: crates/takt/src/run.rs:125-135
   # read from: crates/takt/src/harness.rs:41-50
   # read from: crates/takt/src/harness.rs:72-76
-  # read from: crates/takt/src/harness.rs:240-242
+  # read from: crates/takt/src/harness.rs:244-246
   # read from: crates/takt/src/harness.rs:52-64
   # read from: crates/takt/src/harness.rs:85-89
-  # read from: crates/takt/src/harness.rs:250-262
-  # read from: crates/takt/src/harness.rs:356-372
+  # read from: crates/takt/src/harness.rs:254-266
+  # read from: crates/takt/src/harness.rs:365-381
   - name: takt.work.RunStep
     kind: struct
     fields:
@@ -2681,7 +2681,7 @@ entities:
   # read from: crates/takt/src/run.rs:7075-7089
   # read from: crates/takt/src/run.rs:6411
   # read from: crates/takt/src/harness.rs:118
-  # read from: crates/takt/src/harness.rs:296-302
+  # read from: crates/takt/src/harness.rs:305-311
   # No git takt runs honours a replace ref, which would make a read at a revision (the base's
   # judge-surface list, its loop metric definitions) return another object's content: a ref a
   # step planted is a change the checkpoint names and its restore removes. Neither does a program
