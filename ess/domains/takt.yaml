@@ -1493,7 +1493,7 @@ types:
   # crash, a flag rejected, a command not found) or the predicate's `exit` without its `output`,
   # which makes no claim true.
   # read from: protocols/self-improvement/1.yaml:45-50
-  # read from: scripts/check-finding:509-523
+  # read from: scripts/check-finding:514-528
   - name: takt.work.ScenarioResult
     kind: enum
     variants: [reproduced, not_reproduced, error]
@@ -2069,7 +2069,7 @@ entities:
       # other protocol (story:self-improvement-protocol).
       # read from: protocols/self-improvement/1.yaml:24-26
       # read from: crates/takt/src/case.rs:1931-1968
-      # read from: crates/takt/src/improvement.rs:67-78
+      # read from: crates/takt/src/improvement.rs:71-82
       - name: independence
         type: Map<takt.work.ProducerName, List<String>>
     relations:
@@ -2243,7 +2243,7 @@ entities:
       # read from: crates/takt-cli/src/main.rs:701-729
       # read from: crates/takt-cli/src/main.rs:818-822
       # read from: crates/takt/src/case.rs:2224-2283
-      # read from: crates/takt/src/improvement.rs:47-58
+      # read from: crates/takt/src/improvement.rs:47-62
       - name: inputs
         type: Map<takt.work.InputId, String>
       # The workflow the run follows, when one is given; not built, the kernel takes none yet.
@@ -2820,9 +2820,12 @@ entities:
   # `takt.scenario-reproduce` (`scenario.reproduce`, about `baseline`) and
   # `takt.scenario-verify` (`scenario.verify`, about `candidate`), each `scenario_result` the
   # line the baseline's `scripts/check-finding` prints for the finding at that revision, run on
-  # a checkout of the baseline outside the case's tree, no record when it gives none; a kept
-  # build of the revision runs only while its sha256 is the one the turn recorded under the
-  # case's `artifacts/` when it built it, else it is built again and recorded; and
+  # a checkout of the baseline outside the case's tree, fetched from the case repository through
+  # git's transport with every object hashed and checked (as is the build's checkout), no record
+  # when it gives none; a kept build of the revision runs only while it is reached from the
+  # cache root without a link and its sha256 is the one the turn recorded under the case's
+  # `artifacts/` when it built it, else it is built again and recorded, a planted link unlinked
+  # and never followed; and
   # `takt.scorecard-compare` (`scorecard.compare`, `scorecard_result`,
   # about `candidate`), the candidate's saved scorecard at
   # `$XDG_STATE_HOME/takt/scorecards/scorecard-<candidate>.json` against the baseline's copy in
@@ -2863,12 +2866,12 @@ entities:
   # read from: crates/takt/src/validator.rs:358-383
   # read from: crates/takt/src/validator.rs:150
   # read from: crates/takt/src/validator.rs:2036-2048
-  # read from: crates/takt/src/improvement.rs:406-414
-  # read from: crates/takt/src/improvement.rs:557-563
-  # read from: crates/takt/src/improvement.rs:739-749
+  # read from: crates/takt/src/improvement.rs:459-467
+  # read from: crates/takt/src/improvement.rs:610-616
+  # read from: crates/takt/src/improvement.rs:789-799
   # read from: crates/takt/src/validator.rs:2051-2069
-  # read from: crates/takt/src/improvement.rs:276-327
-  # read from: crates/takt/src/improvement.rs:331-358
+  # read from: crates/takt/src/improvement.rs:280-345
+  # read from: crates/takt/src/improvement.rs:349-412
   - name: takt.work.EvidenceProducer
     naming:
       summary: >-
@@ -3326,7 +3329,8 @@ entities:
   # `aep plan artifact new`, refusing a key the store holds and a predicate that does not parse,
   # with nothing written; `scripts/check-finding` runs the predicate in a clone of the scenario's
   # seed, or of the repository at its seed, with a takt built from a given revision in a checkout
-  # of it, so the binary names that revision. The predicate's command runs under bubblewrap
+  # of it, fetched through git's transport with every object hashed and checked, so the binary
+  # names that revision and no object overwritten in the store is built. The predicate's command runs under bubblewrap
   # with every host path read-only but its clone and its own home; the caller's home and the
   # user's passwd home hidden (a path under them, the repository's among them, is refused as
   # read-only or as not there); /tmp and /run its own; and in network, IPC and PID namespaces
@@ -3342,8 +3346,8 @@ entities:
   # read from: scripts/file-finding:11-56
   # read from: scripts/file-finding:117
   # read from: scripts/file-finding:256
-  # read from: scripts/check-finding:209-424
-  # read from: scripts/check-finding:470-499
+  # read from: scripts/check-finding:209-429
+  # read from: scripts/check-finding:475-504
   # One predicate on one scenario or one repository: a body with a second `expected_before`
   # block, a block that gives a key twice, or one that gives both `scenario` and `repository`, or
   # neither, is malformed and nothing is filed. `seed` and `test` go with `repository` only: a

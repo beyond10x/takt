@@ -302,11 +302,15 @@ toolchain_dir() {
 }
 
 # takt, built from the revision in a checkout of its own, once per revision, confined in
-# bubblewrap. The checkout is a clone of this repository with its own copy of the objects (no
-# hardlink and no alternate into this repository, which the build cannot see), so a revision no
-# branch holds still builds and the build's git reads the checkout alone; and a checkout rather
-# than an export, so the build script reads the revision into the binary. A kept binary without
-# the `revision` file beside it was built from an export, and is replaced.
+# bubblewrap. The checkout is a repository of its own that fetches the revision, by its id, from
+# this one through git's transport, never a local copy of the object files: every object is
+# hashed as it is received and checked (`transfer.fsckObjects`), so one overwritten in this
+# repository's store fails the build, git naming it, rather than building other content. It
+# holds its own copy of the objects (no hardlink and no alternate into this repository, which the
+# build cannot see), so a revision no branch holds still builds and the build's git reads the
+# checkout alone; and it is a checkout rather than an export, so the build script reads the
+# revision into the binary. A kept binary without the `revision` file beside it was built from an
+# export, and is replaced.
 # Never unconfined: without bubblewrap nothing is built and no predicate runs.
 bwrap=$(command -v bwrap) ||
     fail "bubblewrap (\`bwrap\`) is not on PATH; check-finding builds the revision confined in it and runs the predicate under it, never without, so install bubblewrap first"
@@ -319,8 +323,9 @@ if [[ ! -x $takt || ! -f $root/builds/$sha/revision ]]; then
     work=$(mktemp -d "$root/builds/$sha.work-XXXXXX")
     trap 'rm -rf -- "$work"' EXIT
     mkdir -p "$work/target" "$work/cargo-home"
-    git clone --quiet --no-checkout --no-hardlinks --dissociate -- "$repo" "$work/src" >&2 ||
-        fail "clone $repo for the build"
+    { git init --quiet -- "$work/src" &&
+        git -C "$work/src" -c transfer.fsckObjects=true fetch --quiet --no-tags -- "$repo" "$sha"; } >&2 ||
+        fail "fetch $sha from $repo for the build, every object hashed and checked"
     git -C "$work/src" checkout --quiet --detach "$sha" >&2 ||
         fail "check out $sha from $repo"
     # The sandbox of `takt promote`'s build (crates/takt/src/promotion.rs, `Confinement`): the
