@@ -1858,7 +1858,7 @@ types:
 
   # A benchmark run's id: the run's name in its source, as a scenario run's is. Declared ahead of
   # the code (story:bench-nouns-in-ess).
-  # read from: docs/metrics/README.md:38
+  # read from: docs/metrics/README.md:39
   # read from: .engineering/planning/design/benchmark-integration.md:36
   - name: takt.work.BenchRunId
     kind: newtype
@@ -1868,7 +1868,7 @@ types:
   # comparison and not a score: takt; Claude Code running free with the operator's full
   # configuration; Claude Code under takt's harness isolation plus a shell; Codex running free.
   # Spelled as the scenario records spell them.
-  # read from: docs/metrics/README.md:44
+  # read from: docs/metrics/README.md:45
   # read from: docs/metrics/journey.py:40
   # read from: .engineering/planning/design/benchmark-integration.md:35
   # Maps to bench.arm and bench.harness of the organization's benchmark instrument: an arm there is
@@ -1890,7 +1890,7 @@ types:
   # said of the finished task, `pass` or `fail` as a scenario run's held-out check does, and
   # `unknown` when they gave no answer, such as for a task stopped at its budget. Never taken
   # from takt's own claims.
-  # read from: docs/metrics/README.md:60
+  # read from: docs/metrics/README.md:61
   # read from: .engineering/planning/design/benchmark-integration.md:32
   # read from: .engineering/planning/story/bench-subset-and-budget.md:31
   # Maps to bench.fact of the organization's benchmark instrument with `source: hidden-test`: a
@@ -1911,8 +1911,8 @@ types:
   # which sums the same records), unchanged and as a scenario record holds them: the tokens by
   # component and the cost the harness reported. A figure the source does not state is absent,
   # never 0; the token sum is computed from the four parts and not held.
-  # read from: docs/metrics/README.md:19-22
-  # read from: docs/metrics/README.md:52-57
+  # read from: docs/metrics/README.md:20-23
+  # read from: docs/metrics/README.md:53-58
   # read from: .engineering/planning/story/bench-run-export.md:29
   # Maps in part to bench.run of the organization's benchmark instrument, which holds the cost
   # alone, as integer micro-USD with its basis (`provider-reported`, `assumed`, `unknown`), and no
@@ -3810,8 +3810,8 @@ entities:
   # read from: .engineering/planning/design/benchmark-integration.md:36
   # read from: .engineering/planning/story/bench-run-export.md:23
   # read from: docs/metrics/README.md:4-5
-  # read from: docs/metrics/README.md:45
-  # read from: docs/metrics/README.md:47
+  # read from: docs/metrics/README.md:46
+  # read from: docs/metrics/README.md:48
   # Maps to bench.run of the organization's benchmark instrument, one arm of one case on one
   # harness, once: takt exports each run in bench's run shape, so bench's grader and fact table
   # cover takt beside the other harnesses.
@@ -3825,7 +3825,7 @@ entities:
   # one case and may span several invocations and resumes; whether a benchmark run references
   # its case or is owned by it is not said, and a free arm's run has neither.
   # read from: .engineering/planning/story/bench-run-export.md:48
-  # read from: docs/metrics/README.md:49
+  # read from: docs/metrics/README.md:50
   - name: takt.work.BenchRun
     naming:
       summary: >-
