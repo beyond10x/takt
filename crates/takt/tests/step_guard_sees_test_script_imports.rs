@@ -1015,6 +1015,19 @@ impl Venv {
     fn bin(&self) -> String {
         self.root.join("bin").display().to_string()
     }
+
+    /// The venv's `site-packages` directory.
+    fn site(&self) -> PathBuf {
+        let output = Command::new(self.root.join("bin/python"))
+            .args([
+                "-I",
+                "-c",
+                "import sysconfig; print(sysconfig.get_paths()['purelib'])",
+            ])
+            .output()
+            .expect("the venv's python runs");
+        PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
+    }
 }
 
 impl Drop for Venv {
@@ -1158,6 +1171,60 @@ fn a_program_written_to_a_directory_on_path_outside_the_tree_is_refused() {
     assert!(failed.is_empty(), "{failed:#?}");
 }
 
+/// Expected before: takt runs with a virtual environment outside the tree first on the `PATH`
+/// it inherits (an activated one), the test script runs `python3` from it, and a step wrote a
+/// `zz.pth` that ends the interpreter with exit 0 into that environment's `site-packages`:
+/// `tests.run` passed with the failing test there. And a step that writes such a file into
+/// Python's user site under the caller's home was not seen at all. The site directories the
+/// asked interpreter reports, the user site among them, are snapshotted like a program
+/// directory: the run stops naming the file, and takt leaves it, and a directory the step made
+/// on its way, exactly as they are.
+#[test]
+fn a_site_directory_of_the_inherited_interpreter_is_snapshotted() {
+    let failed: Vec<String> = [
+        outside_path_variant("inheritedvenv", &["venv/bin"], &[]),
+        outside_path_variant("usersite", &[], &[]),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// What `python3` prints for `code`, trimmed.
+fn python_says(code: &str) -> String {
+    let output = Command::new("python3")
+        .args(["-c", code])
+        .output()
+        .expect("python3 runs");
+    assert!(output.status.success(), "python3 -c {code:?}");
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// Makes a virtual environment at `<home>/venv` (no pip) and answers its `site-packages`.
+fn inherited_venv_site(home: &Path) -> PathBuf {
+    let venv = home.join("venv");
+    let made = Command::new("/usr/bin/env")
+        .args(["python3", "-m", "venv", "--without-pip"])
+        .arg(&venv)
+        .output()
+        .expect("python3 runs");
+    assert!(
+        made.status.success(),
+        "python3 -m venv: {}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let site = Command::new(venv.join("bin/python"))
+        .args([
+            "-I",
+            "-c",
+            "import sysconfig; print(sysconfig.get_paths()['purelib'])",
+        ])
+        .output()
+        .expect("the venv's python runs");
+    PathBuf::from(String::from_utf8_lossy(&site.stdout).trim())
+}
+
 /// The run [`a_program_written_to_a_directory_on_path_outside_the_tree_is_refused`] makes for
 /// one variant, under the scratch home it names; nothing at all without it.
 #[test]
@@ -1178,12 +1245,24 @@ fn the_outside_path_run() {
         "cargobin" => (home.join(".cargo/bin/cargo-forge"), None),
         "absent" => (home.join(".local/bin/python3"), Some(home.join(".local"))),
         "concurrent" => (home.join(".local/bin/newtool"), None),
+        "inheritedvenv" => (inherited_venv_site(&home).join("zz.pth"), None),
+        "usersite" => {
+            let site = python_says("import site; print(site.getusersitepackages())");
+            assert!(
+                Path::new(&site).starts_with(&home),
+                "the user site {site:?} is under {home:?}"
+            );
+            (
+                PathBuf::from(site).join("zz.pth"),
+                Some(home.join(".local")),
+            )
+        }
         other => panic!("no variant {other}"),
     };
-    let program_text = if variant == "concurrent" {
-        "#!/bin/sh\necho other-session\n"
-    } else {
-        "#!/bin/sh\necho OK\nexit 0\n"
+    let program_text = match variant.as_str() {
+        "concurrent" => "#!/bin/sh\necho other-session\n",
+        "inheritedvenv" | "usersite" => "import os; os._exit(0)\n",
+        _ => "#!/bin/sh\necho OK\nexit 0\n",
     };
     let tree = scenario(&variant, SCENARIO_CHECK);
     let ran = run_writing(
@@ -1270,4 +1349,340 @@ fn a_program_in_an_outside_directory_the_script_exports_onto_path_is_refused() {
         planted.display()
     );
     assert!(left, "takt removed {} outside the tree", planted.display());
+}
+
+/// Runs the scenario under the test script `check` (with `{out}` standing for `out`, a
+/// directory outside the tree in the scratch) and a step that writes `text` at `planted` beside
+/// an ordinary change; answers why the step was not refused as it should be: refused, the
+/// refusal naming `planted`, no pass, and `planted` left where the step wrote it.
+fn outside_import_variant(
+    variant: &str,
+    check: &str,
+    planted: &str,
+    text: &str,
+    venv: Option<&Venv>,
+) -> Option<String> {
+    let tree = scenario(&format!("outside-imports-{variant}"), "");
+    let out = tree.root.join("out");
+    fs::create_dir_all(&out).expect("out");
+    let mut check = check.replace("{out}", &out.display().to_string());
+    let mut planted = planted.replace("{out}", &out.display().to_string());
+    if let Some(venv) = venv {
+        check = check.replace("{bin}", &venv.bin());
+        planted = planted.replace("{site}", &venv.site().display().to_string());
+    }
+    write(&tree, "check.sh", &check);
+    git(&tree, &["commit", "-q", "-am", "the script"]);
+    let ran = run_writing(
+        &tree,
+        "./check.sh",
+        &[
+            (planted.as_str(), text),
+            ("todo.py", "def answer():\n    return 1\n"),
+        ],
+    );
+    let stop = ran.stop.as_ref().map_err(ToString::to_string);
+    if ran.passes() > 0 {
+        return Some(format!(
+            "{variant}: {planted} earned `tests.run` pass; stop {stop:?}"
+        ));
+    }
+    match &ran.stop {
+        Ok(Stop::StepRefused(why)) if why.contains(&planted) => {}
+        _ => {
+            return Some(format!(
+                "{variant}: the refusal does not name {planted}: {stop:?}"
+            ));
+        }
+    }
+    (!Path::new(&planted).exists())
+        .then(|| format!("{variant}: takt removed {planted} outside the tree"))
+}
+
+/// Expected before: the test script set a `PYTHONPATH` entry outside the tree
+/// (`export PYTHONPATH="/srv/out:."`) and a step wrote `unittest.py` there, or a
+/// `sitecustomize.py` that exits 0, or made the entry where none was: `tests.run` passed with the
+/// failing test there. Every directory outside the tree the script makes Python load code from
+/// (each `PYTHONPATH` entry, on its line or exported; `PYTHONPYCACHEPREFIX`, `PYTHONUSERBASE`,
+/// `PYTHONHOME`) is snapshotted like a directory on `PATH`: the run stops naming the file, and
+/// takt leaves it as it is.
+#[test]
+fn an_outside_directory_the_script_imports_from_is_snapshotted() {
+    let unittest = "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\n";
+    let failed: Vec<String> = [
+        (
+            "export",
+            format!("{unittest}export PYTHONPATH=\"{{out}}:.\"\npython3 -m unittest discover -s tests -v\n"),
+            "{out}/unittest.py",
+            FORGED_RUNNER,
+        ),
+        (
+            "sitecustomize",
+            format!("{unittest}export PYTHONPATH=\"{{out}}:.\"\npython3 -m unittest discover -s tests -v\n"),
+            "{out}/sitecustomize.py",
+            EXITS_0,
+        ),
+        (
+            "inline",
+            format!("{unittest}PYTHONPATH={{out}}:. python3 -m unittest discover -s tests -v\n"),
+            "{out}/unittest.py",
+            FORGED_RUNNER,
+        ),
+        (
+            "absent",
+            format!("{unittest}export PYTHONPATH=\"{{out}}/none/yet:.\"\npython3 -m unittest discover -s tests -v\n"),
+            "{out}/none/yet/unittest.py",
+            FORGED_RUNNER,
+        ),
+        (
+            "package",
+            format!("{unittest}export PYTHONPATH=\"{{out}}:.\"\npython3 -m unittest discover -s tests -v\n"),
+            "{out}/unittest/__main__.py",
+            FORGED_RUNNER,
+        ),
+        (
+            "pycacheprefix",
+            format!("{unittest}export PYTHONPYCACHEPREFIX=\"{{out}}/cache\"\nPYTHONPATH=. python3 -m unittest discover -s tests -v\n"),
+            "{out}/cache/forged.pyc",
+            "",
+        ),
+    ]
+    .iter()
+    .filter_map(|(variant, check, planted, text)| {
+        outside_import_variant(variant, check, planted, text, None)
+    })
+    .collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// Expected before: the test script exports a virtual environment outside the tree onto `PATH`
+/// and runs its `python3`; a step wrote a `zz.pth` that exits 0 into that environment's
+/// `site-packages`, which Python runs at start-up, and `tests.run` passed. The interpreter's
+/// site directories are snapshotted: the run stops naming the file and leaves it.
+#[test]
+fn a_site_directory_of_the_interpreter_the_script_runs_is_snapshotted() {
+    let venv = Venv::new("sitepth");
+    let check = "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\nexport PATH=\"{bin}:$PATH\"\nPYTHONPATH=. python3 -m unittest discover -s tests -v\n";
+    let failed = outside_import_variant(
+        "venvsite",
+        check,
+        "{site}/zz.pth",
+        "import os; os._exit(0)\n",
+        Some(&venv),
+    );
+    assert!(failed.is_none(), "{failed:?}");
+}
+
+/// An ordinary fix still earns its pass when the tests import a module from a directory outside
+/// the tree the script puts on `PYTHONPATH`, and from a virtual environment whose start-up file
+/// imports a module: the test command runs without writing byte code, so it changes nothing in
+/// the directories takt snapshots.
+#[test]
+fn an_outside_import_directory_the_tests_use_still_earns_a_pass() {
+    let venv = Venv::new("ordinary");
+    let tree = repository(
+        "outside-ordinary",
+        &[
+            ("todo.py", CODE, false),
+            (
+                "tests/test_todo.py",
+                "import unittest\n\nimport helperlib\nimport todo\n\n\nclass T(unittest.TestCase):\n    def test_answer(self):\n        self.assertEqual(todo.answer(), helperlib.EXPECTED)\n",
+                false,
+            ),
+        ],
+    );
+    let out = tree.root.join("out");
+    fs::create_dir_all(&out).expect("out");
+    fs::write(out.join("helperlib.py"), "EXPECTED = 42\n").expect("helperlib");
+    write(
+        &tree,
+        "check.sh",
+        &format!(
+            "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\nexport PATH=\"{}:$PATH\"\nexport PYTHONPATH=\"{}:.\"\npython3 -m unittest discover -s tests -v\n",
+            venv.bin(),
+            out.display()
+        ),
+    );
+    git(&tree, &["add", "-A"]);
+    git(&tree, &["commit", "-q", "-m", "the script"]);
+    let ran = run(&tree, "./check.sh", "todo.py", FIXED);
+    assert_eq!(
+        ran.stop.as_ref().ok(),
+        Some(&Stop::Completed("accepted".to_owned())),
+        "{:?}\n{}",
+        ran.stop.as_ref().map_err(ToString::to_string),
+        ran.text
+    );
+    assert_eq!(ran.passes(), 1, "{:?}\n{}", ran.records, ran.text);
+}
+
+/// The reason in what [`takt::run::scripts_of`] names for a script that fails closed, if any.
+fn fails_closed_reasons(named: &[String]) -> Vec<&str> {
+    named
+        .iter()
+        .filter_map(|path| path.strip_prefix("(fails closed) "))
+        .collect()
+}
+
+/// Expected before: of the constructs that fail closed, only a sourced file outside the tree
+/// said why; an `eval` line, a loop, a here-document, an unknown variable and the rest put every
+/// Python file, shell file and program on the surface without a word. Each now names its
+/// reason, and the reason quotes what it could not read.
+#[test]
+fn every_construct_that_fails_closed_names_why() {
+    let big = format!("#!/bin/sh\n{}", "# padding\n".repeat(120_000));
+    let mut missed = Vec::new();
+    for (script, extra, says) in [
+        (
+            "#!/bin/sh\nexport PYTHONPATH=\"$X\"\npython3 -m unittest\n",
+            None,
+            "$X",
+        ),
+        ("#!/bin/sh\nnose2 -s \"$X\"\n", None, "$X"),
+        (
+            "#!/bin/sh\npython3 -m unittest discover -s \"$X\"\n",
+            None,
+            "$X",
+        ),
+        (
+            "#!/bin/sh\nsh big.sh\n",
+            Some(("big.sh", big.as_str())),
+            "big.sh",
+        ),
+        (
+            "#!/bin/sh\ncat <<EOF > x.py\nprint(1)\nEOF\npython3 x.py\n",
+            None,
+            "<<",
+        ),
+        (
+            "#!/bin/sh\nif true; then python3 -m unittest; fi\n",
+            None,
+            "if",
+        ),
+        ("#!/bin/sh\ncd \"$X\"\npython3 -m unittest\n", None, "$X"),
+        (
+            "#!/bin/sh\n. /srv/outside/env.sh\n",
+            None,
+            "/srv/outside/env.sh",
+        ),
+        ("#!/bin/sh\n. ./absent.sh\n", None, "absent.sh"),
+        ("#!/bin/sh\neval true\n", None, "eval"),
+        ("#!/bin/sh\npython3 \"${RUNNER:-run.py}\"\n", None, "RUNNER"),
+        ("#!/bin/sh\n\"$PY\" -m unittest\n", None, "$PY"),
+        ("#!/bin/sh\npython3 -m \"$M\"\n", None, "$M"),
+        ("#!/bin/sh\npython3 -m tox\n", None, "tox"),
+        ("#!/bin/sh\nmake test\n", None, "make"),
+        (
+            "#!/bin/sh\nPYTHONPATH=$(other) python3 -m unittest\n",
+            None,
+            "$(",
+        ),
+        ("#!/bin/sh\nf() { python3 -m unittest; }\nf\n", None, "f()"),
+        (
+            "#!/bin/sh\nsh tools/a.sh\n",
+            Some(("tools/a.sh", "sh tools/deep/b.sh\n")),
+            "tools/deep/b.sh",
+        ),
+    ] {
+        let mut files = vec![("check.sh", script, true)];
+        if let Some((path, text)) = extra {
+            files.push((path, text, false));
+        }
+        if script.contains("tools/a.sh") {
+            files.push(("tools/deep/b.sh", "exit 1\n", false));
+        }
+        let tree = repository("reasons", &files);
+        let named = takt::run::scripts_of(&["./check.sh".to_owned()], &tree);
+        let reasons = fails_closed_reasons(&named);
+        if !named.iter().any(|path| path == "**/*.py") {
+            missed.push(format!("{script:?}: does not fail closed: {named:?}"));
+        } else if !reasons.iter().any(|reason| reason.contains(says)) {
+            missed.push(format!(
+                "{script:?}: no reason naming {says:?}: {reasons:?}"
+            ));
+        }
+    }
+    assert!(missed.is_empty(), "{missed:#?}");
+}
+
+/// Expected before: with `eval true` in the test script, the step that added a test was refused
+/// with `: tests/test_forge.py` and no reason; a shell file or a program written while a loop
+/// fails closed the same. The refusal now says why every such file is on the surface.
+#[test]
+fn a_refusal_while_the_guard_fails_closed_names_why() {
+    let mut missed = Vec::new();
+    for (check, path, text, says) in [
+        (
+            "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\neval true\nPYTHONPATH=. python3 -m unittest discover -s tests -v\n",
+            "tests/test_more.py",
+            TEST,
+            "eval",
+        ),
+        (
+            "#!/bin/sh\nfor t in tests; do PYTHONPATH=. python3 -m unittest discover -s \"$t\"; done\n",
+            "helpers/run.sh",
+            "exit 0\n",
+            "for",
+        ),
+        (
+            "#!/bin/sh\nfor t in tests; do PYTHONPATH=. python3 -m unittest discover -s \"$t\"; done\n",
+            "helpers/tool",
+            "#!/bin/sh\nexit 0\n",
+            "for",
+        ),
+    ] {
+        let tree = scenario("closed-reason", check);
+        let ran = run(&tree, "./check.sh", path, text);
+        match &ran.stop {
+            Ok(Stop::StepRefused(why)) if why.contains(path) => {
+                let tail = why.rsplit(path).next().unwrap_or_default();
+                if !tail.contains("fails closed") || !tail.contains(says) {
+                    missed.push(format!("{path}: the refusal does not say why: {tail}"));
+                }
+            }
+            other => missed.push(format!(
+                "{path}: not refused naming it: {:?}",
+                other.as_ref().map_err(ToString::to_string)
+            )),
+        }
+    }
+    assert!(missed.is_empty(), "{missed:#?}");
+}
+
+/// Expected before: with a virtual environment in the tree made with `--copies`, whose Python
+/// takt never runs, the refusal said the interpreter "could not be established". It still fails
+/// closed, and now says the interpreter is inside the tree and is not run.
+#[test]
+fn an_interpreter_inside_the_tree_is_named_as_not_run() {
+    let tree = repository(
+        "tree-venv",
+        &[
+            (".gitignore", "target/\n__pycache__/\n.venv/\n", false),
+            (
+                "check.sh",
+                "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\nPYTHONPATH=. .venv/bin/python -m unittest discover -s tests -v\n",
+                true,
+            ),
+            ("todo.py", CODE, false),
+            ("tests/test_todo.py", TEST, false),
+        ],
+    );
+    let made = Command::new("python3")
+        .args(["-m", "venv", "--copies", "--without-pip"])
+        .arg(tree.join(".venv"))
+        .output()
+        .expect("python3 runs");
+    assert!(
+        made.status.success(),
+        "python3 -m venv --copies: {}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let ran = run(&tree, "./check.sh", "helper.py", "X = 1\n");
+    let why = ran.refusal();
+    assert!(why.contains("helper.py"), "{why}");
+    assert!(
+        why.contains(".venv/bin/python is inside the tree") && why.contains("not run"),
+        "the refusal says the interpreter is inside the tree and not run: {why}"
+    );
+    assert_eq!(ran.passes(), 0, "{:?}", ran.records);
 }

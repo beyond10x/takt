@@ -979,9 +979,23 @@ const FAIL_CLOSED: &[&str] = &[
     PROGRAMS,
 ];
 
-/// Guards what a script line the guard cannot read could load or run ([`FAIL_CLOSED`]).
-fn fail_closed(named: &mut Vec<String>) {
+/// Guards what a script line the guard cannot read could load or run ([`FAIL_CLOSED`]), and
+/// names `reason` beside it ([`FAILS_CLOSED_MARK`]), so a refusal of a path it put on the
+/// surface says why ([`JudgeSurface::modules_note`]).
+fn fail_closed(named: &mut Vec<String>, reason: impl std::fmt::Display) {
     named.extend(FAIL_CLOSED.iter().map(|glob| (*glob).to_owned()));
+    named.push(format!("{FAILS_CLOSED_MARK}{reason}"));
+}
+
+/// `text` as a reason quotes it: on one line, in backticks, cut at 80 characters.
+fn quoted(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cut: String = line.chars().take(80).collect();
+    if cut.len() < line.len() {
+        format!("`{cut}…`")
+    } else {
+        format!("`{cut}`")
+    }
 }
 
 /// What [`scripts_of`] names for every program of the tree, by what the file holds rather
@@ -1387,6 +1401,11 @@ const MARK_SEP: char = '\u{1f}';
 /// a program it finds there.
 const OUTSIDE_PATH_MARK: &str = "(outside path) ";
 
+/// What [`scripts_of`] names for a directory or file outside the tree the script makes Python
+/// load code from: a `PYTHONPATH` entry, or what a variable of [`PYTHON_DIRS`] names. A step
+/// may write nothing in it, since the test command's Python would load what it finds there.
+const OUTSIDE_IMPORTS_MARK: &str = "(outside imports) ";
+
 /// What [`scripts_of`] names, beside failing closed, for why a script fails closed at open: the
 /// refusal names it ([`JudgeSurface::modules_note`]).
 const FAILS_CLOSED_MARK: &str = "(fails closed) ";
@@ -1449,6 +1468,31 @@ pub fn outside_path_dirs(runs: &[String], tree: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// What Python loads code from outside the tree when the test command `runs` in `tree`, so a
+/// step may write nothing in it ([`Outside`]): what the script names ([`OUTSIDE_IMPORTS_MARK`]),
+/// each absolute `PYTHONPATH` entry and [`PYTHON_DIRS`] value takt runs the command with, and
+/// the directories the case's Pythons import from ([`Modules::sites`]).
+#[must_use]
+pub fn outside_import_dirs(runs: &[String], tree: &Path, modules: &Modules) -> Vec<PathBuf> {
+    let mut dirs: BTreeSet<PathBuf> = scripts_of(runs, tree)
+        .iter()
+        .filter_map(|named| named.strip_prefix(OUTSIDE_IMPORTS_MARK))
+        .map(PathBuf::from)
+        .collect();
+    if let Some(path) = std::env::var_os("PYTHONPATH") {
+        dirs.extend(std::env::split_paths(&path).filter(|dir| dir.is_absolute()));
+    }
+    for name in PYTHON_DIRS {
+        dirs.extend(
+            std::env::var_os(name)
+                .map(PathBuf::from)
+                .filter(|dir| dir.is_absolute()),
+        );
+    }
+    dirs.extend(modules.sites.iter().map(PathBuf::from));
+    dirs.into_iter().filter(|dir| !in_tree(tree, dir)).collect()
+}
+
 /// The file a case keeps its module names in ([`Modules`]), under its directory.
 pub const MODULES_FILE: &str = "python-modules.json";
 
@@ -1457,7 +1501,9 @@ pub const MODULES_FILE: &str = "python-modules.json";
 /// argument, `S` for the standard library's and the built-in ones and `N` for the rest: what
 /// every `sys.path` entry outside the tree holds (the standard library, site-packages, what a
 /// `.pth` file adds) and what start-up imported (`sys.modules`, a `.pth` file's imports among
-/// them), but a module loaded from the tree.
+/// them), but a module loaded from the tree. Last, `P` and each directory outside the tree it
+/// imports from: every `sys.path` entry, its site directories, and the user site under the home
+/// given as its second argument (the caller's; it runs in a home of its own).
 const NAMES_PY: &str = r#"
 import os, sys
 tree = os.path.realpath(sys.argv[1])
@@ -1489,6 +1535,22 @@ for name in sorted(strict):
 for name in sorted(names - strict):
     if name.isidentifier() and name != "__pycache__":
         print("N", name)
+import site
+try:
+    sites = list(site.getsitepackages())
+except Exception:
+    sites = []
+if len(sys.argv) > 2 and sys.argv[2]:
+    os.environ["HOME"] = sys.argv[2]
+site.USER_BASE = None
+site.USER_SITE = None
+try:
+    sites.append(site.getusersitepackages())
+except Exception:
+    pass
+for entry in sys.path + sites:
+    if entry and "\n" not in entry and not inside(entry):
+        print("P", os.path.abspath(entry))
 "#;
 
 /// The top-level module names no step may put in a directory Python imports from: asked at case
@@ -1511,6 +1573,20 @@ pub struct Modules {
     /// real interpreter's start-up imports are unknown.
     #[serde(default)]
     pub fail_closed: Option<String>,
+    /// The directories outside the tree each Python asked imports from, absolute: every
+    /// `sys.path` entry, its site directories and the user site under the caller's home. No
+    /// step may write in them ([`Outside`]).
+    #[serde(default)]
+    pub sites: BTreeSet<String>,
+}
+
+/// What one Python answered at case open ([`Modules::answer`]): where it is and its version,
+/// its strict names and the rest, folded, and the directories it imports from.
+struct Answer {
+    from: String,
+    strict: BTreeSet<String>,
+    names: BTreeSet<String>,
+    sites: BTreeSet<String>,
 }
 
 impl Default for Modules {
@@ -1528,6 +1604,7 @@ impl Default for Modules {
                 .collect(),
             names: BTreeSet::new(),
             fail_closed: None,
+            sites: BTreeSet::new(),
         }
     }
 }
@@ -1627,19 +1704,22 @@ fn venv_names(python: &Path) -> BTreeSet<String> {
 }
 
 impl Modules {
-    /// Asks every Python the test command `runs` may run in `tree` for its module names
-    /// ([`NAMES_PY`]): each program its command lines run that is a Python, or whose `#!` line
-    /// names one, found on `PATH` outside the tree, and `python3` there besides. Each is started
-    /// with `-I`, in an empty directory of its own outside the tree with `HOME` there and
-    /// `PYTHONNOUSERSITE=1`, for ten seconds at most; a file in the tree is never run, but a
-    /// virtual environment's `site-packages` there is read ([`venv_names`]). The built-in lists
-    /// when none answered.
+    /// Asks every Python the test command `runs` may run in `tree` for its module names and the
+    /// directories it imports from ([`NAMES_PY`]): each program its command lines run that is a
+    /// Python, or whose `#!` line names one, resolved outside the tree on the `PATH` the script
+    /// leaves (its own prepends first, then the one it inherits), never takt's own `python3` in
+    /// its place. Each is started with `-I`, in an empty directory of its own outside the tree
+    /// with `HOME` there and `PYTHONNOUSERSITE=1`, for ten seconds at most; a file in the tree
+    /// is never run, but a virtual environment's `site-packages` there is read ([`venv_names`]).
+    /// The built-in lists when none answered.
     #[must_use]
     pub fn ask(runs: &[String], tree: &Path) -> Self {
         let mut pythons: Vec<PathBuf> = Vec::new();
         let mut venv = BTreeSet::new();
         let mut python_will_run = false;
         let mut unresolved: Vec<String> = Vec::new();
+        // The Pythons of the tree the test command runs, which are never run here.
+        let mut in_tree_pythons: Vec<String> = Vec::new();
         for mark in scripts_of(runs, tree)
             .iter()
             .filter_map(|named| named.strip_prefix(PROGRAM_MARK))
@@ -1656,6 +1736,7 @@ impl Modules {
                 if python_like(rel) {
                     python_will_run = true;
                     venv.extend(venv_names(&full));
+                    in_tree_pythons.push(rel.to_owned());
                 } else if let Some(python) = shebang_python(&full, tree) {
                     python_will_run = true;
                     pythons.push(python);
@@ -1688,15 +1769,31 @@ impl Modules {
             strict: RUNNER_PACKAGES.iter().map(|name| fold(name)).collect(),
             names: venv,
             fail_closed: None,
+            sites: BTreeSet::new(),
         };
         for python in &pythons {
             if let Some(answer) = Self::answer(python, tree) {
-                asked.from.push(answer.0);
-                asked.strict.extend(answer.1);
-                asked.names.extend(answer.2);
+                asked.from.push(answer.from);
+                asked.strict.extend(answer.strict);
+                asked.names.extend(answer.names);
+                asked.sites.extend(answer.sites);
             } else {
                 unresolved.push(python.display().to_string());
             }
+        }
+        // Why a Python the test command runs was not asked: one of the tree is never run here,
+        // and one that could not be found or did not answer is not known. Either fails closed.
+        let mut reasons = Vec::new();
+        if !in_tree_pythons.is_empty() {
+            let verb = if in_tree_pythons.len() == 1 {
+                "is"
+            } else {
+                "are"
+            };
+            reasons.push(format!(
+                "{} {verb} inside the tree, and takt does not run a file of the tree at case open to ask what the test command's Python imports",
+                in_tree_pythons.join(", ")
+            ));
         }
         if asked.from.is_empty() {
             // No interpreter answered. A test command that runs a Python whose interpreter
@@ -1705,18 +1802,28 @@ impl Modules {
             let mut fallback = Self::default();
             fallback.names.extend(asked.names);
             if python_will_run {
-                fallback.fail_closed = Some(
-                    "the interpreter the test command runs could not be established at case open"
-                        .to_owned(),
-                );
+                if reasons.is_empty() || !unresolved.is_empty() {
+                    reasons.push(format!(
+                        "the interpreter the test command runs could not be established at case open{}",
+                        if unresolved.is_empty() {
+                            String::new()
+                        } else {
+                            format!(": {}", unresolved.join(", "))
+                        }
+                    ));
+                }
+                fallback.fail_closed = Some(reasons.join("; "));
             }
             return fallback;
         }
         if !unresolved.is_empty() {
-            asked.fail_closed = Some(format!(
+            reasons.push(format!(
                 "a Python the test command runs could not be queried at case open: {}",
                 unresolved.join(", ")
             ));
+        }
+        if !reasons.is_empty() {
+            asked.fail_closed = Some(reasons.join("; "));
         }
         let strict = asked.strict.clone();
         asked
@@ -1725,15 +1832,16 @@ impl Modules {
         asked
     }
 
-    /// What `python` answers ([`NAMES_PY`]): where it is and its version, its strict names and
-    /// the rest, folded; `None` when it could not be run or did not answer in time.
-    fn answer(python: &Path, tree: &Path) -> Option<(String, BTreeSet<String>, BTreeSet<String>)> {
+    /// What `python` answers ([`NAMES_PY`]); `None` when it could not be run or did not answer
+    /// in time. Its user site is the one under the caller's home, which it is given.
+    fn answer(python: &Path, tree: &Path) -> Option<Answer> {
         let home = crate::validator::FreshHome::new().ok()?;
         let tree = std::path::absolute(tree).ok()?;
         let mut command = std::process::Command::new(python);
         command
             .args(["-I", "-c", NAMES_PY])
             .arg(&tree)
+            .arg(std::env::var_os("HOME").unwrap_or_default())
             .current_dir(home.dir());
         crate::forge::without_credentials(&mut command, |_| false);
         home.apply(&mut command);
@@ -1749,6 +1857,7 @@ impl Modules {
         let mut from = None;
         let mut strict = BTreeSet::new();
         let mut names = BTreeSet::new();
+        let mut sites = BTreeSet::new();
         for line in text.lines() {
             match line.split_once(' ') {
                 Some(("V", rest)) => {
@@ -1761,10 +1870,18 @@ impl Modules {
                 Some(("N", name)) => {
                     names.insert(fold(name));
                 }
+                Some(("P", dir)) if Path::new(dir).is_absolute() => {
+                    sites.insert(dir.to_owned());
+                }
                 _ => {}
             }
         }
-        Some((from?, strict, names))
+        Some(Answer {
+            from: from?,
+            strict,
+            names,
+            sites,
+        })
     }
 
     /// The names the case at `case_dir` keeps ([`MODULES_FILE`]); asked of the Python the test
@@ -2576,7 +2693,10 @@ fn values_of(
     named: &mut Vec<String>,
 ) -> Option<String> {
     expand(tree, word, dir, env).or_else(|| {
-        fail_closed(named);
+        fail_closed(
+            named,
+            format!("{} holds what the guard cannot expand", quoted(word)),
+        );
         expand_default(tree, word, dir, env)
     })
 }
@@ -2628,18 +2748,29 @@ fn assign(
                 }
             }
         } else {
+            // An entry outside the tree: a directory a step may not write ([`OUTSIDE_IMPORTS_MARK`]).
+            for (dir, entry) in &entries {
+                if changed_dir(tree, dir.as_deref(), entry).is_none()
+                    && let Some(absolute) = absolute_entry(tree, dir.as_deref(), entry)
+                {
+                    named.push(format!("{OUTSIDE_IMPORTS_MARK}{absolute}"));
+                }
+            }
             env.pythonpath
                 .extend(entries.into_iter().map(|(_, entry)| entry));
         }
     } else if PYTHON_DIRS.contains(&name) {
         for dir in dirs {
-            if let Some(value) = values_of(tree, value, dir.as_deref(), env, named)
-                && let Some(path) = changed_dir(tree, dir.as_deref(), &value)
-            {
+            let Some(value) = values_of(tree, value, dir.as_deref(), env, named) else {
+                continue;
+            };
+            if let Some(path) = changed_dir(tree, dir.as_deref(), &value) {
                 named.push(under(&path));
                 if !path.is_empty() {
                     named.push(path);
                 }
+            } else if let Some(absolute) = absolute_entry(tree, dir.as_deref(), &value) {
+                named.push(format!("{OUTSIDE_IMPORTS_MARK}{absolute}"));
             }
         }
     }
@@ -2695,7 +2826,10 @@ fn mark_imports(
         if name == "nose2" || *word == "-mnose2" {
             for start in nose2_dirs(&words[k + 1..]) {
                 if opaque(start) {
-                    fail_closed(named);
+                    fail_closed(
+                        named,
+                        format!("nose2's start directory {} cannot be named", quoted(start)),
+                    );
                 } else if let Some(path) = changed_dir(tree, dir, start) {
                     named.push(marked(&path, IMPORTS));
                 }
@@ -2713,7 +2847,13 @@ fn mark_imports(
         }
         for start in discover_dirs(&words[k + 2..]) {
             if opaque(start) {
-                fail_closed(named);
+                fail_closed(
+                    named,
+                    format!(
+                        "a `unittest discover` directory {} cannot be named",
+                        quoted(start)
+                    ),
+                );
                 continue;
             }
             if let Some(path) = changed_dir(tree, dir, start) {
@@ -2866,7 +3006,13 @@ fn shell_text(full: &Path, by_shell: bool, named: &mut Vec<String>) -> Option<St
     let read = std::fs::File::open(full)
         .and_then(|file| file.take(SCRIPT_BYTES_AT_MOST + 1).read_to_end(&mut bytes));
     if read.is_err() || bytes.len() as u64 > SCRIPT_BYTES_AT_MOST {
-        fail_closed(named);
+        fail_closed(
+            named,
+            format!(
+                "the script {} cannot be read or is larger than {SCRIPT_BYTES_AT_MOST} bytes",
+                full.display()
+            ),
+        );
         return None;
     }
     if bytes.contains(&0) {
@@ -2965,6 +3111,7 @@ fn read_line(
     depth: usize,
     every_word: bool,
 ) {
+    let raw = line;
     let line = substituted(line);
     let words = shell_words(&line);
     if line.contains("$(")
@@ -2974,7 +3121,13 @@ fn read_line(
             .windows(2)
             .any(|pair| pair[0] == "<" && pair[1] == "<")
     {
-        fail_closed(named);
+        fail_closed(
+            named,
+            format!(
+                "the line {} holds a command substitution, a subshell, a function or a here-document, which the guard does not follow",
+                quoted(raw)
+            ),
+        );
     }
     if every_word {
         for dir in &shell.dirs {
@@ -3037,7 +3190,14 @@ fn statement(
         .is_some_and(|word| *word == "!" || COMPOUND.contains(word))
     {
         if words[at] != "!" {
-            fail_closed(named);
+            fail_closed(
+                named,
+                format!(
+                    "the command {} opens or closes a compound command (`{}`), which the guard does not follow",
+                    quoted(&command.join(" ")),
+                    words[at]
+                ),
+            );
         }
         at += 1;
     }
@@ -3075,7 +3235,12 @@ fn statement(
                         Some(target) => to.push(changed_dir(tree, dir.as_deref(), &target)),
                         None => {
                             // Anywhere, and where the default (`${X:-dir}`) leads.
-                            fail_closed(named);
+                            fail_closed(
+                                named,
+                                format!(
+                                    "`{first} {target}` changes to a directory the guard cannot name"
+                                ),
+                            );
                             to.push(Some(ANYWHERE.to_owned()));
                             if let Some(target) =
                                 expand_default(tree, target, dir.as_deref(), &shell.env)
@@ -3112,16 +3277,23 @@ fn statement(
                     // A file outside the tree is code the guard cannot see, and what it does to
                     // `PATH` or the environment it cannot follow: fail closed, and say why.
                     if !target.is_empty() {
-                        fail_closed(named);
-                        named.push(format!(
-                            "{FAILS_CLOSED_MARK}the test command's script sources {target}, outside the tree, whose effect on `PATH` and the interpreter takt cannot follow"
-                        ));
+                        fail_closed(
+                            named,
+                            format!(
+                                "the test command's script sources {target}, outside the tree, whose effect on `PATH` and the interpreter takt cannot follow"
+                            ),
+                        );
                     }
                     continue;
                 };
                 named.push(path.clone());
                 if shell.env.level >= SCRIPTS_AT_MOST {
-                    fail_closed(named);
+                    fail_closed(
+                        named,
+                        format!(
+                            "{path} is sourced deeper than the {SCRIPTS_AT_MOST} scripts the guard reads"
+                        ),
+                    );
                     named.push(under(parent_of(&path)));
                     continue;
                 }
@@ -3138,12 +3310,23 @@ fn statement(
                         shell.env.level -= 1;
                         shell.env.source_dir = outer;
                     }
-                    None => fail_closed(named),
+                    None => fail_closed(
+                        named,
+                        format!(
+                            "the sourced file {path} is not a file of the tree the guard can read"
+                        ),
+                    ),
                 }
             }
         }
         first if OPAQUE.contains(&first) => {
-            fail_closed(named);
+            fail_closed(
+                named,
+                format!(
+                    "the command {} runs `{first}`, which runs code given as text or changes what the guard follows",
+                    quoted(&rest.join(" "))
+                ),
+            );
             for word in &rest[1..] {
                 let code = word.split_once('=').map_or(*word, |(_, code)| code);
                 for line in [*word, code] {
@@ -3176,7 +3359,13 @@ fn statement(
                             .or_else(|| {
                                 let default = expand_default(tree, word, dir.as_deref(), &env);
                                 if default.as_ref().is_some_and(|d| k == 0 || !d.is_empty()) {
-                                    fail_closed(named);
+                                    fail_closed(
+                                        named,
+                                        format!(
+                                            "{} holds a variable the guard does not know and is taken as its default",
+                                            quoted(word)
+                                        ),
+                                    );
                                 }
                                 default
                             })
@@ -3214,7 +3403,10 @@ fn script_paths(
     };
     let parent = parent_of(script);
     if env.level >= SCRIPTS_AT_MOST {
-        fail_closed(named);
+        fail_closed(
+            named,
+            format!("{script} runs deeper than the {SCRIPTS_AT_MOST} scripts the guard reads"),
+        );
         named.push(under(parent));
         return;
     }
@@ -3413,7 +3605,10 @@ fn command_paths(
         named.extend(program_mark(tree, dir.as_deref(), program, &env));
         // A program the guard cannot name runs what it cannot see.
         if opaque(program) {
-            fail_closed(named);
+            fail_closed(
+                named,
+                format!("the program {} cannot be named", quoted(program)),
+            );
         }
         // A program in the tree that a shell reads is read line by line; one Python runs
         // imports from its own directory first.
@@ -3576,7 +3771,10 @@ fn command_paths(
                 let imports = import_dirs(tree, dir.as_deref(), &env);
                 for module in scanned.modules {
                     if opaque(module) {
-                        fail_closed(named);
+                        fail_closed(
+                            named,
+                            format!("the module `-m` runs, {}, cannot be named", quoted(module)),
+                        );
                     }
                     let first = module.split('.').next().unwrap_or(module);
                     // A build tool run as a module reads its recipe as it does by its name.
@@ -3585,7 +3783,12 @@ fn command_paths(
                         .find(|(names, _, _, _)| names.contains(&first))
                         .filter(|_| UNREAD_RECIPES.contains(&first))
                     {
-                        fail_closed(named);
+                        fail_closed(
+                            named,
+                            format!(
+                                "`-m {first}` runs a build tool whose recipe the guard does not read"
+                            ),
+                        );
                         for file in *defaults {
                             named.extend(named_from(tree, dir.as_deref(), file));
                         }
@@ -3640,7 +3843,10 @@ fn command_paths(
                     }
                     if let Some(script) = words.get(script) {
                         if opaque(script) {
-                            fail_closed(named);
+                            fail_closed(
+                                named,
+                                format!("the script {} cannot be named", quoted(script)),
+                            );
                         }
                         // A script a shell runs is read line by line, whatever its first line;
                         // one Python runs imports from its own directory first.
@@ -3682,7 +3888,10 @@ fn command_paths(
             files.extend(configs);
             // No recipe parser reads what the target runs.
             if UNREAD_RECIPES.contains(&name.as_str()) {
-                fail_closed(named);
+                fail_closed(
+                    named,
+                    format!("`{name}` runs a recipe the guard does not read"),
+                );
             }
             for file in files {
                 named.extend(named_from(tree, dir.as_deref(), file));
@@ -3819,7 +4028,7 @@ pub struct JudgeSurface {
     /// built-in lists until it is given them.
     modules: Modules,
     /// Why the test command's script fails closed, as it says it ([`FAILS_CLOSED_MARK`]): named
-    /// in a refusal that names a Python file it put on the surface.
+    /// in every refusal of the surface while there is one.
     closed: Vec<String>,
     /// Each top-level module the tree held when the surface was read, as `<dir>/<name>` folded
     /// (`/<name>` at the root): a name of [`Modules::names`] it already held there is the
@@ -4029,7 +4238,8 @@ impl JudgeSurface {
                 programs = true;
             } else if path.starts_with(PROGRAM_MARK) {
                 // Read at case open ([`Modules::ask`]), guarded by nothing.
-            } else if path.starts_with(OUTSIDE_PATH_MARK) {
+            } else if path.starts_with(OUTSIDE_PATH_MARK) || path.starts_with(OUTSIDE_IMPORTS_MARK)
+            {
                 // A directory outside the tree ([`Outside`]), guarded by nothing tree-relative.
             } else if let Some(reason) = path.strip_prefix(FAILS_CLOSED_MARK) {
                 closed.push(reason.to_owned());
@@ -4106,14 +4316,19 @@ impl JudgeSurface {
         self
     }
 
-    /// What a refusal that names `touched` says of the module names, when one of them is a
-    /// module of such a name in an import directory: where the names came from.
+    /// What a refusal that names `touched` adds: why the guard fails closed, while it does (the
+    /// script's reasons always, the interpreter's when a Python file is among them); else, when
+    /// one of them is a module of such a name in an import directory, where the names came from.
     #[must_use]
     pub fn modules_note(&self, touched: &[String]) -> String {
         let shadowed = touched.iter().any(|path| {
             let folded = fold(path.trim_end_matches('/'));
             self.shadowing(&folded.split('/').collect::<Vec<_>>())
         });
+        // What failing closed puts on the surface: a line of the script, every Python file,
+        // shell file and program ([`FAIL_CLOSED`]), so its reasons go with every refusal of the
+        // surface (a program the step wrote is gone by the time the refusal is written); an
+        // interpreter not asked, every Python file.
         let python = touched.iter().any(|path| {
             matches!(
                 fold(path.trim_end_matches('/'))
@@ -4122,15 +4337,19 @@ impl JudgeSurface {
                 Some("py" | "pyc" | "pth")
             )
         });
-        let reasons: Vec<&str> = self
-            .closed
-            .iter()
-            .map(String::as_str)
-            .chain(self.modules.fail_closed.as_deref())
-            .collect();
-        if python && !reasons.is_empty() {
+        let mut reasons: Vec<&str> = self.closed.iter().map(String::as_str).collect();
+        let script_closed = !reasons.is_empty();
+        if python {
+            reasons.extend(self.modules.fail_closed.as_deref());
+        }
+        if !reasons.is_empty() {
+            let what = if script_closed {
+                "every Python file, shell file and program"
+            } else {
+                "every Python file"
+            };
             return format!(
-                "; every Python file of the tree is on the surface: {}",
+                "; the guard fails closed, {what} of the tree on the surface: {}",
                 reasons.join("; ")
             );
         }
@@ -4493,13 +4712,48 @@ impl JudgeSurface {
 /// written), each directory by itself and each executable file and link directly in it; one too
 /// large to keep is its [`fingerprint`]. A directory the user cannot write no step can change.
 ///
+/// And what Python loads code from outside the tree ([`outside_import_dirs`]): each `PYTHONPATH`
+/// entry and `PYTHONHOME`, `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX` or `PYTHONSTARTUP` value the
+/// script sets or takt inherits, and every `sys.path` entry, site directory and the user site of
+/// each Python asked at case open ([`Modules::sites`]), that the user can write by the same
+/// rule: everything under each, the tree left out, each entry by its [`fingerprint`].
+///
 /// takt never deletes or rewrites a file outside the tree except the named config files the
 /// step guard snapshots; any outside change still stops the run and names it. So a changed
 /// configuration file is written back as it was and the run stops naming it, while a change in
-/// a program directory (a step's, or another session's install) is left exactly as it is and
-/// the run stops naming it ([`Self::put_back`]).
+/// a program or import directory (a step's, or another session's install) is left exactly as it
+/// is and the run stops naming it ([`Self::put_back`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Outside(BTreeMap<PathBuf, (PathBuf, Option<Entry>, bool)>);
+
+/// Why [`Outside`] reads a path: a configuration file cargo or rustup reads, which takt puts
+/// back; a program directory's, or what Python imports from, which it never writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Held {
+    Config,
+    Program,
+    Import,
+}
+
+/// The directories outside the tree a run's test command reaches beside what every run reads
+/// ([`Outside`]): read when the case opens, the same around every step.
+#[derive(Debug, Clone, Default)]
+struct OutsideDirs {
+    /// The directories outside the tree the script prepends to `PATH` ([`outside_path_dirs`]).
+    programs: Vec<PathBuf>,
+    /// What Python loads code from outside the tree ([`outside_import_dirs`]).
+    imports: Vec<PathBuf>,
+}
+
+impl OutsideDirs {
+    /// What the test command `runs` in `tree` reaches, with the case's `modules`.
+    fn of(runs: &[String], tree: &Path, modules: &Modules) -> Self {
+        Self {
+            programs: outside_path_dirs(runs, tree),
+            imports: outside_import_dirs(runs, tree, modules),
+        }
+    }
+}
 
 /// The shell's default `PATH`, which a gate's command has when its binding sets none.
 const SHELL_PATH: &[&str] = &[
@@ -4557,6 +4811,20 @@ fn program_dirs(tree: &Path) -> Vec<(PathBuf, PathBuf)> {
                 .map(|toolchain| toolchain.path().join("bin")),
         );
     }
+    writable_outside(tree, dirs, false)
+}
+
+/// Of `dirs`, absolute, the ones outside `tree` the user can write, each with the path it is
+/// read at and its anchor, as [`program_dirs`] resolves them: an existing one at its real path,
+/// anchored at its parent; one that does not exist yet at its nearest existing directory's real
+/// path joined with the rest, anchored there, with every directory between, when that
+/// directory can be written. An existing file (a zip archive on `PYTHONPATH`) is kept with
+/// `files`, passed over without.
+fn writable_outside(
+    tree: &Path,
+    dirs: impl IntoIterator<Item = PathBuf>,
+    files: bool,
+) -> Vec<(PathBuf, PathBuf)> {
     let roots: Vec<PathBuf> = [
         std::path::absolute(tree).ok(),
         std::fs::canonicalize(tree).ok(),
@@ -4584,7 +4852,8 @@ fn program_dirs(tree: &Path) -> Vec<(PathBuf, PathBuf)> {
         let Some(real) = real else {
             continue;
         };
-        if !real.is_dir() || !writable(&real) {
+        let kept = real.is_dir() || (files && below.is_empty() && real.is_file());
+        if !kept || !writable(&real) {
             continue;
         }
         let whole: PathBuf = below
@@ -4616,14 +4885,17 @@ impl Outside {
     /// and rustup read: the directory above the tree it is in, or the parent of `$CARGO_HOME`;
     /// every part between the anchor and the path (`.cargo`, `$CARGO_HOME` itself) is a path of
     /// its own too, so a link made there is seen as the link it is. The program directories: the
-    /// ones [`program_dirs`] finds and `extra` (the outside directories the script prepends to
-    /// `PATH`), each with the executable files and links directly in them.
-    fn paths(tree: &Path, extra: &[PathBuf]) -> Vec<(PathBuf, PathBuf, bool)> {
-        // Each path to its (anchor, is-program); a configuration path wins a collision.
-        let mut paths: BTreeMap<PathBuf, (PathBuf, bool)> = BTreeMap::new();
+    /// ones [`program_dirs`] finds and `extra`'s (the outside directories the script prepends to
+    /// `PATH`), each with the executable files and links directly in them. What Python imports
+    /// from outside the tree (`extra`'s, [`OutsideDirs::imports`]) that the user can write
+    /// ([`writable_outside`]): each directory with everything under it, a link not followed.
+    fn paths(tree: &Path, extra: &OutsideDirs) -> Vec<(PathBuf, PathBuf, Held)> {
+        // Each path to its (anchor, what holds it); a configuration path wins a collision, and
+        // a program's an import's.
+        let mut paths: BTreeMap<PathBuf, (PathBuf, Held)> = BTreeMap::new();
         let config =
-            |paths: &mut BTreeMap<PathBuf, (PathBuf, bool)>, path: PathBuf, anchor: PathBuf| {
-                paths.insert(path, (anchor, false));
+            |paths: &mut BTreeMap<PathBuf, (PathBuf, Held)>, path: PathBuf, anchor: PathBuf| {
+                paths.insert(path, (anchor, Held::Config));
             };
         let roots = [
             std::path::absolute(tree).ok(),
@@ -4664,10 +4936,10 @@ impl Outside {
         // The programs a lookup by name may find: each directory, and each executable file and
         // link directly in it. A configuration path is not re-tagged as a program's.
         let program =
-            |paths: &mut BTreeMap<PathBuf, (PathBuf, bool)>, path: PathBuf, anchor: PathBuf| {
-                paths.entry(path).or_insert((anchor, true));
+            |paths: &mut BTreeMap<PathBuf, (PathBuf, Held)>, path: PathBuf, anchor: PathBuf| {
+                paths.entry(path).or_insert((anchor, Held::Program));
             };
-        let extra_dirs = extra.iter().filter_map(|dir| {
+        let extra_dirs = extra.programs.iter().filter_map(|dir| {
             let real = std::fs::canonicalize(dir).ok()?;
             if !real.is_dir() || roots.iter().flatten().any(|root| real.starts_with(root)) {
                 return None;
@@ -4692,9 +4964,36 @@ impl Outside {
             }
             program(&mut paths, dir, anchor);
         }
+        // What Python imports from: everything under each directory, by itself, but the tree
+        // (an entry above it, `..`), which the step guard reads; a link is an entry and is not
+        // followed.
+        fn under(
+            paths: &mut BTreeMap<PathBuf, (PathBuf, Held)>,
+            path: &Path,
+            anchor: &Path,
+            trees: &[PathBuf],
+        ) {
+            if trees.iter().any(|tree| path.starts_with(tree)) {
+                return;
+            }
+            paths
+                .entry(path.to_path_buf())
+                .or_insert((anchor.to_path_buf(), Held::Import));
+            if std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir())
+                && let Ok(entries) = std::fs::read_dir(path)
+            {
+                for entry in entries.flatten() {
+                    under(paths, &entry.path(), path, trees);
+                }
+            }
+        }
+        let trees: Vec<PathBuf> = roots.iter().flatten().cloned().collect();
+        for (dir, anchor) in writable_outside(tree, extra.imports.iter().cloned(), true) {
+            under(&mut paths, &dir, &anchor, &trees);
+        }
         paths
             .into_iter()
-            .map(|(path, (anchor, is_program))| (path, anchor, is_program))
+            .map(|(path, (anchor, held))| (path, anchor, held))
             .collect()
     }
 
@@ -4715,17 +5014,25 @@ impl Outside {
 
     /// What is at each of the paths now. A path whose way crosses a link is read through it,
     /// so a change there is seen, and is never written or removed through it ([`Self::put_back`]).
-    fn read(tree: &Path, extra: &[PathBuf]) -> Result<Self> {
+    /// What Python imports from is read by its [`fingerprint`] alone, since takt never puts it
+    /// back.
+    fn read(tree: &Path, extra: &OutsideDirs) -> Result<Self> {
         let mut entries = BTreeMap::new();
-        for (path, anchor, is_program) in Self::paths(tree, extra) {
-            let entry = Self::entry_at(&path)?;
-            entries.insert(path, (anchor, entry, is_program));
+        for (path, anchor, held) in Self::paths(tree, extra) {
+            let entry = Self::entry_at_with(&path, held != Held::Import)?;
+            entries.insert(path, (anchor, entry, held != Held::Config));
         }
         Ok(Self(entries))
     }
 
     /// What is at `path` now, `None` for nothing; a link is not followed.
     fn entry_at(path: &Path) -> Result<Option<Entry>> {
+        Self::entry_at_with(path, true)
+    }
+
+    /// What is at `path` now ([`Self::entry_at`]); a file by its [`fingerprint`] alone without
+    /// `bytes`.
+    fn entry_at_with(path: &Path, bytes: bool) -> Result<Option<Entry>> {
         Ok(match std::fs::symlink_metadata(path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             // A path whose way is not a directory (`.cargo` a file) holds nothing.
@@ -4741,7 +5048,7 @@ impl Outside {
                 std::fs::read_link(path)
                     .with_context(|| format!("read the link {}", path.display()))?,
             )),
-            Ok(meta) if meta.is_file() && meta.len() > OUTSIDE_BYTES_AT_MOST => {
+            Ok(meta) if meta.is_file() && (!bytes || meta.len() > OUTSIDE_BYTES_AT_MOST) => {
                 Some(Entry::Large(fingerprint(&meta)))
             }
             Ok(meta) if meta.is_file() => Some(Entry::File {
@@ -4784,7 +5091,7 @@ impl Outside {
     /// left as it is and answered, and so is a file too large to have been kept ([`Entry::Large`])
     /// that was changed or removed. A path only `now` holds (a program made in a directory on
     /// `PATH`) is anchored as `now` anchors it.
-    fn put_back(&self, tree: &Path, extra: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    fn put_back(&self, tree: &Path, extra: &OutsideDirs) -> Result<Vec<PathBuf>> {
         let mut left = Vec::new();
         let now = Self::read(tree, extra)?;
         for path in self.differing(&now) {
@@ -5513,9 +5820,9 @@ pub struct Run<'a> {
     /// The files outside the tree that decide how cargo and rustup build and run the tests
     /// ([`Outside`]), as the run found them when it began.
     outside: Outside,
-    /// The directories outside the tree the test command prepends to `PATH`, which [`Outside`]
-    /// snapshots beside what cargo and rustup read ([`outside_path_dirs`]).
-    outside_path_dirs: Vec<PathBuf>,
+    /// The directories outside the tree the test command prepends to `PATH` and what its Python
+    /// imports from there, which [`Outside`] snapshots beside what cargo and rustup read.
+    outside_dirs: OutsideDirs,
     /// The module names no step may put in an import directory, kept with the case
     /// ([`Modules::of_case`]).
     modules: Modules,
@@ -5597,7 +5904,7 @@ impl<'a> Run<'a> {
                 return Err(error);
             }
         };
-        let outside_path_dirs = outside_path_dirs(&runs, tree);
+        let outside_dirs = OutsideDirs::of(&runs, tree, &modules);
         Ok(Self {
             tree: tree.to_path_buf(),
             case,
@@ -5610,8 +5917,8 @@ impl<'a> Run<'a> {
             binary: None,
             store: None,
             started: Instant::now(),
-            outside: Outside::read(tree, &outside_path_dirs)?,
-            outside_path_dirs,
+            outside: Outside::read(tree, &outside_dirs)?,
+            outside_dirs,
             options,
             modules,
         })
@@ -5660,7 +5967,7 @@ impl<'a> Run<'a> {
         // A case opened before it kept its module names is asked now and keeps them from here.
         let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
         let modules = Modules::of_case(&case.dir, &runs, tree)?;
-        let outside_path_dirs = outside_path_dirs(&runs, tree);
+        let outside_dirs = OutsideDirs::of(&runs, tree, &modules);
         Ok(Self {
             tree: tree.to_path_buf(),
             case,
@@ -5673,8 +5980,8 @@ impl<'a> Run<'a> {
             binary: None,
             store: None,
             started: Instant::now(),
-            outside: Outside::read(tree, &outside_path_dirs)?,
-            outside_path_dirs,
+            outside: Outside::read(tree, &outside_dirs)?,
+            outside_dirs,
             options,
             modules,
         })
@@ -6517,11 +6824,11 @@ impl<'a> Run<'a> {
                 // ([`Outside`]): one that differs from what the run found when it began (a
                 // change no step could keep, by another route) and nothing is observed or
                 // recorded; one the observation changed is put back and the observation refused.
-                let outside_kept = Outside::read(&self.tree, &self.outside_path_dirs)?;
+                let outside_kept = Outside::read(&self.tree, &self.outside_dirs)?;
                 let outside_moved = self.outside.differing(&outside_kept);
                 if !outside_moved.is_empty() {
                     let why = format!(
-                        "{} would observe {} while what cargo or rustup reads outside the tree, or a program on `PATH`, differs from what the run found when it began: {}",
+                        "{} would observe {} while what cargo or rustup reads outside the tree, a program on `PATH`, or what Python imports from there differs from what the run found when it began: {}",
                         validator.action(),
                         &revision[..8.min(revision.len())],
                         outside_named(&outside_moved)
@@ -6626,7 +6933,7 @@ impl<'a> Run<'a> {
                 }
                 outside.extend(
                     outside_kept
-                        .differing(&Outside::read(&self.tree, &self.outside_path_dirs)?)
+                        .differing(&Outside::read(&self.tree, &self.outside_dirs)?)
                         .iter()
                         .map(|path| path.display().to_string()),
                 );
@@ -6634,10 +6941,10 @@ impl<'a> Run<'a> {
                     restore(&cases, &kept, &touched)?;
                     undo_step(&self.tree, &checkpoint, &cases, &kept)?;
                     surface.put_back(&self.tree, &surface_kept)?;
-                    let left = outside_kept.put_back(&self.tree, &self.outside_path_dirs)?;
+                    let left = outside_kept.put_back(&self.tree, &self.outside_dirs)?;
                     foreign.extend(outside);
                     foreign.extend(left.iter().map(|path| {
-                        format!("not put back (a program directory takt never writes, a link on its way, or a file too large to keep a copy of): {}", path.display())
+                        format!("not put back (a program or import directory takt never writes, a link on its way, or a file too large to keep a copy of): {}", path.display())
                     }));
                     let mut why = format!(
                         "{} wrote what its validator does not: {}",
@@ -6924,8 +7231,8 @@ impl<'a> Run<'a> {
             let cargo_before = cargo_builds(&self.tree);
             // What cargo and rustup read outside the tree ([`Outside`]), put back with the rest
             // of a step that is discarded.
-            let outside_before = Outside::read(&self.tree, &self.outside_path_dirs)?;
-            let outside_dirs = self.outside_path_dirs.clone();
+            let outside_before = Outside::read(&self.tree, &self.outside_dirs)?;
+            let outside_dirs = self.outside_dirs.clone();
             // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
             // base, and a sibling case's branch, which a step could otherwise move under it; a
             // branch another worktree has checked out is that session's, but never the case's
@@ -7258,7 +7565,7 @@ impl<'a> Run<'a> {
             }
             // What cargo and rustup read outside the tree ([`Outside`]): a step that changed it
             // is refused, and what it created there removed, what it changed or removed put back.
-            let outside_changed = match Outside::read(&self.tree, &self.outside_path_dirs) {
+            let outside_changed = match Outside::read(&self.tree, &self.outside_dirs) {
                 Ok(now) => outside_before.differing(&now),
                 Err(error) => {
                     undo()?;
@@ -7273,15 +7580,15 @@ impl<'a> Run<'a> {
                 undo()?;
                 // What is still not as it was is behind a link, never written through.
                 let left =
-                    outside_before.differing(&Outside::read(&self.tree, &self.outside_path_dirs)?);
+                    outside_before.differing(&Outside::read(&self.tree, &self.outside_dirs)?);
                 let mut why = format!(
-                    "{} changed what cargo or rustup reads outside the tree, or a program on `PATH`: {}",
+                    "{} changed what cargo or rustup reads outside the tree, a program on `PATH`, or what Python imports from there: {}",
                     report.action,
                     outside_named(&outside_changed)
                 );
                 if !left.is_empty() {
                     why.push_str(&format!(
-                        "; not put back (a program directory takt never writes, a link on its way, or a file too large to keep a copy of): {}",
+                        "; not put back (a program or import directory takt never writes, a link on its way, or a file too large to keep a copy of): {}",
                         outside_named(&left)
                     ));
                 }

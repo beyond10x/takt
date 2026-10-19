@@ -214,7 +214,8 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
 /// An empty home made for one run of a test command or a gate's commands, outside the tree,
 /// removed when dropped. The command runs with `HOME` there and `PYTHONNOUSERSITE=1`, so
 /// nothing a step wrote in the caller's home (Python's user site, its start-up files) runs
-/// with it; cargo and rustup keep the caller's homes ([`FreshHome::vars`]).
+/// with it, and `PYTHONDONTWRITEBYTECODE=1`, so its Python writes no byte code into a directory
+/// outside the tree takt snapshots; cargo and rustup keep the caller's homes ([`FreshHome::vars`]).
 pub(crate) struct FreshHome(PathBuf);
 
 impl FreshHome {
@@ -238,8 +239,9 @@ impl FreshHome {
     }
 
     /// What the command runs with, given what it would inherit (`inherited`): `HOME` this
-    /// directory, `PYTHONNOUSERSITE=1`, and `CARGO_HOME` and `RUSTUP_HOME`, when it would
-    /// inherit none, the caller's (its own variable, or `.cargo` and `.rustup` in its home).
+    /// directory, `PYTHONNOUSERSITE=1`, `PYTHONDONTWRITEBYTECODE=1`, and `CARGO_HOME` and
+    /// `RUSTUP_HOME`, when it would inherit none, the caller's (its own variable, or `.cargo` and
+    /// `.rustup` in its home).
     fn vars(&self, inherited: impl Fn(&str) -> bool) -> Vec<(&'static str, std::ffi::OsString)> {
         let caller_home = std::env::var_os("HOME")
             .filter(|home| !home.is_empty())
@@ -248,6 +250,7 @@ impl FreshHome {
         let mut vars = vec![
             ("HOME", self.0.clone().into_os_string()),
             ("PYTHONNOUSERSITE", "1".into()),
+            ("PYTHONDONTWRITEBYTECODE", "1".into()),
         ];
         for (name, under) in [("CARGO_HOME", ".cargo"), ("RUSTUP_HOME", ".rustup")] {
             if inherited(name) {
