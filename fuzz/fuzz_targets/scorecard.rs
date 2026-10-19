@@ -53,6 +53,9 @@ fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
                 wall_ms: 0,
                 saturated: false,
                 binary: None,
+                stop: (*outcome).to_owned(),
+                held_out: None,
+                opened_binary: None,
             })
             .collect(),
         no_record: Vec::new(),
