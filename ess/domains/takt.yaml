@@ -379,7 +379,10 @@ types:
   # `unperformable`, 3 every other stop, 5 an error once the case is open, 1 a refusal before
   # the run. The scorecard counts every stop's kind but `completed`'s as no completion, read
   # from one list of the kinds kept beside the stops, for a stop line that does not say itself
-  # (takt.work.RunStopped `completed`).
+  # (takt.work.RunStopped `completed`). It ranks `unperformable` with the budget stops, where
+  # the same run ranked before the rule named its stop: a rule that only names the stop moves no
+  # comparison against an older baseline, which below them would read as worse and above them
+  # would flatter the candidate.
   # read from: crates/takt/src/run.rs:52-71
   # read from: crates/takt/src/run.rs:7354
   # read from: crates/takt/src/run.rs:7781-7785
@@ -401,7 +404,7 @@ types:
   # read from: crates/takt/src/run.rs:809-816
   # read from: crates/takt-cli/src/main.rs:1293
   # read from: crates/takt-cli/src/main.rs:465
-  # read from: crates/takt/src/scorecard.rs:389-402
+  # read from: crates/takt/src/scorecard.rs:395-408
   # read from: crates/takt-cli/src/main.rs:1261
   # read from: crates/takt/src/run.rs:6719-6725
   # read from: crates/takt/src/run.rs:7688-7698
@@ -418,6 +421,7 @@ types:
   # read from: crates/takt-cli/src/main.rs:461
   # read from: crates/takt-cli/src/main.rs:1262-1264
   # read from: crates/takt-cli/src/main.rs:1294
+  # read from: crates/takt/src/scorecard.rs:377-389
   - name: takt.work.Stop
     kind: union
     tag: kind
@@ -978,7 +982,7 @@ types:
   # A saved scorecard's id: the revision of takt under test that names its file,
   # `scorecard-<revision>.json`, a commit id; a file there already is not overwritten.
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
-  # read from: crates/takt/src/scorecard.rs:864-900
+  # read from: crates/takt/src/scorecard.rs:870-906
   # Decided 2026-10-19 (story:scorecard-save-checks-binary): a save, by any caller, is named by
   # the full commit id, 40 lower-case hex digits, checked before anything else; and it is refused
   # naming the run and both revisions, writing nothing, unless every run's `opened` line names the
@@ -986,10 +990,10 @@ types:
   # mix is refused. A line names no revision when it has no `binary`, says `unknown revision` or
   # is empty: one predicate and one mix rule the save, a stated baseline (`takt promote
   # --binary-sha256`) and a trace's revision share; the planner's ruling of 2026-10-19.
-  # read from: crates/takt/src/scorecard.rs:902-932
+  # read from: crates/takt/src/scorecard.rs:908-938
   # read from: .engineering/planning/story/scorecard-save-checks-binary.md (§ Acceptance)
-  # read from: crates/takt/src/scorecard.rs:631-662
-  # read from: crates/takt/src/scorecard.rs:613-619
+  # read from: crates/takt/src/scorecard.rs:637-668
+  # read from: crates/takt/src/scorecard.rs:619-625
   - name: takt.work.ScorecardId
     kind: newtype
     of: String
@@ -1000,8 +1004,8 @@ types:
   # rank before it is worse (`margin`, 1). Decided 2026-10-18 (design:recursive-self-improvement
   # § Scorecard); a file saved before the rule had fields reads with the default.
   # read from: .engineering/planning/design/recursive-self-improvement.md:130-138
-  # read from: crates/takt/src/scorecard.rs:319-336
-  # read from: crates/takt/src/scorecard.rs:352-355
+  # read from: crates/takt/src/scorecard.rs:322-339
+  # read from: crates/takt/src/scorecard.rs:355-358
   - name: takt.work.ScorecardRule
     kind: struct
     fields:
@@ -1030,15 +1034,17 @@ types:
   # The binary the run was made with, as stated beside its record (takt.work.RunBinary), on each
   # run of a case whose directory holds a `binary.txt`; absent otherwise.
   # read from: crates/takt/src/scorecard.rs:89-138
-  # read from: crates/takt/src/scorecard.rs:367-372
-  # read from: crates/takt/src/scorecard.rs:517-563
+  # read from: crates/takt/src/scorecard.rs:370-375
+  # read from: crates/takt/src/scorecard.rs:523-569
   # Decided 2026-10-19 (story:scorecard-outcome-from-held-out-check): a scenario run's outcome
   # comes from the held-out check the runner wrote beside its record (takt.work.HeldOut), never
   # from the run's own record. Every run of a scenario case carries the case's result; one that
   # did not pass scores the run `failed`, ranked with an error, and a pass leaves the run's stop
   # as its outcome. The stop is kept beside the outcome (`stop`, empty on a file saved before
   # it), printed beside it, and a run whose stop claims a completion while the check did not pass
-  # is named as a disagreement. A scenario case with runs and no `held-out.txt`, or one that does
+  # is named as a disagreement: its stop line says `completed: true`, or its stop is one a
+  # `Completed` stop named, either enough, so a `completed: false` beside `Completed (accepted)`
+  # takes no claim back. A scenario case with runs and no `held-out.txt`, or one that does
   # not read or states no result, refuses the scorecard naming the case; a case that is no
   # scenario needs none. The outcome metric's definition is at version 2. Each run also carries
   # the revision its `opened` line names (`opened_binary`: what `takt --version` printed,
@@ -1047,8 +1053,8 @@ types:
   # (takt.work.RunStopped), absent for a line or a saved file from before it; a run whose
   # outcome is its stop is a completion by that word when it is there, else by the stops this
   # binary knows.
-  # read from: crates/takt/src/scorecard.rs:140-185
-  # read from: crates/takt/src/scorecard.rs:665-747
+  # read from: crates/takt/src/scorecard.rs:140-188
+  # read from: crates/takt/src/scorecard.rs:671-753
   # read from: .engineering/planning/story/scorecard-outcome-from-held-out-check.md (§ Outcome)
   - name: takt.work.ScorecardRow
     kind: struct
@@ -1099,8 +1105,8 @@ types:
   # and a saved `passed` that disagrees with it is refused the same way; so is a run whose
   # `scenario` is not the one its case id names, the scenario being derived from the case id.
   # read from: crates/takt/src/scorecard.rs:50-58
-  # read from: crates/takt/src/scorecard.rs:159-186
-  # read from: crates/takt/src/scorecard.rs:934-996
+  # read from: crates/takt/src/scorecard.rs:162-189
+  # read from: crates/takt/src/scorecard.rs:940-1002
   - name: takt.work.HeldOut
     kind: struct
     fields:
@@ -1113,7 +1119,7 @@ types:
   # in a `binary.txt` beside the run's record or by `takt promote --revision`, for a binary whose
   # `--version` names no revision; or the run's record itself, which no record does today. A
   # statement is marked as such wherever it is copied, so a reader tells it from a measurement.
-  # read from: crates/takt/src/scorecard.rs:188-196
+  # read from: crates/takt/src/scorecard.rs:191-199
   - name: takt.work.StatedBy
     kind: enum
     variants: [operator, record]
@@ -1130,9 +1136,9 @@ types:
   # --baseline-only --binary-sha256` checks each run's digest against the binary it hashes.
   # read from: crates/takt/src/scorecard.rs:1-35
   # read from: crates/takt/src/scorecard.rs:60-64
-  # read from: crates/takt/src/scorecard.rs:198-207
-  # read from: crates/takt/src/scorecard.rs:218-244
-  # read from: crates/takt/src/scorecard.rs:665-747
+  # read from: crates/takt/src/scorecard.rs:201-210
+  # read from: crates/takt/src/scorecard.rs:221-247
+  # read from: crates/takt/src/scorecard.rs:671-753
   - name: takt.work.RunBinary
     kind: struct
     fields:
@@ -1186,8 +1192,8 @@ types:
   # its runs' steps, tokens, refusals, errors and wall times summed, a sum stopping at the largest
   # integer and flagged; 1 when its outcome is `NoProgress`. Derived from the runs, never saved
   # apart from them.
-  # read from: crates/takt/src/scorecard.rs:246-317
-  # read from: crates/takt/src/scorecard.rs:750-764
+  # read from: crates/takt/src/scorecard.rs:249-320
+  # read from: crates/takt/src/scorecard.rs:756-770
   - name: takt.work.ScorecardCase
     kind: struct
     fields:
@@ -1543,11 +1549,11 @@ types:
   # on the saved side (<n> of <trials>)` or `too few cases (<n> of <trials>)`, and the
   # comparison ends in a refusal naming each such scenario.
   # read from: .engineering/planning/design/recursive-self-improvement.md:130-138
-  # read from: crates/takt/src/scorecard.rs:998-1014
-  # read from: crates/takt/src/scorecard.rs:1120-1144
-  # read from: crates/takt/src/scorecard.rs:1167-1195
-  # read from: crates/takt/src/scorecard.rs:1070-1094
-  # read from: crates/takt/src/scorecard.rs:1200-1205
+  # read from: crates/takt/src/scorecard.rs:1004-1020
+  # read from: crates/takt/src/scorecard.rs:1126-1150
+  # read from: crates/takt/src/scorecard.rs:1173-1201
+  # read from: crates/takt/src/scorecard.rs:1076-1100
+  # read from: crates/takt/src/scorecard.rs:1206-1211
   - name: takt.work.Comparison
     kind: enum
     variants: [no_regression, regression]
@@ -3274,8 +3280,8 @@ entities:
   # read from: .engineering/planning/story/scorecard-reader.md:50-52
   # read from: crates/takt/src/scorecard.rs:1-35
   # read from: crates/takt/src/scorecard.rs:47-76
-  # read from: crates/takt/src/scorecard.rs:341-364
-  # read from: crates/takt/src/scorecard.rs:998-1206
+  # read from: crates/takt/src/scorecard.rs:344-367
+  # read from: crates/takt/src/scorecard.rs:1004-1212
   - name: takt.work.Scorecard
     naming:
       summary: >-

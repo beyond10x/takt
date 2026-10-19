@@ -3,8 +3,9 @@
 //! case no better than any of the candidate's never makes its verdict better.
 //!
 //! The input: a byte whose value modulo 3 is the margin, then one case each 9 bytes, the first
-//! naming the side (its high bit: the candidate) and the outcome (its low bits), the next eight
-//! the tokens, little-endian.
+//! naming the side (its high bit: the candidate), what its stop line says of completion (the
+//! next two bits: 1 not completed, 2 completed, else no word) and the outcome (its low five
+//! bits), the next eight the tokens, little-endian.
 
 #![no_main]
 
@@ -29,7 +30,16 @@ const OUTCOMES: [&str; STOP_KINDS.len() + 4] = {
     all
 };
 
-fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
+/// What the stop line of a case's run says of completion, from two bits: `completed`.
+fn completed(bits: u8) -> Option<bool> {
+    match bits & 0b11 {
+        1 => Some(false),
+        2 => Some(true),
+        _ => None,
+    }
+}
+
+fn card(cases: &[(&str, u64, Option<bool>)], margin: u32) -> Scorecard {
     Scorecard {
         format: FORMAT.to_owned(),
         revision: None,
@@ -42,7 +52,7 @@ fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
         rows: cases
             .iter()
             .enumerate()
-            .map(|(n, (outcome, tokens))| Row {
+            .map(|(n, (outcome, tokens, completed))| Row {
                 case: format!("scenario-s-trial-{n}"),
                 scenario: Some("s".to_owned()),
                 outcome: (*outcome).to_owned(),
@@ -57,7 +67,7 @@ fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
                 stop: (*outcome).to_owned(),
                 held_out: None,
                 opened_binary: None,
-                completed: None,
+                completed: *completed,
             })
             .collect(),
         no_record: Vec::new(),
@@ -86,12 +96,13 @@ fuzz_target!(|data: &[u8]| {
     let margin = u32::from(*first % 3);
     let (mut saved, mut candidate) = (Vec::new(), Vec::new());
     for chunk in rest.as_chunks::<9>().0.iter().take(16) {
-        let outcome = OUTCOMES[usize::from(chunk[0] & 0x7f) % OUTCOMES.len()];
+        let outcome = OUTCOMES[usize::from(chunk[0] & 0x1f) % OUTCOMES.len()];
+        let said = completed(chunk[0] >> 5);
         let tokens = u64::from_le_bytes(chunk[1..9].try_into().expect("eight bytes"));
         if chunk[0] & 0x80 == 0 {
-            saved.push((outcome, tokens));
+            saved.push((outcome, tokens, said));
         } else {
-            candidate.push((outcome, tokens));
+            candidate.push((outcome, tokens, said));
         }
     }
     let short = saved.is_empty() || candidate.is_empty();
@@ -120,7 +131,7 @@ fuzz_target!(|data: &[u8]| {
         assert!(min <= median && median <= max, "{line}");
     }
     assert_eq!(against(&candidate, &candidate).0, 0);
-    let cases: Vec<(&str, u64)> = candidate
+    let cases: Vec<(&str, u64, Option<bool>)> = candidate
         .rows
         .iter()
         .map(|row| {
@@ -128,17 +139,17 @@ fuzz_target!(|data: &[u8]| {
                 .iter()
                 .find(|outcome| **outcome == row.outcome)
                 .expect("an outcome of the list");
-            (*outcome, row.tokens)
+            (*outcome, row.tokens, row.completed)
         })
         .collect();
-    if let Some(lowest) = cases.iter().map(|(outcome, _)| rank(outcome)).min() {
-        let most = cases.iter().map(|(_, tokens)| *tokens).max().unwrap_or(0);
+    if let Some(lowest) = cases.iter().map(|(outcome, _, _)| rank(outcome)).min() {
+        let most = cases.iter().map(|(_, tokens, _)| *tokens).max().unwrap_or(0);
         let outcome = OUTCOMES
             .iter()
             .find(|outcome| rank(outcome) <= lowest)
             .expect("some outcome ranks lowest");
         let mut more = cases.clone();
-        more.push((outcome, most.saturating_add(u64::from(*first))));
+        more.push((outcome, most.saturating_add(u64::from(*first)), completed(*first)));
         let (after, printed) = against(&card(&more, margin), &saved);
         assert!(after >= worse, "{printed}");
     }
