@@ -122,6 +122,7 @@ fn turn(name: &str, finding: &str) -> Turn {
         surface: "non_judge".to_owned(),
         title: "The probe shows the defect".to_owned(),
         judge_sha256: "0".repeat(64),
+        install_root: None,
     })
     .expect("the turn opens");
     Turn {
@@ -613,14 +614,23 @@ fn every_merge_base_decides_the_surface() {
 
 /// Grants `capability` to the turn's case at the candidate revision, as `takt approve` does.
 fn granted(turn: &Turn, capability: &str) {
+    granted_by(turn, capability, "human:owner");
+}
+
+/// Grants `capability` to the turn's case at the candidate revision by `approver`, in place of
+/// any grant of it before.
+fn granted_by(turn: &Turn, capability: &str, approver: &str) {
     let dir = turn.tree.join(".engineering/cases/turn");
     let mut authority = takt::case::Authority::read(&dir)
         .expect("the authority reads")
         .unwrap_or_default();
+    authority
+        .decisions
+        .retain(|decision| decision.capability != capability);
     authority.decisions.push(takt::case::AuthorityDecision {
         capability: capability.to_owned(),
         decision: takt::case::Grant::Granted,
-        approver: "human:owner".to_owned(),
+        approver: approver.to_owned(),
         granted_at: "2026-01-01T00:00:00Z".to_owned(),
         revision: Some(turn.candidate.clone()),
     });
@@ -697,6 +707,82 @@ fn the_merge_is_observed_through_the_forges_report_of_main() {
         .observe_waiting(&turn.tree, &turn.candidate, 1)
         .expect_err("no tip, no observation");
     assert!(format!("{error:#}").contains("main"), "{error:#}");
+}
+
+/// `candidate.merge_judge_surface` holds its grant to story:judge-guard's rule: an agent role's
+/// grant records nothing while `main` records no delegation to it, and `merged` once `main`
+/// holds an unrevoked delegation of `repository.merge.judge_surface` to that role; the owner's
+/// grant needs none.
+#[test]
+fn a_judge_surface_merge_holds_only_the_owners_grant_or_a_delegated_roles() {
+    let turn = turn("merge-judge-surface", &finding("docs/runs/trial-1.md"));
+    let validator =
+        takt::improvement::CandidateMerged::judge_surface(takt::improvement::Mainline::Local);
+    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
+    granted_by(&turn, "repository.merge.judge_surface", "agent:developer");
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert!(results.is_empty() && !waiting, "undelegated: {summary}");
+    assert!(
+        summary.contains(".engineering/delegations.yaml"),
+        "{summary}"
+    );
+    // The owner delegates to the role on `main`, above the candidate.
+    let scratch = turn
+        .tree
+        .parent()
+        .expect("a parent")
+        .join("delegations.yaml");
+    fs::write(
+        &scratch,
+        "delegations:\n  - owner: human:owner\n    role: agent:developer\n    capability: repository.merge.judge_surface\n    given_at: 2026-01-01T00:00:00Z\n",
+    )
+    .expect("the delegation record");
+    let blob = git(
+        &turn.tree,
+        &["hash-object", "-w", "--", scratch.to_str().expect("utf-8")],
+    );
+    let index = turn
+        .tree
+        .parent()
+        .expect("a parent")
+        .join("delegation-index");
+    let with_index = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
+            .args(args)
+            .env("GIT_INDEX_FILE", &index)
+            .current_dir(&turn.tree)
+            .output()
+            .expect("git runs");
+        assert!(output.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+    with_index(&["read-tree", &turn.candidate]);
+    with_index(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("100644,{blob},.engineering/delegations.yaml"),
+    ]);
+    let tree = with_index(&["write-tree"]);
+    let delegated = git(
+        &turn.tree,
+        &[
+            "commit-tree",
+            &tree,
+            "-p",
+            &turn.candidate,
+            "-m",
+            "delegate",
+        ],
+    );
+    git(&turn.tree, &["branch", "-f", "main", &delegated]);
+    let (results, _, summary) = observed(&validator, &turn);
+    assert_eq!(results, ["merged"], "delegated: {summary}");
+    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
+    granted_by(&turn, "repository.merge.judge_surface", "human:owner");
+    let (results, _, summary) = observed(&validator, &turn);
+    assert_eq!(results, ["merged"], "the owner: {summary}");
 }
 
 /// Writes the promotion store's record of `revision` of `kind`, chained to the file `previous`

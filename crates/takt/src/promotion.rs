@@ -2169,13 +2169,17 @@ pub fn kept_binary(store: &Path, sha256: &str) -> PathBuf {
 }
 
 /// Copies the binary `before` to [`kept_binary`] under `store`, executable, written beside its
-/// place and renamed into it; a binary already kept there by that digest is kept as it is. Its
-/// path.
+/// place and renamed into it; a regular file already kept there by that digest is kept as it
+/// is, and anything else there (a link above all) is replaced. Its path.
 fn keep_replaced(before: &Path, store: &Path) -> Result<PathBuf> {
     use std::os::unix::fs::PermissionsExt as _;
     let digest = sha256_of(before)?;
     let kept = kept_binary(store, &digest);
-    if kept.is_file() && sha256_of(&kept).is_ok_and(|at| at == digest) {
+    // Kept already only as a regular file of its own, never through a link: a link planted there
+    // could be pointed elsewhere after this check. Anything else is replaced by the rename below.
+    if std::fs::symlink_metadata(&kept).is_ok_and(|meta| meta.file_type().is_file())
+        && sha256_of(&kept).is_ok_and(|at| at == digest)
+    {
         return Ok(kept);
     }
     let dir = kept

@@ -1269,6 +1269,53 @@ pub fn judge_surfaces(tree: &Path, baseline: &str, candidate: &str) -> Result<Ve
     Ok(surfaces)
 }
 
+/// Why the case at `dir`'s grant of [`crate::validator::JUDGE_SURFACE_CAPABILITY`] does not
+/// authorise merging the candidate `revision`, a judge-surface change, by story:judge-guard's
+/// rule ([`crate::validator::approver_refusal`]): the owner's grant does, an agent role's only
+/// under an unrevoked delegation in [`crate::validator::DELEGATIONS`] at the mainline's `tip`,
+/// read from a copy made through git's transport, and never for a change to a file of
+/// [`crate::validator::OWNER_ONLY`]; or none when it does.
+fn judge_surface_refusal(
+    dir: &Path,
+    tree: &Path,
+    tip: &str,
+    revision: &str,
+) -> Result<Option<String>> {
+    let capability = crate::validator::JUDGE_SURFACE_CAPABILITY;
+    let authority = crate::case::Authority::read(dir)?.unwrap_or_default();
+    let approver = authority
+        .decision(capability)
+        .map_or("", |decision| decision.approver.as_str());
+    let Some(baseline) = case_revision(dir, "baseline")? else {
+        return Ok(Some(
+            "the case names no baseline revision to judge the candidate's change against"
+                .to_owned(),
+        ));
+    };
+    let surfaces = judge_surfaces(tree, &baseline, revision)?;
+    let owner_only: Vec<&str> = surfaces
+        .iter()
+        .map(String::as_str)
+        .filter(|path| crate::validator::OWNER_ONLY.contains(path))
+        .collect();
+    let mirror = match crate::git::Mirror::of(tree, &[tip])? {
+        Ok(mirror) => mirror,
+        Err(why) => {
+            return Ok(Some(format!(
+                "the mainline's tip {} does not arrive from this repository as its id ({why})",
+                short(tip)
+            )));
+        }
+    };
+    crate::validator::approver_refusal(
+        &mirror,
+        tip,
+        crate::promotion::MAINLINE,
+        approver,
+        &owner_only,
+    )
+}
+
 /// `candidate.merge` and `candidate.merge_judge_surface`, one type for both: observes, never
 /// merges. Writes one `merge_observation` about `candidate`, `merged`, when the case holds the
 /// grant its protocol requires for the action at the candidate revision
@@ -1276,8 +1323,10 @@ pub fn judge_surfaces(tree: &Path, baseline: &str, candidate: &str) -> Result<Ve
 /// descends from it; the mainline it read (the forge, `none` for the local `main`) and the tip
 /// are retained beside the record as `merge-observation-<seq>.txt`. While the mainline does not
 /// hold the candidate it records nothing and waits, naming the tip; without the grant it records
-/// nothing. The merge itself happens in the candidate's own delivery case, under the judge
-/// guard, or by the owner.
+/// nothing. `candidate.merge_judge_surface` holds its grant to story:judge-guard's rule besides
+/// ([`judge_surface_refusal`]): the owner's, or an agent role's under an unrevoked delegation on
+/// record at the mainline's tip; any other grant records nothing. The merge itself happens in
+/// the candidate's own delivery case, under the judge guard, or by the owner.
 #[derive(Clone)]
 pub struct CandidateMerged {
     action: &'static str,
@@ -1341,6 +1390,18 @@ impl CandidateMerged {
         let main = crate::promotion::MAINLINE;
         let forge = self.mainline.forge();
         let tip = self.mainline.tip(tree)?;
+        if self.action == Self::JUDGE_SURFACE_ACTION
+            && let Some(why) = judge_surface_refusal(&dir, tree, &tip, revision)?
+        {
+            return Ok((
+                nothing(format!(
+                    "{} at {} is granted, but {why}; nothing recorded",
+                    self.action,
+                    short(revision)
+                )),
+                false,
+            ));
+        }
         let holds = match Mainline::holds(tree, &tip, revision)? {
             Ok(holds) => holds,
             Err(why) => {
@@ -1452,7 +1513,8 @@ pub struct BinaryPromote {
     /// The state directory; none, and it is the one the promotion store lies in, read when the
     /// validator observes, so no other case needs one.
     pub state: Option<PathBuf>,
-    /// The install root `takt promote` installs into; none, and it is
+    /// The install root `takt promote` installs into; none, and it is the one the turn recorded
+    /// when it opened ([`crate::case::install_root_of`]), else
     /// [`crate::promotion::install_root`], read when the validator observes.
     pub install_root: Option<PathBuf>,
 }
@@ -1494,9 +1556,9 @@ impl BinaryPromote {
     /// Why the store's latest record, `latest`, does not show `revision` promoted and
     /// installed now, or none when it does.
     fn unpromoted(
-        &self,
         latest: Option<&crate::promotion::Promotion>,
         revision: &str,
+        installed: &Path,
     ) -> Result<Option<String>> {
         let Some(record) = latest.filter(|record| record.revision == revision) else {
             return Ok(Some(format!(
@@ -1518,12 +1580,7 @@ impl BinaryPromote {
                 short(revision)
             )));
         };
-        let root = match &self.install_root {
-            Some(root) => root.clone(),
-            None => crate::promotion::install_root()?,
-        };
-        let installed = root.join("bin/takt");
-        let digest = match std::fs::read(&installed) {
+        let digest = match std::fs::read(installed) {
             Ok(bytes) => {
                 use sha2::{Digest as _, Sha256};
                 format!("{:x}", Sha256::digest(&bytes))
@@ -1560,13 +1617,24 @@ impl BinaryPromote {
         let store = state_dir(self.state.as_deref())?.join(crate::promotion::STORE);
         let latest = crate::promotion::baseline(&store, &crate::now())
             .with_context(|| format!("read the promotion store {}", store.display()))?;
-        match self.unpromoted(latest.as_ref(), revision)? {
+        // The install root given, else the one the turn recorded when it opened, else the one
+        // `takt promote` takes from the environment.
+        let root = match &self.install_root {
+            Some(root) => root.clone(),
+            None => match crate::case::install_root_of(&dir)? {
+                Some(root) => root,
+                None => crate::promotion::install_root()?,
+            },
+        };
+        let installed = root.join("bin/takt");
+        match Self::unpromoted(latest.as_ref(), revision, &installed)? {
             None => Ok((
                 Observation {
                     summary: format!(
-                        "the promotion store {}'s latest record installs {}, the binary installed now: promoted",
+                        "the promotion store {}'s latest record installs {}, the binary installed now at {}: promoted",
                         store.display(),
-                        short(revision)
+                        short(revision),
+                        installed.display()
                     ),
                     records: vec![Record::new(
                         format!("promotion-record-{seq}"),
@@ -1582,8 +1650,9 @@ impl BinaryPromote {
             )),
             Some(why) => Ok((
                 nothing(format!(
-                    "the promotion store {}: {why}; promote {} with `takt promote`; waiting",
+                    "the promotion store {}, the installed binary read at {}: {why}; promote {} with `takt promote` into that install root; waiting",
                     store.display(),
+                    installed.display(),
                     short(revision)
                 )),
                 true,

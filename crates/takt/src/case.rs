@@ -1971,7 +1971,8 @@ impl CaseDir {
     /// validator ([`crate::improvement::PRODUCERS`]) independent on
     /// [`crate::improvement::INDEPENDENT_ON`]: a validator is no agent run, so its record is
     /// another run's than the one that delivered the candidate. Nothing else declares
-    /// independence. The sha256 of the binary that judges the turn goes into [`JUDGE_FILE`].
+    /// independence. The sha256 of the binary that judges the turn goes into [`JUDGE_FILE`], and
+    /// the install root given into [`INSTALL_ROOT_FILE`].
     pub fn open_turn(&mut self, opening: &TurnOpening) -> Result<()> {
         let Some(base) = Branch::read(&self.dir)?.base_commit else {
             bail!(
@@ -2004,6 +2005,20 @@ impl CaseDir {
         let judge = self.dir.join(JUDGE_FILE);
         std::fs::write(&judge, format!("{}\n", opening.judge_sha256))
             .with_context(|| format!("write {}", judge.display()))?;
+        if let Some(root) = &opening.install_root {
+            let path = self.dir.join(INSTALL_ROOT_FILE);
+            let root = root
+                .to_str()
+                .filter(|root| root.starts_with('/') && !root.contains('\n'))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "the install root {} is no absolute UTF-8 path on one line",
+                        root.display()
+                    )
+                })?;
+            std::fs::write(&path, format!("{root}\n"))
+                .with_context(|| format!("write {}", path.display()))?;
+        }
         self.set_story(&opening.finding)
     }
 
@@ -2156,6 +2171,35 @@ pub struct TurnOpening {
     /// The sha256 of the binary that judges the turn, the promoted one that opens it: every
     /// later run of the turn is refused unless it is that binary ([`turn_judge_refusal`]).
     pub judge_sha256: String,
+    /// The install root `takt promote` installs into, which `binary.promote` reads the
+    /// installed binary under, recorded at open ([`INSTALL_ROOT_FILE`]); none, and it is read
+    /// from the environment when the validator observes.
+    pub install_root: Option<PathBuf>,
+}
+
+/// The file of an improvement turn's case that holds the install root it was opened with, an
+/// absolute path, on one line.
+pub const INSTALL_ROOT_FILE: &str = "install-root";
+
+/// The install root the turn at `case_dir` was opened with ([`INSTALL_ROOT_FILE`]); none when it
+/// recorded none.
+pub fn install_root_of(case_dir: &Path) -> Result<Option<PathBuf>> {
+    let path = case_dir.join(INSTALL_ROOT_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let root = PathBuf::from(text.trim_end_matches('\n'));
+            if !root.is_absolute() {
+                bail!(
+                    "{} names {}, which is no absolute path",
+                    path.display(),
+                    root.display()
+                );
+            }
+            Ok(Some(root))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
 }
 
 /// The case input a turn's judge surface is, `surface`.
@@ -2434,7 +2478,25 @@ pub fn turn_opening(
         surface: computed.to_owned(),
         title: finding_title(finding, filed.as_deref().unwrap_or_default()),
         judge_sha256: digest,
+        install_root: None,
     })
+}
+
+/// Why a case may not run on `protocol`, or none: an improvement turn (`self.improvement/1`)
+/// runs on the document this binary embeds and on no other of that id, so no file can add an
+/// action the harness would be offered inside a turn, nor take one away. Any other protocol is
+/// not refused here.
+pub fn turn_protocol_refusal(protocol: &LoadedProtocol) -> Result<Option<String>> {
+    if protocol.id != TURN_PROTOCOL {
+        return Ok(None);
+    }
+    let embedded = LoadedProtocol::builtin(TURN_PROTOCOL)?;
+    if protocol.yaml == embedded.yaml {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{TURN_PROTOCOL}: a turn runs on the protocol this binary embeds (`--protocol {TURN_PROTOCOL}`) and on no other document of that id; this one differs from it; nothing was run"
+    )))
 }
 
 /// The file of an improvement turn's case that holds the sha256 of the binary that judges it,
@@ -2471,7 +2533,8 @@ pub fn turn_judge_refusal(case_dir: &Path, binary: &Path) -> Result<Option<Strin
             |_| String::new(),
             |kept| {
                 format!(
-                    "; `takt promote` keeps a binary it replaces at {}",
+                    "; `takt promote` keeps a binary it replaces at {}: check that `sha256sum {}` prints {recorded} before you run it",
+                    kept.display(),
                     kept.display()
                 )
             },

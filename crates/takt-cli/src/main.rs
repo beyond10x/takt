@@ -335,6 +335,13 @@ struct RunArgs {
     /// scenario in, handed to `scripts/check-finding --scenarios`; not read by any other case.
     #[arg(long)]
     scenarios: Option<PathBuf>,
+    /// The install root a `self.improvement/1` turn opened by this run reads the promoted
+    /// binary under (`<root>/bin/takt`, where `takt promote --install-root` installs it),
+    /// recorded in the case so every resume reads the same one. Not given, `CARGO_INSTALL_ROOT`,
+    /// else `CARGO_HOME`, else `~/.cargo`, as `takt promote` takes it. Refused for a resumed
+    /// case, which keeps the one it was opened with; not read by any other case.
+    #[arg(long)]
+    install_root: Option<PathBuf>,
     #[command(flatten)]
     looping: LoopArgs,
 }
@@ -650,6 +657,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 inputs,
                 case_id,
                 scenarios,
+                install_root,
                 looping,
             } = *args;
             looping.check()?;
@@ -699,8 +707,18 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     given_for_resume,
                     first_input.as_deref(),
                 )?;
-                // A turn is run only by the binary that judges it, recorded when it opened:
-                // checked before the case is resumed, so another binary takes no step.
+                if install_root.is_some() {
+                    return Err(anyhow!(
+                        "--install-root is given for the case {}, which keeps the install root it was opened with; nothing was resumed",
+                        resuming.id
+                    ));
+                }
+                // A turn runs on the embedded protocol alone, and only by the binary that judges
+                // it, recorded when it opened: both checked before the case is resumed, so no
+                // step is taken otherwise.
+                if let Some(why) = takt::case::turn_protocol_refusal(&resuming.protocol)? {
+                    return Err(anyhow!(why));
+                }
                 takt::case::check_id(&resuming.id)?;
                 if let Some(why) = takt::case::turn_judge_refusal(
                     &repo.join(takt::case::CASES_DIR).join(&resuming.id),
@@ -739,6 +757,9 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             let turn =
                 if case.is_none() && resuming.is_none() && opens_on.id == takt::case::TURN_PROTOCOL
                 {
+                    if let Some(why) = takt::case::turn_protocol_refusal(&opens_on)? {
+                        return Err(anyhow!(why));
+                    }
                     let mut taken = |name: &str| {
                         inputs
                             .iter()
@@ -751,7 +772,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     // The binary that judges the turn is this one, which must be the promoted:
                     // read as it runs, whatever its path holds by now.
                     let binary = PathBuf::from(RUNNING_BINARY);
-                    let opened = takt::case::turn_opening(
+                    let mut opened = takt::case::turn_opening(
                         &repo,
                         finding.as_deref(),
                         candidate.as_deref(),
@@ -764,6 +785,11 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                         &mainline,
                     )?;
                     inputs.push((takt::case::TURN_SURFACE.to_owned(), opened.surface.clone()));
+                    opened.install_root = Some(match &install_root {
+                        Some(root) => std::path::absolute(root)
+                            .with_context(|| format!("--install-root {}", root.display()))?,
+                        None => takt::promotion::install_root()?,
+                    });
                     Some(opened)
                 } else {
                     None

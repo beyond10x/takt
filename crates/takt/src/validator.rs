@@ -2166,44 +2166,64 @@ impl PrMerged {
                 short(&tip)
             )
         };
-        let typed = crate::case::is_approver(approver);
-        if typed && approver.starts_with("human:") {
-            return Ok(None);
-        }
-        // D5: an approver that is neither the owner nor an agent role the store writes as
-        // (untyped, or takt's own actor) grants nothing here, whatever a delegation names.
-        if !(typed && approver.starts_with("agent:")) {
-            return Ok(Some(format!(
-                "{touches}; the approver `{}` is neither the owner (human:<id>) nor an agent role (agent:<role>), and grants nothing there",
-                approver.escape_debug()
-            )));
-        }
-        if !owner_only.is_empty() {
-            return Ok(Some(format!(
-                "{touches}; a change to {} merges under the owner's grant (human:<id>) alone, never under a delegation, and {approver} is not the owner",
-                owner_only.join(" or ")
-            )));
-        }
-        let delegated = match record_at::<DelegationRecord>(&mirror, &tip, DELEGATIONS)? {
-            None => Err(format!("{DELEGATIONS} is not there")),
-            Some(Err(why)) => Err(format!("{why}; it delegates nothing")),
-            Some(Ok(record)) => Ok(record
-                .delegations
-                .iter()
-                .any(|delegation| delegation.admits(approver))),
-        };
-        Ok(match delegated {
-            Ok(true) => None,
-            Ok(false) => Some(format!(
-                "{touches}; {approver} is not the owner, and {DELEGATIONS} at {base} {} records no unrevoked delegation of {JUDGE_SURFACE_CAPABILITY} to {approver}",
-                short(&tip)
-            )),
-            Err(why) => Some(format!(
-                "{touches}; {approver} is not the owner, and no delegation of {JUDGE_SURFACE_CAPABILITY} to it is on record at {base} {} ({why})",
-                short(&tip)
-            )),
-        })
+        Ok(
+            approver_refusal(&mirror, &tip, base, approver, &owner_only)?
+                .map(|why| format!("{touches}; {why}")),
+        )
     }
+}
+
+/// Why `approver`'s grant does not authorise a merge into `base` at `tip` that changes a judge
+/// surface, or none when it does: the owner's grant (`human:<id>`) does; an agent role's
+/// (`agent:<role>`) does only when no file of [`OWNER_ONLY`] is among `owner_only` (the changed
+/// ones) and [`DELEGATIONS`] at `tip`, read from `mirror`, records an unrevoked delegation of
+/// [`JUDGE_SURFACE_CAPABILITY`] to that role; any other approver grants nothing (D5). The rule
+/// of story:judge-guard, for `repository.merge` and for an improvement turn's
+/// `candidate.merge_judge_surface` alike.
+pub(crate) fn approver_refusal(
+    mirror: &Mirror,
+    tip: &str,
+    base: &str,
+    approver: &str,
+    owner_only: &[&str],
+) -> Result<Option<String>> {
+    let typed = crate::case::is_approver(approver);
+    if typed && approver.starts_with("human:") {
+        return Ok(None);
+    }
+    // D5: an approver that is neither the owner nor an agent role the store writes as
+    // (untyped, or takt's own actor) grants nothing here, whatever a delegation names.
+    if !(typed && approver.starts_with("agent:")) {
+        return Ok(Some(format!(
+            "the approver `{}` is neither the owner (human:<id>) nor an agent role (agent:<role>), and grants nothing there",
+            approver.escape_debug()
+        )));
+    }
+    if !owner_only.is_empty() {
+        return Ok(Some(format!(
+            "a change to {} merges under the owner's grant (human:<id>) alone, never under a delegation, and {approver} is not the owner",
+            owner_only.join(" or ")
+        )));
+    }
+    let delegated = match record_at::<DelegationRecord>(mirror, tip, DELEGATIONS)? {
+        None => Err(format!("{DELEGATIONS} is not there")),
+        Some(Err(why)) => Err(format!("{why}; it delegates nothing")),
+        Some(Ok(record)) => Ok(record
+            .delegations
+            .iter()
+            .any(|delegation| delegation.admits(approver))),
+    };
+    Ok(match delegated {
+        Ok(true) => None,
+        Ok(false) => Some(format!(
+            "{approver} is not the owner, and {DELEGATIONS} at {base} {} records no unrevoked delegation of {JUDGE_SURFACE_CAPABILITY} to {approver}",
+            short(tip)
+        )),
+        Err(why) => Some(format!(
+            "{approver} is not the owner, and no delegation of {JUDGE_SURFACE_CAPABILITY} to it is on record at {base} {} ({why})",
+            short(tip)
+        )),
+    })
 }
 
 impl std::fmt::Debug for PrMerged {

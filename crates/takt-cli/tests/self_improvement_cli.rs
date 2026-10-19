@@ -429,6 +429,8 @@ fn run_as(
             world.repo.to_str().expect("utf-8"),
             "--protocol",
             PROTOCOL,
+            "--install-root",
+            world.install.to_str().expect("utf-8"),
             "--case-id",
             "turn-1",
             "--harness",
@@ -452,7 +454,7 @@ fn run_as(
         .args(&args)
         .env("XDG_STATE_HOME", &world.state)
         .env("XDG_CACHE_HOME", &world.cache)
-        .env("CARGO_INSTALL_ROOT", &world.install)
+        .env("CARGO_INSTALL_ROOT", decoy(world))
         .envs(env.iter().copied())
         .env_remove("B10X_GATES_POLICY")
         .output()
@@ -462,6 +464,12 @@ fn run_as(
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
+}
+
+/// The install root the environment names (`CARGO_INSTALL_ROOT`) to every run, which is not
+/// the one the turn opens with (`--install-root`): `binary.promote` reads the recorded one.
+fn decoy(world: &World) -> PathBuf {
+    world.repo.parent().expect("a parent").join("decoy-install")
 }
 
 /// The inputs a turn opens with.
@@ -901,7 +909,7 @@ fn takt_in(world: &World, args: &[&str]) -> (i32, String, String) {
         ])
         .env("XDG_STATE_HOME", &world.state)
         .env("XDG_CACHE_HOME", &world.cache)
-        .env("CARGO_INSTALL_ROOT", &world.install)
+        .env("CARGO_INSTALL_ROOT", decoy(world))
         .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
@@ -1607,6 +1615,9 @@ fn a_promotion_record_naming_no_installed_binary_is_not_promoted() {
     record(&world, &world.candidate, &world.baseline, None);
     let (_, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--hours", "0.001"]);
     assert!(!out.contains("Completed (accepted)"), "{out}\n{err}");
+    // It reads the install root the turn opened with, never the environment's, and says where.
+    let read = world.install.join("bin/takt").display().to_string();
+    assert!(out.contains(&read), "{read}: {out}\n{err}");
     assert!(
         records(&world.repo)
             .iter()
@@ -1671,6 +1682,10 @@ fn a_resume_by_another_binary_than_the_judge_is_refused() {
         err.contains(&sha256(Path::new(env!("CARGO_BIN_EXE_takt")))),
         "the judge's digest is named: {err}"
     );
+    assert!(
+        err.contains("sha256sum"),
+        "the kept binary is to be checked first: {err}"
+    );
 }
 
 /// The reviewer's `rv_takt_approve_on_a_turn_with_a_planning_store`, inverted as ruled: in a
@@ -1724,4 +1739,156 @@ fn without_a_mainline_a_candidate_rewriting_the_finding_is_refused() {
     ];
     let ran = run(&world, &inputs);
     refused(&world, &ran, FINDING_FILE);
+}
+
+/// `takt approve` on the turn by `approver` for `capability`, its exit code and output.
+fn approve_by(world: &World, capability: &str, approver: &str) -> (i32, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args([
+            "approve",
+            "--repo",
+            world.repo.to_str().expect("utf-8"),
+            "turn-1",
+            capability,
+            "--by",
+            approver,
+        ])
+        .env("XDG_STATE_HOME", &world.state)
+        .env("XDG_CACHE_HOME", &world.cache)
+        .env_remove("B10X_GATES_POLICY")
+        .output()
+        .expect("takt runs");
+    (
+        output.status.code().expect("an exit code"),
+        format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    )
+}
+
+/// The reviewer's `rv_an_undelegated_agent_cannot_grant_a_turns_judge_surface_merge`: a turn
+/// whose candidate touches a judge surface, granted `repository.merge.judge_surface` by an agent
+/// role the owner delegated nothing to (no `.engineering/delegations.yaml` at `main`), records no
+/// merge though the candidate is in `main`: story:judge-guard's rule holds for the turn too, and
+/// the run names the delegation record it read.
+#[test]
+fn an_undelegated_agent_cannot_grant_a_turns_judge_surface_merge() {
+    let world = world_with(
+        "agent-judge",
+        &Setup {
+            touches: Some(("tools/judge.sh", "#!/bin/sh\nexit 0\n")),
+            ..Setup::plain(true, false)
+        },
+    );
+    let inputs = vec![
+        format!("finding={FINDING}"),
+        format!("candidate={}", world.candidate),
+    ];
+    let (code, out, err) = run_as(
+        &world,
+        &inputs,
+        None,
+        Some("the probe no longer shows the defect"),
+        &[],
+    );
+    assert_eq!(code, 4, "{out}\n{err}");
+    assert!(
+        out.contains("candidate.merge_judge_surface"),
+        "{out}\n{err}"
+    );
+    let (code, shown) = approve_by(&world, "repository.merge.judge_surface", "agent:developer");
+    assert_eq!(code, 0, "{shown}");
+    git(&world.repo, &["branch", "-f", "main", &world.candidate]);
+    let (_, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--hours", "0.001"]);
+    assert!(
+        records(&world.repo)
+            .iter()
+            .all(|record| field(record, "kind") != "merge_observation"),
+        "an undelegated agent's grant merged a judge-surface candidate: {out}\n{err}"
+    );
+    assert!(
+        out.contains(".engineering/delegations.yaml"),
+        "{out}\n{err}"
+    );
+}
+
+/// The reviewer's `rv_a_turn_on_a_protocol_file_with_a_harness_action`, inverted as ruled: a
+/// protocol document of id `self.improvement/1` other than the embedded one (here with one more
+/// action, which no validator performs) opens no turn: refused before anything is written,
+/// naming the embedded protocol, and the harness never runs.
+#[test]
+fn a_turn_on_another_protocol_document_of_its_id_is_refused() {
+    let world = world("protocol-file", true, false);
+    let dir = world.repo.parent().expect("a parent").to_path_buf();
+    let text = fs::read_to_string(PROTOCOL).expect("the protocol");
+    let extra = text.replacen(
+        "\nactions:\n",
+        "\nactions:\n  turn.note:\n    description: a note\n    effect: write\n",
+        1,
+    );
+    assert_ne!(extra, text);
+    let protocol = dir.join("self-improvement-extra.yaml");
+    fs::write(&protocol, &extra).expect("the protocol file");
+    let bin = dir.join("harness-bin");
+    executable(
+        &bin.join("claude"),
+        "#!/bin/sh\necho called >> ../claude-called\nprintf '%s\\n' '{\"result\": \"{\\\"action\\\": \\\"turn.note\\\", \\\"summary\\\": \\\"note\\\"}\"}'\n",
+    );
+    let mut args: Vec<String> = [
+        "run",
+        "--repo",
+        world.repo.to_str().expect("utf-8"),
+        "--protocol",
+        protocol.to_str().expect("utf-8"),
+        "--intent",
+        "a note",
+        "--case-id",
+        "turn-1",
+        "--harness",
+        "claude",
+        "--forge",
+        "none",
+        "--test-cmd",
+        "true",
+        "--iterations",
+        "6",
+        "--scenarios",
+        world.scenarios.to_str().expect("utf-8"),
+    ]
+    .iter()
+    .map(|arg| (*arg).to_owned())
+    .collect();
+    for input in opening(&world) {
+        args.extend(["--input".to_owned(), input]);
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args(&args)
+        .env("XDG_STATE_HOME", &world.state)
+        .env("XDG_CACHE_HOME", &world.cache)
+        .env("CARGO_INSTALL_ROOT", decoy(&world))
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env_remove("B10X_GATES_POLICY")
+        .output()
+        .expect("takt runs");
+    let ran = (
+        output.status.code().expect("an exit code"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    );
+    refused(&world, &ran, "embeds");
+    assert!(
+        !dir.join("claude-called").exists(),
+        "the harness ran: {}\n{}",
+        ran.1,
+        ran.2
+    );
 }
