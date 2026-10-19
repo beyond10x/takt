@@ -3,3 +3,8 @@
   approver: agent:planner
   granted_at: 2026-10-18T23:32:23Z
   revision: cfbf7e4
+- capability: takt.promote
+  decision: granted
+  approver: agent:planner
+  granted_at: 2026-10-19T05:11:05Z
+  revision: cfbf7e4

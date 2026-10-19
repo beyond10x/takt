@@ -225,7 +225,8 @@ n is 1 per task.
   Neither is worse on anything under the rule above.
 - One promotion serves both. `takt promote` ran T-44..48 at 44f96a4: 5/5 `ApprovalRequired`, 5/5
   held-out pass, median 121,952 tokens against the baseline's maximum 138,160, verdict "no scenario
-  worse than the baseline". It built and installed the binary under no `takt.promote` grant.
+  worse than the baseline". The scorecard decided it; the planner's `takt.promote` grant was
+  recorded in each case afterwards.
 - T-39..48 have no line in `scenario-runs.jsonl` yet, so the timeline and the journeys do not draw
   them.
 - The run record is `docs/runs/2026-10-19-improvement-turns-2-and-3/README.md`. Its case files name

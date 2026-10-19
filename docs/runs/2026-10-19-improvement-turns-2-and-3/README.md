@@ -4,9 +4,9 @@ Two more improvement turns that Canon accepted, and one promotion that serves bo
 a defect in takt, checked it before and after on scenario 1, compared the candidate with the
 baseline on the scorecard and merged the fix under a grant. Both fixes then reached `main`, and
 `takt promote` installed `44f96a4`, which holds both fixes, once its own five runs showed no
-scenario worse than the baseline. That one promotion serves both cases' `promoted` claim. Unlike
-turn 1's, it had no `takt.promote` grant: the scorecard's verdict
-decided it. The turns ran in phase R0 like turn 1, so **the case records were written by hand** by
+scenario worse than the baseline. That one promotion serves both cases' `promoted` claim. The
+scorecard's verdict decided it; the planner's `takt.promote` grant was recorded in each case after
+the promotion. The turns ran in phase R0 like turn 1, so **the case records were written by hand** by
 the recorder program, not by a takt run.
 
 | item | turn 2 | turn 3 |
@@ -16,7 +16,7 @@ the recorder program, not by a takt run.
 | case | `turn-2-case-id`, copied unchanged into [`cases/turn-2-case-id/`](cases/turn-2-case-id/) | `turn-3-hours`, copied unchanged into [`cases/turn-3-hours/`](cases/turn-3-hours/) |
 | revisions on `main` | finding `33e8c01`, baseline `a0b8576`, candidate `98719c3`, promotion `44f96a4` | finding `c220a80`, baseline `a0b8576`, candidate `9fb14cc`, promotion `44f96a4` |
 | input | `surface: judge` | `surface: judge` |
-| outcome | `accepted`: `legitimate` at the last decision, [`decisions/0009.json`](cases/turn-2-case-id/decisions/0009.json) | `accepted`: `legitimate` at the last decision, [`decisions/0008.json`](cases/turn-3-hours/decisions/0008.json) |
+| outcome | `accepted`: `legitimate` at the last decision, [`decisions/0010.json`](cases/turn-2-case-id/decisions/0010.json) | `accepted`: `legitimate` at the last decision, [`decisions/0009.json`](cases/turn-3-hours/decisions/0009.json) |
 
 The promotion is in [`promotion/`](promotion/): the promotion record, the scorecard it was decided
 on, and `takt promote`'s output.
@@ -24,7 +24,8 @@ on, and `takt promote`'s output.
 ## Commit ids in the case files
 
 The case files were written before this repository's history was rewritten on 2026-10-19, and most
-commit ids changed then. They are kept byte for byte as written, so they name the old ids. The
+commit ids changed then, as each case's `notes.md` says. They are kept byte for byte as written, so
+they name the old ids. The
 rewrite's commit map (one `old new` pair per line) gives the id each has on `main`:
 
 | in the case files | on `main` | what it is | named in |
@@ -33,10 +34,10 @@ rewrite's commit map (one `old new` pair per line) gives the id each has on `mai
 | `0f8d8c2` | `8e041e6` | the commit that filed turn 2's finding | turn 2: `notes.md` |
 | `9922f12` | `333d369` | wave 10's merge into `main`, a second revision turn 2 reproduced at | turn 2: `notes.md` |
 | `8d49743` | `d74da0c` | turn 2's first candidate, measured before review and superseded | turn 2: `notes.md` |
-| `834205f` | `98719c3` | turn 2's candidate, "correction 2 after adversary pass 2" | turn 2: `case.yaml`, `authority.yaml`, e3 to e5, `notes.md` |
+| `834205f` | `98719c3` | turn 2's candidate, "correction 2 after adversary pass 2" | turn 2: `case.yaml`, `authority.yaml` (both grants), e3 to e5, `notes.md` |
 | `4fbdec6` | `0dd0b46` | the commit that filed turn 3's finding | turn 3: `notes.md` |
 | `a9dd0d3` | `c220a80` | the store commit that retired `story:cli-small-fixes`, on `main` with turn 3's finding | turn 3: `case.yaml`, e1, `notes.md` |
-| `cfbf7e4` | `9fb14cc` | turn 3's candidate, "correction 3 after review" | turn 3: `case.yaml`, `authority.yaml`, e3 to e5, `notes.md` |
+| `cfbf7e4` | `9fb14cc` | turn 3's candidate, "correction 3 after review" | turn 3: `case.yaml`, `authority.yaml` (both grants), e3 to e5, `notes.md` |
 | `3b0b748` | `76be9ed` | the merge of turn 3's candidate into `wave/2026-10-18-w12` | turn 3: `notes.md` |
 
 `a0b8576`, the baseline, kept its id. `44f96a4`, the promotion, was written after the rewrite and is
@@ -57,8 +58,8 @@ file has it, with its id on `main` in brackets where the two differ.
 | e2 | `scenario_result` reproduced | baseline, `a0b8576` | `planner-run` | 10-18 19:23:16 | `scripts/check-finding` at `a0b8576`: "reproduced"; the check's output was written at 18:39:22 |
 | e3 | `scenario_result` not_reproduced | candidate, `834205f` (`98719c3`) | `planner-run` | 10-18 19:54:29 | `scripts/check-finding` at `834205f`: "not_reproduced"; output written at 19:41:19 |
 | e4 | `scorecard_result` no_regression | candidate, `834205f` (`98719c3`) | `planner-run` | 10-18 19:54:29 | baseline runs T-14..18 at `a0b8576`, candidate runs T-24..28 at `834205f` |
-| e5 | `merge_observation` merged | candidate, `834205f` (`98719c3`) | `planner-run` | 10-19 05:03:03 | see [Merge and promotion](#merge-and-promotion) |
-| e6 | `promotion_record` promoted | promotion, `44f96a4` | `planner-run` | 10-19 05:03:03 | the promotion record, [`promotion/44f96a4….json`](promotion/44f96a48de6b0a89db6801fd1d85372896e98781.json) |
+| e5 | `merge_observation` merged | candidate, `834205f` (`98719c3`) | `planner-run` | 10-19 05:03:03 | merged into `wave/2026-10-18-w12` and with the wave into `main`; `git merge-base --is-ancestor 98719c3 44f96a4` exits 0 |
+| e6 | `promotion_record` promoted | promotion, `44f96a4` | `planner-run` | 10-19 05:03:03 | `takt promote` of `44f96a4` against the baseline `a0b8576`, the promotion record, [`promotion/44f96a4….json`](promotion/44f96a48de6b0a89db6801fd1d85372896e98781.json), and [`promotion/promote.out`](promotion/promote.out) |
 
 e4 in figures, from `notes.md`: all ten runs stopped at the merge approval (exit 4) with the
 held-out acceptance PASS. Tokens: baseline 122,361 / 138,160 / 107,205 / 122,811 / 122,192 (median
@@ -77,8 +78,8 @@ runs had no resume. The candidate first measured, `8d49743` (`d74da0c`, runs T-1
 | e2 | `scenario_result` reproduced | baseline, `a0b8576` | `planner-run` | 10-18 22:32:50 | `scripts/check-finding` at `a0b8576`: exit 0, "reproduced" |
 | e3 | `scenario_result` not_reproduced | candidate, `cfbf7e4` (`9fb14cc`) | `planner-run` | 10-18 23:32:28 | `scripts/check-finding` at `cfbf7e4`: exit 1, "not_reproduced" |
 | e4 | `scorecard_result` no_regression | candidate, `cfbf7e4` (`9fb14cc`) | `planner-run` | 10-18 23:40:27 | baseline runs T-14..18 at `a0b8576`, candidate runs T-39..43 at `cfbf7e4` |
-| e5 | `merge_observation` merged | candidate, `cfbf7e4` (`9fb14cc`) | `planner-run` | 10-19 05:03:03 | see [Merge and promotion](#merge-and-promotion) |
-| e6 | `promotion_record` promoted | promotion, `44f96a4` | `planner-run` | 10-19 05:03:03 | the promotion record |
+| e5 | `merge_observation` merged | candidate, `cfbf7e4` (`9fb14cc`) | `planner-run` | 10-19 05:03:03 | merged into `wave/2026-10-18-w12` at `3b0b748` (`76be9ed`) and with the wave into `main`; `git merge-base --is-ancestor 9fb14cc 44f96a4` exits 0 |
+| e6 | `promotion_record` promoted | promotion, `44f96a4` | `planner-run` | 10-19 05:03:03 | the same promotion as turn 2's e6 |
 
 e4 in figures, from `notes.md`: all ten runs reached the merge approval with the held-out acceptance
 PASS. Candidate tokens 122,243 / 122,151 / 122,055 / 121,884 / 153,293, median 122,151 against the
@@ -93,10 +94,9 @@ binary's sha256 is `eaa32ab7…4018`, named in the measurement's summary.
 | the wave merged into `main` | at `06e3227`, 2026-10-19 04:04:43 | the same merge | the merge commit |
 | promoted | `44f96a4`, 2026-10-19 05:02:23 | the same promotion | the promotion record |
 
-Both cases have no line in `notes.md` for e5 or e6. The recorder script that wrote them names them
-"e5 (merge_observation) and e6 (promotion_record) for R0 turns 2 and 3, after the scorecard-decided
-promotion of 44f96a4", and it stops before writing anything unless `takt --version` prints
-`takt 0.1.0 (44f96a48de6b0a89db6801fd1d85372896e98781)`. The merge times above are commit times.
+e5 and e6 are as each case's `notes.md` states them; the merge commits and their times (commit
+times) are read from `main`. The notes call e6 "the first promotion decided by the scorecard" and
+say "One promotion serves turns 2 and 3: 44f96a4 holds both candidates."
 
 ### The promotion's scorecard
 
@@ -154,13 +154,13 @@ On 2026-10-19, after the promotion, `sha256sum ~/.cargo/bin/takt` printed the sa
 |---|---|---|
 | turn 2: `repository.merge.judge_surface` on `834205f` (`98719c3`) | `agent:planner`, on the reviewer's verdict "approve" | `cases/turn-2-case-id/authority.yaml`, 2026-10-18T19:54:33Z |
 | turn 3: `repository.merge.judge_surface` on `cfbf7e4` (`9fb14cc`) | `agent:planner`, on the reviewer's verdict "approve" | `cases/turn-3-hours/authority.yaml`, 2026-10-18T23:32:23Z, the time of the merge commit that followed the grant; the grant's own time was not recorded |
-| `takt.promote` | none, in either case | |
+| `takt.promote`, turn 2 on `834205f` (`98719c3`), turn 3 on `cfbf7e4` (`9fb14cc`) | `agent:planner`, "the planner's own decision to run the promotion under the owner's standing delegation" (`notes.md`) | each case's `authority.yaml`, 2026-10-19T05:11:05Z, after e6; the notes say the decision came before the promotion at 2026-10-19T05:02Z |
 
 ## Canon's final decisions
 
-Turn 2's last decision, [`decisions/0009.json`](cases/turn-2-case-id/decisions/0009.json), and turn
-3's, [`decisions/0008.json`](cases/turn-3-hours/decisions/0008.json), were both computed at
-2026-10-19T05:03:03Z from e1 to e6 and the merge grant. Their outcomes are the same, verbatim:
+Turn 2's last decision, [`decisions/0010.json`](cases/turn-2-case-id/decisions/0010.json), and turn
+3's, [`decisions/0009.json`](cases/turn-3-hours/decisions/0009.json), were both computed at
+2026-10-19T05:11:05Z from e1 to e6 and both grants. Their outcomes are the same, verbatim:
 
 ```json
 "outcomes": {
@@ -173,25 +173,27 @@ Turn 2's last decision, [`decisions/0009.json`](cases/turn-2-case-id/decisions/0
 
 In both, all six claims hold (`finding.cited`, `scenario.reproduced_before`,
 `scenario.passes_after`, `scorecard.no_regression`, `fix.merged`, `promoted`), and the obligations
-`reproduction.required`, `verification.required` and `regression.required` are discharged. Every
-earlier decision has `accepted` blocked: turn 2's 0000 to 0008, turn 3's 0000 to 0007. The action
-`binary.promote` stays `approval-required` (`takt.promote`: none), because no grant was recorded;
-the claim `promoted` holds on e6.
+`reproduction.required`, `verification.required` and `regression.required` are discharged, and the
+action `binary.promote` is `admissible`.
+
+`accepted` first became `legitimate` one decision earlier, when e6 was recorded (2026-10-19T05:03:03Z):
+turn 2's `0009.json`, turn 3's `0008.json`. In those, `binary.promote` was still
+`approval-required` (`takt.promote`: none), since the grant was not recorded yet. Every decision
+before them has `accepted` blocked: turn 2's 0000 to 0008, turn 3's 0000 to 0007.
 
 ## Deviations from the protocol as designed
 
 - **Hand records.** Phase R0: the recorder program wrote the evidence and asked Canon for each
   decision; no takt run drove either case.
-- **No promotion grant.** Turn 1's case holds a `takt.promote` grant; these two hold none. The
-  promotion went ahead on the scorecard's verdict, so `binary.promote` is still approval-required at
-  the last decision.
+- **The promotion grant was recorded after the promotion.** In turn 1's case the `takt.promote`
+  grant precedes e6. Here the promotion went ahead on the scorecard's verdict at 05:02:23, e6 was
+  recorded at 05:03:03, and the grant at 05:11:05; the notes say the recorder took them in that
+  order.
 - **The producer of every record is the planner.** e1 to e6 are all `planner-run`, e5 and e6
   included, which turn 1 recorded as `developer-run`. The verifier identity is independent of the
   deliverer, `developer-run`; the role that ran the checks is not the one the design names.
 - **Turn 2's times are recording times.** Its e2 and e3 carry the time the recorder wrote them,
   later than the checks' output files; turn 3's e2 to e4 carry the output files' times.
-- **e5 and e6 have no notes.** Neither `notes.md` says what e5 observed; the merge commits above
-  are read from `main`.
 - **The scorecard's runs used a debug build, not the installed binary.** T-44..48 ran a build whose
   hash differs from the promoted binary's, and the scorecard's rows carry `binary: null`.
 - **The protocol copy is older than the repository's.** Each case holds
