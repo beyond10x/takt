@@ -318,52 +318,23 @@ fn a_step_that_replaces_the_cases_directory_with_a_link_is_undone() {
     }
 }
 
-/// A harness that writes `tests/case.sh` on its first step, so the test command the validator
-/// runs next is the model's: it copies the cases directory to `../seen` and the refs to
-/// `../refs` as it finds them, then runs `body` ([`swap`] to `link` for
-/// [`WritesTest::swapping`]). Any later step ends the run with an error.
-struct WritesTest {
-    body: String,
+/// A harness for runs whose first step is the observation: no judgement step is expected, and
+/// one asked for ends the run with an error.
+#[derive(Default)]
+struct NoStep {
     calls: Cell<usize>,
 }
 
-impl WritesTest {
-    fn swapping(link: &str) -> Self {
-        Self::running(swap(link))
-    }
-
-    fn running(body: String) -> Self {
-        Self {
-            body,
-            calls: Cell::new(0),
-        }
-    }
-}
-
-impl Harness for WritesTest {
+impl Harness for NoStep {
     fn name(&self) -> &str {
-        "writes-test"
+        "no-step"
     }
 
-    fn step(&self, context: &StepContext<'_>) -> anyhow::Result<StepReport> {
+    fn step(&self, _: &StepContext<'_>) -> anyhow::Result<StepReport> {
         self.calls.set(self.calls.get() + 1);
-        if self.calls.get() > 1 {
-            return Err(anyhow!("no further step"));
-        }
-        let script = context.tree.join("tests/case.sh");
-        fs::create_dir_all(script.parent().expect("a parent"))?;
-        fs::write(
-            &script,
-            format!(
-                "#!/bin/sh\nset -e\ncp -r .engineering/cases ../seen\ngit rev-parse HEAD > ../refs\ngit for-each-ref --format='%(refname) %(objectname)' >> ../refs\n{}\n",
-                self.body
-            ),
-        )?;
-        Ok(StepReport {
-            action: "implementation.edit".to_owned(),
-            summary: "edited".to_owned(),
-            tokens: None,
-        })
+        Err(anyhow!(
+            "no judgement step is expected before the observation"
+        ))
     }
 }
 
@@ -374,41 +345,51 @@ impl Harness for WritesTest {
 fn a_test_command_that_replaces_the_cases_directory_with_a_link_is_undone() {
     for (n, link) in LINKS.into_iter().enumerate() {
         let id = format!("validator-{n}");
-        let scratch = repository(
-            &id,
-            &[(
-                "tests/run.sh",
-                "#!/bin/sh\nexec sh \"$(dirname \"$0\")/case.sh\" \"$@\"\n",
-            )],
-        );
-        let (stop, text) = observe(&scratch, &id, WritesTest::swapping(link));
+        let scratch = repository_with_test(&id, &swap(link), &[]);
+        let (stop, text) = observe(&scratch, &id);
         let text = format!("{link}\n{text}");
         let seen = files(&scratch.0.join("seen"));
         assert_undone(&scratch, &stop, &seen, &refs_seen(&scratch, &text), &text);
     }
 }
 
-/// A committed repository whose test command runs `tests/case.sh`, which the harness writes.
-fn repository_with_test(name: &str, files: &[(&str, &str)]) -> Scratch {
-    let mut all = vec![(
-        "tests/run.sh",
-        "#!/bin/sh\nexec sh \"$(dirname \"$0\")/case.sh\" \"$@\"\n",
-    )];
+/// A committed repository with `files` whose test command, `sh tests/run.sh`, runs
+/// `tests/case.sh`: it copies the cases directory to `../seen` and the refs to `../refs` as it
+/// finds them, then runs `body`. Both scripts are committed before the case opens: the scripts
+/// the test command runs are on the judge surface, so no step may write them.
+fn repository_with_test(name: &str, body: &str, files: &[(&str, &str)]) -> Scratch {
+    let case = format!(
+        "#!/bin/sh\nset -e\ncp -r .engineering/cases ../seen\ngit rev-parse HEAD > ../refs\ngit for-each-ref --format='%(refname) %(objectname)' >> ../refs\n{body}\n"
+    );
+    let mut all = vec![
+        (
+            "tests/run.sh",
+            "#!/bin/sh\nexec sh \"$(dirname \"$0\")/case.sh\" \"$@\"\n",
+        ),
+        ("tests/case.sh", case.as_str()),
+    ];
     all.extend_from_slice(files);
     repository(name, &all)
 }
 
-/// The run of the case `id` in `scratch` with `harness`, whose test command is `sh tests/run.sh`;
-/// its stop and its output.
-fn observe(scratch: &Scratch, id: &str, harness: WritesTest) -> (anyhow::Result<Stop>, String) {
+/// The run of the case `id` in `scratch`, whose test command is `sh tests/run.sh`; its stop and
+/// its output. The observation is its first step: a judgement step asked for fails the test.
+fn observe(scratch: &Scratch, id: &str) -> (anyhow::Result<Stop>, String) {
     let validators: Vec<Box<dyn Validator>> = vec![Box::new(
         TestsRun::new("sh tests/run.sh").expect("a command"),
     )];
+    let harness = NoStep::default();
     let mut run =
         Run::open(&scratch.tree(), options(id, 8), &harness, &validators).expect("the case opens");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
+    drop(run);
     let text = format!("{stop:?}\n{}", String::from_utf8_lossy(&out));
+    assert_eq!(
+        harness.calls.get(),
+        0,
+        "a judgement step was asked for\n{text}"
+    );
     (stop, text)
 }
 
@@ -754,14 +735,14 @@ fn a_case_file_replaced_by_a_hard_link_is_not_written_through() {
 #[test]
 fn a_test_command_that_leaves_an_unreadable_case_file_is_still_reset() {
     let id = "unreadable";
-    let scratch = repository_with_test(id, &[]);
-    let (_, text) = observe(
-        &scratch,
+    let scratch = repository_with_test(
         id,
-        WritesTest::running(format!(
+        &format!(
             "{COMMITS}\necho z > .engineering/cases/{id}/secret && chmod 000 .engineering/cases/{id}/secret"
-        )),
+        ),
+        &[],
     );
+    let (_, text) = observe(&scratch, id);
     assert_eq!(refs(&scratch.tree()), refs_seen(&scratch, &text), "{text}");
 }
 
@@ -930,8 +911,9 @@ fn every_part_of_a_discarded_step_is_put_back_when_the_reset_fails() {
 #[test]
 fn every_part_of_a_discarded_observation_is_put_back_when_the_reset_fails() {
     let id = "every-part-observation";
-    let scratch = repository_with_test(id, &[("src/a", "a\n")]);
-    let (_, text) = observe(&scratch, id, WritesTest::running(writes_everywhere(id)));
+    let scratch = repository_with_test(id, &writes_everywhere(id), &[("src/a", "a\n")]);
+    let (_, text) = observe(&scratch, id);
+    refs_seen(&scratch, &text);
     assert_every_part_put_back(&scratch, id, &text);
 }
 
@@ -941,14 +923,14 @@ fn every_part_of_a_discarded_observation_is_put_back_when_the_reset_fails() {
 #[test]
 fn an_observation_whose_judge_surface_cannot_be_read_is_undone_whole() {
     let id = "surface-unreadable";
-    let scratch = repository_with_test(id, &[]);
-    let (_, text) = observe(
-        &scratch,
+    let scratch = repository_with_test(
         id,
-        WritesTest::running(format!(
+        &format!(
             "{COMMITS}\necho forged > .engineering/cases/{id}/authority.yaml\nmkdir -p ../.cargo && echo '[build]' > ../.cargo/config.toml\nmkdir -p .github && echo z > .github/secret && chmod 000 .github/secret"
-        )),
+        ),
+        &[],
     );
+    let (_, text) = observe(&scratch, id);
     let tree = scratch.tree();
     assert_eq!(refs(&tree), refs_seen(&scratch, &text), "{text}");
     assert!(
