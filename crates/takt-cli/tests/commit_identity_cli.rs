@@ -350,6 +350,56 @@ fn a_resume_commits_with_the_identity_the_case_was_opened_with() {
     world.all_by(given, 2, &said);
 }
 
+/// A case opened with no identity under `--forge none` commits as takt's own; once the
+/// repository has an `origin` on github.com, a run that would resume it through the bot route,
+/// by `--case` or as the open case the frontier resumes, is refused before it resumes: exit 1,
+/// nothing committed, the bot route and `gh` never called, and the refusal says how to get past
+/// the case: finish it with `--forge none`, or drop its branch and its directory.
+#[test]
+fn a_case_opened_with_no_identity_is_not_resumed_through_the_bot_route() {
+    let world = world("resume-pushing", None);
+    let (_, out, err) = world.run(&[
+        "--harness",
+        "none",
+        "--forge",
+        "none",
+        "--iterations",
+        "0",
+        "--case-id",
+        "local",
+    ]);
+    let said = format!("stdout {out} stderr {err}");
+    assert!(out.contains("frontier: took story:ready-one"), "{said}");
+    world.all_by("takt <takt@localhost>", 1, &said);
+    git(
+        &world.repo,
+        &["remote", "add", "origin", "git@github.com:owner/repo.git"],
+    );
+    let head = git(&world.repo, &["rev-parse", "HEAD"]);
+    for by_case in [true, false] {
+        let mut args = vec!["--harness", "claude", "--iterations", "3"];
+        if by_case {
+            args.extend(["--case", "local"]);
+        }
+        let (code, out, err) = world.run(&args);
+        let said = format!("--case given: {by_case}: stdout {out} stderr {err}");
+        assert_eq!(code, 1, "{said}");
+        for named in [
+            "the case local was opened with none",
+            "--forge none",
+            ".engineering/cases/local",
+            "branch -D takt/local",
+            IDENTITY_FILE,
+            "--commit-identity",
+        ] {
+            assert!(err.contains(named), "{named}: {said}");
+        }
+        assert_eq!(git(&world.repo, &["rev-parse", "HEAD"]), head, "{said}");
+        assert!(!world.repo.join("work.txt").exists(), "{said}");
+        assert_eq!(world.route_calls(), "", "{said}");
+    }
+}
+
 /// Acceptance 2, where commits leave the machine: with no identity configured, a run whose
 /// forge is the bot route (by default for an `origin` on github.com) is refused before its case
 /// opens, naming the file, its keys and the flag: no case directory, no case branch, no commit,

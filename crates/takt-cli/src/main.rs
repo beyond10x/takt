@@ -1829,9 +1829,21 @@ fn refuse_identity_for_resume(
         ));
     }
     if recorded.is_none() && pushes {
+        // No command closes or drops a case: the way past one is to finish it without pushing,
+        // or to remove its branch and its directory, after which no run finds it and its story
+        // is taken again, the take having been committed on that branch only.
+        let dir = repo.join(takt::case::CASES_DIR).join(id);
+        let base = takt::case::Branch::read(&dir)
+            .ok()
+            .and_then(|branch| branch.base)
+            .unwrap_or_else(|| "its base branch".to_owned());
+        let branch = takt::case::Branch::name_of(id);
         return Err(anyhow!(
-            "no commit identity: the case {id} was opened with none, so its commits are {}, and this run's commits leave the machine (the bot route); a case pushes only under the identity it opened with: open a new one with {} giving `identity.name` and `identity.email` at its base, or with --commit-identity '<name> <email>'; nothing was resumed",
+            "no commit identity: the case {id} was opened with none, so its commits are {}, and this run's commits leave the machine (the bot route); a case pushes only under the identity it was opened with. Finish it without pushing (`takt run --case {id} --forge none`), or drop it: `git -C {} checkout {base}`, `git -C {} branch -D {branch}` and remove {}; the next run then takes its story again under {} (`identity.name`, `identity.email`) at the base, or under --commit-identity '<name> <email>'; nothing was resumed",
             takt::git::CommitIdentity::takt(),
+            repo.display(),
+            repo.display(),
+            dir.display(),
             takt::git::COMMIT_IDENTITY_FILE
         ));
     }

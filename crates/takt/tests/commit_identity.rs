@@ -495,6 +495,79 @@ fn a_library_run_given_no_identity_commits_as_takt_on_both_sides() {
     all_by(&repo, &format!("{start}..HEAD"), "takt <takt@localhost>", 1);
 }
 
+/// A key takt does not read in `.engineering/commit-identity.conf` is refused, naming it,
+/// whether it sits in `[identity]` or in another section (`[user]`, which git's own
+/// configuration would read as the operator's identity): the file is never read past it.
+#[test]
+fn an_unknown_key_in_the_identity_file_is_refused_in_any_section() {
+    let repo = repository("unknown-key", None);
+    for (section, key) in [
+        ("[user]\n\temail = other@example.invalid\n", "user.email"),
+        ("[core]\n\teditor = vi\n", "core.editor"),
+        ("[identity]\n\tsigningkey = x\n", "identity.signingkey"),
+    ] {
+        fs::write(
+            repo.join(COMMIT_IDENTITY_FILE),
+            format!("{}{section}", identity_file(BOT.0, BOT.1)),
+        )
+        .expect("a file");
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "configure"]);
+        let error = format!(
+            "{:#}",
+            configured_identity(&repo, "HEAD").expect_err(section)
+        );
+        assert!(error.contains(COMMIT_IDENTITY_FILE), "{error}");
+        assert!(error.contains(&format!("`{key}`")), "{key} in: {error}");
+        assert!(error.contains("takt does not read"), "{error}");
+    }
+}
+
+/// A case's identity record (`<case>/commit-identity`) that does not read as an identity is
+/// an error wherever it is read, never taken as none: the case is not resumed, so nothing of it
+/// is committed as takt's own identity in its place.
+#[test]
+fn a_malformed_identity_record_in_a_case_is_refused_not_read_as_none() {
+    let repo = repository("malformed-record", None);
+    let given = CommitIdentity::parse("Release Bot <release@example.invalid>").expect("parses");
+    let memory = double();
+    let forge: Rc<dyn Forge> = memory;
+    let validators = validators(forge);
+    let mut out = Vec::new();
+    let taken = Run::take_next_as(
+        &repo,
+        options(1),
+        &Aep::default(),
+        &CommitAs::Given(given),
+        &Editor,
+        &validators,
+        &mut out,
+    )
+    .expect("the frontier answers")
+    .expect("story:ready-one is taken");
+    let id = taken.case.id.clone();
+    drop(taken);
+    let dir = repo.join(CASES_DIR).join(&id);
+    let record = dir.join(takt::case::COMMIT_IDENTITY_RECORD);
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    for text in [
+        "not an identity\n",
+        "\n",
+        "Release Bot <release@example.invalid\n",
+    ] {
+        fs::write(&record, text).expect("the record is overwritten");
+        let error = format!(
+            "{:#}",
+            takt::case::commit_identity_of(&dir).expect_err(text)
+        );
+        assert!(error.contains(&record.display().to_string()), "{error}");
+        let resumed = Run::resume(&repo, options(1), &id, &Editor, &validators);
+        let error = format!("{:#}", resumed.err().expect("the case is not resumed"));
+        assert!(error.contains(&record.display().to_string()), "{error}");
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head, "{text:?}");
+    }
+}
+
 /// The file is read at a revision, without a checkout: the identity it names there, none where
 /// it is absent, and a refusal naming what is wrong with one that gives a key twice, misses
 /// one, gives one takt does not read, or names no identity git would record.
