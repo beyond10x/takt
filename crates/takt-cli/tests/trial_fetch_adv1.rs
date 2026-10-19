@@ -109,7 +109,10 @@ fn world(name: &str) -> World {
     let state = outer.join("forge");
     fs::create_dir_all(&state).expect("a state directory");
     let remote = outer.join("remote.git");
-    git(&outer, &["init", "-q", "--bare", "remote.git"]);
+    git(
+        &outer,
+        &["init", "-q", "-b", "main", "--bare", "remote.git"],
+    );
     doubles(&bin, &state, &remote);
     World {
         _scratch: Scratch(outer),

@@ -119,7 +119,10 @@ fn world(name: &str) -> World {
         &["remote", "add", "origin", "git@github.com:owner/repo.git"],
     );
     let remote = outer.join("remote.git");
-    git(&outer, &["init", "-q", "--bare", "remote.git"]);
+    git(
+        &outer,
+        &["init", "-q", "-b", "main", "--bare", "remote.git"],
+    );
     let bin = outer.join("stub-bin");
     let state = outer.join("forge");
     fs::create_dir_all(&state).expect("a state directory");

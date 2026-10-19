@@ -357,7 +357,14 @@ impl World {
         let origin = outer.join("origin.git");
         git(
             &outer,
-            &["init", "-q", "--bare", origin.to_str().expect("utf-8")],
+            &[
+                "init",
+                "-q",
+                "-b",
+                "main",
+                "--bare",
+                origin.to_str().expect("utf-8"),
+            ],
         );
         git(
             &repo,
