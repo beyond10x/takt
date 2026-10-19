@@ -8,7 +8,7 @@ summary: 'spec-first TUI: views and an ess-http/1 binding, an ess-ui/1 document,
 relations:
 - serves: vision:safe-agentic-coding
 - derived_from: product-requirements:takt
-revision: 6
+revision: 7
 ---
 # Epic: terminal-frontend
 
@@ -48,8 +48,8 @@ On a repository with recorded cases:
 
 - `takt tui --repo <path> --screen-once 120x40` prints the case list naming a recorded case (story:takt-tui-crate);
 - `ess ui test --path ess/ui/takt.ui.yaml ess/ui/tests/*.yaml` passes, with tests that open a case's detail page (its claims, actions and outcomes from its latest decision, and its run events) and the approvals page (a case at `ApprovalRequired` with its `takt approve` line) (story:tui-ui-document);
-- `cargo test -p b10x-takt-serve --test views` passes: `takt serve` over the fixture repository answers every route of `ess/http/takt.http.yaml` with a body byte-equal to the committed fixture the UI tests read, so the pages tested on fixtures are the pages served (story:takt-serve-read-only);
-- `takt serve` answers 405 to every non-GET request and 404 to an undeclared path, with the repository's tree digest unchanged.
+- `cargo test -p b10x-takt-cli --test serve_views` passes: `takt serve` over the fixture repository answers every route of `ess/http/takt.http.yaml` with a body equal, after key-sorted canonical encoding, to its committed expected body, 405 to every non-GET request and 404 to an undeclared path, with the repository's tree digest unchanged (story:takt-serve-read-only);
+- `cargo test -p b10x-takt-cli --test tui_served_equals_tested` passes: the data served for each view equals, as parsed values, the data the UI tests read (story:takt-tui-crate).
 
 `ess verify conform` has no HTTP target in ESS 0.60.0 (`ess verify conform run --target` takes `billing`, `oracle-fixture`, `interpreted`); when an ESS release takt pins ships one, a story adds it.
 
