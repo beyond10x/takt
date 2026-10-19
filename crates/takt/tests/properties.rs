@@ -9,13 +9,14 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use proptest::prelude::*;
-use proptest::test_runner::RngSeed;
+use proptest::test_runner::{RngAlgorithm, RngSeed};
 use takt::case::{CASES_DIR, check_id};
 use takt::events::{EVENTS_FILE, Event, Events};
 use takt::harness::ClaudeCode;
 use takt::scorecard::{FORMAT, METRICS, Row, Rule, Scorecard, rank};
 
-/// The seed every property runs with.
+/// The seed every property runs with, under ChaCha, pinned so a proptest upgrade that changes
+/// its default generator does not change the cases.
 const SEED: u64 = 0x7a6b_7400_0013;
 /// The cases each property runs.
 const CASES: u32 = 1024;
@@ -23,6 +24,7 @@ const CASES: u32 = 1024;
 fn config() -> ProptestConfig {
     ProptestConfig {
         cases: CASES,
+        rng_algorithm: RngAlgorithm::ChaCha,
         rng_seed: RngSeed::Fixed(SEED),
         ..ProptestConfig::default()
     }
@@ -281,6 +283,13 @@ proptest! {
         let ended = bytes[..cut].iter().filter(|byte| **byte == b'\n').count();
         prop_assert!(read.len() >= ended && read.len() <= full.len());
         prop_assert_eq!(&read[..], &full[..read.len()]);
+        // Cut just before a line's end, the unended last line is whole and reads; cut at a
+        // line's end, nothing follows the ended lines.
+        if cut > 0 && cut < bytes.len() && bytes[cut] == b'\n' && bytes[cut - 1] != b'\n' {
+            prop_assert_eq!(read.len(), ended + 1, "cut at {} before a line's end", cut);
+        } else if cut == 0 || bytes[cut - 1] == b'\n' {
+            prop_assert_eq!(read.len(), ended, "cut at {} on a line's end", cut);
+        }
     }
 
     /// A record cut inside a multi-byte character reads as the lines before it
