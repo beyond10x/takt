@@ -974,67 +974,114 @@ fn a_runner_shadowed_under_any_program_is_refused() {
     assert!(missed.is_empty(), "not refused: {missed:#?}");
 }
 
-/// Whether `python3` here imports `module` from outside any tree.
-fn installed(module: &str) -> bool {
-    Command::new("python3")
-        .args([
-            "-I",
-            "-c",
-            "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec(sys.argv[1]) else 1)",
-            module,
-        ])
-        .current_dir(env!("CARGO_TARGET_TMPDIR"))
-        .status()
-        .is_ok_and(|status| status.success())
+/// A virtual environment outside any tree, made `--without-pip` from this machine's `python3`,
+/// whose `site-packages` holds a `.pth` that imports `venvhook` at start-up and an empty
+/// `venvhook.py`: the hermetic stand-in for setuptools' `_distutils_hack` and its kin, the same
+/// on every runner. Removed when dropped.
+struct Venv {
+    root: PathBuf,
 }
 
-/// Expected before: a module no fixed list names but the Python imports from outside the tree
-/// (setuptools' `_distutils_hack`, which its `.pth` imports at start-up; `coverage` under
-/// `coverage run`; `iniconfig` under pytest) added beside the script replaced it and earned
-/// pass. The case asks the test command's Python for its names when it opens and keeps them;
-/// the step is refused and put back, and the refusal says which Python the names came from. A
-/// module this machine's `python3` does not have is no route here and is passed over.
-#[test]
-fn a_module_the_python_imports_from_outside_the_tree_is_refused() {
-    let mut missed = Vec::new();
-    let mut tried = 0;
-    for (module, line) in [
-        (
-            "_distutils_hack",
-            "PYTHONPATH=. python3 -m unittest discover -s tests -v",
-        ),
-        ("coverage", "coverage run -m unittest discover -s tests"),
-        ("iniconfig", "python3 -m pytest -q"),
-    ] {
-        if !installed(module) {
-            continue;
-        }
-        tried += 1;
-        let path = format!("{module}.py");
-        let check = format!("#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\n{line}\n");
-        let tree = repository(
-            "outside-names",
-            &[
-                (".gitignore", "target/\n__pycache__/\n.coverage\n", false),
-                ("check.sh", &check, true),
-                ("todo.py", CODE, false),
-                ("tests/test_todo.py", TEST, false),
-            ],
+impl Venv {
+    fn new(name: &str) -> Self {
+        let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("script-imports-venv-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let made = Command::new("python3")
+            .args(["-m", "venv", "--without-pip"])
+            .arg(&root)
+            .output()
+            .expect("python3 runs");
+        assert!(
+            made.status.success(),
+            "python3 -m venv --without-pip makes the fixture: {}",
+            String::from_utf8_lossy(&made.stderr)
         );
-        let ran = run(&tree, "./check.sh", &path, EXITS_0);
+        let site = Command::new(root.join("bin/python"))
+            .args([
+                "-I",
+                "-c",
+                "import sysconfig; print(sysconfig.get_paths()['purelib'])",
+            ])
+            .output()
+            .expect("the venv's python runs");
+        let site = PathBuf::from(String::from_utf8_lossy(&site.stdout).trim());
+        fs::write(site.join("venvhook.pth"), "import venvhook\n").expect("the .pth");
+        fs::write(site.join("venvhook.py"), "").expect("the module");
+        Self { root }
+    }
+
+    /// The venv's `bin` directory.
+    fn bin(&self) -> String {
+        self.root.join("bin").display().to_string()
+    }
+}
+
+impl Drop for Venv {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// Expected before: the test command's script runs an outside virtual environment's Python
+/// (put on `PATH` by an export, by sourcing its `activate`, or named by a tree script's `#!`),
+/// whose `.pth` imports `venvhook` at start-up; the case asked takt's own `python3` instead, so
+/// a step adding `venvhook.py` (exit 0) at the root, which `PYTHONPATH=.` puts first, earned
+/// pass with the failing test in HEAD. Now the case asks the interpreter the script runs: an
+/// export and a `#!` are followed and `venvhook` is a name it imports; a sourced file outside the
+/// tree cannot be followed and fails closed. Each step is refused and put back. The fixture is
+/// made here on every runner; nothing is skipped.
+#[test]
+fn the_interpreter_the_script_runs_is_the_one_asked() {
+    let mut missed = Vec::new();
+    for variant in ["venvpath", "venvhook", "venvshebang"] {
+        let venv = Venv::new(variant);
+        let bin = venv.bin();
+        let activate = format!("{bin}/activate");
+        let mut files: Vec<(String, String, bool)> = vec![
+            ("todo.py".to_owned(), CODE.to_owned(), false),
+            ("tests/test_todo.py".to_owned(), TEST.to_owned(), false),
+        ];
+        let check = match variant {
+            "venvpath" => format!(
+                "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\nexport PATH=\"{bin}:$PATH\"\nPYTHONPATH=. python -m unittest discover -s tests -v\n"
+            ),
+            "venvhook" => format!(
+                "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\n. \"{activate}\"\nPYTHONPATH=. python -m unittest discover -s tests -v\n"
+            ),
+            _ => {
+                files.push((
+                    "run_tests.py".to_owned(),
+                    format!(
+                        "#!{bin}/python\nimport sys, unittest\nr = unittest.main(module=None, argv=[\"x\", \"discover\", \"-s\", \"tests\", \"-v\"], exit=False)\nsys.exit(0 if r.result.wasSuccessful() else 1)\n"
+                    ),
+                    true,
+                ));
+                "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\nPYTHONPATH=. ./run_tests.py\n"
+                    .to_owned()
+            }
+        };
+        files.push(("check.sh".to_owned(), check, true));
+        let borrowed: Vec<(&str, &str, bool)> = files
+            .iter()
+            .map(|(path, text, executable)| (path.as_str(), text.as_str(), *executable))
+            .collect();
+        let tree = repository(variant, &borrowed);
+        let ran = run(&tree, "./check.sh", "venvhook.py", EXITS_0);
+        // The refusal names the path, and for the sourced `activate`, why it fails closed.
         let refused = matches!(&ran.stop, Ok(Stop::StepRefused(why))
-            if why.contains(&path) && why.contains("python"));
+            if why.contains("venvhook.py")
+                && (variant != "venvhook" || why.contains(&format!("sources {activate}"))));
         if !refused || ran.passes() > 0 {
             missed.push(format!(
-                "{path} under {line:?}: {} pass, stop {:?}",
+                "{variant}: {} pass, stop {:?}",
                 ran.passes(),
                 ran.stop.as_ref().map_err(ToString::to_string)
             ));
             continue;
         }
-        assert_refused_and_put_back(&tree, &ran, &path);
+        assert_refused_and_put_back(&tree, &ran, "venvhook.py");
     }
-    eprintln!("{tried} of 3 modules installed here");
     assert!(missed.is_empty(), "not refused: {missed:#?}");
 }
 
@@ -1091,8 +1138,11 @@ fn outside_path_variant(variant: &str, path_dirs: &[&str], make: &[&str]) -> Opt
 /// Expected before: a step wrote a `python3` that exits 0 into a directory on the `PATH` the
 /// test command inherits, outside the tree (`~/.local/bin`, `~/.cargo/bin`), and `tests.run`
 /// passed; cargo finds a subcommand in `~/.cargo/bin` off `PATH` too. Each such directory the
-/// user can write is snapshotted around the step: the step is refused and what it made
-/// removed, a directory it made among it (`~/.local/bin` absent at the step's start).
+/// user can write is snapshotted around the step: the run stops, naming the program, and takt
+/// leaves it exactly as it is (it never deletes or rewrites a file outside the tree but the
+/// named config files), a directory the step made among it (`~/.local/bin` absent at the step's
+/// start). Another session's install there during the step (`newtool`) stops the run the same
+/// way and is never deleted.
 #[test]
 fn a_program_written_to_a_directory_on_path_outside_the_tree_is_refused() {
     let failed: Vec<String> = [
@@ -1100,6 +1150,7 @@ fn a_program_written_to_a_directory_on_path_outside_the_tree_is_refused() {
         outside_path_variant("pathbin", &[".cargo/bin"], &[".cargo/bin"]),
         outside_path_variant("cargobin", &[], &[".cargo/bin"]),
         outside_path_variant("absent", &[".local/bin"], &[]),
+        outside_path_variant("concurrent", &[".local/bin"], &[".local/bin"]),
     ]
     .into_iter()
     .flatten()
@@ -1126,17 +1177,20 @@ fn the_outside_path_run() {
         "pathbin" => (home.join(".cargo/bin/python3"), None),
         "cargobin" => (home.join(".cargo/bin/cargo-forge"), None),
         "absent" => (home.join(".local/bin/python3"), Some(home.join(".local"))),
+        "concurrent" => (home.join(".local/bin/newtool"), None),
         other => panic!("no variant {other}"),
+    };
+    let program_text = if variant == "concurrent" {
+        "#!/bin/sh\necho other-session\n"
+    } else {
+        "#!/bin/sh\necho OK\nexit 0\n"
     };
     let tree = scenario(&variant, SCENARIO_CHECK);
     let ran = run_writing(
         &tree,
         "./check.sh",
         &[
-            (
-                program.to_str().expect("a UTF-8 path"),
-                "#!/bin/sh\necho OK\nexit 0\n",
-            ),
+            (program.to_str().expect("a UTF-8 path"), program_text),
             ("todo.py", "def answer():\n    return 1\n"),
         ],
     );
@@ -1149,22 +1203,71 @@ fn the_outside_path_run() {
         ran.text
     );
     let why = ran.refusal();
-    let named = made.as_ref().unwrap_or(&program);
     assert!(
-        why.contains(&named.display().to_string()),
+        why.contains(&program.display().to_string()),
         "{variant}: the refusal names {}: {why}",
-        named.display()
+        program.display()
     );
+    // takt never deletes or rewrites a file outside the tree but the named config files: the
+    // program, and a directory the step made, are left exactly as they are.
     assert!(
-        !program.exists(),
-        "{variant}: {} is left after the refusal",
+        program.exists(),
+        "{variant}: takt removed {} outside the tree",
         program.display()
     );
     if let Some(made) = made {
         assert!(
-            !made.exists(),
-            "{variant}: {} the step made is left",
+            made.exists(),
+            "{variant}: takt removed {} the step made outside the tree",
             made.display()
         );
     }
+}
+
+/// Expected before: the test command's script exports a directory outside the tree onto `PATH`
+/// (`export PATH="/abs/xbin:$PATH"`); a step wrote a `python3` that exits 0 there, which the
+/// script then ran in place of Python, and `tests.run` passed. The guard reads that export:
+/// the directory is snapshotted beside the rest of what takt reads outside the tree, the run
+/// stops naming the program, and takt leaves it as it is.
+#[test]
+fn a_program_in_an_outside_directory_the_script_exports_onto_path_is_refused() {
+    let xbin = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("script-imports-xbin-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&xbin);
+    fs::create_dir_all(&xbin).expect("xbin");
+    let check = format!(
+        "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\nexport PATH=\"{}:$PATH\"\nPYTHONPATH=. python3 -m unittest discover -s tests -v\n",
+        xbin.display()
+    );
+    let tree = scenario("scriptpath", &check);
+    let planted = xbin.join("python3");
+    let ran = run_writing(
+        &tree,
+        "./check.sh",
+        &[
+            (
+                planted.to_str().expect("a UTF-8 path"),
+                "#!/bin/sh\necho OK\nexit 0\n",
+            ),
+            ("todo.py", "def answer():\n    return 1\n"),
+        ],
+    );
+    let passes = ran.passes();
+    let stop = ran.stop.as_ref().map_err(ToString::to_string).cloned();
+    let left = planted.exists();
+    let _ = fs::remove_dir_all(&xbin);
+    assert_eq!(
+        passes,
+        0,
+        "{} earned `tests.run` pass; stop {stop:?}\n{}",
+        planted.display(),
+        ran.text
+    );
+    let why = ran.refusal();
+    assert!(
+        why.contains(&planted.display().to_string()),
+        "the refusal names {}: {why}",
+        planted.display()
+    );
+    assert!(left, "takt removed {} outside the tree", planted.display());
 }
