@@ -2000,6 +2000,109 @@ fn the_install_root_is_recorded_canonical_and_fixed() {
     assert!(err.contains("--install-root"), "{err}");
 }
 
+/// story:self-improvement-protocol, as trial 4 met it: a resume given `--install-root` naming the
+/// root the turn recorded, by a path whose canonical form is that root (here a link), is
+/// resumed like a resume given none; one naming another root that exists is refused before
+/// any step, naming both roots, and the recorded root is left as it was. A turn that recorded
+/// no root, and a case that is no turn, refuse `--install-root` as before.
+#[test]
+fn a_resume_given_the_recorded_install_root_resumes_and_another_is_refused_naming_both() {
+    let world = world("root-resume", true, false);
+    let dir = world.repo.parent().expect("a parent").to_path_buf();
+    let args = opening_with_root(&world, world.install.to_str().expect("utf-8"));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (code, out, err) = takt_plain(&world, &args);
+    assert_eq!(code, 4, "{out}\n{err}");
+    let recorded_file = world.repo.join(".engineering/cases/turn-1/install-root");
+    let recorded = fs::read_to_string(&recorded_file).expect("the recorded install root");
+    let canonical = fs::canonicalize(&world.install).expect("the install root");
+    let link = dir.join("install-link");
+    std::os::unix::fs::symlink(&world.install, &link).expect("the link");
+    let resume = |root: &Path| {
+        takt_plain(
+            &world,
+            &[
+                "run",
+                "--case",
+                "turn-1",
+                "--repo",
+                world.repo.to_str().expect("utf-8"),
+                "--harness",
+                "none",
+                "--forge",
+                "none",
+                "--test-cmd",
+                "true",
+                "--scenarios",
+                world.scenarios.to_str().expect("utf-8"),
+                "--install-root",
+                root.to_str().expect("utf-8"),
+            ],
+        )
+    };
+
+    let (code, out, err) = resume(&link);
+    assert_eq!(
+        code, 4,
+        "the recorded root, given again, was refused: {out}\n{err}"
+    );
+    assert!(out.contains("stopped: "), "{out}\n{err}");
+    assert!(!err.contains("--install-root"), "{err}");
+
+    let other = dir.join("decoy-install");
+    let (code, out, err) = resume(&other);
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert!(err.contains("--install-root"), "{err}");
+    assert!(err.contains(other.to_str().expect("utf-8")), "{err}");
+    assert!(err.contains(canonical.to_str().expect("utf-8")), "{err}");
+    assert!(!out.contains("stopped: "), "a step was taken: {out}\n{err}");
+    assert_eq!(
+        fs::read_to_string(&recorded_file).expect("the recorded install root"),
+        recorded
+    );
+
+    fs::remove_file(&recorded_file).expect("the recorded root removed");
+    let (code, out, err) = resume(&link);
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert!(err.contains("--install-root"), "{err}");
+    assert!(!out.contains("stopped: "), "a step was taken: {out}\n{err}");
+
+    let plain = dir.join("plain");
+    fs::create_dir_all(&plain).expect("a directory");
+    fs::write(plain.join("Cargo.toml"), "[package]\nname = \"plain\"\n").expect("a file");
+    git(&plain, &["init", "-q", "-b", "main"]);
+    git(&plain, &["add", "-A"]);
+    git(&plain, &["commit", "-q", "-m", "plain"]);
+    let plain_run = |extra: &[&str]| {
+        let mut args = vec![
+            "run",
+            "--repo",
+            plain.to_str().expect("utf-8"),
+            "--harness",
+            "none",
+            "--forge",
+            "none",
+            "--test-cmd",
+            "true",
+            "--iterations",
+            "1",
+        ];
+        args.extend_from_slice(extra);
+        takt_plain(&world, &args)
+    };
+    let (_, out, err) = plain_run(&["--intent", "a plain change", "--case-id", "plain-1"]);
+    assert!(out.contains("stopped: "), "{out}\n{err}");
+    let (code, out, err) = plain_run(&[
+        "--case",
+        "plain-1",
+        "--install-root",
+        canonical.to_str().expect("utf-8"),
+    ]);
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert!(err.contains("--install-root"), "{err}");
+    assert!(!out.contains("stopped: "), "a step was taken: {out}\n{err}");
+}
+
 /// An install root that does not exist opens no turn: refused before anything is written,
 /// naming it.
 #[test]

@@ -892,3 +892,152 @@ fn a_seed_whose_story_waits_on_a_dependency_is_refused_before_the_push() {
     assert!(git_out(&world.remote, &["for-each-ref"]).is_empty());
     assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
 }
+
+/// The revision of takt the five runs below are saved under: their `opened` lines are made to
+/// name it, as a clean build of one revision would write them, so the save's binary check
+/// holds whether or not the build under test is `-dirty`. Which binary made the runs is not
+/// what the case below is about.
+const SAVED_UNDER: &str = "0123456789abcdef0123456789abcdef01234567";
+
+/// `events` with every `opened` line's `binary` naming `revision`.
+fn opened_by(events: &str, revision: &str) -> String {
+    let key = "\"binary\":\"";
+    events
+        .lines()
+        .map(|line| {
+            let Some(at) = line
+                .contains("\"event\":\"opened\"")
+                .then(|| line.find(key))
+                .flatten()
+            else {
+                return format!("{line}\n");
+            };
+            let value = at + key.len();
+            let end = value + line[value..].find('"').expect("the binary's closing quote");
+            format!("{}{revision}{}\n", &line[..value], &line[end..])
+        })
+        .collect()
+}
+
+/// story:trial-numbers-are-unique-across-checkouts: five scenario runs, each from its own fresh
+/// clone of one origin and without the bot route (the origin is a path, no forge), get five
+/// distinct trial numbers, all digits, and five distinct case ids; gathered into one
+/// repository, `takt scorecard --save` takes all five cases.
+#[test]
+fn five_runs_from_five_fresh_clones_get_five_trial_numbers_and_one_scorecard_takes_all() {
+    let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("scenario-run-{}-five-clones", std::process::id()));
+    if outer.exists() {
+        fs::remove_dir_all(&outer).expect("a stale scratch tree is removed");
+    }
+    let scratch = Scratch(outer);
+    let source = scratch.0.join("source");
+    copy_dir(&Path::new(FIXTURES).join("one-ready"), &source);
+    fs::write(source.join("Cargo.toml"), "[package]\nname = \"scratch\"\n").expect("a file");
+    fs::write(source.join(".engineering/gates.yaml"), GATES).expect("a file");
+    git(&source, &["init", "-q", "-b", "main"]);
+    git(&source, &["add", "-A"]);
+    git(&source, &["commit", "-q", "-m", "seed"]);
+    let seed = git_out(&source, &["rev-parse", "HEAD"]);
+    declare(
+        &source,
+        &format!("[scenario \"1\"]\n\tstory = story:ready-one\n\tseed = {seed}\n"),
+    );
+    git(
+        &scratch.0,
+        &["init", "-q", "-b", "main", "--bare", "origin.git"],
+    );
+    git(&source, &["push", "-q", "../origin.git", "main"]);
+
+    let mut trials: Vec<String> = Vec::new();
+    let mut cases: Vec<PathBuf> = Vec::new();
+    for k in 1..=5 {
+        let name = format!("clone-{k}");
+        git(&scratch.0, &["clone", "-q", "origin.git", &name]);
+        let clone = scratch.0.join(&name);
+        let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+            .args(["scenario", "run", "--repo"])
+            .arg(&clone)
+            .args([
+                "1",
+                "--harness",
+                "none",
+                "--iterations",
+                "1",
+                "--test-cmd",
+                "true",
+            ])
+            .env_remove("B10X_GATES_POLICY")
+            .output()
+            .expect("takt runs");
+        let out = String::from_utf8_lossy(&output.stdout);
+        let err = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            out.contains("not pushed: no forge"),
+            "{name}: exit {:?}, stdout {out} stderr {err}",
+            output.status.code()
+        );
+        let trial = out
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("scenario 1: story:ready-one proposed on trial/")?
+                    .split_once(' ')
+                    .map(|(n, _)| n.to_owned())
+            })
+            .unwrap_or_else(|| panic!("{name} names its trial: stdout {out} stderr {err}"));
+        assert!(
+            !trial.is_empty() && trial.bytes().all(|b| b.is_ascii_digit()),
+            "{name}: trial/{trial} is not all digits"
+        );
+        let case = clone
+            .join(".engineering/cases")
+            .join(format!("scenario-1-trial-{trial}"));
+        assert!(
+            case.join("events.jsonl").is_file(),
+            "{name}: no record at {}: stdout {out} stderr {err}",
+            case.display()
+        );
+        trials.push(trial);
+        cases.push(case);
+    }
+    let mut distinct = trials.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(
+        distinct.len(),
+        5,
+        "five fresh clones share a trial number: {trials:?}"
+    );
+
+    let scores = scratch.0.join("scores");
+    for case in &cases {
+        let id = case.file_name().expect("a case id");
+        let into = scores.join(".engineering/cases").join(id);
+        assert!(!into.exists(), "{} twice", into.display());
+        copy_dir(case, &into);
+        let events = fs::read_to_string(into.join("events.jsonl")).expect("the record");
+        fs::write(into.join("events.jsonl"), opened_by(&events, SAVED_UNDER)).expect("written");
+        fs::write(into.join("held-out.txt"), "PASS\n").expect("the held-out result");
+    }
+    let saves = scratch.0.join("saves");
+    fs::create_dir_all(&saves).expect("the saves directory");
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args(["scorecard", "--repo"])
+        .arg(&scores)
+        .arg("--save")
+        .arg(&saves)
+        .args(["--revision", SAVED_UNDER])
+        .output()
+        .expect("takt runs");
+    let out = String::from_utf8_lossy(&output.stdout);
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "stdout {out} stderr {err}");
+    let saved = fs::read_to_string(saves.join(format!("scorecard-{SAVED_UNDER}.json")))
+        .expect("the saved scorecard");
+    for trial in &trials {
+        assert!(
+            saved.contains(&format!("\"scenario-1-trial-{trial}\"")),
+            "the saved scorecard lacks trial {trial}: {saved}"
+        );
+    }
+}
