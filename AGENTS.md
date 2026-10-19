@@ -72,8 +72,8 @@ cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
   makes, held at the base revision (`design:recursive-self-improvement` § Roles). Until
   story:judge-guard lands, the record is the owner's decision recorded in the planning store
   (`product-requirements:takt` § 2), and a revocation is a later owner decision recorded there;
-  from story:judge-guard on, both are held in `.engineering/delegations.yaml`, read at the base
-  revision, which is itself a judge surface. story:judge-guard enforces it. Adding a path to that
+  from story:judge-guard on, both are held in `.engineering/delegations.yaml`, read at the merge
+  target's tip as the forge reports it, which is itself a judge surface. story:judge-guard enforces it. Adding a path to that
   list is itself a judge-surface change.
 - Four agent roles work on takt (`design:recursive-self-improvement` § Roles): the planner, the
   developer, the reviewer and the doc-writer. § Roles below says what each owns, what it never

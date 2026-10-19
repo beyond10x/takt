@@ -2107,3 +2107,64 @@ fn pr_open_sets_branch_yaml_right_when_its_name_was_rewritten() {
     );
     assert_eq!(calls.last().map(String::as_str), Some("view #1"));
 }
+
+/// A runner that answers the dry-run fetch with the porcelain line for `main` at `tip`.
+struct Fetching {
+    lines: RefCell<Vec<String>>,
+    tip: String,
+}
+
+impl Runner for Fetching {
+    fn run_env(&self, tree: &Path, argv: &[String], _: &[(&str, &str)]) -> anyhow::Result<Exit> {
+        self.run(tree, argv)
+    }
+
+    fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
+        self.lines.borrow_mut().push(argv.join(" "));
+        Ok(Exit {
+            code: Some(0),
+            stdout: format!(
+                "  {} {} refs/remotes/origin/main\n",
+                "0".repeat(40),
+                self.tip
+            ),
+            stderr: String::new(),
+        })
+    }
+}
+
+/// D7: the bot route reports the target's tip through its dry-run fetch of the base branch,
+/// writing nothing.
+#[test]
+fn the_bot_route_reports_the_target_tip_through_a_dry_run_fetch() {
+    let tree = scratch("bot-tip");
+    let tip = "a".repeat(40);
+    let runner = Rc::new(Fetching {
+        lines: RefCell::new(Vec::new()),
+        tip: tip.clone(),
+    });
+    struct Shared(Rc<Fetching>);
+    impl Runner for Shared {
+        fn run_env(
+            &self,
+            tree: &Path,
+            argv: &[String],
+            env: &[(&str, &str)],
+        ) -> anyhow::Result<Exit> {
+            self.0.run_env(tree, argv, env)
+        }
+        fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
+            self.0.run(tree, argv)
+        }
+    }
+    let forge = BotRoute::new("owner/repo", None, Box::new(Shared(runner.clone())));
+    let answered = forge.target_tip(&tree, "main").expect("a tip");
+    assert_eq!(answered, tip);
+    let lines = runner.lines.borrow();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("--dry-run"), "{lines:?}");
+    assert!(
+        lines[0].contains("refs/heads/main:refs/remotes/origin/main"),
+        "{lines:?}"
+    );
+}

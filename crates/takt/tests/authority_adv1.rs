@@ -136,7 +136,7 @@ fn adv1_a_run_resumed_before_another_moved_the_case_is_not_admitted_the_merge_at
     case.set_revision("implementation", &first)
         .expect("the revision moves");
     to_the_gate(&mut case, 1);
-    let approval = grant(&tree, "stale", "repository.merge", "operator").expect("granted");
+    let approval = grant(&tree, "stale", "repository.merge", "human:operator").expect("granted");
     assert_eq!(approval.revision, first);
     drop(case);
 

@@ -841,6 +841,10 @@ struct Scanning {
 }
 
 impl Forge for Scanning {
+    fn target_tip(&self, tree: &Path, base: &str) -> anyhow::Result<String> {
+        self.memory.target_tip(tree, base)
+    }
+
     fn name(&self) -> &str {
         "scanning"
     }

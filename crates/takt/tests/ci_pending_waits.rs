@@ -202,6 +202,10 @@ impl PendingFor {
 }
 
 impl Forge for PendingFor {
+    fn target_tip(&self, tree: &Path, base: &str) -> anyhow::Result<String> {
+        self.memory.target_tip(tree, base)
+    }
+
     /// Scans nothing: the double publishes nothing off the machine.
     fn scan_outgoing(
         &self,
@@ -538,6 +542,10 @@ impl Lagging {
 }
 
 impl Forge for Lagging {
+    fn target_tip(&self, tree: &Path, base: &str) -> anyhow::Result<String> {
+        self.memory.target_tip(tree, base)
+    }
+
     /// Scans nothing: the double publishes nothing off the machine.
     fn scan_outgoing(
         &self,
@@ -842,6 +850,10 @@ struct RefusesFor {
 }
 
 impl Forge for RefusesFor {
+    fn target_tip(&self, tree: &Path, base: &str) -> anyhow::Result<String> {
+        self.memory.target_tip(tree, base)
+    }
+
     /// Scans nothing: the double publishes nothing off the machine.
     fn scan_outgoing(
         &self,

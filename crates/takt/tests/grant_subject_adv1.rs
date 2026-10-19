@@ -305,7 +305,7 @@ fn a_grant_does_not_survive_a_move_of_an_artifact_its_precondition_reads() {
     let d = case.evaluate(0).expect("evaluates");
     assert_eq!(action(&d, "mixed.merge"), "approval-required", "{}", d.json);
 
-    let granted = grant(&tree, "mixed", "mixed.cap", "operator");
+    let granted = grant(&tree, "mixed", "mixed.cap", "human:operator");
 
     // `right` moves; the new revision is reviewed and approved by someone, never by the
     // approver.
@@ -337,7 +337,7 @@ fn a_capability_two_actions_on_two_artifacts_require_is_refused_naming_both() {
     assert_eq!(action(&d, "a.merge"), "approval-required", "{}", d.json);
     assert_eq!(action(&d, "b.merge"), "approval-required", "{}", d.json);
 
-    let error = grant(&tree, "shared", "shared.cap", "operator")
+    let error = grant(&tree, "shared", "shared.cap", "human:operator")
         .expect_err("two artifacts, no single one to bind the grant to");
     let message = format!("{error:#}");
     assert!(
@@ -363,7 +363,7 @@ fn grants_on_two_artifacts_authorise_each_its_own_action_only() {
     assert_eq!(action(&d, "left.merge"), "approval-required", "{}", d.json);
     assert_eq!(action(&d, "right.merge"), "approval-required", "{}", d.json);
 
-    let left = grant(&tree, "two", "left.cap", "operator").expect("left granted");
+    let left = grant(&tree, "two", "left.cap", "human:operator").expect("left granted");
     assert_eq!(left.revision, "left-1");
     let d = case.evaluate(1).expect("evaluates");
     assert_eq!(action(&d, "left.merge"), "admissible", "{}", d.json);
@@ -374,7 +374,7 @@ fn grants_on_two_artifacts_authorise_each_its_own_action_only() {
         d.json
     );
 
-    let right = grant(&tree, "two", "right.cap", "operator").expect("right granted");
+    let right = grant(&tree, "two", "right.cap", "human:operator").expect("right granted");
     assert_eq!(right.revision, "right-1");
     case.set_revision("left", "left-2")
         .expect("the left artifact moves");
@@ -484,8 +484,13 @@ fn a_loop_turn_is_granted_at_its_loop_candidate_and_loses_it_when_it_moves() {
     let d = case.evaluate(0).expect("evaluates");
     assert_eq!(action(&d, "loop.merge"), "approval-required", "{}", d.json);
 
-    let approval =
-        grant(&tree, "loopturn", "repository.merge.judge_surface", "owner").expect("granted");
+    let approval = grant(
+        &tree,
+        "loopturn",
+        "repository.merge.judge_surface",
+        "human:owner",
+    )
+    .expect("granted");
     assert_eq!(approval.revision, "loop_candidate-1");
     let d = case.evaluate(1).expect("evaluates");
     assert_eq!(action(&d, "loop.merge"), "admissible", "{}", d.json);

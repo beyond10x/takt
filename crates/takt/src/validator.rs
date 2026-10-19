@@ -1516,6 +1516,237 @@ impl PrMerged {
     }
 }
 
+/// The judge allow-list: the paths that are not judge surfaces, every other path being one,
+/// read at the merge target's tip as the forge reports it, never from the case's tree.
+pub const JUDGE_ALLOW: &str = ".engineering/judge-allow.yaml";
+
+/// The delegation record: the owner's delegations of a judge-surface merge grant to agent
+/// roles, each revocable, read at the merge target's tip like [`JUDGE_ALLOW`].
+pub const DELEGATIONS: &str = ".engineering/delegations.yaml";
+
+/// The capability a delegation in [`DELEGATIONS`] gives: granting the merge of a change to a
+/// judge surface.
+pub const JUDGE_SURFACE_CAPABILITY: &str = "repository.merge.judge_surface";
+
+/// [`JUDGE_ALLOW`] as it is written: `paths`, a list of path globs.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AllowList {
+    paths: Vec<String>,
+}
+
+/// [`DELEGATIONS`] as it is written: `delegations`, a list of entries.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DelegationRecord {
+    delegations: Vec<Delegation>,
+}
+
+/// One delegation: the delegating owner (`human:<id>`), the role (`agent:<role>`), the
+/// capability, when it was given and, once revoked, when it was revoked.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Delegation {
+    owner: String,
+    role: String,
+    capability: String,
+    given_at: String,
+    #[serde(default)]
+    revoked_at: Option<String>,
+}
+
+impl Delegation {
+    /// Whether it lets `approver` grant a judge-surface merge now: an owner's delegation of
+    /// [`JUDGE_SURFACE_CAPABILITY`] to exactly that role, saying when it was given, with no
+    /// revocation on record.
+    fn admits(&self, approver: &str) -> bool {
+        !self.given_at.trim().is_empty()
+            && self.owner.starts_with("human:")
+            && crate::case::is_approver(&self.owner)
+            && self.role.starts_with("agent:")
+            && self.role == approver
+            && self.capability == JUDGE_SURFACE_CAPABILITY
+            && self.revoked_at.is_none()
+    }
+}
+
+/// The file `path` at the commit `at`, read as `T` without anchors or aliases; `Ok(None)` when
+/// the commit has no such file, the inner error when it does not read.
+fn record_at<T: serde::de::DeserializeOwned>(
+    tree: &Path,
+    at: &str,
+    path: &str,
+) -> Result<Option<std::result::Result<T, String>>> {
+    Ok(file_at(tree, at, Path::new(path))?.map(|text| {
+        crate::loop_scorecard::read_yaml::<T>(Path::new(path), &text)
+            .map_err(|error| format!("{error:#}"))
+    }))
+}
+
+/// The globs of [`JUDGE_ALLOW`] at `at`: none when the commit has no such file; the error when
+/// it does not read or holds a glob that is not relative to the tree, and the caller then admits
+/// nothing.
+fn allow_list_at(tree: &Path, at: &str) -> Result<std::result::Result<Vec<String>, String>> {
+    let Some(read) = record_at::<AllowList>(tree, at, JUDGE_ALLOW)? else {
+        return Ok(Ok(Vec::new()));
+    };
+    Ok(read.and_then(|list| {
+        list.paths
+            .into_iter()
+            .map(|glob| {
+                if glob.is_empty()
+                    || glob.starts_with('/')
+                    || glob.contains('\\')
+                    || glob.split('/').any(|part| part.is_empty() || part == "..")
+                {
+                    Err(format!(
+                        "{JUDGE_ALLOW} holds `{glob}`, which is no path glob relative to the tree"
+                    ))
+                } else {
+                    Ok(glob)
+                }
+            })
+            .collect()
+    }))
+}
+
+impl PrMerged {
+    /// Why a merge granted by `approver` of the case at `revision` is refused, `None` when it
+    /// is not. The merge target is the case's base branch, its tip as the forge reports it now
+    /// ([`Forge::target_tip`]); the case's pinned base commit must be an ancestor of it, or the
+    /// change compared is not the one the target would take. The change is the case's base
+    /// commit to the granted revision (what lies above it is takt's riders alone, which
+    /// [`carries`] holds the head to); a path in it that [`JUDGE_ALLOW`] at the tip does not
+    /// admit is a judge surface. A change to one merges under the owner's grant (`human:`), or
+    /// under an agent role's (`agent:`) when [`DELEGATIONS`] at the tip names an unrevoked
+    /// delegation of [`JUDGE_SURFACE_CAPABILITY`] to that role; any other approver grants it
+    /// nothing. Neither file is read from the tree or at the base commit, so a candidate's own
+    /// edit of either counts for nothing, and is itself a judge surface.
+    fn judge_guard(
+        &self,
+        tree: &Path,
+        branch: &Branch,
+        revision: &str,
+        approver: &str,
+    ) -> Result<Option<String>> {
+        let forge = self.forge.name();
+        let Some(base) = branch.base.as_deref() else {
+            return Ok(Some(
+                "the case has no base branch, the merge target whose allow-list decides what a judge surface is"
+                    .to_owned(),
+            ));
+        };
+        let reported = self.forge.target_tip(tree, base).with_context(|| {
+            format!("read the tip of {base}, the merge target, through the forge {forge}")
+        })?;
+        let commit = |name: &str| -> Option<String> {
+            crate::git::run(
+                tree,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "--end-of-options",
+                    &format!("{name}^{{commit}}"),
+                ],
+            )
+            .ok()
+            .filter(|at| !at.is_empty())
+        };
+        // The forge's answer is an object id this repository holds, never a name git resolves.
+        let tip = (matches!(reported.len(), 40 | 64)
+            && reported.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| commit(&reported))
+        .flatten();
+        let Some(tip) = tip else {
+            return Ok(Some(format!(
+                "the forge {forge} reports {base}, the merge target, at `{}`, which is no commit this repository holds",
+                reported.escape_debug()
+            )));
+        };
+        let Some(at) = branch.base_commit.as_deref().and_then(commit) else {
+            return Ok(Some(format!(
+                "the case pins no base commit this repository holds to compare with {base} at {}",
+                short(&tip)
+            )));
+        };
+        if crate::git::run(tree, &["merge-base", "--is-ancestor", &at, &tip]).is_err() {
+            return Ok(Some(format!(
+                "the case's base {} is not an ancestor of {base} at {}, the merge target's tip as the forge {forge} reports it",
+                short(&at),
+                short(&tip)
+            )));
+        }
+        let (globs, unread) = match allow_list_at(tree, &tip)? {
+            Ok(globs) => (globs, String::new()),
+            Err(why) => (Vec::new(), format!(" ({why}; it admits nothing)")),
+        };
+        let diff = crate::git::bytes(
+            tree,
+            &[
+                "diff-tree",
+                "-r",
+                "-z",
+                "--no-renames",
+                "--name-only",
+                &at,
+                revision,
+                "--",
+            ],
+        )?;
+        let surfaces: Vec<&str> = nul_fields(&diff, "diff-tree", false)?
+            .into_iter()
+            .filter(|path| !globs.iter().any(|glob| crate::run::glob_admits(glob, path)))
+            .collect();
+        if surfaces.is_empty() {
+            return Ok(None);
+        }
+        let shown = if surfaces.len() > 5 {
+            format!(
+                "{} and {} more",
+                surfaces[..5].join(", "),
+                surfaces.len() - 5
+            )
+        } else {
+            surfaces.join(", ")
+        };
+        let touches = format!(
+            "its change from the base {} touches judge surfaces, paths {JUDGE_ALLOW} at {base} {} does not admit{unread}: {shown}",
+            short(&at),
+            short(&tip)
+        );
+        let typed = crate::case::is_approver(approver);
+        if typed && approver.starts_with("human:") {
+            return Ok(None);
+        }
+        if !(typed && approver.starts_with("agent:")) {
+            return Ok(Some(format!(
+                "{touches}; the approver `{}` is neither the owner (human:<id>) nor an agent role (agent:<role>), and grants nothing there",
+                approver.escape_debug()
+            )));
+        }
+        let delegated = match record_at::<DelegationRecord>(tree, &tip, DELEGATIONS)? {
+            None => Err(format!("{DELEGATIONS} is not there")),
+            Some(Err(why)) => Err(format!("{why}; it delegates nothing")),
+            Some(Ok(record)) => Ok(record
+                .delegations
+                .iter()
+                .any(|delegation| delegation.admits(approver))),
+        };
+        Ok(match delegated {
+            Ok(true) => None,
+            Ok(false) => Some(format!(
+                "{touches}; {approver} is not the owner, and {DELEGATIONS} at {base} {} records no unrevoked delegation of {JUDGE_SURFACE_CAPABILITY} to {approver}",
+                short(&tip)
+            )),
+            Err(why) => Some(format!(
+                "{touches}; {approver} is not the owner, and no delegation of {JUDGE_SURFACE_CAPABILITY} to it is on record at {base} {} ({why})",
+                short(&tip)
+            )),
+        })
+    }
+}
+
 impl std::fmt::Debug for PrMerged {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PrMerged")
@@ -1639,6 +1870,20 @@ impl Validator for PrMerged {
                             "pull request #{number} at {} is open, and {} is not granted at that revision ({granted}); nothing merged, the claim stays unknown",
                             short(revision),
                             self.action()
+                        )),
+                        false,
+                    ));
+                }
+                // Whose grant it is decides a change to a judge surface, before anything is
+                // pushed: the owner's, or a role's the owner delegated to on record.
+                let approver = authority
+                    .decision(self.action())
+                    .map_or("", |decision| decision.approver.as_str());
+                if let Some(refusal) = self.judge_guard(tree, &branch, revision, approver)? {
+                    return Ok((
+                        nothing(format!(
+                            "pull request #{number} at {} is open and granted by {approver}, and {refusal}; nothing merged, the claim stays unknown",
+                            short(revision)
                         )),
                         false,
                     ));

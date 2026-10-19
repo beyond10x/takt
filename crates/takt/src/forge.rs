@@ -329,6 +329,17 @@ pub trait Forge {
     /// came back, when it keeps anything. What the merge made of the pull request is read back
     /// through [`Self::pull_request`]; the merge itself answers nothing a validator records.
     fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()>;
+    /// The commit the branch `base`, a merge's target, is at as the repository reports it when
+    /// the merge is decided: where `repository.merge` reads the judge allow-list and the
+    /// delegation record from, never the case's tree. Refused by default, so an adapter that
+    /// cannot say merges nothing: without the target's tip every path is a judge surface.
+    fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
+        let _ = tree;
+        bail!(
+            "the forge {} cannot report the tip of {base}, the merge target; nothing is merged through it",
+            self.name()
+        )
+    }
 }
 
 /// What a program the adapter ran answered.
@@ -1743,6 +1754,18 @@ impl Forge for BotRoute {
         }
         Ok(())
     }
+
+    /// The repository's own `base`, read through the bot route's dry-run fetch
+    /// ([`Self::remote_base`]), which writes nothing; a repository with no such branch is the
+    /// error.
+    fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
+        self.remote_base(tree, base)?.ok_or_else(|| {
+            anyhow!(
+                "the repository {} has no branch {base} to merge into",
+                self.repository
+            )
+        })
+    }
 }
 
 /// The host and the `<owner>/<repo>` an `origin` URL names, in the forms git writes them:
@@ -1914,5 +1937,21 @@ impl Forge for Memory {
         }
         self.merged.borrow_mut().push(number);
         Ok(())
+    }
+
+    /// The tree's own `refs/heads/<base>`: the double's repository is the tree. Not logged, so
+    /// the calls read as the forge's writes and reads of the pull request.
+    fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
+        crate::git::run(
+            tree,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &format!("refs/heads/{base}^{{commit}}"),
+            ],
+        )
+        .with_context(|| format!("the double's {base} is not a branch of the tree"))
     }
 }

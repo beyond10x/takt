@@ -419,14 +419,14 @@ fn without_a_grant_the_run_stops_at_the_gate_and_the_resumed_run_merges_under_it
 
     // The operator grants `repository.merge` to the case.
     let approval =
-        grant(&tree, "grant", "repository.merge", "operator").expect("the grant is written");
+        grant(&tree, "grant", "repository.merge", "human:operator").expect("the grant is written");
     assert_eq!(
         approval,
         Approval {
             case: "grant".to_owned(),
             story: None,
             capability: "repository.merge".to_owned(),
-            approver: "operator".to_owned(),
+            approver: "human:operator".to_owned(),
             granted_at: approval.granted_at.clone(),
             revision: revision.clone(),
         }
@@ -439,7 +439,7 @@ fn without_a_grant_the_run_stops_at_the_gate_and_the_resumed_run_merges_under_it
     let decision = &authority.decisions[0];
     assert_eq!(decision.capability, "repository.merge");
     assert_eq!(decision.decision, Grant::Granted);
-    assert_eq!(decision.approver, "operator");
+    assert_eq!(decision.approver, "human:operator");
     assert_eq!(decision.granted_at, approval.granted_at);
     assert_eq!(decision.revision.as_deref(), Some(revision.as_str()));
     // What Canon is handed: a `canon-authority/1` list of capability and decision, nothing else.
@@ -561,7 +561,7 @@ fn the_grant_is_read_into_every_evaluation_of_the_case() {
         "{}",
         decision.json
     );
-    grant(&tree, "every", "repository.merge", "operator").expect("the grant is written");
+    grant(&tree, "every", "repository.merge", "human:operator").expect("the grant is written");
     let decision = case.evaluate(2).expect("evaluates");
     assert_eq!(
         action(&decision, "repository.merge"),
@@ -587,10 +587,11 @@ fn grant_refuses_a_capability_already_decided_and_a_case_that_does_not_exist() {
     let mut case =
         CaseDir::open(&tree, protocol, "twice", "deliver the story", &[]).expect("the case opens");
     to_the_gate(&mut case, 1);
-    grant(&tree, "twice", "repository.merge", "operator").expect("the first grant is written");
+    grant(&tree, "twice", "repository.merge", "human:operator")
+        .expect("the first grant is written");
     let error = format!(
         "{:#}",
-        grant(&tree, "twice", "repository.merge", "someone else").expect_err("decided twice")
+        grant(&tree, "twice", "repository.merge", "human:someone-else").expect_err("decided twice")
     );
     assert!(error.contains("repository.merge"), "{error}");
     assert!(error.contains("operator"), "{error}");
@@ -598,17 +599,17 @@ fn grant_refuses_a_capability_already_decided_and_a_case_that_does_not_exist() {
         .expect("reads")
         .expect("the file is there");
     assert_eq!(authority.decisions.len(), 1, "{authority:?}");
-    assert_eq!(authority.decisions[0].approver, "operator");
+    assert_eq!(authority.decisions[0].approver, "human:operator");
 
     let error = format!(
         "{:#}",
-        grant(&tree, "absent", "repository.merge", "operator").expect_err("no such case")
+        grant(&tree, "absent", "repository.merge", "human:operator").expect_err("no such case")
     );
     assert!(error.contains("absent"), "{error}");
     assert!(!tree.join(takt::case::CASES_DIR).join("absent").exists());
     for (capability, approver) in [
-        ("", "operator"),
-        ("repository merge", "operator"),
+        ("", "human:operator"),
+        ("repository merge", "human:operator"),
         ("x", ""),
     ] {
         assert!(
@@ -1100,8 +1101,14 @@ fn an_approval_on_a_case_opened_on_an_intent_writes_the_grant_only() {
         CaseDir::open(&tree, protocol, "intent", "deliver the story", &[]).expect("the case opens");
     assert_eq!(case.story().expect("reads"), None);
     to_the_gate(&mut case, 1);
-    let approval = approve(&tree, &Unasked, "intent", "repository.merge", "operator")
-        .expect("the grant is written");
+    let approval = approve(
+        &tree,
+        &Unasked,
+        "intent",
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the grant is written");
     assert_eq!(approval.story, None);
     assert!(case.dir.join(AUTHORITY_FILE).is_file());
 }
@@ -1359,7 +1366,7 @@ fn adv_a_commit_on_the_case_branch_between_runs_returns_the_claims_to_unknown() 
     );
     let moved = git(&tree, &["rev-parse", "HEAD"]);
     assert_ne!(moved, revision);
-    grant(&tree, "adv-moved", "repository.merge", "operator").expect("the grant is written");
+    grant(&tree, "adv-moved", "repository.merge", "human:operator").expect("the grant is written");
 
     let forge: Rc<dyn Forge> = memory.clone();
     let validators = validators(forge);
@@ -1403,14 +1410,14 @@ fn adv_a_capability_the_case_protocol_does_not_require_is_refused() {
         .expect("the case opens");
     // At the gate, so the typo is refused for itself, not for the gate.
     to_the_gate(&mut case, 1);
-    let written = grant(&tree, "adv-typo", "repository.merg", "operator");
+    let written = grant(&tree, "adv-typo", "repository.merg", "human:operator");
     assert!(
         written.is_err(),
         "`repository.merg` is required by no action of story.delivery/1, and the grant was written: {written:?}"
     );
     assert!(!case.dir.join(AUTHORITY_FILE).exists());
     // The capability the protocol requires is a grant.
-    grant(&tree, "adv-typo", "repository.merge", "operator").expect("the grant is written");
+    grant(&tree, "adv-typo", "repository.merge", "human:operator").expect("the grant is written");
 }
 
 /// A case directory that records a story the store does not list `active` (a case left behind
@@ -2012,7 +2019,7 @@ impl Harness for ApprovedMeanwhile {
     }
 
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
-        let refusal = grant(context.tree, self.0, "repository.merge", "operator")
+        let refusal = grant(context.tree, self.0, "repository.merge", "human:operator")
             .err()
             .map(|error| format!("{error:#}"));
         *self.1.borrow_mut() = refusal;
@@ -2063,8 +2070,13 @@ fn adv2_a_grant_given_while_a_judgement_step_runs_is_refused_naming_the_lock() {
     // grant is refused for that, no longer for the lock the run has let go of.
     let after = format!(
         "{:#}",
-        grant(&tree, "adv2-meanwhile", "repository.merge", "operator")
-            .expect_err("the case is not at the gate")
+        grant(
+            &tree,
+            "adv2-meanwhile",
+            "repository.merge",
+            "human:operator"
+        )
+        .expect_err("the case is not at the gate")
     );
     assert!(!after.contains("run.lock"), "{after}");
     assert!(after.contains("is not at the gate"), "{after}");
@@ -2285,6 +2297,10 @@ fn adv2_a_refused_case_write_discards_the_tree_change_with_it() {
 struct StillOpen(Rc<Memory>);
 
 impl Forge for StillOpen {
+    fn target_tip(&self, tree: &Path, base: &str) -> anyhow::Result<String> {
+        self.0.target_tip(tree, base)
+    }
+
     /// Scans nothing: the double publishes nothing off the machine.
     fn scan_outgoing(
         &self,
@@ -2342,7 +2358,13 @@ fn adv2_pr_merged_records_nothing_when_the_forge_still_reports_the_pull_request_
     });
     let (revision, _, _) = first_run(&tree, "adv2-still-open", &memory);
     // The merge is asked for only under a grant at the revision.
-    grant(&tree, "adv2-still-open", "repository.merge", "operator").expect("the grant is written");
+    grant(
+        &tree,
+        "adv2-still-open",
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the grant is written");
     let forge: Rc<dyn Forge> = Rc::new(StillOpen(memory.clone()));
     let observation = PrMerged::new(forge)
         .observe(&tree, &revision, 9)
@@ -2393,8 +2415,13 @@ fn adv2_a_case_resumed_at_a_new_commit_re_establishes_its_claims_before_the_merg
     );
     let moved = git(&tree, &["rev-parse", "HEAD"]);
     assert_ne!(moved, revision);
-    let old = grant(&tree, "adv2-re-established", "repository.merge", "operator")
-        .expect("the grant is written");
+    let old = grant(
+        &tree,
+        "adv2-re-established",
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the grant is written");
     assert_eq!(old.revision, revision);
     let asked = memory.calls.borrow().len();
     let forge: Rc<dyn Forge> = memory.clone();
@@ -2450,8 +2477,13 @@ fn adv2_a_case_resumed_at_a_new_commit_re_establishes_its_claims_before_the_merg
     assert!(memory.merged.borrow().is_empty(), "{text}");
     drop(run);
     // The operator grants the new revision; the next run merges it.
-    let new = grant(&tree, "adv2-re-established", "repository.merge", "operator")
-        .expect("the grant at the new revision is written");
+    let new = grant(
+        &tree,
+        "adv2-re-established",
+        "repository.merge",
+        "human:operator",
+    )
+    .expect("the grant at the new revision is written");
     assert_eq!(new.revision, moved);
     let mut run = Run::resume(
         &tree,
@@ -2547,7 +2579,7 @@ fn a_run_holds_its_case_and_lets_go_at_every_stop() {
     fs::write(&lock, "2026-01-01T00:00:00Z\n").expect("a lock");
     let error = format!(
         "{:#}",
-        grant(&tree, "held", "repository.merge", "operator").expect_err("the case is held")
+        grant(&tree, "held", "repository.merge", "human:operator").expect_err("the case is held")
     );
     assert!(error.contains(LOCK_FILE), "{error}");
     assert!(error.contains("2026-01-01T00:00:00Z"), "{error}");
@@ -2578,7 +2610,7 @@ fn a_run_holds_its_case_and_lets_go_at_every_stop() {
         Stop::Iterations(0)
     );
     assert!(!lock.exists(), "the lock outlived the run that stopped");
-    grant(&tree, "held", "repository.merge", "operator")
+    grant(&tree, "held", "repository.merge", "human:operator")
         .expect("the grant is given once the run has let go");
 }
 
