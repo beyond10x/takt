@@ -128,10 +128,18 @@ fn raw(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
 
 /// Runs `git <args>` in `tree` and answers its standard output trimmed: for answers of one
 /// value (a revision, a branch, a count, a URL). Never for paths or `status`, whose leading
-/// white space is part of the answer; those are read byte for byte with `-z`.
+/// white space is part of the answer; those are read byte for byte with `-z` ([`bytes`]).
 pub fn run(tree: &Path, args: &[&str]) -> Result<String> {
     let stdout = raw(tree, args, None)?;
     Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
+}
+
+/// Runs `git <args>` in `tree` and answers its standard output byte for byte, nothing trimmed
+/// and nothing decoded: for answers that hold paths, asked for with `-z`, whose every byte,
+/// leading white space included, is part of the path. The caller decodes each path, and one
+/// that is not UTF-8 is its to refuse.
+pub fn bytes(tree: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    raw(tree, args, None)
 }
 
 /// The bytes of the blob `object` names (`<revision>:<path>`, or a blob id) as git holds them:
@@ -1419,6 +1427,112 @@ impl Checkpoint {
             bail!("the tree could not be put back as it was before the step: {left:?}");
         }
         Ok(())
+    }
+}
+
+/// Whether the trees of the commits `from` and `to` differ at any path outside the directory
+/// `outside` (relative to the tree): `git diff --quiet`, with no external diff and no text
+/// conversion, and no code from configuration ([`NO_CONFIGURED_CODE`]). Exit 0 is no
+/// difference, 1 a difference; any other exit is an error naming what git said.
+pub fn trees_differ_outside(tree: &Path, from: &str, to: &str, outside: &str) -> Result<bool> {
+    let exclude = format!(":(exclude){outside}");
+    let args = [
+        "diff",
+        "--quiet",
+        "--no-ext-diff",
+        "--no-textconv",
+        from,
+        to,
+        "--",
+        ".",
+        exclude.as_str(),
+    ];
+    let output = output(tree, &args, None)?;
+    match output.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => bail!(
+            "git {} in {} exited {}: {}",
+            args.join(" "),
+            tree.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
+}
+
+/// What merging a revision into a base would leave ([`merged_tree`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Merged {
+    /// The merge's tree object; with conflicts, the conflicted files in it as git leaves them,
+    /// which may be the base's side (a file one side deleted, a binary file both changed).
+    pub tree: String,
+    /// The paths the merge conflicts at, relative to the tree, as git lists them; none for a
+    /// clean merge.
+    pub conflicted: Vec<String>,
+}
+
+/// What merging `revision` into `base` would leave: `git merge-tree --write-tree -z
+/// --name-only`, which writes the merge's tree object and touches neither the work tree nor
+/// the index, with no code from configuration ([`NO_CONFIGURED_CODE`]): the tree and the paths
+/// it conflicts at, read byte for byte. A merge with conflicts (exit 1) still answers its tree;
+/// any exit but 0 (clean) or 1, a conflict that names no path, or a path that is not UTF-8 is
+/// an error naming what git said.
+pub fn merged_tree(tree: &Path, base: &str, revision: &str) -> Result<Merged> {
+    let args = [
+        "merge-tree",
+        "--write-tree",
+        "-z",
+        "--name-only",
+        "--no-messages",
+        base,
+        revision,
+    ];
+    let output = output(tree, &args, None)?;
+    match output.status.code() {
+        Some(code @ (0 | 1)) => {
+            let mut fields = output
+                .stdout
+                .split(|byte| *byte == 0)
+                .filter(|field| !field.is_empty());
+            let merged = fields
+                .next()
+                .and_then(|field| std::str::from_utf8(field).ok())
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_owned();
+            if merged.is_empty() {
+                bail!("git {} in {} named no tree", args.join(" "), tree.display());
+            }
+            let conflicted = fields
+                .map(|path| {
+                    String::from_utf8(path.to_vec()).map_err(|_| {
+                        anyhow!(
+                            "git merge-tree named a path that is not UTF-8: {}",
+                            path.escape_ascii()
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if code == 1 && conflicted.is_empty() {
+                bail!(
+                    "git {} in {} reported a conflict and named no path",
+                    args.join(" "),
+                    tree.display()
+                );
+            }
+            Ok(Merged {
+                tree: merged,
+                conflicted,
+            })
+        }
+        _ => bail!(
+            "git {} in {} exited {}: {}",
+            args.join(" "),
+            tree.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
     }
 }
 

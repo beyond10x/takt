@@ -24,7 +24,7 @@ transitions:
 
 ## Context
 
-From the review of main at fe93286 on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), finding E8.1, confirmed: `events.rs:258@fe93286` reads with `read_to_string`, which fails the whole file on invalid UTF-8 (Rust std: "If the contents of the file are not valid UTF-8, then an error will also be returned"); a write cut inside a multi-byte character on a full disk, the case the module names, leaves a record that `record_accepted` (`run.rs:3011`) and the scorecard (`scorecard.rs:470`) then fail on. Probe: `torn_utf8.py` in the fact-check's directory.
+From the review of main at 9cc158b on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), finding E8.1, confirmed: `events.rs:258@9cc158b` reads with `read_to_string`, which fails the whole file on invalid UTF-8 (Rust std: "If the contents of the file are not valid UTF-8, then an error will also be returned"); a write cut inside a multi-byte character on a full disk, the case the module names, leaves a record that `record_accepted` (`run.rs:3011`) and the scorecard (`scorecard.rs:470`) then fail on. Probe: `torn_utf8.py` in the fact-check's directory.
 
 ## Scope
 

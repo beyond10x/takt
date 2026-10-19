@@ -35,4 +35,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-The rows of `docs/metrics/scenario-runs.jsonl` whose `scenario` is 2 to 6 and whose `acceptance` is `pass` or `fail` cover all 20 pairs of those scenarios and the arms `takt`, `claude-code`, `claude-code-isolated` and `codex`, where at d17bc32 they cover 5.
+The rows of `docs/metrics/scenario-runs.jsonl` whose `scenario` is 2 to 6 and whose `acceptance` is `pass` or `fail` cover all 20 pairs of those scenarios and the arms `takt`, `claude-code`, `claude-code-isolated` and `codex`, where at fb3c3bc they cover 5.

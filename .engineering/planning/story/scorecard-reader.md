@@ -95,7 +95,7 @@ Choosing the baseline and promoting (story:promotion); the weekly report and def
 
 ## Landed (wave 10)
 
-Read from `git diff --stat 8b0afc5^1 8b0afc5` (the unit's merge into the wave branch) at the close of wave 10 (wave branch head 8858b49). Comparison by dominance per outcome rank; a case accepted in any run stays accepted. Saved-file provenance, case identity and the flakiness and token questions are carried by story:promotion.
+Read from `git diff --stat 8b0afc5^1 8b0afc5` (the unit's merge into the wave branch) at the close of wave 10 (wave branch head c34246a). Comparison by dominance per outcome rank; a case accepted in any run stays accepted. Saved-file provenance, case identity and the flakiness and token questions are carried by story:promotion.
 
 - `crates/takt-cli/src/main.rs`
 - `crates/takt-cli/tests/scorecard_adv1.rs`

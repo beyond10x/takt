@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:loop-scorecard
 kind: story
-status: draft
+status: active
 title: Validators drive loop.improvement/1 cases; the L2 turn runs after three L1 turns
 summary: loop scorecard, definition check, comparison; the weekly L2 turn
 relations:
@@ -21,7 +21,10 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/improvement_protocols.rs
-revision: 10
+revision: 15
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-18T20:13:47Z", actor: "human:timo", revision: 11, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "proposed", to: "active", at: "2026-10-18T20:13:47Z", actor: "human:timo", revision: 12, decided_on: {"recorded":{"review_outcome":3}}}
 ---
 # Story: loop-scorecard
 
@@ -41,7 +44,9 @@ design:recursive-self-improvement § Improving the loop, § The loops as protoco
 drives it with hand-written records. A metric's definition is a judge surface: a candidate that
 changes one without printing the previous figures beside it is `redefined` and cannot be merged.
 Turn 1 is story:first-recorded-improvement-turn; turns 2 and 3 are ordinary improvement turns the
-planner agent runs on findings filed after it, and this story stays in draft until they exist.
+planner agent runs on findings filed after it. The validators are built and tested on fixture
+turns; the Acceptance is decided by the acceptance run over the three recorded turns, not by the
+story's status.
 
 ## Domain relations
 
@@ -74,7 +79,8 @@ Typed entries: `crates/takt/src/validator.rs` (cited), `crates/takt/src/scorecar
 
 - depends_on story:first-recorded-improvement-turn: the first row.
 - depends_on story:agent-profiles: the L2 turn goes into the profile it creates.
-- Gate: three recorded L1 turns before this story moves past draft.
+- Gate: the acceptance run, `loop.measure` over the three recorded L1 turns under
+  `.engineering/cases/`, decides the Acceptance; the story's status does not wait on it.
 
 ## Acceptance
 
@@ -86,7 +92,7 @@ the case ids they were computed from.
 - A changed metric definition makes `loop.definition.check` write `dual_reported` when both figures print, and `redefined` when only the new one does.
 - With one turn open, its row has no verdict and the accepted share is accepted rows / all rows.
 - The time from finding to verified is computed from each row's `filed_at` and `verified_at`.
-- The operator profile's L2 turn names the lowest metric as the finding to file.
+- The planner profile's L2 turn names the lowest metric as the finding to file.
 
 ## Out of Scope
 

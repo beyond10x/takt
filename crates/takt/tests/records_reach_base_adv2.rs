@@ -1,7 +1,8 @@
-//! Adversary pass 2 on story:records-reach-base. Each case is named for the defect it shows: a
-//! store write the per-revision done rule makes again on every run once the case's revision
-//! moved, a merge taken with none of the story's records after the store refused the
-//! `test_result`, and takt's own actor accepted as the approver of a story's merge.
+//! Adversary pass 2 on story:records-reach-base. The defects it showed: a store write the
+//! per-revision done rule made again on every run once the case's revision moved, a merge
+//! taken with none of the story's records after the store refused the `test_result`, and
+//! takt's own actor accepted as the approver of a story's merge. Each case is named for what it
+//! asserts now that the defect is closed.
 
 use std::cell::Cell;
 use std::fs;
@@ -15,7 +16,7 @@ use takt::evidence::Record;
 use takt::forge::{Checks, Forge, Memory, PullRequest, PullRequestView};
 use takt::frontier::{Aep, Take, Written, approve};
 use takt::harness::{Harness, StepContext, StepReport};
-use takt::validator::{CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
+use takt::validator::{ChangeRead, CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Frontier, Run, RunOptions, Stop, Story};
 
 const DELIVERY: &str = concat!(
@@ -23,8 +24,6 @@ const DELIVERY: &str = concat!(
     "/../../protocols/story-delivery/1.yaml"
 );
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
-const STORY_FILE: &str = ".engineering/planning/story/ready-one.md";
-const EVIDENCE: &str = ".engineering/evidence/story/ready-one";
 const APPROVER: &str = "human:operator";
 
 fn git(tree: &Path, args: &[&str]) -> String {
@@ -134,6 +133,14 @@ impl Harness for Requester {
             return Ok(StepReport {
                 action: "repository.merge".to_owned(),
                 summary: "merge it".to_owned(),
+                tokens: None,
+            });
+        }
+        // The work committed is complete: hand it over, changing nothing.
+        if context.offered.contains(&"change.handover".to_owned()) {
+            return Ok(StepReport {
+                action: "change.handover".to_owned(),
+                summary: "hand it over".to_owned(),
                 tokens: None,
             });
         }
@@ -273,6 +280,7 @@ impl Frontier for RefusesTestResultOnce {
 fn delivery(forge: Rc<dyn Forge>) -> Vec<Box<dyn Validator>> {
     vec![
         Box::new(TestsRun::new("true").expect("a command")),
+        Box::new(ChangeRead),
         Box::new(GatePass),
         Box::new(PrOpen::new(forge.clone())),
         Box::new(CiRead::new(forge.clone())),
@@ -356,16 +364,6 @@ impl Case {
         (stop, String::from_utf8_lossy(&out).into_owned())
     }
 
-    fn pushed(&self) -> String {
-        self.forge
-            .memory
-            .pushed
-            .borrow()
-            .get(&format!("takt/{}", self.id))
-            .cloned()
-            .expect("the branch was pushed")
-    }
-
     /// The lines of the case's `events.jsonl`, parsed.
     fn events(&self) -> Vec<serde_json::Value> {
         fs::read_to_string(self.dir.join("events.jsonl"))
@@ -376,31 +374,6 @@ impl Case {
     }
 }
 
-/// The kinds of the records in the story's evidence directory at `revision`.
-fn evidence_kinds(repo: &Path, revision: &str) -> Vec<String> {
-    let listed = Command::new("git")
-        .args(["ls-tree", "--name-only", &format!("{revision}:{EVIDENCE}")])
-        .current_dir(repo)
-        .output()
-        .expect("git runs");
-    String::from_utf8_lossy(&listed.stdout)
-        .lines()
-        .map(|name| {
-            let bytes = git_bytes(repo, &["show", &format!("{revision}:{EVIDENCE}/{name}")]);
-            let json: serde_json::Value = serde_json::from_slice(&bytes).expect("a json record");
-            json["change"]["kind"].as_str().unwrap_or("").to_owned()
-        })
-        .collect()
-}
-
-fn status_at(repo: &Path, revision: &str) -> String {
-    git(repo, &["show", &format!("{revision}:{STORY_FILE}")])
-        .lines()
-        .find_map(|line| line.strip_prefix("status: "))
-        .expect("a status")
-        .to_owned()
-}
-
 /// Correction 1's done rule: a write counts as done only when kept under the case's current
 /// revision. Once the revision moved from R1 to R2, the R1 move to `implemented` sits in the
 /// history below R2, so the story at R2 is already `implemented` and the store will not move it
@@ -409,7 +382,7 @@ fn status_at(repo: &Path, revision: &str) -> String {
 /// refusal again. The record says a refusal is recorded once and never retried, and an accepted
 /// case resumed by id has nothing due.
 #[test]
-fn a_move_made_below_a_later_revision_is_tried_again_on_every_run() {
+fn a_move_made_below_a_later_revision_is_not_tried_again_on_a_later_run() {
     let case = approved("move-retried");
     case.forge.checks.set(Checks::Pending);
     let (stop, text) = case.run_with(&NoHarness);
@@ -453,30 +426,30 @@ fn a_move_made_below_a_later_revision_is_tried_again_on_every_run() {
 }
 
 /// The acceptance: after a story's pull request merges under a grant, the base holds the story
-/// at `implemented` with its `test_result`. The store refuses the `test_result` write once, just
-/// before the merge (a refusal the run relays and records); the move, which the store allows only
-/// once the story holds a `test_result`, is refused too, and the merge is taken anyway: the base
-/// holds the story `active` with no `test_result`, the case is `accepted`, and the records a later
-/// run writes land on the case's branch after the merge, which is the Expected-before state.
+/// at `implemented` with its `test_result`. The defect: the store refuses the `test_result`
+/// write once, just before the merge (a refusal the run relays and records); the move, which
+/// the store allows only once the story holds a `test_result`, is refused too, and the merge was
+/// taken anyway, the base holding the story `active` with no `test_result`. Now the run fails
+/// closed for exactly that reason: it stops `StepRefused` because the records are not both
+/// written, and nothing merges. A stop for any other reason fails the case.
 #[test]
-fn a_refused_test_result_lets_the_merge_take_the_base_without_the_records() {
+fn a_refused_test_result_stops_the_merge_as_records_not_both_written() {
     let case = approved("refused-once");
     let store = RefusesTestResultOnce {
         aep: Aep::default(),
         refused: Cell::new(false),
     };
     let (stop, text) = case.run_on(&NoHarness, &store);
-    let merged = !case.forge.memory.merged.borrow().is_empty();
-    if merged {
-        let head = case.pushed();
-        let status = status_at(&case.repo, &head);
-        let kinds = evidence_kinds(&case.repo, &head);
-        assert!(
-            status == "implemented" && kinds.iter().any(|kind| kind == "test_result"),
-            "merged {head} above {} with the story {status} and evidence {kinds:?}: {stop:?}\n{text}",
-            case.granted
-        );
-    }
+    let merged = case.forge.memory.merged.borrow().clone();
+    assert!(
+        merged.is_empty(),
+        "merged {merged:?} above {} without the store's records: {stop:?}\n{text}",
+        case.granted
+    );
+    assert!(
+        matches!(&stop, Stop::StepRefused(why) if why.contains("not both written")),
+        "the merge was not refused for the missing records: {stop:?}\n{text}"
+    );
 }
 
 /// An approver must be `human:<name>` or `agent:<role>`: who grants, apart from the store's and
@@ -484,7 +457,7 @@ fn a_refused_test_result_lets_the_merge_take_the_base_without_the_records() {
 /// are written as; granted as it, the store records the operator's grant of the merge as takt
 /// approving its own merge, indistinguishable from takt's own writes.
 #[test]
-fn takt_own_actor_is_accepted_as_the_approver_of_a_story_merge() {
+fn takt_own_actor_is_refused_as_the_approver_of_a_story_merge() {
     let case = gated("takt-approves");
     let approved = approve(
         &case.repo,
@@ -498,4 +471,43 @@ fn takt_own_actor_is_accepted_as_the_approver_of_a_story_merge() {
         "approved by {}, takt's own actor: {approved:?}",
         takt::frontier::ACTOR
     );
+}
+
+/// A store write is kept with the path git committed it at, byte for byte, which the rider rule
+/// compares later: the path is read from git byte for byte (`-z`), never through a call that
+/// trims or decodes it. A path that is not UTF-8 does not read as a path at all, and nothing is
+/// kept; it is never kept as a different, decoded path.
+#[cfg(unix)]
+#[test]
+fn a_store_write_at_a_path_that_is_not_utf8_is_kept_as_committed_or_not_at_all() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt as _;
+    let repo = repository("not-utf8");
+    let revision = git(&repo, &["rev-parse", "HEAD"]);
+    let committed: &[u8] = b".engineering/evidence/story/ready-one/r\xff.json";
+    let file = repo.join(OsStr::from_bytes(committed));
+    fs::create_dir_all(file.parent().expect("a parent")).expect("a directory");
+    fs::write(&file, "{}\n").expect("a record");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "a store write"]);
+    let commit = git(&repo, &["rev-parse", "HEAD"]);
+    let case_dir = repo.join(".engineering/cases/probe");
+    fs::create_dir_all(&case_dir).expect("a directory");
+    match takt::case::keep_rider(&repo, &case_dir, &revision, &commit, "test_result") {
+        Err(error) => {
+            assert!(
+                !case_dir.join(takt::case::RIDERS_DIR).exists(),
+                "refused ({error:#}) with something kept"
+            );
+        }
+        Ok([_, at]) => {
+            let kept = fs::read(&at).expect("the kept path");
+            assert_eq!(
+                kept,
+                committed,
+                "kept as {:?}, not the committed path",
+                String::from_utf8_lossy(&kept)
+            );
+        }
+    }
 }

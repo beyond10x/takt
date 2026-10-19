@@ -17,7 +17,7 @@ revision: 2
 
 ## Context
 
-The developer reported on 2026-10-19 that this test failed once under load in a gate on f946c3b (load 26-38). A `setsid`'d process wrote `late` after `run_child` returned. It passed when run alone. The developer did not loosen it: the test asserts a guarantee, not a timing premise. Inferred, not traced: the sweep that kills the child's processes races a process that leaves the session or process group before the sweep reads it. A race in this guarantee lets a test command keep writing to the tree after takt has judged it.
+The developer reported on 2026-10-19 that this test failed once under load in a gate on 26bb59d (load 26-38). A `setsid`'d process wrote `late` after `run_child` returned. It passed when run alone. The developer did not loosen it: the test asserts a guarantee, not a timing premise. Inferred, not traced: the sweep that kills the child's processes races a process that leaves the session or process group before the sweep reads it. A race in this guarantee lets a test command keep writing to the tree after takt has judged it.
 
 ## Scope
 

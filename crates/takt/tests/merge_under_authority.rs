@@ -191,6 +191,29 @@ fn to_the_gate(case: &mut CaseDir, first: usize) {
         case.add_evidence(&record(first + n, kind, result, &revision))
             .expect("the record is written");
     }
+    // The delivery protocol's change handed over at the revision, as takt records a
+    // `change.handover` step: no result.
+    if !case.protocol.id.starts_with("software.change") {
+        case.add_evidence(&Record::new(
+            format!("e{}", first + owed.len()),
+            "handover",
+            None,
+            "implementation",
+            &revision,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+        // A change to publish at the revision, as `change.read` records it.
+        case.add_evidence(&Record::new(
+            format!("change-record-e{}", first + owed.len()),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
+        .expect("the record is written");
+    }
     let decision = case
         .evaluate(case.evaluations().expect("counts") + 1)
         .expect("evaluates");
@@ -294,6 +317,27 @@ fn first_run(tree: &Path, id: &str, memory: &Rc<Memory>) -> (String, PathBuf, St
     run.case
         .add_evidence(&record(2, "gate_result", "pass", &revision))
         .expect("the record is written");
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("handover-{}", &revision[..8]),
+            "handover",
+            None,
+            "implementation",
+            &revision,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+    // A change to publish at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &revision[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
+        .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
     let text = String::from_utf8(out).expect("utf-8");
@@ -342,7 +386,7 @@ fn without_a_grant_the_run_stops_at_the_gate_and_the_resumed_run_merges_under_it
     // What the double has been asked so far, this probe included.
     let asked = memory.calls.borrow().len();
     let before = records(&case_dir);
-    assert_eq!(before.len(), 4, "{text}");
+    assert_eq!(before.len(), 6, "{text}");
     assert!(
         before
             .iter()
@@ -446,7 +490,7 @@ fn without_a_grant_the_run_stops_at_the_gate_and_the_resumed_run_merges_under_it
         PullRequestState::Merged
     );
     let after = records(&case_dir);
-    assert_eq!(after.len(), 5, "{text}");
+    assert_eq!(after.len(), 7, "{text}");
     let merges: Vec<&(String, serde_json::Value)> = after
         .iter()
         .filter(|(_, record)| record["kind"] == "merge_observation")
@@ -454,8 +498,8 @@ fn without_a_grant_the_run_stops_at_the_gate_and_the_resumed_run_merges_under_it
     assert_eq!(merges.len(), 1, "{text}");
     let (name, merge) = merges[0];
     assert!(
-        name.starts_with("0005-"),
-        "numbered after the four records already there: {name}"
+        name.starts_with("0007-"),
+        "numbered after the six records already there: {name}"
     );
     assert_eq!(merge["format"], "canon-evidence/1", "{merge}");
     assert_eq!(merge["result"], "merged", "{merge}");
@@ -1109,6 +1153,12 @@ impl Harness for SelfGranting {
         "self-granting"
     }
 
+    /// It answers `repository.inspect`, which only a harness that keeps state is offered
+    /// (story:no-inspect-for-stateless-harness).
+    fn keeps_state(&self) -> bool {
+        true
+    }
+
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
         let dir = current(context.tree)?;
         Authority {
@@ -1154,6 +1204,27 @@ fn adv_a_grant_the_harness_writes_into_the_case_does_not_merge() {
         .expect("the record is written");
     run.case
         .add_evidence(&record(2, "gate_result", "pass", &revision))
+        .expect("the record is written");
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("handover-{}", &revision[..8]),
+            "handover",
+            None,
+            "implementation",
+            &revision,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+    // A change to publish at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &revision[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
         .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
@@ -1423,6 +1494,12 @@ impl Harness for Planting {
         "planting"
     }
 
+    /// It answers `repository.inspect`, which only a harness that keeps state is offered
+    /// (story:no-inspect-for-stateless-harness).
+    fn keeps_state(&self) -> bool {
+        true
+    }
+
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
         let dir = current(context.tree)?;
         let record = Record::new(
@@ -1451,6 +1528,12 @@ impl Harness for Rewriting {
         "rewriting"
     }
 
+    /// It answers `repository.inspect`, which only a harness that keeps state is offered
+    /// (story:no-inspect-for-stateless-harness).
+    fn keeps_state(&self) -> bool {
+        true
+    }
+
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
         let dir = current(context.tree)?;
         let mut branch = Branch::read(&dir)?;
@@ -1465,8 +1548,10 @@ impl Harness for Rewriting {
     }
 }
 
-/// The first run with `harness`: the tests and the gate green at HEAD, the forge double's
-/// checks passing, so the pull request is opened and read before the harness is asked.
+/// The first run with `harness`: the tests and the gate green at HEAD, so the pull request is
+/// opened and its checks read before the harness is asked. The callers give a double whose
+/// checks fail: with every claim but `pr.merged` held, no judgement step is offered at all
+/// (story:no-model-step-for-approval), and the harness's step is what each case is about.
 fn run_with(
     tree: &Path,
     id: &str,
@@ -1483,6 +1568,27 @@ fn run_with(
     run.case
         .add_evidence(&record(2, "gate_result", "pass", &revision))
         .expect("the record is written");
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("handover-{}", &revision[..8]),
+            "handover",
+            None,
+            "implementation",
+            &revision,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+    // A change to publish at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &revision[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
+        .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
     let text = String::from_utf8(out).expect("utf-8");
@@ -1496,7 +1602,7 @@ fn run_with(
 fn a_record_the_harness_plants_in_the_case_is_refused_and_removed() {
     let tree = scratch("planted-record");
     let memory = Rc::new(Memory {
-        checks: Checks::Pass,
+        checks: Checks::Fail,
         ..Memory::default()
     });
     let (stop, text, case_dir) = run_with(&tree, "planted-record", &Planting, &memory);
@@ -1512,7 +1618,14 @@ fn a_record_the_harness_plants_in_the_case_is_refused_and_removed() {
         .collect();
     assert_eq!(
         kinds,
-        ["test_result", "gate_result", "pull_request", "ci_result"],
+        [
+            "test_result",
+            "gate_result",
+            "handover",
+            "change_record",
+            "pull_request",
+            "ci_result"
+        ],
         "{text}"
     );
     assert!(memory.merged.borrow().is_empty(), "{text}");
@@ -1539,7 +1652,7 @@ fn a_record_the_harness_plants_in_the_case_is_refused_and_removed() {
 fn a_case_file_the_harness_changes_or_removes_is_restored_and_the_step_refused() {
     let tree = scratch("rewritten-case");
     let memory = Rc::new(Memory {
-        checks: Checks::Pass,
+        checks: Checks::Fail,
         ..Memory::default()
     });
     let (stop, text, case_dir) = run_with(&tree, "rewritten-case", &Rewriting, &memory);
@@ -1553,7 +1666,7 @@ fn a_case_file_the_harness_changes_or_removes_is_restored_and_the_step_refused()
         .iter()
         .map(|(name, _)| name.clone())
         .collect();
-    assert_eq!(names.len(), 4, "{names:?}\n{text}");
+    assert_eq!(names.len(), 6, "{names:?}\n{text}");
     assert_eq!(names[0], "0001-e1.json", "{names:?}");
     assert!(memory.merged.borrow().is_empty(), "{text}");
 }
@@ -1620,6 +1733,29 @@ fn adv2_a_case_finished_by_a_resumed_run_is_not_resumed_by_the_next_run() {
     first
         .case
         .add_evidence(&record(2, "gate_result", "pass", &revision))
+        .expect("the record is written");
+    first
+        .case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("handover-{}", &revision[..8]),
+            "handover",
+            None,
+            "implementation",
+            &revision,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+    // A change to publish at the revision, as `change.read` records it.
+    first
+        .case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &revision[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &revision,
+            "takt.change-read",
+        ))
         .expect("the record is written");
     let stop = first.run(&mut out).expect("the run stops without an error");
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -1755,6 +1891,12 @@ impl Harness for SiblingGranting {
         "sibling-granting"
     }
 
+    /// It answers `repository.inspect`, which only a harness that keeps state is offered
+    /// (story:no-inspect-for-stateless-harness).
+    fn keeps_state(&self) -> bool {
+        true
+    }
+
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
         Authority {
             decisions: vec![AuthorityDecision {
@@ -1841,6 +1983,12 @@ impl Harness for ApprovedMeanwhile {
         "approved-meanwhile"
     }
 
+    /// It answers `repository.inspect`, which only a harness that keeps state is offered
+    /// (story:no-inspect-for-stateless-harness).
+    fn keeps_state(&self) -> bool {
+        true
+    }
+
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
         let refusal = grant(context.tree, self.0, "repository.merge", "operator")
             .err()
@@ -1864,7 +2012,7 @@ impl Harness for ApprovedMeanwhile {
 fn adv2_a_grant_given_while_a_judgement_step_runs_is_refused_naming_the_lock() {
     let tree = scratch("adv2-meanwhile");
     let memory = Rc::new(Memory {
-        checks: Checks::Pass,
+        checks: Checks::Fail,
         ..Memory::default()
     });
     let harness = ApprovedMeanwhile("adv2-meanwhile", RefCell::new(None));
@@ -1888,8 +2036,16 @@ fn adv2_a_grant_given_while_a_judgement_step_runs_is_refused_naming_the_lock() {
         !case_dir.join("run.lock").exists(),
         "the run let go of the case at its stop:\n{text}"
     );
-    grant(&tree, "adv2-meanwhile", "repository.merge", "operator")
-        .expect("the grant is given once the run has let go");
+    // No judgement step runs at the gate any more (story:no-model-step-for-approval): this step
+    // ran with continuous integration failed, so after it the case is not at the gate, and a
+    // grant is refused for that, no longer for the lock the run has let go of.
+    let after = format!(
+        "{:#}",
+        grant(&tree, "adv2-meanwhile", "repository.merge", "operator")
+            .expect_err("the case is not at the gate")
+    );
+    assert!(!after.contains("run.lock"), "{after}");
+    assert!(after.contains("is not at the gate"), "{after}");
 }
 
 /// A harness that plants, under the case directory, a symbolic link to a directory outside the
@@ -1901,6 +2057,12 @@ struct Linking(PathBuf);
 impl Harness for Linking {
     fn name(&self) -> &str {
         "linking"
+    }
+
+    /// It answers `repository.inspect`, which only a harness that keeps state is offered
+    /// (story:no-inspect-for-stateless-harness).
+    fn keeps_state(&self) -> bool {
+        true
     }
 
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
@@ -1929,7 +2091,7 @@ fn adv2_the_restore_does_not_delete_through_a_symlink_the_harness_planted() {
     fs::create_dir_all(&*elsewhere).expect("a directory");
     fs::write(elsewhere.join("keep.txt"), "not the kernel's\n").expect("a file");
     let memory = Rc::new(Memory {
-        checks: Checks::Pass,
+        checks: Checks::Fail,
         ..Memory::default()
     });
     let (stop, text, _) = run_with(
@@ -2067,7 +2229,7 @@ fn adv2_a_refused_case_write_discards_the_tree_change_with_it() {
     let tree = scratch("adv2-clean");
     let start = git(&tree, &["rev-parse", "HEAD"]);
     let memory = Rc::new(Memory {
-        checks: Checks::Pass,
+        checks: Checks::Fail,
         ..Memory::default()
     });
     let (stop, text, case_dir) = run_with(&tree, "adv2-clean", &GrantingAndEditing, &memory);
@@ -2223,6 +2385,27 @@ fn adv2_a_case_resumed_at_a_new_commit_re_establishes_its_claims_before_the_merg
         .expect("the record is written");
     run.case
         .add_evidence(&record(6, "gate_result", "pass", &moved))
+        .expect("the record is written");
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("handover-{}", &moved[..8]),
+            "handover",
+            None,
+            "implementation",
+            &moved,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("the record is written");
+    // A change to publish at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &moved[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &moved,
+            "takt.change-read",
+        ))
         .expect("the record is written");
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");

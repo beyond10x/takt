@@ -24,7 +24,7 @@ transitions:
 
 ## Context
 
-From the review of main at fe93286 on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), findings P1.2 (confirmed) and X10.3 (confirmed): `Scorecard::load` (`scorecard.rs:613-625@fe93286`) checks only the format, and rows never carry the opened event's binary (`events.rs:76`, `scorecard.rs:337-378`), so a card saved with `--revision <HEAD>` over runs of another binary is judged as the candidate's; `promotion.rs:1016-1096` checks HEAD, a clean tree and the scorecard, with no ancestry and no grant. story:self-improvement-protocol D3 enforces both inside a case only; story:scorecard-save-checks-binary covers the save side.
+From the review of main at 9cc158b on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), findings P1.2 (confirmed) and X10.3 (confirmed): `Scorecard::load` (`scorecard.rs:613-625@9cc158b`) checks only the format, and rows never carry the opened event's binary (`events.rs:76`, `scorecard.rs:337-378`), so a card saved with `--revision <HEAD>` over runs of another binary is judged as the candidate's; `promotion.rs:1016-1096` checks HEAD, a clean tree and the scorecard, with no ancestry and no grant. story:self-improvement-protocol D3 enforces both inside a case only; story:scorecard-save-checks-binary covers the save side.
 
 ## Scope
 

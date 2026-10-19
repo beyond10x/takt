@@ -15,7 +15,7 @@ A step that writes under `refs/replace/` (or sets `GIT_REPLACE_REF_BASE` or `cor
 
 ## Context
 
-From the developer's adversary passes on story:scan-before-push (2026-10-19). The scan before push ignores replacements since correction 2 (504e54a), but takt's other git reads still follow them, for example the check that the case records are on top before a merge. story:loop-scorecard sets `GIT_NO_REPLACE_OBJECTS` in `git::output` on its own branch, which may cover the reads once both units are in wave 12; whether it covers every call site (not only `git::output`) has not been checked.
+From the developer's adversary passes on story:scan-before-push (2026-10-19). The scan before push ignores replacements since correction 2 (c888209), but takt's other git reads still follow them, for example the check that the case records are on top before a merge. story:loop-scorecard sets `GIT_NO_REPLACE_OBJECTS` in `git::output` on its own branch, which may cover the reads once both units are in wave 12; whether it covers every call site (not only `git::output`) has not been checked.
 
 ## Scope
 

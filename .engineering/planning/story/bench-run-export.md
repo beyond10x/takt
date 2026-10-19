@@ -45,4 +45,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-On a fixture case whose `events.jsonl` reports tokens and no cost, `takt export --bench <case dir>` prints one run entry in the instrument's seed shape whose `finish` operation sets `cost_basis: unknown`, where at d17bc32 `takt export` is not a command and exits 2.
+On a fixture case whose `events.jsonl` reports tokens and no cost, `takt export --bench <case dir>` prints one run entry in the instrument's seed shape whose `finish` operation sets `cost_basis: unknown`, where at fb3c3bc `takt export` is not a command and exits 2.

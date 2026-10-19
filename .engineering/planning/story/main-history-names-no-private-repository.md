@@ -17,11 +17,11 @@ transitions:
 ---
 ## Outcome
 
-Before local `main` is first pushed (site publishing option B deploys from `main`), its history names no private repository and no home directory: every commit from the first one that did (d39424e, 2026-10-18T19:40+02:00) onward is rewritten, every commit sha cited in tracked text is mapped to its rewritten sha, and a commit map from old to new is kept so records outside the repository can be mapped too.
+Before local `main` is first pushed (site publishing option B deploys from `main`), its history names no private repository and no home directory: every commit from the first one that did (4f7182b, 2026-10-18T19:40+02:00) onward is rewritten, every commit sha cited in tracked text is mapped to its rewritten sha, and a commit map from old to new is kept so records outside the repository can be mapped too.
 
 ## Context
 
-Owner decision of 2026-10-19: "A rewrite main", on the question whether to rewrite local history, publish it as it is, or deploy the site from an orphan branch. The private name entered history at d39424e and home-directory paths at 4556c02; today's tree has neither (main a550849 scrubbed the store; wave 12's 3c8746a scrubs `ess/`). Both entry points descend from a0b8576, so a0b8576 and its 235 ancestors keep their shas, and with them the promotion baseline record (revision a0b8576). Of 468 commits on main at a550849, 233 come after d39424e; every revision cited since then changes, among them the turn candidates 834205f and cfbf7e4, the promotion merge fe93286 and every sha in review-results and story bodies after that point.
+Owner decision of 2026-10-19: "A rewrite main", on the question whether to rewrite local history, publish it as it is, or deploy the site from an orphan branch. The private name entered history at 4f7182b and home-directory paths at e593f33; today's tree has neither (main f7e0616 scrubbed the store; wave 12's 7518a71 scrubs `ess/`). Both entry points descend from a0b8576, so a0b8576 and its 235 ancestors keep their shas, and with them the promotion baseline record (revision a0b8576). Of 468 commits on main at f7e0616, 233 come after 4f7182b; every revision cited since then changes, among them the turn candidates 98719c3 and 9fb14cc, the promotion merge 9cc158b and every sha in review-results and story bodies after that point.
 
 Timing, decided by the planner: at the close of wave 12, after its merge into `main` and before any push of `main`, so the fewest branches are open.
 

@@ -15,9 +15,9 @@ revision: 1
 ## Context
 
 Seen on 2026-10-18 in gate runs of unchanged trees, each passing on a rerun with no change:
-- `ci_pending_waits::an_hour_budget_cuts_the_wait_and_stops_waiting` (a 0.5 s budget) failed twice while other builds loaded the machine (reviewer verdicts on b0bfad2 and f5f0b2c).
-- `records_reach_base_adv1::records_of_an_earlier_revision_reach_the_base_with_a_later_grant` failed once with `tests.run wrote what its validator does not: .git/info/refs` (the step guard refused the step); `.git/info/refs` is what `git update-server-info` writes; the writer was not found (the developer session's gate on e556ecf).
-- `approval_record` tests failed 6 times under a reviewer's `XDG_CACHE_HOME` override (f5f0b2c review): the tests read the caller's cache location.
+- `ci_pending_waits::an_hour_budget_cuts_the_wait_and_stops_waiting` (a 0.5 s budget) failed twice while other builds loaded the machine (reviewer verdicts on 11495f7 and 478537f).
+- `records_reach_base_adv1::records_of_an_earlier_revision_reach_the_base_with_a_later_grant` failed once with `tests.run wrote what its validator does not: .git/info/refs` (the step guard refused the step); `.git/info/refs` is what `git update-server-info` writes; the writer was not found (the developer session's gate on 479a3bd).
+- `approval_record` tests failed 6 times under a reviewer's `XDG_CACHE_HOME` override (478537f review): the tests read the caller's cache location.
 - `version_cli` compared the binary's revision with the live HEAD and failed when main moved during the suite (wave 11 close; filed in story:wave11-review-follow-ups).
 
 ## Scope

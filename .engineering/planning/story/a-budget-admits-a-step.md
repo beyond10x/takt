@@ -19,7 +19,7 @@ revision: 1
 
 ## Context
 
-From the planner's operator-path variety round on takt at a29d8c7 (`.engineering/planning/review-result/variety-ops-a29d8c7.md`). `--hours 0`, negative, NaN and infinity are refused ("a finite number above 0", `crates/takt-cli/src/main.rs:502`), but `--iterations 0`, `--tokens 0` and `--hours 1e-9` are accepted: each commits "takt: take story", leaves the story `active` and runs 0 steps (`crates/takt/src/run.rs:2866-2877`, `:2741`).
+From the planner's operator-path variety round on takt at 12cffde (`.engineering/planning/review-result/variety-ops-a29d8c7.md`). `--hours 0`, negative, NaN and infinity are refused ("a finite number above 0", `crates/takt-cli/src/main.rs:502`), but `--iterations 0`, `--tokens 0` and `--hours 1e-9` are accepted: each commits "takt: take story", leaves the story `active` and runs 0 steps (`crates/takt/src/run.rs:2866-2877`, `:2741`).
 
 ```expected_before
 scenario: 1

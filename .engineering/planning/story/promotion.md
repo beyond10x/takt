@@ -125,7 +125,7 @@ Typed entries: `crates/takt-cli/src/main.rs` (cited); `crates/takt-cli/build.rs`
   and extends its comparison with the rule; both edit `crates/takt-cli/src/main.rs`.
 - depends_on story:binary-embeds-revision (implemented, wave 11): the installed binary's
   `--version` is what a promotion record is checked against.
-- Delivered by the headstart session off main 0afff2b beside wave 12; the only shared lines with
+- Delivered by the headstart session off main c30f55f beside wave 12; the only shared lines with
   wave 12's loop-scorecard unit are one `pub mod` line in `crates/takt/src/lib.rs` and ESS
   citations.
 

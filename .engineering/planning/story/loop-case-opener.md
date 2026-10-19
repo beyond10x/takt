@@ -17,7 +17,7 @@ revision: 1
 
 ## Context
 
-From the reviewer's verdict on story:loop-scorecard at 20ab1c5 (needs-revision; this was its medium finding 3, not blocking): no production path calls `snapshot_baseline` or sets the loop artifacts' revisions. `Run::open` on loop-improvement/1 gives `loop_baseline` "r0", `loop_candidate` "r0", no `loop-baseline.json`, and the run stops NoProgress. `set_revision` has callers only for "implementation" (`crates/takt/src/case.rs:1362-1366`), and the independence the claims need is written into `case.yaml` by the tests only. It fails closed, so security holds, but the story's Outcome "a loop.improvement/1 case is driven by validators" is not met through `takt run`.
+From the reviewer's verdict on story:loop-scorecard at 00dab82 (needs-revision; this was its medium finding 3, not blocking): no production path calls `snapshot_baseline` or sets the loop artifacts' revisions. `Run::open` on loop-improvement/1 gives `loop_baseline` "r0", `loop_candidate` "r0", no `loop-baseline.json`, and the run stops NoProgress. `set_revision` has callers only for "implementation" (`crates/takt/src/case.rs:1362-1366`), and the independence the claims need is written into `case.yaml` by the tests only. It fails closed, so security holds, but the story's Outcome "a loop.improvement/1 case is driven by validators" is not met through `takt run`.
 
 ## Scope
 

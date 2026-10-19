@@ -19,7 +19,7 @@ The `tests.run` effect line and record keep the test command's own summary, not 
 
 ## Context
 
-From the planner's variety runs of 2026-10-18: the `tests.run` summary keeps the last five lines of stdout plus stderr (`crates/takt/src/validator.rs:281-305` on main, `:148` at a0b8576). In a Cargo workspace those are the doc-tests of the last crate, so every passing run read `running 0 tests … 0 passed` while 26 suites had passed (runs on worktree and metaharness). Reproduced on scenario 1 at 9922f12 with a test script whose first line is its summary and whose last six lines are filler: the effect line holds the filler and drops the summary.
+From the planner's variety runs of 2026-10-18: the `tests.run` summary keeps the last five lines of stdout plus stderr (`crates/takt/src/validator.rs:281-305` on main, `:148` at a0b8576). In a Cargo workspace those are the doc-tests of the last crate, so every passing run read `running 0 tests … 0 passed` while 26 suites had passed (runs on worktree and metaharness). Reproduced on scenario 1 at 333d369 with a test script whose first line is its summary and whose last six lines are filler: the effect line holds the filler and drops the summary.
 
 ```expected_before
 scenario: 1

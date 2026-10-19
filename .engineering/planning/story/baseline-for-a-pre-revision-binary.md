@@ -27,9 +27,9 @@ transitions:
 
 ## Context
 
-Finding of 2026-10-19 from the developer of story:promotion: the promoted revision a0b8576 predates the revision in `--version` (its binary prints `takt 0.1.0`), and `--baseline-only` requires `<root>/bin/takt --version` to name the revision (`crates/takt/src/promotion.rs:1202-1212@df9681a`), so no baseline record can name a0b8576. The installed `~/.cargo/bin/takt` is the a0b8576 binary by sha256 (b7af9ec9…), the binary of the baseline runs T-14..18 and every round-4 and variety run.
+Finding of 2026-10-19 from the developer of story:promotion: the promoted revision a0b8576 predates the revision in `--version` (its binary prints `takt 0.1.0`), and `--baseline-only` requires `<root>/bin/takt --version` to name the revision (`crates/takt/src/promotion.rs:1202-1212@2d10b7f`), so no baseline record can name a0b8576. The installed `~/.cargo/bin/takt` is the a0b8576 binary by sha256 (b7af9ec9…), the binary of the baseline runs T-14..18 and every round-4 and variety run.
 
-Planner decision: the baseline stays a0b8576, identified by sha256. Making 834205f or cfbf7e4 the baseline would install a turn's candidate without the promotion rule deciding it, and turns 2 and 3 would then have no promotion to earn their `promoted` claim. Waiting for a self-naming revision with 5 runs has the same effect for the wave 12 tip.
+Planner decision: the baseline stays a0b8576, identified by sha256. Making 98719c3 or 9fb14cc the baseline would install a turn's candidate without the promotion rule deciding it, and turns 2 and 3 would then have no promotion to earn their `promoted` claim. Waiting for a self-naming revision with 5 runs has the same effect for the wave 12 tip.
 
 ## Scope
 

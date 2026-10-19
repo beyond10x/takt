@@ -16,7 +16,7 @@ Every git invocation takt makes through `git::command`, and the checkout in `tak
 
 ## Context
 
-From the review of main at fe93286 on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), finding P1.4 (code confirmed; no filter in this machine's global config), and the developer's report of 2026-10-19: the override exists only on `crates/takt-cli/build.rs`'s own git calls; `git.rs:22-24` says "A filter driver a `.gitattributes` names is not covered"; `promotion.rs:1292@fe93286` checks out through `git()` (`:532-552`), which blocks hooks and fsmonitor only. Planner decision: a story of its own rather than an item of story:wave11-review-follow-ups.
+From the review of main at 9cc158b on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), finding P1.4 (code confirmed; no filter in this machine's global config), and the developer's report of 2026-10-19: the override exists only on `crates/takt-cli/build.rs`'s own git calls; `git.rs:22-24` says "A filter driver a `.gitattributes` names is not covered"; `promotion.rs:1292@9cc158b` checks out through `git()` (`:532-552`), which blocks hooks and fsmonitor only. Planner decision: a story of its own rather than an item of story:wave11-review-follow-ups.
 
 ## Scope
 

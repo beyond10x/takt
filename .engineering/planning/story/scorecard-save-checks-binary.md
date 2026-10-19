@@ -21,7 +21,7 @@ revision: 1
 
 ## Context
 
-`report` and `save` (`scorecard.rs:750-754`, `:550`) take the operator's `--revision` on trust. `runs()` never reads `binary` (`:313-347`). In the observed run, the `opened` line recorded `"binary":"3fe3f219…"`, the save as `0000000` was accepted, and the output said `named by the revision of takt under test`. This is not the filed `--against` provenance finding: that one is about reading a saved file, this one is about writing it.
+`report` and `save` (`scorecard.rs:750-754`, `:550`) take the operator's `--revision` on trust. `runs()` never reads `binary` (`:313-347`). In the observed run, the `opened` line recorded `"binary":"8378cb29…"`, the save as `0000000` was accepted, and the output said `named by the revision of takt under test`. This is not the filed `--against` provenance finding: that one is about reading a saved file, this one is about writing it.
 
 ```expected_before
 scenario: 1

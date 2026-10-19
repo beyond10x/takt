@@ -3,8 +3,8 @@
 //! untracked file lies where the build can compile it in, or `unknown revision` when no git
 //! checkout with a commit tracks this crate, or git fails; never a guess. Cargo builds it again
 //! when HEAD, the ref it names, the index, the exclude file, a tracked file or the workspace's
-//! `crates/` or `protocols/` changes, so a commit, a checkout, an edit or a new source is never
-//! left out; and on every build while the revision is unknown.
+//! `crates/`, `protocols/` or root `.cargo/` changes, so a commit, a checkout, an edit or a new
+//! source is never left out; and on every build while the revision is unknown.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,9 +13,14 @@ use std::process::Command;
 const UNKNOWN: &str = "unknown revision";
 
 /// The directories, from the top of the checkout, whose untracked files a build can compile in
-/// besides the crate's own: the workspace's crates, and the protocol documents the binary
-/// embeds (`crates/takt/src/protocol.rs`, `include_str!`).
-const COMPILED_IN: [&str; 2] = ["crates", "protocols"];
+/// besides the crate's own: the workspace's crates, the protocol documents the binary embeds
+/// (`crates/takt/src/protocol.rs`, `include_str!`), and the root `.cargo/`, whose
+/// configuration cargo reads on a build from the root (`rustflags`, `[patch]`, `[env]`). A
+/// root `.cargo/` made after a build is seen by the next build that reads the revision for
+/// another reason, and until then a binary compiled with it prints the clean revision, a
+/// known limit: a directory that does not exist is not watched, as cargo would run the script,
+/// and build the crate again, on every build.
+const COMPILED_IN: [&str; 3] = ["crates", "protocols", ".cargo"];
 
 /// The untracked file under [`compiled_in`] that does not make a revision dirty: a
 /// `Cargo.lock`, which cargo writes itself on a build from the committed manifests and which
@@ -31,10 +36,11 @@ const NEVER_WRITTEN: &str = ".takt-unknown-revision";
 /// What every git this script runs is told on its command line, over any configuration: run
 /// no code from configuration (`core.fsmonitor`, which `status` runs, hooks, helpers, signing,
 /// automatic maintenance). The list of `crates/takt/src/git.rs`, copied: a build script cannot
-/// use the library its crate depends on. A clean filter, which `status` runs on a file whose
-/// stat differs from the index, is covered as far as [`NO_ATTRIBUTES`] reaches; a filter named
-/// in the repository's own `info/attributes`, or with a git that does not know
-/// `GIT_ATTR_SOURCE`, still runs.
+/// use the library its crate depends on. A filter, which `status` runs on a file whose stat
+/// differs from the index, is turned off twice: no attributes are read where
+/// [`NO_ATTRIBUTES`] reaches, and every filter driver the configuration names, which the
+/// repository's own `info/attributes` can still name, has its commands set empty
+/// ([`no_filter_drivers`]).
 const NO_CONFIGURED_CODE: [&str; 18] = [
     "-c",
     "core.fsmonitor=false",
@@ -108,21 +114,70 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
 
 /// [`git`] with `env` set on top.
 fn git_with(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Option<String> {
-    let mut command = Command::new("git");
-    for name in REDIRECTING_ENV {
-        command.env_remove(name);
-    }
-    let output = command
-        .envs(env.iter().copied())
-        .args(NO_CONFIGURED_CODE)
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .ok()?;
+    let output = git_command(dir, args, env).output().ok()?;
     output
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The command `git <args>` in `dir`, with no code from configuration, none of the redirecting
+/// environment, and `env` set on top.
+fn git_command(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Command {
+    let mut command = Command::new("git");
+    for name in REDIRECTING_ENV {
+        command.env_remove(name);
+    }
+    command
+        .envs(env.iter().copied())
+        .args(NO_CONFIGURED_CODE)
+        .args(args)
+        .current_dir(dir);
+    command
+}
+
+/// What turns off every filter driver git's configuration for `dir` names
+/// (`git config --name-only --get-regexp '^filter\.'`): for each, `-c filter.<driver>.clean=`,
+/// `smudge=` and `process=`, which git reads as no command, and `required=false`, so that a
+/// file of a required driver is read as it is rather than failing `status`. An attribute that
+/// still names the driver, from the repository's own `info/attributes`, then runs nothing.
+/// `None`, read as an unknown revision, when the listing fails or names a driver `-c` cannot
+/// set (a name that is not UTF-8 or holds `=`).
+fn no_filter_drivers(dir: &Path) -> Option<Vec<String>> {
+    let output = git_command(
+        dir,
+        &["config", "-z", "--name-only", "--get-regexp", r"^filter\."],
+        &[],
+    )
+    .output()
+    .ok()?;
+    let listed = match output.status.code() {
+        Some(0) => output.stdout,
+        Some(1) => Vec::new(),
+        _ => return None,
+    };
+    let mut drivers: Vec<String> = Vec::new();
+    for key in listed
+        .split(|byte| *byte == 0)
+        .filter(|key| !key.is_empty())
+    {
+        let key = std::str::from_utf8(key).ok()?;
+        let (driver, _) = key.strip_prefix("filter.")?.rsplit_once('.')?;
+        if driver.contains('=') {
+            return None;
+        }
+        if !drivers.iter().any(|known| known == driver) {
+            drivers.push(driver.to_owned());
+        }
+    }
+    let mut args = Vec::new();
+    for driver in drivers {
+        for setting in ["clean=", "smudge=", "process=", "required=false"] {
+            args.push("-c".to_owned());
+            args.push(format!("filter.{driver}.{setting}"));
+        }
+    }
+    Some(args)
 }
 
 /// Whether a git checkout tracks the crate whose directory is `dir`: one that does not, a
@@ -154,7 +209,9 @@ fn compiled_in(dir: &Path) -> Option<(PathBuf, Vec<String>)> {
 }
 
 /// The revision of the crate at `dir`: the sha of the commit its checkout is at, `-dirty` after
-/// it while `git status` names a tracked file that differs from that commit, staged or not, or
+/// it while `git status`, every configured filter driver turned off ([`no_filter_drivers`]) and
+/// no submodule looked into (`--ignore-submodules=all`: no submodule's git runs its own
+/// filters, and a submodule at another commit is not seen), names a tracked file that differs from that commit, staged or not, or
 /// an untracked file no ignore rule covers lies under [`compiled_in`], a `Cargo.lock` aside
 /// ([`NOT_COMPILED_IN`]); [`UNKNOWN`] when no checkout with a commit tracks the crate, or git
 /// fails.
@@ -174,12 +231,17 @@ pub fn revision(dir: &Path) -> String {
     } else {
         EMPTY_TREE_SHA1
     };
+    let Some(no_filters) = no_filter_drivers(dir) else {
+        return UNKNOWN.to_owned();
+    };
     let mut args = NO_ATTRIBUTES.to_vec();
+    args.extend(no_filters.iter().map(String::as_str));
     args.extend([
         "--no-optional-locks",
         "status",
         "--porcelain",
         "--untracked-files=no",
+        "--ignore-submodules=all",
     ]);
     let Some(status) = git_with(
         dir,
