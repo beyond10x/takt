@@ -309,7 +309,7 @@ fn home() -> Result<PathBuf> {
     }
 }
 
-fn state_dir() -> Result<PathBuf> {
+pub(crate) fn state_dir() -> Result<PathBuf> {
     match std::env::var_os("XDG_STATE_HOME").filter(|dir| !dir.is_empty()) {
         Some(dir) if Path::new(&dir).is_absolute() => Ok(PathBuf::from(dir)),
         _ => Ok(home()?.join(".local/state")),

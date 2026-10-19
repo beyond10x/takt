@@ -224,6 +224,8 @@ fn a_step_that_plants_bytecode_in_an_ignored_directory_is_refused_and_the_file_r
     };
     let mut run =
         Run::open(tree, options(protocol.clone(), 3), &harness, &validators).expect("opens");
+    let aside = scratch.root.join("aside");
+    run.set_aside = Some(aside.clone());
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -256,6 +258,20 @@ fn a_step_that_plants_bytecode_in_an_ignored_directory_is_refused_and_the_file_r
         !tree.join(&planted).exists(),
         "the planted {planted} is still there\n{text}"
     );
+    // It rewrote the bytecode the first tests.run compiled, of which nothing was kept: moved
+    // out of the tree under the case and the step, and the refusal says where.
+    let step = aside.join("planted-pyc").join("step-2");
+    assert!(
+        step.join(&planted).is_file(),
+        "the planted {planted} is not under {}\n{text}",
+        step.display()
+    );
+    assert!(
+        matches!(&stop, Stop::StepRefused(why)
+            if why.contains(&takt::trace::escape(&step.display().to_string()))),
+        "the refusal does not name {}: {stop:?}",
+        step.display()
+    );
 
     let before = results(&case_dir).len();
     let mut resumed = Run::resume(
@@ -266,6 +282,7 @@ fn a_step_that_plants_bytecode_in_an_ignored_directory_is_refused_and_the_file_r
         &validators,
     )
     .expect("the case resumes");
+    resumed.set_aside = Some(aside);
     let mut out = Vec::new();
     let stop = resumed.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -309,6 +326,7 @@ fn a_step_that_adds_a_file_to_an_ignored_directory_is_refused_and_only_that_file
     let validators: Vec<Box<dyn Validator>> =
         vec![Box::new(TestsRun::new("false").expect("a command"))];
     let mut run = Run::open(tree, options(protocol, 3), &AddsToBuild, &validators).expect("opens");
+    run.set_aside = Some(scratch.root.join("aside"));
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();

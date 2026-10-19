@@ -8,6 +8,7 @@
 //! Paths are read from `git status --porcelain=v1 -z`, never from trimmed or quoted text.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::{OsStr, OsString};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -1603,9 +1604,11 @@ pub struct GitDirPutBack {
 /// ([`Checkpoint::take_guarding`]); the index's entries
 /// and the index file itself; every uncommitted path outside the cases directory with what was
 /// at it (a validator's run may leave one); the ignored paths with what is at each a file git
-/// names, and below each ignored directory every path by its kind and stamp; and what git runs, reads as configuration, or reads to find the objects and the
-/// history in the git directories: the hooks, `info/`, the configuration's keys, `commondir`,
-/// `gitdir`, `shallow`, `objects/info/alternates` and the commit-graph.
+/// names, and below each ignored directory every path by its kind and stamp; and what git runs,
+/// reads as configuration, or reads to find the objects and the history in the git
+/// directories: the hooks, `info/`, the configuration's keys, `commondir`, `gitdir`, `shallow`,
+/// `objects/info/alternates` and the commit-graph. Beside them, where discarding the step moves
+/// what it rewrote inside an ignored directory ([`Checkpoint::setting_aside_in`]).
 #[derive(Debug, Clone)]
 pub struct Checkpoint {
     head: String,
@@ -1615,11 +1618,12 @@ pub struct Checkpoint {
     index: Vec<u8>,
     index_file: Option<(PathBuf, Vec<u8>)>,
     dirty: BTreeMap<String, Content>,
-    ignored: BTreeMap<String, Content>,
+    ignored: BTreeMap<OsString, Content>,
     dot_git: Content,
     head_file: (PathBuf, Content),
     index_lock: (PathBuf, bool),
     git_dirs: Vec<GitDir>,
+    aside: Option<PathBuf>,
 }
 
 /// What a judgement step did to the tree, against its [`Checkpoint`].
@@ -1636,15 +1640,20 @@ pub struct StepChange {
     pub head: Option<String>,
     /// The guarded refs the step moved, made or deleted, each with how.
     pub refs: Vec<String>,
-    /// Ignored paths the step created, inside an ignored directory that was there before it too.
-    pub ignored_added: Vec<String>,
+    /// Ignored paths the step created, inside an ignored directory that was there before it too;
+    /// each path as the file system holds it ([`shown`] names it).
+    pub ignored_added: Vec<OsString>,
     /// Ignored files git names, and paths inside an ignored directory, that the step rewrote.
-    pub ignored_changed: Vec<String>,
+    pub ignored_changed: Vec<OsString>,
     /// Ignored paths the step removed, inside an ignored directory too.
-    pub ignored_removed: Vec<String>,
+    pub ignored_removed: Vec<OsString>,
     /// Those of the rewritten or removed ignored paths of which nothing was kept to put back (a
     /// whole ignored directory, a path inside one, a file too large to keep or unreadable).
-    pub ignored_lost: Vec<String>,
+    pub ignored_lost: Vec<OsString>,
+    /// Those of the rewritten files inside an ignored directory that discarding the step moves
+    /// out of the tree, into [`Checkpoint::aside`] at the same relative path: nothing of them
+    /// was kept to put back, and nothing the operator had is deleted.
+    pub ignored_set_aside: Vec<OsString>,
 }
 
 /// The index's entries: mode, object, stage, the assume-unchanged and skip-worktree flags, path.
@@ -1714,17 +1723,45 @@ fn guarded_refs(tree: &Path, unguarded: &BTreeSet<String>) -> Result<BTreeMap<St
 
 /// What is at each ignored path of `entries`: the content of a file git names, a directory as
 /// itself and, since git names an ignored directory as one entry, every path below it as well
-/// ([`below`]).
-fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<String, Content>> {
+/// ([`below`]). Each path is kept as the bytes the file system holds, a name that is not UTF-8
+/// among them, so that what is found is what is put back.
+fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<OsString, Content>> {
     let mut found = BTreeMap::new();
     for path in ignored(entries) {
-        let content = Content::of(&tree.join(path.trim_end_matches('/')))?;
+        let path = OsString::from(path);
+        let content = Content::of(&at(tree, &path))?;
         if content == Content::Dir {
             below(tree, &path, &mut found)?;
         }
-        found.insert(path, content);
+        // A directory that cannot be listed was recorded as such by [`below`].
+        found.entry(path).or_insert(content);
     }
     Ok(found)
+}
+
+/// The full path of `path`, relative to `tree`, a directory's `/` at its end dropped.
+fn at(tree: &Path, path: &OsStr) -> PathBuf {
+    tree.join(Path::new(path).components().as_path())
+}
+
+/// Whether `path`, as an ignored path is kept, names a directory: it ends in `/`.
+fn names_dir(path: &OsStr) -> bool {
+    path.as_encoded_bytes().ends_with(b"/")
+}
+
+/// How a refusal names a path the tree holds: as text where it is UTF-8 and each byte that is
+/// not as `\x..`, so two names never read the same; each control character escaped and the
+/// home directory as `~` ([`crate::trace::escape`]), so no name can shape a line of its own.
+#[must_use]
+pub fn shown(path: &OsStr) -> String {
+    let mut text = String::new();
+    for chunk in path.as_encoded_bytes().utf8_chunks() {
+        text.push_str(chunk.valid());
+        for byte in chunk.invalid() {
+            text.push_str(&format!("\\x{byte:02x}"));
+        }
+    }
+    crate::trace::escape(&text)
 }
 
 /// Each path below the ignored directory `dir` (relative to the tree, ending in `/`) outside the
@@ -1732,8 +1769,8 @@ fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<String, C
 /// it in turn; a link as the link, never followed; anything else by its kind and [`Stamp`],
 /// never opened, so that a large `target/` costs one `lstat` a path and nothing of it is kept to
 /// put back. A directory that cannot be listed is compared by its stamp alone.
-fn below(tree: &Path, dir: &str, found: &mut BTreeMap<String, Content>) -> Result<()> {
-    let full = tree.join(dir.trim_end_matches('/'));
+fn below(tree: &Path, dir: &OsStr, found: &mut BTreeMap<OsString, Content>) -> Result<()> {
+    let full = at(tree, dir);
     let listed = match std::fs::read_dir(&full) {
         Ok(listed) => listed,
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -1753,8 +1790,10 @@ fn below(tree: &Path, dir: &str, found: &mut BTreeMap<String, Content>) -> Resul
     };
     for entry in listed {
         let entry = entry.with_context(|| format!("list {}", full.display()))?;
-        let path = format!("{dir}{}", entry.file_name().to_string_lossy());
-        if is_under_cases(&path) {
+        let mut path = dir.to_owned();
+        path.push(entry.file_name());
+        // The cases directory's name is ASCII: a name that is not UTF-8 is never under it.
+        if is_under_cases(&path.to_string_lossy()) {
             continue;
         }
         let meta = match entry.metadata() {
@@ -1766,7 +1805,7 @@ fn below(tree: &Path, dir: &str, found: &mut BTreeMap<String, Content>) -> Resul
         };
         let kind = meta.file_type();
         if kind.is_dir() {
-            let path = format!("{path}/");
+            path.push("/");
             below(tree, &path, found)?;
             found.entry(path).or_insert(Content::Dir);
         } else if kind.is_symlink() {
@@ -1842,6 +1881,7 @@ impl Checkpoint {
             index_file,
             dirty,
             ignored: ignored_contents(tree, &entries)?,
+            aside: None,
             dot_git,
             head_file,
             index_lock,
@@ -2075,7 +2115,94 @@ impl Checkpoint {
                 }
             }
         }
+        change.ignored_set_aside = self.set_aside_of(tree, &ignored);
         Ok(change)
+    }
+
+    /// Where discarding the step moves what it rewrote inside an ignored directory
+    /// ([`StepChange::ignored_set_aside`]): a directory outside the tree, made when something is
+    /// moved there. None unless given; nothing is moved then, and such a file stays as the step
+    /// left it.
+    #[must_use]
+    pub fn setting_aside_in(mut self, dir: PathBuf) -> Self {
+        self.aside = Some(dir);
+        self
+    }
+
+    /// The directory [`Self::setting_aside_in`] gave, when it is absolute and outside `tree`
+    /// (through any link to it); none else.
+    #[must_use]
+    pub fn aside(&self, tree: &Path) -> Option<&Path> {
+        let dir = self.aside.as_deref().filter(|dir| dir.is_absolute())?;
+        let real = |path: &Path| {
+            // The longest part of the way that exists, resolved, and the rest as it is.
+            let mut rest = PathBuf::new();
+            let mut base = path;
+            loop {
+                if let Ok(resolved) = std::fs::canonicalize(base) {
+                    return resolved.join(rest);
+                }
+                match (base.parent(), base.file_name()) {
+                    (Some(parent), Some(name)) => {
+                        rest = Path::new(name).join(rest);
+                        base = parent;
+                    }
+                    _ => return path.to_path_buf(),
+                }
+            }
+        };
+        let (tree, at) = (real(tree), real(dir));
+        (!at.starts_with(&tree)).then_some(dir)
+    }
+
+    /// The files of `now`, inside an ignored directory of this checkpoint, that the step
+    /// rewrote, of which nothing was kept: what discarding it moves aside, when there is
+    /// somewhere to move them ([`Self::aside`]).
+    fn set_aside_of(&self, tree: &Path, now: &BTreeMap<OsString, Content>) -> Vec<OsString> {
+        if self.aside(tree).is_none() {
+            return Vec::new();
+        }
+        now.iter()
+            .filter(|(path, content)| {
+                !names_dir(path)
+                    && self.ignored.get(*path).is_some_and(|before| {
+                        !before.can_be_put_back() && before != *content && self.is_inside_dir(path)
+                    })
+            })
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
+
+    /// Moves the file at `path`, relative to `tree`, to the same relative path under `aside`:
+    /// renamed, or copied and removed across file systems; never over something already there.
+    fn set_aside(tree: &Path, aside: &Path, path: &OsStr) -> Result<()> {
+        let from = at(tree, path);
+        let to = aside.join(Path::new(path));
+        if std::fs::symlink_metadata(&to).is_ok() {
+            bail!(
+                "{} is there already; {} was not moved",
+                to.display(),
+                from.display()
+            );
+        }
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+        match std::fs::rename(&from, &to) {
+            Ok(()) => Ok(()),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::CrossesDevices
+                    && std::fs::symlink_metadata(&from).is_ok_and(|meta| meta.is_file()) =>
+            {
+                std::fs::copy(&from, &to)
+                    .with_context(|| format!("copy {} to {}", from.display(), to.display()))?;
+                std::fs::remove_file(&from).with_context(|| format!("remove {}", from.display()))
+            }
+            Err(error) => {
+                Err(error).with_context(|| format!("move {} to {}", from.display(), to.display()))
+            }
+        }
     }
 
     /// Puts the tree back to this checkpoint: everything the step did is discarded and
@@ -2084,10 +2211,12 @@ impl Checkpoint {
     /// [`Self::put_back_git_dir`] and is not again here); then `HEAD`, its branch and the
     /// guarded refs; the tracked files and the index to `HEAD`; untracked files and the ignored
     /// paths the step created removed, inside an ignored directory too; ignored files git names
-    /// written again as they were; the paths uncommitted before written again as they were; the
-    /// index file as it was. The cases directory is not touched here (it is the kernel's, put
-    /// back by the run). Of an ignored directory, a file inside one, a file too large to keep or
-    /// one that could not be read nothing is kept to put back. Checked afterwards: a tree that still differs is an error, not a refusal.
+    /// written again as they were; the files inside an ignored directory it rewrote moved
+    /// aside ([`Self::setting_aside_in`]), never deleted; the paths uncommitted before written
+    /// again as they were; the index file as it was. The cases directory is not touched here
+    /// (it is the kernel's, put back by the run). Of an ignored directory, a file inside one, a
+    /// file too large to keep or one that could not be read nothing is kept to put back.
+    /// Checked afterwards: a tree that still differs is an error, not a refusal.
     pub fn restore(&self, tree: &Path) -> Result<()> {
         let _ = self.put_back_git_dir(tree);
         match &self.branch {
@@ -2121,26 +2250,23 @@ impl Checkpoint {
         run(tree, &["reset", "-q", "--hard", &self.head])?;
         run(tree, &["clean", "-fdq", "-e", &keep])?;
         let now = ignored_contents(tree, &status(tree, true)?)?;
+        // A file inside an ignored directory the step rewrote: nothing of it was kept to put
+        // back, and what is there now may decide the next test run (a build's output, a cache),
+        // so it leaves the tree; it may be the operator's own file the step only touched, so it
+        // is moved aside, never deleted.
+        if let Some(aside) = self.aside(tree) {
+            for path in self.set_aside_of(tree, &now) {
+                Self::set_aside(tree, aside, &path)?;
+            }
+        }
         for path in now.keys() {
             if !self.ignored.contains_key(path) {
-                Content::Absent.put_back(&tree.join(path.trim_end_matches('/')))?;
+                Content::Absent.put_back(&at(tree, path))?;
             }
         }
         for (path, content) in &self.ignored {
             if content.can_be_put_back() && *content != Content::Dir {
-                content.put_back(&tree.join(path.trim_end_matches('/')))?;
-            }
-        }
-        // A file inside an ignored directory the step rewrote: nothing of it was kept to put
-        // back, and what the step wrote there (a build's output, a cache the next test run
-        // reads) goes; whatever made it makes it again.
-        for (path, content) in &now {
-            if !path.ends_with('/')
-                && self.ignored.get(path).is_some_and(|before| {
-                    !before.can_be_put_back() && before != content && self.is_inside_dir(path)
-                })
-            {
-                Content::Absent.put_back(&tree.join(path))?;
+                content.put_back(&at(tree, path))?;
             }
         }
         for (path, content) in &self.dirty {
@@ -2163,10 +2289,16 @@ impl Checkpoint {
 
     /// Whether the ignored path `path` lies inside an ignored directory of this checkpoint,
     /// rather than being one git names by itself.
-    fn is_inside_dir(&self, path: &str) -> bool {
-        path.trim_end_matches('/')
-            .match_indices('/')
-            .any(|(at, _)| self.ignored.get(&path[..=at]) == Some(&Content::Dir))
+    fn is_inside_dir(&self, path: &OsStr) -> bool {
+        Path::new(path)
+            .ancestors()
+            .skip(1)
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .any(|dir| {
+                let mut key = dir.as_os_str().to_owned();
+                key.push("/");
+                self.ignored.get(&key) == Some(&Content::Dir)
+            })
     }
 }
 
@@ -2302,6 +2434,29 @@ mod tests {
         assert!(parse_status(b"R  only-target\0").is_err());
         assert!(parse_status(b"?? \xff\0").is_err());
         assert!(parse_status(b"").expect("reads").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_is_shown_byte_for_byte_and_shapes_no_line() {
+        use std::os::unix::ffi::OsStrExt as _;
+        assert_eq!(shown(OsStr::new("build/a b.o")), "build/a b.o");
+        assert_eq!(shown(OsStr::from_bytes(b"build/\xffx.o")), "build/\\xffx.o");
+        assert_ne!(
+            shown(OsStr::from_bytes(b"build/\xffx.o")),
+            shown(OsStr::from_bytes(b"build/\xfex.o"))
+        );
+        assert_eq!(shown(OsStr::new("a\n  effect: b")), "a\\u{a}  effect: b");
+        assert_eq!(
+            at(Path::new("/srv/t"), OsStr::new("build/sub/")),
+            Path::new("/srv/t/build/sub")
+        );
+        assert!(
+            !at(Path::new("/srv/t"), OsStr::new("build/sub/"))
+                .as_os_str()
+                .as_encoded_bytes()
+                .ends_with(b"/")
+        );
     }
 
     #[test]

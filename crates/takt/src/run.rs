@@ -2995,6 +2995,52 @@ fn undo_step(
     Ok(())
 }
 
+/// How a refusal names ignored paths: the first twenty, each as [`crate::git::shown`] names it,
+/// and how many more; a build inside an ignored directory changes thousands.
+fn ignored_named(paths: &[std::ffi::OsString]) -> String {
+    const SHOWN: usize = 20;
+    let mut named = paths
+        .iter()
+        .take(SHOWN)
+        .map(|path| crate::git::shown(path))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if paths.len() > SHOWN {
+        named.push_str(&format!(" and {} more", paths.len() - SHOWN));
+    }
+    named
+}
+
+/// What a refusal adds for the files inside an ignored directory that discarding the step
+/// moves out of the tree ([`crate::git::StepChange::ignored_set_aside`]): where they go and
+/// which they are; nothing when there are none.
+fn set_aside_named(
+    checkpoint: &crate::git::Checkpoint,
+    tree: &Path,
+    change: &crate::git::StepChange,
+) -> String {
+    match checkpoint.aside(tree) {
+        Some(dir) if !change.ignored_set_aside.is_empty() => format!(
+            "; moved out of the tree, not deleted, into {}: {}",
+            crate::trace::escape(&dir.display().to_string()),
+            ignored_named(&change.ignored_set_aside)
+        ),
+        _ => String::new(),
+    }
+}
+
+/// Where discarding a step moves the files inside an ignored directory it rewrote, outside
+/// every repository and every case directory: `$XDG_STATE_HOME/takt/set-aside`
+/// (`~/.local/state/takt/set-aside` without it), state and not cache, since what is moved
+/// there may be the operator's own file, kept until the operator removes it. None when
+/// neither is set.
+#[must_use]
+pub fn default_set_aside() -> Option<PathBuf> {
+    crate::promotion::state_dir()
+        .ok()
+        .map(|dir| dir.join("takt").join("set-aside"))
+}
+
 /// The subject of the commit that records a take on the case's branch: `takt: take <story>`.
 #[must_use]
 pub fn take_subject(story: &str) -> String {
@@ -3109,6 +3155,9 @@ pub struct Run<'a> {
     /// on the `opened` line; none unless the caller sets it, since this library does not know
     /// the build it is linked into.
     pub binary: Option<String>,
+    /// Where discarding a step moves the files inside an ignored directory it rewrote, under the
+    /// case's id and the step's number: [`default_set_aside`] unless set.
+    pub set_aside: Option<PathBuf>,
     /// The planning store a story's run records its test result and its move in; none until
     /// [`Run::record_on`] gives one, and only a story's run writes to it.
     store: Option<&'a dyn Frontier>,
@@ -3195,6 +3244,7 @@ impl<'a> Run<'a> {
             tokens: 0,
             poll: Self::POLL,
             binary: None,
+            set_aside: None,
             store: None,
             started: Instant::now(),
             outside: Outside::read(tree)?,
@@ -3252,6 +3302,7 @@ impl<'a> Run<'a> {
             tokens: 0,
             poll: Self::POLL,
             binary: None,
+            set_aside: None,
             store: None,
             started: Instant::now(),
             outside: Outside::read(tree)?,
@@ -3418,6 +3469,28 @@ impl<'a> Run<'a> {
                 dir.display()
             )),
         }
+    }
+
+    /// The checkpoint of the tree before the step being taken, the branches of
+    /// [`Self::kept_branches`] guarded, and what discarding the step moves aside going to
+    /// `<set-aside>/<case id>/step-<n>` ([`Run::set_aside`]), a new directory: one a run before
+    /// this one left under the same case id and step gets `-2`, `-3` and so on after it.
+    fn checkpoint(&self) -> Result<crate::git::Checkpoint> {
+        let checkpoint = crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
+        let root = self.set_aside.clone().or_else(default_set_aside);
+        let (Some(root), Some(id)) = (root, self.case.dir.file_name()) else {
+            return Ok(checkpoint);
+        };
+        let step = root.join(id).join(format!("step-{}", self.steps));
+        let mut dir = step.clone();
+        let mut n = 1;
+        while std::fs::symlink_metadata(&dir).is_ok() {
+            n += 1;
+            let mut name = step.clone().into_os_string();
+            name.push(format!("-{n}"));
+            dir = PathBuf::from(name);
+        }
+        Ok(checkpoint.setting_aside_in(dir))
     }
 
     /// The branches a checkpoint guards even when another worktree has them checked out: the
@@ -4117,8 +4190,7 @@ impl<'a> Run<'a> {
                     writeln!(out, "  refused: {why}; nothing observed")?;
                     return Ok(Stop::StepRefused(why));
                 }
-                let checkpoint =
-                    crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
+                let checkpoint = self.checkpoint()?;
                 let cases = self.tree.join(CASES_DIR);
                 let kept = snapshot(&cases)?;
                 let globs = self.judge_list()?.unwrap_or_default();
@@ -4194,8 +4266,8 @@ impl<'a> Run<'a> {
                             .iter()
                             .chain(&change.ignored_changed)
                             .chain(&change.ignored_removed)
-                            .filter(|path| surface.contains(path))
-                            .cloned(),
+                            .filter(|path| surface.contains(&path.to_string_lossy()))
+                            .map(|path| crate::git::shown(path)),
                     )
                 {
                     if !outside.contains(&path) {
@@ -4225,6 +4297,7 @@ impl<'a> Run<'a> {
                     if let Err(error) = &observed {
                         why.push_str(&format!("; the observation failed too: {error:#}"));
                     }
+                    why.push_str(&set_aside_named(&checkpoint, &self.tree, &change));
                     // Written after the cases directory was put back, which would take a
                     // line written before it along.
                     self.stepped(
@@ -4506,8 +4579,7 @@ impl<'a> Run<'a> {
             // base, and a sibling case's branch, which a step could otherwise move under it; a
             // branch another worktree has checked out is that session's, but never the case's
             // base or its own branch.
-            let checkpoint =
-                crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
+            let checkpoint = self.checkpoint()?;
             // What is left of the hour budget is read last, just before the call, so the step
             // ends by the run's end and not by the time its preparation took after it.
             context.time_left = self.time_left();
@@ -4892,25 +4964,21 @@ impl<'a> Run<'a> {
                 || !change.ignored_changed.is_empty()
                 || !change.ignored_removed.is_empty()
             {
-                // A build inside an ignored directory changes thousands of paths; the first of
-                // each list are named, the rest counted.
-                let named = |paths: &[String]| {
-                    const SHOWN: usize = 20;
-                    let mut named = paths[..paths.len().min(SHOWN)].join(", ");
-                    if paths.len() > SHOWN {
-                        named.push_str(&format!(" and {} more", paths.len() - SHOWN));
-                    }
-                    named
-                };
                 let mut what = Vec::new();
                 if !change.ignored_added.is_empty() {
-                    what.push(format!("wrote {}", named(&change.ignored_added)));
+                    what.push(format!("wrote {}", ignored_named(&change.ignored_added)));
                 }
                 if !change.ignored_changed.is_empty() {
-                    what.push(format!("rewrote {}", named(&change.ignored_changed)));
+                    what.push(format!(
+                        "rewrote {}",
+                        ignored_named(&change.ignored_changed)
+                    ));
                 }
                 if !change.ignored_removed.is_empty() {
-                    what.push(format!("removed {}", named(&change.ignored_removed)));
+                    what.push(format!(
+                        "removed {}",
+                        ignored_named(&change.ignored_removed)
+                    ));
                 }
                 let mut why = format!(
                     "{action} {} ignored by git, which no commit would carry",
@@ -4919,9 +4987,10 @@ impl<'a> Run<'a> {
                 if !change.ignored_lost.is_empty() {
                     why.push_str(&format!(
                         "; nothing was kept to put back of {}",
-                        named(&change.ignored_lost)
+                        ignored_named(&change.ignored_lost)
                     ));
                 }
+                why.push_str(&set_aside_named(&checkpoint, &self.tree, &change));
                 Some(why)
             } else if !change.already_uncommitted.is_empty() {
                 Some(format!(
@@ -4931,6 +5000,9 @@ impl<'a> Run<'a> {
             } else {
                 None
             };
+            // A path is the step's to name: each control character in it escaped, so no name
+            // shapes a line of the output.
+            let overreach = overreach.map(|why| crate::trace::escape(&why));
             if let Some(why) = overreach {
                 undo()?;
                 record_step(self)?;
