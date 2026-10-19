@@ -289,14 +289,16 @@ impl Events {
     /// skip), or the line after it is the [`Event::Skipped`] line naming it. Lines that do not
     /// read one after another (a repair that was cut short too) are skipped together when the
     /// last of them is such a line. Any other line that does not read is an error naming the
-    /// file and the line. A line's `at` is its first: a `store_evidence` line an earlier takt
-    /// wrote carries the store's instant as a second `at`, which is read as `observed_at`.
-    /// A symbolic link at the path is refused, never read through ([`Events::open`]).
+    /// file and the line. The file is read as bytes, line by line: a line that is not valid
+    /// UTF-8 (a write cut inside a multi-byte character) is one more line that does not read,
+    /// so one torn write never makes the whole record unreadable. A line's `at` is its first: a
+    /// `store_evidence` line an earlier takt wrote carries the store's instant as a second
+    /// `at`, which is read as `observed_at`. A symbolic link at the path is refused, never read through ([`Events::open`]).
     pub fn read(&self) -> Result<Vec<serde_json::Value>> {
-        let mut text = String::new();
+        let mut bytes = Vec::new();
         match self.open(std::fs::OpenOptions::new().read(true)) {
             Ok(mut file) => {
-                file.read_to_string(&mut text)
+                file.read_to_end(&mut bytes)
                     .with_context(|| format!("read {}", self.path.display()))?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -304,14 +306,21 @@ impl Events {
                 return Err(error).with_context(|| format!("read {}", self.path.display()));
             }
         }
-        let ended = text.ends_with('\n');
-        let lines: Vec<&str> = text.split_terminator('\n').collect();
+        let ended = bytes.ends_with(b"\n");
+        let mut lines: Vec<Option<&str>> = bytes
+            .split(|byte| *byte == b'\n')
+            .map(|line| std::str::from_utf8(line).ok())
+            .collect();
+        if ended {
+            lines.pop();
+        }
+        let blank = |n: usize| lines[n].is_some_and(|line| line.trim().is_empty());
         let parsed: Vec<Option<serde_json::Value>> =
-            lines.iter().map(|line| read_line(line)).collect();
+            lines.iter().map(|line| line.and_then(read_line)).collect();
         let mut read = Vec::new();
         let mut n = 0;
         while n < lines.len() {
-            if lines[n].trim().is_empty() {
+            if blank(n) {
                 n += 1;
                 continue;
             }
@@ -323,10 +332,7 @@ impl Events {
             // A repair cut short too is one more torn line: the lines that do not read, one
             // after another, are skipped together when the last of them was cut short.
             let mut last = n;
-            while last + 1 < lines.len()
-                && parsed[last + 1].is_none()
-                && !lines[last + 1].trim().is_empty()
-            {
+            while last + 1 < lines.len() && parsed[last + 1].is_none() && !blank(last + 1) {
                 last += 1;
             }
             let last_unended = last + 1 == lines.len() && !ended;

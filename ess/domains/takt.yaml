@@ -374,14 +374,17 @@ types:
   # kernel's. A line cut short, without its end, is ended by the next line written, which is a
   # `skipped` line naming it; on read such a line, or a last line without its end, is skipped,
   # with the lines that do not read just before it (a repair cut short too), and any other line
-  # that does not read is an error. A line's `at` is the first it holds: a `store_evidence` line
-  # an earlier takt wrote carries the store's instant as a second `at`, read as `observed_at`.
+  # that does not read is an error naming it. The file is read as bytes, line by line: a line that
+  # is not valid UTF-8 (a write cut inside a multi-byte character) is one more line that does not
+  # read, so one torn write never makes the whole record unreadable. A line's `at` is the first it
+  # holds: a `store_evidence` line an earlier takt wrote carries the store's instant as a second
+  # `at`, read as `observed_at`.
   # read from: crates/takt/src/events.rs:1-11
   # read from: crates/takt/src/events.rs:171-178
   # read from: crates/takt/src/events.rs:201-232
-  # read from: crates/takt/src/events.rs:286-348
+  # read from: crates/takt/src/events.rs:286-354
   # read from: crates/takt/src/events.rs:27-36
-  # read from: crates/takt/src/events.rs:352-364
+  # read from: crates/takt/src/events.rs:358-370
   - name: takt.work.RunEventLine
     kind: struct
     fields:
