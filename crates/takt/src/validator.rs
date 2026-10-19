@@ -1831,7 +1831,7 @@ pub struct BuiltIn {
 /// observation, never a choice the step choice records (`crate::run`): a protocol in which an
 /// action no built-in validator performs may produce one with `effect: read` is refused, and so
 /// is one where an outcome or an obligation holds on choice records alone.
-pub const BUILT_IN: [BuiltIn; 6] = [
+pub const BUILT_IN: [BuiltIn; 9] = [
     BuiltIn {
         validator: "TestsRun",
         action: TestsRun::ACTION,
@@ -1861,6 +1861,21 @@ pub const BUILT_IN: [BuiltIn; 6] = [
         validator: "ChangeRead",
         action: ChangeRead::ACTION,
         kind: ChangeRead::KIND,
+    },
+    BuiltIn {
+        validator: "LoopMeasure",
+        action: crate::loop_scorecard::LoopMeasure::ACTION,
+        kind: crate::loop_scorecard::LoopMeasure::KIND,
+    },
+    BuiltIn {
+        validator: "LoopDefinitionCheck",
+        action: crate::loop_scorecard::LoopDefinitionCheck::ACTION,
+        kind: crate::loop_scorecard::LoopDefinitionCheck::KIND,
+    },
+    BuiltIn {
+        validator: "LoopCompare",
+        action: crate::loop_scorecard::LoopCompare::ACTION,
+        kind: crate::loop_scorecard::LoopCompare::KIND,
     },
 ];
 

@@ -308,7 +308,10 @@ struct RunArgs {
     protocol: Option<String>,
     /// A case input, `name=value`; repeatable. One the protocol a case opens on does not declare
     /// is refused before the case is opened. Given for a resumed case, any input is refused
-    /// before the case is resumed: the case keeps the inputs it was opened with.
+    /// before the case is resumed: the case keeps the inputs it was opened with. A
+    /// `loop.improvement/1` case requires `loop_baseline=<full commit id>`, the promoted revision
+    /// its baseline is, a commit of the repository: it opens the case's baseline and is no case
+    /// input.
     #[arg(long = "input", value_name = "NAME=VALUE")]
     inputs: Vec<String>,
     /// The case id; generated when absent.
@@ -671,6 +674,21 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     first_input.as_deref(),
                 )?;
             }
+            // A loop case opens with its baseline: `--input loop_baseline=<full commit id>`, no
+            // case input of the protocol, is taken out of the inputs and checked here, so a
+            // missing or wrong one is refused before anything is written.
+            let mut inputs = inputs;
+            let loop_baseline =
+                if case.is_none() && resuming.is_none() && opens_on.id == takt::case::LOOP_PROTOCOL
+                {
+                    let given = inputs
+                        .iter()
+                        .position(|(name, _)| name == takt::case::LOOP_BASELINE)
+                        .map(|at| inputs.remove(at).1);
+                    Some(takt::case::loop_baseline(&repo, given.as_deref())?)
+                } else {
+                    None
+                };
             // A case keeps only the inputs its protocol declares: one it does not declare would
             // be dropped without a word, so a case to be opened refuses it before anything is.
             if case.is_none()
@@ -692,7 +710,6 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             }
             // The software change's inputs select the obligations it owes; left out, they take
             // the least demanding values a change can carry, said on the first line of the run.
-            let mut inputs = inputs;
             if opens_on.id == SOFTWARE_CHANGE {
                 for (name, value) in [
                     ("risk", "standard"),
@@ -754,6 +771,11 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     }
                 }
             };
+            // The loop case just opened gets its baseline and the snapshot of its definitions
+            // before any step.
+            if let Some(baseline) = &loop_baseline {
+                run.case.open_loop_baseline(&repo, baseline)?;
+            }
             // A story's case that terminates accepted records its test result and its move
             // in the store; an intent's run has no story and writes nothing there.
             run.record_on(&store);
@@ -810,8 +832,9 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
     }
 }
 
-/// The validators that need no forge: the test command, `change.read`, and the gate when a gates
-/// document is given or at its default path in `repo`, with the project file likewise.
+/// The validators that need no forge: the test command, `change.read`, the gate when a gates
+/// document is given or at its default path in `repo`, with the project file likewise, and
+/// the loop scorecard's three.
 fn validators_of(repo: &Path, looping: &LoopArgs) -> Result<Vec<Box<dyn Validator>>> {
     let mut validators: Vec<Box<dyn Validator>> = vec![
         Box::new(TestsRun::new(&looping.test_cmd)?),
@@ -826,6 +849,11 @@ fn validators_of(repo: &Path, looping: &LoopArgs) -> Result<Vec<Box<dyn Validato
         }
         validators.push(Box::new(gate));
     }
+    // The loop scorecard's validators: due only in a `loop.improvement/1` case, whose
+    // protocol alone has their actions.
+    validators.push(Box::new(takt::loop_scorecard::LoopMeasure));
+    validators.push(Box::new(takt::loop_scorecard::LoopDefinitionCheck));
+    validators.push(Box::new(takt::loop_scorecard::LoopCompare));
     Ok(validators)
 }
 

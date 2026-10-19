@@ -4,8 +4,10 @@
 //! design names: a fix verified by another run, merged under the authority its surface needs,
 //! with no regression and promoted is accepted; a fix that leaves the finding reproducing is
 //! declined; a loop change that redefines a metric without the old figures cannot be merged.
-//! No validator exists for these actions yet; the records here stand in for the ones they will
-//! write.
+//! No validator exists for the `self.improvement/1` actions yet; the records here stand in for
+//! the ones they will write. The `loop.improvement/1` actions have theirs
+//! (`crates/takt/src/loop_scorecard.rs`, driven in `tests/loop_scorecard.rs`); the loop cases
+//! here keep hand-written records so that they decide the protocol's reading alone.
 
 use std::fs;
 use std::path::{Path, PathBuf};
