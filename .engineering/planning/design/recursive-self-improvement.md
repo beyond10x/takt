@@ -8,7 +8,7 @@ summary: Three levels (work, takt, the loop), four agent roles, a pinned judge, 
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 12
+revision: 13
 ---
 # Design: recursive self-improvement of takt
 
@@ -119,7 +119,7 @@ file the candidate could plant. Each scenario is compared against the promoted r
 for that scenario.
 
 Promotion defaults, changeable by the owner: no scenario's outcome worse; the median of tokens at
-most the baseline plus 10 %; at most one promotion a day. A metric's definition is a judge
+most the baseline plus 10 %; no daily cap: the owner removed the one-promotion-a-day default on 2026-10-19 so improvement trials run back to back (story:promotion-without-daily-cap), and a cap may return after 1.0. A metric's definition is a judge
 surface; for one cycle after a change the previous definition's numbers are printed beside the
 new ones, so a metric cannot be redefined to look better.
 
