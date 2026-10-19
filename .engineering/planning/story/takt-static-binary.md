@@ -9,7 +9,7 @@ relations:
 - decomposes: epic:benchmark-integration
 - serves: vision:safe-agentic-coding
 - informed_by: story:prebuilt-binaries-in-ci
-revision: 1
+revision: 2
 ---
 ## Outcome
 
@@ -33,4 +33,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-After `task build:static`, `file target/x86_64-unknown-linux-musl/release/takt` prints a line containing `statically linked`, where at d17bc32 `task build:static` is not a task and exits non-zero.
+After `task build:static`, `file target/x86_64-unknown-linux-musl/release/takt` prints a line matching the regular expression `static(ally|-pie) linked` (`file` 5.48 prints `static-pie linked` for a musl build), where at d17bc32 `task build:static` is not a task and exits non-zero.

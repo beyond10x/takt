@@ -4,7 +4,7 @@ id: story:bench-nouns-in-ess
 kind: story
 status: draft
 title: takt's ESS model names the benchmark nouns, aligned with the benchmark instrument's entities
-summary: BenchTask, BenchRun, BenchArm and the export link to bench's run entity declared before code
+summary: BenchTask, BenchRun, BenchArm and the export link to the instrument's run entity declared before code
 relations:
 - decomposes: epic:benchmark-integration
 - serves: vision:safe-agentic-coding
@@ -13,7 +13,7 @@ scope:
   path: ess/domains/takt.citations.tsv
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 6
+revision: 8
 ---
 # Story: bench-nouns-in-ess
 
@@ -23,7 +23,7 @@ takt's specification declares what a benchmark run is in takt (the task, the arm
 
 ## Context
 
-Spec first (AGENTS.md § Rules). the organization's benchmark instrument types the comparison already (`docs/design/bench-entities-v0.1.md` there); takt's model must reference those, not invent a parallel set. A relation into another repository's model that nothing settles is `UNMAPPED:`.
+Spec first (AGENTS.md § Rules). the organization's benchmark instrument types the comparison already; takt's model must reference those, not invent a parallel set. A relation into another repository's model that nothing settles is `UNMAPPED:`.
 
 ## Expected before
 
@@ -38,4 +38,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-`ess specify validate --path ess` passes with BenchTask, BenchRun and BenchArm declared, each relation to a bench entity named or `UNMAPPED:`, and every `read from:` resolving.
+`ess specify validate --path ess` passes with BenchTask, BenchRun and BenchArm declared, and `python3 -I scripts/check-citations --require-digests` exits 0 over their `read from:` lines; each relation to an entity of the instrument is a `relations:` entry or carries an `UNMAPPED:` comment beside the entity.
