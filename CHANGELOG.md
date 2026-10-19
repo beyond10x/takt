@@ -16,13 +16,13 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   running binary is the promoted one, the candidate leaves the finding's story file,
   `scripts/check-finding` and `scripts/file-finding` as the baseline has them, and the baseline's
   `scripts/check-finding` is one reviewed as confined. Both scripts are read at the baseline,
-  never from the case's tree. <!-- pending: impl/sip -->
+  never from the case's tree.
 - Four validators drive a turn: `finding.file`, `scenario.reproduce`, `scenario.verify` and
   `scorecard.compare`, which reads the candidate's `scorecard-<candidate>.json` under
   `$XDG_STATE_HOME/takt/scorecards/`. A turn ends `unreproducible` when the finding does not
   reproduce on the baseline and `declined` when it still reproduces on the candidate. The merge
   validators and `binary.promote` are not built yet, so no turn reaches `accepted`.
-  `--scenarios <dir>` names the scenario checkout a finding's check runs in. <!-- pending: impl/sip -->
+  `--scenarios <dir>` names the scenario checkout a finding's check runs in.
 - `loop.improvement/1` cases (`protocols/loop-improvement/1.yaml`) open only with `--input
   loop_baseline=<full commit id>`. `loop.measure` writes a measurement over the recorded
   `self.improvement/1` cases, each figure naming the case ids it was computed from;
@@ -71,7 +71,21 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   container clients) and, on Linux, in a user and mount namespace of its own, where `/run/user`
   is empty and the bus sockets and cargo's registry credentials are covered. Where the host
   refuses unprivileged user namespaces, the test command does not run, and the error names the
-  kernel setting. <!-- pending: impl/test-forge -->
+  kernel setting.
+- A harness step that adds, rewrites or removes a file inside an ignored directory that existed
+  before it (`__pycache__/`, `target/`) is refused and undone. A file it rewrote is not deleted:
+  it is moved, never over another file and through no link, to
+  `$XDG_STATE_HOME/takt/set-aside/<case>/step-<n>/` (`~/.local/state/takt/set-aside/` without
+  it), and every message about the discarded step names where each file went or why it stayed.
+  A set-aside root that cannot be used keeps the run from starting; with neither
+  `XDG_STATE_HOME` nor `HOME` set, the first harness step is refused before the harness is
+  called. What a validator's command rewrote there is its build output and stays.
+- A step or a test command that replaces `.engineering/cases`, or a part on the way to it, with
+  a link or something other than a directory is undone: a link is removed as itself, the cases
+  directory is put back from the snapshot, and nothing is put back through a link. A case is
+  never opened or resumed through a link. When the undo fails, nothing of the run is recorded
+  through the link, the case is not let go, and the error, with the run's steps and tokens, goes
+  to stderr.
 
 ### Findings
 
@@ -109,7 +123,7 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 - `takt promote` no longer refuses a second promotion on the same UTC day: a candidate of
   another revision is judged against the latest record and, when it holds, recorded after it.
   Promotions still run one at a time under the store's lock, and a revision or tree recorded
-  already is still refused. <!-- pending: impl/promotion-no-daily-cap -->
+  already is still refused.
 
 ### Repository and site
 
@@ -122,12 +136,8 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   (story:story-delivery-tests-first).
 - `tests.run` passes on exit 0 alone, so code under test that ends the process with status 0
   before the runner reports earns a pass (story:test-pass-needs-the-runners-report).
-- The test command can reach the operator's forge login through the keyring and session bus
-  (story:test-command-reaches-no-forge-login). <!-- until: impl/test-forge -->
 - A relative or in-tree `B10X_GATES_POLICY` resolves inside the case's tree, where a step can
   rewrite the policy `pr.open` scans with (story:scan-policy-outside-the-tree).
-- A step's writes inside a git-ignored directory that existed before it are not detected
-  (story:ignored-directories-are-guarded).
 - A deleted `promotions.head` is read on trust again, and a process running as the same user can
   rewrite a record and the head together.
 - A predicate's command still sees a host socket outside `/run`, `/tmp` and the hidden homes, and
