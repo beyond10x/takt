@@ -14,3 +14,7 @@ path = "src/main.rs"
 b10x-takt = { path = "../takt" }
 anyhow = { workspace = true }
 clap = { workspace = true }
+
+[dev-dependencies]
+b10x-canon-engineering-assertions = { workspace = true }
+serde_yaml_ng = { workspace = true }
