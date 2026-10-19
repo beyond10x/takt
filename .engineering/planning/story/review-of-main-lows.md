@@ -8,7 +8,7 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-fe93286-areas
-revision: 1
+revision: 2
 ---
 ## Outcome
 
@@ -50,3 +50,9 @@ Covered elsewhere: F7.5/E8.6 (suffix credential list) by story:environment-allow
 ## Acceptance
 
 Each item above has a commit with a test that fails before it, or a line in this story's body saying why it is accepted; `task check` passes.
+
+## From the review of run-report at df179c9 (2026-10-19)
+
+- `crates/takt/src/report.rs:583-605@df179c9`: a `|` in a case id or run name adds a markdown table column; failing input `"case":"case|x"`.
+- `crates/takt/src/trace.rs` (`escape`): only the current `$HOME` becomes `~`; a record made under another home keeps its home path (`HOME=/nonexistent takt report` printed 3 lines with a home path).
+- `crates/takt/src/trace.rs` (`escape`): Cf format characters such as U+202E are not escaped (inferred from `char::is_control`, not run).
