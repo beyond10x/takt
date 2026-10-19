@@ -1,0 +1,10 @@
+{
+  "format": "canon-evidence/1",
+  "id": "e6",
+  "kind": "promotion_record",
+  "result": "promoted",
+  "subject": "promotion",
+  "subject_revision": "44f96a48de6b0a89db6801fd1d85372896e98781",
+  "observed_at": "2026-10-19T05:03:03Z",
+  "producer": "planner-run"
+}

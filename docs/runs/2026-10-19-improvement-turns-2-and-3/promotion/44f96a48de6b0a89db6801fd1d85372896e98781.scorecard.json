@@ -1,0 +1,87 @@
+{
+  "format": "takt-scorecard/1",
+  "revision": "44f96a48de6b0a89db6801fd1d85372896e98781",
+  "named_by": "build",
+  "metrics": {
+    "errors": 1,
+    "no_progress": 1,
+    "outcome": 1,
+    "refusals": 1,
+    "steps": 1,
+    "tokens": 1,
+    "wall": 1
+  },
+  "rule": {
+    "trials": 5,
+    "margin": 1
+  },
+  "rows": [
+    {
+      "case": "scenario-1-trial-71",
+      "scenario": "1",
+      "outcome": "ApprovalRequired",
+      "steps": 13,
+      "tokens": 121495,
+      "refusals": 0,
+      "no_progress": 0,
+      "errors": 0,
+      "wall_ms": 100150,
+      "saturated": false,
+      "binary": null
+    },
+    {
+      "case": "scenario-1-trial-72",
+      "scenario": "1",
+      "outcome": "ApprovalRequired",
+      "steps": 13,
+      "tokens": 121906,
+      "refusals": 0,
+      "no_progress": 0,
+      "errors": 0,
+      "wall_ms": 85519,
+      "saturated": false,
+      "binary": null
+    },
+    {
+      "case": "scenario-1-trial-73",
+      "scenario": "1",
+      "outcome": "ApprovalRequired",
+      "steps": 13,
+      "tokens": 122058,
+      "refusals": 0,
+      "no_progress": 0,
+      "errors": 0,
+      "wall_ms": 89757,
+      "saturated": false,
+      "binary": null
+    },
+    {
+      "case": "scenario-1-trial-74",
+      "scenario": "1",
+      "outcome": "ApprovalRequired",
+      "steps": 13,
+      "tokens": 121952,
+      "refusals": 0,
+      "no_progress": 0,
+      "errors": 0,
+      "wall_ms": 87541,
+      "saturated": false,
+      "binary": null
+    },
+    {
+      "case": "scenario-1-trial-75",
+      "scenario": "1",
+      "outcome": "ApprovalRequired",
+      "steps": 13,
+      "tokens": 121986,
+      "refusals": 0,
+      "no_progress": 0,
+      "errors": 0,
+      "wall_ms": 83979,
+      "saturated": false,
+      "binary": null
+    }
+  ],
+  "no_record": [],
+  "unstated": {}
+}

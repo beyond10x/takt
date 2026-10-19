@@ -1,0 +1,17 @@
+format: canon-case/1
+id: turn-3-hours
+protocol: self.improvement
+artifacts:
+  finding:
+    revision: a9dd0d3
+  baseline:
+    revision: a0b8576
+  candidate:
+    revision: cfbf7e4
+  promotion:
+    revision: 44f96a48de6b0a89db6801fd1d85372896e98781
+inputs:
+  surface: judge
+independence:
+  planner-run:
+  - different_agent_run
