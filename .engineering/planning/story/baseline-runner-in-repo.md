@@ -11,7 +11,7 @@ relations:
 scope:
 - confidence: inferred
   path: docs/metrics/runner
-revision: 6
+revision: 7
 ---
 # Story: baseline-runner-in-repo
 
@@ -41,4 +41,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-With doubles of `claude`, `codex`, `gh` and `b10x-gates` first on PATH (built as `crates/takt-cli/tests/scenario_run.rs:260-270` builds one) and a local bare clone of a fixture scratch repository as the remote, `docs/metrics/runner/run-arm.sh <arm> 1` writes `<out>/<arm>-1/result.json` holding the keys `arm`, `i`, `trial`, `branch`, `wall_seconds`, `last_exit`, `resumes`, `acceptance` and `pull_requests` for every arm of T, C, I and X, where at d17bc32 `docs/metrics/runner/run-arm.sh` does not exist.
+With doubles of `claude`, `codex`, `gh` and `b10x-gates` first on PATH (built as `crates/takt-cli/tests/scenario_run.rs:260-270` builds one) and a local bare clone of a fixture scratch repository as the remote, `docs/metrics/runner/run-arm.sh <arm> 1` writes `<out>/<arm>-1/result.json` holding the keys `arm`, `i`, `trial`, `branch`, `wall_seconds`, `last_exit`, `resumes`, `acceptance` and `pull_requests` for every arm of T (takt), C (Claude Code, free), I (Claude Code with takt's isolation flags) and X (Codex), where at d17bc32 `docs/metrics/runner/run-arm.sh` does not exist.

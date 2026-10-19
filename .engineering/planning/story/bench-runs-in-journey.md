@@ -9,7 +9,7 @@ relations:
 - decomposes: epic:benchmark-integration
 - serves: vision:safe-agentic-coding
 - depends_on: story:bench-runs-schema
-revision: 1
+revision: 2
 ---
 ## Outcome
 
@@ -35,3 +35,5 @@ On takt at main, holds; after the change, fails:
 ## Acceptance
 
 With `docs/metrics/fixtures/bench-runs-one.jsonl` (one takt-arm row whose `case_dir` names a committed fixture case), `python3 -I docs/metrics/journey.py --bench-runs docs/metrics/fixtures/bench-runs-one.jsonl --out <dir>` writes `<dir>/journeys.jsonl` holding at least one line whose `run` is that row's `id`, where at d17bc32 `journey.py` takes no arguments and writes no such line.
+
+The written SVG also holds one lane per run, grouped by arm: for the fixture's one row, `grep -c 'data-arm="takt"' <out>` prints 1.

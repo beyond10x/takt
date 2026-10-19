@@ -4,11 +4,11 @@ id: design:benchmark-integration
 kind: design
 status: draft
 title: 'Benchmark integration: realistic scenarios first, then Terminal-Bench 2.0 and SWE-bench Verified Mini through the organization''s benchmark instrument'
-summary: own realistic scenarios first; then the two public benchmarks as bench corpora, takt as one harness, benchmark tests as held-out acceptance, four arms per task
+summary: own realistic scenarios first; then the two public benchmarks as corpora of the organization's benchmark instrument, takt as one harness, benchmark tests as the held-out verdict
 relations:
 - designs: product-requirements:takt
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 7
 ---
 # Design: benchmark integration
 
@@ -25,7 +25,7 @@ takt's evidence so far comes from one toy scenario: a 31-line change to a small 
 
 ## The organization's instrument: the organization's benchmark instrument
 
-the organization's benchmark instrument already types what a comparison needs (harness, framework, corpus, case, arm, run, fact, study; `docs/design/bench-entities-v0.1.md` there) and judges runs with a deterministic grader into a fact table that counts what held and what did not, without scoring. takt does not build a second instrument: takt is one harness in bench's harness-by-harness subject, takt exports each run in bench's run shape, and Terminal-Bench 2.0 and SWE-bench Verified Mini become bench corpora. The bench-side work (importing the two benchmarks as corpora, a takt arm, the studies) is filed in bench's own store when it starts; the takt-side work is the stories of epic:benchmark-integration.
+the organization's benchmark instrument already types what a comparison needs (harness, framework, corpus, case, arm, run, fact, study) and judges runs with a deterministic grader into a fact table that counts what held and what did not, without scoring. takt does not build a second instrument: takt is one harness in the instrument's harness-by-harness subject, takt exports each run in the instrument's run shape, and Terminal-Bench 2.0 and SWE-bench Verified Mini become corpora of the instrument. The instrument-side work (importing the two benchmarks as corpora, a takt arm, the studies) is filed in the instrument's own store when it starts; the takt-side work is the stories of epic:benchmark-integration.
 
 ## How takt fits a benchmark
 

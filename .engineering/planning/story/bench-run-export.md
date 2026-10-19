@@ -4,7 +4,7 @@ id: story:bench-run-export
 kind: story
 status: draft
 title: takt exports each scenario or benchmark run as a run record of the organization's benchmark instrument
-summary: a run's case, events and raw usage become a bench run in bench's record shape, so bench's fact table holds takt
+summary: a run's case, events and raw usage become a run record in the organization's benchmark instrument's shape
 relations:
 - decomposes: epic:benchmark-integration
 - serves: vision:safe-agentic-coding
@@ -14,13 +14,13 @@ scope:
   path: crates/takt-cli/src/main.rs
 - confidence: inferred
   path: crates/takt/src/events.rs
-revision: 8
+revision: 10
 ---
 # Story: bench-run-export
 
 ## Outcome
 
-Every takt run on a scenario or a benchmark task can be exported as a run record of the organization's benchmark instrument (its arm, case, revision, verdict, raw usage and the path of its case directory), so bench's grader and fact table cover takt beside the other harnesses.
+Every takt run on a scenario or a benchmark task can be exported as a run record of the organization's benchmark instrument (its arm, case, revision, verdict, raw usage and the path of its case directory), so the instrument's grader and fact table cover takt beside the other harnesses.
 
 ## Context
 

@@ -15,7 +15,7 @@ scope:
   path: Taskfile.yml
 - confidence: inferred
   path: crates/takt/src/harness.rs
-revision: 10
+revision: 11
 ---
 # Story: takt-in-container
 
@@ -47,4 +47,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-With `HOME` set to a fixture home whose `.claude/.credentials.json` holds the canary `takt-canary-7f3a`, and a `claude` double first on PATH that copies that file's content into its reply's summary, `grep -rF takt-canary-7f3a <case dir> <takt's captured stdout and stderr>` exits 1 after `takt run --harness claude --forge none` on the fixture task of story:bench-task-protocol, where at d17bc32 it exits 0 on the case's `events.jsonl`.
+With `HOME` set to a fixture home whose `.claude/.credentials.json` holds the canary `takt-canary-7f3a`, and a `claude` double first on PATH that copies that file's content into its reply's summary, `takt run` exits 0 with the double's step line in `events.jsonl`, and `grep -rF takt-canary-7f3a <case dir> <takt's captured stdout and stderr>` exits 1 after `takt run --harness claude --forge none` on the fixture task of story:bench-task-protocol, where at d17bc32 it exits 0 on the case's `events.jsonl`.
