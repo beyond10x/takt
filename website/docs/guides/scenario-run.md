@@ -23,14 +23,14 @@ takt scenario run --repo <path> <id> --hours 1
 6. opens the case `scenario-<id>-trial-<n>` on `story.delivery/1`, whose pull request targets
    `trial/<n>`.
 
-Nothing is reset by a force-push, and nothing of an earlier run is resumed. A refusal before the
+Nothing of an earlier run is resumed. A refusal before the
 push removes the branch and puts the tree back.
 
 A trial branch is deleted afterwards with
 `b10x-gates bot --repository <owner>/<repo> -- delete-branch trial/<n>`, which the bot route
 admits only while the branch's tip is merged into the default branch.
 
-## The scenarios measured so far
+## Scenarios
 
 Scenario 1 is the scratch repository's `story:remove-a-todo`: a 31-line change to a toy CLI.
 Scenarios 2 to 6 were added on 2026-10-18 and each run once. The held-out check of each is a

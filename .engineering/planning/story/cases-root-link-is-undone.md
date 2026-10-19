@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cases-root-link-is-undone
 kind: story
-status: draft
+status: active
 title: A step that replaces the cases directory with a link is undone, not resumed through
 tags:
 - priority:high
@@ -10,7 +10,15 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-fe93286-areas
-revision: 2
+scope:
+- confidence: cited
+  path: crates/takt/src/case.rs
+- confidence: cited
+  path: crates/takt/src/run.rs
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T07:39:18Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-19T07:39:18Z", actor: "human:timo", revision: 5}
 ---
 ## Outcome
 

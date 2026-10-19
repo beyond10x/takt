@@ -24,9 +24,10 @@ Read from a raw record a program wrote during the run.
 
 ## Derived
 
-Computed from measured records by a program in the repository, never typed by hand.
+Computed from measured records.
 
-- Medians, minima and maxima per arm and revision: from `scenario-runs.jsonl`.
+- Medians, minima and maxima per arm and revision in the [Runs](./runs.mdx) tables: from
+  `scenario-runs.jsonl`; no program in the repository writes these tables.
 - `journeys.jsonl` and the journey chart: `docs/metrics/journey.py`, from the raw files each run
   record names. It holds order, kind and time only; no token or cost figure is read from it.
 - The timeline chart: `docs/metrics/timeline.py`.

@@ -27,7 +27,7 @@ scope:
   path: ess/domains/takt.citations.tsv
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T06:11:33Z", actor: "human:timo", revision: 5}
 - {from: "proposed", to: "active", at: "2026-10-19T06:11:33Z", actor: "human:timo", revision: 6}
@@ -70,4 +70,4 @@ Derived 2026-10-19 by `story-scoper`, read-only at `wave/2026-10-19-w13` bbe5bdb
 
 ## Acceptance
 
-Saving under a revision that differs from a run's `binary` (an `unknown revision` binary included) exits 1 and names the case. Saving under the matching sha succeeds.
+Saving under a revision that differs from a run's `binary` exits 1 and names the case. Saving under the matching sha succeeds.

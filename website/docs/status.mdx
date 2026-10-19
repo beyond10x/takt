@@ -12,16 +12,12 @@ import counts from '@site/data/story-counts.json';
 `scorecard`, `trace`, `report` and `promote`, with `story.delivery/1` embedded, and prebuilt
 binaries for Linux (x86_64, aarch64) and macOS (aarch64).
 
-Open: no recorded run has yet taken a story from ready to merged with the grant as the only
-manual step; no operating-system sandbox holds the harness or the test command; and improvement
-turns are still recorded by hand.
-
 | milestone | state |
 |---|---|
 | M1 one step validated | done 2026-10-18 |
 | M2 a story end to end | built; not yet proven with the grant as the only manual step |
 | unattended scenario 1 | next: accepted with one invocation plus one grant, daily for a week |
-| self-improvement | phase R0: one turn accepted from records written by hand; the judge guard and validators for `self.improvement/1` are not built |
+| self-improvement | phase R0: three turns accepted from records written by hand; the judge guard and validators for `self.improvement/1` are not built |
 | M3 to M5 | workflows as `workflow/1` files, a second harness and the confinement seam, a week of daily runs: not built |
 | continuous runs | designed, not built |
 
@@ -30,8 +26,8 @@ turns are still recorded by hand.
 The planning store at {counts.revision} holds {counts.total} stories that are not archived:
 {counts.counts.implemented ?? 0} implemented, {counts.counts.active ?? 0} in an open wave,
 {counts.counts.proposed ?? 0} proposed and {counts.counts.draft ?? 0} drafts. The table lists the
-first two groups. **Shipped** means the story is `implemented` in the store; **Decided** means it
-is `active`, in an open wave. The drafts are in
+first two groups: **Shipped** is `implemented`, **Decided** is `active`. Proposed stories and
+drafts are in
 [`.engineering/planning/story/`](https://github.com/beyond10x/takt/tree/main/.engineering/planning/story).
 
 <StatusTable data={status} label="Every implemented story and every story in an open wave" />
