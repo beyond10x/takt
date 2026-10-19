@@ -904,16 +904,30 @@ fn put_back_file(at: &Path, bytes: &[u8], executable: bool) -> Result<()> {
 /// or the link made again; a path the step added stays removed, and an entry that was neither
 /// a file nor a link (a FIFO) cannot be made again and stays removed too. The paths go in
 /// order, so a link or file the step put in place of a directory is gone before anything is
-/// written below it.
-fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -> Result<()> {
-    if std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_symlink()) {
-        bail!(
-            "the directory {} was replaced by a link; nothing is put back through it",
-            dir.display()
-        );
-    }
+/// written below it. Something in `dir`'s own place (a link, as the link itself, or a file) is
+/// removed first and every path of `before` put back: nothing is ever put back through it.
+/// `dir` lies under `root`, the tree, and before anything is removed or written each part of the
+/// way from `root` down is read with `symlink_metadata`: a link on the way, which would take the
+/// write wherever it points, refuses it, naming the link.
+fn restore(
+    root: &Path,
+    dir: &Path,
+    before: &BTreeMap<PathBuf, Entry>,
+    changed: &[PathBuf],
+) -> Result<()> {
+    no_link_on_the_way(root, dir)?;
+    let all: Vec<PathBuf>;
+    let changed = match std::fs::symlink_metadata(dir) {
+        Ok(meta) if !meta.is_dir() => {
+            std::fs::remove_file(dir).with_context(|| format!("remove {}", dir.display()))?;
+            all = before.keys().cloned().collect();
+            &all
+        }
+        _ => changed,
+    };
     for path in changed {
         let full = dir.join(path);
+        no_link_on_the_way(root, &full)?;
         if let Ok(meta) = std::fs::symlink_metadata(&full) {
             if meta.is_dir() {
                 std::fs::remove_dir_all(&full)
@@ -933,6 +947,19 @@ fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -
             Some(Entry::Link(target)) => make_link(target, &full)?,
             Some(Entry::Other(_) | Entry::Large(_)) | None => {}
         }
+    }
+    Ok(())
+}
+
+/// Refuses a write at `at` when a part of the way from `root` down to it, `at` itself left out,
+/// is a link ([`Outside::link_on_the_way`]): the refusal names the link, relative to `root`.
+fn no_link_on_the_way(root: &Path, at: &Path) -> Result<()> {
+    if let Some(link) = Outside::link_on_the_way(root, at) {
+        bail!(
+            "{} is a link on the way to {}; nothing is put back through it",
+            link.strip_prefix(root).unwrap_or(&link).display(),
+            at.strip_prefix(root).unwrap_or(at).display()
+        );
     }
     Ok(())
 }
@@ -4698,7 +4725,7 @@ impl JudgeSurface {
         if !again.is_empty() {
             let real = std::fs::canonicalize(tree)
                 .with_context(|| format!("resolve {}", tree.display()))?;
-            restore(&real, kept, &again)?;
+            restore(&real, &real, kept, &again)?;
         }
         Ok(())
     }
@@ -5691,22 +5718,88 @@ fn surface_refusal(action: &str, touched: &[String]) -> String {
     format!("{action} {}", parts.join("; and "))
 }
 
-/// Discards everything a judgement step did, back to `checkpoint`, and puts the cases directory
-/// back to `kept` once more: a reset can remove a case file the step had staged.
-fn undo_step(
-    tree: &Path,
-    checkpoint: &crate::git::Checkpoint,
-    cases: &Path,
-    kept: &BTreeMap<PathBuf, Entry>,
-) -> Result<()> {
-    checkpoint
+/// What a judgement step or an observation is checked against and put back to when it is
+/// discarded: the checkpoint, the cases directory, the judge surface and what lies outside the
+/// tree, each as it was just before.
+struct Kept<'k> {
+    checkpoint: &'k crate::git::Checkpoint,
+    cases: &'k Path,
+    cases_kept: &'k BTreeMap<PathBuf, Entry>,
+    surface: &'k JudgeSurface,
+    surface_kept: &'k BTreeMap<PathBuf, Entry>,
+    outside: &'k Outside,
+    outside_dirs: &'k OutsideDirs,
+}
+
+/// Discards everything a judgement step or an observation did, in this order: the reset to the
+/// checkpoint; the judge surface put back, which removes a link the step put at `.engineering`
+/// as the link itself; the cases directory put back, after the reset, which can remove a case
+/// file the step had staged; and what lies outside the tree. Every part is attempted whatever
+/// another part's error, and the errors are joined in that order. Answers the paths outside the
+/// tree left as they were, their way crossing a link.
+fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Vec<PathBuf>> {
+    let reset = kept
+        .checkpoint
         .restore(tree)
-        .context("discard the step's change")?;
-    let again = differing(kept, &snapshot(cases)?);
-    if !again.is_empty() {
-        restore(cases, kept, &again)?;
+        .context("discard the step's change");
+    let surface = kept.surface.put_back(tree, kept.surface_kept);
+    let cases = snapshot(kept.cases).and_then(|now| {
+        let again = differing(kept.cases_kept, &now);
+        if again.is_empty() {
+            Ok(())
+        } else {
+            restore(tree, kept.cases, kept.cases_kept, &again)
+        }
+    });
+    let outside = kept.outside.put_back(tree, kept.outside_dirs);
+    let mut errors: Vec<String> = [reset, surface, cases]
+        .into_iter()
+        .filter_map(|part| part.err().map(|error| format!("{error:#}")))
+        .collect();
+    let left = outside.unwrap_or_else(|error| {
+        errors.push(format!("{error:#}"));
+        Vec::new()
+    });
+    if errors.is_empty() {
+        Ok(left)
+    } else {
+        bail!("{}", errors.join("; and "))
     }
-    Ok(())
+}
+
+/// The paths of the cases directory `cases` a step or an observation changed, as a refusal names
+/// them, under [`CASES_DIR`]: the directory itself first when something else stands in its
+/// place (a link, with where it leads), then each of `paths`, one that is a link now with where
+/// it leads. Read before the directory is put back.
+fn cases_named<'p>(cases: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -> Vec<String> {
+    let link = |at: &Path| {
+        std::fs::symlink_metadata(at)
+            .ok()
+            .filter(|meta| meta.file_type().is_symlink())
+            .map(|_| match std::fs::read_link(at) {
+                Ok(target) => format!(", replaced by a link to {}", target.display()),
+                Err(_) => ", replaced by a link".to_owned(),
+            })
+    };
+    let mut named = Vec::new();
+    let replaced = match std::fs::symlink_metadata(cases) {
+        Ok(meta) if !meta.is_dir() => {
+            named.push(format!(
+                "{CASES_DIR}{}",
+                link(cases).unwrap_or_else(|| ", replaced by a file".to_owned())
+            ));
+            true
+        }
+        _ => false,
+    };
+    named.extend(paths.into_iter().map(|path| {
+        let shown = Path::new(CASES_DIR).join(path).display().to_string();
+        match (!replaced).then(|| link(&cases.join(path))).flatten() {
+            Some(link) => format!("{shown}{link}"),
+            None => shown,
+        }
+    }));
+    named
 }
 
 /// The subject of the commit that records a take on the case's branch: `takt: take <story>`.
@@ -6246,16 +6339,24 @@ impl<'a> Run<'a> {
     /// is kept. Every run's record ends on its `stop` line, or on an `error` line when the run
     /// ends on an error, a failing `out` among them. The run holds the case while it runs
     /// (`run.lock` under the case directory), so no grant lands and no second run starts on it
-    /// meanwhile; it lets go at every stop and on error.
+    /// meanwhile; it lets go at every stop and on error. Nothing under the case directory is
+    /// written, appended to or removed while a part of the way to it is not a real directory
+    /// ([`CaseDir::check_way`], read before the hold, before the stop and before the error
+    /// line): a run that ends that way records nothing and keeps its hold, says on standard
+    /// error what it could not record, and ends on the error.
     pub fn run(&mut self, out: &mut dyn Write) -> Result<Stop> {
+        self.case.check_way()?;
         self.case.hold()?;
         let events = Events::new(&self.case.dir);
         // A panic in the loop (a harness or a validator that broke) is recorded as the run's
         // `error` line and the case let go before the panic goes on: the record ends, and the
-        // case is not left held.
+        // case is not left held; unless the way to the case directory holds a link or a part
+        // that is not a directory, when neither is done (`unrecorded`).
         let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_held(&events, out)
-                .and_then(|stop| self.close(&events, &stop, out).map(|()| stop))
+            self.run_held(&events, out).and_then(|stop| {
+                self.case.check_way()?;
+                self.close(&events, &stop, out).map(|()| stop)
+            })
         })) {
             Ok(outcome) => outcome,
             Err(panic) => {
@@ -6264,36 +6365,55 @@ impl<'a> Run<'a> {
                     .map(|text| (*text).to_owned())
                     .or_else(|| panic.downcast_ref::<String>().cloned())
                     .unwrap_or_else(|| "a panic with no message".to_owned());
-                let _ = events.emit(
-                    self.steps,
-                    &Event::Error {
-                        error: format!("the run panicked: {what}"),
-                    },
-                );
-                let _ = self.case.release();
+                let error = format!("the run panicked: {what}");
+                match self.case.check_way() {
+                    Ok(()) => {
+                        let _ = events.emit(self.steps, &Event::Error { error });
+                        let _ = self.case.release();
+                    }
+                    Err(way) => self.unrecorded(&error, &way),
+                }
                 std::panic::resume_unwind(panic);
             }
         };
         let outcome = match outcome {
             Ok(stop) => Ok(stop),
-            Err(error) => Err(
-                match events.emit(
-                    self.steps,
-                    &Event::Error {
-                        error: format!("{error:#}"),
+            Err(error) => {
+                if let Err(way) = self.case.check_way() {
+                    self.unrecorded(&format!("{error:#}"), &way);
+                    return Err(error.context(format!(
+                        "nothing of the run was recorded and the case was not let go: {way:#}"
+                    )));
+                }
+                Err(
+                    match events.emit(
+                        self.steps,
+                        &Event::Error {
+                            error: format!("{error:#}"),
+                        },
+                    ) {
+                        Ok(()) => error,
+                        Err(unrecorded) => error.context(format!(
+                            "and the error could not be recorded: {unrecorded:#}"
+                        )),
                     },
-                ) {
-                    Ok(()) => error,
-                    Err(unrecorded) => error.context(format!(
-                        "and the error could not be recorded: {unrecorded:#}"
-                    )),
-                },
-            ),
+                )
+            }
         };
         let released = self.case.release();
         let stop = outcome?;
         released?;
         Ok(stop)
+    }
+
+    /// Says on standard error what a run that ended on `error` did not record because the way to
+    /// its case directory is not a real directory (`way`, [`CaseDir::check_way`]): the steps and
+    /// the tokens it took, the refusal, and the error. Its record and its hold stay as they are.
+    fn unrecorded(&self, error: &str, way: &anyhow::Error) {
+        eprintln!(
+            "takt: case {}: nothing of this run was recorded and the case was not let go: {way:#}; the run took {} step(s) and {} token(s); it ended on: {error}",
+            self.case.id, self.steps, self.tokens
+        );
     }
 
     /// After the loop stopped: the store's writes of a story's case that terminated
@@ -6881,27 +7001,42 @@ impl<'a> Run<'a> {
                 if let Err(error) = swept {
                     planted.push(format!("processes still running: {error:#}"));
                 }
-                // What the observation left on the judge surface; a read that fails (a file
-                // the run may not read) discards everything it did before the run ends on the
+                // What the observation left: on the judge surface, in the cases directory, in the
+                // tree as git sees it and outside the tree. A read that fails (a file the run may
+                // not read) discards everything the observation did before the run ends on the
                 // error.
-                let on_surface = match surface.snapshot(&self.tree) {
-                    Ok(now) => differing(&surface_kept, &now),
+                let kept_all = Kept {
+                    checkpoint: &checkpoint,
+                    cases: &cases,
+                    cases_kept: &kept,
+                    surface: &surface,
+                    surface_kept: &surface_kept,
+                    outside: &outside_kept,
+                    outside_dirs: &self.outside_dirs,
+                };
+                let seen = (|| -> Result<_> {
+                    let on_surface = differing(&surface_kept, &surface.snapshot(&self.tree)?);
+                    let touched = differing(&kept, &snapshot(&cases)?);
+                    let change = checkpoint.change(&self.tree)?;
+                    let moved =
+                        outside_kept.differing(&Outside::read(&self.tree, &self.outside_dirs)?);
+                    Ok((on_surface, touched, change, moved))
+                })();
+                let (on_surface, touched, change, outside_moved) = match seen {
+                    Ok(seen) => seen,
                     Err(error) => {
-                        let undone = undo_step(&self.tree, &checkpoint, &cases, &kept)
-                            .and_then(|()| surface.put_back(&self.tree, &surface_kept));
-                        return Err(match undone {
-                            Ok(()) => error.context(format!(
-                                "{}: what the observation left on the judge surface could not be read; everything it changed was discarded",
+                        return Err(match undo_step(&self.tree, &kept_all) {
+                            Ok(_) => error.context(format!(
+                                "{}: what the observation left could not be read; everything it changed was discarded",
                                 validator.action()
                             )),
                             Err(undo) => error.context(format!(
-                                "{}: what the observation left on the judge surface could not be read, and its change could not be discarded: {undo:#}",
+                                "{}: what the observation left could not be read, and its change could not be discarded: {undo:#}",
                                 validator.action()
                             )),
                         });
                     }
                 };
-                let touched = differing(&kept, &snapshot(&cases)?);
                 let own: Vec<PathBuf> = match self.case.dir.file_name() {
                     Some(id) => validator
                         .writes()
@@ -6910,12 +7045,8 @@ impl<'a> Run<'a> {
                         .collect(),
                     None => Vec::new(),
                 };
-                let mut foreign: Vec<String> = touched
-                    .iter()
-                    .filter(|path| !own.contains(path))
-                    .map(|path| Path::new(CASES_DIR).join(path).display().to_string())
-                    .collect();
-                let change = checkpoint.change(&self.tree)?;
+                let mut foreign =
+                    cases_named(&cases, touched.iter().filter(|path| !own.contains(path)));
                 let mut outside: Vec<String> = planted;
                 outside.extend(change.paths.iter().cloned());
                 if change.staged {
@@ -6942,17 +7073,9 @@ impl<'a> Run<'a> {
                         outside.push(path);
                     }
                 }
-                outside.extend(
-                    outside_kept
-                        .differing(&Outside::read(&self.tree, &self.outside_dirs)?)
-                        .iter()
-                        .map(|path| path.display().to_string()),
-                );
+                outside.extend(outside_moved.iter().map(|path| path.display().to_string()));
                 if !foreign.is_empty() || !outside.is_empty() {
-                    restore(&cases, &kept, &touched)?;
-                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
-                    surface.put_back(&self.tree, &surface_kept)?;
-                    let left = outside_kept.put_back(&self.tree, &self.outside_dirs)?;
+                    let left = undo_step(&self.tree, &kept_all)?;
                     foreign.extend(outside);
                     foreign.extend(left.iter().map(|path| {
                         format!("not put back (a program or import directory takt never writes, a link on its way, or a file too large to keep a copy of): {}", path.display())
@@ -6988,7 +7111,7 @@ impl<'a> Run<'a> {
                     && self.deadline().is_some_and(|deadline| returned >= deadline)
                     && let Some(h) = self.options.hours
                 {
-                    restore(&cases, &kept, &touched)?;
+                    restore(&self.tree, &cases, &kept, &touched)?;
                     let why = format!(
                         "step {}: the hour budget ran out during {}; nothing recorded: {error:#}",
                         self.steps,
@@ -7267,11 +7390,16 @@ impl<'a> Run<'a> {
             // not put back is named in the refusal below.
             let git_dir = checkpoint.put_back_git_dir(&self.tree);
             let tree = self.tree.clone();
-            let undo = || -> Result<()> {
-                undo_step(&tree, &checkpoint, &cases, &kept)?;
-                surface.put_back(&tree, &surface_kept)?;
-                outside_before.put_back(&tree, &outside_dirs).map(|_| ())
+            let kept_all = Kept {
+                checkpoint: &checkpoint,
+                cases: &cases,
+                cases_kept: &kept,
+                surface: &surface,
+                surface_kept: &surface_kept,
+                outside: &outside_before,
+                outside_dirs: &outside_dirs,
             };
+            let undo = || -> Result<()> { undo_step(&tree, &kept_all).map(|_| ()) };
             let stepped = match stepped {
                 Ok(stepped) => stepped,
                 Err(panic) => {
@@ -7328,9 +7456,9 @@ impl<'a> Run<'a> {
                     });
                 }
             };
-            if !touched.is_empty() {
-                restore(&cases, &kept, &touched)?;
-            }
+            // Named as the step left them; the cases directory is put back with the rest of the
+            // step's change by `undo`, after the reset, on every path below that discards it.
+            let touched_named = cases_named(&cases, &touched);
             // A step that returned when the hour budget ended, failed (killed by it) or not, is
             // discarded whole like any failed step, recorded as a refusal, and the run stops on
             // the budget. One that reported keeps its step line, with its tokens and their
@@ -7443,14 +7571,10 @@ impl<'a> Run<'a> {
             let changed = &change.paths;
             if !touched.is_empty() {
                 undo()?;
-                let paths: Vec<String> = touched
-                    .iter()
-                    .map(|p| Path::new(CASES_DIR).join(p).display().to_string())
-                    .collect();
                 let why = format!(
                     "{} wrote into the cases directory: {}",
                     report.action,
-                    paths.join(", ")
+                    touched_named.join(", ")
                 );
                 record_step(self)?;
                 self.refused(events, BY_TAKT, &why)?;
