@@ -5,10 +5,12 @@ kind: story
 status: active
 title: Scenario runs from fresh checkouts never share a trial number
 summary: 'trial 2: four aborted runs, 239,745 tokens'
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 3}

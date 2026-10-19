@@ -5,10 +5,12 @@ kind: story
 status: active
 title: A judge-surface candidate counts as merged only after the turn holds its grant
 summary: the first real turn's candidate was merged before the grant
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T18:37:47Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T18:37:47Z", actor: "human:timo", revision: 3}

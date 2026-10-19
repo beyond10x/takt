@@ -5,10 +5,12 @@ kind: story
 status: draft
 title: The scorecard refuses a case whose rows are split up
 summary: interleaved rows of two cases count as five trials; promote --dry-run would install
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
 ---
 # Story: a-scorecard-case-is-one-run-of-rows
 

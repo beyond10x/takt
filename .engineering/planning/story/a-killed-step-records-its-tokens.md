@@ -5,10 +5,12 @@ kind: story
 status: draft
 title: A step killed by the hour budget or a harness error still records the tokens it spent
 summary: a killed step records 0 tokens, so a candidate whose steps time out looks cheaper to the judge
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
 ---
 # Story: a-killed-step-records-its-tokens
 

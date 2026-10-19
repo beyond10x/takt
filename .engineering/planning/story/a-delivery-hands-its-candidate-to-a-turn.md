@@ -5,10 +5,12 @@ kind: story
 status: active
 title: A delivery that ends green hands a turn its candidate with no operator step
 summary: the first real turn's candidate was cherry-picked by the operator
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T18:37:46Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T18:37:46Z", actor: "human:timo", revision: 3}

@@ -5,10 +5,12 @@ kind: story
 status: active
 title: A wait on a local file exits 6 at once instead of polling
 summary: 'trial 2: 35 polls, 70 decision records in 17 min'
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 3}

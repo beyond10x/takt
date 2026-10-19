@@ -5,10 +5,12 @@ kind: story
 status: active
 title: Each harness step's stream is kept under the case's artifacts
 summary: trial 1 needed a recording shim to read why a run looped
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:59:00Z", actor: "human:timo", revision: 3}

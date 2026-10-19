@@ -4,13 +4,15 @@ id: story:wall-time-test-without-sleep
 kind: story
 status: draft
 title: The crashed-run wall-time test sets its instants and does not sleep
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 scope:
 - confidence: cited
   path: crates/takt/tests/scorecard_adv1.rs
-revision: 4
+revision: 5
 ---
 ## Outcome
 

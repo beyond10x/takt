@@ -81,6 +81,10 @@ cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
   delivers stories in waves and never marks its own fix verified; the reviewer reviews, runs and
   measures, and never grants or files; the doc-writer writes `docs/**` but the wave pages, the
   README's structure and the public site, and writes no takt code.
+- A story that comes from a self-improvement trial, a self-improvement turn or a review of
+  self-improvement work carries the tag `rsi`, and every open `rsi` story is scheduled before any
+  story without it: a wave takes the `rsi` stories first, and opens without one only for a unit it
+  depends on (owner, 2026-10-19).
 - A finding goes into the planning store with an `expected_before` predicate a machine can check.
   Messages between the agents only announce a store change; their first lines are in § Messages
   below.
