@@ -11,9 +11,16 @@
 //! the installed binary must name no revision and hash to `<hex>`, every run of the scorecard
 //! must state `<hex>` in a `binary.txt` beside its record, and the record marks the revision
 //! and each run's digest as the operator's statement. Each record carries the digest of the
-//! record before it (`previous_sha256`), so a record removed from between two is noticed, and
-//! before anything is judged the installed binary's `--version` must name the latest baseline
-//! or promotion, so a record removed from the end is noticed too.
+//! record before it (`previous_sha256`), so a record removed from between two is noticed; the
+//! latest record's file name and sha256 are kept beside the store in its head ([`Head`],
+//! `<state>/takt/promotions.head`), written with every record, so a chain that ends before the
+//! head, its latest record removed or replaced, is refused naming that record, a refusal
+//! included; and before anything is judged the installed binary's `--version` must name the
+//! latest baseline or promotion. A store with records and no head is read on trust, again
+//! whenever no head is found: the head is written from the chain as it stands and the run says
+//! so on stderr. The head detects a record removed or replaced by accident or by a tool; a
+//! process running as the same user can rewrite both, and removing the latest record and the
+//! head together leaves a shorter chain that is read on trust.
 //!
 //! `takt promote` reads the candidate's saved scorecard (a file outside the candidate's
 //! repository with one link, whose `revision` field equals its name and the checkout's `HEAD`,
@@ -39,12 +46,13 @@
 //! is confined the same way. The binary is installed with `cargo install --locked --path
 //! crates/takt-cli` into a fresh root, hashed, recorded first and then moved into place in one
 //! rename, and checked again in place against the revision and the digest; a failure after the
-//! move puts the binary before it back and removes the record. One promotion a UTC day; one at
-//! a time, under an exclusive lock on the store's [`LOCK`] from its reading to its writing. The
+//! move puts the binary before it back and removes the record. Promotions run one at a time,
+//! under an exclusive lock on the store's [`LOCK`] from its reading to its writing. The
 //! store is read fail-closed: a file that is no record, a record whose name, kind or instant
-//! disagrees with its content, a scorecard copy whose digest differs from its record, or a chain
-//! of records with a gap, refuses every promotion until someone looks. `--dry-run` prints the
-//! verdict and the record it would write and writes nothing.
+//! disagrees with its content, a scorecard copy whose digest differs from its record, a chain
+//! of records with a gap, or one that ends before its head or runs past it, refuses every
+//! promotion until someone looks. `--dry-run` prints the verdict and the record it would write,
+//! checks the head as every read does, and writes nothing, a head read on trust included.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -58,7 +66,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::scorecard::{
-    BINARY_FILE, METRICS, Row, Rule, RunBinary, Scorecard, StatedBy, is_sha256, rank,
+    BINARY_FILE, METRICS, Row, Rule, RunBinary, Scorecard, StatedBy, is_sha256, names_no_revision,
+    rank, unnamed_in_a_mix,
 };
 
 /// The promotion record's format.
@@ -149,8 +158,8 @@ pub struct Promotion {
     pub revision_stated_by: Option<StatedBy>,
     /// The tree of that commit, so the same tree under another commit is known.
     pub tree: String,
-    /// When the record was written, `YYYY-MM-DDTHH:MM:SSZ`, read after the build; the
-    /// one-a-UTC-day rule reads it, and no record carries one before the record before it.
+    /// When the record was written, `YYYY-MM-DDTHH:MM:SSZ`, read after the build; no record
+    /// carries one before the record before it.
     pub promoted_at: String,
     /// What the record is.
     pub kind: Kind,
@@ -191,6 +200,16 @@ pub struct Promotion {
     /// the field.
     #[serde(default)]
     pub cases: Vec<String>,
+}
+
+/// The head of the chain of records: the latest record's file name in the store and that file's
+/// sha256, lower-case hex, kept beside the store at `<store>.head` ([`head_path`]), outside the
+/// record directory; written with every record ([`write`], [`unwrite`]) under the store's lock.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Head {
+    pub record: String,
+    pub sha256: String,
 }
 
 /// The refusal a candidate judged again on new runs was refused by before: its record's file
@@ -293,6 +312,152 @@ pub fn store() -> Result<PathBuf> {
     Ok(state_dir()?.join(STORE))
 }
 
+/// The head of `store`'s chain ([`Head`]): the file `<store>.head` beside it,
+/// `$XDG_STATE_HOME/takt/promotions.head` for the store [`store`] names.
+pub fn head_path(store: &Path) -> PathBuf {
+    let mut name = store.file_name().unwrap_or_default().to_os_string();
+    name.push(".head");
+    store.with_file_name(name)
+}
+
+/// The head of `store`'s chain; none when there is no head file. A head that is no regular file
+/// or does not read as a [`Head`] naming a record by its file name and a sha256 is an error
+/// naming it.
+fn read_head(store: &Path) -> Result<Option<Head>> {
+    let path = head_path(store);
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => bail!(
+            "{}: the head of the chain of records is not a regular file; the store is not read past this",
+            path.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    }
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let head: Head = serde_json::from_str(&text).with_context(|| {
+        format!(
+            "{} is not the head of a chain of records; the store is not read past this",
+            path.display()
+        )
+    })?;
+    let plain = Path::new(&head.record).file_name() == Some(std::ffi::OsStr::new(&head.record));
+    if !plain || !head.record.ends_with(".json") || !is_sha256(&head.sha256) {
+        bail!(
+            "{}: names {:?} with the digest {:?}, not a record's file name and a sha256; the store is not read past this",
+            path.display(),
+            head.record,
+            head.sha256
+        );
+    }
+    Ok(Some(head))
+}
+
+/// Points the head of `store`'s chain at `latest`'s record file, or removes it when `latest` is
+/// none: written and synced to a temporary file beside it, then renamed into place.
+fn set_head(store: &Path, latest: Option<&Promotion>) -> Result<()> {
+    let path = head_path(store);
+    let Some(latest) = latest else {
+        return match std::fs::remove_file(&path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                Err(error).with_context(|| format!("remove {}", path.display()))
+            }
+            _ => Ok(()),
+        };
+    };
+    let record = record_path(store, latest);
+    let head = Head {
+        record: record
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        sha256: sha256_of(&record)?,
+    };
+    let mut text = serde_json::to_string_pretty(&head).context("write the head")?;
+    text.push('\n');
+    let temporary = path.with_file_name(format!(
+        ".{}.tmp-{}",
+        path.file_name().unwrap_or_default().to_string_lossy(),
+        std::process::id()
+    ));
+    let written = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, &path)
+    })()
+    .with_context(|| format!("write {}", path.display()));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written
+}
+
+/// The chain `records` against its `head`: the latest record must be the file the head names,
+/// with its digest. A chain that ends before the head, the record it names missing, or runs past
+/// it is an error naming the record.
+fn ends_at_head(store: &Path, head: &Head, records: &[Promotion]) -> Result<()> {
+    let shown = head_path(store);
+    let named = store.join(&head.record);
+    let Some(latest) = records.last() else {
+        bail!(
+            "{} names {} ({}) as the latest record, but the store holds none; the record is missing: a record is missing or was removed, and the store is not read past this",
+            shown.display(),
+            head.record,
+            head.sha256
+        );
+    };
+    let last = record_path(store, latest);
+    if last == named {
+        return Ok(());
+    }
+    if records
+        .iter()
+        .any(|record| record_path(store, record) == named)
+    {
+        bail!(
+            "{} names {} as the latest record, but {} follows it in the chain; a record was written the head does not name, and the store is not read past this",
+            shown.display(),
+            named.display(),
+            last.display()
+        );
+    }
+    bail!(
+        "{} names {} ({}) as the latest record, but the chain ends before it, at {}; the record is missing: a record is missing or was removed, and the store is not read past this",
+        shown.display(),
+        head.record,
+        head.sha256,
+        last.display()
+    )
+}
+
+/// A store with records and no head is read on trust, again whenever no head is found: the head
+/// is written from the chain `records` as it stands, and stderr says so; a dry run says so and
+/// writes nothing.
+fn trust(store: &Path, records: &[Promotion], head: Option<&Head>, dry_run: bool) -> Result<()> {
+    let Some(latest) = records.last().filter(|_| head.is_none()) else {
+        return Ok(());
+    };
+    let shown = head_path(store);
+    let last = record_path(store, latest);
+    if dry_run {
+        eprintln!(
+            "takt: {} does not exist: the chain of records is read on trust as it stands, ending at {}; a dry run writes no head",
+            shown.display(),
+            last.display()
+        );
+        return Ok(());
+    }
+    set_head(store, Some(latest))?;
+    eprintln!(
+        "takt: {} did not exist: the chain of records is read on trust as it stands, and the head is written naming {}; from now on a chain that ends before it is refused",
+        shown.display(),
+        last.display()
+    );
+    Ok(())
+}
+
 /// Where candidates are built: `$XDG_CACHE_HOME/takt/promote`, or `~/.cache/takt/promote`.
 pub fn build_dir() -> Result<PathBuf> {
     let cache = match std::env::var_os("XDG_CACHE_HOME").filter(|dir| !dir.is_empty()) {
@@ -309,7 +474,7 @@ fn home() -> Result<PathBuf> {
     }
 }
 
-fn state_dir() -> Result<PathBuf> {
+pub(crate) fn state_dir() -> Result<PathBuf> {
     match std::env::var_os("XDG_STATE_HOME").filter(|dir| !dir.is_empty()) {
         Some(dir) if Path::new(&dir).is_absolute() => Ok(PathBuf::from(dir)),
         _ => Ok(home()?.join(".local/state")),
@@ -391,8 +556,39 @@ fn is_full_revision(candidate: &str) -> bool {
 /// [`LOCK`] aside), a record whose name does not carry its revision and kind, one whose instant
 /// does not parse or lies after `now`, a scorecard copy without its record or with a digest
 /// other than the record's, or a record whose `previous_sha256` is not the digest of the record
-/// before it, is an error naming it.
+/// before it, is an error naming it; so is a chain that ends before its head ([`Head`]) or runs
+/// past it, and a record the head names whose digest is not the head's, before the record is
+/// read. A store with no head is read as it stands ([`trust`]).
 pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
+    Ok(read(store, now)?.0)
+}
+
+/// [`records`], with the head they were checked against; none when there is no head file.
+fn read(store: &Path, now: &str) -> Result<(Vec<Promotion>, Option<Head>)> {
+    let head = read_head(store)?;
+    if let Some(head) = &head {
+        let named = store.join(&head.record);
+        if named.is_file() {
+            let digest = sha256_of(&named)?;
+            if digest != head.sha256 {
+                bail!(
+                    "{} names {} with the digest {} as the latest record, but the file hashes to {digest}; the record was replaced, and the store is not read past this",
+                    head_path(store).display(),
+                    named.display(),
+                    head.sha256
+                );
+            }
+        }
+    }
+    let records = chain(store, now)?;
+    if let Some(head) = &head {
+        ends_at_head(store, head, &records)?;
+    }
+    Ok((records, head))
+}
+
+/// The chain of records in `store`, read as [`records`] says, the head aside.
+fn chain(store: &Path, now: &str) -> Result<Vec<Promotion>> {
     let mut records = Vec::new();
     let mut copies: BTreeSet<String> = BTreeSet::new();
     let entries = match std::fs::read_dir(store) {
@@ -965,29 +1161,38 @@ fn publish(path: &Path, text: &[u8]) -> Result<()> {
 }
 
 /// Writes `record` to the store, with the scorecard it read copied beside it unless it is a
-/// refusal, the copy first; a record that cannot be written leaves no copy. The record's path.
+/// refusal, the copy first, then the head pointed at it ([`set_head`]); a record that cannot be
+/// written leaves no copy, and one whose head cannot be written is removed again, the head as it
+/// was. The record's path.
 fn write(store: &Path, record: &Promotion, scorecard_text: &[u8]) -> Result<PathBuf> {
     std::fs::create_dir_all(store).with_context(|| format!("create {}", store.display()))?;
     let path = record_path(store, record);
     let mut text = serde_json::to_string_pretty(record).context("write the record")?;
     text.push('\n');
-    if record.kind == Kind::Refused {
-        publish(&path, text.as_bytes())?;
-        return Ok(path);
+    let copy = (record.kind != Kind::Refused).then(|| copy_path(store, record));
+    if let Some(copy) = &copy {
+        publish(copy, scorecard_text)?;
     }
-    let copy = copy_path(store, record);
-    publish(&copy, scorecard_text)?;
-    if let Err(error) = publish(&path, text.as_bytes()) {
-        let _ = std::fs::remove_file(&copy);
+    let written = publish(&path, text.as_bytes()).and_then(|()| {
+        set_head(store, Some(record)).inspect_err(|_| {
+            let _ = std::fs::remove_file(&path);
+        })
+    });
+    if let Err(error) = written {
+        if let Some(copy) = &copy {
+            let _ = std::fs::remove_file(copy);
+        }
         return Err(error);
     }
     Ok(path)
 }
 
 /// Removes `record` and its scorecard copy from the store, after the install that followed the
-/// record failed; what could not be removed is the error.
-fn unwrite(store: &Path, record: &Promotion) -> Result<()> {
-    let mut paths = vec![record_path(store, record)];
+/// record failed, and points the head back at `before`, the record before it; a record that
+/// could not be removed stays the head. What could not be removed or pointed back is the error.
+fn unwrite(store: &Path, record: &Promotion, before: Option<&Promotion>) -> Result<()> {
+    let file = record_path(store, record);
+    let mut paths = vec![file.clone()];
     if record.kind != Kind::Refused {
         paths.push(copy_path(store, record));
     }
@@ -998,6 +1203,11 @@ fn unwrite(store: &Path, record: &Promotion) -> Result<()> {
         {
             failed.push(format!("{}: {error}", path.display()));
         }
+    }
+    if !file.exists()
+        && let Err(error) = set_head(store, before)
+    {
+        failed.push(format!("{error:#}"));
     }
     if failed.is_empty() {
         Ok(())
@@ -1750,14 +1960,22 @@ fn installed_hashes_to(installed: &Path, revision: &str, stated: &str) -> Result
 /// the operator: a run that states none, states it by anything but the operator, or states
 /// another digest, is a refusal naming it, so the scorecard recorded is the stated binary's and
 /// every statement the record copies is the operator's. A run whose `opened` line names a
-/// revision must name `revision`; only a run that names none (no `binary`, or `unknown
-/// revision`) is taken on its statement alone. The runs with their statements, for the record.
+/// revision must name `revision`; only a run that names none ([`names_no_revision`]: no
+/// `binary`, or `unknown revision`) is taken on its statement alone, and a run that names none
+/// beside one that names one ([`unnamed_in_a_mix`]) is refused, as a save refuses it. The runs
+/// with their statements, for the record.
 fn runs_stating(
     card: &Scorecard,
     stated: &str,
     revision: &str,
     shown: &Path,
 ) -> Result<Vec<RecordedRun>> {
+    if let Some((run, _)) = unnamed_in_a_mix(&card.rows) {
+        bail!(
+            "{}: run {run} names no revision, beside runs that name one; a scorecard's runs all name {revision} or all name none, so nothing is recorded",
+            shown.display()
+        );
+    }
     let mut runs = Vec::new();
     let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
     for row in &card.rows {
@@ -1765,7 +1983,7 @@ fn runs_stating(
         *n += 1;
         let run = format!("{}#{n}", row.case);
         if let Some(named) = row.opened_binary.as_deref()
-            && named != "unknown revision"
+            && !names_no_revision(Some(named))
             && named != revision
         {
             bail!(
@@ -2053,7 +2271,8 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         Some(lock(store)?)
     };
     let now = (request.clock)();
-    let existing = records(store, &now)?;
+    let (existing, head) = read(store, &now)?;
+    trust(store, &existing, head.as_ref(), request.dry_run)?;
     let previous_sha256 = match existing.last() {
         Some(latest) => Some(sha256_of(&record_path(store, latest))?),
         None => None,
@@ -2206,17 +2425,6 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         );
     };
     installed_names_latest(&installed, store, &base)?;
-    let today = now.get(..10).unwrap_or("");
-    if let Some(earlier) = existing.iter().find(|record| {
-        record.kind == Kind::Promotion && record.promoted_at.get(..10) == Some(today)
-    }) {
-        bail!(
-            "a promotion was made this UTC day already: {} at {} ({}); one promotion a day",
-            earlier.revision,
-            earlier.promoted_at,
-            record_path(store, earlier).display()
-        );
-    }
     let base_copy = copy_path(store, &base);
     let base_card = Scorecard::load(&base_copy)?;
     if base_card.revision.as_deref() != Some(base.revision.as_str()) {
@@ -2300,7 +2508,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     record.binary_sha256 = Some(staged.digest.clone());
     let path = write(store, &record, &text)?;
     if let Err(error) = install(confinement, &staged, &installed, &revision) {
-        return Err(match unwrite(store, &record) {
+        return Err(match unwrite(store, &record, existing.last()) {
             Ok(()) => with_note(error, "nothing recorded"),
             Err(removal) => with_note(
                 error,
@@ -2384,7 +2592,8 @@ pub fn rebaseline(request: &Rebaseline<'_>, out: &mut dyn Write) -> Result<Outco
         Some(lock(store)?)
     };
     let now = (request.clock)();
-    let existing = records(store, &now)?;
+    let (existing, head) = read(store, &now)?;
+    trust(store, &existing, head.as_ref(), request.dry_run)?;
     let Some(base) = existing
         .iter()
         .rfind(|record| record.kind != Kind::Refused)

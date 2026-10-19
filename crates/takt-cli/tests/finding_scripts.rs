@@ -6,10 +6,12 @@
 //! binary names it, confined in bubblewrap so the build reads nothing of the caller's home or
 //! environment and writes nothing outside its own build directory, runs the predicate on a
 //! fresh checkout of the scenario's seed, or of the repository and seed the predicate names
-//! itself, and prints `reproduced`, `not_reproduced` (only when the command ended with the exit
-//! the predicate names as the healthy one) or `error`, the results of the `scenario_result`
-//! evidence kind (`protocols/self-improvement/1.yaml`). The scratch takt is a workspace with no
-//! dependencies, so each build takes seconds; nothing reaches a network.
+//! itself, with every host path read-only but its own run directory, the caller's home hidden
+//! and a PID namespace of its own, and prints `reproduced`, `not_reproduced` (only when the
+//! command ended with the exit the predicate names as the healthy one) or `error`, the results
+//! of the `scenario_result` evidence kind (`protocols/self-improvement/1.yaml`). The scratch
+//! takt is a workspace with no dependencies, so each build takes seconds; nothing reaches a
+//! network.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -144,6 +146,30 @@ fn script(name: &str, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Output
         .envs(env.iter().copied())
         .output()
         .unwrap_or_else(|error| panic!("scripts/{name} runs: {error}"))
+}
+
+/// A predicate's command line that writes `script` to `$HOME/<name>`, in the predicate's own
+/// home, through base64: the scratch this suite writes may lie under a home the check hides
+/// from the command, so a script there is out of its sight.
+fn carried(name: &str, script: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::new();
+    for chunk in script.as_bytes().chunks(3) {
+        let bytes = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let word = (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
+        for at in 0..4 {
+            if at <= chunk.len() {
+                encoded.push(ALPHABET[((word >> (18 - 6 * at)) & 63) as usize] as char);
+            } else {
+                encoded.push('=');
+            }
+        }
+    }
+    format!("echo {encoded} | base64 -d > \"$HOME/{name}\"")
 }
 
 fn shown(output: &Output) -> String {
@@ -710,6 +736,32 @@ fn the_predicate_is_not_reproduced_with_a_takt_built_from_the_revision_that_fixe
     );
 }
 
+/// Runs `check-finding` as [`World::check`] does, with `held` open for reading on descriptor 7
+/// of its process, as a caller that leaves a descriptor open would.
+fn check_holding(
+    world: &World,
+    finding: &str,
+    revision: &str,
+    env: &[(&str, &str)],
+    held: &Path,
+) -> Output {
+    Command::new("bash")
+        .args(["-c", "exec 7<\"$1\" && shift && exec \"$@\"", "bash"])
+        .arg(held)
+        .arg(Path::new(SCRIPTS).join("check-finding"))
+        .args([
+            "--scenarios",
+            world.scenarios.to_str().expect("UTF-8"),
+            finding,
+            revision,
+        ])
+        .current_dir(&world.takt)
+        .env("XDG_CACHE_HOME", world.cache())
+        .envs(env.iter().copied())
+        .output()
+        .expect("check-finding runs")
+}
+
 /// The run directory a check names on standard error (`check-finding: record: <dir>`).
 fn record(output: &Output) -> PathBuf {
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -850,8 +902,9 @@ fn a_command_that_does_not_end_healthy_or_with_the_defect_gives_error_naming_its
 
 /// The `build.rs` of a revision that probes its build's confinement, the paths it tries filled
 /// in by [`probe_build`]: it writes `$HOME/canary`, writes and reads under the caller's home by
-/// its path, overwrites another revision's kept binary and plants a file beside it, and copies
-/// its whole environment; each attempt and the environment go to `probe.txt` in its `OUT_DIR`,
+/// its path, overwrites another revision's kept binary and plants a file beside it, looks for
+/// the caller's secret in a descriptor it holds, and copies its whole environment; each
+/// attempt and the environment go to `probe.txt` in its `OUT_DIR`,
 /// which the binary prints for `--probe`. Every attempt is recorded, none fails the build.
 const PROBE_BUILD: &str = r#"use std::fmt::Write as _;
 
@@ -860,6 +913,20 @@ fn attempt(what: &str, result: std::io::Result<()>, out: &mut String) {
         Ok(()) => writeln!(out, "{what}: done").unwrap(),
         Err(error) => writeln!(out, "{what}: refused: {error}").unwrap(),
     }
+}
+
+/// Done when a descriptor this process holds is a regular file naming the planted secret.
+fn held_secret() -> std::io::Result<()> {
+    for entry in std::fs::read_dir("/proc/self/fd")? {
+        let path = entry?.path();
+        let regular = std::fs::metadata(&path).is_ok_and(|meta| meta.is_file());
+        if regular
+            && std::fs::read_to_string(&path).is_ok_and(|text| text.contains("PLANTED-HOME-SECRET"))
+        {
+            return Ok(());
+        }
+    }
+    Err(std::io::Error::other("no descriptor held names the secret"))
 }
 
 fn main() {
@@ -874,8 +941,9 @@ fn main() {
     );
     attempt("other-build", std::fs::write("@OTHER@/takt", "build.rs\n"), &mut out);
     attempt("other-build-planted", std::fs::write("@OTHER@/planted", "build.rs\n"), &mut out);
+    attempt("inherited-fd", held_secret(), &mut out);
     for (name, value) in std::env::vars() {
-        writeln!(out, "env {name}={value}").unwrap();
+        writeln!(out, "env {name}={value:?}").unwrap();
     }
     let dir = std::env::var("OUT_DIR").unwrap();
     std::fs::write(format!("{dir}/probe.txt"), out).unwrap();
@@ -937,7 +1005,8 @@ fn allowed_in_a_build(name: &str) -> bool {
 /// A revision whose `build.rs` writes `$HOME/canary`, writes and reads under the caller's home,
 /// overwrites another revision's kept binary and copies its environment still builds, and
 /// leaves no canary in the caller's home and the other revision's build as it was; its
-/// environment holds the allow-list only, nothing the caller set, and not the caller's home.
+/// environment holds the allow-list only, nothing the caller set, and not the caller's home;
+/// and the secret file the caller left open on a descriptor reaches it on none.
 #[test]
 fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes_only_its_own() {
     let world = world("confined");
@@ -981,7 +1050,8 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
     );
     assert!(filed.status.success(), "{}", shown(&filed));
     let shared = world.outer.0.join("shared-target");
-    let output = world.check(
+    let output = check_holding(
+        &world,
         "story:probe",
         &probe,
         &[
@@ -990,6 +1060,7 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
             ("GITHUB_TOKEN", "PLANTED-CREDENTIAL"),
             ("CARGO_TARGET_DIR", shared.to_str().expect("UTF-8")),
         ],
+        &home.join(".secret"),
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
@@ -1044,6 +1115,7 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
         "callers-home-secret",
         "other-build",
         "other-build-planted",
+        "inherited-fd",
     ] {
         assert!(
             printed
@@ -1137,8 +1209,9 @@ fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
 
 /// A bubblewrap that forks the command's process and then fails its mount setup never runs the
 /// command, and its own exit 1 is not the command's: a predicate naming 1 as the defect's exit,
-/// or as the healthy one, gets no result, and the check names bubblewrap's error. The status
-/// file names the command's pid in both cases; only its `exit-code` line says the command ran.
+/// or as the healthy one, gets no result, and the check names bubblewrap's error. Bubblewrap's
+/// status names the command's pid in both cases; only an `exit-code` line, its last, says that
+/// bubblewrap ran the command to its end.
 #[test]
 fn a_bubblewrap_that_fails_before_the_command_runs_gives_no_result() {
     use std::os::unix::fs::PermissionsExt;
@@ -1191,6 +1264,176 @@ fn a_bubblewrap_that_fails_before_the_command_runs_gives_no_result() {
             "{key}: a result was recorded"
         );
     }
+}
+
+/// A process a predicate leaves running: it leaves `started` in the predicate's home, then
+/// waits for another check's bubblewrap status file (beside its own run directory, `$HOME/..`)
+/// holding the command's pid and no exit, appends `{ "exit-code": 1 }` to it and ends; it gives
+/// up after 30 seconds. Half a second in, it leaves `alive` in the predicate's home.
+const STALE: &str = r#"own=$(dirname "$HOME")
+runs=$(dirname "$own")
+: >"$HOME/started"
+i=0
+while [ "$i" -lt 600 ]; do
+    [ "$i" -eq 10 ] && : >"$HOME/alive"
+    for f in "$runs"/*/bwrap-status; do
+        [ -f "$f" ] && [ "$f" != "$own/bwrap-status" ] || continue
+        grep -q exit-code "$f" && continue
+        grep -q child-pid "$f" || continue
+        printf '{ "exit-code": 1 }\n' >>"$f"
+        exit 0
+    done
+    sleep 0.05
+    i=$((i + 1))
+done
+"#;
+
+/// story:check-finding-run-step-confined, the review's finding A: a process one check's
+/// predicate leaves running dies with that check (the command runs in a PID namespace of its
+/// own), and bubblewrap's status reaches the check through a pipe, never a file another check's
+/// process can append to. The next check, whose bubblewrap fails its mount setup after a
+/// second's delay and so never runs its command, gives no result, though its predicate names
+/// the 1 bubblewrap exits with. The command waits until the process it leaves has started.
+#[test]
+fn a_process_left_running_by_one_check_cannot_change_the_next_checks_result() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let world = world("stale-process");
+    let (_, env) = callers_home(&world);
+    let env: Vec<(&str, &str)> = env
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
+    let filed = file(
+        &world.takt,
+        "leaves-a-process",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version; {} && sh \"$HOME/stale.sh\" </dev/null >/dev/null 2>&1 & i=0; while [ ! -e \"$HOME/started\" ] && [ $i -lt 500 ]; do sleep 0.01; i=$((i + 1)); done\nexit: 0\noutput: takt 0.1.0\nsource: {SOURCE}\n",
+            carried("stale.sh", STALE)
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let filed = file(
+        &world.takt,
+        "exit-one",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version\nexit: 1\nsource: {SOURCE}\n"
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let first = world.check("story:leaves-a-process", &world.defect, &env);
+    assert_eq!(
+        String::from_utf8_lossy(&first.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&first)
+    );
+    let real = Command::new("sh")
+        .args(["-c", "command -v bwrap"])
+        .output()
+        .expect("sh runs");
+    let real = String::from_utf8_lossy(&real.stdout).trim().to_owned();
+    assert!(!real.is_empty(), "bubblewrap is on PATH");
+    let bin = world.outer.0.join("bin-slow-failing-bwrap");
+    write(
+        &bin.join("bwrap"),
+        &format!(
+            "#!/bin/sh\ncase \" $* \" in *' --json-status-fd '*) {real} --ro-bind /nonexistent-check-finding /srv/absent \"$@\"; s=$?; sleep 1; exit $s;; esac\nexec {real} \"$@\"\n"
+        ),
+    );
+    fs::set_permissions(bin.join("bwrap"), fs::Permissions::from_mode(0o755)).expect("executable");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").expect("a PATH")
+    );
+    let mut with_path = env.clone();
+    with_path.push(("PATH", &path));
+    let second = world.check("story:exit-one", &world.defect, &with_path);
+    assert_eq!(second.status.code(), Some(1), "{}", shown(&second));
+    assert!(second.stdout.is_empty(), "{}", shown(&second));
+    assert!(
+        String::from_utf8_lossy(&second.stderr)
+            .contains("bwrap: Can't find source path /nonexistent-check-finding"),
+        "the check names bubblewrap's error: {}",
+        shown(&second)
+    );
+    assert!(
+        record(&first).join("home/started").exists(),
+        "the first check's predicate started no process"
+    );
+    assert!(
+        !record(&first).join("home/alive").exists(),
+        "the process the first check's predicate left was still running a second later"
+    );
+}
+
+/// The command's exit is bubblewrap's only when the last line bubblewrap writes on its status
+/// pipe is `{ "exit-code": N }` and N is the status bubblewrap exited with. A bubblewrap that
+/// exits 1 after its command ended 0 gives no result for a predicate naming 1 (the review's
+/// mutant M8b, the line read but not compared, takes the 1 as the command's); an `exit-code`
+/// line written ahead of bubblewrap's own is not the one read (M8d, the first line for the
+/// last, reads it).
+#[test]
+fn only_the_last_line_bubblewrap_writes_gives_the_commands_exit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let world = world("bwrap-last-word");
+    let real = Command::new("sh")
+        .args(["-c", "command -v bwrap"])
+        .output()
+        .expect("sh runs");
+    let real = String::from_utf8_lossy(&real.stdout).trim().to_owned();
+    assert!(!real.is_empty(), "bubblewrap is on PATH");
+    let filed = file(
+        &world.takt,
+        "exit-one",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version\nexit: 1\nsource: {SOURCE}\n"
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let wrapper = |name: &str, predicate_call: &str| {
+        let bin = world.outer.0.join(name);
+        write(
+            &bin.join("bwrap"),
+            &format!(
+                "#!/bin/sh\ncase \" $* \" in *' --json-status-fd '*) {predicate_call};; esac\nexec {real} \"$@\"\n"
+            ),
+        );
+        fs::set_permissions(bin.join("bwrap"), fs::Permissions::from_mode(0o755))
+            .expect("executable");
+        format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").expect("a PATH")
+        )
+    };
+
+    let path = wrapper("bin-exits-otherwise", &format!("{real} \"$@\"; exit 1"));
+    let output = world.check("story:exit-one", &world.defect, &[("PATH", &path)]);
+    assert_eq!(output.status.code(), Some(1), "M8b: {}", shown(&output));
+    assert!(output.stdout.is_empty(), "M8b: {}", shown(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("(exit 1, the command ended 0)"),
+        "M8b: the check names both statuses: {}",
+        shown(&output)
+    );
+
+    let path = wrapper(
+        "bin-leading-line",
+        &format!("printf '{{ \"exit-code\": 1 }}\\n' >&3; exec {real} \"$@\""),
+    );
+    let output = world.check("story:exit-one", &world.defect, &[("PATH", &path)]);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "not_reproduced\n",
+        "M8d: {}",
+        shown(&output)
+    );
 }
 
 /// The binary kept for a revision is the one cargo reports building, never a file the revision
@@ -1313,6 +1556,435 @@ fn the_predicate_cannot_write_the_callers_protocol_sources() {
     assert!(
         fs::symlink_metadata(&sources).is_ok_and(|meta| meta.is_dir()),
         "the caller's protocol sources are still a directory"
+    );
+}
+
+/// The caller's home a check is run with, holding a planted secret and a `.cache`; the
+/// variables that let the check find the toolchain and the registry caches without it.
+fn callers_home(world: &World) -> (PathBuf, Vec<(&'static str, String)>) {
+    let real_home = std::env::var("HOME").expect("HOME");
+    let rustup = std::env::var("RUSTUP_HOME").unwrap_or_else(|_| format!("{real_home}/.rustup"));
+    let cargo = std::env::var("CARGO_HOME").unwrap_or_else(|_| format!("{real_home}/.cargo"));
+    let home = world.outer.0.join("callers-home");
+    write(&home.join(".secret"), "PLANTED-HOME-SECRET\n");
+    fs::create_dir_all(home.join(".cache")).expect("a directory");
+    let env = vec![
+        ("HOME", home.to_str().expect("UTF-8").to_owned()),
+        ("RUSTUP_HOME", rustup),
+        ("CARGO_HOME", cargo),
+    ];
+    (home, env)
+}
+
+/// What a predicate tries on the host, by real path: `@HOME@` the caller's home, `@REPO@` this
+/// repository, `@SOURCES@` the caller's protocol sources. Each write is recorded as `done` or
+/// `refused: <the shell's error>`; the secret planted in the caller's home as `read` or
+/// `refused`. Carried into the predicate's home by [`carried`] and run from there.
+const RUN_PROBE: &str = r#"attempt() {
+    if { printf 'written by the predicate\n' >"$2"; } 2>"$HOME/attempt.err"; then
+        echo "$1: done"
+    else
+        echo "$1: refused: $(cat "$HOME/attempt.err")"
+    fi
+}
+attempt callers-cache "@HOME@/.cache/canary"
+attempt repository "@REPO@/planted"
+attempt repository-file "@REPO@/Cargo.toml"
+attempt kept-binary "$TAKT"
+attempt kept-build "${TAKT%/takt}/planted"
+attempt protocol-source "@SOURCES@/abc/protocol.yaml"
+if grep -q PLANTED "@HOME@/.secret" 2>/dev/null; then
+    echo "callers-home-secret: read"
+else
+    echo "callers-home-secret: refused"
+fi
+echo probe-ran
+"#;
+
+/// story:check-finding-run-step-confined: the predicate's command runs with every host path
+/// read-only but the clone and its own home, and the caller's home hidden. In the default
+/// layout (no XDG_CACHE_HOME, the cache under the caller's home), a command that writes into
+/// the caller's `~/.cache`, the kept `builds/<sha>/takt` beside a file of its own, and a
+/// protocol source by its real path gets a read-only error on each; one that writes into this
+/// repository is refused too, with a read-only error, or with no such file where the
+/// repository lies under a home the check hides (the user's own, here, when the scratch lies
+/// under it); one that reads a secret planted in the caller's home does not see it; and the
+/// check still gives its result.
+#[test]
+fn the_predicate_writes_no_host_path_and_reads_nothing_of_the_callers_home() {
+    let world = world("run-confined");
+    let (home, env) = callers_home(&world);
+    let sources = home.join(".cache/aep/protocol-sources");
+    let original = "kind: protocol\n";
+    write(&sources.join("abc/protocol.yaml"), original);
+    let manifest = fs::read(world.takt.join("Cargo.toml")).expect("the repository's manifest");
+    let probe = RUN_PROBE
+        .replace("@HOME@", home.to_str().expect("UTF-8"))
+        .replace("@REPO@", world.takt.to_str().expect("UTF-8"))
+        .replace("@SOURCES@", sources.to_str().expect("UTF-8"));
+    let filed = file(
+        &world.takt,
+        "run-probe",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; {} && sh \"$HOME/run-probe.sh\"\nexit: 0\noutput: probe-ran\nsource: {SOURCE}\n",
+            carried("run-probe.sh", &probe)
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = Command::new(Path::new(SCRIPTS).join("check-finding"))
+        .args([
+            "--scenarios",
+            world.scenarios.to_str().expect("UTF-8"),
+            "story:run-probe",
+            &world.defect,
+        ])
+        .current_dir(&world.takt)
+        .env_remove("XDG_CACHE_HOME")
+        .envs(env.iter().map(|(name, value)| (*name, value.as_str())))
+        .output()
+        .expect("check-finding runs");
+    let ran = fs::read_to_string(record(&output).join("output")).unwrap_or_default();
+    let builds = home
+        .join(".cache/takt/check-finding/builds")
+        .join(&world.defect);
+    assert!(
+        !home.join(".cache/canary").exists(),
+        "the predicate wrote into the caller's ~/.cache:\n{ran}"
+    );
+    assert!(
+        !world.takt.join("planted").exists(),
+        "the predicate wrote into the repository:\n{ran}"
+    );
+    assert_eq!(
+        fs::read(world.takt.join("Cargo.toml")).expect("the repository's manifest"),
+        manifest,
+        "the predicate changed a file of the repository:\n{ran}"
+    );
+    let version = Command::new(builds.join("takt"))
+        .arg("--version")
+        .output()
+        .map(|version| String::from_utf8_lossy(&version.stdout).into_owned())
+        .unwrap_or_default();
+    assert_eq!(
+        version,
+        format!("takt 0.1.0 ({})\n", world.defect),
+        "the predicate overwrote the kept binary:\n{ran}"
+    );
+    assert!(
+        !builds.join("planted").exists(),
+        "the predicate wrote beside the kept binary:\n{ran}"
+    );
+    assert_eq!(
+        fs::read_to_string(sources.join("abc/protocol.yaml")).expect("the caller's source"),
+        original,
+        "the predicate wrote a protocol source by its real path:\n{ran}"
+    );
+    for (attempt, hidden) in [
+        ("callers-cache", false),
+        ("repository", true),
+        ("repository-file", true),
+        ("kept-binary", false),
+        ("kept-build", false),
+        ("protocol-source", false),
+    ] {
+        let line = ran
+            .lines()
+            .find(|line| line.starts_with(&format!("{attempt}: ")))
+            .unwrap_or_default();
+        assert!(
+            line.starts_with(&format!("{attempt}: refused: "))
+                && (line.contains("Read-only file system")
+                    || hidden && line.contains("No such file or directory")),
+            "{attempt} gets a read-only error{}:\n{ran}",
+            if hidden { ", or none such" } else { "" }
+        );
+    }
+    assert!(
+        ran.lines()
+            .any(|line| line == "callers-home-secret: refused"),
+        "the predicate read the caller's home:\n{ran}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "the check still gives its result: {}",
+        shown(&output)
+    );
+}
+
+/// What a predicate reaches of the host beyond its files: its network and IPC namespaces, the
+/// network interfaces and abstract unix sockets it sees, and the host's well-known sockets
+/// (the user's session bus, agents and runtime directory under `/run/user`, the container
+/// engines', the system bus, X11's); each one in sight is printed as `reachable <path>`.
+const SOCKET_PROBE: &str = r#"echo "net $(readlink /proc/self/ns/net)"
+echo "ipc $(readlink /proc/self/ns/ipc)"
+echo "interfaces $(tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' ' | tr '\n' ' ')"
+echo "abstract $(grep -c ' @' /proc/net/unix)"
+for p in "/run/user/$(id -u)" /run/docker.sock /var/run/docker.sock /run/podman/podman.sock \
+    /run/dbus/system_bus_socket /tmp/.X11-unix; do
+    [ -e "$p" ] && echo "reachable $p"
+done
+echo probe-ran
+"#;
+
+/// The review's correction 1, finding 1: the command shares no network and no IPC namespace
+/// with the host, so it reaches no network, no abstract unix socket (X11's among them) and no
+/// System V or POSIX IPC of the host, and it sees nothing of `/run` (the user's session bus,
+/// ssh and gpg agents, keyring and podman under `/run/user/<uid>`, the docker socket, the
+/// system bus), nor `/var/run/docker.sock`, nor the host's `/tmp`.
+#[test]
+fn the_predicate_reaches_no_network_ipc_or_socket_of_the_host() {
+    let world = world("sockets");
+    let filed = file(
+        &world.takt,
+        "socket-probe",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; {} && sh \"$HOME/socket-probe.sh\"\nexit: 0\noutput: probe-ran\nsource: {SOURCE}\n",
+            carried("socket-probe.sh", SOCKET_PROBE)
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = world.check("story:socket-probe", &world.defect, &[]);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&output)
+    );
+    let ran = fs::read_to_string(record(&output).join("output")).expect("the command's output");
+    let host = |kind: &str| {
+        fs::read_link(format!("/proc/self/ns/{kind}"))
+            .expect("this process's namespace")
+            .display()
+            .to_string()
+    };
+    for kind in ["net", "ipc"] {
+        assert!(
+            ran.lines()
+                .any(|line| line.starts_with(&format!("{kind} ")))
+                && !ran
+                    .lines()
+                    .any(|line| line == format!("{kind} {}", host(kind))),
+            "the command shares the host's {kind} namespace:\n{ran}"
+        );
+    }
+    assert!(
+        ran.lines().any(|line| line == "interfaces lo "),
+        "the command sees a network interface but loopback:\n{ran}"
+    );
+    assert!(
+        ran.lines().any(|line| line == "abstract 0"),
+        "the command sees abstract unix sockets:\n{ran}"
+    );
+    let reachable: Vec<_> = ran
+        .lines()
+        .filter(|line| line.starts_with("reachable "))
+        .collect();
+    assert!(
+        reachable.is_empty(),
+        "the command reaches host sockets: {reachable:?}"
+    );
+}
+
+/// The review's correction 1, finding 2: the check writes its result, and reads the command's
+/// output and its predicate, in its run directory after the command ran there. The command
+/// can write its clone and its home and nothing else of that directory, so it plants no link
+/// where the check writes: a link at `result` to a path outside, a file of its own beside the
+/// record, and the removal of `output` and `predicate.tsv` are each refused, and the check
+/// writes its result to its own file.
+#[test]
+fn the_predicate_cannot_plant_a_link_where_the_check_writes() {
+    let world = world("record-link");
+    let victim = world.outer.0.join("outside-the-record");
+    let filed = file(
+        &world.takt,
+        "record-link",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version; r=\"$HOME/..\"; ln -s {} \"$r/result\" 2>/dev/null && echo linked; touch \"$r/planted\" 2>/dev/null && echo planted; rm -f \"$r/output\" \"$r/predicate.tsv\" 2>/dev/null; true\nexit: 0\noutput: takt 0.1.0\nsource: {SOURCE}\n",
+            victim.display()
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = world.check("story:record-link", &world.defect, &[]);
+    let run = record(&output);
+    assert!(
+        !victim.exists(),
+        "the check wrote through a link the command planted: {}",
+        shown(&output)
+    );
+    let result = fs::symlink_metadata(run.join("result"));
+    assert!(
+        result.as_ref().is_ok_and(|meta| meta.is_file()),
+        "the result is no file of the check's own: {result:?}"
+    );
+    assert!(
+        !run.join("planted").exists(),
+        "the command wrote into the record"
+    );
+    for kept in ["output", "predicate.tsv"] {
+        assert!(
+            fs::symlink_metadata(run.join(kept)).is_ok_and(|meta| meta.is_file()),
+            "the command removed {kept}"
+        );
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&output)
+    );
+}
+
+/// The review's correction 1, finding 3: the check hides the home of the user it runs as
+/// (the passwd entry of `id -u`), not only the directory HOME names. Under a HOME of the
+/// scratch's, no file directly in the user's passwd home (a shell profile, a git
+/// configuration) is in the command's sight.
+#[test]
+fn the_predicate_sees_no_file_of_the_users_passwd_home() {
+    let world = world("passwd-home");
+    let (_, env) = callers_home(&world);
+    let env: Vec<(&str, &str)> = env
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
+    let filed = file(
+        &world.takt,
+        "passwd-home",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; pw=$(getent passwd \"$(id -u)\" | cut -d: -f6); echo \"passwd-home $pw\"; for f in \"$pw\"/.* \"$pw\"/*; do [ -f \"$f\" ] && echo \"visible $f\"; done; echo probe-ran\nexit: 0\noutput: probe-ran\nsource: {SOURCE}\n"
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = world.check("story:passwd-home", &world.defect, &env);
+    let ran = fs::read_to_string(record(&output).join("output")).unwrap_or_default();
+    assert!(
+        ran.lines()
+            .any(|line| line.starts_with("passwd-home /") && line != "passwd-home /"),
+        "the command names the user's passwd home:\n{ran}"
+    );
+    let visible: Vec<_> = ran
+        .lines()
+        .filter(|line| line.starts_with("visible "))
+        .collect();
+    assert!(
+        visible.is_empty(),
+        "files of the user's passwd home are in the command's sight: {visible:?}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&output)
+    );
+}
+
+/// The passwd home is hidden beside HOME, not only when it holds HOME: the user's passwd entry
+/// is read from a `getent` first on PATH that names a home of the scratch's, beside the
+/// HOME the check is given, so the case reaches that branch whether or not the scratch lies
+/// under the user's real passwd home. A file planted there is not in the command's sight.
+#[test]
+fn a_passwd_home_beside_home_is_hidden_as_well() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let world = world("passwd-beside");
+    let (home, env) = callers_home(&world);
+    let passwd_home = world.outer.0.join("passwd-home");
+    write(
+        &passwd_home.join(".ssh/id_planted"),
+        "PLANTED-PASSWD-HOME\n",
+    );
+    assert!(
+        !home.starts_with(&passwd_home) && !passwd_home.starts_with(&home),
+        "the two homes lie beside each other"
+    );
+    let bin = world.outer.0.join("bin-getent");
+    write(
+        &bin.join("getent"),
+        &format!(
+            "#!/bin/sh\n[ \"$1\" = passwd ] || exit 2\nprintf 'u:x:%s:%s::%s:/bin/sh\\n' \"$(id -u)\" \"$(id -g)\" '{}'\n",
+            passwd_home.display()
+        ),
+    );
+    fs::set_permissions(bin.join("getent"), fs::Permissions::from_mode(0o755)).expect("executable");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").expect("a PATH")
+    );
+    let mut env: Vec<(&str, &str)> = env
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
+    env.push(("PATH", &path));
+    let filed = file(
+        &world.takt,
+        "passwd-beside",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; cat '{}' 2>/dev/null; echo probe-ran\nexit: 0\noutput: probe-ran\nsource: {SOURCE}\n",
+            passwd_home.join(".ssh/id_planted").display()
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = world.check("story:passwd-beside", &world.defect, &env);
+    let ran = fs::read_to_string(record(&output).join("output")).unwrap_or_default();
+    assert!(
+        !ran.contains("PLANTED-PASSWD-HOME"),
+        "the command read a file of the passwd home beside HOME:\n{ran}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&output)
+    );
+}
+
+/// The review's last finding: a descriptor the caller left open passes to no process the
+/// check runs under bubblewrap. A caller holding a file of its hidden home open on descriptor
+/// 7 gives the command nothing of it, through `/proc/self/fd/7` or `/dev/fd/7`.
+#[test]
+fn the_predicate_reads_no_descriptor_the_caller_left_open() {
+    let world = world("held-fd");
+    let (home, env) = callers_home(&world);
+    let env: Vec<(&str, &str)> = env
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
+    let filed = file(
+        &world.takt,
+        "held-fd",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; for f in /proc/self/fd/7 /dev/fd/7; do cat \"$f\" 2>/dev/null | grep -q PLANTED-HOME-SECRET && echo \"read $f\"; done; echo probe-ran\nexit: 0\noutput: probe-ran\nsource: {SOURCE}\n"
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = check_holding(
+        &world,
+        "story:held-fd",
+        &world.defect,
+        &env,
+        &home.join(".secret"),
+    );
+    let ran = fs::read_to_string(record(&output).join("output")).unwrap_or_default();
+    let read: Vec<_> = ran
+        .lines()
+        .filter(|line| line.starts_with("read "))
+        .collect();
+    assert!(
+        read.is_empty(),
+        "the command read the caller's open descriptor: {read:?}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&output)
     );
 }
 
@@ -2215,4 +2887,119 @@ fn a_repository_findings_seed_is_recorded_as_the_full_commit_id() {
             .all(|result| result.contains(&format!("seed: {}\n", world.seed))),
         "{results:?}"
     );
+}
+
+/// `check-finding` builds the revision in a checkout of its own that fetches it through git's
+/// transport, every object hashed and checked as it is received. With the loose object of the
+/// fixed revision's `main.rs` overwritten in this repository's store by the defect's bytes, the
+/// build fails, git naming the object, and there is no result: never the defect's text built as
+/// the fixed revision. So too when `GIT_TEMPLATE_DIR` names a template whose
+/// `objects/info/alternates` would lend a new repository this store's objects, so that a fetch
+/// received none: the checkout is made with no template.
+#[test]
+fn a_poisoned_object_of_the_revision_fails_the_build_naming_it() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let loose = |repo: &Path, id: &str| repo.join(".git/objects").join(&id[..2]).join(&id[2..]);
+    for template in [false, true] {
+        let world = world(if template {
+            "poisoned-template"
+        } else {
+            "poisoned"
+        });
+        let filed = file(
+            &world.takt,
+            "default-protocol",
+            &body(Some(&predicate())),
+            &[],
+        );
+        assert!(filed.status.success(), "{}", shown(&filed));
+        let main = "crates/takt-cli/src/main.rs";
+        let blob = git_out(
+            &world.takt,
+            &["rev-parse", &format!("{}:{main}", world.fixed)],
+        );
+        let other = git_out(
+            &world.takt,
+            &["rev-parse", &format!("{}:{main}", world.defect)],
+        );
+        let target = loose(&world.takt, &blob);
+        let bytes = fs::read(loose(&world.takt, &other)).expect("the defect's object");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).expect("writable");
+        fs::write(&target, bytes).expect("poisoned");
+        let lending = world.outer.0.join("template");
+        write(
+            &lending.join("objects/info/alternates"),
+            &format!("{}\n", world.takt.join(".git/objects").display()),
+        );
+        let env: Vec<(&str, &str)> = if template {
+            vec![("GIT_TEMPLATE_DIR", lending.to_str().expect("UTF-8"))]
+        } else {
+            Vec::new()
+        };
+        let output = world.check("story:default-protocol", &world.fixed, &env);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "template {template}: {}",
+            shown(&output)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "template {template}: {}",
+            shown(&output)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(&blob),
+            "template {template}: the failure names {blob}: {}",
+            shown(&output)
+        );
+    }
+}
+
+/// The reviewer's RV-R: the caller's environment names an object directory
+/// (`GIT_ALTERNATE_OBJECT_DIRECTORIES` or `GIT_OBJECT_DIRECTORY`, which a hook's environment
+/// under quarantine carries) holding this repository's store, in which the fixed revision's
+/// `main.rs` was overwritten with the defect's bytes. The build's git runs under a cleared
+/// environment, so the fetch still receives and hashes every object: the build fails naming the
+/// object, and there is no result.
+#[test]
+fn object_directories_in_the_callers_environment_reach_no_build() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let loose = |repo: &Path, id: &str| repo.join(".git/objects").join(&id[..2]).join(&id[2..]);
+    for var in ["GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_OBJECT_DIRECTORY"] {
+        let world = world(&format!("caller-{}", var.to_lowercase()));
+        let filed = file(
+            &world.takt,
+            "default-protocol",
+            &body(Some(&predicate())),
+            &[],
+        );
+        assert!(filed.status.success(), "{}", shown(&filed));
+        let main = "crates/takt-cli/src/main.rs";
+        let blob = git_out(
+            &world.takt,
+            &["rev-parse", &format!("{}:{main}", world.fixed)],
+        );
+        let other = git_out(
+            &world.takt,
+            &["rev-parse", &format!("{}:{main}", world.defect)],
+        );
+        let target = loose(&world.takt, &blob);
+        let bytes = fs::read(loose(&world.takt, &other)).expect("the defect's object");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).expect("writable");
+        fs::write(&target, bytes).expect("poisoned");
+        let objects = world.takt.join(".git/objects");
+        let output = world.check(
+            "story:default-protocol",
+            &world.fixed,
+            &[(var, objects.to_str().expect("UTF-8"))],
+        );
+        assert_eq!(output.status.code(), Some(1), "{var}: {}", shown(&output));
+        assert!(output.stdout.is_empty(), "{var}: {}", shown(&output));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(&blob),
+            "{var}: the failure names {blob}: {}",
+            shown(&output)
+        );
+    }
 }

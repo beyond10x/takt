@@ -266,6 +266,7 @@ impl Runner for Gates {
                     "mergedAt": null,
                     "headRefName": branch,
                     "headRefOid": sha,
+                    "baseRefName": "main",
                 });
                 exit(0, &view.to_string(), "")
             }
@@ -841,6 +842,10 @@ struct Scanning {
 }
 
 impl Forge for Scanning {
+    fn target_tip(&self, tree: &Path, base: &str) -> anyhow::Result<String> {
+        self.memory.target_tip(tree, base)
+    }
+
     fn name(&self) -> &str {
         "scanning"
     }

@@ -83,7 +83,7 @@ their figures are in `docs/metrics/`.
 ```
 takt run --repo <path> --intent "make the failing test pass" --iterations 1
 takt run --repo <path> --hours 1
-takt approve --repo <path> <case> repository.merge --by <who>
+takt approve --repo <path> <case> repository.merge --by human:<id>
 takt scenario run --repo <path> <id> --hours 1
 takt protocols
 takt scorecard --repo <path> [--against <scorecard.json>]

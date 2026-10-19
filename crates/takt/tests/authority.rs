@@ -213,7 +213,7 @@ fn a_grant_written_while_a_run_holds_the_case_is_refused() {
     case.hold().expect("the run holds the case");
     let refusal = format!(
         "{:#}",
-        grant(&tree, "grant-hold", "repository.merge", "operator").expect_err("held")
+        grant(&tree, "grant-hold", "repository.merge", "human:operator").expect_err("held")
     );
     assert!(refusal.contains(LOCK_FILE), "{refusal}");
     assert!(!dir.join(AUTHORITY_FILE).exists());
@@ -232,7 +232,7 @@ fn a_grant_written_while_a_run_holds_the_case_is_refused() {
         });
         let tg = std::thread::spawn(move || {
             bg.wait();
-            grant(&t, "grant-hold", "repository.merge", "operator").is_ok()
+            grant(&t, "grant-hold", "repository.merge", "human:operator").is_ok()
         });
         let (held, granted) = (th.join().expect("joins"), tg.join().expect("joins"));
         assert!(
@@ -294,7 +294,7 @@ fn a_grant_records_its_revision_and_the_merge_is_admitted_at_no_other() {
     let tree = scratch("bound");
     let (mut case, first) = at_the_gate(&tree, "bound");
     let approval =
-        grant(&tree, "bound", "repository.merge", "operator").expect("the grant is written");
+        grant(&tree, "bound", "repository.merge", "human:operator").expect("the grant is written");
     assert_eq!(approval.revision, first);
     let authority = Authority::read(&case.dir)
         .expect("reads")
@@ -324,8 +324,8 @@ fn a_grant_records_its_revision_and_the_merge_is_admitted_at_no_other() {
     );
 
     // A new grant, at the new revision, replaces the old one.
-    let approval =
-        grant(&tree, "bound", "repository.merge", "operator").expect("the new grant is written");
+    let approval = grant(&tree, "bound", "repository.merge", "human:operator")
+        .expect("the new grant is written");
     assert_eq!(approval.revision, second);
     let authority = Authority::read(&case.dir)
         .expect("reads")
@@ -370,7 +370,7 @@ fn a_grant_with_no_revision_admits_nothing() {
 fn pr_merged_merges_nothing_under_a_grant_for_another_revision() {
     let tree = scratch("pr-merged");
     let (mut case, first) = at_the_gate(&tree, "pr-merged");
-    grant(&tree, "pr-merged", "repository.merge", "operator").expect("the grant is written");
+    grant(&tree, "pr-merged", "repository.merge", "human:operator").expect("the grant is written");
     let second = commit(&tree, &mut case, "after-the-grant.txt");
     let mut branch = takt::case::Branch::read(&case.dir).expect("the branch file");
     branch.pushed = Some(second.clone());
@@ -416,7 +416,7 @@ fn grant_refuses_a_case_that_is_not_at_the_gate() {
         CaseDir::open(&tree, protocol(), "gate", "deliver the story", &[]).expect("the case opens");
     let refusal = format!(
         "{:#}",
-        grant(&tree, "gate", "repository.merge", "operator").expect_err("never evaluated")
+        grant(&tree, "gate", "repository.merge", "human:operator").expect_err("never evaluated")
     );
     assert!(refusal.contains("gate"), "{refusal}");
     assert!(!case.dir.join(AUTHORITY_FILE).exists());
@@ -426,7 +426,7 @@ fn grant_refuses_a_case_that_is_not_at_the_gate() {
     assert_eq!(action(&decision, "repository.merge"), "blocked");
     let refusal = format!(
         "{:#}",
-        grant(&tree, "gate", "repository.merge", "operator").expect_err("merge blocked")
+        grant(&tree, "gate", "repository.merge", "human:operator").expect_err("merge blocked")
     );
     assert!(refusal.contains("repository.merge"), "{refusal}");
     assert!(!case.dir.join(AUTHORITY_FILE).exists());
@@ -435,7 +435,8 @@ fn grant_refuses_a_case_that_is_not_at_the_gate() {
     commit(&tree, &mut case, "moved.txt");
     let refusal = format!(
         "{:#}",
-        grant(&tree, "gate", "repository.merge", "operator").expect_err("moved since the gate")
+        grant(&tree, "gate", "repository.merge", "human:operator")
+            .expect_err("moved since the gate")
     );
     assert!(refusal.contains("gate"), "{refusal}");
     assert!(!case.dir.join(AUTHORITY_FILE).exists());
@@ -600,7 +601,7 @@ fn case_ids_reaching_outside_the_cases_directory_are_refused() {
 
         let refusal = format!(
             "{:#}",
-            approve(&tree, &NoStore, id, "repository.merge", "operator").expect_err(id)
+            approve(&tree, &NoStore, id, "repository.merge", "human:operator").expect_err(id)
         );
         assert!(refusal.contains("case id"), "{id}: {refusal}");
         assert!(!outside.join(AUTHORITY_FILE).exists(), "{id}");

@@ -26,8 +26,10 @@
 # from `--declared-on` with `git config --no-includes --blob`, as `takt scenario run` reads it;
 # or a `repository` (an `https://` URL) with the `seed` the task starts from and, optionally,
 # the task's `test` command. The revision is checked out into a build directory
-# of its own under the cache (a clone of this repository holding its own copy of the objects,
-# so a commit no branch holds builds too) and built with `cargo build --locked --offline`,
+# of its own under the cache (a repository made with no template that fetches the revision by
+# its id from this one through git's transport, every object hashed and checked as it is
+# received, so a commit no branch holds builds too and an object overwritten in this repository's
+# store is refused, naming it) and built with `cargo build --locked --offline`,
 # confined in bubblewrap (`bwrap`, on PATH) as `takt promote` builds a candidate
 # (crates/takt/src/promotion.rs): the environment cleared but for HOME, TMPDIR, PATH, LANG,
 # TERM when set, CARGO_HOME and RUSTC; an empty HOME and /tmp of its own; its own process and
@@ -60,14 +62,26 @@
 # PATH, LANG, TAKT, SCENARIO, TEST and HOME, and HOME is a fresh directory of the check's own,
 # never the caller's, so no credential of the caller reaches it, neither from the environment
 # nor from a file a tool reads under HOME (git's credential store, a CLI's login). The command
-# runs under bubblewrap with the whole filesystem bound as it is and, over it, the caller's
-# cache of the public protocol sources `aep` reads bound read-only at the home's
-# `.cache/aep/protocol-sources`, so `aep` needs no network there and a write through it fails;
-# bubblewrap adds no other isolation (network, processes and every other path as before), and
-# without it no predicate runs. The command still runs as the caller's user: this is
-# no sandbox against a path it names outright. The script's own git reads and writes name their
-# repository by path, so a `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE` of the caller (a
-# hook's environment) is unset before any of them.
+# runs under bubblewrap with every host path read-only but the clone and the predicate's home:
+# the repository, the kept `builds/<sha>/takt`, the caller's protocol sources by their real
+# paths and the run directory, where the check keeps the predicate, the command's output and
+# the result, cannot be written. The caller's home, the directory HOME names, and the home of
+# the user the check runs as, its passwd entry's, are empty read-only directories there, so
+# nothing under them is read or written but what the check binds into them (a repository under
+# one is not there at all); devices, /proc, /tmp and /run are its own, so no socket of the
+# user's session, its agents or the container engines is in sight. The caller's cache of the
+# public protocol sources `aep` reads is bound read-only at the home's
+# `.cache/aep/protocol-sources`, so `aep` needs no network there. The command runs in network,
+# IPC and PID namespaces of its own: no network and no abstract unix socket of the host, and
+# every process it leaves is killed when it ends; bubblewrap's status reaches the script on a
+# pipe, so no process of an earlier check reaches this one's result. It keeps the caller's
+# user, and a socket the host holds outside the paths above stays in sight where the user may
+# open it; without bubblewrap no predicate runs. Neither bubblewrap, the build's nor the
+# command's, inherits a descriptor above 2 the caller left open: each is closed first, so no
+# file the caller holds open reaches the revision's code through `/proc/self/fd`. The
+# script's own git reads and writes name their repository by path, so a `GIT_DIR`,
+# `GIT_WORK_TREE` or `GIT_INDEX_FILE` of the caller (a hook's environment) is unset before any
+# of them.
 # The cache is `$XDG_CACHE_HOME/takt/check-finding`, `~/.cache/takt/check-finding` without it:
 # `builds/<sha>/takt` and `builds/<sha>/revision`, and one directory per check under `runs/`
 # holding the finding, the clone, the predicate's home, the command's output and the result,
@@ -83,16 +97,24 @@
 # started, a flag rejected, or any status the predicate does not name as the healthy one. An
 # `error` verifies nothing. All three exit 0. A check that cannot run its predicate (no such
 # finding, a predicate that does not parse, a revision that names no commit, a scenario not
-# declared, no bubblewrap or no toolchain for a build, a build that fails, a bubblewrap that
-# did not run the command to its end, its error named on standard error, a command past
+# declared, no bubblewrap or no toolchain for a build, a build that fails, a HOME that names
+# no directory to hide, a bubblewrap that did not run the command to its end, its error named
+# on standard error, its status pipe's last line not the exit it gave, a command past
 # CHECK_FINDING_TIMEOUT seconds, 900 by default) prints nothing on standard output and exits 1;
 # a usage error, a CHECK_FINDING_TIMEOUT that is no whole number of seconds among them, exits 64.
 set -euo pipefail
 
-# The repositories this script reads and writes are the ones it names by path; a GIT_DIR,
-# GIT_WORK_TREE or GIT_INDEX_FILE of the caller (a hook's environment) would send every `git -C`
-# to another repository, or a checkout into the caller's index.
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+# The repositories this script reads and writes are the ones it names by path, as they hold
+# them; a GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE of the caller (a hook's environment) would send
+# every `git -C` to another repository, or a checkout into the caller's index, and a
+# GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES or GIT_COMMON_DIR (a hook's environment
+# under quarantine), a GIT_CONFIG_PARAMETERS or GIT_CONFIG_COUNT, a GIT_GRAFT_FILE,
+# GIT_SHALLOW_FILE, GIT_REPLACE_REF_BASE, GIT_NAMESPACE or GIT_TEMPLATE_DIR would lend it objects,
+# configuration or history it does not hold. None reaches a git here; the build's git runs under
+# a cleared environment besides (`build_git`).
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+    GIT_COMMON_DIR GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT GIT_GRAFT_FILE GIT_SHALLOW_FILE \
+    GIT_REPLACE_REF_BASE GIT_NAMESPACE GIT_TEMPLATE_DIR
 
 say() { printf 'check-finding: %s\n' "$*" >&2; }
 usage() {
@@ -103,6 +125,18 @@ usage() {
 fail() {
     say "$*; no result"
     exit 1
+}
+# Closes every descriptor above 2 of the shell it runs in, to be called in the subshell that
+# then starts bubblewrap: a descriptor the caller left open passes to every process bubblewrap
+# runs, and through `/proc/self/fd/N` or `/dev/fd/N` it reads the file it names, whatever the
+# sandbox hides of that file's path.
+close_inherited() {
+    local fd
+    for fd in /proc/self/fd/*; do
+        fd=${fd##*/}
+        [[ $fd =~ ^[0-9]+$ ]] && ((fd > 2)) || continue
+        { exec {fd}<&-; } 2>/dev/null || true
+    done
 }
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
@@ -277,11 +311,17 @@ toolchain_dir() {
 }
 
 # takt, built from the revision in a checkout of its own, once per revision, confined in
-# bubblewrap. The checkout is a clone of this repository with its own copy of the objects (no
-# hardlink and no alternate into this repository, which the build cannot see), so a revision no
-# branch holds still builds and the build's git reads the checkout alone; and a checkout rather
-# than an export, so the build script reads the revision into the binary. A kept binary without
-# the `revision` file beside it was built from an export, and is replaced.
+# bubblewrap. The checkout is a repository of its own, made with no template (one could lend it
+# this repository's objects through `objects/info/alternates`, so the fetch would receive none),
+# that fetches the revision, by its id, from this one through git's transport, never a local
+# copy of the object files: every object is
+# hashed as it is received and checked (`transfer.fsckObjects`), so one overwritten in this
+# repository's store fails the build, git naming it, rather than building other content. It
+# holds its own copy of the objects (no hardlink and no alternate into this repository, which the
+# build cannot see), so a revision no branch holds still builds and the build's git reads the
+# checkout alone; and it is a checkout rather than an export, so the build script reads the
+# revision into the binary. A kept binary without the `revision` file beside it was built from an
+# export, and is replaced.
 # Never unconfined: without bubblewrap nothing is built and no predicate runs.
 bwrap=$(command -v bwrap) ||
     fail "bubblewrap (\`bwrap\`) is not on PATH; check-finding builds the revision confined in it and runs the predicate under it, never without, so install bubblewrap first"
@@ -293,10 +333,21 @@ if [[ ! -x $takt || ! -f $root/builds/$sha/revision ]]; then
     [[ $cached == /* ]] || cached=$HOME/.cargo
     work=$(mktemp -d "$root/builds/$sha.work-XXXXXX")
     trap 'rm -rf -- "$work"' EXIT
-    mkdir -p "$work/target" "$work/cargo-home"
-    git clone --quiet --no-checkout --no-hardlinks --dissociate -- "$repo" "$work/src" >&2 ||
-        fail "clone $repo for the build"
-    git -C "$work/src" checkout --quiet --detach "$sha" >&2 ||
+    mkdir -p "$work/target" "$work/cargo-home" "$work/git-home"
+    # The build's checkout is made, fetched and checked out by a git that runs as the predicate's
+    # clone does (`clone_git`): with the environment replaced (`env -i`), so no
+    # GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_COMMON_DIR, GIT_CONFIG_PARAMETERS,
+    # GIT_CONFIG_COUNT or GIT_GRAFT_FILE of the caller (a hook's environment under quarantine
+    # carries some) lends it objects or changes what it reads, in a home of its own, with no
+    # system or global configuration and no prompt.
+    build_git() {
+        env -i PATH="$PATH" HOME="$work/git-home" LANG="${LANG:-C.UTF-8}" \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 git "$@"
+    }
+    { build_git init --quiet --template= -- "$work/src" &&
+        build_git -C "$work/src" -c transfer.fsckObjects=true fetch --quiet --no-tags -- "$repo" "$sha"; } >&2 ||
+        fail "fetch $sha from $repo for the build, every object hashed and checked"
+    build_git -C "$work/src" checkout --quiet --detach "$sha" >&2 ||
         fail "check out $sha from $repo"
     # The sandbox of `takt promote`'s build (crates/takt/src/promotion.rs, `Confinement`): the
     # system directories and /etc read-only, its own /proc, /dev, /tmp and HOME, the toolchain
@@ -333,9 +384,9 @@ if [[ ! -x $takt || ! -f $root/builds/$sha/revision ]]; then
         fail "$toolchain/bin/rustc -vV names no host"
     [[ $host =~ ^[A-Za-z0-9_.-]+$ ]] || fail "$toolchain/bin/rustc names the host \`$host\`, no target triple"
     say "building takt at ${sha:0:12} in $work for $host, confined in bwrap"
-    "${sandbox[@]}" --chdir /work -- /toolchain/bin/cargo build --locked --offline \
-        --config "build.target=\"$host\"" --message-format=json \
-        -p b10x-takt-cli --bin takt --target-dir /target </dev/null >"$work/messages" ||
+    (close_inherited && exec "${sandbox[@]}" --chdir /work -- /toolchain/bin/cargo build \
+        --locked --offline --config "build.target=\"$host\"" --message-format=json \
+        -p b10x-takt-cli --bin takt --target-dir /target </dev/null >"$work/messages") ||
         fail "takt does not build at ${sha:0:12}, confined in bwrap"
     built=()
     while IFS= read -r line; do
@@ -408,25 +459,69 @@ clone_git -C "$clone" config user.email check-finding@example.invalid
 say "$finding: $where, takt at ${sha:0:12}: $command"
 environment=(PATH="$PATH" HOME="$home" LANG="${LANG:-C.UTF-8}" TAKT="$takt" SCENARIO="$clone")
 [[ -z $test_command ]] || environment+=(TEST="$test_command")
-# Under bubblewrap only for the bind: the whole filesystem bound as it is, devices included
-# (`--dev-bind / /`), then the protocol sources read-only over it; no namespace but the mount
-# namespace bwrap needs for that, so the command reaches the network, the processes and every
-# path it reached before, as the caller's user. `--die-with-parent`, so the command dies with
-# bwrap when `timeout` kills it. bwrap clears nothing of the environment `env -i` gives it.
-# Its status file names the command's pid as soon as bwrap forked, before its mount setup, so
-# that line proves nothing; the `exit-code` line it writes once the command ended does. Without
-# it, or with one that is not the status bwrap exited with, the exit is bwrap's own (a mount
-# setup that failed exits 1, the status a predicate may name), not the command's, and there is
-# no result.
+# The caller's home, hidden from the command: the directory HOME names, by its real path. A
+# HOME that names no directory, or names the root, is no home to hide, and nothing runs.
+callers_home=$(cd "${HOME:-}" 2>/dev/null && pwd -P) && [[ -n ${HOME:-} && $callers_home != / ]] ||
+    fail "HOME=${HOME:-} names no directory other than the root; the command runs with the caller's home hidden, never without"
+# And the home of the user the check runs as, its passwd entry's, whatever HOME names: under a
+# HOME of another directory it would be in sight (`~/.ssh`, a git configuration). One home
+# that holds the other is hidden alone; a user with no passwd entry, or whose passwd home is
+# no directory or the root, has none to hide.
+hidden=("$callers_home")
+user_home=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6) || user_home=
+if [[ -n $user_home ]] && user_home=$(cd "$user_home" 2>/dev/null && pwd -P) && [[ $user_home != / ]]; then
+    if [[ $callers_home/ == "$user_home"/* ]]; then
+        hidden=("$user_home")
+    elif [[ $user_home/ != "$callers_home"/* ]]; then
+        hidden+=("$user_home")
+    fi
+fi
+# The run step's sandbox. Every host path read-only (`--ro-bind / /`) but two, bound writable
+# at their paths: the clone and the predicate's home. The run directory around them, where the
+# check keeps the predicate, the command's output and the result, is not, so the command
+# plants no link the check would write through. Devices, /proc, /tmp and /run of its own
+# (`/var/run` too where it is a directory and no link to /run): no socket of the user's
+# session, its agents, the container engines or the system bus under them is in sight. The
+# homes above, each an empty read-only directory (a tmpfs, remounted read-only once the paths
+# below are bound into it), so nothing under them is read and a write there fails, or finds no
+# such path. The kept binary and the caller's protocol sources bound read-only at the paths
+# they have on the host, which may lie under a hidden home, and the sources once more at the
+# predicate's home (`binds`). Its own network namespace (`--unshare-net`): no network, and no
+# abstract unix socket of the host (X11's among them); its own IPC namespace
+# (`--unshare-ipc`); its own PID namespace (`--unshare-pid`): when the command ends, bwrap's
+# init, pid 1 there, ends, and the kernel kills every process the command left, so none
+# outlives the check. The caller's user stays as it is. `--die-with-parent`, so the command
+# dies with bwrap when `timeout` kills it. bwrap clears nothing of the environment `env -i`
+# gives it.
+sandbox=("$bwrap" --die-with-parent --unshare-pid --unshare-net --unshare-ipc --json-status-fd 3
+    --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --tmpfs /run)
+[[ -L /var/run || ! -d /var/run ]] || sandbox+=(--tmpfs /var/run)
+for dir in "${hidden[@]}"; do
+    sandbox+=(--tmpfs "$dir")
+done
+sandbox+=(--bind "$clone" "$clone" --bind "$home" "$home" --ro-bind "$takt" "$takt")
+[[ ! -d $sources ]] || sandbox+=(--ro-bind "$sources" "$sources")
+sandbox+=("${binds[@]}")
+for dir in "${hidden[@]}"; do
+    sandbox+=(--remount-ro "$dir")
+done
+sandbox+=(--chdir "$clone")
+# bwrap's status reaches the check on a pipe (fd 3, standard output of the substitution),
+# never a file on disk another process could write; bwrap keeps that descriptor to its own
+# process outside the namespace (bubblewrap 0.12.0: neither the command nor pid 1 holds it).
+# It writes `{ "child-pid": … }` once it has forked, before its mount setup, and its last line,
+# `{ "exit-code": N }`, only once the setup held, `sh` started and then ended with N: a mount
+# that fails, or an exec that fails, leaves no such line and exits 1, a status a predicate may
+# name. So the command's exit is bwrap's status only when the last line is `exit-code` and N
+# is that status; else bwrap did not run the command to its end, and there is no result. N
+# says how `sh -c` ended, nothing of what the command did on the way.
 set +e
-(cd "$clone" && env -i "${environment[@]}" timeout --kill-after=10 "$limit" \
-    "$bwrap" --die-with-parent --json-status-fd 3 --dev-bind / / "${binds[@]}" --chdir "$clone" \
-    -- sh -c "$command" 3>"$run/bwrap-status") \
-    >"$run/output" 2>&1 </dev/null
+reported=$(close_inherited && cd "$clone" && env -i "${environment[@]}" timeout --kill-after=10 "$limit" \
+    "${sandbox[@]}" -- sh -c "$command" 3>&1 >"$run/output" 2>&1 </dev/null)
 status=$?
 set -e
 ((status != 124 && status != 137)) || fail "the command ran past $limit seconds"
-ended=$(sed -n 's/^{ *"exit-code": *\([0-9][0-9]*\) *}$/\1/p' "$run/bwrap-status" | tail -n 1)
+ended=$(printf '%s\n' "$reported" | tail -n 1 | sed -n 's/^{ *"exit-code": *\([0-9][0-9]*\) *}$/\1/p')
 if [[ -z $ended ]] || ((10#$ended != status)); then
     error=$({ grep '^bwrap: ' "$run/output" || true; } | tail -n 1)
     fail "bubblewrap did not run the command to its end (exit $status${ended:+, the command ended $ended}): ${error:-bubblewrap printed no error}"

@@ -124,7 +124,11 @@ fn compare(candidate: &Path, saved: &Path, name: &str) -> (usize, String) {
     let saves = scratch(&format!("{name}-saves"));
     let file = Scorecard::read(saved)
         .expect("the saved side reads")
-        .save(&saves, "abcdef1234567", Named::Build)
+        .save(
+            &saves,
+            "abcdef1234567890abcdef1234567890abcdef12",
+            Named::Build,
+        )
         .expect("saved");
     let mut card = Scorecard::read(candidate).expect("the candidate reads");
     card.rule.trials = 1;
@@ -262,14 +266,21 @@ fn a_save_does_not_follow_a_link_or_a_path_revision() {
     let saves = scratch("save-link-saves");
     let elsewhere = scratch("save-link-elsewhere");
     let target = elsewhere.join("planted.json");
-    std::os::unix::fs::symlink(&target, saves.join("scorecard-abcdef1234567.json"))
-        .expect("a link");
+    std::os::unix::fs::symlink(
+        &target,
+        saves.join("scorecard-abcdef1234567890abcdef1234567890abcdef12.json"),
+    )
+    .expect("a link");
     let card = Scorecard::read(&repo).expect("reads");
-    assert!(
-        card.clone()
-            .save(&saves, "abcdef1234567", Named::Build)
-            .is_err()
-    );
+    let refused = card
+        .clone()
+        .save(
+            &saves,
+            "abcdef1234567890abcdef1234567890abcdef12",
+            Named::Build,
+        )
+        .expect_err("a link at the file's name is refused");
+    assert!(format!("{refused:#}").contains("exists"), "{refused:#}");
     assert!(!target.exists());
     for revision in ["../abcdef1", "ABCDEF1", "abcdef", &"a".repeat(65), ""] {
         assert!(
@@ -347,7 +358,7 @@ fn self_is_never_worse_and_two_lowered_cases_always_are() {
         }
         let file = card
             .clone()
-            .save(&saves, &format!("{trial:07x}"), Named::Build)
+            .save(&saves, &format!("{trial:040x}"), Named::Build)
             .expect("saved");
         let saved = Scorecard::load(&file).expect("loads");
         let mut out = Vec::new();

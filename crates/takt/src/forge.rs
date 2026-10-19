@@ -22,6 +22,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -255,14 +256,27 @@ pub struct Head {
     pub sha: String,
 }
 
-/// What the forge reports about a pull request: its state and its head. A validator checks
-/// the head against the case's branch and revision before it trusts a number.
+/// What the forge reports about a pull request: its state, its head and its base. A validator
+/// checks the head against the case's branch and revision before it trusts a number; the
+/// base is the branch a merge goes into, whatever the case's own records name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullRequestView {
     /// The state.
     pub state: PullRequestState,
     /// The head.
     pub head: Head,
+    /// The base branch, the merge's target, as the forge holds it.
+    pub base: String,
+}
+
+/// Whether `text` is a full object id as git writes one: 40 (SHA-1) or 64 (SHA-256) lowercase
+/// hexadecimal digits, never a name or an expression git would resolve.
+#[must_use]
+pub fn is_object_id(text: &str) -> bool {
+    matches!(text.len(), 40 | 64)
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// What an `origin` URL names: the host and the `<owner>/<repo>` on it.
@@ -329,6 +343,18 @@ pub trait Forge {
     /// came back, when it keeps anything. What the merge made of the pull request is read back
     /// through [`Self::pull_request`]; the merge itself answers nothing a validator records.
     fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()>;
+    /// The commit the branch `base`, a merge's target, is at as the repository reports it when
+    /// the merge is decided: where `repository.merge` reads the judge allow-list and the
+    /// delegation record from, never the case's tree. Refused by default, so an adapter that
+    /// cannot say merges nothing: without the target's tip every path is a judge surface. An
+    /// adapter that answers leaves the commit it names held by the tree's repository.
+    fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
+        let _ = tree;
+        bail!(
+            "the forge {} cannot report the tip of {base}, the merge target; nothing is merged through it",
+            self.name()
+        )
+    }
 }
 
 /// What a program the adapter ran answered.
@@ -437,6 +463,291 @@ pub fn without_credentials(command: &mut Command, keep: fn(&str) -> bool) {
             command.env_remove(&name);
         }
     }
+}
+
+/// The variables that tell a program where a login of the user's is found besides `HOME`: the
+/// session bus and the runtime directory it is found in (the keyring is reached through it), the
+/// XDG base directories, and the configuration a forge client, git, GnuPG, a cloud or container
+/// client reads its login from. [`without_login`] removes every one.
+pub const LOGIN_LOCATIONS: [&str; 16] = [
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "GNOME_KEYRING_CONTROL",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "GH_CONFIG_DIR",
+    "GIT_CONFIG_GLOBAL",
+    "GNUPGHOME",
+    "NETRC",
+    "AWS_CONFIG_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "CLOUDSDK_CONFIG",
+    "DOCKER_CONFIG",
+    "KUBECONFIG",
+];
+
+/// The files under the toolchain's `CARGO_HOME` that hold a registry login.
+const CARGO_LOGINS: [&str; 2] = ["credentials.toml", "credentials"];
+
+/// A home directory of its own for a child, empty and readable by this user only, under the
+/// system's temporary directory; removed with what is in it when dropped.
+#[derive(Debug)]
+pub struct ScratchHome(PathBuf);
+
+impl ScratchHome {
+    /// Makes a new one; an error when it cannot be made.
+    pub fn new() -> Result<Self> {
+        static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "takt-home-{}-{}",
+            std::process::id(),
+            MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder
+            .create(&dir)
+            .with_context(|| format!("make the scratch home {}", dir.display()))?;
+        Ok(Self(dir))
+    }
+
+    /// Where it is.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Starts `command` with no login of the user's in reach: `HOME` is `home`, every variable of
+/// [`LOGIN_LOCATIONS`] is removed, and the toolchain stays where it was (`CARGO_HOME` and
+/// `RUSTUP_HOME`, when unset, name the user's `~/.cargo` and `~/.rustup`). `HOME`,
+/// `CARGO_HOME` and `RUSTUP_HOME` are read as the command will see them: its own setting
+/// first, this process's after, a relative one from the command's directory. On Linux the process
+/// starts in a user and a mount namespace of its own, which every child of it inherits, where
+/// `/run/user` and the runtime directory `XDG_RUNTIME_DIR` names (unless it holds `home` or the
+/// command's directory) are empty and read-only, and where each socket
+/// `DBUS_SESSION_BUS_ADDRESS` names by path and each registry login under the `CARGO_HOME` the
+/// command will see is
+/// `/dev/null`; with no capability left once it executes, nothing it runs can unmount them. The
+/// spawn fails when the host refuses the namespaces: the command is never run with the user's
+/// session in reach. Not hidden: an abstract socket a bus address names, and the user's home
+/// read by its path.
+pub fn without_login(command: &mut Command, home: &Path) {
+    // What the command will see of `name`: its own setting when it has one (a caller such as
+    // the test command's fresh home sets `CARGO_HOME`, or removes a variable), else this
+    // process's. A relative path is read from the command's own directory.
+    let seen = |name: &str| -> Option<PathBuf> {
+        let own = command
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new(name))
+            .map(|(_, value)| value.map(OsStr::to_os_string));
+        let value = match own {
+            Some(value) => value,
+            None => std::env::var_os(name),
+        }
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)?;
+        Some(match command.get_current_dir() {
+            Some(dir) if value.is_relative() => dir.join(value),
+            _ => value,
+        })
+    };
+    let user_home = seen("HOME").filter(|dir| dir.is_absolute());
+    let mut cargo_home = seen("CARGO_HOME");
+    let rustup_home = seen("RUSTUP_HOME");
+    for name in LOGIN_LOCATIONS {
+        command.env_remove(name);
+    }
+    if let Some(user_home) = &user_home {
+        for (name, dir, set) in [
+            ("CARGO_HOME", ".cargo", cargo_home.is_some()),
+            ("RUSTUP_HOME", ".rustup", rustup_home.is_some()),
+        ] {
+            let dir = user_home.join(dir);
+            if !set && dir.is_dir() {
+                command.env(name, &dir);
+                if name == "CARGO_HOME" {
+                    cargo_home = Some(dir);
+                }
+            }
+        }
+    }
+    command.env("HOME", home);
+    #[cfg(target_os = "linux")]
+    {
+        let mut dirs = vec![PathBuf::from("/run/user")];
+        if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)
+            && runtime.is_absolute()
+        {
+            dirs.push(runtime);
+        }
+        let kept: Vec<PathBuf> = [Some(home), command.get_current_dir()]
+            .into_iter()
+            .flatten()
+            .filter_map(|dir| dir.canonicalize().ok())
+            .collect();
+        let mut hidden: Vec<PathBuf> = Vec::new();
+        for dir in dirs.iter().filter_map(|dir| dir.canonicalize().ok()) {
+            if dir.is_dir()
+                && !hidden.iter().any(|outer| dir.starts_with(outer))
+                && !kept.iter().any(|inner| inner.starts_with(&dir))
+            {
+                hidden.push(dir);
+            }
+        }
+        let dirs = hidden;
+        let mut files: Vec<PathBuf> = std::env::var("DBUS_SESSION_BUS_ADDRESS")
+            .unwrap_or_default()
+            .split(';')
+            .filter_map(|address| address.split_once(':').map(|(_, keys)| keys))
+            .flat_map(|keys| keys.split(','))
+            .filter_map(|key| key.strip_prefix("path="))
+            .map(PathBuf::from)
+            .collect();
+        if let Some(cargo_home) = cargo_home {
+            files.extend(CARGO_LOGINS.iter().map(|name| cargo_home.join(name)));
+        }
+        let files: Vec<PathBuf> = files
+            .into_iter()
+            .filter(|file| file.exists() && !file.is_dir())
+            .filter_map(|file| file.canonicalize().ok())
+            .filter(|file| !dirs.iter().any(|dir| file.starts_with(dir)))
+            .collect();
+        session::hide(command, &dirs, &files);
+    }
+}
+
+/// The namespaces [`without_login`] starts a child in.
+#[cfg(target_os = "linux")]
+mod session {
+    use std::ffi::{CStr, CString};
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::os::unix::process::CommandExt as _;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    /// Writes `text` to the file at `path`, as the child between fork and exec may: system
+    /// calls only, nothing allocated.
+    fn write(path: &CStr, text: &[u8]) -> std::io::Result<()> {
+        // SAFETY: `path` is a NUL-terminated string; `open` reads it only.
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `text` is valid for `text.len()` bytes; `write` reads them only.
+        let written = unsafe { libc::write(fd, text.as_ptr().cast(), text.len()) };
+        let error = std::io::Error::last_os_error();
+        // SAFETY: `fd` was opened above and is closed once.
+        unsafe {
+            libc::close(fd);
+        }
+        if usize::try_from(written).ok() == Some(text.len()) {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+
+    /// Fails with the last error when `result` is negative.
+    fn check(result: libc::c_int) -> std::io::Result<()> {
+        if result < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Has `command` start in a user namespace mapping this user to itself and a mount
+    /// namespace of its own, with an empty read-only tmpfs over each of `dirs` and `/dev/null`
+    /// bound over each of `files`.
+    pub fn hide(command: &mut Command, dirs: &[PathBuf], files: &[PathBuf]) {
+        let c = |path: &PathBuf| CString::new(path.as_os_str().as_bytes()).ok();
+        let dirs: Vec<CString> = dirs.iter().filter_map(c).collect();
+        let files: Vec<CString> = files.iter().filter_map(c).collect();
+        // SAFETY: `getuid` and `getgid` take nothing and cannot fail.
+        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+        let uid_map = format!("{uid} {uid} 1\n").into_bytes();
+        let gid_map = format!("{gid} {gid} 1\n").into_bytes();
+        let hidden = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
+        let steps = move || -> std::io::Result<()> {
+            // SAFETY: each call below is a system call given integers or NUL-terminated
+            // strings that live as long as the closure; none allocates, so each is safe
+            // between fork and exec.
+            unsafe {
+                check(libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS))?;
+                write(c"/proc/self/setgroups", b"deny")?;
+                write(c"/proc/self/uid_map", &uid_map)?;
+                write(c"/proc/self/gid_map", &gid_map)?;
+                check(libc::mount(
+                    std::ptr::null(),
+                    c"/".as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_REC | libc::MS_PRIVATE,
+                    std::ptr::null(),
+                ))?;
+                for dir in &dirs {
+                    check(libc::mount(
+                        c"tmpfs".as_ptr(),
+                        dir.as_ptr(),
+                        c"tmpfs".as_ptr(),
+                        hidden,
+                        c"mode=0755".as_ptr().cast(),
+                    ))?;
+                }
+                for file in &files {
+                    check(libc::mount(
+                        c"/dev/null".as_ptr(),
+                        file.as_ptr(),
+                        std::ptr::null(),
+                        libc::MS_BIND,
+                        std::ptr::null(),
+                    ))?;
+                }
+            }
+            Ok(())
+        };
+        // Whichever step the host refuses, and with whatever error, the spawn fails with
+        // `EPERM`, which [`super::refused_namespaces`] names; building the error allocates
+        // nothing.
+        let child = move || steps().map_err(|_| std::io::Error::from_raw_os_error(libc::EPERM));
+        // SAFETY: the closure runs between fork and exec and makes system calls only.
+        unsafe {
+            command.pre_exec(child);
+        }
+    }
+}
+
+/// What a test command that cannot run in the user and mount namespace [`without_login`]
+/// starts it in is told.
+#[cfg(target_os = "linux")]
+pub const NAMESPACES_REFUSED: &str = "the test command runs in a user and a mount namespace of its own, where no login of the user's is in reach, and this host refuses unprivileged user namespaces (as with `kernel.apparmor_restrict_unprivileged_userns = 1` or `kernel.unprivileged_userns_clone = 0`); allow them, or run takt where they are allowed";
+
+/// `error`, from starting a command [`without_login`] confined, with the cause named when it
+/// is the refusal of its namespaces: on Linux an `EPERM` (`PermissionDenied`), which every
+/// refused namespace step fails with, gets [`NAMESPACES_REFUSED`] as its context. Any other
+/// error, and an `EACCES` (`PermissionDenied` too: a program that is not executable), is
+/// returned as it was.
+#[must_use]
+pub fn refused_namespaces(error: anyhow::Error) -> anyhow::Error {
+    #[cfg(target_os = "linux")]
+    if error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|cause| {
+            cause.kind() == std::io::ErrorKind::PermissionDenied
+                && cause.raw_os_error() == Some(libc::EPERM)
+        })
+    }) {
+        return error.context(NAMESPACES_REFUSED);
+    }
+    error
 }
 
 /// Reads `stream` to its end on a thread of its own, keeping its last `limit` bytes; answers
@@ -1024,6 +1335,28 @@ impl BotRoute {
         }
     }
 
+    /// The line that fetches the commit `object` and what it reaches through the bot route into
+    /// no ref: the object id alone as the refspec, so no branch, tag or tracking ref moves, and
+    /// no `FETCH_HEAD` (`--no-write-fetch-head`), no tag and no submodule, the options last as
+    /// on a push. `object` is an id the repository reported, never a name git would resolve.
+    #[must_use]
+    pub fn fetch_object_argv(&self, object: &str) -> Vec<String> {
+        let url = self.push_url();
+        [
+            "b10x-gates",
+            "bot",
+            "--",
+            "fetch",
+            &url,
+            object,
+            "--no-write-fetch-head",
+            "--no-tags",
+            "--recurse-submodules=no",
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    }
+
     /// The options every `b10x-gates` line that reads the policy carries, the scan and the API
     /// writes alike: `--repository`, and `--policy` when the policy file is known.
     fn scope(&self) -> Vec<String> {
@@ -1110,7 +1443,7 @@ impl BotRoute {
             "view".to_owned(),
             number.to_string(),
             "--json".to_owned(),
-            "state,mergedAt,headRefName,headRefOid".to_owned(),
+            "state,mergedAt,headRefName,headRefOid,baseRefName".to_owned(),
             "--repo".to_owned(),
             self.repository.clone(),
         ]
@@ -1676,6 +2009,7 @@ impl Forge for BotRoute {
                 branch: field("headRefName")?,
                 sha: field("headRefOid")?,
             },
+            base: field("baseRefName")?,
         })
     }
 
@@ -1742,6 +2076,39 @@ impl Forge for BotRoute {
             );
         }
         Ok(())
+    }
+
+    /// The repository's own `base`, read through the bot route's dry-run fetch
+    /// ([`Self::remote_base`]), then its commit fetched into no ref
+    /// ([`Self::fetch_object_argv`]): a tip newer than anything the tree's repository holds is
+    /// then held, so the allow-list and the delegation record at it can be read, and no ref a
+    /// step or the tree sees has moved. A repository with no such branch, an answer that is no
+    /// object id, or a fetch that fails is the error.
+    fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
+        let tip = self.remote_base(tree, base)?.ok_or_else(|| {
+            anyhow!(
+                "the repository {} has no branch {base} to merge into",
+                self.repository
+            )
+        })?;
+        if !is_object_id(&tip) {
+            bail!(
+                "the repository {} reports {base} at `{}`, which is no object id",
+                self.repository,
+                tip.escape_debug()
+            );
+        }
+        let argv = self.fetch_object_argv(&tip);
+        let exit = self.runner.run_env(tree, &argv, &Self::PUSH_ENV)?;
+        if !exit.success() {
+            return Err(Failed {
+                line: argv.join(" "),
+                code: exit.code,
+                stderr: exit.stderr.trim().to_owned(),
+            }
+            .into());
+        }
+        Ok(tip)
     }
 }
 
@@ -1892,7 +2259,8 @@ impl Forge for Memory {
         } else {
             self.state
         };
-        Ok(PullRequestView { state, head })
+        let base = self.opened.borrow()[index].base.clone();
+        Ok(PullRequestView { state, head, base })
     }
 
     fn checks(&self, _: &Path, number: u64) -> Result<Checks> {
@@ -1914,5 +2282,28 @@ impl Forge for Memory {
         }
         self.merged.borrow_mut().push(number);
         Ok(())
+    }
+
+    /// The tree's own `refs/heads/<base>`: the double's repository is the tree. Not logged, so
+    /// the calls read as the forge's writes and reads of the pull request.
+    ///
+    /// A test double, never a production forge: D3 of story:judge-guard forbids reading the
+    /// merge target's tip from a local branch at merge time, because a step's test command can
+    /// move it. The double may, because it stands for a repository the test itself owns: the
+    /// test moves `refs/heads/<base>` as the owner's merge on the forge would, and no step runs
+    /// between that move and this read. The CLI never builds a `Memory`; `--forge none`
+    /// registers no merge validator at all.
+    fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
+        crate::git::run(
+            tree,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &format!("refs/heads/{base}^{{commit}}"),
+            ],
+        )
+        .with_context(|| format!("the double's {base} is not a branch of the tree"))
     }
 }

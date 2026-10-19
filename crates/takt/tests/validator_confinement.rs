@@ -223,10 +223,15 @@ exit 0
 
 /// A test command that writes a grant, two records and the gates document is refused: what it
 /// wrote is removed, no record is written for its observation, and nothing is pushed or merged,
-/// with the forge reporting CI failing.
+/// with the forge reporting CI failing. The script is the base's: the step guard refuses a step
+/// that writes a script the test command runs.
 #[test]
 fn a_test_command_that_writes_a_grant_records_and_the_gates_is_refused_and_undone() {
-    let tree = repository("forger", r#"fs.file.exists("README.md")"#, &[]);
+    let tree = repository(
+        "forger",
+        r#"fs.file.exists("README.md")"#,
+        &[("tests/case.sh", FORGER)],
+    );
     let original = fs::read_to_string(tree.join(".engineering/gates.yaml")).expect("the gates");
     let memory = Rc::new(Memory {
         checks: Checks::Fail,
@@ -240,7 +245,7 @@ fn a_test_command_that_writes_a_grant_records_and_the_gates_is_refused_and_undon
         Box::new(CiRead::new(forge.clone())),
         Box::new(PrMerged::new(forge)),
     ];
-    let harness = Writes::new(&[("tests/case.sh", FORGER)]);
+    let harness = Writes::new(&[]);
     let mut run =
         Run::open(&tree, options("forger", 20), &harness, &validators).expect("the case opens");
     let mut out = Vec::new();
@@ -787,14 +792,19 @@ fn ci_read_reads_nothing_when_the_pushed_revision_is_another() {
     drop(run);
 }
 
-/// One run of the delivery protocol whose test command is `script`, written by the model under
-/// `implementation.edit`: what it stopped with and printed, and the case directory.
+/// One run of the delivery protocol whose test command runs `script`, held at the base (the step
+/// guard refuses a step that writes a script the test command runs): what it stopped with and
+/// printed, and the case directory.
 fn tested_by(name: &str, script: &str) -> (Scratch, anyhow::Result<Stop>, String, PathBuf) {
-    let tree = repository(name, r#"fs.file.exists("README.md")"#, &[]);
+    let tree = repository(
+        name,
+        r#"fs.file.exists("README.md")"#,
+        &[("tests/case.sh", script)],
+    );
     let validators: Vec<Box<dyn Validator>> = vec![Box::new(
         TestsRun::new("sh tests/run.sh").expect("a command"),
     )];
-    let harness = Writes::new(&[("tests/case.sh", script)]);
+    let harness = Writes::new(&[]);
     let mut run = Run::open(&tree, options(name, 6), &harness, &validators).expect("opens");
     let mut out = Vec::new();
     let stop = run.run(&mut out);

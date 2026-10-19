@@ -666,13 +666,14 @@ const ACTOR_KINDS: [&str; 3] = ["human", "agent", "service"];
 /// The kinds of actor that may grant a story's capability: a person or an agent role.
 const APPROVER_KINDS: [&str; 2] = ["human", "agent"];
 
-/// Whether `approver` may grant a story's capability: `human:<name>` or `agent:<role>`, an
+/// Whether `approver` may grant a case's capability: `human:<name>` or `agent:<role>`, an
 /// actor the store writes ([`is_store_actor`]). The store writes an approval's record as its
 /// approver ([`crate::frontier::Aep`] sets `AEP_ACTOR`); `system` and `service:<name>` are the
 /// store's and tools' own actors, not who grants, and takt's own actor
 /// ([`crate::frontier::ACTOR`]), which writes the story's `test_result` and move, never grants
 /// its own merge.
-fn is_approver(approver: &str) -> bool {
+#[must_use]
+pub fn is_approver(approver: &str) -> bool {
     approver != crate::frontier::ACTOR
         && is_store_actor(approver)
         && approver
@@ -875,8 +876,8 @@ pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<
 /// for it, writing nothing. The case is held first (`run.lock`, taken atomically), so a grant
 /// never lands while a run holds the case, and no run starts until the grant is written or
 /// dropped. Refused: an id that is not a case id ([`check_id`]), a case that does not exist, a
-/// case another holds, a capability that is not an identifier, an empty approver, for a story's
-/// case an approver that is not `human:<name>` or `agent:<role>` as the store writes them, a
+/// case another holds, a capability that is not an identifier, an empty approver, an approver
+/// that is not `human:<name>` or `agent:<role>` as the store writes them ([`is_approver`]), a
 /// capability no action of the case's protocol requires (a grant nothing asks for is a typo, told at the
 /// command line rather than by a run that stops at the gate again), a capability whose actions
 /// are about no single artifact ([`LoadedProtocol::grant_subject`]), a case that is not at the
@@ -909,11 +910,12 @@ pub fn prepare_grant(
     if approver.trim().is_empty() {
         bail!("the approver is empty; say who grants {capability}");
     }
-    // A story's grant is recorded in the store as its approver, and its record rides to the
-    // base only with the approver as its actor: the approver is a person or an agent role the
-    // store writes as.
+    // Every grant is typed: a person or an agent role the store writes as, for a story's case
+    // and an intent's alike. A story's grant is recorded in the store as its approver, and its
+    // record rides to the base only with the approver as its actor; and the merge of a
+    // judge-surface change reads the kind to decide whose grant it is.
     let story = story_of(&dir)?;
-    if story.is_some() && !is_approver(approver) {
+    if !is_approver(approver) {
         bail!(
             "the approver `{}` is not an actor the planning store records as granting; say who grants {capability} as human:<name> or agent:<role>, not takt's own {}",
             approver.escape_debug(),
@@ -1520,6 +1522,29 @@ pub fn current(tree: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// Refuses the case `id` under `tree` when a link stands on the way to its directory:
+/// `.engineering`, the cases directory or the case's own directory. What a link points at could
+/// be anywhere, in the tree or out of it, and a run snapshots the cases directory without
+/// following one, so a case reached through a link would be read and written where no snapshot
+/// sees it. `what` says what the case is not: `opened`, `resumed`.
+fn refuse_link_on_the_way(tree: &Path, id: &str, what: &str) -> Result<()> {
+    let mut way = PathBuf::new();
+    for part in Path::new(CASES_DIR).join(id).components() {
+        way.push(part);
+        let at = tree.join(&way);
+        if std::fs::symlink_metadata(&at).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            let target = std::fs::read_link(&at)
+                .with_context(|| format!("read the link {}", at.display()))?;
+            bail!(
+                "the case {id} is not {what}: {} is a link to {}; a case is never read or written through a link",
+                way.display(),
+                target.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// One case's files.
 #[derive(Debug, Clone)]
 pub struct CaseDir {
@@ -1564,6 +1589,7 @@ impl CaseDir {
         inputs: &[(String, String)],
     ) -> Result<Self> {
         check_id(id)?;
+        refuse_link_on_the_way(tree, id, "opened")?;
         let dir = tree.join(CASES_DIR).join(id);
         if dir.exists() {
             return Err(anyhow!("the case {id} already exists at {}", dir.display()));
@@ -1722,6 +1748,7 @@ impl CaseDir {
     /// hold when it starts ([`CaseDir::hold`]).
     pub fn resume(tree: &Path, id: &str) -> Result<Self> {
         check_id(id)?;
+        refuse_link_on_the_way(tree, id, "resumed")?;
         let dir = tree.join(CASES_DIR).join(id);
         let snapshot = dir.join("case.yaml");
         if !snapshot.is_file() {
@@ -1775,6 +1802,40 @@ impl CaseDir {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error).with_context(|| format!("remove {}", path.display())),
         }
+    }
+
+    /// Checks that every part of the way from the tree down to the case's directory, the
+    /// directory itself included, is a real directory, each read with `symlink_metadata` and
+    /// never followed: a link on it (one a step left at `.engineering` when its undo failed)
+    /// would take a write, an append or a removal under the case wherever it points. A run
+    /// writes, appends to and removes nothing under the case directory, its event log and its
+    /// hold among them, until this holds ([`crate::Run::run`]).
+    pub fn check_way(&self) -> Result<()> {
+        let mut way = PathBuf::new();
+        for part in Path::new(CASES_DIR).join(&self.id).components() {
+            way.push(part);
+            let at = self.tree.join(&way);
+            let meta =
+                std::fs::symlink_metadata(&at).with_context(|| format!("read {}", at.display()))?;
+            if meta.file_type().is_symlink() {
+                let target = std::fs::read_link(&at)
+                    .with_context(|| format!("read the link {}", at.display()))?;
+                bail!(
+                    "{} is a link to {}; nothing under the case {} is written through it",
+                    way.display(),
+                    target.display(),
+                    self.id
+                );
+            }
+            if !meta.is_dir() {
+                bail!(
+                    "{} is not a directory; nothing under the case {} is written there",
+                    way.display(),
+                    self.id
+                );
+            }
+        }
+        Ok(())
     }
 
     /// The number of the latest evaluation written under the case, the highest `n` of its
@@ -1928,6 +1989,46 @@ impl CaseDir {
         Ok(())
     }
 
+    /// Opens an improvement turn, before any step: `finding` at the commit the case's branch
+    /// forked from (its `base_commit`), `baseline` and `promotion` at the promoted baseline (the
+    /// installed binary's revision when the turn opens), `candidate` at the candidate given,
+    /// `story.yaml` naming the finding, and `independence` in `case.yaml` declaring each turn
+    /// validator ([`crate::improvement::PRODUCERS`]) independent on
+    /// [`crate::improvement::INDEPENDENT_ON`]: a validator is no agent run, so its record is
+    /// another run's than the one that delivered the candidate. Nothing else declares
+    /// independence.
+    pub fn open_turn(&mut self, opening: &TurnOpening) -> Result<()> {
+        let Some(base) = Branch::read(&self.dir)?.base_commit else {
+            bail!(
+                "the turn {} pins no base commit, which its finding artifact is",
+                self.id
+            );
+        };
+        for (artifact, revision) in [
+            ("finding", base.as_str()),
+            ("baseline", opening.baseline.as_str()),
+            ("candidate", opening.candidate.as_str()),
+            ("promotion", opening.baseline.as_str()),
+        ] {
+            let entry = self
+                .doc
+                .get_mut("artifacts")
+                .and_then(|a| a.get_mut(artifact))
+                .ok_or_else(|| anyhow!("the case declares no artifact {artifact}"))?;
+            entry["revision"] = revision.into();
+        }
+        let mut independence = serde_yaml_ng::Mapping::new();
+        for producer in crate::improvement::PRODUCERS {
+            independence.insert(
+                producer.into(),
+                vec![crate::improvement::INDEPENDENT_ON].into(),
+            );
+        }
+        self.doc["independence"] = independence.into();
+        self.write()?;
+        self.set_story(&opening.finding)
+    }
+
     /// Moves `artifact` to `revision`; evidence about the old revision no longer applies.
     pub fn set_revision(&mut self, artifact: &str, revision: &str) -> Result<()> {
         let entry = self
@@ -2042,4 +2143,210 @@ impl CaseDir {
         )?;
         Decision::from_json(&json)
     }
+}
+
+/// The protocol of an improvement turn, which opens with its finding, its candidate and the
+/// promoted baseline: `self.improvement/1`.
+pub const TURN_PROTOCOL: &str = "self.improvement/1";
+
+/// The name `takt run` reads a turn's finding from, `--input finding=<story id>`, which the
+/// protocol declares as no case input.
+pub const TURN_FINDING: &str = "finding";
+
+/// The name `takt run` reads a turn's candidate from, `--input candidate=<full commit id>`,
+/// which the protocol declares as no case input.
+pub const TURN_CANDIDATE: &str = "candidate";
+
+/// What an improvement turn opens with, each checked by [`turn_opening`] before anything is
+/// written: the finding it verifies (`story:<key>`), the candidate revision delivered outside
+/// the case, and the baseline, the revision of the latest promotion record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnOpening {
+    /// The finding, `story:<key>`.
+    pub finding: String,
+    /// The candidate, a full commit id.
+    pub candidate: String,
+    /// The baseline, the latest promoted revision.
+    pub baseline: String,
+}
+
+/// Whether `value` is a full commit id: 40 or 64 lower-case hexadecimal digits.
+fn is_full_commit_id(value: &str) -> bool {
+    matches!(value.len(), 40 | 64)
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The binary that would judge a turn: the revision it was built from, as `takt --version`
+/// names it, and its file.
+#[derive(Debug, Clone, Copy)]
+pub struct Judge<'a> {
+    /// The revision, `<sha>`, `<sha>-dirty` or `unknown revision`.
+    pub revision: &'a str,
+    /// The binary's file.
+    pub binary: &'a Path,
+}
+
+/// What a turn on `tree` opens with, from `--input finding=<story id>` and `--input
+/// candidate=<full commit id>` and the promotion store `store`: the finding a story the planning
+/// store holds at the commit the case forks from (`.engineering/planning/story/<key>.md`), the
+/// candidate a full commit id of a commit `tree` holds, and the baseline the revision of the
+/// store's latest record that is no refusal ([`crate::promotion::baseline`]), a commit `tree`
+/// holds. A missing or wrong value, or a store with no such record, is refused, naming why,
+/// before anything is written. The candidate is delivered outside the case, so it is given here.
+///
+/// What judges the turn is never the candidate's, nor the tree's: the finding scripts are read
+/// at the baseline ([`crate::improvement`]), and a candidate whose tree differs from the
+/// baseline's at the finding's file, `scripts/check-finding` or `scripts/file-finding` is
+/// refused, naming the path, as is a commit the case forks from that holds another text of the
+/// finding than the baseline. The turn is refused too unless `judge` is the promoted binary: its
+/// sha256 is the record's `binary_sha256` whenever the record has one, and its revision is the
+/// promoted one unless the operator stated the record; and unless the baseline's
+/// `scripts/check-finding` is a reviewed confined one
+/// ([`crate::improvement::CONFINED_CHECK_FINDING_SHA256S`]).
+pub fn turn_opening(
+    tree: &Path,
+    finding: Option<&str>,
+    candidate: Option<&str>,
+    store: &Path,
+    judge: &Judge<'_>,
+) -> Result<TurnOpening> {
+    let Some(finding) = finding else {
+        bail!(
+            "{TURN_PROTOCOL} opens with --input {TURN_FINDING}=<story id>, the finding the turn verifies; none was given; nothing was written"
+        );
+    };
+    let Some(path) = crate::improvement::finding_path(finding) else {
+        bail!(
+            "--input {TURN_FINDING}={finding}: a finding is a story of the planning store, `story:<key>`; nothing was written"
+        );
+    };
+    let (_, _, from) = opening_base(tree)?;
+    let at = crate::git::run(
+        tree,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{}^{{commit}}", from.as_deref().unwrap_or("HEAD")),
+        ],
+    )
+    .with_context(|| format!("--input {TURN_FINDING}={finding}: the commit the case forks from"))?;
+    let filed = crate::loop_scorecard::verified_file(tree, &at, &path)
+        .with_context(|| format!("--input {TURN_FINDING}={finding}; nothing was written"))?;
+    if filed.is_none() {
+        bail!(
+            "--input {TURN_FINDING}={finding}: the planning store at {} holds no {path}; file the finding before the turn opens; nothing was written",
+            &at[..8.min(at.len())]
+        );
+    }
+    let Some(candidate) = candidate else {
+        bail!(
+            "{TURN_PROTOCOL} opens with --input {TURN_CANDIDATE}=<full commit id>, the candidate delivered outside the case; none was given; nothing was written"
+        );
+    };
+    let mut history = crate::loop_scorecard::History::open(tree, None)
+        .with_context(|| format!("--input {TURN_CANDIDATE}={candidate}; nothing was written"))?;
+    if !is_full_commit_id(candidate)
+        || history
+            .resolve(candidate)
+            .with_context(|| format!("--input {TURN_CANDIDATE}={candidate}; nothing was written"))?
+            .as_deref()
+            != Some(candidate)
+    {
+        bail!(
+            "--input {TURN_CANDIDATE}={candidate}: a turn's candidate is the full commit id (40 or 64 lower-case hexadecimal digits) of a commit of {}; nothing was written",
+            tree.display()
+        );
+    }
+    let Some(promoted) = crate::promotion::baseline(store, &crate::now())
+        .with_context(|| format!("the promotion store {}", store.display()))?
+    else {
+        bail!(
+            "{TURN_PROTOCOL}: the promotion store {} holds no baseline or promotion record, the turn's baseline; record the installed revision with `takt promote --baseline-only`; nothing was written",
+            store.display()
+        );
+    };
+    let baseline = promoted.revision;
+    if history
+        .resolve(&baseline)
+        .with_context(|| format!("the promoted baseline {baseline}; nothing was written"))?
+        .as_deref()
+        != Some(baseline.as_str())
+    {
+        bail!(
+            "{TURN_PROTOCOL}: the promoted baseline {baseline} ({}) is no commit of {}; nothing was written",
+            store.display(),
+            tree.display()
+        );
+    }
+    let short = |revision: &str| revision[..8.min(revision.len())].to_owned();
+    // What judges the candidate is never the candidate's: the scripts are read at the baseline,
+    // and the finding where the case forks from, so a candidate that changes either, or a fork
+    // that holds another finding, is no turn.
+    for judged in [
+        path.as_str(),
+        crate::improvement::CHECK_FINDING,
+        crate::improvement::FILE_FINDING,
+    ] {
+        if history.file(candidate, judged)? != history.file(&baseline, judged)? {
+            bail!(
+                "--input {TURN_CANDIDATE}={candidate}: the candidate changes {judged} against the baseline {}; what judges a turn is never the candidate's, so the turn is not opened; nothing was written",
+                short(&baseline)
+            );
+        }
+    }
+    if filed != history.file(&baseline, &path)? {
+        bail!(
+            "--input {TURN_FINDING}={finding}: {path} at {}, where the case forks from, is not the one the baseline {} holds; the turn's finding is the one filed at the baseline; nothing was written",
+            short(&at),
+            short(&baseline)
+        );
+    }
+    // The binary that judges is the promoted one: of the digest the record holds, whenever it
+    // holds one, and of its revision unless the operator stated the record (a binary that names
+    // no revision).
+    if promoted.revision_stated_by.is_some() || promoted.binary_sha256.is_some() {
+        let bytes = std::fs::read(judge.binary)
+            .with_context(|| format!("read this binary, {}", judge.binary.display()))?;
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        if promoted.binary_sha256.as_deref() != Some(digest.as_str()) {
+            bail!(
+                "{TURN_PROTOCOL}: this binary {} hashes to sha256 {digest}, not to {}, the sha256 the record of the promoted binary of {} holds; a turn is judged by the promoted binary only; nothing was written",
+                judge.binary.display(),
+                promoted.binary_sha256.as_deref().unwrap_or("none"),
+                short(&baseline)
+            );
+        }
+    }
+    if promoted.revision_stated_by.is_none() && judge.revision != baseline {
+        bail!(
+            "{TURN_PROTOCOL}: this binary was built from {}, not from {baseline}, the revision of the promoted binary ({}); a turn is judged by the promoted binary only; nothing was written",
+            judge.revision,
+            store.display()
+        );
+    }
+    // The baseline runs a confined check: its script is one reviewed as confined, byte for byte.
+    // The confinement lives in the script alone, so the baseline's history says nothing of it.
+    let script = history
+        .file(&baseline, crate::improvement::CHECK_FINDING)?
+        .map(|bytes| format!("{:x}", Sha256::digest(&bytes)));
+    if !script
+        .as_deref()
+        .is_some_and(|digest| crate::improvement::CONFINED_CHECK_FINDING_SHA256S.contains(&digest))
+    {
+        bail!(
+            "{TURN_PROTOCOL}: the promoted baseline {} does not run a confined {}: its sha256 {} is none of the reviewed confined scripts' ({}); its run step would not be confined, so no turn opens on it until a revision holding a reviewed script is promoted; nothing was written",
+            short(&baseline),
+            crate::improvement::CHECK_FINDING,
+            script.as_deref().unwrap_or("(no such file)"),
+            crate::improvement::CONFINED_CHECK_FINDING_SHA256S.join(", ")
+        );
+    }
+    Ok(TurnOpening {
+        finding: finding.to_owned(),
+        candidate: candidate.to_owned(),
+        baseline,
+    })
 }
