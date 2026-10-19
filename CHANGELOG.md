@@ -52,6 +52,9 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   its committer date and the grant's time. A grant that records no tip (a turn opened before
   the forge was recorded), whose tip cannot be fetched, or whose tip is not on the mainline now
   is refused too.
+- A turn is refused at open, exit 1, when the mainline's tip already holds its candidate (the
+  candidate or a descendant of it), naming both ids; open it on a fresh candidate. A turn whose
+  candidate reaches the mainline after it opened still resumes.
 - A turn resumed through another forge than the one it recorded when it opened is refused, exit
   1, before anything is written, naming both and `--forge <recorded>` as the way past.
 

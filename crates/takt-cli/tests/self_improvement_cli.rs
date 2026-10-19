@@ -770,6 +770,35 @@ fn a_candidate_that_changes_the_finding_scripts_is_refused() {
     refused(&world, &ran, path);
 }
 
+/// story:a-turn-refuses-a-candidate-main-already-holds: a candidate the mainline's tip already
+/// holds (here `main` moved onto it before the turn opens, as the first real turn's candidate was
+/// merged before its grant) is refused before any step, naming the candidate, the tip and the
+/// remedy; one `main` holds as an ancestor of its tip is refused the same.
+#[test]
+fn a_candidate_the_mainline_already_holds_is_refused_at_open() {
+    let held = world("held-candidate", true, false);
+    git(&held.repo, &["reset", "-q", "--hard", &held.candidate]);
+    assert_eq!(git(&held.repo, &["rev-parse", "main"]), held.candidate);
+    let ran = run(&held, &opening(&held));
+    refused(&held, &ran, &held.candidate);
+    refused(&held, &ran, "open the turn on a fresh candidate");
+
+    let ancestor = world("held-ancestor", true, false);
+    git(
+        &ancestor.repo,
+        &["reset", "-q", "--hard", &ancestor.candidate],
+    );
+    write(&ancestor.repo.join("after.txt"), "after the candidate\n");
+    git(&ancestor.repo, &["add", "-A"]);
+    git(&ancestor.repo, &["commit", "-q", "-m", "after"]);
+    let tip = git(&ancestor.repo, &["rev-parse", "main"]);
+    assert_ne!(tip, ancestor.candidate);
+    let ran = run(&ancestor, &opening(&ancestor));
+    refused(&ancestor, &ran, &ancestor.candidate);
+    refused(&ancestor, &ran, &tip);
+    refused(&ancestor, &ran, "open the turn on a fresh candidate");
+}
+
 /// The finding is read on the mainline, local `main` under `--forge none`, at the commit the
 /// case forks from, and its file is no part of the candidate's comparison with the baseline: a
 /// candidate that rewrites the finding opens a turn (on a judge surface, the planning store)
@@ -987,10 +1016,12 @@ fn a_build_planted_before_the_turn_is_not_judged() {
 /// A binary planted over a build the turn made and recorded, between that build and the next
 /// check of the same revision, is rebuilt: the turn recorded the build's sha256 in the case when
 /// `scenario.reproduce` built it, and `scenario.verify` (the candidate is the baseline here) runs
-/// the kept build only while it hashes to that record.
+/// the kept build only while it hashes to that record. The repository has no `main`, the
+/// mainline, which would hold the baseline and so refuse it as the candidate.
 #[test]
 fn a_build_planted_between_the_build_and_verify_is_rebuilt() {
     let world = world("planted-between", true, true);
+    git(&world.repo, &["branch", "-m", "main", "trunk"]);
     let inputs = [
         "surface=non_judge".to_owned(),
         format!("finding={FINDING}"),
