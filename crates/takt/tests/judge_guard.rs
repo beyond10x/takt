@@ -136,7 +136,12 @@ fn commit_on(tree: &Path, index: &Path, parent: &str, files: &[(&str, &str)]) ->
         fs::write(&blob_file, text).expect("a blob file");
         let blob = git(
             tree,
-            &["hash-object", "-w", blob_file.to_str().expect("utf-8")],
+            &[
+                "hash-object",
+                "--no-filters",
+                "-w",
+                blob_file.to_str().expect("utf-8"),
+            ],
         );
         git_env(
             tree,
@@ -1735,4 +1740,214 @@ fn a_retarget_after_the_guard_is_not_merged() {
     let calls = memory.calls.borrow().clone();
     assert!(forge.reads.get() > 1, "{calls:?}");
     assert_refused(&observation, &calls, "a retarget", &["elsewhere", "main"]);
+}
+
+/// `git <args>` in `tree`; its standard output byte for byte.
+fn git_raw(tree: &Path, args: &[&str]) -> Vec<u8> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(tree)
+        .output()
+        .expect("git runs");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+/// The object directory of `tree`'s repository.
+fn objects_of(tree: &Path) -> PathBuf {
+    PathBuf::from(git(
+        tree,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    ))
+    .join("objects")
+}
+
+/// Writes `content` as an object of `kind` into `tree`'s repository; its id.
+fn write_object(tree: &Path, tag: &str, kind: &str, content: &[u8]) -> String {
+    let file = tree
+        .parent()
+        .expect("a parent")
+        .join(format!("poison-{}-{tag}", std::process::id()));
+    fs::write(&file, content).expect("a file");
+    let id = git(
+        tree,
+        &[
+            "hash-object",
+            "-t",
+            kind,
+            "-w",
+            file.to_str().expect("utf-8"),
+        ],
+    );
+    fs::remove_file(&file).expect("removed");
+    id
+}
+
+/// Overwrites the loose object `victim` of `tree`'s repository with the loose object of
+/// `content` (of `kind`): every read of `victim` that does not hash it again now answers
+/// `content`. What a step with write access to `.git/objects` can do.
+fn poison_loose(tree: &Path, tag: &str, victim: &str, kind: &str, content: &[u8]) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let forged = write_object(tree, tag, kind, content);
+    let objects = objects_of(tree);
+    let from = objects.join(&forged[..2]).join(&forged[2..]);
+    let to = objects.join(&victim[..2]).join(&victim[2..]);
+    assert!(to.exists(), "the victim {victim} is a loose object");
+    let bytes = fs::read(&from).expect("the forged object");
+    fs::set_permissions(&to, fs::Permissions::from_mode(0o644)).expect("chmod");
+    fs::write(&to, bytes).expect("the victim overwritten");
+}
+
+/// What the guard says when the copy it reads from does not arrive as its ids.
+const NOT_AS_THEIR_IDS: &str = "do not arrive from this repository as their ids";
+
+/// H1: the allow-list blob at the target's tip, which the forge holds as it is, is overwritten
+/// in the case's object store with one that admits `crates/**`. The guard reads every object
+/// from a copy made through git's transport, hashed as it arrives: the overwritten object does
+/// not arrive as its id, and the merge is refused.
+#[test]
+fn a_poisoned_allow_list_blob_at_the_tip_admits_nothing() {
+    let (_scratch, tree) = repository("poison-allow", None);
+    let (revision, _) = at_the_gate(&tree, "poison-allow", &[JUDGE_EDIT]);
+    grant(&tree, "poison-allow", "repository.merge", "agent:planner").expect("granted");
+    let allow = git(&tree, &["rev-parse", "main:.engineering/judge-allow.yaml"]);
+    let widened = format!("{ALLOW}  - crates/**\n");
+    poison_loose(&tree, "allow", &allow, "blob", widened.as_bytes());
+    assert_eq!(
+        git(&tree, &["show", "main:.engineering/judge-allow.yaml"]),
+        widened.trim(),
+        "a read that does not hash again sees the forged allow-list"
+    );
+    let (observation, calls) = merge(&tree, "poison-allow", &revision);
+    assert_refused(
+        &observation,
+        &calls,
+        "a poisoned allow-list",
+        &[NOT_AS_THEIR_IDS],
+    );
+}
+
+/// H2: the candidate's root tree is overwritten in the case's store with the tip's root tree,
+/// so a merge or a diff read from that store sees no change; the forge, which holds the real
+/// tree, would merge the judge's edit. The copy does not arrive as its ids: refused.
+#[test]
+fn a_poisoned_candidate_tree_hides_nothing() {
+    let (_scratch, tree) = repository("poison-tree", None);
+    let (revision, _) = at_the_gate(&tree, "poison-tree", &[JUDGE_EDIT]);
+    grant(&tree, "poison-tree", "repository.merge", "agent:planner").expect("granted");
+    let real = git(&tree, &["rev-parse", &format!("{revision}^{{tree}}")]);
+    let tip_tree = git_raw(&tree, &["cat-file", "tree", "main^{tree}"]);
+    poison_loose(&tree, "tree", &real, "tree", &tip_tree);
+    assert_eq!(
+        git(
+            &tree,
+            &["diff-tree", "-r", "--name-only", "main", &revision]
+        ),
+        "",
+        "a read that does not hash again sees no change"
+    );
+    let (observation, calls) = merge(&tree, "poison-tree", &revision);
+    assert_refused(
+        &observation,
+        &calls,
+        "a poisoned candidate tree",
+        &[NOT_AS_THEIR_IDS],
+    );
+}
+
+/// N6: a fake take (the take's parent and message, one other path), the owner then changing
+/// the story's frontmatter on `main`, and the candidate merging `main` and putting the story
+/// back as the base had it. Without the take's path check the fake take would match, the merge
+/// leave the story as at that commit and the body equal the tip's: the owner's change reverted
+/// under an exemption. With it there is no take, and the story is a judge surface.
+#[test]
+fn a_fake_take_on_another_path_does_not_exempt_a_frontmatter_revert() {
+    let case = story_case_with("fake-take", "agent:planner", |tree| {
+        let base = git(tree, &["rev-parse", "HEAD~1"]);
+        let at_base = String::from_utf8(git_raw(
+            tree,
+            &["cat-file", "blob", &format!("{base}:{STORY_FILE}")],
+        ))
+        .expect("utf-8");
+        let narrowed = at_base.replacen(
+            "summary: The one ready story\n",
+            "summary: The one ready story, narrowed by the owner\n",
+            1,
+        );
+        assert_ne!(narrowed, at_base);
+        let index = tree
+            .parent()
+            .expect("a parent")
+            .join(format!("fake-take-index-{}", std::process::id()));
+        let main = git(tree, &["rev-parse", "refs/heads/main"]);
+        let moved = commit_on(tree, &index, &main, &[(STORY_FILE, narrowed.as_str())]);
+        let _ = fs::remove_file(&index);
+        let _ = fs::remove_file(index.with_extension("blob"));
+        git(tree, &["update-ref", "refs/heads/main", &moved, &main]);
+        git(tree, &["reset", "-q", "--hard", "HEAD~1"]);
+        fs::write(tree.join("docs/extra.md"), "an extra doc\n").expect("a file");
+        git(tree, &["add", "docs/extra.md"]);
+        git(tree, &["commit", "-q", "-m", TAKE_SUBJECT]);
+        git(
+            tree,
+            &["merge", "-q", "--no-ff", "-m", "merge main", "main"],
+        );
+        fs::write(tree.join(STORY_FILE), &at_base).expect("the story as the base had it");
+        git(tree, &["commit", "-q", "-am", "the story back"]);
+    });
+    let (observation, calls) = merge(&case.repo, &case.id, &case.granted);
+    assert_refused(&observation, &calls, "a fake take", &[STORY_FILE]);
+}
+
+/// R5 at the tip: the owner's `main` writes a carriage return into the story's file after the
+/// case opened; the candidate merges `main` and puts the story back as its take wrote it, so the
+/// merge holds none. The tip's does: refused, naming the tip.
+#[test]
+fn a_carriage_return_in_the_story_at_the_tip_is_refused() {
+    let case = story_case_with("crlf-tip", "agent:planner", |tree| {
+        let taken = fs::read(tree.join(STORY_FILE)).expect("the story as taken");
+        let base = git(tree, &["rev-parse", "HEAD~1"]);
+        let mut at_base = git_raw(tree, &["cat-file", "blob", &format!("{base}:{STORY_FILE}")]);
+        at_base.extend_from_slice(b"A line the owner ends with a carriage return.\r\n");
+        let index = tree
+            .parent()
+            .expect("a parent")
+            .join(format!("crlf-tip-index-{}", std::process::id()));
+        let main = git(tree, &["rev-parse", "refs/heads/main"]);
+        let moved = commit_on(
+            tree,
+            &index,
+            &main,
+            &[(STORY_FILE, std::str::from_utf8(&at_base).expect("utf-8"))],
+        );
+        let _ = fs::remove_file(&index);
+        let _ = fs::remove_file(index.with_extension("blob"));
+        git(tree, &["update-ref", "refs/heads/main", &moved, &main]);
+        git(tree, &["config", "core.autocrlf", "false"]);
+        git(
+            tree,
+            &["merge", "-q", "--no-ff", "-m", "merge main", "main"],
+        );
+        fs::write(tree.join(STORY_FILE), &taken).expect("the story as the take wrote it");
+        git(tree, &["commit", "-q", "-am", "the story back"]);
+    });
+    let at_tip = git_raw(
+        &case.repo,
+        &["cat-file", "blob", &format!("main:{STORY_FILE}")],
+    );
+    assert!(
+        at_tip.contains(&b'\r'),
+        "the tip's story holds a carriage return"
+    );
+    let (observation, calls) = merge(&case.repo, &case.id, &case.granted);
+    assert_refused(
+        &observation,
+        &calls,
+        "a carriage return at the tip",
+        &[STORY_FILE, "carriage return at main"],
+    );
 }

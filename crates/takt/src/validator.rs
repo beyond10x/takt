@@ -10,6 +10,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use crate::case::{BRANCH_FILE, Branch, current};
 use crate::evidence::Record;
 use crate::forge::{BotRoute, Checks, Forge, Limits, PullRequest, PullRequestState};
+use crate::git::Mirror;
 
 /// What a validator observed, and the records it wrote from it.
 #[derive(Debug)]
@@ -1610,24 +1611,28 @@ impl Delegation {
     }
 }
 
-/// The file `path` at the commit `at`, read as `T` without anchors or aliases; `Ok(None)` when
-/// the commit has no such file, the inner error when it does not read.
+/// The file `path` at the commit `at` in the judge's copy, read as `T` without anchors or
+/// aliases; `Ok(None)` when the commit has no such file, the inner error when it does not read.
 fn record_at<T: serde::de::DeserializeOwned>(
-    tree: &Path,
+    mirror: &Mirror,
     at: &str,
     path: &str,
 ) -> Result<Option<std::result::Result<T, String>>> {
-    Ok(file_at(tree, at, Path::new(path))?.map(|text| {
-        crate::loop_scorecard::read_yaml::<T>(Path::new(path), &text)
-            .map_err(|error| format!("{error:#}"))
+    Ok(blob_at(mirror, at, path)?.map(|bytes| {
+        String::from_utf8(bytes)
+            .map_err(|_| format!("{path} is not UTF-8"))
+            .and_then(|text| {
+                crate::loop_scorecard::read_yaml::<T>(Path::new(path), &text)
+                    .map_err(|error| format!("{error:#}"))
+            })
     }))
 }
 
 /// The globs of [`JUDGE_ALLOW`] at `at`: none when the commit has no such file; the error when
 /// it does not read or holds a glob that is not relative to the tree, and the caller then admits
 /// nothing.
-fn allow_list_at(tree: &Path, at: &str) -> Result<std::result::Result<Vec<String>, String>> {
-    let Some(read) = record_at::<AllowList>(tree, at, JUDGE_ALLOW)? else {
+fn allow_list_at(mirror: &Mirror, at: &str) -> Result<std::result::Result<Vec<String>, String>> {
+    let Some(read) = record_at::<AllowList>(mirror, at, JUDGE_ALLOW)? else {
         return Ok(Ok(Vec::new()));
     };
     Ok(read.and_then(|list| {
@@ -1665,16 +1670,16 @@ fn story_body(text: &[u8]) -> Option<&[u8]> {
     None
 }
 
-/// The bytes of the regular file `path` (relative to the root) in the commit or tree `at`,
-/// nothing trimmed; `None` when `at` holds no blob there.
-fn blob_at(tree: &Path, at: &str, path: &str) -> Result<Option<Vec<u8>>> {
+/// The bytes of the regular file `path` (relative to the root) in the commit or tree `at` of
+/// the judge's copy, nothing trimmed; `None` when `at` holds no blob there.
+fn blob_at(mirror: &Mirror, at: &str, path: &str) -> Result<Option<Vec<u8>>> {
     let spec = format!("{at}:{path}");
-    if crate::git::run(tree, &["cat-file", "-e", &spec]).is_err()
-        || crate::git::run(tree, &["cat-file", "-t", &spec])? != "blob"
+    if !mirror.output(&["cat-file", "-e", &spec])?.status.success()
+        || mirror.run(&["cat-file", "-t", &spec])? != "blob"
     {
         return Ok(None);
     }
-    crate::git::blob(tree, &spec).map(Some)
+    mirror.bytes(&["cat-file", "blob", &spec]).map(Some)
 }
 
 /// The story the case at `dir` was opened for and its file in the planning store
@@ -1710,7 +1715,7 @@ impl PrMerged {
     /// (R6), so no change after the take rides on it. Any other path in the planning store
     /// stays guarded.
     fn exempt_take(
-        tree: &Path,
+        mirror: &Mirror,
         dir: &Path,
         at: &str,
         revision: &str,
@@ -1721,13 +1726,10 @@ impl PrMerged {
             return Ok(None);
         };
         let message = format!("{}\n", crate::run::take_subject(&story));
-        let listed = crate::git::run(
-            tree,
-            &["rev-list", "--end-of-options", &format!("{at}..{revision}")],
-        )?;
+        let listed = mirror.run(&["rev-list", "--end-of-options", &format!("{at}..{revision}")])?;
         let mut taken = None;
         for id in listed.lines().filter(|id| crate::forge::is_object_id(id)) {
-            let bytes = crate::git::verified_object(tree, "commit", id)?;
+            let bytes = mirror.bytes(&["cat-file", "commit", id])?;
             let header = crate::git::parse_commit(id, &bytes, id.len())?;
             let body = bytes
                 .windows(2)
@@ -1736,22 +1738,16 @@ impl PrMerged {
             if header.parents != [at] || body != Some(message.as_bytes()) {
                 continue;
             }
-            let diff = crate::git::bytes(
-                tree,
-                &[
-                    "diff-tree",
-                    "-r",
-                    "-z",
-                    "--no-renames",
-                    "--raw",
-                    at,
-                    id,
-                    "--",
-                ],
-            )?;
-            // The path check is a second refusal: no test fails with it alone removed, as under
-            // R6 below a take that changed another path has nothing to exempt (the story file
-            // stays as at the base, and the merge must leave it so).
+            let diff = mirror.bytes(&[
+                "diff-tree",
+                "-r",
+                "-z",
+                "--no-renames",
+                "--raw",
+                at,
+                id,
+                "--",
+            ])?;
             if let [(mode, changed)] = raw_changes(&diff)?.as_slice()
                 && *changed == path
                 && *mode == "100644"
@@ -1764,9 +1760,9 @@ impl PrMerged {
             return Ok(None);
         };
         let (Some(at_take), Some(at_tip), Some(at_merge)) = (
-            blob_at(tree, taken, &path)?,
-            blob_at(tree, tip, &path)?,
-            blob_at(tree, merged, &path)?,
+            blob_at(mirror, taken, &path)?,
+            blob_at(mirror, tip, &path)?,
+            blob_at(mirror, merged, &path)?,
         ) else {
             return Ok(None);
         };
@@ -1803,7 +1799,11 @@ impl PrMerged {
     /// [`JUDGE_SURFACE_CAPABILITY`] to that role; any other approver grants it nothing. A change
     /// to a file of [`OWNER_ONLY`] merges under the owner's grant alone, whatever the allow-list
     /// admits. Neither file is read from the tree or at the base commit, so a candidate's own
-    /// edit of either counts for nothing.
+    /// edit of either counts for nothing. Every object it reads (the lists, the story's file,
+    /// the commits and trees it merges and compares) comes from a [`Mirror`]: a copy of the
+    /// tip, the revision and the base made through git's transport, each object hashed as it
+    /// arrives, never this repository's store, where a step can overwrite one; a copy that does
+    /// not arrive as its ids refuses the merge.
     #[expect(
         clippy::too_many_lines,
         reason = "one decision, read in the order it refuses"
@@ -1832,44 +1832,74 @@ impl PrMerged {
         let reported = self.forge.target_tip(tree, base).with_context(|| {
             format!("read the tip of {base}, the merge target, through the forge {forge}")
         })?;
+        // The forge's answer is an object id, never a name git resolves; so is the base the
+        // case pinned at open.
+        if !crate::forge::is_object_id(&reported) {
+            return Ok(Some(format!(
+                "the forge {forge} reports {base}, the merge target, at `{}`, which is no commit this repository holds",
+                reported.escape_debug()
+            )));
+        }
+        let Some(pinned) = branch
+            .base_commit
+            .as_deref()
+            .filter(|at| crate::forge::is_object_id(at))
+        else {
+            return Ok(Some(format!(
+                "the case pins no base commit by its id to compare with {base} at {}",
+                short(&reported)
+            )));
+        };
+        // Every object the guard reads comes from a copy made through git's transport, each
+        // object hashed as it arrives (H1, H2): none is read from this repository's store,
+        // where a step can overwrite one.
+        let mirror = match Mirror::of(tree, &[&reported, revision, pinned])? {
+            Ok(mirror) => mirror,
+            Err(why) => {
+                return Ok(Some(format!(
+                    "the commits of {base} at {}, the revision {} and the base {} do not arrive from this repository as their ids, every object hashed again ({why})",
+                    short(&reported),
+                    short(revision),
+                    short(pinned)
+                )));
+            }
+        };
         let commit = |name: &str| -> Option<String> {
-            crate::git::run(
-                tree,
-                &[
+            mirror
+                .run(&[
                     "rev-parse",
                     "--verify",
                     "--quiet",
                     "--end-of-options",
                     &format!("{name}^{{commit}}"),
-                ],
-            )
-            .ok()
-            .filter(|at| !at.is_empty())
+                ])
+                .ok()
+                .filter(|at| !at.is_empty())
         };
-        // The forge's answer is an object id this repository holds, never a name git resolves.
-        let tip = crate::forge::is_object_id(&reported)
-            .then(|| commit(&reported))
-            .flatten();
-        let Some(tip) = tip else {
+        let Some(tip) = commit(&reported) else {
             return Ok(Some(format!(
                 "the forge {forge} reports {base}, the merge target, at `{}`, which is no commit this repository holds",
                 reported.escape_debug()
             )));
         };
-        let Some(at) = branch.base_commit.as_deref().and_then(commit) else {
+        let Some(at) = commit(pinned) else {
             return Ok(Some(format!(
                 "the case pins no base commit this repository holds to compare with {base} at {}",
                 short(&tip)
             )));
         };
-        if crate::git::run(tree, &["merge-base", "--is-ancestor", &at, &tip]).is_err() {
+        if !mirror
+            .output(&["merge-base", "--is-ancestor", &at, &tip])?
+            .status
+            .success()
+        {
             return Ok(Some(format!(
                 "the case's base {} is not an ancestor of {base} at {}, the merge target's tip as the forge {forge} reports it",
                 short(&at),
                 short(&tip)
             )));
         }
-        let merged = crate::git::merged_tree(tree, &tip, revision)?;
+        let merged = mirror.merged_tree(&tip, revision)?;
         if !merged.conflicted.is_empty() {
             return Ok(Some(format!(
                 "merging {} into {base} at {} conflicts at {}, so what the merge would change is not known",
@@ -1882,44 +1912,39 @@ impl PrMerged {
         // its frontmatter fence that does not fold one reads another body than the store does.
         if let Some((_, path)) = story_file(dir)? {
             for (at, name) in [(tip.as_str(), base), (merged.tree.as_str(), "the merge")] {
-                if blob_at(tree, at, &path)?.is_some_and(|text| text.contains(&b'\r')) {
+                if blob_at(&mirror, at, &path)?.is_some_and(|text| text.contains(&b'\r')) {
                     return Ok(Some(format!(
                         "the story's file {path} holds a carriage return at {name}, which takt's take never writes"
                     )));
                 }
             }
         }
-        let (globs, unread) = match allow_list_at(tree, &tip)? {
+        let (globs, unread) = match allow_list_at(&mirror, &tip)? {
             Ok(globs) => (globs, String::new()),
             Err(why) => (Vec::new(), format!(" ({why}; it admits nothing)")),
         };
         // R4: what the merge does to the target, and every change the candidate made from
         // where it meets the target, so no merge result (a driver, an attribute) hides one.
         let mut ranges = vec![(tip.clone(), merged.tree.clone())];
-        for meet in crate::git::run(
-            tree,
-            &["merge-base", "--all", "--end-of-options", &tip, revision],
-        )?
-        .lines()
-        .filter(|meet| crate::forge::is_object_id(meet))
+        for meet in mirror
+            .run(&["merge-base", "--all", "--end-of-options", &tip, revision])?
+            .lines()
+            .filter(|meet| crate::forge::is_object_id(meet))
         {
             ranges.push((meet.to_owned(), revision.to_owned()));
         }
         let mut changes: Vec<(String, String)> = Vec::new();
         for (from, to) in &ranges {
-            let diff = crate::git::bytes(
-                tree,
-                &[
-                    "diff-tree",
-                    "-r",
-                    "-z",
-                    "--no-renames",
-                    "--raw",
-                    from,
-                    to,
-                    "--",
-                ],
-            )?;
+            let diff = mirror.bytes(&[
+                "diff-tree",
+                "-r",
+                "-z",
+                "--no-renames",
+                "--raw",
+                from,
+                to,
+                "--",
+            ])?;
             for (mode, path) in raw_changes(&diff)? {
                 let change = (mode.to_owned(), path.to_owned());
                 if !changes.contains(&change) {
@@ -1927,7 +1952,7 @@ impl PrMerged {
                 }
             }
         }
-        let exempt = Self::exempt_take(tree, dir, &at, revision, &tip, &merged.tree)?;
+        let exempt = Self::exempt_take(&mirror, dir, &at, revision, &tip, &merged.tree)?;
         let mut surfaces: Vec<&str> = Vec::new();
         let mut owner_only: Vec<&str> = Vec::new();
         for (mode, path) in &changes {
@@ -1986,7 +2011,7 @@ impl PrMerged {
                 owner_only.join(" or ")
             )));
         }
-        let delegated = match record_at::<DelegationRecord>(tree, &tip, DELEGATIONS)? {
+        let delegated = match record_at::<DelegationRecord>(&mirror, &tip, DELEGATIONS)? {
             None => Err(format!("{DELEGATIONS} is not there")),
             Some(Err(why)) => Err(format!("{why}; it delegates nothing")),
             Some(Ok(record)) => Ok(record

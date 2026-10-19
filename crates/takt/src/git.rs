@@ -2113,13 +2113,21 @@ pub fn trees_differ_outside(tree: &Path, from: &str, to: &str, outside: &str) ->
     }
 }
 
-/// A bare repository made for one git command and removed when dropped: no work tree, no
-/// configuration but what `git init` writes, no `info/attributes` and no hook (`--template=`
-/// copies nothing), `HEAD` on a branch with no commit, so no attributes come from a tree. Its
-/// objects are the repository's own (`GIT_OBJECT_DIRECTORY`), so what it reads is what the
-/// repository holds and what it writes (a merge's tree) the repository holds after.
+/// A bare repository made for git commands that read no configured code, removed when
+/// dropped: no work tree, no configuration but what `git init` writes, no `info/attributes`
+/// and no hook (`--template=` copies nothing), `HEAD` on a branch with no commit, so no
+/// attributes come from a tree. Every command runs with no code and no attributes from any
+/// configuration: no system or global configuration (`GIT_CONFIG_NOSYSTEM`,
+/// `GIT_CONFIG_GLOBAL=/dev/null`, `HOME` and `XDG_CONFIG_HOME` an empty directory), no system
+/// or global attributes file (`GIT_ATTR_NOSYSTEM`, `core.attributesFile=/dev/null`), none from
+/// a work tree, `$GIT_DIR/info/attributes` or a committed `.gitattributes`, and so no merge
+/// driver, which only an attribute names and only configuration defines; besides
+/// [`NO_CONFIGURED_CODE`]. Needs git 2.32 for `GIT_CONFIG_GLOBAL` (`--path-format` is 2.31,
+/// `--object-format` 2.29). It holds no ref, so every revision a command names is an object id.
 struct Isolated {
     dir: PathBuf,
+    repository: PathBuf,
+    home: PathBuf,
 }
 
 impl Drop for Isolated {
@@ -2128,36 +2136,51 @@ impl Drop for Isolated {
     }
 }
 
-/// Runs `git <args>` for the repository of `tree` in an [`Isolated`] bare repository, with no
-/// code and no attributes from any configuration: no system or global configuration
-/// (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL=/dev/null`, `HOME` and `XDG_CONFIG_HOME` an empty
-/// directory), no system or global attributes file (`GIT_ATTR_NOSYSTEM`,
-/// `core.attributesFile=/dev/null`), none from the work tree, `$GIT_DIR/info/attributes` or
-/// a committed `.gitattributes` (the repository is bare and its `HEAD` unborn), and so no merge
-/// driver, which only an attribute names and only configuration defines; besides
-/// [`NO_CONFIGURED_CODE`]. Needs git 2.32 for `GIT_CONFIG_GLOBAL` (`--path-format` is 2.31,
-/// `--object-format` 2.29). It holds no ref, so every revision `args` names is an object id.
-/// Answers what it printed, whatever its exit status.
-fn isolated_output(tree: &Path, args: &[&str]) -> Result<Output> {
-    static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let objects = PathBuf::from(run(
-        tree,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?)
-    .join("objects");
-    let format = run(tree, &["rev-parse", "--show-object-format"])?;
-    let dir = std::env::temp_dir().join(format!(
-        "takt-git-{}-{}",
-        std::process::id(),
-        MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    std::fs::create_dir(&dir)
-        .with_context(|| format!("make the isolated repository {}", dir.display()))?;
-    let isolated = Isolated { dir };
-    let repository = isolated.dir.join("repository");
-    let home = isolated.dir.join("home");
-    std::fs::create_dir(&home).with_context(|| format!("make {}", home.display()))?;
-    let git = |extra: &[(&str, &Path)], args: &[&str]| -> Result<Output> {
+impl Isolated {
+    /// A new one for the repository of `tree`, in its object format, under the temporary
+    /// directory.
+    fn new(tree: &Path) -> Result<Self> {
+        static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let format = run(tree, &["rev-parse", "--show-object-format"])?;
+        let dir = std::env::temp_dir().join(format!(
+            "takt-git-{}-{}",
+            std::process::id(),
+            MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&dir)
+            .with_context(|| format!("make the isolated repository {}", dir.display()))?;
+        let isolated = Self {
+            repository: dir.join("repository"),
+            home: dir.join("home"),
+            dir,
+        };
+        std::fs::create_dir(&isolated.home)
+            .with_context(|| format!("make {}", isolated.home.display()))?;
+        let made = isolated.git(
+            &[],
+            &[
+                "init",
+                "--quiet",
+                "--bare",
+                "--template=",
+                &format!("--object-format={format}"),
+                "repository",
+            ],
+        )?;
+        if !made.status.success() {
+            bail!(
+                "git init of the isolated repository {} exited {}: {}",
+                isolated.repository.display(),
+                made.status,
+                String::from_utf8_lossy(&made.stderr).trim()
+            );
+        }
+        Ok(isolated)
+    }
+
+    /// Runs `git <args>` with `extra` set in its environment, as the type says; answers what it
+    /// printed, whatever its exit status.
+    fn git(&self, extra: &[(&str, &Path)], args: &[&str]) -> Result<Output> {
         let mut command = Command::new("git");
         crate::forge::without_credentials(&mut command, |_| false);
         for name in REDIRECTING_ENV {
@@ -2169,8 +2192,8 @@ fn isolated_output(tree: &Path, args: &[&str]) -> Result<Output> {
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_ATTR_NOSYSTEM", "1")
-            .env("HOME", &home)
-            .env("XDG_CONFIG_HOME", &home)
+            .env("HOME", &self.home)
+            .env("XDG_CONFIG_HOME", &self.home)
             .env("GIT_NO_REPLACE_OBJECTS", "1")
             .env("GIT_NO_LAZY_FETCH", "1");
         for (name, value) in extra {
@@ -2185,37 +2208,120 @@ fn isolated_output(tree: &Path, args: &[&str]) -> Result<Output> {
                 "core.commitGraph=false",
             ])
             .args(args)
-            .current_dir(&isolated.dir)
+            .current_dir(&self.dir)
             .stdin(Stdio::null())
             .output()
             .with_context(|| format!("run git {} isolated", args.join(" ")))
-    };
-    let made = git(
-        &[],
-        &[
-            "init",
-            "--quiet",
-            "--bare",
-            "--template=",
-            &format!("--object-format={format}"),
-            "repository",
-        ],
-    )?;
-    if !made.status.success() {
-        bail!(
-            "git init of the isolated repository {} exited {}: {}",
-            repository.display(),
-            made.status,
-            String::from_utf8_lossy(&made.stderr).trim()
-        );
     }
-    git(
+}
+
+/// Runs `git <args>` for the repository of `tree` in an [`Isolated`] bare repository whose
+/// objects are the repository's own (`GIT_OBJECT_DIRECTORY`): what it reads is what the
+/// repository's store holds, not hashed again, and what it writes (a merge's tree) the
+/// repository holds after. Answers what it printed, whatever its exit status. What a judge
+/// reads goes through a [`Mirror`] instead.
+fn isolated_output(tree: &Path, args: &[&str]) -> Result<Output> {
+    let objects = PathBuf::from(run(
+        tree,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?)
+    .join("objects");
+    let isolated = Isolated::new(tree)?;
+    isolated.git(
         &[
-            ("GIT_DIR", repository.as_path()),
+            ("GIT_DIR", isolated.repository.as_path()),
             ("GIT_OBJECT_DIRECTORY", objects.as_path()),
         ],
         args,
     )
+}
+
+/// An [`Isolated`] repository holding a copy of some commits of `tree`'s repository and all
+/// they reach, received through git's transport (`git fetch` of their ids from the tree's
+/// path), every object hashed as it is received and checked (`transfer.fsckObjects`): an object
+/// overwritten in the tree's store (a loose file, or a pack that names an id for other
+/// content) does not arrive as its id, and the fetch fails naming it. Every read after the fetch
+/// is of the copy, never of the tree's store, so what is read is what the ids name.
+pub struct Mirror {
+    isolated: Isolated,
+}
+
+impl Mirror {
+    /// The copy of the commits `ids` (object ids) of `tree`'s repository; the inner error, what
+    /// git said, when they do not arrive as their ids or are not there.
+    pub fn of(tree: &Path, ids: &[&str]) -> Result<std::result::Result<Self, String>> {
+        if ids.is_empty() || !ids.iter().all(|id| crate::forge::is_object_id(id)) {
+            bail!("a mirror copies commits named by their object ids, not {ids:?}");
+        }
+        let source = std::path::absolute(tree)
+            .with_context(|| format!("make {} absolute", tree.display()))?;
+        let source = source
+            .to_str()
+            .ok_or_else(|| anyhow!("the tree {} is no UTF-8 path", tree.display()))?
+            .to_owned();
+        let mirror = Self {
+            isolated: Isolated::new(tree)?,
+        };
+        let mut args = vec![
+            "-c",
+            "transfer.fsckObjects=true",
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--recurse-submodules=no",
+            "--",
+            source.as_str(),
+        ];
+        args.extend(ids);
+        let fetched = mirror.output_with(&[("GIT_ALLOW_PROTOCOL", Path::new("file"))], &args)?;
+        if !fetched.status.success() {
+            return Ok(Err(String::from_utf8_lossy(&fetched.stderr)
+                .trim()
+                .replace('\n', "; ")));
+        }
+        Ok(Ok(mirror))
+    }
+
+    fn output_with(&self, extra: &[(&str, &Path)], args: &[&str]) -> Result<Output> {
+        let mut env = vec![("GIT_DIR", self.isolated.repository.as_path())];
+        env.extend_from_slice(extra);
+        self.isolated.git(&env, args)
+    }
+
+    /// Runs `git <args>` on the copy; answers what it printed, whatever its exit status.
+    pub fn output(&self, args: &[&str]) -> Result<Output> {
+        self.output_with(&[], args)
+    }
+
+    /// Runs `git <args>` on the copy; its standard output byte for byte, or an error naming
+    /// what git said when it exits non-zero.
+    pub fn bytes(&self, args: &[&str]) -> Result<Vec<u8>> {
+        let output = self.output(args)?;
+        if !output.status.success() {
+            bail!(
+                "git {} on the judge's copy exited {}: {}",
+                args.join(" "),
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Ok(output.stdout)
+    }
+
+    /// Runs `git <args>` on the copy; its standard output trimmed, for answers of one value.
+    pub fn run(&self, args: &[&str]) -> Result<String> {
+        let bytes = self.bytes(args)?;
+        Ok(String::from_utf8_lossy(&bytes).trim().to_owned())
+    }
+
+    /// What merging `revision` into `base` would leave, as [`merged_tree`] reads it, on the
+    /// copy: the merge's tree is written into the copy.
+    pub fn merged_tree(&self, base: &str, revision: &str) -> Result<Merged> {
+        let args = merge_tree_args(base, revision);
+        let output = self.output(&args)?;
+        read_merged(&args, &output, "the judge's copy")
+    }
 }
 
 /// What merging a revision into a base would leave ([`merged_tree`]).
@@ -2237,7 +2343,14 @@ pub struct Merged {
 /// an error naming what git said. `--write-tree` needs git 2.38 or later; an older git exits
 /// with a usage error, which is that error, so nothing is judged or merged on it.
 pub fn merged_tree(tree: &Path, base: &str, revision: &str) -> Result<Merged> {
-    let args = [
+    let args = merge_tree_args(base, revision);
+    let output = isolated_output(tree, &args)?;
+    read_merged(&args, &output, &tree.display().to_string())
+}
+
+/// The argument line of [`merged_tree`].
+fn merge_tree_args<'a>(base: &'a str, revision: &'a str) -> [&'a str; 7] {
+    [
         "merge-tree",
         "--write-tree",
         "-z",
@@ -2245,8 +2358,11 @@ pub fn merged_tree(tree: &Path, base: &str, revision: &str) -> Result<Merged> {
         "--no-messages",
         base,
         revision,
-    ];
-    let output = isolated_output(tree, &args)?;
+    ]
+}
+
+/// What `git merge-tree` run as `args` in `place` answered ([`merged_tree`]).
+fn read_merged(args: &[&str], output: &Output, place: &str) -> Result<Merged> {
     match output.status.code() {
         Some(code @ (0 | 1)) => {
             let mut fields = output
@@ -2260,7 +2376,7 @@ pub fn merged_tree(tree: &Path, base: &str, revision: &str) -> Result<Merged> {
                 .unwrap_or_default()
                 .to_owned();
             if merged.is_empty() {
-                bail!("git {} in {} named no tree", args.join(" "), tree.display());
+                bail!("git {} in {} named no tree", args.join(" "), place);
             }
             let conflicted = fields
                 .map(|path| {
@@ -2276,7 +2392,7 @@ pub fn merged_tree(tree: &Path, base: &str, revision: &str) -> Result<Merged> {
                 bail!(
                     "git {} in {} reported a conflict and named no path",
                     args.join(" "),
-                    tree.display()
+                    place
                 );
             }
             Ok(Merged {
@@ -2287,7 +2403,7 @@ pub fn merged_tree(tree: &Path, base: &str, revision: &str) -> Result<Merged> {
         _ => bail!(
             "git {} in {} exited {}: {}",
             args.join(" "),
-            tree.display(),
+            place,
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         ),
