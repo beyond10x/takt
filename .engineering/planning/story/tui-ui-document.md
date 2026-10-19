@@ -16,17 +16,26 @@ scope:
   path: ess/ui/takt.ui.yaml
 - confidence: inferred
   path: ess/ui/tests
-revision: 3
+revision: 4
 ---
 # Story: tui-ui-document
 
 ## Outcome
 
-The terminal frontend exists as an `ess-ui/1` document, `ess/ui/takt.ui.yaml`, before any code: pages for the case list, case detail (frontier and evidence), run events, approvals pending, scorecard and journey; navigation between them; fixtures read from real recorded cases; and `ess-ui-test/1` tests that pass headless against the terminal renderer.
+The terminal frontend exists as an `ess-ui/1` document, `ess/ui/takt.ui.yaml`, before any code: pages for the case list, case detail (frontier and evidence), run events, approvals pending, scorecard and journey; navigation between them; fixtures copied from real recorded cases; and `ess-ui-test/1` tests that pass headless against the terminal renderer. The document declares no command.
 
 ## Context
 
-epic:terminal-frontend, step 2. Depends on story:tui-read-model for the views the document reads. The worked example of every construct is beyond10x/ess `examples/partner-portal/ui.yaml` with its `fixtures/` and `tests/`. Fixtures come from the scenario 1 cases recorded on 2026-10-18 (docs/runs/2026-10-18-improvement-turn-1/case/ and the timed takt runs), copied, never edited by hand.
+epic:terminal-frontend, step 2. Depends on story:tui-read-model for the views. The worked example of every construct is beyond10x/ess `examples/partner-portal/ui.yaml` with its `fixtures/` and `tests/`.
+
+Fixture sources, copied and never edited by hand:
+- case, decisions, evidence, authority: `docs/runs/2026-10-18-improvement-turn-1/case/` and `docs/runs/2026-10-19-improvement-turns-2-and-3/cases/`.
+- run events: no `events.jsonl` is committed under `docs/runs/` (`find docs/runs -name events.jsonl` prints nothing). Record one from a `takt run` in a scratch repository and copy it into `ess/ui/fixtures/`, naming the takt revision that wrote it in the commit message.
+- an approval pending: a case stopped at `ApprovalRequired (repository.merge)` from the same scratch run.
+
+The run events page and the case detail are `live:` sections with a `refresh:` (polled; the served surface streams nothing).
+
+The approvals page shows, per pending approval, the case, the capability, the bound revision and the text `takt approve --repo <repo> --by <you> <case> <capability>` (epic decision: no write route).
 
 ## Expected before
 
@@ -40,4 +49,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-`ess ui check --model ess ess/ui/takt.ui.yaml` reports no error, `ess ui test` passes every test in `ess/ui/tests/` headless, and `ess ui run --tui --path ess/ui/takt.ui.yaml` shows the improvement turn's case at outcome `accepted` from its fixture.
+`ess ui check --model ess ess/ui/takt.ui.yaml` reports no error; `ess ui test` passes every test in `ess/ui/tests/` headless, including one that opens the approvals page and finds the `takt approve` line of the fixture's pending case; `grep -c "command:" ess/ui/takt.ui.yaml` prints 0; and `ess ui run --tui --path ess/ui/takt.ui.yaml` shows an improvement turn's case at outcome `accepted` from its fixture.
