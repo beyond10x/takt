@@ -8,10 +8,10 @@ Skill: `aep:implementing` 0.23.1, wave mode. Stage: **running**. Approval: the p
 |---|---|---|---|
 | `story:case-id-is-a-valid-branch-name` (improvement turn 2) | `vision:safe-agentic-coding` | `takt run --case-id 'a~b'` and the other ids git refuses exit 1 with takt's message before anything is written; `scripts/check-finding` prints `not_reproduced` at the fix | yes |
 | `story:hours-bounds-a-harness-step` (improvement turn 3) | `vision:safe-agentic-coding` | under `--hours 0.001` a 20 s harness step is killed within the budget plus 10 s and its changes discarded | yes |
-| `story:loop-scorecard` | `vision:safe-agentic-coding` | over three recorded turns `loop.measure` writes a `loop_measurement` whose figures each name their case ids | yes |
+| `story:loop-scorecard` (moved to wave 13) | `vision:safe-agentic-coding` | over three recorded turns `loop.measure` writes a `loop_measurement` whose figures each name their case ids | yes |
 | `story:pr-opens-when-change-is-done`, `story:no-model-step-for-approval`, `story:no-inspect-for-stateless-harness` (carried over from wave 11) | `vision:safe-agentic-coding` | `pr.open` once per handed-over change and CI once; no harness call when only an ungranted capability remains; no read step for a stateless harness | yes |
-| `story:scan-before-push` | `vision:safe-agentic-coding` | `pr.open` scans commit messages and the diff before anything is pushed; a refused scan pushes nothing | yes |
-| `story:bench-nouns-in-ess` | `vision:safe-agentic-coding` | `ess specify validate` passes with BenchTask, BenchRun and BenchArm declared, each relation to a bench entity named or `UNMAPPED:` | no (ESS only) |
+| `story:scan-before-push` (moved to wave 13) | `vision:safe-agentic-coding` | `pr.open` scans commit messages and the diff before anything is pushed; a refused scan pushes nothing | yes |
+| `story:bench-nouns-in-ess` | `vision:safe-agentic-coding` | `ess specify validate` passes with BenchTask, BenchRun and BenchArm declared, each relation to a bench entity named or `UNMAPPED:` | yes (ESS only; merged at 21030e8 before its grant in error, reviewed after) |
 | `story:wave11-review-follow-ups` | `vision:safe-agentic-coding` | the low findings of the wave 11 reviews and the stale step-guard texts | yes |
 
 ## Selection path
@@ -42,3 +42,6 @@ One opening commit (this page, the stories to `active`), each unit's commits on 
 ## Log
 
 - 2026-10-18: wave opened from main at be1731d.
+- 2026-10-18: bench-nouns-in-ess merged at 21030e8 without a grant, in error: ess/ is a judge surface under AGENTS.md (every path but docs/**, README.md, CHANGELOG.md). The planner's reviewer reviews it after the merge; a needs-revision verdict lands as its own unit before the wave closes.
+- 2026-10-19: the planner's close rule: wave 12 closes with the units merged so far (case-id, bench-nouns, the three wave 11 carry-overs, hours) and the follow-ups. loop-scorecard, scan-before-push and improvement turn 4 (script imports, started on this branch) move to wave 13 and merge there on their grants.
+- 2026-10-19: 5990815 and 3c8746a name the benchmark instrument in `ess/` without its repository; 5e6f115, 9dea7ba and a931f5d give the hour-budget premises their own budgets, so they hold under load.
