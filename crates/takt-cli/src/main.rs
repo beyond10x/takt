@@ -257,7 +257,13 @@ enum ScenarioCommands {
     /// it create the branch, and refuse unless the push reports it created, then open a case
     /// for the story on `story.delivery/1`, whose pull request targets `trial/<n>`. The case is
     /// `scenario-<id>-trial-<n>`, refused before anything is cut when it or its branch exists;
-    /// nothing of an earlier run is resumed. A refusal before the push removes the branch and
+    /// nothing of an earlier run is resumed. Without the bot route nothing is fetched or
+    /// pushed, and `<n>` is 22 digits: the 14-digit instant to the second (UTC,
+    /// `YYYYMMDDHHMMSS`) and a random 8-digit nonce, so runs from different checkouts very
+    /// likely take different ones (two runs in one second share one with a chance of 1 in
+    /// 10^8), not consecutive ones. The
+    /// hard guard is the checkout's own: a number it knows is passed over, and `git checkout -b`
+    /// refuses a branch that exists. A refusal before the push removes the branch and
     /// puts the tree back.
     #[command(after_help = SCENARIO_EXIT_CODES)]
     Run(Box<ScenarioRunArgs>),
@@ -345,8 +351,10 @@ struct RunArgs {
     /// binary under (`<root>/bin/takt`, where `takt promote --install-root` installs it),
     /// recorded in the case, canonical, so every resume reads the same one. Not given,
     /// `CARGO_INSTALL_ROOT`, else `CARGO_HOME`, else `~/.cargo`, as `takt promote` takes it. A
-    /// root that does not exist opens no turn. Refused for a resumed case, which keeps the one it
-    /// was opened with; not read by any other case.
+    /// root that does not exist opens no turn. A resumed turn keeps the one it was opened with:
+    /// given again, by any path whose canonical form is that root, it is accepted; another root,
+    /// or any for a turn that recorded none or for a case that is no turn, is refused naming
+    /// what the case keeps. Not read by any other case.
     #[arg(long)]
     install_root: Option<PathBuf>,
     #[command(flatten)]
@@ -714,11 +722,8 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     given_for_resume,
                     first_input.as_deref(),
                 )?;
-                if install_root.is_some() {
-                    return Err(anyhow!(
-                        "--install-root is given for the case {}, which keeps the install root it was opened with; nothing was resumed",
-                        resuming.id
-                    ));
+                if let Some(given) = &install_root {
+                    resume_install_root(&repo, &resuming.id, &resuming.protocol.id, given)?;
                 }
                 // A turn runs on the embedded protocol alone, and only by the binary that judges
                 // it, recorded when it opened: both checked before the case is resumed, so no
@@ -1340,25 +1345,37 @@ impl Scenario {
     }
 }
 
+/// The trial branches the checkout knows: every local `trial/…` and every remote's (as last
+/// fetched), by full ref name.
+fn known_trials(repo: &Path) -> Result<Vec<String>> {
+    takt::git::refs(repo, &["refs/heads/trial", "refs/remotes"])
+}
+
+/// The `<n>` of the trial base `name` names, a full ref name `refs/heads/trial/<n>` or
+/// `refs/remotes/<remote>/trial/<n>`; none for another ref, or a name under `trial/` that is
+/// not all digits, which is no trial base.
+fn trial_number(name: &str) -> Option<&str> {
+    let n = name.strip_prefix("refs/heads/trial/").or_else(|| {
+        name.strip_prefix("refs/remotes/")
+            .and_then(|rest| rest.split_once('/'))
+            .and_then(|(_, branch)| branch.strip_prefix("trial/"))
+    })?;
+    (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then_some(n)
+}
+
 /// The trial base a scenario run cuts next: one past the highest `trial/<n>` the checkout
 /// knows, a local branch or a remote's (as last fetched), `0` when there is none. Names under
-/// `trial/` that are not all digits are not trial bases. A number too large for `u64`, or a
+/// `trial/` that are not all digits are not trial bases. A number too large for `u128`, or a
 /// highest number nothing follows, is refused: never skipped, never wrapped to a number in use.
-fn next_trial(repo: &Path) -> Result<u64> {
-    let known = takt::git::refs(repo, &["refs/heads/trial", "refs/remotes"])?;
-    let mut highest: Option<u64> = None;
+/// Only a run through the bot route numbers its trial so ([`unique_trial`] otherwise).
+fn next_trial(repo: &Path) -> Result<u128> {
+    let known = known_trials(repo)?;
+    let mut highest: Option<u128> = None;
     for name in &known {
-        let Some(n) = name.strip_prefix("refs/heads/trial/").or_else(|| {
-            name.strip_prefix("refs/remotes/")
-                .and_then(|rest| rest.split_once('/'))
-                .and_then(|(_, branch)| branch.strip_prefix("trial/"))
-        }) else {
+        let Some(n) = trial_number(name) else {
             continue;
         };
-        if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
-            continue;
-        }
-        let n: u64 = n.parse().map_err(|_| {
+        let n: u128 = n.parse().map_err(|_| {
             anyhow!("{name} numbers a trial past the largest a scenario run counts to; nothing was changed")
         })?;
         highest = Some(highest.map_or(n, |h| h.max(n)));
@@ -1376,22 +1393,100 @@ fn next_trial(repo: &Path) -> Result<u64> {
 /// `takt/<case>`. The trial branch itself is not, as `n` is past every one known. A case id
 /// [`takt::case::check_id`] refuses (a scenario id long enough to take it past 250 bytes) is
 /// refused here, before any branch is cut or pushed.
-fn trial_free(repo: &Path, scenario: &str, n: u64) -> Result<String> {
+fn trial_free(repo: &Path, scenario: &str, n: u128) -> Result<String> {
     let case_id = format!("scenario-{scenario}-trial-{n}");
     takt::case::check_id(&case_id)?;
-    let refused = |what: String| {
-        anyhow!(
+    if let Some(what) = case_taken(repo, &case_id)? {
+        return Err(anyhow!(
             "scenario {scenario}: {what} exists already, though no trial/{n} branch is known: the case of trial/{n} would collide with it; nothing was pushed"
-        )
-    };
-    if repo.join(takt::case::CASES_DIR).join(&case_id).exists() {
-        return Err(refused(format!("the case {case_id}")));
-    }
-    let branch = takt::case::Branch::name_of(&case_id);
-    if !takt::git::refs(repo, &[&format!("refs/heads/{branch}")])?.is_empty() {
-        return Err(refused(format!("the case's branch {branch}")));
+        ));
     }
     Ok(case_id)
+}
+
+/// What of the case `case_id` is there already, its directory or its branch `takt/<case>`;
+/// none when neither is. `case_id` is one [`takt::case::check_id`] accepted.
+fn case_taken(repo: &Path, case_id: &str) -> Result<Option<String>> {
+    if repo.join(takt::case::CASES_DIR).join(case_id).exists() {
+        return Ok(Some(format!("the case {case_id}")));
+    }
+    let branch = takt::case::Branch::name_of(case_id);
+    if !takt::git::refs(repo, &[&format!("refs/heads/{branch}")])?.is_empty() {
+        return Ok(Some(format!("the case's branch {branch}")));
+    }
+    Ok(None)
+}
+
+/// How many nonces a trial number without the bot route can take within one second: eight
+/// digits.
+const TRIAL_NONCES: u64 = 100_000_000;
+
+/// The trial number and case id of a scenario run without the bot route, which has no remote
+/// to reserve a number on: the instant `at` (`YYYY-MM-DDTHH:MM:SSZ`, as [`takt::now`] gives it)
+/// to the second, its 14 digits, then an 8-digit nonce, 22 digits in all, past `u64`, so it
+/// is counted in `u128`. Runs from different checkouts very likely take different numbers (two
+/// runs in one second share one with a chance of 1 in 10^8) and their cases go into one
+/// scorecard; not consecutive ones. The
+/// nonce is `nonce` (random, [`trial_nonce`]) when that number is free in this checkout, else
+/// the next free one after it, wrapping: a number whose trial branch is known, local or a
+/// remote's, or whose case or case branch is there, is passed over. That, and `git checkout
+/// -b` refusing a branch that exists, is the hard guard; it holds within a checkout only. A
+/// case id [`takt::case::check_id`] refuses is refused, and so is a second whose every number
+/// is taken, before any branch is cut.
+fn unique_trial(repo: &Path, scenario: &str, at: &str, nonce: u64) -> Result<(u128, String)> {
+    let digits: String = at.chars().filter(char::is_ascii_digit).collect();
+    let second: u128 = match digits.len() {
+        14 => digits.parse().ok(),
+        _ => None,
+    }
+    .ok_or_else(|| anyhow!("the instant {at} gives no second to number a trial by"))?;
+    let known = known_trials(repo)?;
+    for k in 0..TRIAL_NONCES {
+        let n = second * u128::from(TRIAL_NONCES)
+            + u128::from((nonce % TRIAL_NONCES + k) % TRIAL_NONCES);
+        let case_id = format!("scenario-{scenario}-trial-{n}");
+        takt::case::check_id(&case_id)?;
+        let digits = n.to_string();
+        if known
+            .iter()
+            .any(|name| trial_number(name) == Some(digits.as_str()))
+        {
+            continue;
+        }
+        if case_taken(repo, &case_id)?.is_none() {
+            return Ok((n, case_id));
+        }
+    }
+    Err(anyhow!(
+        "scenario {scenario}: every trial number of {at} is taken in {}; nothing was changed",
+        repo.display()
+    ))
+}
+
+/// The nonce of a trial number without the bot route ([`unique_trial`]): eight random bytes
+/// from the operating system (`/dev/urandom`), modulo [`TRIAL_NONCES`]. Nothing a run shares
+/// with another goes into it: runs each in a PID namespace of its own have the same process id,
+/// and containers started alike the same host name. Where `/dev/urandom` does not read, the
+/// standard library's hasher, keyed from the operating system's randomness per process, over
+/// the process id and the clock's nanoseconds.
+fn trial_nonce() -> u64 {
+    use std::hash::{BuildHasher as _, Hasher as _};
+    use std::io::Read as _;
+    let mut bytes = [0_u8; 8];
+    let random = std::fs::File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map(|()| u64::from_le_bytes(bytes))
+        .unwrap_or_else(|_| {
+            let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+            hasher.write_u32(std::process::id());
+            hasher.write_u128(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| since.as_nanos()),
+            );
+            hasher.finish()
+        });
+    random % TRIAL_NONCES
 }
 
 /// `takt scenario run`: the scenario read, the tree found clean, `trial/<n>` cut from the seed
@@ -1451,8 +1546,15 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             )
         })?;
     }
-    let n = next_trial(&repo)?;
-    let case_id = trial_free(&repo, &scenario.id, n)?;
+    // Through the bot route the number is one past the highest known and the push's lease
+    // reserves it on the remote; without it, no remote reserves anything, so the number is the
+    // instant and a nonce, unique across checkouts.
+    let (n, case_id) = if forge.trials.is_some() {
+        let n = next_trial(&repo)?;
+        (n, trial_free(&repo, &scenario.id, n)?)
+    } else {
+        unique_trial(&repo, &scenario.id, &takt::now(), trial_nonce())?
+    };
     let trial = format!("trial/{n}");
     let left = takt::git::current_branch(&repo)?;
     let at = takt::git::head(&repo)?;
@@ -1714,6 +1816,41 @@ fn refuse_for_resume(
         ));
     }
     Ok(())
+}
+
+/// Refuses `--install-root <given>` for the case `id`, on `protocol`, about to be resumed, unless
+/// it names the root the case keeps: a `self.improvement/1` turn's recorded install root
+/// ([`takt::case::install_root_of`]), which `given` names when its canonical path is that root.
+/// A case that is no turn, or a turn that recorded none, refuses any. `id` is one
+/// [`takt::case::check_id`] accepted, as [`case_protocol`] read it.
+fn resume_install_root(repo: &Path, id: &str, protocol: &str, given: &Path) -> Result<()> {
+    let keeps = |what: String| {
+        anyhow!(
+            "--install-root is given for the case {id}, which keeps the install root it was opened with{what}; nothing was resumed"
+        )
+    };
+    let recorded = if protocol == takt::case::TURN_PROTOCOL {
+        takt::case::install_root_of(&repo.join(takt::case::CASES_DIR).join(id))?
+    } else {
+        None
+    };
+    let Some(recorded) = recorded else {
+        return Err(keeps(String::new()));
+    };
+    match std::fs::canonicalize(given) {
+        Ok(canonical) if canonical == recorded => Ok(()),
+        Ok(canonical) => Err(keeps(format!(
+            ", {}; --install-root {} names {}, another root",
+            recorded.display(),
+            given.display(),
+            canonical.display()
+        ))),
+        Err(error) => Err(keeps(format!(
+            ", {}; --install-root {} is not there ({error})",
+            recorded.display(),
+            given.display()
+        ))),
+    }
 }
 
 /// `text` on one line: its lines, trimmed, the empty ones left out, joined with ` | `.
@@ -2275,6 +2412,47 @@ mod tests {
         ));
         assert_eq!(error, "no forge `hub`: bot or none");
         assert!(!repo.join(".engineering/cases").exists());
+    }
+
+    /// story:trial-numbers-are-unique-across-checkouts: without the bot route a trial number is
+    /// the instant's fourteen digits, then the eight-digit nonce, 22 digits; a number whose
+    /// trial branch is known (local, or a remote's), whose case is there, or whose case branch
+    /// is, is passed over for the next nonce, past 99999999 to 00000000.
+    #[test]
+    fn a_trial_number_without_the_bot_route_is_the_instant_and_a_free_nonce() {
+        let repo = repository("one-ready", "unique-trial");
+        let at = "2026-10-19T14:25:30Z";
+        let taken = |nonce: u64| {
+            super::unique_trial(&repo, "1", at, nonce)
+                .expect("a trial number")
+                .0
+        };
+        assert_eq!(
+            super::unique_trial(&repo, "1", at, 42).expect("a trial number"),
+            (
+                2_026_101_914_253_000_000_042,
+                "scenario-1-trial-2026101914253000000042".to_owned()
+            )
+        );
+        git(&repo, &["branch", "trial/2026101914253000000042"]);
+        git(
+            &repo,
+            &[
+                "update-ref",
+                "refs/remotes/origin/trial/2026101914253000000043",
+                "HEAD",
+            ],
+        );
+        fs::create_dir_all(repo.join(".engineering/cases/scenario-1-trial-2026101914253000000044"))
+            .expect("a case directory");
+        git(
+            &repo,
+            &["branch", "takt/scenario-1-trial-2026101914253000000045"],
+        );
+        assert_eq!(taken(42), 2_026_101_914_253_000_000_046);
+        assert_eq!(taken(99_999_999), 2_026_101_914_253_099_999_999);
+        git(&repo, &["branch", "trial/2026101914253099999999"]);
+        assert_eq!(taken(99_999_999), 2_026_101_914_253_000_000_000);
     }
 
     /// The lines of `aep plan artifact history <id>` in `repo` that record an approval.

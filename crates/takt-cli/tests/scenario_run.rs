@@ -553,6 +553,77 @@ fn the_next_trial_follows_the_highest_trial_branch_local_or_remote() {
     );
 }
 
+/// A run through the bot route in a checkout that holds a trial number a run without it took,
+/// 22 digits (a 14-digit instant and an 8-digit nonce, past `u64`), takes that number plus one:
+/// counted, not refused as too large.
+#[test]
+fn the_next_trial_follows_a_22_digit_trial_number() {
+    let world = world("numbering-22");
+    git(
+        &world.repo,
+        &["branch", "trial/2026101914253012345678", &world.seed],
+    );
+
+    let (code, out, err) = world.scenario_run("1", &["--iterations", "0"]);
+    assert_eq!(code, 3, "stdout {out} stderr {err}");
+    assert!(
+        out.contains("scenario 1: story:ready-one proposed on trial/2026101914253012345679 at "),
+        "stdout {out} stderr {err}"
+    );
+    assert_eq!(
+        world.pushed("trial/2026101914253012345679").as_deref(),
+        Some(world.seed.as_str())
+    );
+    assert_eq!(
+        git_out(&world.repo, &["branch", "--show-current"]),
+        "takt/scenario-1-trial-2026101914253012345679"
+    );
+}
+
+/// The top of the range a trial number is counted in, `u128` since a trial number without the
+/// bot route is 22 digits: a trial branch at the top has no number after it, and one past the
+/// top does not parse. Each is refused in one line naming it, after the fetch and before
+/// anything is cut or pushed: never wrapped to a number in use, never a panic.
+#[test]
+fn a_trial_number_at_the_top_of_u128_is_refused_not_wrapped() {
+    let world = world("numbering-top");
+    for (number, says) in [
+        (
+            "340282366920938463463374607431768211456",
+            "numbers a trial past the largest a scenario run counts to",
+        ),
+        (
+            "340282366920938463463374607431768211455",
+            "is the highest trial branch known, and no number follows it",
+        ),
+    ] {
+        let branch = format!("trial/{number}");
+        git(&world.repo, &["branch", &branch, &world.seed]);
+        let (code, out, err) = world.scenario_run("1", &["--iterations", "0"]);
+        assert!(
+            !err.contains("panicked"),
+            "takt panicked: exit {code}, stderr {err}"
+        );
+        assert_eq!(code, 1, "{number}: stdout {out} stderr {err}");
+        assert!(err.contains(number), "{number}: stderr {err}");
+        assert!(err.contains(says), "{number}: stderr {err}");
+        assert_eq!(
+            world.trial_branches(),
+            std::slice::from_ref(&branch),
+            "{number}"
+        );
+        assert!(
+            !world
+                .calls()
+                .iter()
+                .any(|call| call.starts_with("bot -- push")),
+            "{:?}",
+            world.calls()
+        );
+        git(&world.repo, &["branch", "-D", &branch]);
+    }
+}
+
 /// A scenario the declaration does not name is refused before anything is changed, naming
 /// where it was looked for.
 #[test]
@@ -891,4 +962,228 @@ fn a_seed_whose_story_waits_on_a_dependency_is_refused_before_the_push() {
     );
     assert!(git_out(&world.remote, &["for-each-ref"]).is_empty());
     assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
+}
+
+/// The revision of takt the five runs below are saved under: their `opened` lines are made to
+/// name it, as a clean build of one revision would write them, so the save's binary check
+/// holds whether or not the build under test is `-dirty`. Which binary made the runs is not
+/// what the case below is about.
+const SAVED_UNDER: &str = "0123456789abcdef0123456789abcdef01234567";
+
+/// `events` with every `opened` line's `binary` naming `revision`.
+fn opened_by(events: &str, revision: &str) -> String {
+    let key = "\"binary\":\"";
+    events
+        .lines()
+        .map(|line| {
+            let Some(at) = line
+                .contains("\"event\":\"opened\"")
+                .then(|| line.find(key))
+                .flatten()
+            else {
+                return format!("{line}\n");
+            };
+            let value = at + key.len();
+            let end = value + line[value..].find('"').expect("the binary's closing quote");
+            format!("{}{revision}{}\n", &line[..value], &line[end..])
+        })
+        .collect()
+}
+
+/// How the five runs of [`five_clones_one_scorecard`] are started.
+#[derive(Clone, Copy, PartialEq)]
+enum Started {
+    /// One after another, each in this process's PID namespace.
+    InTurn,
+    /// All at once, each in a PID namespace of its own (`bwrap --unshare-pid`), as containers
+    /// or confined runners start them: every run has the same process id and host name.
+    AtOnceInOwnPidNamespaces,
+}
+
+/// Five scenario runs of scenario 1, each from its own fresh clone of one origin and without
+/// the bot route (the origin is a path, no forge), started as `started` says; asserts five
+/// distinct trial numbers, all digits, and five distinct case ids, and that, gathered into one
+/// repository, `takt scorecard --save` takes all five cases.
+fn five_clones_one_scorecard(name: &str, started: Started) {
+    let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("scenario-run-{}-{name}", std::process::id()));
+    if outer.exists() {
+        fs::remove_dir_all(&outer).expect("a stale scratch tree is removed");
+    }
+    let scratch = Scratch(outer);
+    let source = scratch.0.join("source");
+    copy_dir(&Path::new(FIXTURES).join("one-ready"), &source);
+    fs::write(source.join("Cargo.toml"), "[package]\nname = \"scratch\"\n").expect("a file");
+    fs::write(source.join(".engineering/gates.yaml"), GATES).expect("a file");
+    git(&source, &["init", "-q", "-b", "main"]);
+    git(&source, &["add", "-A"]);
+    git(&source, &["commit", "-q", "-m", "seed"]);
+    let seed = git_out(&source, &["rev-parse", "HEAD"]);
+    declare(
+        &source,
+        &format!("[scenario \"1\"]\n\tstory = story:ready-one\n\tseed = {seed}\n"),
+    );
+    git(
+        &scratch.0,
+        &["init", "-q", "-b", "main", "--bare", "origin.git"],
+    );
+    git(&source, &["push", "-q", "../origin.git", "main"]);
+
+    let clones: Vec<PathBuf> = (1..=5)
+        .map(|k| {
+            let name = format!("clone-{k}");
+            git(&scratch.0, &["clone", "-q", "origin.git", &name]);
+            scratch.0.join(&name)
+        })
+        .collect();
+    let command = |clone: &Path| {
+        let mut command = match started {
+            Started::InTurn => Command::new(env!("CARGO_BIN_EXE_takt")),
+            Started::AtOnceInOwnPidNamespaces => {
+                let mut bwrap = Command::new("bwrap");
+                bwrap.args([
+                    "--dev-bind",
+                    "/",
+                    "/",
+                    "--unshare-pid",
+                    "--die-with-parent",
+                    env!("CARGO_BIN_EXE_takt"),
+                ]);
+                bwrap
+            }
+        };
+        command
+            .args(["scenario", "run", "--repo"])
+            .arg(clone)
+            .args([
+                "1",
+                "--harness",
+                "none",
+                "--iterations",
+                "1",
+                "--test-cmd",
+                "true",
+            ])
+            .env_remove("B10X_GATES_POLICY");
+        command
+    };
+    let outputs: Vec<std::process::Output> = match started {
+        Started::InTurn => clones
+            .iter()
+            .map(|clone| command(clone).output().expect("takt runs"))
+            .collect(),
+        Started::AtOnceInOwnPidNamespaces => {
+            let children: Vec<std::process::Child> = clones
+                .iter()
+                .map(|clone| {
+                    command(clone)
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
+                        .spawn()
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "bwrap does not start ({error}): this case needs bubblewrap on the program path, as CI installs it"
+                            )
+                        })
+                })
+                .collect();
+            children
+                .into_iter()
+                .map(|child| child.wait_with_output().expect("takt runs"))
+                .collect()
+        }
+    };
+
+    let mut trials: Vec<String> = Vec::new();
+    let mut cases: Vec<PathBuf> = Vec::new();
+    for (k, (clone, output)) in clones.iter().zip(&outputs).enumerate() {
+        let name = format!("clone-{}", k + 1);
+        let out = String::from_utf8_lossy(&output.stdout);
+        let err = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            out.contains("not pushed: no forge"),
+            "{name}: exit {:?}, stdout {out} stderr {err}",
+            output.status.code()
+        );
+        let trial = out
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("scenario 1: story:ready-one proposed on trial/")?
+                    .split_once(' ')
+                    .map(|(n, _)| n.to_owned())
+            })
+            .unwrap_or_else(|| panic!("{name} names its trial: stdout {out} stderr {err}"));
+        assert!(
+            !trial.is_empty() && trial.bytes().all(|b| b.is_ascii_digit()),
+            "{name}: trial/{trial} is not all digits"
+        );
+        let case = clone
+            .join(".engineering/cases")
+            .join(format!("scenario-1-trial-{trial}"));
+        assert!(
+            case.join("events.jsonl").is_file(),
+            "{name}: no record at {}: stdout {out} stderr {err}",
+            case.display()
+        );
+        trials.push(trial);
+        cases.push(case);
+    }
+    let mut distinct = trials.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(
+        distinct.len(),
+        5,
+        "five fresh clones share a trial number: {trials:?}"
+    );
+
+    let scores = scratch.0.join("scores");
+    for case in &cases {
+        let id = case.file_name().expect("a case id");
+        let into = scores.join(".engineering/cases").join(id);
+        assert!(!into.exists(), "{} twice", into.display());
+        copy_dir(case, &into);
+        let events = fs::read_to_string(into.join("events.jsonl")).expect("the record");
+        fs::write(into.join("events.jsonl"), opened_by(&events, SAVED_UNDER)).expect("written");
+        fs::write(into.join("held-out.txt"), "PASS\n").expect("the held-out result");
+    }
+    let saves = scratch.0.join("saves");
+    fs::create_dir_all(&saves).expect("the saves directory");
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args(["scorecard", "--repo"])
+        .arg(&scores)
+        .arg("--save")
+        .arg(&saves)
+        .args(["--revision", SAVED_UNDER])
+        .output()
+        .expect("takt runs");
+    let out = String::from_utf8_lossy(&output.stdout);
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "stdout {out} stderr {err}");
+    let saved = fs::read_to_string(saves.join(format!("scorecard-{SAVED_UNDER}.json")))
+        .expect("the saved scorecard");
+    for trial in &trials {
+        assert!(
+            saved.contains(&format!("\"scenario-1-trial-{trial}\"")),
+            "the saved scorecard lacks trial {trial}: {saved}"
+        );
+    }
+}
+
+/// story:trial-numbers-are-unique-across-checkouts: five scenario runs, one after another, each
+/// from its own fresh clone of one origin and without the bot route, get five distinct trial
+/// numbers and case ids, and one scorecard takes all five.
+#[test]
+fn five_runs_from_five_fresh_clones_get_five_trial_numbers_and_one_scorecard_takes_all() {
+    five_clones_one_scorecard("five-clones", Started::InTurn);
+}
+
+/// The same five runs started at once, each in a PID namespace of its own (`bwrap
+/// --unshare-pid`), where every run has the same process id and host name: the nonce does not
+/// rest on either, so they still get five distinct trial numbers. Two runs in one second share
+/// a number with a chance of 1 in 10^8 per pair (about 1 in 10^7 for five). Bubblewrap is
+/// required, never skipped: without it the case fails, naming it.
+#[test]
+fn five_runs_started_at_once_in_their_own_pid_namespaces_get_five_trial_numbers() {
+    five_clones_one_scorecard("five-clones-pid-ns", Started::AtOnceInOwnPidNamespaces);
 }
