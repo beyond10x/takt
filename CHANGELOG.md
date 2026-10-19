@@ -6,6 +6,26 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+### Changed
+
+- Every commit takt makes (the take, the store's writes on the case's branch, an approval's
+  record, a step's change) carries one identity as author and committer: `--commit-identity
+  '<name> <email>'`, else the one `.engineering/commit-identity.conf` names at the commit the case
+  forks from, else `takt <takt@localhost>`. The case records it when it opens and a resume keeps
+  it. Neither the operator's git configuration nor the identity variables in takt's environment
+  reach a commit. A run whose commits leave the machine (the bot route) is refused at open, exit
+  1, when no identity is configured; a run under `--forge none` is not.
+
+### Added
+
+- A delivery under `--forge none` that stops at `pr.opened` hands its change over as a candidate:
+  its code commits are replayed on the base under the configured identity, kept under
+  `refs/takt/candidates/<case-id>`, and the run prints `candidate: <id>`, which a
+  `self.improvement/1` turn opens on. With no configured identity, or when the replay conflicts,
+  it prints `candidate: none:` and why.
+
+### Gates
+
 - `gate.run` with a project file compares at the case's pinned base, besides the executables and
   catalogs it admits, every file a gate command takes as an argument, the tool configuration
   (`.cargo/config`, `.cargo/config.toml`, `clippy.toml`, `.clippy.toml`, `rustfmt.toml`,
