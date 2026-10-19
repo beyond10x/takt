@@ -615,6 +615,23 @@ fn the_harness_child_loads_no_project_or_user_settings() {
         .position(|a| a == "--settings")
         .map(|i| line[i + 1].as_str());
     assert_eq!(settings, Some(r#"{"disableAllHooks":true}"#), "{line:?}");
+    // The model is offered only the tools it may use: a tool offered and never allowed costs
+    // its schema in every call (story:claude-step-offers-tools-it-never-allows).
+    let value = |flag: &str| {
+        line.iter()
+            .position(|a| a == flag)
+            .map(|i| line[i + 1].as_str())
+    };
+    assert_eq!(
+        value("--tools"),
+        Some("Read,Edit,Write,Glob,Grep"),
+        "{line:?}"
+    );
+    assert_eq!(
+        value("--allowedTools"),
+        Some("Read,Edit,Write,Glob,Grep"),
+        "{line:?}"
+    );
 }
 
 /// A script that sleeps in a child of its shell, so the child holds the output pipes after
