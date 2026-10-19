@@ -2888,3 +2888,118 @@ fn a_repository_findings_seed_is_recorded_as_the_full_commit_id() {
         "{results:?}"
     );
 }
+
+/// `check-finding` builds the revision in a checkout of its own that fetches it through git's
+/// transport, every object hashed and checked as it is received. With the loose object of the
+/// fixed revision's `main.rs` overwritten in this repository's store by the defect's bytes, the
+/// build fails, git naming the object, and there is no result: never the defect's text built as
+/// the fixed revision. So too when `GIT_TEMPLATE_DIR` names a template whose
+/// `objects/info/alternates` would lend a new repository this store's objects, so that a fetch
+/// received none: the checkout is made with no template.
+#[test]
+fn a_poisoned_object_of_the_revision_fails_the_build_naming_it() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let loose = |repo: &Path, id: &str| repo.join(".git/objects").join(&id[..2]).join(&id[2..]);
+    for template in [false, true] {
+        let world = world(if template {
+            "poisoned-template"
+        } else {
+            "poisoned"
+        });
+        let filed = file(
+            &world.takt,
+            "default-protocol",
+            &body(Some(&predicate())),
+            &[],
+        );
+        assert!(filed.status.success(), "{}", shown(&filed));
+        let main = "crates/takt-cli/src/main.rs";
+        let blob = git_out(
+            &world.takt,
+            &["rev-parse", &format!("{}:{main}", world.fixed)],
+        );
+        let other = git_out(
+            &world.takt,
+            &["rev-parse", &format!("{}:{main}", world.defect)],
+        );
+        let target = loose(&world.takt, &blob);
+        let bytes = fs::read(loose(&world.takt, &other)).expect("the defect's object");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).expect("writable");
+        fs::write(&target, bytes).expect("poisoned");
+        let lending = world.outer.0.join("template");
+        write(
+            &lending.join("objects/info/alternates"),
+            &format!("{}\n", world.takt.join(".git/objects").display()),
+        );
+        let env: Vec<(&str, &str)> = if template {
+            vec![("GIT_TEMPLATE_DIR", lending.to_str().expect("UTF-8"))]
+        } else {
+            Vec::new()
+        };
+        let output = world.check("story:default-protocol", &world.fixed, &env);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "template {template}: {}",
+            shown(&output)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "template {template}: {}",
+            shown(&output)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(&blob),
+            "template {template}: the failure names {blob}: {}",
+            shown(&output)
+        );
+    }
+}
+
+/// The reviewer's RV-R: the caller's environment names an object directory
+/// (`GIT_ALTERNATE_OBJECT_DIRECTORIES` or `GIT_OBJECT_DIRECTORY`, which a hook's environment
+/// under quarantine carries) holding this repository's store, in which the fixed revision's
+/// `main.rs` was overwritten with the defect's bytes. The build's git runs under a cleared
+/// environment, so the fetch still receives and hashes every object: the build fails naming the
+/// object, and there is no result.
+#[test]
+fn object_directories_in_the_callers_environment_reach_no_build() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let loose = |repo: &Path, id: &str| repo.join(".git/objects").join(&id[..2]).join(&id[2..]);
+    for var in ["GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_OBJECT_DIRECTORY"] {
+        let world = world(&format!("caller-{}", var.to_lowercase()));
+        let filed = file(
+            &world.takt,
+            "default-protocol",
+            &body(Some(&predicate())),
+            &[],
+        );
+        assert!(filed.status.success(), "{}", shown(&filed));
+        let main = "crates/takt-cli/src/main.rs";
+        let blob = git_out(
+            &world.takt,
+            &["rev-parse", &format!("{}:{main}", world.fixed)],
+        );
+        let other = git_out(
+            &world.takt,
+            &["rev-parse", &format!("{}:{main}", world.defect)],
+        );
+        let target = loose(&world.takt, &blob);
+        let bytes = fs::read(loose(&world.takt, &other)).expect("the defect's object");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).expect("writable");
+        fs::write(&target, bytes).expect("poisoned");
+        let objects = world.takt.join(".git/objects");
+        let output = world.check(
+            "story:default-protocol",
+            &world.fixed,
+            &[(var, objects.to_str().expect("UTF-8"))],
+        );
+        assert_eq!(output.status.code(), Some(1), "{var}: {}", shown(&output));
+        assert!(output.stdout.is_empty(), "{var}: {}", shown(&output));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(&blob),
+            "{var}: the failure names {blob}: {}",
+            shown(&output)
+        );
+    }
+}

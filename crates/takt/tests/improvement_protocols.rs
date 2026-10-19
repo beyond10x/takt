@@ -4,16 +4,22 @@
 //! design names: a fix verified by another run, merged under the authority its surface needs,
 //! with no regression and promoted is accepted; a fix that leaves the finding reproducing is
 //! declined; a loop change that redefines a metric without the old figures cannot be merged.
-//! No validator exists for the `self.improvement/1` actions yet; the records here stand in for
-//! the ones they will write. The `loop.improvement/1` actions have theirs
-//! (`crates/takt/src/loop_scorecard.rs`, driven in `tests/loop_scorecard.rs`); the loop cases
-//! here keep hand-written records so that they decide the protocol's reading alone.
+//! The records here are written by hand so that they decide the protocol's reading alone. A
+//! turn's carry the names of the turn validators that write them
+//! (`crates/takt/src/improvement.rs`, driven in `tests/self_improvement.rs` and by `takt run` in
+//! `crates/takt-cli/tests/self_improvement_cli.rs`), and the turn opens through the kernel's
+//! opening method, which declares those validators independent; the merge and promotion
+//! validators come with story:judge-guard, and their records here are the delivering run's. The
+//! `loop.improvement/1` actions have theirs (`crates/takt/src/loop_scorecard.rs`, driven in
+//! `tests/loop_scorecard.rs`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use takt::case::TurnOpening;
 use takt::evidence::Record;
+use takt::improvement::{FindingFile, ScenarioReproduce, ScenarioVerify, ScorecardCompare};
 use takt::{CaseDir, Decision, LoadedProtocol};
 
 const SELF_IMPROVEMENT: &str = concat!(
@@ -25,9 +31,12 @@ const LOOP_IMPROVEMENT: &str = concat!(
     "/../../protocols/loop-improvement/1.yaml"
 );
 
-/// The producer that delivered the candidate, and the one that verifies it.
+/// The producer that delivered the candidate, and the one that verifies a loop change.
 const DELIVERER: &str = "developer-run";
 const VERIFIER: &str = "operator-run";
+
+/// In a turn, the validator of the turn that writes the record's kind ([`judge_of`]).
+const JUDGE: &str = "judge";
 
 fn git(tree: &Path, args: &[&str]) {
     let status = Command::new("git")
@@ -77,10 +86,13 @@ fn scratch(name: &str) -> Scratch {
     Scratch(dir)
 }
 
-/// Opens a case on `protocol` with `inputs`, gives every artifact a revision of its own, and
-/// declares the verifier independent of the case's work on `different_agent_run`, as the context
-/// that writes the case will once the kernel resolves producers.
+/// Opens a case on `protocol` with `inputs`. A turn (`self.improvement/1`) opens through the
+/// kernel's opening method, its baseline and candidate revisions of their own, which declares
+/// every turn validator independent of the case's work on `different_agent_run`: nothing here
+/// writes `independence`. A loop case gives every artifact a revision of its own and declares the
+/// verifier independent by hand, as the loop protocol's opening does not yet (story:loop-scorecard).
 fn open(tree: &Path, protocol: &str, id: &str, inputs: &[(&str, &str)]) -> CaseDir {
+    let turn = protocol == SELF_IMPROVEMENT;
     let protocol = LoadedProtocol::from_file(Path::new(protocol))
         .expect("the protocol loads, validates and compiles");
     let inputs: Vec<(String, String)> = inputs
@@ -90,6 +102,15 @@ fn open(tree: &Path, protocol: &str, id: &str, inputs: &[(&str, &str)]) -> CaseD
     let artifacts = protocol.artifacts.clone();
     let mut case =
         CaseDir::open(tree, protocol, id, "one improvement turn", &inputs).expect("the case opens");
+    if turn {
+        case.open_turn(&TurnOpening {
+            finding: "story:a-finding".to_owned(),
+            candidate: "candidate-1".to_owned(),
+            baseline: "baseline-1".to_owned(),
+        })
+        .expect("the turn opens");
+        return case;
+    }
     for artifact in &artifacts {
         case.set_revision(artifact, &format!("{artifact}-1"))
             .expect("the revision is set");
@@ -104,7 +125,23 @@ fn open(tree: &Path, protocol: &str, id: &str, inputs: &[(&str, &str)]) -> CaseD
     CaseDir::resume(tree, id).expect("the case resumes with its independence")
 }
 
+/// The turn validator that writes `kind` about `subject`: the producer [`JUDGE`] stands for.
+fn judge_of(kind: &str, subject: &str) -> &'static str {
+    match (kind, subject) {
+        ("finding_record", _) => FindingFile::NAME,
+        ("scenario_result", "baseline") => ScenarioReproduce::NAME,
+        ("scenario_result", _) => ScenarioVerify::NAME,
+        ("scorecard_result", _) => ScorecardCompare::NAME,
+        _ => panic!("no turn validator writes {kind}"),
+    }
+}
+
 fn add(case: &mut CaseDir, n: usize, kind: &str, result: &str, subject: &str, producer: &str) {
+    let producer = if producer == JUDGE {
+        judge_of(kind, subject)
+    } else {
+        producer
+    };
     let revision = case.revision(subject).expect("the subject has a revision");
     case.add_evidence(&Record::new(
         format!("e{n}"),
@@ -165,14 +202,14 @@ fn a_verified_fix_without_regression_is_accepted_once_promoted() {
         d.json
     );
 
-    add(&mut case, 1, "finding_record", "filed", "finding", VERIFIER);
+    add(&mut case, 1, "finding_record", "filed", "finding", JUDGE);
     add(
         &mut case,
         2,
         "scenario_result",
         "reproduced",
         "baseline",
-        VERIFIER,
+        JUDGE,
     );
     let d = case.evaluate(1).expect("evaluates");
     assert_eq!(
@@ -194,7 +231,7 @@ fn a_verified_fix_without_regression_is_accepted_once_promoted() {
         "scenario_result",
         "not_reproduced",
         "candidate",
-        VERIFIER,
+        JUDGE,
     );
     let d = case.evaluate(2).expect("evaluates");
     assert_eq!(claim(&d, "scenario.passes_after"), "true", "{}", d.json);
@@ -226,7 +263,7 @@ fn a_verified_fix_without_regression_is_accepted_once_promoted() {
         "scorecard_result",
         "no_regression",
         "candidate",
-        VERIFIER,
+        JUDGE,
     );
     let d = case.evaluate(3).expect("evaluates");
     assert_eq!(
@@ -259,14 +296,14 @@ fn the_delivering_run_cannot_verify_its_own_fix() {
         "self-verified",
         &[("surface", "non_judge")],
     );
-    add(&mut case, 1, "finding_record", "filed", "finding", VERIFIER);
+    add(&mut case, 1, "finding_record", "filed", "finding", JUDGE);
     add(
         &mut case,
         2,
         "scenario_result",
         "reproduced",
         "baseline",
-        VERIFIER,
+        JUDGE,
     );
     add(
         &mut case,
@@ -290,14 +327,14 @@ fn the_delivering_run_cannot_verify_its_own_fix() {
 fn a_judge_surface_change_needs_the_judge_surface_capability() {
     let tree = scratch("judge");
     let mut case = open(&tree, SELF_IMPROVEMENT, "judge", &[("surface", "judge")]);
-    add(&mut case, 1, "finding_record", "filed", "finding", VERIFIER);
+    add(&mut case, 1, "finding_record", "filed", "finding", JUDGE);
     add(
         &mut case,
         2,
         "scenario_result",
         "reproduced",
         "baseline",
-        VERIFIER,
+        JUDGE,
     );
     add(
         &mut case,
@@ -305,7 +342,7 @@ fn a_judge_surface_change_needs_the_judge_surface_capability() {
         "scenario_result",
         "not_reproduced",
         "candidate",
-        VERIFIER,
+        JUDGE,
     );
     let d = case.evaluate(1).expect("evaluates");
     assert_eq!(
@@ -331,14 +368,14 @@ fn a_fix_that_leaves_the_finding_reproducing_is_declined() {
         "declined",
         &[("surface", "non_judge")],
     );
-    add(&mut case, 1, "finding_record", "filed", "finding", VERIFIER);
+    add(&mut case, 1, "finding_record", "filed", "finding", JUDGE);
     add(
         &mut case,
         2,
         "scenario_result",
         "reproduced",
         "baseline",
-        VERIFIER,
+        JUDGE,
     );
     add(
         &mut case,
@@ -346,7 +383,7 @@ fn a_fix_that_leaves_the_finding_reproducing_is_declined() {
         "scenario_result",
         "reproduced",
         "candidate",
-        VERIFIER,
+        JUDGE,
     );
     let d = case.evaluate(1).expect("evaluates");
     assert_eq!(status(&d.outcomes, "declined"), "legitimate", "{}", d.json);
@@ -362,14 +399,14 @@ fn a_new_candidate_revision_keeps_the_baseline_reproduction() {
         "revision",
         &[("surface", "non_judge")],
     );
-    add(&mut case, 1, "finding_record", "filed", "finding", VERIFIER);
+    add(&mut case, 1, "finding_record", "filed", "finding", JUDGE);
     add(
         &mut case,
         2,
         "scenario_result",
         "reproduced",
         "baseline",
-        VERIFIER,
+        JUDGE,
     );
     add(
         &mut case,
@@ -377,7 +414,7 @@ fn a_new_candidate_revision_keeps_the_baseline_reproduction() {
         "scenario_result",
         "not_reproduced",
         "candidate",
-        VERIFIER,
+        JUDGE,
     );
     case.set_revision("candidate", "candidate-2")
         .expect("the candidate moves");

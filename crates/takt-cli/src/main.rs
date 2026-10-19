@@ -78,7 +78,7 @@ enum Commands {
     /// `$XDG_STATE_HOME/takt/promotions/` (`~/.local/state/takt/promotions/`), where the latest
     /// record is the next baseline, and then move the binary into place. The revision must be
     /// an ancestor of the checkout's `origin/main`, and every run of its scorecard made with its own
-    /// binary, as the run's `opened` line names it. One promotion a UTC day, one at a time
+    /// binary, as the run's `opened` line names it. One promotion at a time
     /// under the store's lock; a refused candidate is recorded and not judged again until it
     /// changes, or on a scorecard of new runs with --rejudge; the installed binary must name the
     /// latest record's revision before anything is judged.
@@ -153,7 +153,7 @@ struct PromoteArgs {
 /// What `takt promote --help` says about the exit codes.
 const PROMOTE_EXIT_CODES: &str = "Exit codes:
   0  promoted and recorded; or the baseline recorded (--baseline-only); or the baseline's scorecard replaced (--rebaseline); or, with --dry-run, the candidate would be promoted or the baseline would be recorded
-  1  refused, nothing written or installed but the head beside the store where none was found (written from the chain as it stands, said on stderr; not on --dry-run): the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, is no ancestor of the checkout's origin/main as last fetched (or there is none), a local main moved by hand counting for nothing, was saved under another rule or metric definition, holds a run made with another binary than the revision's (the run named; its `opened` line names another revision, the revision -dirty, or none; with --binary-sha256 the binary.txt statements are checked instead) or a scenario run without its held-out result; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree, or commits a rust-toolchain.toml with a `path`; bubblewrap (`bwrap`) or a toolchain is not found; another promotion holds the store's lock; no baseline is recorded; the installed binary does not name the latest record's revision, or names none and hashes to another digest than the record's binary_sha256, or to none it records (with --baseline-only, the revision recorded); --revision or --binary-sha256 without --baseline-only, --binary-sha256 without --revision, a --revision that is no full commit id or not the scorecard's, a --binary-sha256 that is no sha256; with --binary-sha256, an installed binary whose --version names a revision or that hashes to another digest (both named), a run of the scorecard that names no revision beside runs that name one, or a run that states no binary or another (the run named); the revision or its tree was refused (without --rejudge) or recorded already; --rejudge without an earlier refusal of the revision or its tree, with --baseline-only, or on a scorecard sharing a case with one it was refused on (the case named); --rebaseline with a scorecard of another revision than the baseline's, of other cases than the stored scorecard's (the first named), under a metric definition below the stored one (named) or none newer, or with no baseline; a promotion was made this UTC day; a scenario the baseline has has fewer cases than the rule's trials on either side, or a scenario only the candidate has fewer on its side; the store holds a file takt does not read, a record that disagrees with its name, instant or scorecard copy, a chain of records with a gap, or one that ends before the head beside the store (promotions.head) or runs past it; the record could not be written; the reason on stderr
+  1  refused, nothing written or installed but the head beside the store where none was found (written from the chain as it stands, said on stderr; not on --dry-run): the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, is no ancestor of the checkout's origin/main as last fetched (or there is none), a local main moved by hand counting for nothing, was saved under another rule or metric definition, holds a run made with another binary than the revision's (the run named; its `opened` line names another revision, the revision -dirty, or none; with --binary-sha256 the binary.txt statements are checked instead) or a scenario run without its held-out result; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree, or commits a rust-toolchain.toml with a `path`; bubblewrap (`bwrap`) or a toolchain is not found; another promotion holds the store's lock; no baseline is recorded; the installed binary does not name the latest record's revision, or names none and hashes to another digest than the record's binary_sha256, or to none it records (with --baseline-only, the revision recorded); --revision or --binary-sha256 without --baseline-only, --binary-sha256 without --revision, a --revision that is no full commit id or not the scorecard's, a --binary-sha256 that is no sha256; with --binary-sha256, an installed binary whose --version names a revision or that hashes to another digest (both named), a run of the scorecard that names no revision beside runs that name one, or a run that states no binary or another (the run named); the revision or its tree was refused (without --rejudge) or recorded already; --rejudge without an earlier refusal of the revision or its tree, with --baseline-only, or on a scorecard sharing a case with one it was refused on (the case named); --rebaseline with a scorecard of another revision than the baseline's, of other cases than the stored scorecard's (the first named), under a metric definition below the stored one (named) or none newer, or with no baseline; a scenario the baseline has has fewer cases than the rule's trials on either side, or a scenario only the candidate has fewer on its side; the store holds a file takt does not read, a record that disagrees with its name, instant or scorecard copy, a chain of records with a gap, or one that ends before the head beside the store (promotions.head) or runs past it; the record could not be written; the reason on stderr
   2  the arguments do not parse
   3  refused on the scorecard: a scenario is worse than the baseline's; the refusal is recorded (not with --dry-run), nothing installed
   5  the candidate held but its clone, its confined build or its install failed, the built binary names another revision, or the binary names another revision or hashes differently once in place (then the binary before it is back in place and the record removed); nothing recorded, the installed binary unchanged";
@@ -313,12 +313,18 @@ struct RunArgs {
     /// before the case is resumed: the case keeps the inputs it was opened with. A
     /// `loop.improvement/1` case requires `loop_baseline=<full commit id>`, the promoted revision
     /// its baseline is, a commit of the repository: it opens the case's baseline and is no case
-    /// input.
+    /// input. A `self.improvement/1` turn requires `finding=<story id>`, a finding the planning
+    /// store holds, and `candidate=<full commit id>`, the candidate delivered outside the case;
+    /// its baseline is the promotion store's latest promoted revision. Neither is a case input.
     #[arg(long = "input", value_name = "NAME=VALUE")]
     inputs: Vec<String>,
     /// The case id; generated when absent.
     #[arg(long)]
     case_id: Option<String>,
+    /// The checkout of the scenario repository a `self.improvement/1` turn's finding names its
+    /// scenario in, handed to `scripts/check-finding --scenarios`; not read by any other case.
+    #[arg(long)]
+    scenarios: Option<PathBuf>,
     #[command(flatten)]
     looping: LoopArgs,
 }
@@ -630,6 +636,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 protocol,
                 inputs,
                 case_id,
+                scenarios,
                 looping,
             } = *args;
             looping.check()?;
@@ -691,6 +698,36 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 } else {
                     None
                 };
+            // An improvement turn opens with its finding and its candidate, `--input
+            // finding=<story id>` and `--input candidate=<full commit id>`, no case inputs of the
+            // protocol, taken out of the inputs and checked here with the promoted baseline, so
+            // a missing or wrong one is refused before anything is written.
+            let turn =
+                if case.is_none() && resuming.is_none() && opens_on.id == takt::case::TURN_PROTOCOL
+                {
+                    let mut taken = |name: &str| {
+                        inputs
+                            .iter()
+                            .position(|(given, _)| given == name)
+                            .map(|at| inputs.remove(at).1)
+                    };
+                    let finding = taken(takt::case::TURN_FINDING);
+                    let candidate = taken(takt::case::TURN_CANDIDATE);
+                    // The binary that judges the turn is this one, which must be the promoted.
+                    let binary = std::env::current_exe().context("this binary's path")?;
+                    Some(takt::case::turn_opening(
+                        &repo,
+                        finding.as_deref(),
+                        candidate.as_deref(),
+                        &takt::promotion::store()?,
+                        &takt::case::Judge {
+                            revision: REVISION,
+                            binary: &binary,
+                        },
+                    )?)
+                } else {
+                    None
+                };
             // A case keeps only the inputs its protocol declares: one it does not declare would
             // be dropped without a word, so a case to be opened refuses it before anything is.
             if case.is_none()
@@ -726,7 +763,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             let options = looping.options(opening, inputs, case_id);
             let harness = harness_of(&looping)?;
             let harness = harness.as_ref();
-            let mut validators = validators_of(&repo, &looping)?;
+            let mut validators = validators_of(&repo, &looping, scenarios)?;
             let forge = forge_of(&repo, looping.forge.as_deref())?;
             forge.register(&mut validators);
             let forge_line = forge.line;
@@ -777,6 +814,11 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // before any step.
             if let Some(baseline) = &loop_baseline {
                 run.case.open_loop_baseline(&repo, baseline)?;
+            }
+            // The turn just opened gets its revisions, its finding and its validators'
+            // independence before any step.
+            if let Some(turn) = &turn {
+                run.case.open_turn(turn)?;
             }
             // A story's case that terminates accepted records its test result and its move
             // in the store; an intent's run has no story and writes nothing there.
@@ -836,8 +878,13 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
 
 /// The validators that need no forge: the test command, `change.read`, the gate when a gates
 /// document is given or at its default path in `repo`, with the project file likewise, and
-/// the loop scorecard's three.
-fn validators_of(repo: &Path, looping: &LoopArgs) -> Result<Vec<Box<dyn Validator>>> {
+/// the loop scorecard's three, and an improvement turn's four, `scenarios` the scenario
+/// repository's checkout its scenario checks are given.
+fn validators_of(
+    repo: &Path,
+    looping: &LoopArgs,
+    scenarios: Option<PathBuf>,
+) -> Result<Vec<Box<dyn Validator>>> {
     let mut validators: Vec<Box<dyn Validator>> = vec![
         Box::new(TestsRun::new(&looping.test_cmd)?),
         Box::new(ChangeRead),
@@ -856,6 +903,15 @@ fn validators_of(repo: &Path, looping: &LoopArgs) -> Result<Vec<Box<dyn Validato
     validators.push(Box::new(takt::loop_scorecard::LoopMeasure));
     validators.push(Box::new(takt::loop_scorecard::LoopDefinitionCheck));
     validators.push(Box::new(takt::loop_scorecard::LoopCompare));
+    // An improvement turn's validators: due only in a `self.improvement/1` case, whose
+    // protocol alone has their actions. The merge and promotion validators are not here yet.
+    let checking = takt::improvement::Checking::from_env().with_scenarios(scenarios);
+    validators.push(Box::new(takt::improvement::FindingFile(checking.clone())));
+    validators.push(Box::new(takt::improvement::ScenarioReproduce(
+        checking.clone(),
+    )));
+    validators.push(Box::new(takt::improvement::ScenarioVerify(checking)));
+    validators.push(Box::new(takt::improvement::ScorecardCompare::from_env()));
     Ok(validators)
 }
 
@@ -1346,7 +1402,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         // Everything read before the push: the story's text and the gates and the project file,
         // the seed's, read on the trial branch.
         let story = Aep::default().show(&repo, &scenario.story)?;
-        let mut validators = validators_of(&repo, &looping)?;
+        let mut validators = validators_of(&repo, &looping, None)?;
         forge.register(&mut validators);
         if let Some(trials) = &forge.trials {
             trials.create(&repo, &trial).with_context(|| {

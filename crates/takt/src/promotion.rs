@@ -46,8 +46,8 @@
 //! is confined the same way. The binary is installed with `cargo install --locked --path
 //! crates/takt-cli` into a fresh root, hashed, recorded first and then moved into place in one
 //! rename, and checked again in place against the revision and the digest; a failure after the
-//! move puts the binary before it back and removes the record. One promotion a UTC day; one at
-//! a time, under an exclusive lock on the store's [`LOCK`] from its reading to its writing. The
+//! move puts the binary before it back and removes the record. Promotions run one at a time,
+//! under an exclusive lock on the store's [`LOCK`] from its reading to its writing. The
 //! store is read fail-closed: a file that is no record, a record whose name, kind or instant
 //! disagrees with its content, a scorecard copy whose digest differs from its record, a chain
 //! of records with a gap, or one that ends before its head or runs past it, refuses every
@@ -158,8 +158,8 @@ pub struct Promotion {
     pub revision_stated_by: Option<StatedBy>,
     /// The tree of that commit, so the same tree under another commit is known.
     pub tree: String,
-    /// When the record was written, `YYYY-MM-DDTHH:MM:SSZ`, read after the build; the
-    /// one-a-UTC-day rule reads it, and no record carries one before the record before it.
+    /// When the record was written, `YYYY-MM-DDTHH:MM:SSZ`, read after the build; no record
+    /// carries one before the record before it.
     pub promoted_at: String,
     /// What the record is.
     pub kind: Kind,
@@ -474,7 +474,7 @@ fn home() -> Result<PathBuf> {
     }
 }
 
-fn state_dir() -> Result<PathBuf> {
+pub(crate) fn state_dir() -> Result<PathBuf> {
     match std::env::var_os("XDG_STATE_HOME").filter(|dir| !dir.is_empty()) {
         Some(dir) if Path::new(&dir).is_absolute() => Ok(PathBuf::from(dir)),
         _ => Ok(home()?.join(".local/state")),
@@ -2425,17 +2425,6 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         );
     };
     installed_names_latest(&installed, store, &base)?;
-    let today = now.get(..10).unwrap_or("");
-    if let Some(earlier) = existing.iter().find(|record| {
-        record.kind == Kind::Promotion && record.promoted_at.get(..10) == Some(today)
-    }) {
-        bail!(
-            "a promotion was made this UTC day already: {} at {} ({}); one promotion a day",
-            earlier.revision,
-            earlier.promoted_at,
-            record_path(store, earlier).display()
-        );
-    }
     let base_copy = copy_path(store, &base);
     let base_card = Scorecard::load(&base_copy)?;
     if base_card.revision.as_deref() != Some(base.revision.as_str()) {
