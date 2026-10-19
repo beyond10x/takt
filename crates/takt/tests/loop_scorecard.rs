@@ -1822,3 +1822,21 @@ fn a_twenty_thousand_commit_history_is_walked_within_ten_seconds() {
         "two walks of 20,000 commits took {took:?}"
     );
 }
+
+/// The reviewer's L5: a loose object planted over the definitions blob whose header gives a
+/// size of `u64::MAX`. The read refuses it before allocating anything, naming the object and
+/// its size, instead of overflowing.
+#[test]
+fn an_object_whose_header_gives_the_largest_size_is_refused_naming_it() {
+    let (tree, head) = scratch("largest-size", DEFINED);
+    let blob = git(&tree, &["rev-parse", &format!("{head}:{DEFINITIONS}")]);
+    let path = tree.join(".git/objects").join(&blob[..2]).join(&blob[2..]);
+    fs::remove_file(&path).expect("the object is removed");
+    let mut raw = format!("blob {}\0", u64::MAX).into_bytes();
+    raw.extend_from_slice(DEFINED.as_bytes());
+    fs::write(&path, zlib_stored(&raw)).expect("the object is written");
+    let error = Definitions::at(&tree, &head).expect_err("the object is refused");
+    let shown = format!("{error:#}");
+    assert!(shown.contains(&blob), "{shown}");
+    assert!(shown.contains(&u64::MAX.to_string()), "{shown}");
+}

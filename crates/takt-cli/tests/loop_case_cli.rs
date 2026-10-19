@@ -473,3 +473,112 @@ fn a_side_commit_a_forged_commit_makes_an_ancestor_of_the_base_is_refused() {
     assert!(err.contains(&c1), "the forged commit is named: {err}");
     nothing_written(&repo, "side made an ancestor");
 }
+
+/// [`run`], killed when it has not ended within `bound`: its exit code (none when killed),
+/// standard output and standard error, and how long it ran.
+fn run_bounded(
+    repo: &Path,
+    value: &str,
+    bound: std::time::Duration,
+) -> (Option<i32>, String, String, std::time::Duration) {
+    let input = format!("loop_baseline={value}");
+    let started = std::time::Instant::now();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args([
+            "run",
+            "--repo",
+            repo.to_str().expect("utf-8"),
+            "--protocol",
+            LOOP_PROTOCOL,
+            "--intent",
+            "raise the loop's accepted share",
+            "--case-id",
+            "loop-1",
+            "--harness",
+            "none",
+            "--forge",
+            "none",
+            "--test-cmd",
+            "true",
+            "--iterations",
+            "1",
+            "--input",
+            &input,
+        ])
+        .env_remove("B10X_GATES_POLICY")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("takt runs");
+    let code = loop {
+        if let Some(status) = child.try_wait().expect("takt is waited for") {
+            break status.code();
+        }
+        if started.elapsed() > bound {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let took = started.elapsed();
+    let output = child.wait_with_output().expect("takt's output");
+    (
+        code,
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        took,
+    )
+}
+
+/// The reviewer's probe 7 (`header[blob 100000]`): a loose object planted over the definitions
+/// blob whose header claims 100,000 bytes over a body of a few hundred. The read is bounded: the
+/// run ends within 30 s (the reader kills `git cat-file` 10 s into a read), refused, naming the
+/// object, with nothing written.
+#[test]
+fn a_planted_object_whose_header_overstates_its_size_is_refused_within_a_bound() {
+    let (repo, head) = repository("overstated-size");
+    let blob = git(
+        &repo,
+        &["rev-parse", "HEAD:protocols/loop-improvement/metrics.yaml"],
+    );
+    let body = forged();
+    let mut raw = b"blob 100000\0".to_vec();
+    raw.extend_from_slice(body.as_bytes());
+    let object = repo.join(".git/objects").join(&blob[..2]).join(&blob[2..]);
+    fs::remove_file(&object).expect("the loose blob is removed");
+    fs::write(&object, zlib_stored(&raw)).expect("the overstated object is written");
+    let bound = std::time::Duration::from_secs(30);
+    let (code, out, err, took) = run_bounded(&repo, &head, bound);
+    assert!(
+        took < bound,
+        "the run ended within {bound:?}: it took {took:?}\n{out}\n{err}"
+    );
+    assert_eq!(code, Some(1), "{out}\n{err}");
+    assert!(err.contains(&blob), "the object is named: {err}");
+    nothing_written(&repo, "an overstated size");
+}
+
+/// Definitions above 256 KiB are refused when the case opens, naming their size: they would be
+/// copied whole into the case's snapshot.
+#[test]
+fn definitions_above_their_cap_are_refused_naming_the_size() {
+    let (repo, _) = repository("big-definitions");
+    let mut big = DEFINED.to_owned();
+    big.push_str("  padding:\n    version: 1\n    definition: \"");
+    while big.len() < 300 * 1024 {
+        big.push_str("padding the definitions past their cap ");
+    }
+    big.push_str("\"\n");
+    fs::write(repo.join("protocols/loop-improvement/metrics.yaml"), &big).expect("the definitions");
+    git(&repo, &["commit", "-q", "-am", "big definitions"]);
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let (code, out, err) = run(&repo, Some(&head));
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert!(
+        err.contains(&big.len().to_string()),
+        "the size {} is named: {err}",
+        big.len()
+    );
+    nothing_written(&repo, "big definitions");
+}

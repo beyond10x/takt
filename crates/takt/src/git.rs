@@ -213,16 +213,143 @@ impl ObjectFormat {
     }
 }
 
+/// The largest blob [`ObjectReader`] reads, in bytes: the cap on the loop's metric definitions,
+/// the only blob takt reads through it. A blob git reports larger is refused before any of it
+/// is read.
+pub const MAX_BLOB: u64 = 256 << 10;
+
+/// The largest commit or tree [`ObjectReader`] reads, in bytes; one git reports larger is
+/// refused before any of it is read.
+pub const MAX_COMMIT_OR_TREE: u64 = 1 << 20;
+
+/// How long one read of [`ObjectReader`] may take: past it, `git cat-file` is killed and the
+/// read is an error naming the object.
+pub const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// What the watchdog of an [`ObjectReader`] is told: the instant the read in progress must end
+/// by, whether it fired, and whether the reader is gone.
+#[derive(Default)]
+struct Watch {
+    deadline: Option<std::time::Instant>,
+    fired: bool,
+    stop: bool,
+}
+
+/// The watchdog of an [`ObjectReader`]: one thread that kills `git cat-file` when a read runs
+/// past its deadline, so no read blocks for longer than [`READ_DEADLINE`] whatever git does.
+struct Watchdog {
+    watch: std::sync::Arc<(std::sync::Mutex<Watch>, std::sync::Condvar)>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Watchdog {
+    /// A watchdog over the process `pid`, which its owner keeps unwaited for while the watchdog
+    /// lives, so the id names no other process.
+    fn over(pid: u32) -> Self {
+        let watch = std::sync::Arc::new((
+            std::sync::Mutex::new(Watch::default()),
+            std::sync::Condvar::new(),
+        ));
+        let shared = std::sync::Arc::clone(&watch);
+        let thread = std::thread::spawn(move || {
+            let (lock, wake) = &*shared;
+            let Ok(mut watch) = lock.lock() else {
+                return;
+            };
+            loop {
+                if watch.stop {
+                    return;
+                }
+                let now = std::time::Instant::now();
+                watch = match watch.deadline {
+                    Some(deadline) if now >= deadline => {
+                        kill(pid);
+                        watch.fired = true;
+                        watch.deadline = None;
+                        continue;
+                    }
+                    Some(deadline) => match wake.wait_timeout(watch, deadline - now) {
+                        Ok((watch, _)) => watch,
+                        Err(_) => return,
+                    },
+                    None => match wake.wait(watch) {
+                        Ok(watch) => watch,
+                        Err(_) => return,
+                    },
+                };
+            }
+        });
+        Self {
+            watch,
+            thread: Some(thread),
+        }
+    }
+
+    /// Arms the deadline of a read beginning now.
+    fn arm(&self) {
+        let (lock, wake) = &*self.watch;
+        if let Ok(mut watch) = lock.lock() {
+            watch.deadline = Some(std::time::Instant::now() + READ_DEADLINE);
+            watch.fired = false;
+        }
+        wake.notify_one();
+    }
+
+    /// Disarms the deadline; whether it fired during the read.
+    fn disarm(&self) -> bool {
+        let (lock, wake) = &*self.watch;
+        let fired = lock.lock().is_ok_and(|mut watch| {
+            watch.deadline = None;
+            watch.fired
+        });
+        wake.notify_one();
+        fired
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        let (lock, wake) = &*self.watch;
+        if let Ok(mut watch) = lock.lock() {
+            watch.stop = true;
+        }
+        wake.notify_one();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Kills the process `pid`.
+fn kill(pid: u32) {
+    #[cfg(unix)]
+    if let Ok(pid) = libc::pid_t::try_from(pid) {
+        // SAFETY: `kill` takes a process id and a signal; the process is the reader's own
+        // child, not yet waited for.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
+}
+
 /// Objects read through one `git cat-file --batch`, each checked in this process: git does not
 /// check a loose object's bytes against the id it is stored under, so the id is computed again
 /// from the kind and the bytes read, in the repository's object format, and an object whose
-/// bytes hash to another id is an error naming it. One process reads any number of objects;
-/// it ends when the reader is dropped.
+/// bytes hash to another id is an error naming it. Every read is bounded: an object of a kind
+/// other than commit, tree or blob, or one git reports larger than its cap ([`MAX_BLOB`],
+/// [`MAX_COMMIT_OR_TREE`]), is refused before any of it is read, and a read that takes longer
+/// than [`READ_DEADLINE`] (a header that overstates the body, a git that stalls) kills the
+/// process and is an error naming the object. After any error the reader reads nothing more.
+/// One process reads any number of objects; it is killed and waited for when the reader is
+/// dropped.
 pub struct ObjectReader {
     child: std::process::Child,
     stdin: Option<std::process::ChildStdin>,
     stdout: std::io::BufReader<std::process::ChildStdout>,
     format: ObjectFormat,
+    watchdog: Option<Watchdog>,
 }
 
 impl ObjectReader {
@@ -241,19 +368,21 @@ impl ObjectReader {
             .take()
             .map(std::io::BufReader::new)
             .ok_or_else(|| anyhow!("git cat-file --batch has no standard output"))?;
+        let watchdog = Some(Watchdog::over(child.id()));
         Ok(Self {
             child,
             stdin,
             stdout,
             format,
+            watchdog,
         })
     }
 
     /// The kind and the bytes of the object `id` (a full object id), checked; none when the
     /// repository holds no such object. An object whose bytes do not hash to `id` is an error
-    /// naming it, and so is a reply git does not document.
+    /// naming it, and so is one over its cap, a read past [`READ_DEADLINE`], and a reply git
+    /// does not document.
     pub fn read(&mut self, id: &str) -> Result<Option<(String, Vec<u8>)>> {
-        use std::io::{BufRead as _, Read as _};
         let hex = id.len() == 40 || id.len() == 64;
         if !hex
             || !id
@@ -262,30 +391,69 @@ impl ObjectReader {
         {
             bail!("{id} is no full object id");
         }
+        if let Some(watchdog) = &self.watchdog {
+            watchdog.arm();
+        }
+        let read = self.read_bounded(id);
+        let fired = self.watchdog.as_ref().is_some_and(Watchdog::disarm);
+        let read = if fired {
+            Err(anyhow!(
+                "reading the object {id} took longer than {} s; git cat-file was stopped and nothing was read from it",
+                READ_DEADLINE.as_secs()
+            ))
+        } else {
+            read
+        };
+        if read.is_err() {
+            // The stream may be anywhere in an object: nothing more is read from it.
+            self.stdin = None;
+            kill(self.child.id());
+        }
+        read
+    }
+
+    /// [`Self::read`] once its deadline is armed.
+    fn read_bounded(&mut self, id: &str) -> Result<Option<(String, Vec<u8>)>> {
+        use std::io::{BufRead as _, Read as _};
         let stdin = self
             .stdin
             .as_mut()
-            .ok_or_else(|| anyhow!("git cat-file --batch is closed"))?;
+            .ok_or_else(|| anyhow!("git cat-file --batch was stopped after an earlier error"))?;
         stdin
             .write_all(format!("{id}\n").as_bytes())
             .and_then(|()| stdin.flush())
             .context("write to git cat-file --batch")?;
         let mut header = String::new();
-        self.stdout
+        (&mut self.stdout)
+            .take(256)
             .read_line(&mut header)
-            .context("read from git cat-file --batch")?;
+            .with_context(|| format!("read the header of the object {id}"))?;
         let fields: Vec<&str> = header.trim_end_matches('\n').split(' ').collect();
         match fields.as_slice() {
             [named, "missing"] if *named == id => Ok(None),
             [named, kind, size] if *named == id => {
-                let size: usize = size
-                    .parse()
-                    .with_context(|| format!("git cat-file --batch replied {header:?}"))?;
-                let mut bytes = vec![0; size + 1];
+                let size: u64 = size.parse().with_context(|| {
+                    format!("the object {id}: git cat-file --batch replied {header:?}")
+                })?;
+                let cap = match *kind {
+                    "blob" => MAX_BLOB,
+                    "commit" | "tree" => MAX_COMMIT_OR_TREE,
+                    other => bail!("the object {id} is a {other}, which takt does not read"),
+                };
+                if size > cap {
+                    bail!(
+                        "the {kind} {id} is {size} bytes, above the {cap} bytes takt reads of a {kind}; nothing was read from it"
+                    );
+                }
+                let with_newline = size
+                    .checked_add(1)
+                    .and_then(|length| usize::try_from(length).ok())
+                    .ok_or_else(|| anyhow!("the {kind} {id} is {size} bytes, too many to read"))?;
+                let mut bytes = vec![0; with_newline];
                 self.stdout
                     .read_exact(&mut bytes)
-                    .context("read from git cat-file --batch")?;
-                bytes.truncate(size);
+                    .with_context(|| format!("read the {kind} {id}"))?;
+                bytes.truncate(with_newline - 1);
                 let computed = self.format.id(kind, &bytes);
                 if computed != id {
                     bail!(
@@ -294,19 +462,19 @@ impl ObjectReader {
                 }
                 Ok(Some(((*kind).to_owned(), bytes)))
             }
-            _ => bail!("git cat-file --batch replied {header:?} for {id}"),
+            _ => bail!("the object {id}: git cat-file --batch replied {header:?}"),
         }
     }
 }
 
 impl Drop for ObjectReader {
     fn drop(&mut self) {
-        // Its standard input closed, git ends; it is waited for, so no process is left.
+        // The watchdog stops first; then git is killed (it reads, it writes nothing elsewhere)
+        // and waited for, so no process is left, even one blocked writing a body nobody reads.
+        self.watchdog = None;
         drop(self.stdin.take());
-        if self.child.wait().is_err() {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

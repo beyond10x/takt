@@ -1084,7 +1084,12 @@ types:
   # and of a baseline's ancestry reads its objects through one `git cat-file --batch` and checks
   # each in takt's own process, computing its id again from its kind and bytes in the
   # repository's object format (SHA-1 or SHA-256, its `extensions.objectFormat`), and refuses
-  # one whose bytes hash to another id, naming it. The definitions are read commit, tree by
+  # one whose bytes hash to another id, naming it. Every read is bounded: an object git reports
+  # larger than its cap (a blob, the definitions, 256 KiB; a commit or a tree, 1 MiB), or of
+  # another kind, is refused before any of it is read, and a read that takes longer than 10 s
+  # (a header that overstates its body, a git that stalls) kills `git cat-file` and is an
+  # error naming the object; after an error the reader reads nothing more, and it kills and
+  # waits for its process when it is done. The definitions are read commit, tree by
   # tree, blob. An ancestry is answered by walking from the tip through the parents each
   # commit's own checked bytes name, every commit seen once (a cycle a forged commit makes ends
   # the walk), with no `merge-base` or `rev-list` answering any part of it; a commit on the way
@@ -1099,7 +1104,7 @@ types:
   # read from: crates/takt/src/loop_scorecard.rs:1005-1018
   # read from: crates/takt/src/loop_scorecard.rs:1032-1073
   # read from: crates/takt/src/loop_scorecard.rs:184-312
-  # read from: crates/takt/src/git.rs:161-311
+  # read from: crates/takt/src/git.rs:161-479
   - name: takt.work.DefinitionCheckResult
     kind: enum
     variants: [unchanged, dual_reported, redefined]
@@ -1132,7 +1137,8 @@ types:
   # digits) of a commit of the repository, is refused before anything is written, and so is a
   # commit that is not on the base branch the case opens from (a side branch's, or one no
   # branch reaches) and one whose definitions do not read with every object on the way
-  # checked (an object planted under another's id, named). Once the case is open, before any
+  # checked (an object planted under another's id, named), and definitions above 256 KiB,
+  # which the snapshot would copy whole, naming their size. Once the case is open, before any
   # step, `loop_baseline` is set to that commit and the snapshot taken, its objects checked
   # the same way; a snapshot that cannot be taken ends the run on an error.
   # read from: crates/takt/src/case.rs:43-146
@@ -2045,9 +2051,9 @@ entities:
   # `GIT_GRAFT_FILE` or `GIT_SHALLOW_FILE` it inherited, which would give commits other parents
   # or cut the history, reaches it.
   # read from: crates/takt/src/git.rs:118-125
-  # read from: crates/takt/src/git.rs:1215-1228
+  # read from: crates/takt/src/git.rs:1383-1396
   # read from: crates/takt/src/forge.rs:716-725
-  # read from: crates/takt/src/git.rs:857-874
+  # read from: crates/takt/src/git.rs:1025-1042
   - name: takt.work.Step
     naming:
       summary: >-
@@ -2120,7 +2126,7 @@ entities:
       # `implementation` now names; absent when nothing changed, the step was refused, or the step
       # was deterministic.
       # read from: crates/takt/src/run.rs:4933-4948
-      # read from: crates/takt/src/git.rs:607
+      # read from: crates/takt/src/git.rs:775
       - name: committed
         type: Optional<takt.work.Revision>
     relations:
@@ -2222,9 +2228,9 @@ entities:
   # read from: crates/takt/src/forge.rs:735-755
   # read from: crates/takt/src/validator.rs:112-123
   # read from: crates/takt/src/validator.rs:1684-1695
-  # read from: crates/takt/src/git.rs:1612-1616
+  # read from: crates/takt/src/git.rs:1780-1784
   # read from: crates/takt/src/validator.rs:1723-1773
-  # read from: crates/takt/src/git.rs:1643-1648
+  # read from: crates/takt/src/git.rs:1811-1816
   # read from: crates/takt/src/validator.rs:1656-1668
   - name: takt.work.EvidenceProducer
     naming:
