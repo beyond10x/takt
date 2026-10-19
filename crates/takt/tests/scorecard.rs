@@ -997,10 +997,11 @@ fn a_saved_scorecard_names_its_revision_and_definitions() {
 /// story:scorecard-save-checks-binary, decision D1: the check sits in [`Scorecard::save`], so a
 /// save by any caller, whatever names it, is refused for a run whose `opened` line names another
 /// revision, or names none beside one that names one, and writes nothing; runs that all name the
-/// revision, or all name none, save.
+/// revision, or all name none, save. `unknown revision` names none, as no `binary` does.
 #[test]
 fn a_save_by_any_caller_checks_each_runs_binary() {
     const OWN: &str = "4444444444444444444444444444444444444444";
+    const UNKNOWN: Option<&str> = Some("unknown revision");
     let repo = scratch("save-binary");
     two_scenario_one_runs(&repo);
     let base = Scorecard::read(&repo).expect("the scorecard reads");
@@ -1013,10 +1014,8 @@ fn a_save_by_any_caller_checks_each_runs_binary() {
         card
     };
     for (n, (binaries, run)) in [
-        (
-            [Some(OWN), Some("unknown revision"), Some(OWN)],
-            "scenario-1-trial-2#1",
-        ),
+        ([Some(OWN), UNKNOWN, Some(OWN)], "scenario-1-trial-2#1"),
+        ([UNKNOWN, Some(OWN), None], "scenario-1-trial-1#1"),
         ([Some(OWN), Some(OWN), None], "scenario-1-trial-2#2"),
         ([None, Some(OWN), Some(OWN)], "scenario-1-trial-1#1"),
     ]
@@ -1032,11 +1031,16 @@ fn a_save_by_any_caller_checks_each_runs_binary() {
             assert_eq!(fs::read_dir(&*saves).expect("the directory").count(), 0);
         }
     }
-    for binaries in [[Some(OWN); 3], [None; 3]] {
+    for binaries in [
+        [Some(OWN); 3],
+        [None; 3],
+        [UNKNOWN; 3],
+        [UNKNOWN, None, UNKNOWN],
+    ] {
         let saves = scratch("save-binary-own");
         let path = made(binaries)
             .save(&saves, OWN, Named::Head)
-            .expect("saved");
+            .unwrap_or_else(|refused| panic!("{binaries:?} saves: {refused:#}"));
         assert!(path.is_file());
     }
 }

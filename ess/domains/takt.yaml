@@ -885,13 +885,16 @@ types:
   # A saved scorecard's id: the revision of takt under test that names its file,
   # `scorecard-<revision>.json`, a commit id; a file there already is not overwritten.
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
-  # read from: crates/takt/src/scorecard.rs:807-843
+  # read from: crates/takt/src/scorecard.rs:824-860
   # Decided 2026-10-19 (story:scorecard-save-checks-binary): a save, by any caller, is refused
   # naming the run and both revisions, and writes nothing, unless every run's `opened` line names
-  # the revision, the full commit id compared exactly (`<sha>-dirty`, `unknown revision` and an
-  # abbreviated id are other binaries), or no run's line names one; a mix is refused.
-  # read from: crates/takt/src/scorecard.rs:845-872
+  # the revision, the full commit id compared exactly (`<sha>-dirty` and an abbreviated id are
+  # other binaries), or no run's line names one; a mix is refused. A line names no revision when
+  # it has no `binary` or says `unknown revision`, one definition the save and a stated baseline
+  # (`takt promote --binary-sha256`) share; the planner's ruling of 2026-10-19.
+  # read from: crates/takt/src/scorecard.rs:862-893
   # read from: .engineering/planning/story/scorecard-save-checks-binary.md (§ Acceptance)
+  # read from: crates/takt/src/scorecard.rs:607-621
   - name: takt.work.ScorecardId
     kind: newtype
     of: String
@@ -947,7 +950,7 @@ types:
   # `<sha>`, `<sha>-dirty` or `unknown revision`), absent when the line names none
   # (story:promote-binds-scorecard-and-merge).
   # read from: crates/takt/src/scorecard.rs:134-169
-  # read from: crates/takt/src/scorecard.rs:608-690
+  # read from: crates/takt/src/scorecard.rs:625-707
   # read from: .engineering/planning/story/scorecard-outcome-from-held-out-check.md (§ Outcome)
   - name: takt.work.ScorecardRow
     kind: struct
@@ -997,7 +1000,7 @@ types:
   # `scenario` is not the one its case id names, the scenario being derived from the case id.
   # read from: crates/takt/src/scorecard.rs:50-58
   # read from: crates/takt/src/scorecard.rs:142-169
-  # read from: crates/takt/src/scorecard.rs:874-936
+  # read from: crates/takt/src/scorecard.rs:895-957
   - name: takt.work.HeldOut
     kind: struct
     fields:
@@ -1029,7 +1032,7 @@ types:
   # read from: crates/takt/src/scorecard.rs:60-64
   # read from: crates/takt/src/scorecard.rs:181-190
   # read from: crates/takt/src/scorecard.rs:201-227
-  # read from: crates/takt/src/scorecard.rs:608-690
+  # read from: crates/takt/src/scorecard.rs:625-707
   - name: takt.work.RunBinary
     kind: struct
     fields:
@@ -1070,7 +1073,7 @@ types:
   # integer and flagged; 1 when its outcome is `NoProgress`. Derived from the runs, never saved
   # apart from them.
   # read from: crates/takt/src/scorecard.rs:229-300
-  # read from: crates/takt/src/scorecard.rs:693-707
+  # read from: crates/takt/src/scorecard.rs:710-724
   - name: takt.work.ScorecardCase
     kind: struct
     fields:
@@ -1426,11 +1429,11 @@ types:
   # on the saved side (<n> of <trials>)` or `too few cases (<n> of <trials>)`, and the
   # comparison ends in a refusal naming each such scenario.
   # read from: .engineering/planning/design/recursive-self-improvement.md:130-138
-  # read from: crates/takt/src/scorecard.rs:938-954
-  # read from: crates/takt/src/scorecard.rs:1060-1084
-  # read from: crates/takt/src/scorecard.rs:1107-1135
-  # read from: crates/takt/src/scorecard.rs:1010-1034
-  # read from: crates/takt/src/scorecard.rs:1140-1145
+  # read from: crates/takt/src/scorecard.rs:959-975
+  # read from: crates/takt/src/scorecard.rs:1081-1105
+  # read from: crates/takt/src/scorecard.rs:1128-1156
+  # read from: crates/takt/src/scorecard.rs:1031-1055
+  # read from: crates/takt/src/scorecard.rs:1161-1166
   - name: takt.work.Comparison
     kind: enum
     variants: [no_regression, regression]
@@ -2863,7 +2866,7 @@ entities:
   # read from: crates/takt/src/scorecard.rs:1-35
   # read from: crates/takt/src/scorecard.rs:47-76
   # read from: crates/takt/src/scorecard.rs:324-347
-  # read from: crates/takt/src/scorecard.rs:938-1146
+  # read from: crates/takt/src/scorecard.rs:959-1167
   - name: takt.work.Scorecard
     naming:
       summary: >-

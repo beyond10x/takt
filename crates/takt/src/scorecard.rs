@@ -604,6 +604,23 @@ fn disagreement(run: &Row) -> Option<String> {
     ))
 }
 
+/// What `takt --version` prints, and so a run's `opened` line names, for a binary built where
+/// no git checkout held it: a binary that names no revision.
+pub const UNKNOWN_REVISION: &str = "unknown revision";
+
+impl Row {
+    /// The revision the run's `opened` line names; none when it names none: no `binary`, as a
+    /// binary built before `--version` named its revision left it, or [`UNKNOWN_REVISION`].
+    /// The one reading of it a save ([`Scorecard::save`]) and a stated baseline (`takt promote
+    /// --binary-sha256`) apply.
+    #[must_use]
+    pub fn names_revision(&self) -> Option<&str> {
+        self.opened_binary
+            .as_deref()
+            .filter(|binary| *binary != UNKNOWN_REVISION)
+    }
+}
+
 impl Scorecard {
     /// The scorecard of the runs recorded under `repo`'s cases directory, cases in name order;
     /// none when the directory is absent. A record that does not read is an error naming it;
@@ -843,28 +860,32 @@ impl Scorecard {
     }
 
     /// Every run was made with the binary of `revision`, the full commit id, as its `opened`
-    /// line names it, compared exactly (`<sha>-dirty`, `unknown revision` and an abbreviated id
-    /// are other binaries); or no run's line names a revision, as a binary built before
-    /// `--version` named its revision left them. The first run that is neither is the refusal,
-    /// named `<case>#<n>` with both revisions: a run that names another, or one that names none
-    /// beside a run that names one.
+    /// line names it ([`Row::names_revision`]), compared exactly (`<sha>-dirty` and an
+    /// abbreviated id are other binaries); or no run's line names a revision (no `binary`, or
+    /// [`UNKNOWN_REVISION`]). The first run that is neither is the refusal, named `<case>#<n>`
+    /// with both revisions: a run that names another, or one that names none beside a run that
+    /// names one.
     fn made_with(&self, revision: &str) -> Result<()> {
-        if self.rows.iter().all(|row| row.opened_binary.is_none()) {
+        if self.rows.iter().all(|row| row.names_revision().is_none()) {
             return Ok(());
         }
         let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
         for row in &self.rows {
             let n = counted.entry(row.case.as_str()).or_insert(0);
             *n += 1;
-            match row.opened_binary.as_deref() {
-                Some(binary) if binary == revision => {}
-                Some(binary) => bail!(
-                    "run {}#{n} was made with the binary of {binary}, not with the binary of {revision}; a scorecard is saved under the full revision every run's `opened` line names, so nothing is saved",
+            match row.names_revision() {
+                Some(named) if named == revision => {}
+                Some(named) => bail!(
+                    "run {}#{n} was made with the binary of {named}, not with the binary of {revision}; a scorecard is saved under the full revision every run's `opened` line names, so nothing is saved",
                     row.case
                 ),
                 None => bail!(
-                    "run {}#{n} was made with a binary that recorded no revision, beside runs that name one; saved under {revision}, a scorecard's runs all name {revision} or all name none, so nothing is saved",
-                    row.case
+                    "run {}#{n} names no revision ({}), beside runs that name one; saved under {revision}, a scorecard's runs all name {revision} or all name none, so nothing is saved",
+                    row.case,
+                    row.opened_binary.as_deref().map_or_else(
+                        || "its `opened` line has no `binary`".to_owned(),
+                        |binary| format!("its `opened` line says {binary}")
+                    )
                 ),
             }
         }

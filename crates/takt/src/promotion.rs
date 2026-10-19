@@ -1750,8 +1750,9 @@ fn installed_hashes_to(installed: &Path, revision: &str, stated: &str) -> Result
 /// the operator: a run that states none, states it by anything but the operator, or states
 /// another digest, is a refusal naming it, so the scorecard recorded is the stated binary's and
 /// every statement the record copies is the operator's. A run whose `opened` line names a
-/// revision must name `revision`; only a run that names none (no `binary`, or `unknown
-/// revision`) is taken on its statement alone. The runs with their statements, for the record.
+/// revision must name `revision`; only a run that names none ([`Row::names_revision`]: no
+/// `binary`, or `unknown revision`) is taken on its statement alone. The runs with their
+/// statements, for the record.
 fn runs_stating(
     card: &Scorecard,
     stated: &str,
@@ -1764,8 +1765,7 @@ fn runs_stating(
         let n = counted.entry(row.case.as_str()).or_insert(0);
         *n += 1;
         let run = format!("{}#{n}", row.case);
-        if let Some(named) = row.opened_binary.as_deref()
-            && named != "unknown revision"
+        if let Some(named) = row.names_revision()
             && named != revision
         {
             bail!(
