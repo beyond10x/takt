@@ -15,4 +15,6 @@ npm run build                          # dist/
 
 The graph: an action produces evidence; evidence makes a claim true; claims gate actions (dotted)
 and outcomes; a capability (hexagon) needs a grant before its action runs; obligations wait on
-claims. New views go in `src/` as components that read the same `protocols.json`.
+claims. The graph is drawn at its natural size with pan (drag) and zoom; the same relations are
+listed under it, open by default on a narrow screen where the graph is one tap away. The page uses
+the home page's header, palette, type and column. New views go in `src/` as components that read the same `protocols.json`.

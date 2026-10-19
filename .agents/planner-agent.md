@@ -151,6 +151,19 @@ once at least three turns have been filed since the merge.
 - `b10x-gates scan-text` gates the commit: run it unpiped in a chain that stops on its exit
   status (`set -eo pipefail`). A `| tail` after it hid a refusal on 2026-10-18 and a personal path
   reached local main.
+- A store write or a merge into main can move lines that `ess/` cites (`relate` adds a
+  frontmatter line; a `docs/**` merge moves a cited generator line). Local `main` only receives a
+  tree whose citations resolve: in the managed worktree, after the store commit (for a `docs/**`
+  branch, after merging it into a worktree cut from `main`), run `python3 -I
+  scripts/check-citations --require-digests` unpiped in the same `set -eo pipefail` chain as
+  scan-text, and merge into `main` only when it exits 0 and the worktree contains `main`'s tip
+  (`git merge-base --is-ancestor main HEAD`); if `main` moved, merge it into the worktree and run
+  the check again, so the `--no-ff` merge into `main` has the checked tree. On an unresolved line, run
+  `check-citations fix` outside that chain (it exits 1 even when it re-pointed every line), then
+  run the check again: when it exits 0, commit the re-point in the worktree as its own commit and
+  merge; when it does not (the cited text changed, or a needle matches twice), merge nothing and
+  report it to the owner. On 2026-10-19 a `relate` left main red with 5 unresolved citations,
+  and a `docs/**` merge with 1.
 
 ## Intake
 
@@ -176,12 +189,16 @@ goes to standard error.
    | key | what |
    |---|---|
    | `scenario` | the scenario's id in the scratch repository's `.engineering/scenarios.conf` |
-   | `command` | one shell line, run in a fresh clone of the scenario's seed, with `$TAKT` the binary under test and `$SCENARIO` the clone, in a fresh HOME of the check's own; no credential of the caller's environment or home reaches it |
+   | `repository` | instead of `scenario`: the repository the defect was seen on, an `https://` URL and never a path (the predicate is committed to a public repository and must hold on every machine), which `check-finding` clones without `--scenarios`; a local checkout stands in for the URL only through `check-finding --checkout <url>=<path>` at check time |
+   | `seed` | with `repository`: the commit the task starts from, a commit id |
+   | `test` | with `repository`, optional: the task's test command, handed to the command as `$TEST` |
+   | `command` | one shell line, run in a fresh clone of the scenario's seed, or of `repository` at `seed`, with `$TAKT` the binary under test and `$SCENARIO` the clone, in a fresh HOME of the check's own; no credential of the caller's environment or home reaches it |
    | `exit` | the exit status while the defect is present, 0 to 255 but 124 and 137, which `check-finding` reads as its timeout and `file-finding` refuses as `malformed` |
    | `output` | a fixed string the command's standard output or standard error then holds |
    | `source` | the run record or review that produced the finding, a path in this repository |
 
-   `exit`, `output` or both; the predicate holds when every one given holds.
+   `scenario` or `repository`, one of the two; `exit`, `output` or both; the predicate holds when
+   every one given holds.
 3. **File.** `scripts/file-finding --key <key> --title "<title>" --from <body.md>`, with
    `--kind blocker` when the finding stops other work and no takt change resolves it; a story
    otherwise. `filed`: the store holds `story:<key>` (or `blocker:<key>`) with the reference
