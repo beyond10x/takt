@@ -134,13 +134,6 @@ actions:
       claim: finding.cited
     may_produce:
       - evidence: scenario_result
-  candidate.deliver:
-    description: >-
-      deliver a candidate fix on a takt branch; a story.delivery/1 case on takt, judged by the
-      promoted binary with its protocol, gates and store read from the baseline
-    effect: write
-    precondition:
-      claim: scenario.reproduced_before
   scenario.verify:
     description: run the finding's predicate on its scenario or repository with a takt built from the candidate
     effect: read

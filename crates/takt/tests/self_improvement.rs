@@ -116,6 +116,8 @@ fn turn(name: &str, finding: &str) -> Turn {
         finding: FINDING.to_owned(),
         candidate: candidate.clone(),
         baseline: baseline.clone(),
+        surface: "non_judge".to_owned(),
+        title: "The probe shows the defect".to_owned(),
     })
     .expect("the turn opens");
     Turn {
@@ -235,7 +237,7 @@ fn the_turn_opens_with_its_revisions_and_its_validators_independent() {
     assert_eq!(case.revision("finding"), Some(base));
     assert_eq!(case.revision("baseline"), Some(turn.baseline.clone()));
     assert_eq!(case.revision("candidate"), Some(turn.candidate.clone()));
-    assert_eq!(case.revision("promotion"), Some(turn.baseline.clone()));
+    assert_eq!(case.revision("promotion"), Some(turn.candidate.clone()));
     assert_eq!(case.story().expect("story.yaml").as_deref(), Some(FINDING));
     let snapshot = fs::read_to_string(case.dir.join("case.yaml")).expect("case.yaml");
     let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&snapshot).expect("yaml");

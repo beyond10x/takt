@@ -7,7 +7,10 @@
 //! `scenario.reproduce` at the baseline, then `scenario.verify` at the candidate, each through
 //! `scripts/check-finding` as the baseline holds it, run on a checkout of the baseline. A finding
 //! that never reproduced at the baseline ends `unreproducible`; a candidate that still reproduces
-//! it ends `declined`.
+//! it ends `declined`. Part 2: the judge surface is computed at open; the finding is read on the
+//! mainline, the local `main` under `--forge none`; the merge and the promotion are observed by
+//! `candidate.merge` and `binary.promote` once granted, so a verified candidate merged into
+//! `main` and promoted ends `accepted` on the validators' records alone.
 //!
 //! Each revision is a scratch takt, a cargo workspace with no dependency whose `takt probe`
 //! shows the defect or not, which `check-finding` builds itself, confined, in seconds; the
@@ -165,6 +168,9 @@ struct Setup {
     /// The baseline's `.gitattributes`, when it has one.
     attributes: Option<&'static str>,
     promoted: Promoted,
+    /// The finding filed on `main` after the baseline, in a commit of its own, rather than in
+    /// the baseline.
+    filed_after: bool,
 }
 
 impl Setup {
@@ -177,8 +183,42 @@ impl Setup {
             unconfined: false,
             attributes: None,
             promoted: Promoted::Stated(None),
+            filed_after: false,
         }
     }
+}
+
+/// The baseline's judge allow-list: the candidate's own paths (`fix.txt`, the scratch takt's
+/// sources) are no judge surface; every other path is one.
+const JUDGE_ALLOW: &str = "paths:\n  - fix.txt\n  - crates/**\n";
+
+/// The finding's text in the store.
+fn finding_text() -> String {
+    format!(
+        "# The probe shows the defect\n\nThe probe prints the defect.\n\n```expected_before\nscenario: 1\ncommand: \"$TAKT\" probe\nexit: 1\noutput: {DEFECT}\nsource: docs/runs/trial-1.md\n```\n"
+    )
+}
+
+/// A scorecard of `revision` as `takt scorecard --save` writes it: scenario 1 run five times,
+/// each accepted with its held-out check passed, made with the binary of `binary`.
+fn scorecard(revision: &str, binary: &str) -> String {
+    let metrics: Vec<String> = takt::scorecard::METRICS
+        .iter()
+        .map(|(metric, version)| format!("\"{metric}\":{version}"))
+        .collect();
+    let rows: Vec<String> = (1..=5)
+        .map(|n| {
+            format!(
+                "{{\"case\":\"scenario-1-trial-{n}\",\"scenario\":\"1\",\"outcome\":\"accepted\",\"stop\":\"accepted\",\"held_out\":{{\"passed\":true,\"result\":\"PASS\"}},\"steps\":4,\"tokens\":1000,\"refusals\":0,\"no_progress\":0,\"errors\":0,\"wall_ms\":1000,\"saturated\":false,\"binary\":null,\"opened_binary\":\"{binary}\"}}"
+            )
+        })
+        .collect();
+    format!(
+        "{{\"format\":\"{}\",\"revision\":\"{revision}\",\"named_by\":\"build\",\"metrics\":{{{}}},\"rule\":{{\"trials\":5,\"margin\":1}},\"rows\":[{}],\"no_record\":[],\"unstated\":{{}}}}",
+        takt::scorecard::FORMAT,
+        metrics.join(","),
+        rows.join(",")
+    )
 }
 
 /// [`world_with`] with HEAD on `main`, a candidate that touches `fix.txt` alone and a baseline
@@ -235,17 +275,20 @@ fn world_with(name: &str, setup: &Setup) -> World {
     if let Some(attributes) = setup.attributes {
         write(&repo.join(".gitattributes"), attributes);
     }
-    write(
-        &repo.join(".engineering/planning/story/probe-shows-the-defect.md"),
-        &format!(
-            "# The probe shows the defect\n\nThe probe prints the defect.\n\n```expected_before\nscenario: 1\ncommand: \"$TAKT\" probe\nexit: 1\noutput: {DEFECT}\nsource: docs/runs/trial-1.md\n```\n"
-        ),
-    );
+    write(&repo.join(".engineering/judge-allow.yaml"), JUDGE_ALLOW);
+    if !setup.filed_after {
+        write(&repo.join(FINDING_FILE), &finding_text());
+    }
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "base"]);
     let baseline = git(&repo, &["rev-parse", "HEAD"]);
-    git(&repo, &["checkout", "-q", "-b", "fix"]);
+    if setup.filed_after {
+        write(&repo.join(FINDING_FILE), &finding_text());
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "file the finding"]);
+    }
+    git(&repo, &["checkout", "-q", "-b", "fix", &baseline]);
     write(&repo.join("fix.txt"), "the fix\n");
     write(&repo.join(TAKT_MAIN), &takt_main(at_candidate));
     if let Some((path, text)) = setup.touches {
@@ -282,12 +325,9 @@ fn world_with(name: &str, setup: &Setup) -> World {
 
     let state = dir.join("state");
     let store = state.join("takt/promotions");
-    let scorecard = format!(
-        "{{\"format\":\"takt-scorecard/1\",\"revision\":\"{baseline}\",\"named_by\":\"build\",\"metrics\":{{}},\"rows\":[],\"no_record\":[]}}"
-    );
     write(
         &store.join(format!("{baseline}.scorecard.json")),
-        &scorecard,
+        &scorecard(&baseline, &baseline),
     );
     let digest = sha256(&store.join(format!("{baseline}.scorecard.json")));
     let tree = git(&repo, &["rev-parse", &format!("{baseline}^{{tree}}")]);
@@ -352,32 +392,54 @@ fn run_with_env(
     gate: &str,
     env: &[(&str, &Path)],
 ) -> (i32, String, String) {
-    let mut args: Vec<String> = [
-        "run",
-        "--gate",
-        gate,
-        "--repo",
-        world.repo.to_str().expect("utf-8"),
-        "--protocol",
-        PROTOCOL,
-        "--intent",
-        "the probe no longer shows the defect",
-        "--case-id",
-        "turn-1",
-        "--harness",
-        "none",
-        "--forge",
-        "none",
-        "--test-cmd",
-        "true",
-        "--iterations",
-        "6",
-        "--scenarios",
-        world.scenarios.to_str().expect("utf-8"),
-    ]
-    .iter()
-    .map(|arg| (*arg).to_owned())
-    .collect();
+    run_as(
+        world,
+        inputs,
+        Some(gate),
+        Some("the probe no longer shows the defect"),
+        env,
+    )
+}
+
+/// `takt run` opening the turn `turn-1` on the protocol with `inputs`, `--gate` and `--intent`
+/// given only when they are some, and `env` added to the run's environment.
+fn run_as(
+    world: &World,
+    inputs: &[String],
+    gate: Option<&str>,
+    intent: Option<&str>,
+    env: &[(&str, &Path)],
+) -> (i32, String, String) {
+    let mut args: Vec<String> = Vec::new();
+    args.push("run".to_owned());
+    if let Some(gate) = gate {
+        args.extend(["--gate".to_owned(), gate.to_owned()]);
+    }
+    if let Some(intent) = intent {
+        args.extend(["--intent".to_owned(), intent.to_owned()]);
+    }
+    args.extend(
+        [
+            "--repo",
+            world.repo.to_str().expect("utf-8"),
+            "--protocol",
+            PROTOCOL,
+            "--case-id",
+            "turn-1",
+            "--harness",
+            "none",
+            "--forge",
+            "none",
+            "--test-cmd",
+            "true",
+            "--iterations",
+            "6",
+            "--scenarios",
+            world.scenarios.to_str().expect("utf-8"),
+        ]
+        .iter()
+        .map(|arg| (*arg).to_owned()),
+    );
     for input in inputs {
         args.extend(["--input".to_owned(), input.clone()]);
     }
@@ -468,7 +530,7 @@ fn a_turn_whose_finding_does_not_reproduce_at_the_baseline_is_unreproducible() {
     assert_eq!(case.story().expect("story.yaml").as_deref(), Some(FINDING));
     assert_eq!(
         case.revision("promotion").as_deref(),
-        Some(world.baseline.as_str())
+        Some(world.candidate.as_str())
     );
     assert_eq!(
         shown(&records(&world.repo)),
@@ -674,25 +736,49 @@ fn a_candidate_that_rigs_check_finding_with_head_on_it_is_refused() {
     refused(&world, &ran, "scripts/check-finding");
 }
 
-/// A candidate that changes the finding's file or `scripts/file-finding` against the baseline is
-/// refused before anything is written, naming the path: what judges the candidate is never the
-/// candidate's.
+/// A candidate that changes `scripts/file-finding` against the baseline is refused before
+/// anything is written, naming the path: what judges the candidate is never the candidate's.
 #[test]
-fn a_candidate_that_changes_the_finding_or_its_scripts_is_refused() {
-    for (n, path) in [FINDING_FILE, "scripts/file-finding"]
-        .into_iter()
-        .enumerate()
-    {
-        let world = world_with(
-            &format!("touches-{n}"),
-            &Setup {
-                touches: Some((path, "#!/bin/sh\necho changed by the candidate\n")),
-                ..Setup::plain(true, true)
-            },
-        );
-        let ran = run(&world, &opening(&world));
-        refused(&world, &ran, path);
-    }
+fn a_candidate_that_changes_the_finding_scripts_is_refused() {
+    let path = "scripts/file-finding";
+    let world = world_with(
+        "touches-script",
+        &Setup {
+            touches: Some((path, "#!/bin/sh\necho changed by the candidate\n")),
+            ..Setup::plain(true, true)
+        },
+    );
+    let ran = run(&world, &opening(&world));
+    refused(&world, &ran, path);
+}
+
+/// The finding is read on the mainline, local `main` under `--forge none`, at the commit the
+/// case forks from, and its file is no part of the candidate's comparison with the baseline: a
+/// candidate that rewrites the finding opens a turn (on a judge surface, the planning store)
+/// that judges the finding as `main` holds it, whose defect both builds still show, so the
+/// turn ends `declined`.
+#[test]
+fn a_candidate_that_rewrites_the_finding_is_judged_on_the_mainlines_finding() {
+    let world = world_with(
+        "touches-finding",
+        &Setup {
+            touches: Some((FINDING_FILE, "#!/bin/sh\necho changed by the candidate\n")),
+            ..Setup::plain(true, true)
+        },
+    );
+    let inputs = [
+        "surface=judge".to_owned(),
+        format!("finding={FINDING}"),
+        format!("candidate={}", world.candidate),
+    ];
+    let (code, out, err) = run(&world, &inputs);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("Completed (declined)"), "{out}\n{err}");
+    assert_eq!(
+        shown(&records(&world.repo))[0],
+        row("finding_record", "finding", "filed", "takt.finding-file"),
+        "{out}\n{err}"
+    );
 }
 
 /// With `HEAD` on a branch whose `scripts/check-finding` is rigged to say `not_reproduced`, the
@@ -1192,4 +1278,220 @@ fn a_finding_rewritten_by_the_baselines_checkout_records_nothing() {
         "{out}\n{err}"
     );
     assert!(out.contains("does not hold"), "{out}\n{err}");
+}
+
+/// Writes the promotion record of `revision` into the world's store, chained to the record of
+/// `previous`, with its scorecard copy, as `takt promote` leaves one once it installed the
+/// binary built from `revision`.
+fn promote(world: &World, revision: &str, previous: &str) {
+    let store = world.state.join("takt/promotions");
+    let copy = store.join(format!("{revision}.scorecard.json"));
+    write(&copy, &scorecard(revision, revision));
+    let digest = sha256(&copy);
+    let before = sha256(&store.join(format!("{previous}.json")));
+    let tree = git(&world.repo, &["rev-parse", &format!("{revision}^{{tree}}")]);
+    write(
+        &store.join(format!("{revision}.json")),
+        &format!(
+            "{{\"format\":\"takt-promotion/1\",\"revision\":\"{revision}\",\"tree\":\"{tree}\",\"promoted_at\":\"2026-01-02T00:00:00Z\",\"kind\":\"promotion\",\"scorecard\":\"{revision}\",\"scorecard_file\":\"/srv/scorecards/scorecard-{revision}.json\",\"scorecard_sha256\":\"{digest}\",\"against\":\"{previous}\",\"rule\":{{\"trials\":5,\"margin\":1}},\"worse\":0,\"binary\":null,\"binary_sha256\":null,\"previous_sha256\":\"{before}\"}}"
+        ),
+    );
+}
+
+/// The turn resumed by `takt run --case turn-1`.
+fn resume(world: &World) -> (i32, String, String) {
+    takt_in(world, &["run", "--case", "turn-1", "--iterations", "6"])
+}
+
+/// The acceptance of story:self-improvement-protocol under `--forge none`, no `--gate` given: a
+/// turn whose finding reproduces at the baseline and not at the candidate stops for the merge's
+/// grant; granted, with the candidate merged into the local `main` (the mainline under `--forge
+/// none`, which the operator owns) and its scorecard saved, it stops for the promotion's grant;
+/// granted, with the candidate promoted, it reaches `accepted`, every record in the case written
+/// by a validator of the turn. The merge's record retains what it read: no forge, and the tip of
+/// `main` it found the candidate in.
+#[test]
+fn a_turn_under_forge_none_reaches_accepted_on_validators_records() {
+    let world = world("accepted", true, false);
+    let (code, out, err) = run_as(
+        &world,
+        &opening(&world),
+        None,
+        Some("the probe no longer shows the defect"),
+        &[],
+    );
+    assert_eq!(code, 4, "{out}\n{err}");
+    assert!(out.contains("candidate.merge"), "{out}\n{err}");
+    takt::case::grant(&world.repo, "turn-1", "repository.merge", "human:owner")
+        .expect("the merge is granted");
+    git(&world.repo, &["branch", "-f", "main", &world.candidate]);
+    write(
+        &world.state.join(format!(
+            "takt/scorecards/scorecard-{}.json",
+            world.candidate
+        )),
+        &scorecard(&world.candidate, &world.candidate),
+    );
+    let (code, out, err) = resume(&world);
+    assert_eq!(code, 4, "{out}\n{err}");
+    assert!(out.contains("binary.promote"), "{out}\n{err}");
+    takt::case::grant(&world.repo, "turn-1", "takt.promote", "human:owner")
+        .expect("the promotion is granted");
+    promote(&world, &world.candidate, &world.baseline);
+    let (code, out, err) = resume(&world);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("Completed (accepted)"), "{out}\n{err}");
+    let written = records(&world.repo);
+    assert_eq!(
+        shown(&written),
+        [
+            row("finding_record", "finding", "filed", "takt.finding-file"),
+            row(
+                "scenario_result",
+                "baseline",
+                "reproduced",
+                "takt.scenario-reproduce"
+            ),
+            row(
+                "scenario_result",
+                "candidate",
+                "not_reproduced",
+                "takt.scenario-verify"
+            ),
+            row(
+                "merge_observation",
+                "candidate",
+                "merged",
+                "takt.candidate-merge"
+            ),
+            row(
+                "scorecard_result",
+                "candidate",
+                "no_regression",
+                "takt.scorecard-compare"
+            ),
+            row(
+                "promotion_record",
+                "promotion",
+                "promoted",
+                "takt.binary-promote"
+            ),
+        ],
+        "{out}\n{err}"
+    );
+    for record in &written[2..] {
+        assert_eq!(
+            field(record, "subject_revision"),
+            world.candidate,
+            "{record}"
+        );
+    }
+    let artifacts = world.repo.join(".engineering/cases/turn-1/artifacts");
+    let retained: Vec<String> = fs::read_dir(&artifacts)
+        .expect("the case's artifacts")
+        .map(|entry| entry.expect("an entry").path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("merge-observation-"))
+        })
+        .map(|path| fs::read_to_string(path).expect("the merge's artifact"))
+        .collect();
+    assert_eq!(retained.len(), 1, "{retained:?}");
+    assert!(retained[0].contains("forge: none"), "{}", retained[0]);
+    assert!(
+        retained[0].contains(&format!("tip: {}", world.candidate)),
+        "{}",
+        retained[0]
+    );
+}
+
+/// Granted, the merge validator records nothing while the candidate is not in local `main`: it
+/// waits, naming the tip it read (the baseline, where `main` still is), and the turn stays short
+/// of `fix.merged`.
+#[test]
+fn a_granted_candidate_not_yet_in_main_is_not_merged() {
+    let world = world("not-merged", true, false);
+    let (code, out, err) = run(&world, &opening(&world));
+    assert_eq!(code, 4, "{out}\n{err}");
+    takt::case::grant(&world.repo, "turn-1", "repository.merge", "human:owner")
+        .expect("the merge is granted");
+    // An hour budget of 3.6 s: the validator waits on the mainline, and the budget ends it.
+    let (_, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--hours", "0.001"]);
+    assert!(
+        records(&world.repo)
+            .iter()
+            .all(|record| field(record, "kind") != "merge_observation"),
+        "{out}\n{err}"
+    );
+    assert!(out.contains(&world.baseline[..8]), "{out}\n{err}");
+}
+
+/// The judge surface is computed when the turn opens, from the baseline's allow-list over the
+/// candidate's change: a given `surface` that disagrees is refused before anything is written,
+/// naming the first judge-surface path; none given, the case opens with the computed one, and
+/// the turn stops for the judge-surface merge's grant.
+#[test]
+fn the_surface_is_computed_at_open_and_a_disagreeing_one_is_refused() {
+    let world = world_with(
+        "surface",
+        &Setup {
+            touches: Some(("tools/judge.sh", "#!/bin/sh\nexit 0\n")),
+            ..Setup::plain(true, false)
+        },
+    );
+    let ran = run(&world, &opening(&world));
+    refused(&world, &ran, "tools/judge.sh");
+    let inputs = vec![
+        format!("finding={FINDING}"),
+        format!("candidate={}", world.candidate),
+    ];
+    let (code, out, err) = run_as(
+        &world,
+        &inputs,
+        None,
+        Some("the probe no longer shows the defect"),
+        &[],
+    );
+    assert_eq!(code, 4, "{out}\n{err}");
+    assert!(
+        out.contains("candidate.merge_judge_surface"),
+        "{out}\n{err}"
+    );
+    let case = fs::read_to_string(world.repo.join(".engineering/cases/turn-1/case.yaml"))
+        .expect("case.yaml");
+    assert!(case.contains("surface: judge"), "{case}");
+}
+
+/// A finding filed on `main` after the last promotion opens a turn: it is read where the case
+/// forks from, a commit of the mainline, not at the baseline, which does not hold it.
+#[test]
+fn a_finding_filed_on_main_after_the_last_promotion_opens_a_turn() {
+    let world = world_with(
+        "filed-after",
+        &Setup {
+            filed_after: true,
+            ..Setup::plain(true, true)
+        },
+    );
+    let (code, out, err) = run(&world, &opening(&world));
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("Completed (declined)"), "{out}\n{err}");
+    let case = takt::CaseDir::resume(&world.repo, "turn-1").expect("the case reads");
+    let main = git(&world.repo, &["rev-parse", "main"]);
+    assert_ne!(main, world.baseline);
+    assert_eq!(case.revision("finding").as_deref(), Some(main.as_str()));
+}
+
+/// A turn opened with no `--intent` opens on its finding's title, never the planning store's
+/// frontier.
+#[test]
+fn a_turn_without_an_intent_opens_with_the_findings_title() {
+    let world = world("no-intent", true, true);
+    let (code, out, err) = run_as(&world, &opening(&world), Some("candidate.merge"), None, &[]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(!out.contains("frontier: nothing ready"), "{out}\n{err}");
+    assert!(out.contains("Completed (declined)"), "{out}\n{err}");
+    let intent = fs::read_to_string(world.repo.join(".engineering/cases/turn-1/intent.md"))
+        .expect("intent.md");
+    assert_eq!(intent, "The probe shows the defect");
 }

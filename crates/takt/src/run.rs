@@ -5940,9 +5940,13 @@ impl<'a> Run<'a> {
     /// the story to `implemented`, each a commit on the case's branch
     /// ([`crate::frontier::write_on_case_branch`]), before the step the case's grant authorises
     /// or, without one, once the case terminates `accepted`; a refusal is relayed and the stop
-    /// is unchanged. A run on an intent has no story and writes nothing there.
+    /// is unchanged. A run on an intent has no story and writes nothing there; nor does an
+    /// improvement turn ([`crate::case::TURN_PROTOCOL`]), whose `story.yaml` names the finding it
+    /// verifies, a story it does not deliver: a turn writes nothing to the planning store.
     pub fn record_on(&mut self, store: &'a dyn Frontier) {
-        self.store = Some(store);
+        if self.case.protocol.id != crate::case::TURN_PROTOCOL {
+            self.store = Some(store);
+        }
     }
 
     /// Prepares a run on the case `id` a run before this one opened under `tree`: the case's
@@ -6206,6 +6210,15 @@ impl<'a> Run<'a> {
             return Some(Stop::Tokens(t));
         }
         None
+    }
+
+    /// For a run given no approval gate, the gate its case's protocol names for the case's
+    /// inputs ([`crate::LoadedProtocol::default_gate`]); a run given one keeps it. Without this
+    /// call a run with no gate offers the harness none.
+    pub fn take_default_gate(&mut self) {
+        if self.options.gate.is_none() {
+            self.options.gate = self.case.protocol.default_gate(&self.case.inputs());
+        }
     }
 
     /// How long the run waits on the forge before it observes again: [`Run::poll`], cut to
@@ -7813,8 +7826,11 @@ impl<'a> Run<'a> {
                     )));
                 }
             };
-            self.case.set_revision("implementation", &head)?;
+            // The step is on record before anything that can end the run, so the tokens it spent
+            // are kept whatever follows: a case that declares no implementation artifact ends
+            // the run here.
             record_step(self)?;
+            self.case.set_revision("implementation", &head)?;
             events.emit(
                 self.steps,
                 &Event::Effect {

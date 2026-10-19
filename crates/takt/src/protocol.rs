@@ -30,15 +30,22 @@ pub struct LoadedProtocol {
 /// The protocols this crate ships beside the engineering protocols' built-ins, `(name, major,
 /// document)`: the `protocol/1` files of this repository's `protocols/`, embedded so that a
 /// repository a story is delivered in need not carry them.
-const EMBEDDED: &[(&str, u32, &str)] = &[(
-    "story.delivery",
-    1,
-    include_str!("../../../protocols/story-delivery/1.yaml"),
-)];
+const EMBEDDED: &[(&str, u32, &str)] = &[
+    (
+        "story.delivery",
+        1,
+        include_str!("../../../protocols/story-delivery/1.yaml"),
+    ),
+    (
+        "self.improvement",
+        1,
+        include_str!("../../../protocols/self-improvement/1.yaml"),
+    ),
+];
 
 impl LoadedProtocol {
     /// A built-in, by `name/major` (`software.change/1`): one this crate embeds
-    /// (`story.delivery/1`), else one of the engineering protocols.
+    /// (`story.delivery/1`, `self.improvement/1`), else one of the engineering protocols.
     pub fn builtin(id: &str) -> Result<Self> {
         let (name, major) = split_id(id)?;
         // An embedded protocol answers to its own id, `story.delivery`, and to its directory's
@@ -240,6 +247,49 @@ fn split_id(id: &str) -> Result<(&str, u32)> {
 }
 
 impl LoadedProtocol {
+    /// The approval gate a run on this protocol takes when it is given none: the first action,
+    /// in declaration order, that requires a capability and whose precondition the case's
+    /// `inputs` do not make false for good, an `input` test (alone or a term of an `all`) whose
+    /// value is not among those it names. `repository.merge` for a delivery or a software
+    /// change; `candidate.merge` or `candidate.merge_judge_surface` for an improvement turn, as
+    /// its `surface` says. None when no action requires a capability.
+    #[must_use]
+    pub fn default_gate(&self, inputs: &[(String, String)]) -> Option<String> {
+        let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&self.yaml).ok()?;
+        let blocked = |test: &serde_yaml_ng::Value| -> bool {
+            let (Some(input), Some(values)) = (test["input"].as_str(), test["in"].as_sequence())
+            else {
+                return false;
+            };
+            inputs
+                .iter()
+                .find(|(name, _)| name == input)
+                .is_some_and(|(_, value)| {
+                    !values.iter().any(|allowed| match allowed {
+                        serde_yaml_ng::Value::Bool(b) => b.to_string() == *value,
+                        other => other.as_str() == Some(value.as_str()),
+                    })
+                })
+        };
+        doc["actions"]
+            .as_mapping()?
+            .iter()
+            .find(|(_, action)| {
+                let requires = action["requires"].as_sequence().is_some_and(|requires| {
+                    requires
+                        .iter()
+                        .any(|requirement| requirement["capability"].as_str().is_some())
+                });
+                let precondition = &action["precondition"];
+                let never = blocked(precondition)
+                    || precondition["all"]
+                        .as_sequence()
+                        .is_some_and(|terms| terms.iter().any(blocked));
+                requires && !never
+            })
+            .and_then(|(name, _)| name.as_str().map(str::to_owned))
+    }
+
     /// The built-in protocols, `(name, major)` each: the engineering protocols', then the ones
     /// this crate embeds.
     #[must_use]

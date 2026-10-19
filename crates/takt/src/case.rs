@@ -838,6 +838,32 @@ fn revision_of(case_dir: &Path, artifact: &str) -> Result<Option<String>> {
         .map(str::to_owned))
 }
 
+/// Whether the case at `case_dir` holds a grant for `action`, read from its own files, so a
+/// validator observing while a run holds the case can ask: its `protocol.yaml` has the action
+/// require at least one capability, and its `authority.yaml` grants each at the case's current
+/// revision (`case.yaml`) of the artifact that capability's action is about. What
+/// [`CaseDir::grants`] answers from the case in memory.
+pub fn holds_grant(case_dir: &Path, action: &str) -> Result<bool> {
+    let (_, actions) = required_capabilities(case_dir)?;
+    let Some(capabilities) = actions.get(action) else {
+        return Ok(false);
+    };
+    let protocol = LoadedProtocol::from_file(&case_dir.join("protocol.yaml"))?;
+    let authority = Authority::read(case_dir)?.unwrap_or_default();
+    for capability in capabilities {
+        let Ok(subject) = protocol.grant_subject(capability) else {
+            return Ok(false);
+        };
+        let Some(revision) = revision_of(case_dir, &subject)? else {
+            return Ok(false);
+        };
+        if !authority.grants_at(capability, &revision) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// A grant checked and ready to be written, the case held until it is written or dropped: what
 /// `takt approve` records on the story before the grant lands, so a record the store refuses
 /// leaves nothing written and the same approval can be given again.
@@ -1931,8 +1957,9 @@ impl CaseDir {
     }
 
     /// Opens an improvement turn, before any step: `finding` at the commit the case's branch
-    /// forked from (its `base_commit`), `baseline` and `promotion` at the promoted baseline (the
-    /// installed binary's revision when the turn opens), `candidate` at the candidate given,
+    /// forked from (its `base_commit`), `baseline` at the promoted baseline (the installed
+    /// binary's revision when the turn opens), `candidate` at the candidate given, `promotion` at
+    /// the candidate too (the revision `binary.promote` observes installed),
     /// `story.yaml` naming the finding, and `independence` in `case.yaml` declaring each turn
     /// validator ([`crate::improvement::PRODUCERS`]) independent on
     /// [`crate::improvement::INDEPENDENT_ON`]: a validator is no agent run, so its record is
@@ -1949,7 +1976,7 @@ impl CaseDir {
             ("finding", base.as_str()),
             ("baseline", opening.baseline.as_str()),
             ("candidate", opening.candidate.as_str()),
-            ("promotion", opening.baseline.as_str()),
+            ("promotion", opening.candidate.as_str()),
         ] {
             let entry = self
                 .doc
@@ -2100,7 +2127,8 @@ pub const TURN_CANDIDATE: &str = "candidate";
 
 /// What an improvement turn opens with, each checked by [`turn_opening`] before anything is
 /// written: the finding it verifies (`story:<key>`), the candidate revision delivered outside
-/// the case, and the baseline, the revision of the latest promotion record.
+/// the case, the baseline, the revision of the latest promotion record, the judge surface the
+/// candidate's change touches or not, and the finding's title.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnOpening {
     /// The finding, `story:<key>`.
@@ -2109,6 +2137,46 @@ pub struct TurnOpening {
     pub candidate: String,
     /// The baseline, the latest promoted revision.
     pub baseline: String,
+    /// The case input `surface`: `judge` when the candidate's change touches a judge surface
+    /// ([`crate::improvement::judge_surfaces`]), else `non_judge`.
+    pub surface: String,
+    /// The finding's title, the turn's intent when none is given: its frontmatter's `title`,
+    /// else its first `# ` heading, else the finding's id.
+    pub title: String,
+}
+
+/// The case input a turn's judge surface is, `surface`.
+pub const TURN_SURFACE: &str = "surface";
+
+/// The title of the finding `finding` whose file holds `text`: its frontmatter's `title`, else
+/// its first `# ` heading (a leading `Story: ` dropped), else `finding` itself.
+fn finding_title(finding: &str, text: &[u8]) -> String {
+    let text = String::from_utf8_lossy(text);
+    if let Some(front) = front_matter(&text)
+        && let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&front)
+        && let Some(title) = doc["title"]
+            .as_str()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+    {
+        return title.to_owned();
+    }
+    text.lines()
+        .find_map(|line| line.strip_prefix("# "))
+        .map(|heading| {
+            heading
+                .trim()
+                .trim_start_matches("Story: ")
+                .trim()
+                .to_owned()
+        })
+        .filter(|heading| !heading.is_empty())
+        .unwrap_or_else(|| finding.to_owned())
+}
+
+/// A story file's body, below its frontmatter, or the whole text when it has none.
+fn finding_body(text: Option<&[u8]>) -> Option<&[u8]> {
+    text.map(|text| crate::validator::story_body(text).unwrap_or(text))
 }
 
 /// Whether `value` is a full commit id: 40 or 64 lower-case hexadecimal digits.
@@ -2129,19 +2197,28 @@ pub struct Judge<'a> {
     pub binary: &'a Path,
 }
 
-/// What a turn on `tree` opens with, from `--input finding=<story id>` and `--input
-/// candidate=<full commit id>` and the promotion store `store`: the finding a story the planning
-/// store holds at the commit the case forks from (`.engineering/planning/story/<key>.md`), the
-/// candidate a full commit id of a commit `tree` holds, and the baseline the revision of the
+/// What a turn on `tree` opens with, from `--input finding=<story id>`, `--input
+/// candidate=<full commit id>` and, when given, `--input surface=<judge|non_judge>`, the
+/// promotion store `store` and the mainline `mainline`: the finding a story the planning store
+/// holds at the commit the case forks from (`.engineering/planning/story/<key>.md`), the
+/// candidate a full commit id of a commit `tree` holds, the baseline the revision of the
 /// store's latest record that is no refusal ([`crate::promotion::baseline`]), a commit `tree`
-/// holds. A missing or wrong value, or a store with no such record, is refused, naming why,
-/// before anything is written. The candidate is delivered outside the case, so it is given here.
+/// holds, and the judge surface computed from the candidate's change against the baseline
+/// ([`crate::improvement::judge_surfaces`]). A missing or wrong value, a store with no such
+/// record, or a given `surface` that is not the computed one (naming the first judge-surface
+/// path) is refused, naming why, before anything is written. The candidate is delivered outside
+/// the case, so it is given here.
 ///
 /// What judges the turn is never the candidate's, nor the tree's: the finding scripts are read
 /// at the baseline ([`crate::improvement`]), and a candidate whose tree differs from the
-/// baseline's at the finding's file, `scripts/check-finding` or `scripts/file-finding` is
-/// refused, naming the path, as is a commit the case forks from that holds another text of the
-/// finding than the baseline. The turn is refused too unless `judge` is the promoted binary: its
+/// baseline's at `scripts/check-finding` or `scripts/file-finding` is refused, naming the path.
+/// The finding is read on the mainline: when the commit the case forks from is `mainline`'s tip
+/// or an ancestor of it ([`crate::improvement::Mainline`]; the local `main` with no forge, which
+/// the operator is trusted with), the finding is read there and its file is no part of the
+/// candidate's comparison, so a finding filed after the last promotion opens a turn. Else the
+/// finding's body (below its frontmatter, which a delivery's take changes) must be the
+/// baseline's, at the commit the case forks from and in the candidate, or the turn is refused
+/// naming its file. The turn is refused too unless `judge` is the promoted binary: its
 /// sha256 is the record's `binary_sha256` whenever the record has one, and its revision is the
 /// promoted one unless the operator stated the record; and unless the baseline's
 /// `scripts/check-finding` is a reviewed confined one
@@ -2150,8 +2227,10 @@ pub fn turn_opening(
     tree: &Path,
     finding: Option<&str>,
     candidate: Option<&str>,
+    surface: Option<&str>,
     store: &Path,
     judge: &Judge<'_>,
+    mainline: &crate::improvement::Mainline,
 ) -> Result<TurnOpening> {
     let Some(finding) = finding else {
         bail!(
@@ -2224,10 +2303,8 @@ pub fn turn_opening(
     }
     let short = |revision: &str| revision[..8.min(revision.len())].to_owned();
     // What judges the candidate is never the candidate's: the scripts are read at the baseline,
-    // and the finding where the case forks from, so a candidate that changes either, or a fork
-    // that holds another finding, is no turn.
+    // so a candidate that changes either is no turn.
     for judged in [
-        path.as_str(),
         crate::improvement::CHECK_FINDING,
         crate::improvement::FILE_FINDING,
     ] {
@@ -2238,12 +2315,39 @@ pub fn turn_opening(
             );
         }
     }
-    if filed != history.file(&baseline, &path)? {
-        bail!(
-            "--input {TURN_FINDING}={finding}: {path} at {}, where the case forks from, is not the one the baseline {} holds; the turn's finding is the one filed at the baseline; nothing was written",
-            short(&at),
-            short(&baseline)
-        );
+    // The finding is read on the mainline, where the case forks from, and checked out there for
+    // the check: what the candidate holds at its path judges nothing. Off the mainline (or with
+    // no tip to read), the finding's body must be the baseline's, where the case forks from and
+    // in the candidate alike.
+    let on_mainline = match mainline.tip(tree) {
+        Ok(tip) => matches!(
+            crate::improvement::Mainline::holds(tree, &tip, &at)?,
+            Ok(true)
+        ),
+        Err(_) => false,
+    };
+    if !on_mainline {
+        let at_baseline = history.file(&baseline, &path)?;
+        if finding_body(history.file(candidate, &path)?.as_deref())
+            != finding_body(at_baseline.as_deref())
+        {
+            bail!(
+                "--input {TURN_CANDIDATE}={candidate}: the candidate changes the body of {path} against the baseline {}, and the case forks from {}, no commit of {} (forge: {}); what judges a turn is never the candidate's, so the turn is not opened; nothing was written",
+                short(&baseline),
+                short(&at),
+                crate::promotion::MAINLINE,
+                mainline.forge()
+            );
+        }
+        if finding_body(filed.as_deref()) != finding_body(at_baseline.as_deref()) {
+            bail!(
+                "--input {TURN_FINDING}={finding}: {path} at {}, where the case forks from, no commit of {} (forge: {}), does not hold the body the baseline {} holds; the turn's finding is read on the mainline or is the one filed at the baseline; nothing was written",
+                short(&at),
+                crate::promotion::MAINLINE,
+                mainline.forge(),
+                short(&baseline)
+            );
+        }
     }
     // The binary that judges is the promoted one: of the digest the record holds, whenever it
     // holds one, and of its revision unless the operator stated the record (a binary that names
@@ -2285,9 +2389,36 @@ pub fn turn_opening(
             crate::improvement::CONFINED_CHECK_FINDING_SHA256S.join(", ")
         );
     }
+    // The judge surface is the candidate's change's, computed here; a given one that says
+    // otherwise is refused, naming the first path that decides it.
+    let surfaces = crate::improvement::judge_surfaces(tree, &baseline, candidate)
+        .with_context(|| format!("--input {TURN_CANDIDATE}={candidate}; nothing was written"))?;
+    let computed = if surfaces.is_empty() {
+        "non_judge"
+    } else {
+        "judge"
+    };
+    if let Some(given) = surface
+        && given != computed
+    {
+        match surfaces.first() {
+            Some(first) => bail!(
+                "--input {TURN_SURFACE}={given}: the candidate's change touches the judge surface {first}, a path {} at the baseline {} does not admit, so the turn's surface is judge; nothing was written",
+                crate::validator::JUDGE_ALLOW,
+                short(&baseline)
+            ),
+            None => bail!(
+                "--input {TURN_SURFACE}={given}: the candidate's change touches no judge surface, every path admitted by {} at the baseline {}, so the turn's surface is non_judge; nothing was written",
+                crate::validator::JUDGE_ALLOW,
+                short(&baseline)
+            ),
+        }
+    }
     Ok(TurnOpening {
         finding: finding.to_owned(),
         candidate: candidate.to_owned(),
         baseline,
+        surface: computed.to_owned(),
+        title: finding_title(finding, filed.as_deref().unwrap_or_default()),
     })
 }

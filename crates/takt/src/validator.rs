@@ -1709,11 +1709,11 @@ pub const OWNER_ONLY: [&str; 2] = [JUDGE_ALLOW, DELEGATIONS];
 /// surface: a regular file, plain or executable, or none (the path deleted). Any other, a
 /// symbolic link (`120000`) or a submodule's commit (`160000`) above all, is a judge surface
 /// whatever its name: what it points at is not the text its name stands for.
-const NAMED_BY_PATH: [&str; 3] = ["100644", "100755", "000000"];
+pub(crate) const NAMED_BY_PATH: [&str; 3] = ["100644", "100755", "000000"];
 
 /// Each change of `git diff-tree -r -z --raw` output `raw` as its new mode and its path; an
 /// error when a field does not read, a path that is not UTF-8 among them.
-fn raw_changes(raw: &[u8]) -> Result<Vec<(&str, &str)>> {
+pub(crate) fn raw_changes(raw: &[u8]) -> Result<Vec<(&str, &str)>> {
     let mut fields = raw
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty());
@@ -1801,7 +1801,10 @@ fn record_at<T: serde::de::DeserializeOwned>(
 /// The globs of [`JUDGE_ALLOW`] at `at`: none when the commit has no such file; the error when
 /// it does not read or holds a glob that is not relative to the tree, and the caller then admits
 /// nothing.
-fn allow_list_at(mirror: &Mirror, at: &str) -> Result<std::result::Result<Vec<String>, String>> {
+pub(crate) fn allow_list_at(
+    mirror: &Mirror,
+    at: &str,
+) -> Result<std::result::Result<Vec<String>, String>> {
     let Some(read) = record_at::<AllowList>(mirror, at, JUDGE_ALLOW)? else {
         return Ok(Ok(Vec::new()));
     };
@@ -1828,7 +1831,7 @@ fn allow_list_at(mirror: &Mirror, at: &str) -> Result<std::result::Result<Vec<St
 /// The body of a story's file in the planning store, everything below its frontmatter: the
 /// bytes after the line `---` that closes the `---` line the file opens with; `None` for a
 /// file that opens with no frontmatter or never closes it.
-fn story_body(text: &[u8]) -> Option<&[u8]> {
+pub(crate) fn story_body(text: &[u8]) -> Option<&[u8]> {
     let rest = text.strip_prefix(b"---\n")?;
     let mut offset = 0;
     for line in rest.split_inclusive(|byte| *byte == b'\n') {
@@ -2552,7 +2555,7 @@ pub struct BuiltIn {
 /// observation, never a choice the step choice records (`crate::run`): a protocol in which an
 /// action no built-in validator performs may produce one with `effect: read` is refused, and so
 /// is one where an outcome or an obligation holds on choice records alone.
-pub const BUILT_IN: [BuiltIn; 13] = [
+pub const BUILT_IN: [BuiltIn; 16] = [
     BuiltIn {
         validator: "TestsRun",
         action: TestsRun::ACTION,
@@ -2617,6 +2620,22 @@ pub const BUILT_IN: [BuiltIn; 13] = [
         validator: "ScorecardCompare",
         action: crate::improvement::ScorecardCompare::ACTION,
         kind: crate::improvement::ScorecardCompare::KIND,
+    },
+    // One type, two actions: one entry each.
+    BuiltIn {
+        validator: "CandidateMerged",
+        action: crate::improvement::CandidateMerged::ACTION,
+        kind: crate::improvement::CandidateMerged::KIND,
+    },
+    BuiltIn {
+        validator: "CandidateMerged",
+        action: crate::improvement::CandidateMerged::JUDGE_SURFACE_ACTION,
+        kind: crate::improvement::CandidateMerged::KIND,
+    },
+    BuiltIn {
+        validator: "BinaryPromote",
+        action: crate::improvement::BinaryPromote::ACTION,
+        kind: crate::improvement::BinaryPromote::KIND,
     },
 ];
 
