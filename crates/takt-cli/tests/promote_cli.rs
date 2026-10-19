@@ -1293,14 +1293,15 @@ fn a_candidate_within_the_rule_is_installed_and_recorded() {
     );
 }
 
-/// story:promotion-without-daily-cap: a second promotion of another revision the same UTC day,
-/// whose scorecard holds against the first promotion as the baseline, is built, installed and
-/// recorded after it in the chain, and the head names it; the second revision promoted again
-/// is refused as recorded already.
+/// story:promotion-without-daily-cap: two promotions of different revisions, one right after
+/// the other, each judged against the baseline before it, both hold: nothing between them
+/// refuses on time; each is recorded after the one before it and the head names the second;
+/// the second revision promoted again is refused as recorded already.
 #[test]
-fn a_second_revision_the_same_day_is_promoted_after_the_first() {
-    let world = World::new("same-day", BASELINE_TOKENS, FIVE_APPROVALS);
+fn two_revisions_promoted_one_after_the_other_both_hold_and_chain() {
+    let world = World::new("successive", BASELINE_TOKENS, FIVE_APPROVALS);
     world.record_baseline();
+    let baseline_digest = sha256(&world.store.join(format!("{BASELINE_REVISION}.json")));
     let card = world.candidate_card(
         "first",
         WITHIN_TOKENS,
@@ -1308,8 +1309,21 @@ fn a_second_revision_the_same_day_is_promoted_after_the_first() {
     );
     let (code, out, err) = world.promote(&card, &[]);
     assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(&format!(
+            "candidate {} against baseline {BASELINE_REVISION}",
+            world.revision
+        )),
+        "the recorded baseline is the first's: {out}"
+    );
     let first_name = format!("{}.json", world.revision);
     let first = world.record(&first_name);
+    for line in [
+        format!("\"against\": \"{BASELINE_REVISION}\""),
+        format!("\"previous_sha256\": \"{baseline_digest}\""),
+    ] {
+        assert!(first.contains(&line), "{line} in {first}");
+    }
     let first_digest = sha256(&world.store.join(&first_name));
     write(&world.repo.join("second.txt"), "second\n");
     let second = world.commit("second");
@@ -1342,11 +1356,6 @@ fn a_second_revision_the_same_day_is_promoted_after_the_first() {
     ] {
         assert!(record.contains(&line), "{line} in {record}");
     }
-    assert_eq!(
-        field(&record, "promoted_at").get(..10),
-        field(&first, "promoted_at").get(..10),
-        "both promotions fall on one UTC day"
-    );
     assert_eq!(field(&record, "binary_sha256"), sha256(&world.installed()));
     let text = fs::read_to_string(head(&world)).expect("the head");
     assert!(
@@ -2017,10 +2026,12 @@ fn a_binary_that_changes_once_installed_is_rolled_back() {
     );
 }
 
-/// Two promotions started together record and install exactly one (probe N12): the other
-/// refuses naming the store's lock, or sees the first's record.
+/// Two promotions started together run one at a time (probe N12): either the other refuses
+/// naming the store's lock or the moved baseline, or both promote one after the other; the
+/// records form one chain from the baseline, the head names the last, and each promotion's
+/// installed binary is the one its record names.
 #[test]
-fn two_promotions_at_once_record_and_install_exactly_one() {
+fn two_promotions_at_once_run_one_at_a_time_and_chain() {
     let world = World::new("two-at-once", BASELINE_TOKENS, FIVE_APPROVALS);
     world.record_baseline();
     let card = world.candidate_card("one", BASELINE_TOKENS, FIVE_APPROVALS);
@@ -2064,36 +2075,72 @@ fn two_promotions_at_once_record_and_install_exactly_one() {
             )
         })
         .collect();
-    let promoted: Vec<&(i32, String, String)> =
-        outputs.iter().filter(|(code, _, _)| *code == 0).collect();
-    assert_eq!(promoted.len(), 1, "exactly one promotes: {outputs:?}");
-    let refused: Vec<&(i32, String, String)> =
-        outputs.iter().filter(|(code, _, _)| *code != 0).collect();
-    assert_eq!(refused.len(), 1, "{outputs:?}");
-    let (code, _, err) = refused[0];
-    assert_eq!(*code, 1, "{err}");
-    assert!(
-        err.contains("holds the store lock") || err.contains("recorded already"),
-        "{err}"
-    );
-    let records = world.records();
-    assert_eq!(records.len(), 4, "one promotion recorded: {records:?}");
-    let recorded = records
+    for (code, out, err) in &outputs {
+        if *code != 0 {
+            assert_eq!(*code, 1, "{out}{err}");
+            assert!(
+                err.contains("holds the store lock")
+                    || err.contains("the latest baseline or promotion recorded is"),
+                "a refusal names the store's lock or the moved baseline: {err}"
+            );
+        }
+    }
+    let promoted: Vec<&String> = outputs
         .iter()
-        .find(|name| {
-            name.ends_with(".json")
-                && !name.ends_with(".scorecard.json")
-                && !name.starts_with(BASELINE_REVISION)
-        })
-        .expect("the promotion's record");
-    let record = world.record(recorded);
-    let revision = field(&record, "revision");
+        .filter(|(code, _, _)| *code == 0)
+        .map(|(_, out, _)| out)
+        .collect();
+    assert!(!promoted.is_empty(), "one promotes at least: {outputs:?}");
+    // The records form one chain from the baseline: each names the digest of the one before
+    // it, and every record in the store is on it.
+    let names: Vec<String> = world
+        .records()
+        .into_iter()
+        .filter(|name| !name.ends_with(".scorecard.json"))
+        .collect();
+    let mut chain = vec![format!("{BASELINE_REVISION}.json")];
+    while let Some(next) = names.iter().find(|name| {
+        let previous = sha256(&world.store.join(chain.last().expect("a record")));
+        world
+            .record(name)
+            .contains(&format!("\"previous_sha256\": \"{previous}\""))
+    }) {
+        chain.push(next.clone());
+    }
+    let mut sorted = chain.clone();
+    sorted.sort();
+    assert_eq!(sorted, names, "every record is on one chain: {chain:?}");
+    assert_eq!(
+        chain.len(),
+        1 + promoted.len(),
+        "a record a promotion, nothing else: {chain:?} {outputs:?}"
+    );
+    // Each promotion's installed binary is the one its record names.
+    for out in &promoted {
+        let line = out
+            .lines()
+            .find_map(|line| line.strip_prefix("promoted: "))
+            .unwrap_or_else(|| panic!("a promoted line: {out}"));
+        let (_, rest) = line.split_once(" at ").expect("the revision");
+        let (revision, rest) = rest.split_once(", sha256 ").expect("the digest");
+        let (digest, path) = rest.split_once("; recorded: ").expect("the record");
+        let record = fs::read_to_string(path).expect("the promotion's record");
+        assert_eq!(field(&record, "revision"), revision, "{record}");
+        assert_eq!(field(&record, "binary_sha256"), digest, "{record}");
+    }
+    let last = chain.last().expect("the latest record");
+    let record = world.record(last);
     assert_eq!(
         world.version(),
-        format!("takt 0.1.0 ({revision})"),
-        "the installed binary is the recorded one"
+        format!("takt 0.1.0 ({})", field(&record, "revision")),
+        "the installed binary is the latest record's"
     );
     assert_eq!(field(&record, "binary_sha256"), sha256(&world.installed()));
+    let text = fs::read_to_string(head(&world)).expect("the head");
+    assert!(
+        text.contains(&format!("\"{last}\"")) && text.contains(&sha256(&world.store.join(last))),
+        "the head names the last record: {text}"
+    );
 }
 
 /// A record removed from the store is noticed (probe N13): the installed binary must name the
