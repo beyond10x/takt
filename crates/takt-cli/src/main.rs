@@ -72,8 +72,12 @@ enum Commands {
     #[command(after_help = REPORT_EXIT_CODES)]
     Report(ReportArgs),
     /// Promote a takt revision: compare its saved scorecard with the promoted baseline's under
-    /// the scorecard's rule and, when no scenario is worse, build a fresh clone of that
-    /// revision confined in bubblewrap (`bwrap`: only the clone, rustup's default toolchain
+    /// the scorecard's rule, and with the series start's on its scenarios, the latest
+    /// --baseline-only record or --rebaseline under a newer metric definition, so steps each
+    /// within the rule cannot add up past it (a --rebaseline that only adds a scenario keeps the
+    /// series start, and the scenario it adds is judged against the --rebaseline that added it),
+    /// and, when no scenario is worse than any of them, build a fresh clone of
+    /// that revision confined in bubblewrap (`bwrap`: only the clone, rustup's default toolchain
     /// as its settings file names it, never one on PATH, the host's registry cache read-only
     /// and the system directories visible, the environment cleared, `cargo build --locked
     /// --offline`), install the binary with
@@ -109,9 +113,11 @@ struct PromoteArgs {
     )]
     scorecard: Option<PathBuf>,
     /// Replace the baseline's scorecard with FILE, nothing built or installed: accepted only
-    /// when its revision is the baseline's, its case ids are the stored scorecard's exactly, and
-    /// every metric definition is at or above the stored version with one of them higher (a
-    /// baseline saved before a definition changed, re-scored under the new one). The record
+    /// when its revision is the baseline's, its case ids are the stored scorecard's exactly but
+    /// for the cases of whole scenarios it adds, and every metric definition is at or above the
+    /// stored version with one of them higher (a baseline saved before a definition changed,
+    /// re-scored under the new one) or a scenario added (the one way a scenario joins the
+    /// corpus a promotion compares). The record
     /// appended to the chain names the scorecard it replaces by its sha256. With --dry-run and
     /// --install-root only.
     #[arg(
@@ -121,7 +127,8 @@ struct PromoteArgs {
     )]
     rebaseline: Option<PathBuf>,
     /// Record the baseline only: the scorecard of the revision installed today, compared with
-    /// nothing; nothing is built or installed. Refused when the store holds a baseline already.
+    /// nothing; nothing is built or installed. Refused when the store holds a baseline already,
+    /// and for a scorecard holding no scenario case, which would judge nothing.
     #[arg(long)]
     baseline_only: bool,
     /// With --baseline-only: the revision the installed binary was built from, a full commit
@@ -156,9 +163,9 @@ struct PromoteArgs {
 /// What `takt promote --help` says about the exit codes.
 const PROMOTE_EXIT_CODES: &str = "Exit codes:
   0  promoted and recorded; or the baseline recorded (--baseline-only); or the baseline's scorecard replaced (--rebaseline); or, with --dry-run, the candidate would be promoted or the baseline would be recorded
-  1  refused, nothing written or installed but the head beside the store where none was found (written from the chain as it stands, said on stderr; not on --dry-run): the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, is no ancestor of the checkout's origin/main as last fetched (or there is none), a local main moved by hand counting for nothing, was saved under another rule or metric definition, holds a run made with another binary than the revision's (the run named; its `opened` line names another revision, the revision -dirty, or none; with --binary-sha256 the binary.txt statements are checked instead) or a scenario run without its held-out result; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree, or commits a rust-toolchain.toml with a `path`; bubblewrap (`bwrap`) or a toolchain is not found; another promotion holds the store's lock; no baseline is recorded; the installed binary does not name the latest record's revision, or names none and hashes to another digest than the record's binary_sha256, or to none it records (with --baseline-only, the revision recorded); --revision or --binary-sha256 without --baseline-only, --binary-sha256 without --revision, a --revision that is no full commit id or not the scorecard's, a --binary-sha256 that is no sha256; with --binary-sha256, an installed binary whose --version names a revision or that hashes to another digest (both named), a run of the scorecard that names no revision beside runs that name one, or a run that states no binary or another (the run named); the revision or its tree was refused (without --rejudge) or recorded already; --rejudge without an earlier refusal of the revision or its tree, with --baseline-only, or on a scorecard sharing a case with one it was refused on (the case named); --rebaseline with a scorecard of another revision than the baseline's, of other cases than the stored scorecard's (the first named), under a metric definition below the stored one (named) or none newer, or with no baseline; a scenario the baseline has has fewer cases than the rule's trials on either side, or a scenario only the candidate has fewer on its side; the store holds a file takt does not read, a record that disagrees with its name, instant or scorecard copy, a chain of records with a gap, or one that ends before the head beside the store (promotions.head) or runs past it; the record could not be written; the reason on stderr
+  1  refused, nothing written or installed but the head beside the store where none was found (written from the chain as it stands, said on stderr; not on --dry-run): the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, is no ancestor of the checkout's origin/main as last fetched (or there is none), a local main moved by hand counting for nothing, was saved under another rule or metric definition, holds a run made with another binary than the revision's (the run named; its `opened` line names another revision, the revision -dirty, or none; with --binary-sha256 the binary.txt statements are checked instead) or a scenario run without its held-out result; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree, or commits a rust-toolchain.toml with a `path`; bubblewrap (`bwrap`) or a toolchain is not found; another promotion holds the store's lock; no baseline is recorded; the installed binary does not name the latest record's revision, or names none and hashes to another digest than the record's binary_sha256, or to none it records (with --baseline-only, the revision recorded); --revision or --binary-sha256 without --baseline-only, --binary-sha256 without --revision, a --revision that is no full commit id or not the scorecard's, a --binary-sha256 that is no sha256; with --binary-sha256, an installed binary whose --version names a revision or that hashes to another digest (both named), a run of the scorecard that names no revision beside runs that name one, or a run that states no binary or another (the run named); the revision or its tree was refused (without --rejudge) or recorded already; --rejudge without an earlier refusal of the revision or its tree, with --baseline-only, or on a scorecard sharing a case with one it was refused on (the case named); --rebaseline with a scorecard of another revision than the baseline's, missing a case of the stored scorecard's or holding one more that is not of a scenario it adds whole, one the stored scorecard lacks (the first named; a new scenario joins the corpus only this way), under a metric definition below the stored one (named), with none newer when it adds no scenario, or with no baseline; a scenario the baseline has has fewer cases than the rule's trials on either side, or a scenario only the candidate has fewer on its side; the scorecard and the baseline's hold no scenario case between them (`no scenario case`), or a scenario only the candidate has (`not in the saved scorecard`), however many its cases: the comparison covers every scenario either side has; --baseline-only with a scorecard holding no scenario case, a baseline that would judge nothing; the store holds a file takt does not read, a record that disagrees with its name, instant or scorecard copy, a chain of records with a gap, or one that ends before the head beside the store (promotions.head) or runs past it; the record could not be written; the reason on stderr
   2  the arguments do not parse
-  3  refused on the scorecard: a scenario is worse than the baseline's; the refusal is recorded (not with --dry-run), nothing installed
+  3  refused on the scorecard: a scenario is worse than the baseline's, or than the series start's, the latest --baseline-only record or --rebaseline under a newer metric definition, or, for a scenario a later --rebaseline added, than that --rebaseline's (the record and the scenario named); the refusal is recorded (not with --dry-run), nothing installed
   5  the candidate held but its clone, its confined build or its install failed, the built binary names another revision, or the binary names another revision or hashes differently once in place (then the binary before it is back in place and the record removed); nothing recorded, the installed binary unchanged";
 
 #[derive(clap::Args)]
@@ -183,8 +190,11 @@ struct ScorecardArgs {
     /// then NoProgress and every other stop, then an error), its cases at that rank or better
     /// fall short of the saved share of its n by more than the margin, each such rank printed
     /// with both counts; or when its median of tokens exceeds the saved maximum. A side with fewer
-    /// cases than the rule's trials, none included, gets no verdict. Tokens are printed as n, min,
-    /// median and max per scenario and side, with the difference of the medians.
+    /// cases than the rule's trials, none included, gets no verdict. Every scenario either side
+    /// has is compared: one the saved scorecard lacks gets no verdict either (`not in the saved
+    /// scorecard`), and no scenario case on either side is no comparison (`no scenario case`).
+    /// Tokens are printed as n, min, median and max per scenario and side, with the difference
+    /// of the medians.
     #[arg(long, value_name = "FILE")]
     against: Option<PathBuf>,
 }
@@ -192,7 +202,7 @@ struct ScorecardArgs {
 /// What `takt scorecard --help` says about the exit codes.
 const SCORECARD_EXIT_CODES: &str = "Exit codes:
   0  printed (and saved); with --against, no scenario is worse than the saved one
-  1  refused: the repository, a case's events.jsonl, or the saved scorecard does not read (a binary.txt that does not read leaves its case's runs stating no binary, the case listed with the reason); a scenario case has no held-out.txt beside its record, or one that does not read or states no result (the case named); --save without --revision, or under a --revision that is not the full commit id (40 lower-case hex digits), onto a file that exists, or that cannot be written; --save with a run made with another binary than the --revision's (the run named; its `opened` line names another revision or the revision -dirty, or names none, no `binary` or `unknown revision`, beside runs that name one), nothing written; with --against, a scenario the saved scorecard has with fewer cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), or any scenario with fewer on this side, none included (`too few cases (<n> of <trials>)`): no verdict given, as a promotion refuses; a saved scorecard with a run whose outcome disagrees with its held-out result; the reason on stderr
+  1  refused: the repository, a case's events.jsonl, or the saved scorecard does not read (a binary.txt that does not read leaves its case's runs stating no binary, the case listed with the reason); a scenario case has no held-out.txt beside its record, or one that does not read or states no result (the case named); --save without --revision, or under a --revision that is not the full commit id (40 lower-case hex digits), onto a file that exists, or that cannot be written; --save with a run made with another binary than the --revision's (the run named; its `opened` line names another revision or the revision -dirty, or names none, no `binary` or `unknown revision`, beside runs that name one), nothing written; with --against, a scenario the saved scorecard has with fewer cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), or any scenario with fewer on this side, none included (`too few cases (<n> of <trials>)`), or a scenario the saved scorecard lacks, however many its cases here (`not in the saved scorecard`): no verdict given, as a promotion refuses; with --against, no scenario case on either side (`no scenario case`), nothing compared; a saved scorecard with a run whose outcome disagrees with its held-out result; the reason on stderr
   2  the arguments do not parse
   3  with --against: a scenario is worse: at some outcome rank its cases at that rank or better fall short of the saved share by more than the rule's margin, or its median of tokens exceeds the saved maximum (a scenario with no run on this side is exit 1, too few cases)";
 
@@ -252,7 +262,13 @@ enum ScenarioCommands {
     /// it create the branch, and refuse unless the push reports it created, then open a case
     /// for the story on `story.delivery/1`, whose pull request targets `trial/<n>`. The case is
     /// `scenario-<id>-trial-<n>`, refused before anything is cut when it or its branch exists;
-    /// nothing of an earlier run is resumed. A refusal before the push removes the branch and
+    /// nothing of an earlier run is resumed. Without the bot route nothing is fetched or
+    /// pushed, and `<n>` is 22 digits: the 14-digit instant to the second (UTC,
+    /// `YYYYMMDDHHMMSS`) and a random 8-digit nonce, so runs from different checkouts very
+    /// likely take different ones (two runs in one second share one with a chance of 1 in
+    /// 10^8), not consecutive ones. The
+    /// hard guard is the checkout's own: a number it knows is passed over, and `git checkout -b`
+    /// refuses a branch that exists. A refusal before the push removes the branch and
     /// puts the tree back.
     #[command(after_help = SCENARIO_EXIT_CODES)]
     Run(Box<ScenarioRunArgs>),
@@ -340,8 +356,10 @@ struct RunArgs {
     /// binary under (`<root>/bin/takt`, where `takt promote --install-root` installs it),
     /// recorded in the case, canonical, so every resume reads the same one. Not given,
     /// `CARGO_INSTALL_ROOT`, else `CARGO_HOME`, else `~/.cargo`, as `takt promote` takes it. A
-    /// root that does not exist opens no turn. Refused for a resumed case, which keeps the one it
-    /// was opened with; not read by any other case.
+    /// root that does not exist opens no turn. A resumed turn keeps the one it was opened with:
+    /// given again, by any path whose canonical form is that root, it is accepted; another root,
+    /// or any for a turn that recorded none or for a case that is no turn, is refused naming
+    /// what the case keeps. Not read by any other case.
     #[arg(long)]
     install_root: Option<PathBuf>,
     #[command(flatten)]
@@ -391,6 +409,14 @@ struct LoopArgs {
     /// github.com, the host the bot route serves, else `none`.
     #[arg(long)]
     forge: Option<String>,
+    /// The least free space, in GiB, a step needs on the file system of the repository's tree
+    /// and, when `CARGO_TARGET_DIR` is set, of the one holding that directory, each read before
+    /// every step (a harness step, the test command, a gate, any deterministic step); under it
+    /// the run stops `DiskLow` naming the path, its free space and this threshold, exit 3,
+    /// before the step instead of failing in it. `0` turns the check off. A free space that
+    /// cannot be read stops nothing and is said once.
+    #[arg(long, value_name = "GIB", default_value_t = 10)]
+    min_free_gib: u64,
 }
 
 /// A harness that performs nothing. Asked while an approval is pending, it requests the gate
@@ -432,24 +458,30 @@ impl Harness for NoHarness {
 const EXIT_DONE: u8 = 0;
 /// Exit 1: refused before the run, the reason on stderr (`main`).
 const EXIT_REFUSED: u8 = 1;
-/// Exit 3: the run stopped on a budget or with nothing more it may do.
+/// Exit 3: the run stopped on a budget, with nothing more it may do, or with too little free
+/// disk for a step.
 const EXIT_STOPPED: u8 = 3;
 /// Exit 4: the run stopped for an approval; `takt approve` is the next step.
 const EXIT_APPROVAL: u8 = 4;
 /// Exit 5: the run ended on an error once its case was open, `stopped: error:`.
 const EXIT_ERROR: u8 = 5;
-/// Exit 6: the run waited on the forge and its budget ended first, `stopped: Waiting`.
+/// Exit 6: the run waited on the forge and its budget ended first, or it waits on something
+/// local and stopped at once, `stopped: Waiting`.
 const EXIT_WAITING: u8 = 6;
+/// Exit 7: no step can move the case, a claim left decided only by an action the run has no
+/// performer for, `stopped: Unperformable`.
+const EXIT_UNPERFORMABLE: u8 = 7;
 
 /// What `takt run --help` says about the exit codes; each line opens with its code.
 const EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
   1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress
+  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress; or DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
-  6  stopped: Waiting (<actions>; <the budget spent> or no step or hour budget): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; nothing recorded for it, the case stays open and the next run resumes it";
+  6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and the next run resumes it
+  7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open";
 
 /// What `takt scenario run --help` says about the exit codes: [`EXIT_CODES`] without `frontier:
 /// nothing ready`, which only `takt run` prints; a scenario whose story is not ready is exit 1.
@@ -457,10 +489,11 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate)
   1  refused before the run (an argument, the repository, the scenario, its seed, its story not ready there, its trial base or its case); the reason on stderr, no step run
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress
+  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress; or DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
-  6  stopped: Waiting (<actions>; <the budget spent> or no step or hour budget): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case";
+  6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
+  7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open";
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -483,10 +516,11 @@ fn main() -> ExitCode {
 /// | 0 | `Completed`; the frontier had nothing ready; `approve` and `protocols` done |
 /// | 1 | refused before the run, the reason on stderr, no step run |
 /// | 2 | the arguments do not parse (clap) |
-/// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress` |
+/// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress`, `DiskLow` |
 /// | 4 | `ApprovalRequired`: `takt approve` is the next step |
 /// | 5 | `stopped: error:`, the run ended on an error once its case was open: a forge that refused, a validator or the harness that failed |
-/// | 6 | `Waiting`: the run waited on the forge until its budget ended; the next run resumes the case |
+/// | 6 | `Waiting`: the run waited on the forge until its budget ended, or waits on something local and stopped at once; the next run resumes the case |
+/// | 7 | `Unperformable`: no step can move the case; a claim left is decided only by an action the run has no performer for |
 fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
     match cli.command {
         Commands::Protocols => {
@@ -709,11 +743,8 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     given_for_resume,
                     first_input.as_deref(),
                 )?;
-                if install_root.is_some() {
-                    return Err(anyhow!(
-                        "--install-root is given for the case {}, which keeps the install root it was opened with; nothing was resumed",
-                        resuming.id
-                    ));
+                if let Some(given) = &install_root {
+                    resume_install_root(&repo, &resuming.id, &resuming.protocol.id, given)?;
                 }
                 // A turn runs on the embedded protocol alone, and only by the binary that judges
                 // it, recorded when it opened: both checked before the case is resumed, so no
@@ -916,7 +947,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // A story's case that terminates accepted records its test result and its move
             // in the store; an intent's run has no story and writes nothing there.
             run.record_on(&store);
-            finish(&mut run, forge_line.as_deref(), out)
+            finish(&mut run, forge_line.as_deref(), &looping, out)
         }
     }
 }
@@ -1228,13 +1259,31 @@ fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
 /// Runs the open case `run` to its stop, `forge_line` said first, the run given this binary's
 /// [`REVISION`] to record; the exit code. An error the loop ends on once the case is open, a
 /// forge that refused the pull request among them, is a stop like any other: one line on
-/// stdout, its own code.
-fn finish(run: &mut Run<'_>, forge_line: Option<&str>, out: &mut dyn Write) -> Result<u8> {
+/// stdout, its own code. Every run the CLI makes stops `Unperformable` when no step can move
+/// its case ([`Run::stop_when_unperformable`], off in the library until a caller turns it on),
+/// and `DiskLow` before a step when the tree's or `CARGO_TARGET_DIR`'s file system has less
+/// free than `--min-free-gib` ([`Run::stop_when_disk_below`]).
+fn finish(
+    run: &mut Run<'_>,
+    forge_line: Option<&str>,
+    looping: &LoopArgs,
+    out: &mut dyn Write,
+) -> Result<u8> {
     if let Some(line) = forge_line {
         writeln!(out, "{line}")?;
     }
     run.binary = Some(REVISION.to_owned());
+    if let Some(transcripts) = takt::run::default_transcripts() {
+        run.transcripts_in(transcripts)?;
+    }
     run.take_default_gate();
+    run.stop_when_unperformable();
+    run.stop_when_disk_below(
+        looping.min_free_gib.saturating_mul(1 << 30),
+        std::env::var_os("CARGO_TARGET_DIR")
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from),
+    );
     let stop = match run.run(out) {
         Ok(stop) => stop,
         Err(error) => {
@@ -1260,6 +1309,8 @@ fn finish(run: &mut Run<'_>, forge_line: Option<&str>, out: &mut dyn Write) -> R
         Stop::Completed(_) => EXIT_DONE,
         Stop::ApprovalRequired(_) => EXIT_APPROVAL,
         Stop::Waiting { .. } => EXIT_WAITING,
+        Stop::Unperformable { .. } => EXIT_UNPERFORMABLE,
+        Stop::DiskLow { .. } => EXIT_STOPPED,
         _ => EXIT_STOPPED,
     })
 }
@@ -1335,25 +1386,37 @@ impl Scenario {
     }
 }
 
+/// The trial branches the checkout knows: every local `trial/…` and every remote's (as last
+/// fetched), by full ref name.
+fn known_trials(repo: &Path) -> Result<Vec<String>> {
+    takt::git::refs(repo, &["refs/heads/trial", "refs/remotes"])
+}
+
+/// The `<n>` of the trial base `name` names, a full ref name `refs/heads/trial/<n>` or
+/// `refs/remotes/<remote>/trial/<n>`; none for another ref, or a name under `trial/` that is
+/// not all digits, which is no trial base.
+fn trial_number(name: &str) -> Option<&str> {
+    let n = name.strip_prefix("refs/heads/trial/").or_else(|| {
+        name.strip_prefix("refs/remotes/")
+            .and_then(|rest| rest.split_once('/'))
+            .and_then(|(_, branch)| branch.strip_prefix("trial/"))
+    })?;
+    (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then_some(n)
+}
+
 /// The trial base a scenario run cuts next: one past the highest `trial/<n>` the checkout
 /// knows, a local branch or a remote's (as last fetched), `0` when there is none. Names under
-/// `trial/` that are not all digits are not trial bases. A number too large for `u64`, or a
+/// `trial/` that are not all digits are not trial bases. A number too large for `u128`, or a
 /// highest number nothing follows, is refused: never skipped, never wrapped to a number in use.
-fn next_trial(repo: &Path) -> Result<u64> {
-    let known = takt::git::refs(repo, &["refs/heads/trial", "refs/remotes"])?;
-    let mut highest: Option<u64> = None;
+/// Only a run through the bot route numbers its trial so ([`unique_trial`] otherwise).
+fn next_trial(repo: &Path) -> Result<u128> {
+    let known = known_trials(repo)?;
+    let mut highest: Option<u128> = None;
     for name in &known {
-        let Some(n) = name.strip_prefix("refs/heads/trial/").or_else(|| {
-            name.strip_prefix("refs/remotes/")
-                .and_then(|rest| rest.split_once('/'))
-                .and_then(|(_, branch)| branch.strip_prefix("trial/"))
-        }) else {
+        let Some(n) = trial_number(name) else {
             continue;
         };
-        if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
-            continue;
-        }
-        let n: u64 = n.parse().map_err(|_| {
+        let n: u128 = n.parse().map_err(|_| {
             anyhow!("{name} numbers a trial past the largest a scenario run counts to; nothing was changed")
         })?;
         highest = Some(highest.map_or(n, |h| h.max(n)));
@@ -1371,22 +1434,100 @@ fn next_trial(repo: &Path) -> Result<u64> {
 /// `takt/<case>`. The trial branch itself is not, as `n` is past every one known. A case id
 /// [`takt::case::check_id`] refuses (a scenario id long enough to take it past 250 bytes) is
 /// refused here, before any branch is cut or pushed.
-fn trial_free(repo: &Path, scenario: &str, n: u64) -> Result<String> {
+fn trial_free(repo: &Path, scenario: &str, n: u128) -> Result<String> {
     let case_id = format!("scenario-{scenario}-trial-{n}");
     takt::case::check_id(&case_id)?;
-    let refused = |what: String| {
-        anyhow!(
+    if let Some(what) = case_taken(repo, &case_id)? {
+        return Err(anyhow!(
             "scenario {scenario}: {what} exists already, though no trial/{n} branch is known: the case of trial/{n} would collide with it; nothing was pushed"
-        )
-    };
-    if repo.join(takt::case::CASES_DIR).join(&case_id).exists() {
-        return Err(refused(format!("the case {case_id}")));
-    }
-    let branch = takt::case::Branch::name_of(&case_id);
-    if !takt::git::refs(repo, &[&format!("refs/heads/{branch}")])?.is_empty() {
-        return Err(refused(format!("the case's branch {branch}")));
+        ));
     }
     Ok(case_id)
+}
+
+/// What of the case `case_id` is there already, its directory or its branch `takt/<case>`;
+/// none when neither is. `case_id` is one [`takt::case::check_id`] accepted.
+fn case_taken(repo: &Path, case_id: &str) -> Result<Option<String>> {
+    if repo.join(takt::case::CASES_DIR).join(case_id).exists() {
+        return Ok(Some(format!("the case {case_id}")));
+    }
+    let branch = takt::case::Branch::name_of(case_id);
+    if !takt::git::refs(repo, &[&format!("refs/heads/{branch}")])?.is_empty() {
+        return Ok(Some(format!("the case's branch {branch}")));
+    }
+    Ok(None)
+}
+
+/// How many nonces a trial number without the bot route can take within one second: eight
+/// digits.
+const TRIAL_NONCES: u64 = 100_000_000;
+
+/// The trial number and case id of a scenario run without the bot route, which has no remote
+/// to reserve a number on: the instant `at` (`YYYY-MM-DDTHH:MM:SSZ`, as [`takt::now`] gives it)
+/// to the second, its 14 digits, then an 8-digit nonce, 22 digits in all, past `u64`, so it
+/// is counted in `u128`. Runs from different checkouts very likely take different numbers (two
+/// runs in one second share one with a chance of 1 in 10^8) and their cases go into one
+/// scorecard; not consecutive ones. The
+/// nonce is `nonce` (random, [`trial_nonce`]) when that number is free in this checkout, else
+/// the next free one after it, wrapping: a number whose trial branch is known, local or a
+/// remote's, or whose case or case branch is there, is passed over. That, and `git checkout
+/// -b` refusing a branch that exists, is the hard guard; it holds within a checkout only. A
+/// case id [`takt::case::check_id`] refuses is refused, and so is a second whose every number
+/// is taken, before any branch is cut.
+fn unique_trial(repo: &Path, scenario: &str, at: &str, nonce: u64) -> Result<(u128, String)> {
+    let digits: String = at.chars().filter(char::is_ascii_digit).collect();
+    let second: u128 = match digits.len() {
+        14 => digits.parse().ok(),
+        _ => None,
+    }
+    .ok_or_else(|| anyhow!("the instant {at} gives no second to number a trial by"))?;
+    let known = known_trials(repo)?;
+    for k in 0..TRIAL_NONCES {
+        let n = second * u128::from(TRIAL_NONCES)
+            + u128::from((nonce % TRIAL_NONCES + k) % TRIAL_NONCES);
+        let case_id = format!("scenario-{scenario}-trial-{n}");
+        takt::case::check_id(&case_id)?;
+        let digits = n.to_string();
+        if known
+            .iter()
+            .any(|name| trial_number(name) == Some(digits.as_str()))
+        {
+            continue;
+        }
+        if case_taken(repo, &case_id)?.is_none() {
+            return Ok((n, case_id));
+        }
+    }
+    Err(anyhow!(
+        "scenario {scenario}: every trial number of {at} is taken in {}; nothing was changed",
+        repo.display()
+    ))
+}
+
+/// The nonce of a trial number without the bot route ([`unique_trial`]): eight random bytes
+/// from the operating system (`/dev/urandom`), modulo [`TRIAL_NONCES`]. Nothing a run shares
+/// with another goes into it: runs each in a PID namespace of its own have the same process id,
+/// and containers started alike the same host name. Where `/dev/urandom` does not read, the
+/// standard library's hasher, keyed from the operating system's randomness per process, over
+/// the process id and the clock's nanoseconds.
+fn trial_nonce() -> u64 {
+    use std::hash::{BuildHasher as _, Hasher as _};
+    use std::io::Read as _;
+    let mut bytes = [0_u8; 8];
+    let random = std::fs::File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map(|()| u64::from_le_bytes(bytes))
+        .unwrap_or_else(|_| {
+            let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+            hasher.write_u32(std::process::id());
+            hasher.write_u128(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| since.as_nanos()),
+            );
+            hasher.finish()
+        });
+    random % TRIAL_NONCES
 }
 
 /// `takt scenario run`: the scenario read, the tree found clean, `trial/<n>` cut from the seed
@@ -1446,8 +1587,15 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             )
         })?;
     }
-    let n = next_trial(&repo)?;
-    let case_id = trial_free(&repo, &scenario.id, n)?;
+    // Through the bot route the number is one past the highest known and the push's lease
+    // reserves it on the remote; without it, no remote reserves anything, so the number is the
+    // instant and a nonce, unique across checkouts.
+    let (n, case_id) = if forge.trials.is_some() {
+        let n = next_trial(&repo)?;
+        (n, trial_free(&repo, &scenario.id, n)?)
+    } else {
+        unique_trial(&repo, &scenario.id, &takt::now(), trial_nonce())?
+    };
     let trial = format!("trial/{n}");
     let left = takt::git::current_branch(&repo)?;
     let at = takt::git::head(&repo)?;
@@ -1529,7 +1677,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     // As `takt run`: a case that terminates accepted records its test result and its move in
     // the store, on the case's branch.
     run.record_on(&store);
-    finish(&mut run, forge.line.as_deref(), out)
+    finish(&mut run, forge.line.as_deref(), &looping, out)
 }
 
 /// Why `story`, `proposed`, is not ready among `all`, as [`takt::frontier::is_ready`] reads it:
@@ -1709,6 +1857,41 @@ fn refuse_for_resume(
         ));
     }
     Ok(())
+}
+
+/// Refuses `--install-root <given>` for the case `id`, on `protocol`, about to be resumed, unless
+/// it names the root the case keeps: a `self.improvement/1` turn's recorded install root
+/// ([`takt::case::install_root_of`]), which `given` names when its canonical path is that root.
+/// A case that is no turn, or a turn that recorded none, refuses any. `id` is one
+/// [`takt::case::check_id`] accepted, as [`case_protocol`] read it.
+fn resume_install_root(repo: &Path, id: &str, protocol: &str, given: &Path) -> Result<()> {
+    let keeps = |what: String| {
+        anyhow!(
+            "--install-root is given for the case {id}, which keeps the install root it was opened with{what}; nothing was resumed"
+        )
+    };
+    let recorded = if protocol == takt::case::TURN_PROTOCOL {
+        takt::case::install_root_of(&repo.join(takt::case::CASES_DIR).join(id))?
+    } else {
+        None
+    };
+    let Some(recorded) = recorded else {
+        return Err(keeps(String::new()));
+    };
+    match std::fs::canonicalize(given) {
+        Ok(canonical) if canonical == recorded => Ok(()),
+        Ok(canonical) => Err(keeps(format!(
+            ", {}; --install-root {} names {}, another root",
+            recorded.display(),
+            given.display(),
+            canonical.display()
+        ))),
+        Err(error) => Err(keeps(format!(
+            ", {}; --install-root {} is not there ({error})",
+            recorded.display(),
+            given.display()
+        ))),
+    }
 }
 
 /// `text` on one line: its lines, trimmed, the empty ones left out, joined with ` | `.
@@ -2069,8 +2252,8 @@ mod tests {
 
     /// Without a gates document no validator owns `gate.run`, and it only reads: a harness that
     /// keeps no state, `--harness none` among them, is not offered it
-    /// (story:no-inspect-for-stateless-harness). Nothing else is left, so the run stops
-    /// `NothingAdmissible`, exit 3, with no step taken.
+    /// (story:no-inspect-for-stateless-harness). `gate.green` is decided only by it, so the run
+    /// stops `Unperformable` naming the claim and the gates document, exit 7, with no step taken.
     #[test]
     fn without_a_gates_document_gate_run_is_left_to_no_one() {
         let repo = gated_repository("gates-none", None);
@@ -2089,10 +2272,12 @@ mod tests {
             "--test-cmd",
             "true",
         ]);
-        assert_eq!(code, 3, "{out}");
+        assert_eq!(code, 7, "{out}");
         assert!(out.contains("frontier: gate.run (admissible)"), "{out}");
         assert!(
-            out.contains("stopped: NothingAdmissible; steps 0, tokens 0"),
+            out.contains(
+                "stopped: Unperformable (gate.green; nothing performs it without the gates document); steps 0, tokens 0"
+            ),
             "{out}"
         );
     }
@@ -2126,11 +2311,10 @@ mod tests {
     }
 
     /// Without `--forge` and without an origin, neither forge validator is registered: no
-    /// `forge:` line, no `pr.open` or `ci.read` step. After `tests.run` the none harness hands the
-    /// work over as it stands, `change.read` finds nothing a merge into the base would change, so
-    /// `pr.open` stays blocked, and the edits are the judgement steps left (`gate.run` and
-    /// `ci.read` only read and record no choice, and are not offered to a harness that keeps no
-    /// state).
+    /// `forge:` line, no `pr.open` or `ci.read` step. The repository has no gates document
+    /// either: after `tests.run` nothing offered moves an open obligation and `gate.run`, which
+    /// alone decides `gate.green`, has no performer, so the run stops `Unperformable`, exit 7,
+    /// before any judgement step.
     #[test]
     fn without_an_origin_the_forge_is_none_and_no_forge_step_is_taken() {
         let repo = gated_repository("forge-default-none", None);
@@ -2139,16 +2323,15 @@ mod tests {
             "default-none",
             &[],
         ));
-        assert_eq!(code, 5, "a judgement step is left: {out}");
+        assert_eq!(code, 7, "{out}");
         assert!(!out.contains("forge:"), "{out}");
         assert!(!out.contains("pr.open {}"), "{out}");
         assert!(!out.contains("ci.read {}"), "{out}");
-        assert!(out.contains("step 2: change.handover (none)"), "{out}");
-        assert!(out.contains("evidence: change_record none"), "{out}");
+        assert!(!out.contains("(none)"), "a judgement step: {out}");
         assert!(out.contains("step 1: tests.run {}"), "{out}");
         assert!(
             out.contains(
-                "stopped: error: step 4: the harness failed; everything the step changed was discarded: no harness: a judgement step among implementation.edit, tests.write is left"
+                "stopped: Unperformable (gate.green; nothing performs it without the gates document); steps 1, tokens 0"
             ),
             "{out}"
         );
@@ -2166,15 +2349,14 @@ mod tests {
             "none",
             &["--forge", "none"],
         ));
-        assert_eq!(code, 5, "a judgement step is left: {out}");
+        assert_eq!(code, 7, "{out}");
         assert!(!out.contains("forge:"), "{out}");
         assert!(!out.contains("pr.open {}"), "{out}");
         assert!(!out.contains("ci.read {}"), "{out}");
-        assert!(out.contains("step 2: change.handover (none)"), "{out}");
-        assert!(out.contains("evidence: change_record none"), "{out}");
+        assert!(!out.contains("(none)"), "a judgement step: {out}");
         assert!(
             out.contains(
-                "stopped: error: step 4: the harness failed; everything the step changed was discarded: no harness: a judgement step among implementation.edit, tests.write is left"
+                "stopped: Unperformable (gate.green; nothing performs it without the gates document); steps 1, tokens 0"
             ),
             "{out}"
         );
@@ -2270,6 +2452,47 @@ mod tests {
         ));
         assert_eq!(error, "no forge `hub`: bot or none");
         assert!(!repo.join(".engineering/cases").exists());
+    }
+
+    /// story:trial-numbers-are-unique-across-checkouts: without the bot route a trial number is
+    /// the instant's fourteen digits, then the eight-digit nonce, 22 digits; a number whose
+    /// trial branch is known (local, or a remote's), whose case is there, or whose case branch
+    /// is, is passed over for the next nonce, past 99999999 to 00000000.
+    #[test]
+    fn a_trial_number_without_the_bot_route_is_the_instant_and_a_free_nonce() {
+        let repo = repository("one-ready", "unique-trial");
+        let at = "2026-10-19T14:25:30Z";
+        let taken = |nonce: u64| {
+            super::unique_trial(&repo, "1", at, nonce)
+                .expect("a trial number")
+                .0
+        };
+        assert_eq!(
+            super::unique_trial(&repo, "1", at, 42).expect("a trial number"),
+            (
+                2_026_101_914_253_000_000_042,
+                "scenario-1-trial-2026101914253000000042".to_owned()
+            )
+        );
+        git(&repo, &["branch", "trial/2026101914253000000042"]);
+        git(
+            &repo,
+            &[
+                "update-ref",
+                "refs/remotes/origin/trial/2026101914253000000043",
+                "HEAD",
+            ],
+        );
+        fs::create_dir_all(repo.join(".engineering/cases/scenario-1-trial-2026101914253000000044"))
+            .expect("a case directory");
+        git(
+            &repo,
+            &["branch", "takt/scenario-1-trial-2026101914253000000045"],
+        );
+        assert_eq!(taken(42), 2_026_101_914_253_000_000_046);
+        assert_eq!(taken(99_999_999), 2_026_101_914_253_099_999_999);
+        git(&repo, &["branch", "trial/2026101914253099999999"]);
+        assert_eq!(taken(99_999_999), 2_026_101_914_253_000_000_000);
     }
 
     /// The lines of `aep plan artifact history <id>` in `repo` that record an approval.

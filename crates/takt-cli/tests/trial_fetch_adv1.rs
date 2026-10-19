@@ -264,6 +264,7 @@ impl World {
     fn takt(&self, args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
         let output = Command::new(env!("CARGO_BIN_EXE_takt"))
             .args(args)
+            .env("XDG_STATE_HOME", self.state.join("xdg-state"))
             .envs(env.iter().copied())
             .env_remove("B10X_GATES_POLICY")
             .env(

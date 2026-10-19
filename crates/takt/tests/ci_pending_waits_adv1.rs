@@ -320,6 +320,7 @@ fn adv1_an_infinite_hour_budget_waits_without_a_panic_and_lets_go_of_the_case() 
         Ok(Stop::Waiting {
             on: vec!["ci.read".to_owned()],
             budget: Some(Box::new(Stop::Iterations(4))),
+            local: Vec::new(),
         }),
         "{text}"
     );

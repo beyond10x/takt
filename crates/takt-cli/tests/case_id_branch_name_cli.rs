@@ -190,11 +190,19 @@ fn scenario_run_refuses_a_minted_case_id_before_any_branch_is_cut() {
         .output()
         .expect("takt runs");
     let err = String::from_utf8_lossy(&output.stderr);
-    let case_id = format!("scenario-{scenario}-trial-0");
     assert_eq!(output.status.code(), Some(1), "{err}");
+    // Without the bot route the trial number is the instant's digits and a nonce, all digits.
+    let refused = err
+        .split_once("the case id `")
+        .and_then(|(_, rest)| rest.split_once("` is refused"))
+        .map(|(id, _)| id)
+        .unwrap_or_else(|| panic!("no case id refused: {err}"));
+    let trial = refused
+        .strip_prefix(&format!("scenario-{scenario}-trial-"))
+        .unwrap_or_else(|| panic!("not the minted case id: {refused}"));
     assert!(
-        err.contains(&format!("the case id `{case_id}` is refused")),
-        "{err}"
+        !trial.is_empty() && trial.bytes().all(|b| b.is_ascii_digit()),
+        "{refused}"
     );
     assert!(err.contains("250"), "{err}");
     assert!(

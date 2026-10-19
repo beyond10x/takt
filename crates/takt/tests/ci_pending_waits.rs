@@ -406,6 +406,7 @@ fn a_step_budget_that_ends_while_the_checks_are_pending_stops_waiting_and_the_ne
         Ok(Stop::Waiting {
             on: vec!["ci.read".to_owned()],
             budget: Some(Box::new(Stop::Iterations(4))),
+            local: Vec::new(),
         }),
         "{text}"
     );
@@ -446,6 +447,8 @@ fn a_step_budget_that_ends_while_the_checks_are_pending_stops_waiting_and_the_ne
 
 /// An hour budget bounds the wait as a step budget does: a poll longer than what is left of
 /// the hours is cut to it, and the run stops `Waiting` with `Hours` spent, well before the poll.
+/// The budget is 3 s and the poll 120 s, and the run ends within 60 s: a loaded host may take
+/// 57 s past the budget, and a wait the budget did not cut takes the whole poll.
 #[test]
 fn an_hour_budget_cuts_the_wait_and_stops_waiting() {
     let repo = repository("pending-hours");
@@ -461,13 +464,13 @@ fn an_hour_budget_cuts_the_wait_and_stops_waiting() {
         &validators,
     )
     .expect("the case resumes");
-    run.poll = Duration::from_secs(30);
+    run.poll = Duration::from_secs(120);
     let mut out = Vec::new();
     let started = Instant::now();
     let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
     let text = String::from_utf8_lossy(&out);
     assert!(
-        started.elapsed() < Duration::from_secs(10),
+        started.elapsed() < Duration::from_secs(60),
         "waited {:?}: {text}",
         started.elapsed()
     );
@@ -476,6 +479,7 @@ fn an_hour_budget_cuts_the_wait_and_stops_waiting() {
         Ok(Stop::Waiting {
             on: vec!["ci.read".to_owned()],
             budget: Some(Box::new(Stop::Hours(hours))),
+            local: Vec::new(),
         }),
         "{text}"
     );
@@ -498,6 +502,7 @@ fn a_run_with_no_step_or_hour_budget_stops_waiting_at_once() {
         Ok(Stop::Waiting {
             on: vec!["ci.read".to_owned()],
             budget: None,
+            local: Vec::new(),
         }),
         "{text}"
     );
@@ -662,9 +667,10 @@ fn shape_pr_open_a_head_lagging_its_own_push_is_waited_on_and_recorded_once_it_c
         &harness,
     );
     match &stop {
-        Ok(Stop::Waiting { on, budget }) => {
+        Ok(Stop::Waiting { on, budget, local }) => {
             assert!(on.contains(&"pr.open".to_owned()), "{stop:?}\n{text}");
             assert_eq!(budget.as_deref(), Some(&Stop::Iterations(4)), "{text}");
+            assert!(local.is_empty(), "{stop:?}\n{text}");
         }
         other => panic!("not waiting on pr.open: {other:?}\n{text}"),
     }
@@ -731,6 +737,7 @@ fn shape_ci_read_a_head_lagging_the_push_is_waited_on_and_read_once_it_catches_u
         Ok(Stop::Waiting {
             on: vec!["ci.read".to_owned()],
             budget: Some(Box::new(Stop::Iterations(4))),
+            local: Vec::new(),
         }),
         "{text}"
     );
@@ -814,6 +821,7 @@ fn shape_merge_a_head_lagging_the_approval_push_is_waited_on_and_merged_once_it_
         Ok(Stop::Waiting {
             on: vec!["repository.merge".to_owned()],
             budget: Some(Box::new(Stop::Iterations(4))),
+            local: Vec::new(),
         }),
         "{text}"
     );
