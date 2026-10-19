@@ -1,0 +1,17 @@
+format: canon-case/1
+id: turn-2-case-id
+protocol: self.improvement
+artifacts:
+  finding:
+    revision: 0e5d555
+  baseline:
+    revision: a0b8576
+  candidate:
+    revision: 834205f
+  promotion:
+    revision: 44f96a48de6b0a89db6801fd1d85372896e98781
+inputs:
+  surface: judge
+independence:
+  planner-run:
+  - different_agent_run

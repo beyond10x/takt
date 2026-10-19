@@ -1,0 +1,5 @@
+- capability: repository.merge.judge_surface
+  decision: granted
+  approver: agent:planner
+  granted_at: 2026-10-18T19:54:33Z
+  revision: 834205f

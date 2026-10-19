@@ -1,0 +1,21 @@
+{
+  "format": "takt-promotion/1",
+  "revision": "44f96a48de6b0a89db6801fd1d85372896e98781",
+  "revision_stated_by": null,
+  "tree": "0986f1f00e588ca5377869daedb77e3ac93bc29d",
+  "promoted_at": "2026-10-19T05:02:23Z",
+  "kind": "promotion",
+  "scorecard": "44f96a48de6b0a89db6801fd1d85372896e98781",
+  "scorecard_file": "~/.cache/takt-r0/step4/saves/scorecard-44f96a48de6b0a89db6801fd1d85372896e98781.json",
+  "scorecard_sha256": "25b32aa6c0c22d990aad4334ffaf99e3767b116c3ba24a428586ebdd042cc6a2",
+  "against": "a0b8576fe56aca1304e412eb62e5622762de198a",
+  "rule": {
+    "trials": 5,
+    "margin": 1
+  },
+  "worse": 0,
+  "binary": "~/.cargo/bin/takt",
+  "binary_sha256": "0146e9dcfcfbff0be5c5e7ff27ccb7824ad13bf935864dc5fbeb968649b5c269",
+  "runs": [],
+  "previous_sha256": "d10dd5e1eacf6eabaf86ffd3829c77fbd02ca8afa45caa6a0097a397e8aa58c5"
+}

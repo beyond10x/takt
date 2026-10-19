@@ -157,7 +157,8 @@ not say.
 - Against the promotion rule decided on 2026-10-18 (`design:recursive-self-improvement`
   § Scorecard: n=5; worse on tokens when the candidate's median is above the baseline's maximum),
   98719c3's median, 122,465, is below the baseline's maximum, 138,160. This is a reading of the
-  rows above, not a scorecard record: `improvement-turns.jsonl` holds no line for turn 2 yet.
+  rows above, not a scorecard record. Turn 2's line in `improvement-turns.jsonl` was added on
+  2026-10-19 (below).
 - The 15 lanes add to `journey.svg`; in each the CI runs a second time
   (`story:pr-opens-when-change-is-done`).
 
@@ -214,6 +215,22 @@ n is 1 per task.
   `--model claude-opus-5-5` and compiled the tests before the run. It reached the approval in 6
   steps with no resume: 592,698 tokens, $0.85, 242 s, held-out check 10/10. Its run record is
   `docs/runs/2026-10-18-trial-1-worktree.md`.
+
+## Turns 2 and 3 and the first promotion decided by the scorecard (2026-10-19)
+
+- `improvement-turns.jsonl` holds three turns, all accepted by Canon. Turn 2
+  (`story:case-id-is-a-valid-branch-name`) compared T-14..18 with T-24..28 at 98719c3: median
+  tokens 122,465 against the baseline's 122,361 (+0.1%). Turn 3
+  (`story:hours-bounds-a-harness-step`) compared them with T-39..43 at 9fb14cc: 122,151 (-0.2%).
+  Neither is worse on anything under the rule above.
+- One promotion serves both. `takt promote` ran T-44..48 at 44f96a4: 5/5 `ApprovalRequired`, 5/5
+  held-out pass, median 121,952 tokens against the baseline's maximum 138,160, verdict "no scenario
+  worse than the baseline". It built and installed the binary under no `takt.promote` grant.
+- T-39..48 have no line in `scenario-runs.jsonl` yet, so the timeline and the journeys do not draw
+  them.
+- The run record is `docs/runs/2026-10-19-improvement-turns-2-and-3/README.md`. Its case files name
+  commits by their ids before the history rewrite of 2026-10-19, and it maps them to the ids on
+  `main`.
 
 ## `improvement-turns.jsonl`
 

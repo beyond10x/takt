@@ -1,0 +1,282 @@
+{
+  "actions": {
+    "binary.promote": {
+      "reasons": [
+        {
+          "claim": "fix.merged",
+          "value": "unknown"
+        }
+      ],
+      "status": "blocked"
+    },
+    "candidate.deliver": {
+      "status": "admissible"
+    },
+    "candidate.merge": {
+      "reasons": [
+        {
+          "input": "surface",
+          "value": "judge"
+        }
+      ],
+      "status": "blocked"
+    },
+    "candidate.merge_judge_surface": {
+      "reasons": [
+        {
+          "capability": "repository.merge.judge_surface",
+          "decision": "none"
+        }
+      ],
+      "status": "approval-required"
+    },
+    "finding.file": {
+      "status": "admissible"
+    },
+    "scenario.reproduce": {
+      "status": "admissible"
+    },
+    "scenario.verify": {
+      "status": "admissible"
+    },
+    "scorecard.compare": {
+      "reasons": [
+        {
+          "claim": "fix.merged",
+          "value": "unknown"
+        }
+      ],
+      "status": "blocked"
+    }
+  },
+  "case": "turn-2-case-id",
+  "claims": {
+    "finding.cited": {
+      "value": "true"
+    },
+    "fix.merged": {
+      "value": "unknown"
+    },
+    "promoted": {
+      "value": "unknown"
+    },
+    "scenario.passes_after": {
+      "value": "true"
+    },
+    "scenario.reproduced_before": {
+      "value": "true"
+    },
+    "scorecard.no_regression": {
+      "value": "true"
+    }
+  },
+  "explanation": {
+    "actions": {
+      "binary.promote": {
+        "because": [
+          {
+            "claim": "fix.merged",
+            "value": "unknown"
+          }
+        ],
+        "status": "blocked"
+      },
+      "candidate.merge": {
+        "because": [
+          {
+            "input": "surface",
+            "value": "judge"
+          }
+        ],
+        "status": "blocked"
+      },
+      "candidate.merge_judge_surface": {
+        "because": [
+          {
+            "capability": "repository.merge.judge_surface",
+            "decision": "none"
+          }
+        ],
+        "status": "approval-required"
+      },
+      "scorecard.compare": {
+        "because": [
+          {
+            "claim": "fix.merged",
+            "value": "unknown"
+          }
+        ],
+        "status": "blocked"
+      }
+    },
+    "claims": {
+      "fix.merged": {
+        "because": [
+          {
+            "kind": "merge_observation",
+            "status": "absent",
+            "subject": "candidate"
+          }
+        ],
+        "value": "unknown"
+      },
+      "promoted": {
+        "because": [
+          {
+            "kind": "promotion_record",
+            "status": "absent",
+            "subject": "promotion"
+          }
+        ],
+        "value": "unknown"
+      }
+    },
+    "computed_from": {
+      "at": "2026-10-18T19:54:33Z",
+      "case": {
+        "artifacts": {
+          "baseline": {
+            "revision": "a0b8576"
+          },
+          "candidate": {
+            "revision": "834205f"
+          },
+          "finding": {
+            "revision": "0e5d555"
+          },
+          "promotion": {
+            "revision": "r0"
+          }
+        },
+        "format": "canon-case/1",
+        "id": "turn-2-case-id",
+        "independence": {
+          "planner-run": [
+            "different_agent_run"
+          ]
+        },
+        "inputs": {
+          "surface": "judge"
+        },
+        "protocol": "self.improvement"
+      },
+      "evidence": [
+        "e1",
+        "e2",
+        "e3",
+        "e4"
+      ],
+      "protocol": "self.improvement",
+      "protocol_revision": 1,
+      "semantics": {
+        "canon": "0.6.0",
+        "format": "canon-decision/1"
+      }
+    },
+    "outcomes": {
+      "abandoned": {
+        "because": [
+          {
+            "decision": "explicitly_abandoned",
+            "present": false
+          }
+        ],
+        "status": "blocked"
+      },
+      "accepted": {
+        "because": [
+          {
+            "claim": "promoted",
+            "value": "unknown"
+          }
+        ],
+        "status": "blocked"
+      },
+      "declined": {
+        "because": [
+          {
+            "evidence": "scenario_result",
+            "present": true,
+            "subject": "candidate"
+          },
+          {
+            "evidence": "e3",
+            "status": "applied"
+          }
+        ],
+        "status": "blocked"
+      },
+      "unreproducible": {
+        "because": [
+          {
+            "evidence": "scenario_result",
+            "present": true,
+            "subject": "baseline"
+          },
+          {
+            "evidence": "e2",
+            "status": "applied"
+          }
+        ],
+        "status": "blocked"
+      }
+    }
+  },
+  "format": "canon-decision/1",
+  "obligations": [
+    {
+      "id": "regression.required",
+      "status": "discharged"
+    },
+    {
+      "id": "reproduction.required",
+      "status": "discharged"
+    },
+    {
+      "id": "verification.required",
+      "status": "discharged"
+    }
+  ],
+  "outcomes": {
+    "abandoned": {
+      "reasons": [
+        {
+          "decision": "explicitly_abandoned",
+          "present": false
+        }
+      ],
+      "status": "blocked"
+    },
+    "accepted": {
+      "reasons": [
+        {
+          "claim": "promoted",
+          "value": "unknown"
+        }
+      ],
+      "status": "blocked"
+    },
+    "declined": {
+      "reasons": [
+        {
+          "evidence": "scenario_result",
+          "present": true,
+          "subject": "candidate"
+        }
+      ],
+      "status": "blocked"
+    },
+    "unreproducible": {
+      "reasons": [
+        {
+          "evidence": "scenario_result",
+          "present": true,
+          "subject": "baseline"
+        }
+      ],
+      "status": "blocked"
+    }
+  },
+  "protocol": "self.improvement",
+  "protocol_revision": 1
+}
