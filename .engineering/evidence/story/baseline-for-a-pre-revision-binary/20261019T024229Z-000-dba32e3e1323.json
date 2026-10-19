@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T02:42:29Z",
+  "actor": "human:timo",
+  "artifact": "story:baseline-for-a-pre-revision-binary",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check at 69ffa2b: 709 passed, 0 failed; reviewer approve at 69ffa2b (both round-1 probes refused, real a0b8576 record accepted by --dry-run); citations 509/509",
+    "reference": "c944ce7"
+  }
+}

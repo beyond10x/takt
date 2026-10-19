@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T02:00:17Z",
+  "actor": "human:timo",
+  "artifact": "story:step-records-per-call-usage",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check at df179c9: 79 suites, 698 passed, 0 failed; reviewer approve at df179c9 (11 probes red at bd0d91f, green at df179c9); citations 498/498",
+    "reference": "48d6500"
+  }
+}

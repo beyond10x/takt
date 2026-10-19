@@ -107,6 +107,12 @@ fn run(repo: &Path, case: &str, tokens: u64, stop: &str) {
                 tokens: Some(usage.total()),
                 usage: Some(usage),
                 revision: None,
+                model: None,
+                cost_usd: None,
+                duration_ms: None,
+                api_ms: None,
+                turns: None,
+                started_at: None,
             },
         ),
         (
@@ -231,9 +237,12 @@ fn save_then_against_marks_a_worse_scenario_and_exits_3() {
         &saved.display().to_string(),
     ]);
     assert_eq!(code, 3, "{text}{stderr}");
+    // One case lowered is within the rule's margin of one; the median of tokens over the saved
+    // maximum is what marks the scenario worse.
     for line in [
-        "scenario 1  rank 4 or better (accepted): candidate 0/1 against saved 1/1",
-        "scenario 1  outcomes by rank  worse",
+        "rule  trials 5 a scenario  margin 1 case  tokens worse when the median exceeds the saved maximum",
+        "scenario 1  median tokens 650 exceeds the saved maximum 500",
+        "scenario 1  outcomes by rank held  tokens over  worse",
     ] {
         assert!(text.contains(line), "{line} in {text}");
     }
@@ -252,7 +261,7 @@ fn save_then_against_marks_a_worse_scenario_and_exits_3() {
     ]);
     assert_eq!(code, 0, "{text}{stderr}");
     assert!(
-        text.contains("scenario 1  outcomes by rank  not worse"),
+        text.contains("scenario 1  outcomes by rank held  tokens held  not worse"),
         "{text}"
     );
 }

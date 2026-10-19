@@ -31,7 +31,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/confinement.rs
-revision: 13
+revision: 17
 ---
 # Story: confinement-seam
 
@@ -120,3 +120,15 @@ Routes the reviewer of story:step-cannot-forge-its-validators found at 9b70c5b t
 step-cannot-forge-its-validators keeps an ignored test for each, naming this story.
 - M16, from the reviewer's verdict on step-cannot-forge-its-validators at 65795ea: `../.cargo` is a link before the run and a step writes `config.toml` through it; run 1 refuses and names what it could not put back, but run 2 takes the outside baseline afresh and is accepted with 1 pass. A cheap interim fix outside this story: record what a run could not put back, so the next run refuses until it is cleared.
 - M17, from the loop-scorecard adversary pass 2 (2026-10-18): a judgement step overwrites a loose object of the base under its own id; git does not re-hash on read and `.git/objects/` is not guarded, so `judge_list_at` (the step guard's list read at the base) and any other read "at the base" return the step's bytes after the checkpoint restore. story:loop-scorecard closes the neighbouring routes in its own unit (the checkpoint guards `commondir`, `gitdir`, `shallow` and `objects/info/alternates`; `loop.definition.check` compares against a snapshot taken at case open). Closed by confining the harness child so it cannot write the repository's object store, or by reading base content only from a snapshot taken before the step.
+- M18, from the reviewer's verdict on story:loop-scorecard at 20ab1c5 (inferred, not probed): `guarded_roots` adds only a sibling worktree's `info/`, not its `commondir` or `gitdir`; a step's write there redirects another session's tree, not this case's. Closed by confining the harness child to its own tree.
+- M19, from the reviewer's verdict on story:promotion at 2c6d2bf (observed): the test command runs files the harness wrote into the tree, unconfined, with `HOME` and `XDG_STATE_HOME` passed through (`crates/takt/src/validator.rs:275-279`); `takt run --harness none --test-cmd "sh probe_test.sh"` wrote a record into `$XDG_STATE_HOME/takt/promotions/`. A step can therefore plant a promotion baseline. Closed by running the test command (and a candidate takt in scenario runs) with a scratch HOME and XDG directories and no write access outside the tree.
+
+- M20, from the reviewer's verdict on story:loop-scorecard at b87db6d (observed): the test command of one case, which runs the candidate's code, writes a loose object over an existing blob id in `.git/objects/`; git does not re-hash on read, `.git/objects/` is neither guarded nor put back after a validator run, and the object survives into later cases. A loop case opened afterwards on the true baseline snapshotted the planted definitions (`at_least: 0.25`) and recorded `at_target` where the real target gives `below_target`; it also works when the real object is packed. story:loop-scorecard verifies commit, tree and blob ids from their bytes before its own reads; every other read of history by id stays open. Closed by running the test command with no write access to the repository's object store.
+
+## From the promotion review (2026-10-19)
+
+The reviewer's verdict on story:promotion at df9681a ("approve") found two more routes that need write access to the operator's store, which a candidate has only through M19:
+- C6: the chain protects every record but the newest (`chained()`, `crates/takt/src/promotion.rs:396-451@df9681a`). After the newest record's scorecard copy was rewritten to all `error` at 9M tokens, with `scorecard_sha256` updated, an all-`error` candidate passed `--dry-run`.
+- C8: after a trailing `.refused.json` was deleted, the refused revision was judged again.
+
+A digest of the newest record kept beside the installed binary does not close them: the same user can write there. Confinement closes them.

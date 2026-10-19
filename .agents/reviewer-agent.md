@@ -74,6 +74,10 @@ The reviewer agent's part of one improvement turn (run → record → measure �
 deliver → verify → promote), one task at a time:
 
 1. **Run** a scenario on a fresh trial base, with `B10X_GATES_POLICY` set.
+   A task from another repository uses its merged unit: seed = the merge's first parent, intent =
+   the story body, hidden acceptance = the unit's added or changed test files, copied over the
+   candidate's files after the run (overwrite, never apply as a patch: the run may have edited the
+   same test file). Use one build directory per repository and stop below 15G free disk.
 2. **Measure** it against the promoted baseline.
 3. **Diagnose** each defect down to one `expected_before` predicate that reproduces it
    (`.agents/planner-agent.md` § Intake gives its keys).

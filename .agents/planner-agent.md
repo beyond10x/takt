@@ -110,17 +110,27 @@ Cadence, until takt drives the loop itself:
 - **Per turn**: `scripts/check-finding` at the baseline and at the candidate, then five candidate
   runs scored against that baseline under the promotion rule (design:recursive-self-improvement
   § Scorecard).
-- **Daily**: one scenario run at the promoted revision by the reviewer, recorded under
-  `docs/metrics/`; a stop or a figure outside the baseline's range becomes a finding.
-- **Weekly**: the L2 turn below.
+- **Variety, by hand, no schedule** (the owner, 2026-10-18): the reviewer runs many different
+  tasks at the promoted revision, not scenario 1 again: story-sized merged units of public
+  beyond10x repositories (seed = the merge's first parent, intent = the story body, hidden
+  acceptance = the unit's added tests applied after the run), the realistic scenario corpus, and a
+  common benchmark once it is integrated. Every run is recorded under `docs/metrics/` with its
+  repository; every failure of the hidden acceptance is diagnosed and becomes a finding. A
+  repeated weekly run comes later, when the owner says so.
 
 The planner dispatches every run: the reviewer and the doc-writer as agents started from their
 profiles, the developer by message.
 
+No idle slots. The owner allows three agents at once on the planner's side; while the developer
+works, those three run work that waits on nobody: a code review that hunts findings for the next
+turns, a scope pass on the next wave's stories, a docs or site refresh, a scheduled run. A watch on
+a ref is not work. The developer runs three implementors at once on stories whose scopes do not
+overlap, the improvement turn always one of them.
+
 A turn counts on the loop scorecard only as a `self.improvement` case under `.engineering/cases/`;
 a turn recorded elsewhere, such as an R0 case under `docs/runs/`, is copied there unchanged.
 
-**The L2 turn.** Once three improvement turns are recorded, and weekly after that, open a
+**The L2 turn.** Once three improvement turns are recorded, and after every three more, open a
 `loop.improvement/1` case with `loop_baseline` at the promoted revision. The validator
 `loop.measure` writes the loop scorecard's `loop_measurement`; its retained
 `loop-measurement-<n>.json` holds each figure with the turns it was computed from. File the metric
@@ -138,6 +148,25 @@ once at least three turns have been filed since the merge.
 - A message that puts a choice names its options, each with its cost, then a recommendation and
   a default.
 - In Slack, never `#` followed by a digit; a pull request or an issue is a full GitHub URL.
+- `b10x-gates scan-text` gates the commit: run it unpiped in a bash script file that starts with
+  `set -euo pipefail`, run by path, with the commit after it in the same script. A `| tail` after
+  it hid a refusal on 2026-10-18 and a personal path reached local main. An inline command is not
+  such a chain: the harness runs it in zsh under `eval`, where `set -e` did not stop after a
+  failing command, and on 2026-10-19 a commit followed a scan that had failed on an unsplit
+  `$files`.
+- A store write or a merge into main can move lines that `ess/` cites (`relate` adds a
+  frontmatter line; a `docs/**` merge moves a cited generator line). Local `main` only receives a
+  tree whose citations resolve: in the managed worktree, after the store commit (for a `docs/**`
+  branch, after merging it into a worktree cut from `main`), run `python3 -I
+  scripts/check-citations --require-digests` unpiped in the same script as
+  scan-text, and merge into `main` only when it exits 0 and the worktree contains `main`'s tip
+  (`git merge-base --is-ancestor main HEAD`); if `main` moved, merge it into the worktree and run
+  the check again, so the `--no-ff` merge into `main` has the checked tree. On an unresolved line, run
+  `check-citations fix` outside that script (it exits 1 even when it re-pointed every line), then
+  run the check again: when it exits 0, commit the re-point in the worktree as its own commit and
+  merge; when it does not (the cited text changed, or a needle matches twice), merge nothing and
+  report it to the owner. On 2026-10-19 a `relate` left main red with 5 unresolved citations,
+  and a `docs/**` merge with 1.
 
 ## Intake
 
@@ -163,12 +192,16 @@ goes to standard error.
    | key | what |
    |---|---|
    | `scenario` | the scenario's id in the scratch repository's `.engineering/scenarios.conf` |
-   | `command` | one shell line, run in a fresh clone of the scenario's seed, with `$TAKT` the binary under test and `$SCENARIO` the clone, in a fresh HOME of the check's own; no credential of the caller's environment or home reaches it |
+   | `repository` | instead of `scenario`: the repository the defect was seen on, an `https://` URL and never a path (the predicate is committed to a public repository and must hold on every machine), which `check-finding` clones without `--scenarios`; a local checkout stands in for the URL only through `check-finding --checkout <url>=<path>` at check time |
+   | `seed` | with `repository`: the commit the task starts from, a commit id |
+   | `test` | with `repository`, optional: the task's test command, handed to the command as `$TEST` |
+   | `command` | one shell line, run in a fresh clone of the scenario's seed, or of `repository` at `seed`, with `$TAKT` the binary under test and `$SCENARIO` the clone, in a fresh HOME of the check's own; no credential of the caller's environment or home reaches it |
    | `exit` | the exit status while the defect is present, 0 to 255 but 124 and 137, which `check-finding` reads as its timeout and `file-finding` refuses as `malformed` |
    | `output` | a fixed string the command's standard output or standard error then holds |
    | `source` | the run record or review that produced the finding, a path in this repository |
 
-   `exit`, `output` or both; the predicate holds when every one given holds.
+   `scenario` or `repository`, one of the two; `exit`, `output` or both; the predicate holds when
+   every one given holds.
 3. **File.** `scripts/file-finding --key <key> --title "<title>" --from <body.md>`, with
    `--kind blocker` when the finding stops other work and no takt change resolves it; a story
    otherwise. `filed`: the store holds `story:<key>` (or `blocker:<key>`) with the reference

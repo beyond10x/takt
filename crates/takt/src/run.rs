@@ -123,10 +123,15 @@ fn short(revision: &str) -> &str {
 }
 
 /// Who took a step, with what its event records of it: a validator, and the revision it
-/// observed when it observed; or the harness, the tokens it reported and their components.
+/// observed when it observed; or the harness, the tokens it reported, their components and
+/// what it reported about the call besides them.
 enum SteppedBy<'r> {
     Validator(Option<&'r str>),
-    Harness(Option<u64>, Option<crate::events::TokenUsage>),
+    Harness(
+        Option<u64>,
+        Option<crate::events::TokenUsage>,
+        Option<crate::harness::CallReport>,
+    ),
 }
 
 /// What [`Run::record_before`] found before a step: no grant authorises it, so nothing was
@@ -3874,7 +3879,9 @@ impl<'a> Run<'a> {
     }
 
     /// Records a step: by a validator, with the revision it observed, or by the harness, with
-    /// the tokens it reported and their components; which one, the action, what it reported.
+    /// the tokens it reported, their components and what it reported about the call (the
+    /// model, cost, duration, API time, turns and start, each only when stated); which one,
+    /// the action, what it reported.
     fn stepped(
         &self,
         events: &Events,
@@ -3883,10 +3890,11 @@ impl<'a> Run<'a> {
         action: &str,
         summary: &str,
     ) -> Result<()> {
-        let (by, tokens, usage, revision) = match by {
-            SteppedBy::Validator(revision) => ("validator", None, None, revision),
-            SteppedBy::Harness(tokens, usage) => ("harness", tokens, usage, None),
+        let (by, tokens, usage, revision, call) = match by {
+            SteppedBy::Validator(revision) => ("validator", None, None, revision, None),
+            SteppedBy::Harness(tokens, usage, call) => ("harness", tokens, usage, None, call),
         };
+        let call = call.unwrap_or_default();
         events.emit(
             self.steps,
             &Event::Step {
@@ -3897,6 +3905,12 @@ impl<'a> Run<'a> {
                 tokens,
                 usage,
                 revision: revision.map(str::to_owned),
+                model: call.model,
+                cost_usd: call.cost_usd,
+                duration_ms: call.duration_ms,
+                api_ms: call.api_ms,
+                turns: call.turns,
+                started_at: call.started_at,
             },
         )
     }
@@ -4645,7 +4659,7 @@ impl<'a> Run<'a> {
             let record_step = |run: &Self| {
                 run.stepped(
                     events,
-                    SteppedBy::Harness(report.tokens, harness.last_usage()),
+                    SteppedBy::Harness(report.tokens, harness.last_usage(), harness.last_call()),
                     harness.name(),
                     &report.action,
                     &report.summary,
