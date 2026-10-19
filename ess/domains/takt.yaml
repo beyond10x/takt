@@ -1496,7 +1496,7 @@ types:
   # crash, a flag rejected, a command not found) or the predicate's `exit` without its `output`,
   # which makes no claim true.
   # read from: protocols/self-improvement/1.yaml:45-50
-  # read from: scripts/check-finding:518-532
+  # read from: scripts/check-finding:535-549
   - name: takt.work.ScenarioResult
     kind: enum
     variants: [reproduced, not_reproduced, error]
@@ -2080,7 +2080,7 @@ entities:
       # other protocol (story:self-improvement-protocol).
       # read from: protocols/self-improvement/1.yaml:24-26
       # read from: crates/takt/src/case.rs:1992-2029
-      # read from: crates/takt/src/improvement.rs:68-79
+      # read from: crates/takt/src/improvement.rs:69-80
       - name: independence
         type: Map<takt.work.ProducerName, List<String>>
     relations:
@@ -2264,7 +2264,7 @@ entities:
       # read from: crates/takt-cli/src/main.rs:701-729
       # read from: crates/takt-cli/src/main.rs:818-822
       # read from: crates/takt/src/case.rs:2285-2344
-      # read from: crates/takt/src/improvement.rs:47-59
+      # read from: crates/takt/src/improvement.rs:47-60
       - name: inputs
         type: Map<takt.work.InputId, String>
       # The workflow the run follows, when one is given; not built, the kernel takes none yet.
@@ -2948,12 +2948,12 @@ entities:
   # read from: crates/takt/src/validator.rs:2589-2601
   # read from: crates/takt/src/forge.rs:529-539
   # read from: crates/takt/src/validator.rs:631-633
-  # read from: crates/takt/src/improvement.rs:480-488
-  # read from: crates/takt/src/improvement.rs:631-637
-  # read from: crates/takt/src/improvement.rs:810-820
+  # read from: crates/takt/src/improvement.rs:481-489
+  # read from: crates/takt/src/improvement.rs:632-638
+  # read from: crates/takt/src/improvement.rs:811-821
   # read from: crates/takt/src/validator.rs:2604-2622
-  # read from: crates/takt/src/improvement.rs:300-367
-  # read from: crates/takt/src/improvement.rs:371-440
+  # read from: crates/takt/src/improvement.rs:301-368
+  # read from: crates/takt/src/improvement.rs:372-441
   - name: takt.work.EvidenceProducer
     naming:
       summary: >-
@@ -3430,8 +3430,8 @@ entities:
   # read from: scripts/file-finding:11-56
   # read from: scripts/file-finding:117
   # read from: scripts/file-finding:256
-  # read from: scripts/check-finding:211-433
-  # read from: scripts/check-finding:479-508
+  # read from: scripts/check-finding:218-450
+  # read from: scripts/check-finding:496-525
   # One predicate on one scenario or one repository: a body with a second `expected_before`
   # block, a block that gives a key twice, or one that gives both `scenario` and `repository`, or
   # neither, is malformed and nothing is filed. `seed` and `test` go with `repository` only: a
