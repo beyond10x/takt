@@ -714,12 +714,44 @@ impl Shape {
 /// symbolic link with its target, or anything else (a FIFO, a socket, a device) by its kind
 /// alone. A link is an entry by itself and is never followed: what it points at may lie outside
 /// the tree, and nothing the kernel does for a case reaches outside the tree. Anything else is
-/// never opened: reading a FIFO no one writes would block the run for good.
+/// never opened: reading a FIFO no one writes would block the run for good. A file outside the
+/// tree too large to keep a copy of ([`Outside`]) is its fingerprint alone ([`fingerprint`]),
+/// which tells a change but cannot put the file back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Entry {
     File { bytes: Vec<u8>, executable: bool },
     Link(PathBuf),
     Other(&'static str),
+    Large(String),
+}
+
+/// The size past which [`Outside`] keeps a file's fingerprint, not its bytes.
+const OUTSIDE_BYTES_AT_MOST: u64 = 1 << 20;
+
+/// What tells a change to the file `meta` describes without reading it: its size, mode, device
+/// and inode, and its modification and change times to the nanosecond. The kernel sets the
+/// change time on every write and every change of mode or times, and no user can set it back,
+/// so a file whose fingerprint is the same holds the same bytes.
+fn fingerprint(meta: &std::fs::Metadata) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        format!(
+            "{} bytes, mode {:o}, inode {}:{}, modified {}.{:09}, changed {}.{:09}",
+            meta.size(),
+            meta.mode(),
+            meta.dev(),
+            meta.ino(),
+            meta.mtime(),
+            meta.mtime_nsec(),
+            meta.ctime(),
+            meta.ctime_nsec()
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        format!("{} bytes, modified {:?}", meta.len(), meta.modified().ok())
+    }
 }
 
 /// What a file that is not a regular file, a directory or a link is.
@@ -894,7 +926,7 @@ fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -
         match before.get(path) {
             Some(Entry::File { bytes, executable }) => put_back_file(&full, bytes, *executable)?,
             Some(Entry::Link(target)) => make_link(target, &full)?,
-            Some(Entry::Other(_)) | None => {}
+            Some(Entry::Other(_) | Entry::Large(_)) | None => {}
         }
     }
     Ok(())
@@ -923,7 +955,7 @@ const PYTHON_FILES: &[&str] = &[
 ];
 
 /// The judge surface every run guards, as a refusal names it.
-pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini`, `setup.cfg`, `sitecustomize.py` and `usercustomize.py` at any depth, `*.pth` at the root and directly in a `site-packages` or `dist-packages` directory, `[tool.pytest*]` in `pyproject.toml`, the module and package `python -m` runs and the `*.pth` files in every directory it imports from (where it runs and what `PYTHONPATH` names), a module, compiled module or package named like a standard-library module or a test runner (`unittest`, `pytest`, `_pytest`, `pluggy`, `nose2`) in every directory Python imports from under any program (where it runs, each `PYTHONPATH` entry, a `unittest discover` or `nose2` start and top-level directory, a test file's directory when pytest runs, a Python script's own directory), every executable entry (at the base, before or after the step) directly in a tree directory on `PATH`, the script's or the one takt runs with, the test command's own script, the scripts it runs, read one level deep (every file beside a script deeper than that), and its build tool's file, every Python file, shell file and program of the tree while a line of such a script cannot be read or a build tool's recipe runs, and the repository's own `.engineering/judge-surface.yaml` list";
+pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini`, `setup.cfg`, `sitecustomize.py` and `usercustomize.py` at any depth, `*.pth` at the root and directly in a `site-packages` or `dist-packages` directory, `[tool.pytest*]` in `pyproject.toml`, the module and package `python -m` runs and the `*.pth` files in every directory it imports from (where it runs and what `PYTHONPATH` names), a module, compiled module or package named like one the test command's Python imports from outside the tree (asked when the case opens; the standard library's and the test runners' `unittest`, `pytest`, `_pytest`, `pluggy`, `nose2` when no Python answers) in every directory Python imports from under any program (where it runs, each `PYTHONPATH` entry, a `unittest discover` or `nose2` start and top-level directory, a test file's directory when pytest runs, a Python script's own directory), every executable entry (at the base, before or after the step) directly in a tree directory on `PATH`, the script's or the one takt runs with, the test command's own script, the scripts it runs, read one level deep (every file beside a script deeper than that), and its build tool's file, every Python file, shell file and program of the tree while a line of such a script cannot be read or a build tool's recipe runs, and the repository's own `.engineering/judge-surface.yaml` list";
 
 /// How many scripts deep the guard reads: the test command's own script, and the scripts it
 /// runs. A script deeper than that is not read; everything in its directory, and every Python
@@ -953,8 +985,8 @@ fn fail_closed(named: &mut Vec<String>) {
 const PROGRAMS: &str = "**/(programs)";
 
 /// The last part of what [`scripts_of`] names for a directory Python imports from: in it, a
-/// module, compiled module or package with a name of the standard library or a test runner
-/// ([`shadows`]) is guarded, since Python finds it there before the installed one.
+/// module, compiled module or package with a name the Python imports from outside the tree
+/// ([`Modules`]) is guarded, since Python finds it there before the installed one.
 const IMPORTS: &str = "(imports)";
 
 /// The last part of what [`scripts_of`] names for a directory of the tree on `PATH`: every
@@ -970,13 +1002,13 @@ fn marked(dir: &str, mark: &str) -> String {
     }
 }
 
-/// The test runners' packages, guarded in every import directory beside the standard library's
-/// modules ([`STDLIB_MODULES`]).
+/// The test runners' packages, refused in every import directory whatever Python answered, and
+/// with the standard library's ([`STDLIB_MODULES`]) the fallback when none did ([`Modules`]).
 const RUNNER_PACKAGES: &[&str] = &["unittest", "pytest", "_pytest", "pluggy", "nose2"];
 
 /// The standard library's module names: `sys.stdlib_module_names` of CPython 3.14.7. A module of
 /// this name in a directory Python imports from replaces the installed one for the test runner
-/// and for the tests alike.
+/// and for the tests alike. The fallback when no Python answers at case open ([`Modules`]).
 const STDLIB_MODULES: &[&str] = &[
     "__future__",
     "_abc",
@@ -1277,16 +1309,6 @@ const STDLIB_MODULES: &[&str] = &[
     "zoneinfo",
 ];
 
-/// Whether `name`, a module's name folded ([`fold`]), is one the guard keeps in every import
-/// directory: the standard library's ([`STDLIB_MODULES`]) and the test runners'
-/// ([`RUNNER_PACKAGES`]).
-fn shadows(name: &str) -> bool {
-    STDLIB_MODULES
-        .iter()
-        .chain(RUNNER_PACKAGES)
-        .any(|module| module.eq_ignore_ascii_case(name))
-}
-
 /// The module the file `name` in an import directory loads as: `m.py`, `m.pyc`, `m.pyw`, `m.pyd`,
 /// `m.so` and `m.<tag>.so` are `m`, and a name with no suffix (a package) is itself.
 fn module_of(name: &str) -> Option<&str> {
@@ -1343,6 +1365,329 @@ fn interpreter_of(shebang: &str) -> Option<String> {
         return words.find(|word| !word.starts_with('-') && !word.contains('='));
     }
     Some(interpreter)
+}
+
+/// The first part of what [`scripts_of`] names for a program a command runs, which no
+/// [`JudgeSurface`] guards: the case asks the Python it is, or its `#!` line names, for the
+/// module names that Python imports from outside the tree ([`Modules::ask`]). The rest is the
+/// program's name, its absolute path outside the tree, or `tree:` and its path in the tree.
+const PROGRAM_MARK: &str = "(program) ";
+
+/// What [`scripts_of`] names for the program `word` run from `dir` ([`PROGRAM_MARK`]); nothing
+/// for one the guard cannot name.
+fn program_mark(tree: &Path, dir: Option<&str>, word: &str) -> Option<String> {
+    if word.is_empty() || opaque(word) {
+        return None;
+    }
+    if !word.contains('/') {
+        return Some(format!("{PROGRAM_MARK}{word}"));
+    }
+    if let Some(path) = named_from(tree, dir, word) {
+        return Some(format!("{PROGRAM_MARK}tree:{path}"));
+    }
+    let full = if Path::new(word).is_absolute() {
+        PathBuf::from(word)
+    } else {
+        std::path::absolute(tree).ok()?.join(dir?).join(word)
+    };
+    Some(format!("{PROGRAM_MARK}{}", full.display()))
+}
+
+/// The file a case keeps its module names in ([`Modules`]), under its directory.
+pub const MODULES_FILE: &str = "python-modules.json";
+
+/// What a Python asked at case open prints ([`Modules::ask`]): its path and version (`V`),
+/// then each top-level module name it can import from outside the tree given as its first
+/// argument, `S` for the standard library's and the built-in ones and `N` for the rest: what
+/// every `sys.path` entry outside the tree holds (the standard library, site-packages, what a
+/// `.pth` file adds) and what start-up imported (`sys.modules`, a `.pth` file's imports among
+/// them), but a module loaded from the tree.
+const NAMES_PY: &str = r#"
+import os, sys
+tree = os.path.realpath(sys.argv[1])
+def inside(path):
+    if not path:
+        return False
+    real = os.path.realpath(path)
+    return real == tree or real.startswith(tree + os.sep)
+strict = set(sys.stdlib_module_names) | set(sys.builtin_module_names)
+names = set()
+for name, module in list(sys.modules.items()):
+    if not inside(getattr(module, "__file__", None) or ""):
+        names.add(name.split(".")[0])
+for entry in sys.path:
+    if not entry or not os.path.isdir(entry) or inside(entry):
+        continue
+    try:
+        for found in os.scandir(entry):
+            stem, dot, suffix = found.name.partition(".")
+            if found.is_dir() and not dot:
+                names.add(stem)
+            elif suffix in ("py", "pyc", "pyd", "so") or suffix.endswith((".so", ".pyd")):
+                names.add(stem)
+    except OSError:
+        pass
+print("V", sys.executable, sys.version.split()[0])
+for name in sorted(strict):
+    print("S", name)
+for name in sorted(names - strict):
+    if name.isidentifier() and name != "__pycache__":
+        print("N", name)
+"#;
+
+/// The top-level module names no step may put in a directory Python imports from: asked at case
+/// open of the Python the test command runs, and kept with the case ([`MODULES_FILE`]); the
+/// built-in lists ([`STDLIB_MODULES`], [`RUNNER_PACKAGES`]) when no Python answered.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Modules {
+    /// Where the names came from: each Python asked, with its version, or the built-in lists.
+    pub from: Vec<String>,
+    /// The names refused in every import directory, folded: the standard library's, the
+    /// built-in modules' and the test runners' packages.
+    pub strict: BTreeSet<String>,
+    /// The other names the Python imports from outside the tree, folded: refused in an import
+    /// directory unless the tree held a module of that name there before the step (the
+    /// project's own, which already replaces the installed one).
+    pub names: BTreeSet<String>,
+}
+
+impl Default for Modules {
+    /// The built-in lists, which stand in when no Python answered.
+    fn default() -> Self {
+        Self {
+            from: vec![format!(
+                "the built-in lists: CPython 3.14.7's standard library and the test runners' packages ({}); no Python interpreter answered",
+                RUNNER_PACKAGES.join(", ")
+            )],
+            strict: STDLIB_MODULES
+                .iter()
+                .chain(RUNNER_PACKAGES)
+                .map(|name| fold(name))
+                .collect(),
+            names: BTreeSet::new(),
+        }
+    }
+}
+
+/// Whether `name`, a program's name without its directory, is a Python ([`INTERPRETERS`]).
+fn python_like(name: &str) -> bool {
+    spec_of(INTERPRETERS, &program_of(name)).is_some_and(|spec| !spec.short_module.is_empty())
+}
+
+/// Whether `path` lies in `tree`, both at their real paths.
+fn in_tree(tree: &Path, path: &Path) -> bool {
+    match (std::fs::canonicalize(tree), std::fs::canonicalize(path)) {
+        (Ok(tree), Ok(path)) => path.starts_with(tree),
+        // One that does not resolve is taken as written.
+        (Ok(tree), Err(_)) => std::path::absolute(path).is_ok_and(|path| path.starts_with(tree)),
+        _ => false,
+    }
+}
+
+/// The executable file `name` names on `PATH`, as the test command inherits it, outside `tree`:
+/// a relative entry, the tree's own, is passed over.
+fn lookup(name: &str, tree: &Path) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(name))
+        .find(|candidate| {
+            std::fs::metadata(candidate).is_ok_and(|meta| meta.is_file() && is_executable(&meta))
+                && !in_tree(tree, candidate)
+        })
+}
+
+/// The Python the `#!` line of the program at `path` names, outside `tree`: `#!/usr/bin/python3`,
+/// or `#!/usr/bin/env python3` looked up on `PATH`.
+fn shebang_python(path: &Path, tree: &Path) -> Option<PathBuf> {
+    use std::io::Read as _;
+    let mut start = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take(256).read_to_end(&mut start))
+        .ok()?;
+    let text = String::from_utf8_lossy(&start);
+    let line = text.strip_prefix("#!")?.lines().next()?;
+    let words = shell_words(line);
+    let first = words.first()?;
+    if program_of(first) == "env" {
+        let name = words[1..]
+            .iter()
+            .find(|word| !word.starts_with('-') && !word.contains('='))?;
+        return python_like(name).then(|| lookup(name, tree)).flatten();
+    }
+    let interpreter = PathBuf::from(first);
+    (python_like(first) && interpreter.is_absolute() && !in_tree(tree, &interpreter))
+        .then_some(interpreter)
+}
+
+/// The top-level names in the `site-packages` of a virtual environment in the tree whose
+/// interpreter is at `python` (`<venv>/bin/python`), read from the directory, never run.
+fn venv_names(python: &Path) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let Some(venv) = python.parent().and_then(Path::parent) else {
+        return names;
+    };
+    for lib in ["lib", "lib64"] {
+        let Ok(versions) = std::fs::read_dir(venv.join(lib)) else {
+            continue;
+        };
+        for version in versions.flatten() {
+            let Ok(entries) = std::fs::read_dir(version.path().join("site-packages")) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+                let module = if name == "__pycache__" {
+                    None
+                } else if is_dir && !name.contains('.') {
+                    Some(name.as_str())
+                } else if is_dir {
+                    None
+                } else {
+                    module_of(&name).filter(|_| name.contains('.'))
+                };
+                names.extend(module.map(fold));
+            }
+        }
+    }
+    names
+}
+
+impl Modules {
+    /// Asks every Python the test command `runs` may run in `tree` for its module names
+    /// ([`NAMES_PY`]): each program its command lines run that is a Python, or whose `#!` line
+    /// names one, found on `PATH` outside the tree, and `python3` there besides. Each is started
+    /// with `-I`, in an empty directory of its own outside the tree with `HOME` there and
+    /// `PYTHONNOUSERSITE=1`, for ten seconds at most; a file in the tree is never run, but a
+    /// virtual environment's `site-packages` there is read ([`venv_names`]). The built-in lists
+    /// when none answered.
+    #[must_use]
+    pub fn ask(runs: &[String], tree: &Path) -> Self {
+        let mut pythons: Vec<PathBuf> = Vec::new();
+        let mut venv = BTreeSet::new();
+        for program in scripts_of(runs, tree)
+            .iter()
+            .filter_map(|named| named.strip_prefix(PROGRAM_MARK))
+        {
+            if let Some(path) = program.strip_prefix("tree:") {
+                if python_like(path) {
+                    venv.extend(venv_names(&tree.join(path)));
+                }
+                continue;
+            }
+            let path = if program.contains('/') {
+                Some(PathBuf::from(program))
+            } else {
+                lookup(program, tree)
+            };
+            let Some(path) = path.filter(|path| !in_tree(tree, path)) else {
+                continue;
+            };
+            if python_like(program) {
+                pythons.push(path);
+            } else if let Some(python) = shebang_python(&path, tree) {
+                pythons.push(python);
+            }
+        }
+        pythons.extend(lookup("python3", tree));
+        let mut seen = BTreeSet::new();
+        pythons
+            .retain(|python| seen.insert(std::fs::canonicalize(python).unwrap_or(python.clone())));
+        let mut asked = Self {
+            from: Vec::new(),
+            strict: RUNNER_PACKAGES.iter().map(|name| fold(name)).collect(),
+            names: venv,
+        };
+        for python in &pythons {
+            if let Some(answer) = Self::answer(python, tree) {
+                asked.from.push(answer.0);
+                asked.strict.extend(answer.1);
+                asked.names.extend(answer.2);
+            }
+        }
+        if asked.from.is_empty() {
+            let mut fallback = Self::default();
+            fallback.names.extend(asked.names);
+            return fallback;
+        }
+        let strict = asked.strict.clone();
+        asked
+            .names
+            .retain(|name| !strict.contains(name) && name != "__pycache__");
+        asked
+    }
+
+    /// What `python` answers ([`NAMES_PY`]): where it is and its version, its strict names and
+    /// the rest, folded; `None` when it could not be run or did not answer in time.
+    fn answer(python: &Path, tree: &Path) -> Option<(String, BTreeSet<String>, BTreeSet<String>)> {
+        let home = crate::validator::FreshHome::new().ok()?;
+        let tree = std::path::absolute(tree).ok()?;
+        let mut command = std::process::Command::new(python);
+        command
+            .args(["-I", "-c", NAMES_PY])
+            .arg(&tree)
+            .current_dir(home.dir());
+        crate::forge::without_credentials(&mut command, |_| false);
+        home.apply(&mut command);
+        let limits = crate::forge::Limits {
+            timeout: Duration::from_secs(10),
+            output: 4 << 20,
+        };
+        let finished = crate::forge::run_child(&mut command, limits).ok()?;
+        if !finished.success() || finished.stdout_cut {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&finished.stdout);
+        let mut from = None;
+        let mut strict = BTreeSet::new();
+        let mut names = BTreeSet::new();
+        for line in text.lines() {
+            match line.split_once(' ') {
+                Some(("V", rest)) => {
+                    let version = rest.rsplit(' ').next().unwrap_or(rest);
+                    from = Some(format!("{} (Python {version})", python.display()));
+                }
+                Some(("S", name)) => {
+                    strict.insert(fold(name));
+                }
+                Some(("N", name)) => {
+                    names.insert(fold(name));
+                }
+                _ => {}
+            }
+        }
+        Some((from?, strict, names))
+    }
+
+    /// The names the case at `case_dir` keeps ([`MODULES_FILE`]); asked of the Python the test
+    /// command `runs` in `tree` and kept there when it keeps none.
+    pub fn of_case(case_dir: &Path, runs: &[String], tree: &Path) -> Result<Self> {
+        let file = case_dir.join(MODULES_FILE);
+        if file.is_file() {
+            return Ok(Self::read(case_dir));
+        }
+        let modules = Self::ask(runs, tree);
+        std::fs::write(&file, serde_json::to_vec_pretty(&modules)?)
+            .with_context(|| format!("write {}", file.display()))?;
+        Ok(modules)
+    }
+
+    /// The names the case at `case_dir` keeps ([`MODULES_FILE`]); the built-in lists when it
+    /// keeps none it can read.
+    #[must_use]
+    pub fn read(case_dir: &Path) -> Self {
+        std::fs::read(case_dir.join(MODULES_FILE))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    /// Where the names came from, as a refusal says it.
+    #[must_use]
+    pub fn described(&self) -> String {
+        self.from.join("; ")
+    }
 }
 
 /// The build tools whose recipe the guard does not read: as the test command or a command of a
@@ -2934,6 +3279,8 @@ fn command_paths(
         // Whatever the program, Python may run under it: where it runs and what `PYTHONPATH`
         // names are import directories, and so are a `unittest discover`'s.
         mark_imports(tree, &words[at..], dir.as_deref(), &env, named);
+        // The program as the case asks for the module names its Python imports ([`Modules`]).
+        named.extend(program_mark(tree, dir.as_deref(), program));
         // A program the guard cannot name runs what it cannot see.
         if opaque(program) {
             fail_closed(named);
@@ -3336,8 +3683,15 @@ pub struct JudgeSurface {
     /// matches and everything under it.
     globs: Vec<String>,
     /// The directories Python imports from ([`IMPORTS`]), folded, `**` for any: in each, the
-    /// standard library's and the test runners' names ([`shadows`]).
+    /// module names of [`JudgeSurface::modules`].
     imports: BTreeSet<String>,
+    /// The module names no step may put in an import directory: the case's ([`Modules`]), the
+    /// built-in lists until it is given them.
+    modules: Modules,
+    /// Each top-level module the tree held when the surface was read, as `<dir>/<name>` folded
+    /// (`/<name>` at the root): a name of [`Modules::names`] it already held there is the
+    /// project's own.
+    provided: BTreeSet<String>,
     /// The tree's directories on `PATH` ([`ON_PATH`]), folded: every executable entry directly
     /// in each, since a lookup by name finds nothing else.
     on_path: BTreeSet<String>,
@@ -3349,6 +3703,28 @@ pub struct JudgeSurface {
     programs: Option<BTreeSet<String>>,
     /// The tree, where what a file is now is read.
     tree: PathBuf,
+}
+
+/// The top-level modules `paths` (relative to the tree) hold in each directory, as
+/// `<dir>/<name>` folded ([`JudgeSurface::provided`]): every directory on a path's way by its
+/// name, and the file by the module it loads as ([`module_of`]).
+fn provided_by<'p>(paths: impl Iterator<Item = &'p str>) -> BTreeSet<String> {
+    let mut provided = BTreeSet::new();
+    for path in paths {
+        let folded = fold(path);
+        let parts: Vec<&str> = folded.split('/').collect();
+        for k in 0..parts.len() {
+            let name = if k + 1 == parts.len() {
+                module_of(parts[k])
+            } else {
+                Some(parts[k])
+            };
+            if let Some(name) = name {
+                provided.insert(format!("{}/{name}", parts[..k].join("/")));
+            }
+        }
+    }
+    provided
 }
 
 /// The paths git tracks or would add in `tree`, the cases left out; none when git cannot list
@@ -3517,6 +3893,8 @@ impl JudgeSurface {
         for path in scripts_of(runs, tree) {
             if path == PROGRAMS {
                 programs = true;
+            } else if path.starts_with(PROGRAM_MARK) {
+                // Read at case open ([`Modules::ask`]), guarded by nothing.
             } else if let Some(dir) = path.strip_suffix(IMPORTS) {
                 imports.insert(fold(dir.trim_end_matches('/')));
             } else if let Some(dir) = path.strip_suffix(ON_PATH) {
@@ -3536,6 +3914,8 @@ impl JudgeSurface {
             on_path_before: BTreeSet::new(),
             programs: programs.then(|| programs_in(tree)),
             tree: tree.to_path_buf(),
+            modules: Modules::default(),
+            provided: provided_by(listed_files(tree).iter().map(String::as_str)),
         };
         if !surface.on_path.is_empty() {
             surface.on_path_before = listed_files(tree)
@@ -3550,8 +3930,9 @@ impl JudgeSurface {
     }
 
     /// Whether the folded path parts `parts` name, in a directory Python imports from, a module,
-    /// compiled module or package of the standard library's or a test runner's name, or what is
-    /// under such a package.
+    /// compiled module or package of a name the Python imports from outside the tree
+    /// ([`Modules`]), or what is under such a package: a strict name always, any other unless
+    /// the tree held a module of that name there when the surface was read.
     fn shadowing(&self, parts: &[&str]) -> bool {
         (0..parts.len()).any(|k| {
             let name = if k + 1 == parts.len() {
@@ -3559,9 +3940,49 @@ impl JudgeSurface {
             } else {
                 Some(parts[k])
             };
-            name.is_some_and(shadows)
-                && self.imports.iter().any(|dir| dir_matches(dir, &parts[..k]))
+            let Some(name) = name else {
+                return false;
+            };
+            self.imports.iter().any(|dir| dir_matches(dir, &parts[..k]))
+                && (self.modules.strict.contains(name)
+                    || (self.modules.names.contains(name)
+                        && !self
+                            .provided
+                            .contains(&format!("{}/{name}", parts[..k].join("/")))))
         })
+    }
+
+    /// With the module names `modules`, the case's ([`Modules::of_case`]).
+    #[must_use]
+    pub fn with_modules(mut self, modules: Modules) -> Self {
+        self.modules = modules;
+        self
+    }
+
+    /// With the top-level modules the tree held taken from `paths` (a commit's files, relative
+    /// to the tree) rather than from the tree as it is ([`JudgeSurface::provided`]).
+    #[must_use]
+    pub fn provided_by<'p>(mut self, paths: impl Iterator<Item = &'p str>) -> Self {
+        self.provided = provided_by(paths);
+        self
+    }
+
+    /// What a refusal that names `touched` says of the module names, when one of them is a
+    /// module of such a name in an import directory: where the names came from.
+    #[must_use]
+    pub fn modules_note(&self, touched: &[String]) -> String {
+        let shadowed = touched.iter().any(|path| {
+            let folded = fold(path.trim_end_matches('/'));
+            self.shadowing(&folded.split('/').collect::<Vec<_>>())
+        });
+        if shadowed {
+            format!(
+                "; a module name the Python imports from outside the tree, from {}",
+                self.modules.described()
+            )
+        } else {
+            String::new()
+        }
     }
 
     /// Whether the folded path parts `parts` name an entry directly in a directory on `PATH`.
@@ -3820,13 +4241,17 @@ impl JudgeSurface {
         Ok(entries)
     }
 
-    /// The surface of a run whose validators run `runs`, and what is on it in `tree` now.
+    /// The surface of a run whose validators run `runs`, with the case's module names `modules`,
+    /// and what is on it in `tree` now.
     fn read(
         runs: &[String],
         globs: Vec<String>,
+        modules: &Modules,
         tree: &Path,
     ) -> Result<(Self, BTreeMap<PathBuf, Entry>)> {
-        let surface = Self::new(runs, tree).with_globs(globs);
+        let surface = Self::new(runs, tree)
+            .with_globs(globs)
+            .with_modules(modules.clone());
         let kept = surface.snapshot(tree)?;
         Ok((surface, kept))
     }
@@ -3895,8 +4320,124 @@ impl JudgeSurface {
 /// back, and no validator records while one differs from what the run found when it began. A
 /// file behind a link is read through it, so its change is seen, but nothing is ever written or
 /// removed through a link. Confining the step to the tree is not this.
+///
+/// Beside them, the programs a command may find by name ([`program_dirs`]): every directory on
+/// the `PATH` the test command inherits and on the shell's default `PATH` a gate's command has,
+/// `$CARGO_HOME/bin` and every `bin` of a rustup toolchain, that the user can write (one that
+/// does not exist yet when its nearest existing directory can be written), each directory by
+/// itself and each executable file and link directly in it; one too large to keep is its
+/// [`fingerprint`]. A directory the user cannot write no step can change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Outside(BTreeMap<PathBuf, (PathBuf, Option<Entry>)>);
+
+/// The shell's default `PATH`, which a gate's command has when its binding sets none.
+const SHELL_PATH: &[&str] = &[
+    "/usr/local/sbin",
+    "/usr/local/bin",
+    "/usr/sbin",
+    "/usr/bin",
+    "/sbin",
+    "/bin",
+];
+
+/// Whether the user can write the directory `dir`, which exists.
+fn writable(dir: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        let Ok(path) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // SAFETY: `path` is a valid NUL-terminated string that outlives the call.
+        unsafe { libc::access(path.as_ptr(), libc::W_OK) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::metadata(dir).is_ok_and(|meta| !meta.permissions().readonly())
+    }
+}
+
+/// The directories outside `tree` a command may find a program in by its name, which the user
+/// can write, each with the path it is read at and its anchor: an existing one at its real path
+/// (a linked directory resolved), anchored at its parent; one that does not exist yet at its
+/// nearest existing directory's real path joined with the rest, anchored there, with every
+/// directory between, when that existing directory can be written. Which directories: every
+/// absolute entry of `PATH`, the shell's default `PATH` ([`SHELL_PATH`]), `$CARGO_HOME/bin`
+/// (`~/.cargo/bin`) and `$RUSTUP_HOME/toolchains/*/bin` (`~/.rustup`).
+fn program_dirs(tree: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    dirs.extend(SHELL_PATH.iter().map(PathBuf::from));
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|home| home.join(".cargo")));
+    dirs.extend(cargo_home.map(|cargo| cargo.join("bin")));
+    let rustup_home = std::env::var_os("RUSTUP_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|home| home.join(".rustup")));
+    if let Some(Ok(toolchains)) =
+        rustup_home.map(|rustup| std::fs::read_dir(rustup.join("toolchains")))
+    {
+        dirs.extend(
+            toolchains
+                .flatten()
+                .map(|toolchain| toolchain.path().join("bin")),
+        );
+    }
+    let roots: Vec<PathBuf> = [
+        std::path::absolute(tree).ok(),
+        std::fs::canonicalize(tree).ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let mut found = BTreeMap::new();
+    for dir in dirs.into_iter().filter(|dir| dir.is_absolute()) {
+        // The nearest existing directory, at its real path, and what is below it.
+        let mut existing = dir.as_path();
+        let mut below = Vec::new();
+        let real = loop {
+            if let Ok(real) = std::fs::canonicalize(existing) {
+                break Some(real);
+            }
+            match (existing.parent(), existing.file_name()) {
+                (Some(parent), Some(name)) => {
+                    below.push(name.to_owned());
+                    existing = parent;
+                }
+                _ => break None,
+            }
+        };
+        let Some(real) = real else {
+            continue;
+        };
+        if !real.is_dir() || !writable(&real) {
+            continue;
+        }
+        let whole: PathBuf = below
+            .iter()
+            .rev()
+            .fold(real.clone(), |path, name| path.join(name));
+        if roots.iter().any(|root| whole.starts_with(root)) {
+            continue;
+        }
+        if below.is_empty() {
+            let anchor = real
+                .parent()
+                .map_or_else(|| real.clone(), Path::to_path_buf);
+            found.insert(real, anchor);
+        } else {
+            let mut path = real.clone();
+            for name in below.iter().rev() {
+                path.push(name);
+                found.insert(path.clone(), real.clone());
+            }
+        }
+    }
+    found.into_iter().collect()
+}
 
 impl Outside {
     /// The paths [`Outside`] reads for `tree`, each with its anchor: the directory above the
@@ -3941,6 +4482,21 @@ impl Outside {
                 }
             }
         }
+        // The programs a lookup by name may find: each directory, and each executable file and
+        // link directly in it.
+        for (dir, anchor) in program_dirs(tree) {
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if std::fs::symlink_metadata(&path).is_ok_and(|meta| {
+                        meta.file_type().is_symlink() || (meta.is_file() && is_executable(&meta))
+                    }) {
+                        paths.insert(path, dir.clone());
+                    }
+                }
+            }
+            paths.insert(dir, anchor);
+        }
         paths.into_iter().collect()
     }
 
@@ -3964,44 +4520,57 @@ impl Outside {
     fn read(tree: &Path) -> Result<Self> {
         let mut entries = BTreeMap::new();
         for (path, anchor) in Self::paths(tree) {
-            let entry = match std::fs::symlink_metadata(&path) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                // A path whose way is not a directory (`.cargo` a file) holds nothing.
-                Err(error) if error.raw_os_error() == Some(20) => None,
-                // One the run may not read is compared by that alone.
-                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                    Some(Entry::Other("unreadable"))
-                }
-                Err(error) => {
-                    return Err(error).with_context(|| format!("read {}", path.display()));
-                }
-                Ok(meta) if meta.file_type().is_symlink() => Some(Entry::Link(
-                    std::fs::read_link(&path)
-                        .with_context(|| format!("read the link {}", path.display()))?,
-                )),
-                Ok(meta) if meta.is_file() => Some(Entry::File {
-                    bytes: std::fs::read(&path)
-                        .with_context(|| format!("read {}", path.display()))?,
-                    executable: is_executable(&meta),
-                }),
-                Ok(meta) if meta.is_dir() => Some(Entry::Other("directory")),
-                Ok(meta) => Some(Entry::Other(other_kind(meta.file_type()))),
-            };
+            let entry = Self::entry_at(&path)?;
             entries.insert(path, (anchor, entry));
         }
         Ok(Self(entries))
     }
 
+    /// What is at `path` now, `None` for nothing; a link is not followed.
+    fn entry_at(path: &Path) -> Result<Option<Entry>> {
+        Ok(match std::fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            // A path whose way is not a directory (`.cargo` a file) holds nothing.
+            Err(error) if error.raw_os_error() == Some(20) => None,
+            // One the run may not read is compared by that alone.
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                Some(Entry::Other("unreadable"))
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("read {}", path.display()));
+            }
+            Ok(meta) if meta.file_type().is_symlink() => Some(Entry::Link(
+                std::fs::read_link(path)
+                    .with_context(|| format!("read the link {}", path.display()))?,
+            )),
+            Ok(meta) if meta.is_file() && meta.len() > OUTSIDE_BYTES_AT_MOST => {
+                Some(Entry::Large(fingerprint(&meta)))
+            }
+            Ok(meta) if meta.is_file() => Some(Entry::File {
+                bytes: std::fs::read(path).with_context(|| format!("read {}", path.display()))?,
+                executable: is_executable(&meta),
+            }),
+            Ok(meta) if meta.is_dir() => Some(Entry::Other("directory")),
+            Ok(meta) => Some(Entry::Other(other_kind(meta.file_type()))),
+        })
+    }
+
     /// The paths at which `now` differs from this, in path order: a part of the way (`.cargo`)
-    /// before what is under it.
+    /// before what is under it. A path this holds and `now` does not list (a directory that
+    /// did not exist, `~/.local` on the way to `~/.local/bin`, now made; a program that is no
+    /// longer executable) is compared with what is at it now.
     fn differing(&self, now: &Self) -> Vec<PathBuf> {
         let entry = |outside: &Self, path: &PathBuf| {
             outside.0.get(path).and_then(|(_, entry)| entry.clone())
         };
+        let current = |path: &PathBuf| match now.0.get(path) {
+            Some((_, entry)) => entry.clone(),
+            None => Self::entry_at(path).unwrap_or(Some(Entry::Other("unreadable"))),
+        };
         self.0
             .keys()
             .chain(now.0.keys())
-            .filter(|path| entry(self, path) != entry(now, path))
+            .filter(|path| entry(self, path) != current(path))
             .cloned()
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -4012,15 +4581,20 @@ impl Outside {
     /// was created is removed (a link as the link itself), what was changed or removed is written
     /// again (a link made again, a directory made again empty). Nothing is ever written or
     /// removed through a link: a path whose way crosses one, checked part by part, is left as it
-    /// is and answered, for the refusal to name.
+    /// is and answered, for the refusal to name, and so is a file too large to have been kept
+    /// ([`Entry::Large`]) that was changed or removed. A path only `now` holds (a program made in
+    /// a directory on `PATH`) is anchored as `now` anchors it.
     fn put_back(&self, tree: &Path) -> Result<Vec<PathBuf>> {
         let mut left = Vec::new();
-        for path in self.differing(&Self::read(tree)?) {
-            let anchor = match self.0.get(&path) {
+        let now = Self::read(tree)?;
+        for path in self.differing(&now) {
+            let anchor = match self.0.get(&path).or_else(|| now.0.get(&path)) {
                 Some((anchor, _)) => anchor.clone(),
                 None => continue,
             };
-            if Self::link_on_the_way(&anchor, &path).is_some() {
+            if Self::link_on_the_way(&anchor, &path).is_some()
+                || matches!(self.0.get(&path), Some((_, Some(Entry::Large(_)))))
+            {
                 left.push(path);
                 continue;
             }
@@ -4043,7 +4617,7 @@ impl Outside {
                 Some(Entry::Link(target)) => make_link(&target, &path)?,
                 Some(Entry::Other("directory")) => std::fs::create_dir_all(&path)
                     .with_context(|| format!("create {}", path.display()))?,
-                Some(Entry::Other(_)) | None => {}
+                Some(Entry::Other(_) | Entry::Large(_)) | None => {}
             }
         }
         Ok(left)
@@ -4729,6 +5303,9 @@ pub struct Run<'a> {
     /// The files outside the tree that decide how cargo and rustup build and run the tests
     /// ([`Outside`]), as the run found them when it began.
     outside: Outside,
+    /// The module names no step may put in an import directory, kept with the case
+    /// ([`Modules::of_case`]).
+    modules: Modules,
 }
 
 impl<'a> Run<'a> {
@@ -4797,6 +5374,16 @@ impl<'a> Run<'a> {
             case.discard()?;
             return Err(error);
         }
+        // The module names the test command's Python imports from outside the tree, asked once
+        // and kept with the case.
+        let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
+        let modules = match Modules::of_case(&case.dir, &runs, tree) {
+            Ok(modules) => modules,
+            Err(error) => {
+                case.discard()?;
+                return Err(error);
+            }
+        };
         Ok(Self {
             tree: tree.to_path_buf(),
             case,
@@ -4811,6 +5398,7 @@ impl<'a> Run<'a> {
             started: Instant::now(),
             outside: Outside::read(tree)?,
             options,
+            modules,
         })
     }
 
@@ -4854,6 +5442,9 @@ impl<'a> Run<'a> {
         options.inputs = case.inputs();
         options.case_id = Some(id.to_owned());
         options.protocol = case.protocol.id.clone();
+        // A case opened before it kept its module names is asked now and keeps them from here.
+        let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
+        let modules = Modules::of_case(&case.dir, &runs, tree)?;
         Ok(Self {
             tree: tree.to_path_buf(),
             case,
@@ -4868,6 +5459,7 @@ impl<'a> Run<'a> {
             started: Instant::now(),
             outside: Outside::read(tree)?,
             options,
+            modules,
         })
     }
 
@@ -5683,7 +6275,7 @@ impl<'a> Run<'a> {
                 let outside_moved = self.outside.differing(&outside_kept);
                 if !outside_moved.is_empty() {
                     let why = format!(
-                        "{} would observe {} while what cargo or rustup reads outside the tree differs from what the run found when it began: {}",
+                        "{} would observe {} while what cargo or rustup reads outside the tree, or a program on `PATH`, differs from what the run found when it began: {}",
                         validator.action(),
                         &revision[..8.min(revision.len())],
                         outside_named(&outside_moved)
@@ -5705,7 +6297,8 @@ impl<'a> Run<'a> {
                 let cases = self.tree.join(CASES_DIR);
                 let kept = snapshot(&cases)?;
                 let globs = self.judge_list()?.unwrap_or_default();
-                let (surface, surface_kept) = JudgeSurface::read(&self.runs(), globs, &self.tree)?;
+                let (surface, surface_kept) =
+                    JudgeSurface::read(&self.runs(), globs, &self.modules, &self.tree)?;
                 let observed = validator
                     .observe_waiting(&self.tree, &revision, seq)
                     .with_context(|| format!("{} ({})", validator.action(), validator.name()));
@@ -5797,7 +6390,7 @@ impl<'a> Run<'a> {
                     let left = outside_kept.put_back(&self.tree)?;
                     foreign.extend(outside);
                     foreign.extend(left.iter().map(|path| {
-                        format!("not put back, its way crosses a link: {}", path.display())
+                        format!("not put back (a link on its way, or a file too large to keep a copy of): {}", path.display())
                     }));
                     let mut why = format!(
                         "{} wrote what its validator does not: {}",
@@ -6024,7 +6617,8 @@ impl<'a> Run<'a> {
                     return Ok(Stop::StepRefused(why));
                 }
             };
-            let (surface, surface_kept) = JudgeSurface::read(&runs, globs, &self.tree)?;
+            let (surface, surface_kept) =
+                JudgeSurface::read(&runs, globs, &self.modules, &self.tree)?;
             // A link is never followed: while what a validator or the guarded command reads is
             // reached through one, what it guards could be anywhere, in the tree or out of it,
             // and no judgement step is taken ([`JudgeSurface::locking_links`]). Any other link
@@ -6218,7 +6812,8 @@ impl<'a> Run<'a> {
             }
             if !surface_touched.is_empty() {
                 undo()?;
-                let why = surface_refusal(&report.action, &surface_touched);
+                let why = surface_refusal(&report.action, &surface_touched)
+                    + &surface.modules_note(&surface_touched);
                 record_step(self)?;
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(
@@ -6347,13 +6942,13 @@ impl<'a> Run<'a> {
                 // What is still not as it was is behind a link, never written through.
                 let left = outside_before.differing(&Outside::read(&self.tree)?);
                 let mut why = format!(
-                    "{} changed what cargo or rustup reads outside the tree: {}",
+                    "{} changed what cargo or rustup reads outside the tree, or a program on `PATH`: {}",
                     report.action,
                     outside_named(&outside_changed)
                 );
                 if !left.is_empty() {
                     why.push_str(&format!(
-                        "; not put back, its way crosses a link: {}",
+                        "; not put back (a link on its way, or a file too large to keep a copy of): {}",
                         outside_named(&left)
                     ));
                 }

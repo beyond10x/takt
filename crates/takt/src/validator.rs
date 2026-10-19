@@ -118,9 +118,17 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
             Vec::new()
         }
     };
+    // The case's module names, and the top-level modules the base held: a name the base held
+    // in an import directory is the project's own, one the branch added there is not.
+    let at_base = crate::git::run(
+        tree,
+        &["ls-tree", "-r", "-z", "--name-only", "--full-tree", &at],
+    )?;
     let surface = crate::run::JudgeSurface::new(runs, tree)
         .without_store()
-        .with_globs(globs);
+        .with_globs(globs)
+        .with_modules(crate::run::Modules::read(dir))
+        .provided_by(at_base.split('\0').filter(|path| !path.is_empty()));
     // A link is never followed: one the base or the revision holds on the surface, or on the
     // way to a script, is named, and nothing is recorded while it is there.
     for commit in [at.as_str(), revision] {
@@ -176,6 +184,11 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
             }
         }
     }
+    // Where the module names came from, when one of the paths is such a module.
+    let note = surface.modules_note(&paths);
+    if let Some(last) = paths.last_mut() {
+        last.push_str(&note);
+    }
     Ok(if paths.is_empty() {
         Judged::Unchanged
     } else {
@@ -187,12 +200,12 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
 /// removed when dropped. The command runs with `HOME` there and `PYTHONNOUSERSITE=1`, so
 /// nothing a step wrote in the caller's home (Python's user site, its start-up files) runs
 /// with it; cargo and rustup keep the caller's homes ([`FreshHome::vars`]).
-struct FreshHome(PathBuf);
+pub(crate) struct FreshHome(PathBuf);
 
 impl FreshHome {
     /// A new empty directory under the system's temporary directory, readable by its owner
     /// alone.
-    fn new() -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nanos = std::time::SystemTime::now()
@@ -281,8 +294,13 @@ impl FreshHome {
         serde_yaml_ng::to_string(&doc).context("write the project file")
     }
 
+    /// The directory.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.0
+    }
+
     /// Runs `command` in this home ([`FreshHome::vars`]).
-    fn apply(&self, command: &mut Command) {
+    pub(crate) fn apply(&self, command: &mut Command) {
         for (name, value) in self.vars(|name| std::env::var_os(name).is_some()) {
             command.env(name, value);
         }

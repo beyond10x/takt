@@ -973,3 +973,198 @@ fn a_runner_shadowed_under_any_program_is_refused() {
     }
     assert!(missed.is_empty(), "not refused: {missed:#?}");
 }
+
+/// Whether `python3` here imports `module` from outside any tree.
+fn installed(module: &str) -> bool {
+    Command::new("python3")
+        .args([
+            "-I",
+            "-c",
+            "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec(sys.argv[1]) else 1)",
+            module,
+        ])
+        .current_dir(env!("CARGO_TARGET_TMPDIR"))
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Expected before: a module no fixed list names but the Python imports from outside the tree
+/// (setuptools' `_distutils_hack`, which its `.pth` imports at start-up; `coverage` under
+/// `coverage run`; `iniconfig` under pytest) added beside the script replaced it and earned
+/// pass. The case asks the test command's Python for its names when it opens and keeps them;
+/// the step is refused and put back, and the refusal says which Python the names came from. A
+/// module this machine's `python3` does not have is no route here and is passed over.
+#[test]
+fn a_module_the_python_imports_from_outside_the_tree_is_refused() {
+    let mut missed = Vec::new();
+    let mut tried = 0;
+    for (module, line) in [
+        (
+            "_distutils_hack",
+            "PYTHONPATH=. python3 -m unittest discover -s tests -v",
+        ),
+        ("coverage", "coverage run -m unittest discover -s tests"),
+        ("iniconfig", "python3 -m pytest -q"),
+    ] {
+        if !installed(module) {
+            continue;
+        }
+        tried += 1;
+        let path = format!("{module}.py");
+        let check = format!("#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\n{line}\n");
+        let tree = repository(
+            "outside-names",
+            &[
+                (".gitignore", "target/\n__pycache__/\n.coverage\n", false),
+                ("check.sh", &check, true),
+                ("todo.py", CODE, false),
+                ("tests/test_todo.py", TEST, false),
+            ],
+        );
+        let ran = run(&tree, "./check.sh", &path, EXITS_0);
+        let refused = matches!(&ran.stop, Ok(Stop::StepRefused(why))
+            if why.contains(&path) && why.contains("python"));
+        if !refused || ran.passes() > 0 {
+            missed.push(format!(
+                "{path} under {line:?}: {} pass, stop {:?}",
+                ran.passes(),
+                ran.stop.as_ref().map_err(ToString::to_string)
+            ));
+            continue;
+        }
+        assert_refused_and_put_back(&tree, &ran, &path);
+    }
+    eprintln!("{tried} of 3 modules installed here");
+    assert!(missed.is_empty(), "not refused: {missed:#?}");
+}
+
+/// The variable that names the variant [`the_outside_path_run`] runs.
+const OUTSIDE_VARIANT: &str = "TAKT_TEST_OUTSIDE_VARIANT";
+
+/// The variable that names the scratch home [`the_outside_path_run`] runs under.
+const OUTSIDE_HOME: &str = "TAKT_TEST_OUTSIDE_HOME";
+
+/// Runs [`the_outside_path_run`] as `variant` under a scratch home holding the directories
+/// `make`, with `path_dirs` (relative to that home) first on `PATH`; answers why it failed.
+fn outside_path_variant(variant: &str, path_dirs: &[&str], make: &[&str]) -> Option<String> {
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "script-imports-outside-{}-{variant}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&scratch);
+    let home = scratch.join("home");
+    fs::create_dir_all(&home).expect("a home");
+    for dir in make {
+        fs::create_dir_all(home.join(dir)).expect("a directory");
+    }
+    let path = std::env::join_paths(path_dirs.iter().map(|dir| home.join(dir)).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("a PATH");
+    let output = Command::new(std::env::current_exe().expect("this test binary"))
+        .args([
+            "--exact",
+            "the_outside_path_run",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("HOME", &home)
+        .env("PATH", path)
+        .env("CARGO_HOME", home.join(".cargo"))
+        .env_remove("RUSTUP_HOME")
+        .env(OUTSIDE_VARIANT, variant)
+        .env(OUTSIDE_HOME, &home)
+        .output()
+        .expect("the test binary runs");
+    let _ = fs::remove_dir_all(&scratch);
+    let text = String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        let why = text
+            .lines()
+            .find(|line| line.contains(variant) && line.contains(':'))
+            .unwrap_or(&text);
+        return Some(why.to_owned());
+    }
+    (!text.contains("1 passed")).then(|| format!("{variant}: the inner case did not run: {text}"))
+}
+
+/// Expected before: a step wrote a `python3` that exits 0 into a directory on the `PATH` the
+/// test command inherits, outside the tree (`~/.local/bin`, `~/.cargo/bin`), and `tests.run`
+/// passed; cargo finds a subcommand in `~/.cargo/bin` off `PATH` too. Each such directory the
+/// user can write is snapshotted around the step: the step is refused and what it made
+/// removed, a directory it made among it (`~/.local/bin` absent at the step's start).
+#[test]
+fn a_program_written_to_a_directory_on_path_outside_the_tree_is_refused() {
+    let failed: Vec<String> = [
+        outside_path_variant("pathlocal", &[".local/bin"], &[".local/bin"]),
+        outside_path_variant("pathbin", &[".cargo/bin"], &[".cargo/bin"]),
+        outside_path_variant("cargobin", &[], &[".cargo/bin"]),
+        outside_path_variant("absent", &[".local/bin"], &[]),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// The run [`a_program_written_to_a_directory_on_path_outside_the_tree_is_refused`] makes for
+/// one variant, under the scratch home it names; nothing at all without it.
+#[test]
+fn the_outside_path_run() {
+    let (Some(variant), Some(home)) = (
+        std::env::var(OUTSIDE_VARIANT).ok(),
+        std::env::var_os(OUTSIDE_HOME).map(PathBuf::from),
+    ) else {
+        return;
+    };
+    assert_eq!(
+        std::env::var_os("HOME"),
+        Some(home.clone().into_os_string())
+    );
+    let (program, made) = match variant.as_str() {
+        "pathlocal" => (home.join(".local/bin/python3"), None),
+        "pathbin" => (home.join(".cargo/bin/python3"), None),
+        "cargobin" => (home.join(".cargo/bin/cargo-forge"), None),
+        "absent" => (home.join(".local/bin/python3"), Some(home.join(".local"))),
+        other => panic!("no variant {other}"),
+    };
+    let tree = scenario(&variant, SCENARIO_CHECK);
+    let ran = run_writing(
+        &tree,
+        "./check.sh",
+        &[
+            (
+                program.to_str().expect("a UTF-8 path"),
+                "#!/bin/sh\necho OK\nexit 0\n",
+            ),
+            ("todo.py", "def answer():\n    return 1\n"),
+        ],
+    );
+    assert_eq!(
+        ran.passes(),
+        0,
+        "{variant}: {} earned `tests.run` pass; stop {:?}\n{}",
+        program.display(),
+        ran.stop.as_ref().map_err(ToString::to_string),
+        ran.text
+    );
+    let why = ran.refusal();
+    let named = made.as_ref().unwrap_or(&program);
+    assert!(
+        why.contains(&named.display().to_string()),
+        "{variant}: the refusal names {}: {why}",
+        named.display()
+    );
+    assert!(
+        !program.exists(),
+        "{variant}: {} is left after the refusal",
+        program.display()
+    );
+    if let Some(made) = made {
+        assert!(
+            !made.exists(),
+            "{variant}: {} the step made is left",
+            made.display()
+        );
+    }
+}
