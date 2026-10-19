@@ -465,6 +465,43 @@ types:
       - name: performer
         type: String
 
+  # What a delivery hands over when it stops `unperformable` at `pr.opened` (no forge to open its
+  # pull request, its change read ahead): its candidate, the revision a self-improvement turn
+  # opens on as it is (`--input candidate=<id>`), printed `candidate: <full commit id>` before the
+  # stop line. Its code commits are every commit from the base commit the case pinned at open to
+  # its implementation revision but takt's store commits: a commit whose subject is the take's,
+  # the `test_result` record's, the move's or an approval's for the case's story and whose every
+  # path lies in the planning store. A step's commit is a code commit whatever it changes, a file
+  # under `.engineering/` among them, and is kept whole. They are replayed in order on the base
+  # branch's tip (the pinned commit with none) with `git merge-tree --write-tree --merge-base` and
+  # `git commit-tree`, run isolated on the repository's objects, so neither the work tree, the
+  # index nor a branch moves; each keeps its message and its author and committer dates and
+  # carries the identity the case was opened with, else the one the repository configures at
+  # that tip, so the same case on the same base gives the same commit on every resume. It is named
+  # by `refs/takt/candidates/<case id>`: a fetch of its id over git's first protocol, which sends
+  # only what a ref names, gets it too. With no identity configured, or a code commit that does
+  # not apply without what was left out, none is made and the line says why, naming the setting
+  # or the commit; the stop and its exit stay as they are.
+  # read from: crates/takt/src/run.rs:186-192
+  # read from: crates/takt/src/run.rs:196
+  # read from: crates/takt/src/run.rs:198-213
+  # read from: crates/takt/src/run.rs:6511-6521
+  # read from: crates/takt/src/run.rs:6559-6572
+  # read from: crates/takt/src/run.rs:7143-7149
+  # read from: crates/takt/src/git.rs:3120-3128
+  # read from: crates/takt/src/git.rs:3191-3205
+  - name: takt.work.DeliveryCandidate
+    kind: struct
+    fields:
+      - name: case
+        type: takt.work.CaseId
+      - name: revision
+        type: takt.work.Revision
+      - name: base
+        type: takt.work.Revision
+      - name: code_commits
+        type: List<takt.work.Revision>
+
   # What a `disk_low` stop names: the path whose file system was under the threshold (the case's
   # tree, or the build directory), the bytes free there for a writer that is not root, and the
   # threshold in bytes. The free space is `statvfs`'s `f_bavail * f_frsize`, and a file system is
@@ -3247,7 +3284,7 @@ entities:
   # Each built-in validator defines its action and kind,
   # and the list the step choice reads is built from them.
   # read from: crates/takt/src/validator.rs:1732-1736
-  # read from: crates/takt/src/run.rs:188-190
+  # read from: crates/takt/src/run.rs:218-220
   # read from: crates/takt/src/validator.rs:1169-1173
   # read from: crates/takt/src/validator.rs:1528-1532
   # read from: crates/takt/src/validator.rs:725-737
@@ -3268,7 +3305,7 @@ entities:
   # read from: crates/takt/src/validator.rs:2729-2743
   # read from: crates/takt/src/git.rs:2887-2891
   # read from: crates/takt/src/validator.rs:2771-2854
-  # read from: crates/takt/src/git.rs:3140-3147
+  # read from: crates/takt/src/git.rs:3328-3335
   # read from: crates/takt/src/validator.rs:619-627
   # read from: crates/takt/src/run.rs:7745-7768
   # read from: crates/takt/src/validator.rs:631-647
@@ -4024,11 +4061,11 @@ entities:
   # read from: crates/takt/src/validator.rs:2049
   # read from: crates/takt/src/validator.rs:2131
   # read from: crates/takt/src/validator.rs:1945
-  # read from: crates/takt/src/git.rs:3145-3146
+  # read from: crates/takt/src/git.rs:3333-3334
   # read from: crates/takt/src/validator.rs:1999
   # read from: crates/takt/src/validator.rs:2145
   # read from: crates/takt/src/validator.rs:2515
-  # read from: crates/takt/src/git.rs:3025
+  # read from: crates/takt/src/git.rs:3213
   - name: takt.work.JudgeAllowList
     naming:
       summary: >-

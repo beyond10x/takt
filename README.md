@@ -124,6 +124,12 @@ takt commits as the identity the repository names in `.engineering/commit-identi
 your git configuration. With neither it commits as `takt <takt@localhost>`, and a run through
 the bot route, which pushes those commits, is refused before its case opens.
 
+A `--forge none` delivery whose change reads ahead stops `Unperformable` at `pr.opened`, exit 7,
+and prints `candidate: <full commit id>`: its code commits, without takt's take, record and
+approval commits, replayed on the base branch's tip under that identity and named by
+`refs/takt/candidates/<case>`, the revision a self-improvement turn opens on
+(`--input candidate=<id>`). With no identity configured it makes none and names the setting.
+
 bubblewrap is Linux only, so on macOS a promotion refuses with exit 1 before it judges;
 `--dry-run` and `--baseline-only`, which build nothing, still run. On macOS a run kills what a
 child process started in the child's process group only; on Linux takt also adopts and kills

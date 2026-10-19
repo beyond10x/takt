@@ -17,7 +17,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 
 use crate::case::{CASES_DIR, CaseDir, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT};
 use crate::events::{BY_STORE, BY_TAKT, Event, Events};
@@ -180,6 +180,36 @@ impl std::fmt::Display for Stop {
             ),
         }
     }
+}
+
+impl Stop {
+    /// Whether the run hands its change over as a candidate here ([`Run::candidate`]): the
+    /// [`Stop::Unperformable`] at `pr.opened`, a delivery whose change reads ahead with no forge
+    /// to open its pull request.
+    #[must_use]
+    pub fn hands_over(&self) -> bool {
+        matches!(self, Stop::Unperformable { claim, .. } if claim == "pr.opened")
+    }
+}
+
+/// Where a case's candidate is named: `refs/takt/candidates/<case id>` ([`Run::candidate`]).
+pub const CANDIDATE_REFS: &str = "refs/takt/candidates/";
+
+/// Whether the commit `commit` of the case delivering `story` is one of takt's store commits,
+/// left out of its candidate: its subject is the take's, the `test_result` record's, the move's
+/// or an approval's for that story, and every path it changes lies in the planning store
+/// ([`crate::frontier::is_store_path`]). A commit a step made is never one, whatever it
+/// changes: its subject is `<action>: <summary>`.
+fn is_store_commit(commit: &crate::git::Commit, story: &str) -> bool {
+    let subject = commit.subject.as_str();
+    (subject == take_subject(story)
+        || subject == crate::frontier::test_result_subject(story)
+        || subject == crate::frontier::implemented_subject(story)
+        || subject.starts_with(&crate::frontier::approve_subject(story, "")))
+        && commit
+            .paths
+            .iter()
+            .all(|path| crate::frontier::is_store_path(path))
 }
 
 /// The outcome of a case whose story is recorded and moved to `implemented` in the store.
@@ -6454,6 +6484,116 @@ impl<'a> Run<'a> {
         &self.committer
     }
 
+    /// The case's candidate, a commit a turn takes as it is: the case's code commits, every
+    /// commit from the base commit it pinned at open to its implementation revision but takt's
+    /// store commits ([`is_store_commit`]: the take, the `test_result` record, the move and the
+    /// approvals), replayed in order on its base branch's tip, else on that pinned commit
+    /// ([`crate::git::replay`]), under the identity the case was opened with, else the one
+    /// [`crate::git::COMMIT_IDENTITY_FILE`] names at that tip; named by
+    /// `refs/takt/candidates/<case id>` ([`CANDIDATE_REFS`]), so it is fetched by its id from the
+    /// repository whatever protocol the fetch speaks. Neither the work tree, the index nor a
+    /// branch is touched, and the same case on the same base gives the same commit. Refused,
+    /// with no ref written, when no identity is configured (takt makes no candidate as
+    /// [`crate::git::CommitIdentity::takt`]), when the case pins no base, holds a merge or no
+    /// code commit, and when a code commit does not apply on the base without what was left
+    /// out, naming it.
+    pub fn candidate(&self) -> Result<String> {
+        let branch = crate::case::Branch::read(&self.case.dir)?;
+        let Some(pinned) = branch.base_commit else {
+            bail!("the case {} pins no base commit", self.case.id);
+        };
+        let onto = match &branch.base {
+            Some(base) => crate::git::run(
+                &self.tree,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--end-of-options",
+                    &format!("refs/heads/{base}^{{commit}}"),
+                ],
+            )
+            .with_context(|| format!("the tip of the case's base branch {base}"))?,
+            None => pinned.clone(),
+        };
+        let tip = match self.case.revision("implementation") {
+            Some(revision) => revision.to_owned(),
+            None => crate::git::run(
+                &self.tree,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    &format!("refs/heads/{}", branch.name),
+                ],
+            )?,
+        };
+        let identity = match self.case.commit_identity()? {
+            Some(identity) => identity,
+            None => crate::git::configured_identity(&self.tree, &onto)?.ok_or_else(|| {
+                anyhow!(
+                    "no commit identity: the case {} was opened with none, and {} holds no {} giving `identity.name` and `identity.email`; a candidate is a commit that leaves the machine, and takt makes none as {}: commit that file on {} or open the case with --commit-identity '<name> <email>'",
+                    self.case.id,
+                    short(&onto),
+                    crate::git::COMMIT_IDENTITY_FILE,
+                    crate::git::CommitIdentity::takt(),
+                    branch.base.as_deref().unwrap_or("the base")
+                )
+            })?,
+        };
+        let story = self.case.story()?;
+        let listed = crate::git::run(
+            &self.tree,
+            &[
+                "rev-list",
+                "--reverse",
+                "--topo-order",
+                "--end-of-options",
+                &format!("{pinned}..{tip}"),
+            ],
+        )?;
+        let mut code = Vec::new();
+        for id in listed.lines().filter(|id| !id.is_empty()) {
+            let commit = crate::git::commit(&self.tree, id)?;
+            if commit.parents.len() != 1 {
+                bail!(
+                    "the case's branch holds the merge {id} ({}); a candidate is replayed from commits with one parent",
+                    commit.subject
+                );
+            }
+            if !story
+                .as_deref()
+                .is_some_and(|story| is_store_commit(&commit, story))
+            {
+                code.push(id.to_owned());
+            }
+        }
+        if code.is_empty() {
+            bail!(
+                "the case's branch holds no code commit from {} to {}",
+                short(&pinned),
+                short(&tip)
+            );
+        }
+        match crate::git::replay(&self.tree, &onto, &code, &identity)? {
+            crate::git::Replayed::Made(candidate) => {
+                crate::git::run(
+                    &self.tree,
+                    &[
+                        "update-ref",
+                        &format!("{CANDIDATE_REFS}{}", self.case.id),
+                        &candidate,
+                    ],
+                )?;
+                Ok(candidate)
+            }
+            crate::git::Replayed::Conflict { commit, paths } => bail!(
+                "the code commit {commit} does not apply on {} at {} without the commits left out of the candidate (takt's take, record and approval commits): it conflicts at {}",
+                branch.base.as_deref().unwrap_or("the base"),
+                short(&onto),
+                paths.join(", ")
+            ),
+        }
+    }
+
     /// Gives the run the planning store `store`: a story's run records there the `test_result`
     /// pass record a validator of the case wrote, at the record's own `observed_at`, and moves
     /// the story to `implemented`, each a commit on the case's branch
@@ -7037,6 +7177,14 @@ impl<'a> Run<'a> {
                     ),
                 },
             )?;
+        }
+        // A delivery stopped at `pr.opened` for want of a forge hands its change over as a
+        // candidate a turn takes as it is; one that cannot be made is named, and the stop stays.
+        if stop.hands_over() {
+            match self.candidate() {
+                Ok(candidate) => writeln!(out, "candidate: {candidate}")?,
+                Err(why) => writeln!(out, "candidate: none: {why:#}")?,
+            }
         }
         events.emit(
             self.steps,
