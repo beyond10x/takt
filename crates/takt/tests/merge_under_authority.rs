@@ -1197,6 +1197,7 @@ impl Harness for SelfGranting {
                 approver: "the harness".to_owned(),
                 granted_at: "2026-01-01T00:00:00Z".to_owned(),
                 revision: Some(git(context.tree, &["rev-parse", "HEAD"])),
+                mainline_tip: None,
             }],
         }
         .write(&dir)?;
@@ -1937,6 +1938,7 @@ impl Harness for SiblingGranting {
                     context.tree,
                     &["rev-parse", &format!("takt/{}", self.0)],
                 )),
+                mainline_tip: None,
             }],
         }
         .write(&context.tree.join(CASES_DIR).join(self.0))?;
@@ -2243,6 +2245,7 @@ impl Harness for GrantingAndEditing {
                 approver: "the harness".to_owned(),
                 granted_at: "2026-01-01T00:00:00Z".to_owned(),
                 revision: Some(git(context.tree, &["rev-parse", "HEAD"])),
+                mainline_tip: None,
             }],
         }
         .write(&dir)?;

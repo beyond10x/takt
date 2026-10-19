@@ -501,6 +501,13 @@ pub struct AuthorityDecision {
     /// revision) authorises none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
+    /// The commit the mainline was at when the grant was given, read by `takt approve` through
+    /// the forge the improvement turn recorded at open ([`FORGE_FILE`]): what
+    /// `candidate.merge_judge_surface` decides a merge made before the grant by, never a date.
+    /// Recorded for a turn's grant of [`crate::validator::JUDGE_SURFACE_CAPABILITY`] only; a
+    /// grant without one authorises no judge-surface merge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mainline_tip: Option<String>,
 }
 
 impl AuthorityDecision {
@@ -912,7 +919,9 @@ pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<
 /// approval-required, or was computed at another revision of that artifact than the case is at
 /// now), and a capability the case already decides at that revision. A grant given at another
 /// revision is replaced: it authorises nothing here, and Canon refuses a capability decided
-/// twice.
+/// twice. An improvement turn's grant of [`crate::validator::JUDGE_SURFACE_CAPABILITY`] records
+/// the mainline's tip read once the grant's instant is taken ([`mainline_at_grant`]), none for a
+/// turn that recorded no forge; a tip that cannot be read is refused with nothing written.
 pub fn prepare_grant(
     tree: &Path,
     id: &str,
@@ -1033,12 +1042,21 @@ pub fn prepare_grant(
         .decisions
         .retain(|decision| decision.capability != capability);
     let granted_at = crate::now();
+    // A turn's judge-surface grant records the mainline's tip, read after its instant, so a
+    // merge made before the grant is found by ancestry, never by a date.
+    let mainline_tip =
+        if protocol == TURN_PROTOCOL && capability == crate::validator::JUDGE_SURFACE_CAPABILITY {
+            mainline_at_grant(tree, &dir, id)?
+        } else {
+            None
+        };
     authority.decisions.push(AuthorityDecision {
         capability: capability.to_owned(),
         decision: Grant::Granted,
         approver: approver.to_owned(),
         granted_at: granted_at.clone(),
         revision: Some(revision.clone()),
+        mainline_tip,
     });
     let approval = Approval {
         case: id.to_owned(),
@@ -1053,6 +1071,22 @@ pub fn prepare_grant(
         authority,
         approval,
         _held: held,
+    })
+}
+
+/// The commit the mainline is at now for the turn `id` at `dir` under `tree`, read through the
+/// forge the turn recorded when it opened ([`turn_forge`],
+/// [`crate::improvement::Mainline::recorded`]): what its judge-surface grant records. None for
+/// a turn that recorded no forge, whose grant then authorises no judge-surface merge; a tip that
+/// cannot be read is an error, and nothing is written then.
+fn mainline_at_grant(tree: &Path, dir: &Path, id: &str) -> Result<Option<String>> {
+    let main = crate::promotion::MAINLINE;
+    let Some(forge) = turn_forge(dir)? else {
+        return Ok(None);
+    };
+    let mainline = crate::improvement::Mainline::recorded(tree, &forge)?;
+    mainline.tip(tree).map(Some).with_context(|| {
+        format!("the tip of {main} at this grant to the turn {id} could not be read; nothing was written")
     })
 }
 
@@ -2032,8 +2066,18 @@ impl CaseDir {
     /// another run's than the one that delivered the candidate. Nothing else declares
     /// independence. The sha256 of the binary that judges the turn goes into [`JUDGE_FILE`], and
     /// the install root given, an existing directory named canonically, into
-    /// [`INSTALL_ROOT_FILE`]; any other root is refused before anything is written.
+    /// [`INSTALL_ROOT_FILE`]; any other root is refused before anything is written. The forge
+    /// given goes into [`FORGE_FILE`]; a name that is empty or holds white space is refused
+    /// before anything is written.
     pub fn open_turn(&mut self, opening: &TurnOpening) -> Result<()> {
+        if let Some(forge) = &opening.forge
+            && (forge.is_empty() || forge.chars().any(|c| c.is_whitespace() || c.is_control()))
+        {
+            bail!(
+                "the forge `{}` is no forge's name; a turn records the forge it reads the mainline through",
+                forge.escape_debug()
+            );
+        }
         // The install root is checked before anything is written: an existing directory named
         // canonically, an absolute UTF-8 path on one line, so no `..` or link recorded could
         // later lead elsewhere.
@@ -2096,6 +2140,11 @@ impl CaseDir {
         if let Some(root) = &install_root {
             let path = self.dir.join(INSTALL_ROOT_FILE);
             std::fs::write(&path, format!("{root}\n"))
+                .with_context(|| format!("write {}", path.display()))?;
+        }
+        if let Some(forge) = &opening.forge {
+            let path = self.dir.join(FORGE_FILE);
+            std::fs::write(&path, format!("{forge}\n"))
                 .with_context(|| format!("write {}", path.display()))?;
         }
         self.set_story(&opening.finding)
@@ -2254,6 +2303,11 @@ pub struct TurnOpening {
     /// installed binary under, recorded at open ([`INSTALL_ROOT_FILE`]); none, and it is read
     /// from the environment when the validator observes.
     pub install_root: Option<PathBuf>,
+    /// The forge whose mainline the turn reads ([`crate::improvement::Mainline::forge`]: `bot`,
+    /// or `none` for the local `main`), recorded at open ([`FORGE_FILE`]) for `takt approve` to
+    /// read the mainline's tip at a judge-surface grant through; none records nothing, and such
+    /// a grant records no tip and authorises no judge-surface merge.
+    pub forge: Option<String>,
 }
 
 /// The file of an improvement turn's case that holds the install root it was opened with, an
@@ -2275,6 +2329,30 @@ pub fn install_root_of(case_dir: &Path) -> Result<Option<PathBuf>> {
                 );
             }
             Ok(Some(root))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
+}
+
+/// The file of an improvement turn's case that holds the forge it was opened with, its name on
+/// one line ([`TurnOpening::forge`]).
+pub const FORGE_FILE: &str = "forge";
+
+/// The forge the turn at `case_dir` was opened with ([`FORGE_FILE`]); none when it recorded none.
+pub fn turn_forge(case_dir: &Path) -> Result<Option<String>> {
+    let path = case_dir.join(FORGE_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let forge = text.strip_suffix('\n').unwrap_or(&text);
+            if forge.is_empty() || forge.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                bail!(
+                    "{} names `{}`, which is no forge's name",
+                    path.display(),
+                    forge.escape_debug()
+                );
+            }
+            Ok(Some(forge.to_owned()))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
@@ -2558,6 +2636,7 @@ pub fn turn_opening(
         title: finding_title(finding, filed.as_deref().unwrap_or_default()),
         judge_sha256: digest,
         install_root: None,
+        forge: Some(mainline.forge()),
     })
 }
 

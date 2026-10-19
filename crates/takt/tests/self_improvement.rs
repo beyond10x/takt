@@ -76,8 +76,13 @@ struct Turn {
 
 /// A repository whose base holds the finding scripts and the finding `finding` (its body), with
 /// a candidate commit on a side branch, and the turn `turn` opened on it through the kernel's
-/// opening method.
+/// opening method, its surface `non_judge`, recording the forge `none`.
 fn turn(name: &str, finding: &str) -> Turn {
+    turn_with(name, finding, "non_judge", Some("none"))
+}
+
+/// [`turn`], the turn's surface `surface`, recording the forge `forge` or none.
+fn turn_with(name: &str, finding: &str, surface: &str, forge: Option<&str>) -> Turn {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("self-improvement-{}-{name}", std::process::id()));
     if dir.exists() {
@@ -112,17 +117,18 @@ fn turn(name: &str, finding: &str) -> Turn {
         protocol,
         "turn",
         "one improvement turn",
-        &[("surface".to_owned(), "non_judge".to_owned())],
+        &[("surface".to_owned(), surface.to_owned())],
     )
     .expect("the case opens");
     case.open_turn(&TurnOpening {
         finding: FINDING.to_owned(),
         candidate: candidate.clone(),
         baseline: baseline.clone(),
-        surface: "non_judge".to_owned(),
+        surface: surface.to_owned(),
         title: "The probe shows the defect".to_owned(),
         judge_sha256: "0".repeat(64),
         install_root: None,
+        forge: forge.map(str::to_owned),
     })
     .expect("the turn opens");
     Turn {
@@ -634,6 +640,7 @@ fn granted_by(turn: &Turn, capability: &str, approver: &str) {
         approver: approver.to_owned(),
         granted_at: "2026-01-01T00:00:00Z".to_owned(),
         revision: Some(turn.candidate.clone()),
+        mainline_tip: Some(git(&turn.tree, &["rev-parse", "main"])),
     });
     authority.write(&dir).expect("the authority is written");
 }
@@ -713,14 +720,15 @@ fn the_merge_is_observed_through_the_forges_report_of_main() {
 /// `candidate.merge_judge_surface` holds its grant to story:judge-guard's rule: an agent role's
 /// grant records nothing while `main` records no delegation to it, and `merged` once `main`
 /// holds an unrevoked delegation of `repository.merge.judge_surface` to that role; the owner's
-/// grant needs none.
+/// grant needs none. Each grant is given while `main` is at the baseline, and `main` moves to
+/// the candidate after it, as a merge the grant authorises does.
 #[test]
 fn a_judge_surface_merge_holds_only_the_owners_grant_or_a_delegated_roles() {
     let turn = turn("merge-judge-surface", &finding("docs/runs/trial-1.md"));
     let validator =
         takt::improvement::CandidateMerged::judge_surface(takt::improvement::Mainline::Local);
-    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
     granted_by(&turn, "repository.merge.judge_surface", "agent:developer");
+    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
     let (results, waiting, summary) = observed(&validator, &turn);
     assert!(results.is_empty() && !waiting, "undelegated: {summary}");
     assert!(
@@ -780,10 +788,264 @@ fn a_judge_surface_merge_holds_only_the_owners_grant_or_a_delegated_roles() {
     git(&turn.tree, &["branch", "-f", "main", &delegated]);
     let (results, _, summary) = observed(&validator, &turn);
     assert_eq!(results, ["merged"], "delegated: {summary}");
-    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
+    git(&turn.tree, &["branch", "-f", "main", &turn.baseline]);
     granted_by(&turn, "repository.merge.judge_surface", "human:owner");
+    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
     let (results, _, summary) = observed(&validator, &turn);
     assert_eq!(results, ["merged"], "the owner: {summary}");
+}
+
+/// The owner's grant of the turn's judge-surface merge written into its `authority.yaml` as
+/// `takt approve` writes it: given at `granted_at`, with `tip` the commit `main` was at when it
+/// was given, or none recorded. Written as the file's text, the one grant the case holds.
+fn judge_grant(turn: &Turn, granted_at: &str, tip: Option<&str>) {
+    let dir = turn.tree.join(".engineering/cases/turn");
+    let mut text = format!(
+        "- capability: repository.merge.judge_surface\n  decision: granted\n  approver: human:owner\n  granted_at: '{granted_at}'\n  revision: {}\n",
+        turn.candidate
+    );
+    if let Some(tip) = tip {
+        text.push_str(&format!("  mainline_tip: {tip}\n"));
+    }
+    fs::write(dir.join("authority.yaml"), text).expect("the authority is written");
+}
+
+/// A commit of the tree `tree` with `parents` and `message`, committed at `date` by the
+/// committer's clock; its id.
+fn commit_tree(turn: &Turn, tree: &str, parents: &[&str], message: &str, date: &str) -> String {
+    let mut args = vec!["commit-tree", tree];
+    for parent in parents {
+        args.extend(["-p", parent]);
+    }
+    args.extend(["-m", message]);
+    let output = Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
+        .args(&args)
+        .env("GIT_COMMITTER_DATE", date)
+        .env("GIT_AUTHOR_DATE", date)
+        .current_dir(&turn.tree)
+        .output()
+        .expect("git runs");
+    assert!(output.status.success(), "git {args:?}");
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// The first real turn's shape: the candidate reached `main` by a fast-forward before the owner
+/// granted its judge-surface merge, so `main` held it when the grant was given. The grant
+/// authorises no merge already made: nothing is recorded, and the run does not wait, and the
+/// summary names the merge (the candidate itself, a fast-forward having no merge commit) with
+/// its committer date, by the committer's clock, and the grant's instant. The grant's instant is
+/// set before the candidate's committer date, so a check by date would record `merged`.
+#[test]
+fn a_candidate_merged_before_the_grant_is_refused_naming_both_instants() {
+    let turn = turn("merge-before-grant", &finding("docs/runs/trial-1.md"));
+    let validator =
+        takt::improvement::CandidateMerged::judge_surface(takt::improvement::Mainline::Local);
+    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
+    let granted_at = "2000-01-01T00:00:00Z";
+    judge_grant(&turn, granted_at, Some(&turn.candidate));
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert!(results.is_empty() && !waiting, "{summary}");
+    let committed = git(&turn.tree, &["log", "-1", "--format=%cI", &turn.candidate]);
+    assert!(
+        summary.contains(granted_at),
+        "the grant's instant: {summary}"
+    );
+    assert!(
+        summary.contains(&committed),
+        "the merge's committer date {committed}: {summary}"
+    );
+    assert!(summary.contains("committer's clock"), "{summary}");
+    assert!(summary.contains(&turn.candidate[..8]), "{summary}");
+}
+
+/// A candidate merged into `main` by a merge commit, `main` then moved on by one more commit, all
+/// before the grant: the refusal names the merge commit, the first commit of `main`'s
+/// first-parent chain that holds the candidate, not the tip and not the candidate, with the
+/// merge commit's committer date.
+#[test]
+fn the_refusal_names_the_first_commit_of_mains_first_parent_chain_that_holds_the_candidate() {
+    let turn = turn(
+        "merge-commit-before-grant",
+        &finding("docs/runs/trial-1.md"),
+    );
+    let validator =
+        takt::improvement::CandidateMerged::judge_surface(takt::improvement::Mainline::Local);
+    let tree = git(
+        &turn.tree,
+        &["rev-parse", &format!("{}^{{tree}}", turn.candidate)],
+    );
+    let merge = commit_tree(
+        &turn,
+        &tree,
+        &[&turn.baseline, &turn.candidate],
+        "merge the candidate",
+        "2026-10-19T18:02:18Z",
+    );
+    let after = commit_tree(&turn, &tree, &[&merge], "after", "2026-10-19T18:04:00Z");
+    git(&turn.tree, &["branch", "-f", "main", &after]);
+    judge_grant(&turn, "2026-10-19T18:05:26Z", Some(&after));
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert!(results.is_empty() && !waiting, "{summary}");
+    assert!(summary.contains(&merge[..8]), "the merge commit: {summary}");
+    let committed = git(&turn.tree, &["log", "-1", "--format=%cI", &merge]);
+    assert!(committed.starts_with("2026-10-19T18:02:18"), "{committed}");
+    assert!(
+        summary.contains(&committed),
+        "the merge's committer date {committed}: {summary}"
+    );
+    assert!(summary.contains("2026-10-19T18:05:26Z"), "{summary}");
+}
+
+/// The incident's fast-forward shape after the grant: the owner grants while `main` is at the
+/// baseline, and `main` then moves to the candidate. It waits until then and records `merged`
+/// after, though the candidate's committer date precedes the grant's instant: no date decides it.
+#[test]
+fn a_candidate_merged_after_the_grant_records_merged() {
+    let turn = turn("merge-after-grant", &finding("docs/runs/trial-1.md"));
+    let validator =
+        takt::improvement::CandidateMerged::judge_surface(takt::improvement::Mainline::Local);
+    judge_grant(&turn, "2999-01-01T00:00:00Z", Some(&turn.baseline));
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert!(results.is_empty() && waiting, "{summary}");
+    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert_eq!(results, ["merged"], "{summary}");
+    assert!(!waiting, "{summary}");
+}
+
+/// A judge-surface grant that records no tip of `main` read when it was given authorises no
+/// merge: whether the candidate reached `main` after it is not known, so nothing is recorded
+/// though `main` moved to the candidate after the grant.
+#[test]
+fn a_judge_surface_grant_with_no_mainline_tip_is_refused() {
+    let turn = turn("merge-no-anchor", &finding("docs/runs/trial-1.md"));
+    let validator =
+        takt::improvement::CandidateMerged::judge_surface(takt::improvement::Mainline::Local);
+    judge_grant(&turn, "2026-10-19T18:05:26Z", None);
+    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert!(results.is_empty() && !waiting, "{summary}");
+    assert!(summary.contains("records no tip of main"), "{summary}");
+}
+
+/// A judge-surface grant whose recorded tip of `main` does not arrive from the repository as its
+/// id authorises no merge: nothing is recorded, naming the tip.
+#[test]
+fn a_judge_surface_grant_whose_mainline_tip_cannot_be_fetched_is_refused() {
+    let turn = turn("merge-anchor-missing", &finding("docs/runs/trial-1.md"));
+    let validator =
+        takt::improvement::CandidateMerged::judge_surface(takt::improvement::Mainline::Local);
+    let missing = "1".repeat(40);
+    judge_grant(&turn, "2026-10-19T18:05:26Z", Some(&missing));
+    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert!(results.is_empty() && !waiting, "{summary}");
+    assert!(summary.contains(&missing[..8]), "{summary}");
+}
+
+/// The turn's records up to the judge-surface merge's gate, as its validators write them, and
+/// the decision that finds `candidate.merge_judge_surface` approval-required.
+fn at_the_judge_gate(turn: &Turn) {
+    let mut case = CaseDir::resume(&turn.tree, "turn").expect("the case resumes");
+    for (n, kind, result, subject, producer) in [
+        (1, "finding_record", "filed", "finding", FindingFile::NAME),
+        (
+            2,
+            "scenario_result",
+            "reproduced",
+            "baseline",
+            takt::improvement::ScenarioReproduce::NAME,
+        ),
+        (
+            3,
+            "scenario_result",
+            "not_reproduced",
+            "candidate",
+            takt::improvement::ScenarioVerify::NAME,
+        ),
+    ] {
+        let revision = case.revision(subject).expect("the subject has a revision");
+        case.add_evidence(&takt::evidence::Record::new(
+            format!("e{n}"),
+            kind,
+            Some(result.to_owned()),
+            subject,
+            revision,
+            producer,
+        ))
+        .expect("the record is written");
+    }
+    let decision = case.evaluate(0).expect("evaluates");
+    assert_eq!(
+        decision
+            .actions
+            .get("candidate.merge_judge_surface")
+            .map(String::as_str),
+        Some("approval-required"),
+        "{}",
+        decision.json
+    );
+}
+
+/// `takt approve`'s grant of a turn's judge-surface merge records the tip of `main` read through
+/// the forge the turn recorded when it opened (`none`: the local `main`); a turn that recorded no
+/// forge gets a grant with no tip, which records no merge though `main` moves to the candidate
+/// after it.
+#[test]
+fn a_judge_surface_grant_records_the_mainline_tip_through_the_turns_forge() {
+    let turn = turn_with(
+        "grant-anchor",
+        &finding("docs/runs/trial-1.md"),
+        "judge",
+        Some("none"),
+    );
+    at_the_judge_gate(&turn);
+    let main = git(&turn.tree, &["rev-parse", "main"]);
+    takt::case::grant(
+        &turn.tree,
+        "turn",
+        "repository.merge.judge_surface",
+        "human:owner",
+    )
+    .expect("granted");
+    let dir = turn.tree.join(".engineering/cases/turn");
+    let authority = takt::case::Authority::read(&dir)
+        .expect("the authority reads")
+        .expect("an authority");
+    let decision = authority
+        .decision("repository.merge.judge_surface")
+        .expect("the grant");
+    assert_eq!(decision.mainline_tip.as_deref(), Some(main.as_str()));
+
+    let turn = turn_with(
+        "grant-no-forge",
+        &finding("docs/runs/trial-1.md"),
+        "judge",
+        None,
+    );
+    at_the_judge_gate(&turn);
+    takt::case::grant(
+        &turn.tree,
+        "turn",
+        "repository.merge.judge_surface",
+        "human:owner",
+    )
+    .expect("granted");
+    let dir = turn.tree.join(".engineering/cases/turn");
+    let authority = takt::case::Authority::read(&dir)
+        .expect("the authority reads")
+        .expect("an authority");
+    let decision = authority
+        .decision("repository.merge.judge_surface")
+        .expect("the grant");
+    assert_eq!(decision.mainline_tip, None);
+    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
+    let validator =
+        takt::improvement::CandidateMerged::judge_surface(takt::improvement::Mainline::Local);
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert!(results.is_empty() && !waiting, "{summary}");
+    assert!(summary.contains("records no tip of main"), "{summary}");
 }
 
 /// Writes the promotion store's record of `revision` of `kind`, chained to the file `previous`

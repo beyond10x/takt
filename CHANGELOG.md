@@ -6,6 +6,15 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+### Improvement turns
+
+- `candidate.merge_judge_surface` records `merged` only for a candidate that reached the mainline
+  after the grant. `takt approve` records the mainline's tip with a turn's judge-surface grant,
+  read through the forge the turn recorded when it opened. A candidate that tip already holds is
+  refused, decided by ancestry, not by a committer date. The refusal names the merge commit with
+  its committer date and the grant's time. A grant that records no tip (a turn opened before
+  the forge was recorded), or whose tip cannot be fetched, is refused too.
+
 ## [0.2.2] — 2026-10-19
 
 ### Improvement turns

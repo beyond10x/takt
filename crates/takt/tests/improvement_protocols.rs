@@ -112,6 +112,7 @@ fn open(tree: &Path, protocol: &str, id: &str, inputs: &[(&str, &str)]) -> CaseD
             title: "A finding".to_owned(),
             judge_sha256: "0".repeat(64),
             install_root: None,
+            forge: Some("none".to_owned()),
         })
         .expect("the turn opens");
         return case;
