@@ -9,8 +9,11 @@
 //! These validators run in the takt that drives the case, the installed promoted binary, which
 //! judges; the candidate's binary runs only inside `scripts/check-finding`'s run step. The
 //! scripts they run (`scripts/check-finding`, and `scripts/file-finding` it calls) are read at the
-//! case's base commit, checked against their ids, and run from a directory of their own, never
-//! from the tree a step edits. The candidate is delivered outside the case and given at open.
+//! turn's baseline, the promoted revision, checked against their ids, and run from a directory
+//! of their own, never from the tree a step edits nor from the commit the case forks from, which
+//! the operator's `HEAD` decides; a candidate that changes them, or the finding, does not open a
+//! turn ([`crate::case::turn_opening`]). The candidate is delivered outside the case and given at
+//! open.
 //!
 //! Not here yet: the merge validators (`candidate.merge`, `candidate.merge_judge_surface`), the
 //! judge-surface input computed at open, and `binary.promote`; until they are, no turn reaches
@@ -22,7 +25,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
-use crate::case::Branch;
 use crate::evidence::Record;
 use crate::forge::Limits;
 use crate::promotion::Kind;
@@ -30,17 +32,29 @@ use crate::scorecard::{Rule, Scorecard};
 use crate::validator::{Artifact, Observation, Validator};
 
 /// The script that runs a finding's predicate with a takt built from a revision, read at the
-/// case's base commit.
+/// turn's baseline, the promoted revision.
 pub const CHECK_FINDING: &str = "scripts/check-finding";
 
-/// The script that files a finding and parses its predicate (`--predicate`), read at the case's
-/// base commit; `scripts/check-finding` calls it from its own directory.
+/// The script that files a finding and parses its predicate (`--predicate`), read at the turn's
+/// baseline; `scripts/check-finding` calls it from its own directory.
 pub const FILE_FINDING: &str = "scripts/file-finding";
 
 /// Where a candidate's saved scorecard is read, under the state directory
 /// (`$XDG_STATE_HOME`, `~/.local/state` without it): `scorecard-<candidate>.json`, written
 /// beforehand with `takt scorecard --save`.
 pub const SCORECARDS: &str = "takt/scorecards";
+
+/// The commit that confined `scripts/check-finding`'s run step (story:check-finding-run-step-
+/// confined): a turn opens only on a promoted baseline that descends from it, or that holds its
+/// script byte for byte ([`CONFINED_CHECK_FINDING_SHA256`]), since the baseline's script is the
+/// one the turn runs.
+pub const CONFINED_CHECK_FINDING_COMMIT: &str = "f2a20e9f4f0c85d869e24f9ad43f8178b6fdab48";
+
+/// The sha256 of `scripts/check-finding` at [`CONFINED_CHECK_FINDING_COMMIT`]: a baseline
+/// holding exactly that script runs the confined step, whether or not its history reaches the
+/// commit (a shallow clone's does not).
+pub const CONFINED_CHECK_FINDING_SHA256: &str =
+    "d87db09ee62e424e721bba54199927411ee523397c7b09c6bcc18080bc7def8e";
 
 /// The independence dimension the kernel declares every turn validator on: a validator is no
 /// agent run, so it is another than the one that delivered the candidate.
@@ -57,7 +71,7 @@ pub const PRODUCERS: [&str; 4] = [
 
 /// What the turn validators that run the finding scripts are given: the cache directory
 /// (`$XDG_CACHE_HOME`, `~/.cache` without it) handed to `scripts/check-finding`, which keeps its
-/// builds and runs under `takt/check-finding` there, and under which the scripts read at the base
+/// builds and runs under `takt/check-finding` there, and under which the scripts read at the baseline
 /// are put while they run; the checkout of the scenario repository a predicate naming a
 /// `scenario` runs on (`--scenarios`); and the limits the script is held to.
 #[derive(Debug, Clone)]
@@ -161,11 +175,13 @@ fn held_to(
     }
 }
 
-/// The turn the tree's case is: the finding its `story.yaml` names and the base commit its
-/// branch pinned; or what to say when it has either not.
+/// The turn the tree's case is: the finding its `story.yaml` names and its `baseline`
+/// revision, the promoted one the finding scripts are read at, never the commit the case forks
+/// from (which the operator's `HEAD` decides, the candidate's included); or what to say when it
+/// has either not.
 struct Turn {
     finding: String,
-    base: String,
+    baseline: String,
 }
 
 fn turn_of(tree: &Path) -> Result<std::result::Result<Turn, String>> {
@@ -176,12 +192,12 @@ fn turn_of(tree: &Path) -> Result<std::result::Result<Turn, String>> {
             crate::case::STORY_FILE
         )));
     };
-    let Some(base) = Branch::read(&dir)?.base_commit else {
+    let Some(baseline) = case_revision(&dir, "baseline")? else {
         return Ok(Err(
-            "the case pins no base commit to read the finding scripts at".to_owned(),
+            "the case names no baseline revision to read the finding scripts at".to_owned(),
         ));
     };
-    Ok(Ok(Turn { finding, base }))
+    Ok(Ok(Turn { finding, baseline }))
 }
 
 /// The finding's file in the planning store, for `story:<key>`, the key lower-case letters and
@@ -206,7 +222,7 @@ struct Scripts {
 }
 
 impl Scripts {
-    /// The scripts at `base` in `tree`, under `cache`; or what to say when the base holds one
+    /// The scripts at `base` (the baseline) in `tree`, under `cache`; or what to say when it holds one
     /// not.
     fn at(
         tree: &Path,
@@ -229,10 +245,7 @@ impl Scripts {
             let Some(bytes) =
                 crate::loop_scorecard::verified_file_within(tree, base, path, deadline)?
             else {
-                return Ok(Err(format!(
-                    "the case's base {} holds no {path}",
-                    short(base)
-                )));
+                return Ok(Err(format!("the baseline {} holds no {path}", short(base))));
             };
             let to = scripts.path(path);
             std::fs::write(&to, bytes).with_context(|| format!("write {}", to.display()))?;
@@ -293,7 +306,7 @@ fn last_line(bytes: &[u8]) -> String {
 
 /// `finding.file`: the finding the case was opened for (its `story.yaml`), as the planning store
 /// holds it at the `finding` revision (the case's base commit), its predicate parsed by the
-/// base's `scripts/file-finding --predicate`; writes one `finding_record` about `finding`:
+/// baseline's `scripts/file-finding --predicate`; writes one `finding_record` about `finding`:
 /// `filed` when the predicate parses and the source it cites is a file at that revision,
 /// `malformed` when either is not. It writes nothing to the planning store: the finding is filed
 /// before the turn opens. A finding the store does not hold there, or a case that names none,
@@ -336,7 +349,7 @@ impl FindingFile {
             )));
         };
         let cache = self.0.cache()?;
-        let scripts = match Scripts::at(tree, &turn.base, &cache, deadline)? {
+        let scripts = match Scripts::at(tree, &turn.baseline, &cache, deadline)? {
             Ok(scripts) => scripts,
             Err(why) => return Ok(nothing(format!("{why}; nothing recorded"))),
         };
@@ -442,7 +455,7 @@ impl Validator for FindingFile {
     }
 }
 
-/// Runs the base's `scripts/check-finding` on the case's finding at `revision` and writes one
+/// Runs the baseline's `scripts/check-finding` on the case's finding at `revision` and writes one
 /// `scenario_result` about `validator`'s subject from the line it prints: `reproduced`,
 /// `not_reproduced` or `error` (which makes no claim true). A check that gives no result (exit
 /// 1: no build, a scenario not declared, a predicate past its time) or is refused (exit 64: no
@@ -462,7 +475,7 @@ fn check_finding(
         Err(why) => return Ok(nothing(format!("{action}: {why}; nothing recorded"))),
     };
     let cache = checking.cache()?;
-    let scripts = match Scripts::at(tree, &turn.base, &cache, deadline)? {
+    let scripts = match Scripts::at(tree, &turn.baseline, &cache, deadline)? {
         Ok(scripts) => scripts,
         Err(why) => return Ok(nothing(format!("{action}: {why}; nothing recorded"))),
     };
@@ -508,7 +521,8 @@ fn check_finding(
 }
 
 /// `scenario.reproduce`: the finding's predicate run with a takt built from the `baseline`
-/// revision, through the base's `scripts/check-finding`; one `scenario_result` about `baseline`.
+/// revision, through the baseline's `scripts/check-finding`; one `scenario_result` about
+/// `baseline`.
 #[derive(Debug, Clone)]
 pub struct ScenarioReproduce(pub Checking);
 
@@ -556,7 +570,7 @@ impl Validator for ScenarioReproduce {
 }
 
 /// `scenario.verify`: the finding's predicate run with a takt built from the `candidate`
-/// revision, through the base's `scripts/check-finding`; one `scenario_result` about
+/// revision, through the baseline's `scripts/check-finding`; one `scenario_result` about
 /// `candidate`. It is no run of the agent that delivered the candidate, which the kernel
 /// declares when the turn opens, so its `not_reproduced` earns `scenario.passes_after`.
 #[derive(Debug, Clone)]

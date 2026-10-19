@@ -103,12 +103,103 @@ fn build(defect: bool) -> String {
     }
 }
 
+/// The confined `scripts/check-finding` a promoted baseline holds: the script at
+/// `takt::improvement::CONFINED_CHECK_FINDING_COMMIT` when this repository's object store has
+/// that commit, else this tree's own (a shallow checkout holds the commit's script in its tree
+/// once that commit is merged). Read through git, nothing written.
+fn confined_check_finding() -> String {
+    let output = Command::new("git")
+        .args([
+            "show",
+            &format!(
+                "{}:scripts/check-finding",
+                takt::improvement::CONFINED_CHECK_FINDING_COMMIT
+            ),
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("git runs");
+    if output.status.success() {
+        return String::from_utf8(output.stdout).expect("a UTF-8 script");
+    }
+    fs::read_to_string(Path::new(SCRIPTS).join("check-finding")).expect("the script")
+}
+
+/// The finding's file in the store.
+const FINDING_FILE: &str = ".engineering/planning/story/probe-shows-the-defect.md";
+
+/// The reviewer's rigged `scripts/check-finding`: `not_reproduced` for the revision `HEAD` is
+/// at, `reproduced` for any other, whatever the predicate shows.
+const RIGGED_FOR_HEAD: &str = "#!/bin/sh\nrev=\"\"\nfor a in \"$@\"; do rev=$a; done\nif [ \"$rev\" = \"$(git rev-parse HEAD)\" ]; then echo not_reproduced; else echo reproduced; fi\n";
+
+/// A rigged `scripts/check-finding` that says `not_reproduced` for every revision.
+const RIGGED_ALWAYS: &str = "#!/bin/sh\necho not_reproduced\n";
+
+/// Where the operator's `HEAD` is when the turn opens.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Head {
+    /// `main`, the baseline.
+    Main,
+    /// The candidate's branch.
+    Fix,
+    /// A branch off the baseline whose one commit writes `(path, text)`.
+    Side(&'static str, &'static str),
+}
+
+/// The promotion store's baseline record: one the operator stated for the binary with this
+/// sha256 (the test binary's when none is given), or one that names the baseline's revision as
+/// the binary's own.
+#[derive(Clone, PartialEq, Eq)]
+enum Promoted {
+    Stated(Option<String>),
+    Named,
+}
+
+/// How a world differs from the plain one.
+struct Setup {
+    at_baseline: bool,
+    at_candidate: bool,
+    head: Head,
+    /// What the candidate's commit writes besides `fix.txt`.
+    touches: Option<(&'static str, &'static str)>,
+    /// Text appended to the baseline's `scripts/check-finding`, making it another script than
+    /// the confined one.
+    unconfined: bool,
+    promoted: Promoted,
+}
+
+impl Setup {
+    fn plain(at_baseline: bool, at_candidate: bool) -> Self {
+        Self {
+            at_baseline,
+            at_candidate,
+            head: Head::Main,
+            touches: None,
+            unconfined: false,
+            promoted: Promoted::Stated(None),
+        }
+    }
+}
+
+/// [`world_with`] with HEAD on `main`, a candidate that touches `fix.txt` alone and a baseline
+/// record the operator stated for the test binary.
+fn world(name: &str, at_baseline: bool, at_candidate: bool) -> World {
+    world_with(name, &Setup::plain(at_baseline, at_candidate))
+}
+
 /// A repository whose base holds the finding scripts, the finding and the run record it cites,
 /// and a candidate commit on a side branch; the scenario repository the predicate runs on; a
-/// promotion store whose baseline is the base; and `check-finding`'s cache holding a build of
-/// each revision, the baseline's showing the defect when `at_baseline` and the candidate's when
-/// `at_candidate`.
-fn world(name: &str, at_baseline: bool, at_candidate: bool) -> World {
+/// promotion store whose baseline is the base, stated by the operator for the test binary (its
+/// sha256), as a turn needs the binary that judges to be the promoted one; and
+/// `check-finding`'s cache holding a build of each revision, the baseline's showing the defect
+/// when `at_baseline` and the candidate's when `at_candidate`. `setup` says where `HEAD` is,
+/// what else the candidate writes, and how the baseline differs.
+fn world_with(name: &str, setup: &Setup) -> World {
+    let Setup {
+        at_baseline,
+        at_candidate,
+        ..
+    } = *setup;
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "self-improvement-cli-{}-{name}",
         std::process::id()
@@ -118,7 +209,14 @@ fn world(name: &str, at_baseline: bool, at_candidate: bool) -> World {
     }
     let repo = dir.join("takt");
     for script in ["check-finding", "file-finding"] {
-        let text = fs::read_to_string(Path::new(SCRIPTS).join(script)).expect("the script");
+        let mut text = if script == "check-finding" {
+            confined_check_finding()
+        } else {
+            fs::read_to_string(Path::new(SCRIPTS).join(script)).expect("the script")
+        };
+        if setup.unconfined && script == "check-finding" {
+            text.push_str("# an older check-finding than the confined one\n");
+        }
         executable(&repo.join("scripts").join(script), &text);
     }
     write(
@@ -137,10 +235,24 @@ fn world(name: &str, at_baseline: bool, at_candidate: bool) -> World {
     let baseline = git(&repo, &["rev-parse", "HEAD"]);
     git(&repo, &["checkout", "-q", "-b", "fix"]);
     write(&repo.join("fix.txt"), "the fix\n");
+    if let Some((path, text)) = setup.touches {
+        executable(&repo.join(path), text);
+    }
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "fix"]);
     let candidate = git(&repo, &["rev-parse", "HEAD"]);
-    git(&repo, &["checkout", "-q", "main"]);
+    match setup.head {
+        Head::Fix => {}
+        Head::Main => {
+            git(&repo, &["checkout", "-q", "main"]);
+        }
+        Head::Side(path, text) => {
+            git(&repo, &["checkout", "-q", "-b", "side", &baseline]);
+            executable(&repo.join(path), text);
+            git(&repo, &["add", "-A"]);
+            git(&repo, &["commit", "-q", "-m", "side"]);
+        }
+    }
 
     let scenarios = dir.join("scenarios");
     write(&scenarios.join("README.md"), "the scenario\n");
@@ -166,10 +278,19 @@ fn world(name: &str, at_baseline: bool, at_candidate: bool) -> World {
     );
     let digest = sha256(&store.join(format!("{baseline}.scorecard.json")));
     let tree = git(&repo, &["rev-parse", &format!("{baseline}^{{tree}}")]);
+    let stated = match &setup.promoted {
+        Promoted::Stated(digest) => format!(
+            "\"binary\":null,\"binary_sha256\":\"{}\",\"revision_stated_by\":\"operator\",",
+            digest
+                .clone()
+                .unwrap_or_else(|| sha256(Path::new(env!("CARGO_BIN_EXE_takt"))))
+        ),
+        Promoted::Named => "\"binary\":null,\"binary_sha256\":null,".to_owned(),
+    };
     write(
         &store.join(format!("{baseline}.json")),
         &format!(
-            "{{\"format\":\"takt-promotion/1\",\"revision\":\"{baseline}\",\"tree\":\"{tree}\",\"promoted_at\":\"2026-01-01T00:00:00Z\",\"kind\":\"baseline\",\"scorecard\":\"{baseline}\",\"scorecard_file\":\"/srv/scorecards/scorecard-{baseline}.json\",\"scorecard_sha256\":\"{digest}\",\"against\":null,\"rule\":{{\"trials\":5,\"margin\":1}},\"worse\":0,\"binary\":null,\"binary_sha256\":null,\"previous_sha256\":null}}"
+            "{{\"format\":\"takt-promotion/1\",\"revision\":\"{baseline}\",\"tree\":\"{tree}\",\"promoted_at\":\"2026-01-01T00:00:00Z\",\"kind\":\"baseline\",\"scorecard\":\"{baseline}\",\"scorecard_file\":\"/srv/scorecards/scorecard-{baseline}.json\",\"scorecard_sha256\":\"{digest}\",\"against\":null,\"rule\":{{\"trials\":5,\"margin\":1}},\"worse\":0,{stated}\"previous_sha256\":null}}"
         ),
     );
 
@@ -499,4 +620,150 @@ fn a_turn_without_its_opening_values_is_refused_before_anything_is_written() {
     assert_eq!(code, 1, "{out}\n{err}");
     assert!(err.contains("promotion"), "{err}");
     assert!(!world.repo.join(".engineering/cases").exists());
+}
+
+/// Asserts the turn was refused before anything was written, naming `named`.
+fn refused(world: &World, (code, out, err): &(i32, String, String), named: &str) {
+    assert_eq!(*code, 1, "{out}\n{err}");
+    assert!(err.contains(named), "{named}: {err}");
+    assert!(
+        !world.repo.join(".engineering/cases").exists(),
+        "nothing was written: {out}\n{err}"
+    );
+    assert_eq!(git(&world.repo, &["branch", "--list", "takt/*"]), "");
+}
+
+/// The reviewer's probe `head-on-fix`: the operator's `HEAD` is on the candidate, whose own
+/// `scripts/check-finding` is rigged to say `not_reproduced` for the revision `HEAD` is at,
+/// while the candidate's build still shows the defect. Read at the case's base commit, that
+/// script would earn `scenario.passes_after`; the turn refuses to open instead, naming it, since
+/// the candidate changes a script that judges it.
+#[test]
+fn a_candidate_that_rigs_check_finding_with_head_on_it_is_refused() {
+    let world = world_with(
+        "head-on-fix",
+        &Setup {
+            head: Head::Fix,
+            touches: Some(("scripts/check-finding", RIGGED_FOR_HEAD)),
+            ..Setup::plain(true, true)
+        },
+    );
+    let ran = run_with_gate(&world, &opening(&world), "candidate.merge");
+    refused(&world, &ran, "scripts/check-finding");
+}
+
+/// A candidate that changes the finding's file or `scripts/file-finding` against the baseline is
+/// refused before anything is written, naming the path: what judges the candidate is never the
+/// candidate's.
+#[test]
+fn a_candidate_that_changes_the_finding_or_its_scripts_is_refused() {
+    for (n, path) in [FINDING_FILE, "scripts/file-finding"]
+        .into_iter()
+        .enumerate()
+    {
+        let world = world_with(
+            &format!("touches-{n}"),
+            &Setup {
+                touches: Some((path, "#!/bin/sh\necho changed by the candidate\n")),
+                ..Setup::plain(true, true)
+            },
+        );
+        let ran = run(&world, &opening(&world));
+        refused(&world, &ran, path);
+    }
+}
+
+/// With `HEAD` on a branch whose `scripts/check-finding` is rigged to say `not_reproduced`, the
+/// turn's validators still run the baseline's: the defect reproduces at both revisions and the
+/// turn ends `declined`, not `unreproducible`.
+#[test]
+fn the_turn_runs_the_baselines_check_finding_wherever_head_is() {
+    let world = world_with(
+        "head-on-side",
+        &Setup {
+            head: Head::Side("scripts/check-finding", RIGGED_ALWAYS),
+            ..Setup::plain(true, true)
+        },
+    );
+    let (code, out, err) = run(&world, &opening(&world));
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("Completed (declined)"), "{out}\n{err}");
+    let written = records(&world.repo);
+    assert_eq!(
+        shown(&written)[1..],
+        [
+            row(
+                "scenario_result",
+                "baseline",
+                "reproduced",
+                "takt.scenario-reproduce"
+            ),
+            row(
+                "scenario_result",
+                "candidate",
+                "reproduced",
+                "takt.scenario-verify"
+            ),
+        ],
+        "{out}\n{err}"
+    );
+}
+
+/// The finding is read at the commit the case forks from: one that holds another text of it
+/// than the baseline refuses the turn, naming the finding's file.
+#[test]
+fn a_finding_edited_where_head_is_is_refused() {
+    let world = world_with(
+        "finding-on-side",
+        &Setup {
+            head: Head::Side(
+                FINDING_FILE,
+                "# Another finding\n\n```expected_before\nscenario: 1\ncommand: \"$TAKT\" probe\nexit: 1\noutput: NEVER PRINTED AT ALL\nsource: docs/runs/trial-1.md\n```\n",
+            ),
+            ..Setup::plain(true, true)
+        },
+    );
+    let ran = run(&world, &opening(&world));
+    refused(&world, &ran, FINDING_FILE);
+}
+
+/// A promoted baseline whose `scripts/check-finding` is not the confined one (story
+/// check-finding-run-step-confined), and that does not descend from the commit that confined
+/// it, judges nothing: the turn refuses to open, naming the missing confinement.
+#[test]
+fn a_baseline_without_the_confined_check_finding_is_refused() {
+    let world = world_with(
+        "unconfined",
+        &Setup {
+            unconfined: true,
+            ..Setup::plain(true, false)
+        },
+    );
+    let ran = run(&world, &opening(&world));
+    refused(&world, &ran, "confine");
+}
+
+/// The binary that judges a turn is the promoted one: a store whose latest record names a
+/// revision this binary was not built from, or that the operator stated for a binary with
+/// another sha256, refuses the turn before anything is written.
+#[test]
+fn a_turn_is_judged_only_by_the_promoted_binary() {
+    let world = world_with(
+        "named",
+        &Setup {
+            promoted: Promoted::Named,
+            ..Setup::plain(true, false)
+        },
+    );
+    let ran = run(&world, &opening(&world));
+    refused(&world, &ran, "promoted binary");
+    let world = world_with(
+        "stated-other",
+        &Setup {
+            promoted: Promoted::Stated(Some("0".repeat(64))),
+            ..Setup::plain(true, false)
+        },
+    );
+    let ran = run(&world, &opening(&world));
+    refused(&world, &ran, "sha256");
 }

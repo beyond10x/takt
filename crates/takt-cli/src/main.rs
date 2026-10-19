@@ -713,11 +713,17 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     };
                     let finding = taken(takt::case::TURN_FINDING);
                     let candidate = taken(takt::case::TURN_CANDIDATE);
+                    // The binary that judges the turn is this one, which must be the promoted.
+                    let binary = std::env::current_exe().context("this binary's path")?;
                     Some(takt::case::turn_opening(
                         &repo,
                         finding.as_deref(),
                         candidate.as_deref(),
                         &takt::promotion::store()?,
+                        &takt::case::Judge {
+                            revision: REVISION,
+                            binary: &binary,
+                        },
                     )?)
                 } else {
                     None
