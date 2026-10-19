@@ -1106,8 +1106,8 @@ types:
   # wall time from its run record, its filing from the planning store's history read through git
   # at the base. A field no record holds is absent, never guessed: the first turn, recorded by
   # hand, has no run record and no story record, so no tokens, wall time, finding or filing.
-  # read from: .engineering/planning/story/loop-scorecard.md:33-36
-  # read from: .engineering/planning/story/loop-scorecard.md:53-55
+  # read from: .engineering/planning/story/loop-scorecard.md:34-37
+  # read from: .engineering/planning/story/loop-scorecard.md:54-56
   # read from: .engineering/planning/design/recursive-self-improvement.md:185-187
   # read from: crates/takt/src/scorecard.rs:89-126
   # read from: crates/takt/src/loop_scorecard.rs:52-82
@@ -1176,8 +1176,8 @@ types:
   # Escaped defects are not among them: a later, human-sourced figure no validator observes.
   # Decided 2026-10-18 (story:loop-scorecard). Each figure is takt.work.LoopFigure, computed
   # under each definition takt.work.LoopMetric holds.
-  # read from: .engineering/planning/story/loop-scorecard.md:56
-  # read from: .engineering/planning/story/loop-scorecard.md:101
+  # read from: .engineering/planning/story/loop-scorecard.md:57
+  # read from: .engineering/planning/story/loop-scorecard.md:102
   # read from: crates/takt/src/loop_scorecard.rs:84-89
   # read from: crates/takt/src/loop_scorecard.rs:1059-1085
   - name: takt.work.LoopScorecard
