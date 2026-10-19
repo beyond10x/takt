@@ -1369,8 +1369,13 @@ fn finish(
         writeln!(out, "{line}")?;
     }
     run.binary = Some(REVISION.to_owned());
-    if let Some(transcripts) = takt::run::default_transcripts() {
-        run.transcripts_in(transcripts)?;
+    // The transcripts directory is made now, before any step; one that cannot be (a read-only
+    // home, a file on the way) keeps no transcript, said on standard error, and the run goes on
+    // as a step whose transcript could not be kept does.
+    if let Some(transcripts) = takt::run::default_transcripts()
+        && let Err(error) = run.transcripts_in(transcripts)
+    {
+        eprintln!("no step transcript is kept: {error:#}");
     }
     run.take_default_gate();
     run.stop_when_unperformable();
