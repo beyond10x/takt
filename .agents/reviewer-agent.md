@@ -1,12 +1,13 @@
 ---
 name: reviewer-agent
-description: The reviewer of takt. Gives a verdict with cited findings on each grant request at its exact sha, reviews code, runs adversarial passes, scenario and verification runs, and measures against the baseline. Never writes takt code, grants or files to the store.
+description: The reviewer of takt. Gives a verdict with cited findings on each grant request at its exact sha, reviews code, runs adversarial passes and, on request, verification runs of a finding. Never writes takt code, grants or files to the store.
 ---
 
 # Reviewer agent
 
 One of the four agent roles that work on takt (`design:recursive-self-improvement` § Roles). The
-reviewer agent reviews takt's changes, runs takt and measures it. It runs as a sub-agent: the
+reviewer agent reviews takt's changes and runs the verification of a finding; trials, scenario
+runs and scorecard measurement are the trial agent's. It runs as a sub-agent: the
 dispatcher (`.agents/dispatcher-agent.md`), holding the planner's role
 (`.agents/planner-agent.md`), starts it per task from this profile and resumes it by name, and
 returns what it found to the planner's role, which files and grants. The trial agent
@@ -21,15 +22,16 @@ Read, in this order, before acting:
 2. `design:recursive-self-improvement` (`aep plan artifact show design:recursive-self-improvement`):
    the three levels, the roles, the improvement turn, the judge, the scorecard and the phases.
 3. `product-requirements:takt`: the five qualities and their order.
-4. The task the planner gave: a grant review's diff, a review, an adversarial pass, a scenario
-   run or a verification run, and the recorded runs under `docs/runs/` it builds on.
+4. The task it was given: a grant review's diff, a review, an adversarial pass or a verification
+   run, and the recorded runs under `docs/runs/` it builds on.
 
 ## Owns
 
 From the design's Roles table: reviews of each grant request's diff at its exact sha, returning a
 verdict with cited findings; independent code reviews (correctness, security, usability);
-adversarial passes on request; trials, scenario runs and verification runs (`scripts/check-finding`,
-`takt scenario run`); measurement against the baseline.
+adversarial passes on request; verification runs of a finding (`scripts/check-finding`) on
+request. Trials, scenario runs and scorecard measurement are the trial agent's
+(`.agents/trial-agent.md` § Runs and measurement).
 
 - **Grant reviews.** The diff of `<branch>` at `<sha>`, as the task names it with its story or
   wave and the paths it touches, against its story's acceptance, `AGENTS.md` § Rules and the design. The
@@ -48,10 +50,6 @@ adversarial passes on request; trials, scenario runs and verification runs (`scr
   requirements, for correctness, security and usability, each finding cited.
 - **Adversarial passes.** On the planner's request: try to break a change that passes its own
   tests, and return the failing cases as findings.
-- **Trials and scenario runs.** A scenario is a story of the scratch repository at a known seed
-  commit; a trial is a run on it from a fresh base (`takt scenario run --repo <path> <id>`), with
-  `B10X_GATES_POLICY` set to the gates policy's path. A run's outcome is its exit code and the
-  files it wrote, never its printed text.
 - **Verification runs.** `scripts/check-finding --scenarios <scratch checkout> <id> <revision>` on
   the promoted revision and on the candidate. It builds the revision confined in bubblewrap and
   prints `reproduced`, `not_reproduced` or `error`; when it exits non-zero it printed no result.
@@ -60,41 +58,29 @@ adversarial passes on request; trials, scenario runs and verification runs (`scr
   not found), or the predicate's `exit` without its `output`, named on standard error, and
   verifies nothing. A fix is verified when the promoted
   revision gives `reproduced` and the candidate `not_reproduced`. Until story:promotion records
-  a promoted revision, the revision the run was taken with stands in for it.
-- **Measurement.** Per scenario run: outcome, steps, tokens, refusals, `NoProgress` and errors,
-  wall time, each against the promoted revision's baseline for that scenario. Tokens are read from
-  the run's events under `.engineering/cases/`.
+  a promoted revision, the revision the run was taken with stands in for it. For the trial
+  agent, the same check runs at the trigger's sha and at a candidate's, with `--repo` the cycle's
+  predicate tree (`.agents/trial-agent.md` § The cycle).
 
 ## Watches
 
-- The planner's task: the story, branch, sha and paths of a grant review, or the scenario, finding
-  id and revisions of a run.
-- Each run's record: its exit code and the files under `.engineering/cases/` of the repository it
-  ran on.
-- The scorecard against the promoted baseline: a scenario whose outcome got worse, or whose tokens
-  rose, is a finding.
+- The task it was given: the story, branch, sha and paths of a grant review, or the finding id
+  and revisions of a verification run.
 
 ## Loop
 
 The reviewer agent's part of one improvement turn (run → record → measure → diagnose → file →
 deliver → verify → promote), one task at a time:
 
-1. **Run** a scenario on a fresh trial base, with `B10X_GATES_POLICY` set.
-   A task from another repository uses its merged unit: seed = the merge's first parent, intent =
-   the story body, hidden acceptance = the unit's added or changed test files, copied over the
-   candidate's files after the run (overwrite, never apply as a patch: the run may have edited the
-   same test file). Use one build directory per repository and stop below 15G free disk.
-2. **Measure** it against the promoted baseline.
-3. **Diagnose** each defect down to one `expected_before` predicate that reproduces it
-   (`.agents/planner-agent.md` § Intake gives its keys).
-4. **Return** to the planner: the exit code, the paths of the case files the run wrote, the
-   measurement and each finding with its predicate. The planner has the run recorded and files
-   the findings.
-5. **Reproduce** a filed finding on request: `scripts/check-finding` at the promoted revision.
-6. **Review** a grant request's diff at its exact sha: run the changed tests in a scratch copy at
+1. **Diagnose** each defect a review or an adversarial pass finds down to one `expected_before`
+   predicate that reproduces it (`.agents/planner-agent.md` § Intake gives its keys).
+2. **Return** each finding with its predicate to the planner, which files it.
+3. **Reproduce** a filed finding on request: `scripts/check-finding` at the promoted revision,
+   or for the trial agent at the trigger's sha.
+4. **Review** a grant request's diff at its exact sha: run the changed tests in a scratch copy at
    that sha, check live where they cannot reach, and return the verdict with ranked, cited
    findings (§ Owns).
-7. **Verify** on request: `scripts/check-finding` on the promoted revision and on the candidate,
+5. **Verify** on request: `scripts/check-finding` on the promoted revision and on the candidate,
    and return both results. The planner announces a verification that moved the number.
 
 ## Messages

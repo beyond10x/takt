@@ -75,15 +75,16 @@ on record naming the planner; dispatching the reviewer and the doc-writer; repor
 - Stories that reach `implemented` in the store: `aep plan artifact list --kind story --status
   implemented`: fixes waiting for verification.
 - Runs that stop with exit 4, `ApprovalRequired`: a merge waiting for a grant.
-- The trial agent's hand-overs (`AGENTS.md` § Messages): a candidate waiting for the next wave.
+- The trial agent's hand-overs (`AGENTS.md` § Messages): a candidate waiting for the next wave,
+  with its finding to file; a rejection, a finding to file.
 
 ## Loop
 
 The planner agent's part of one improvement turn (run → record → measure → diagnose → file →
 deliver → verify → promote):
 
-1. **Run, measure, diagnose**: the trial agent's cycles, and the reviewer's runs and adversarial
-   passes, return each defect down to one `expected_before` predicate.
+1. **Run, measure, diagnose**: the trial agent's cycles, and the reviewer's reviews and
+   adversarial passes, return each defect down to one `expected_before` predicate.
 2. **Record**: start the doc-writer on a run's record under `docs/runs/`, from what was returned.
 3. **File** each finding in the store (§ Intake); it joins the next pick.
 4. **Deliver**: the developer's role, in the same session (`.agents/dispatcher-agent.md`). Along
@@ -100,18 +101,17 @@ Cadence, until takt drives the loop itself:
 - **RSI stories first** (AGENTS.md § Rules): a story filed from a self-improvement trial, turn or
   review carries the tag `rsi` (`aep plan artifact new … --tag rsi`, or `set --tag rsi`); wave
   selection takes every open `rsi` story before any other.
-- **Every wave carries at least one improvement turn**: a finding from a run or a review, filed
-  with an `expected_before` predicate, delivered as its own unit and recorded as a
-  `self.improvement` case when it merges.
-- **Per promotion**: the trial agent runs scenario 1 five times at the newly promoted revision; those
-  runs are the baseline every turn until the next promotion is compared with.
-- **Per turn**: `scripts/check-finding` at the baseline and at the candidate, then five candidate
-  runs scored against that baseline under the promotion rule (design:recursive-self-improvement
-  § Scorecard).
-- **Variety, by hand, no schedule** (the owner, 2026-10-18): the reviewer runs many different
-  tasks at the promoted revision, not scenario 1 again: story-sized merged units of public
-  beyond10x repositories (seed = the merge's first parent, intent = the story body, hidden
-  acceptance = the unit's added tests applied after the run), the realistic scenario corpus, and a
+- **Per promotion**: `takt promote` stores the promoted candidate's scorecard, five cases or more
+  per scenario, with its record; that scorecard is the baseline every turn until the next
+  promotion is compared with.
+- **Per turn**: the trial agent's cycle (`.agents/trial-agent.md`): `scripts/check-finding` at the
+  trigger and at the candidate, then five candidate runs per scenario scored against that
+  baseline under the promotion rule (design:recursive-self-improvement § Scorecard).
+- **Variety, by hand, no schedule** (the owner, 2026-10-18): the trial agent runs many different
+  tasks at the promoted revision, on the owner's request, not scenario 1 again: story-sized
+  merged units of public beyond10x repositories (seed = the merge's first parent, intent = the
+  story body, hidden acceptance = the unit's added tests applied after the run), the realistic
+  scenario corpus, and a
   common benchmark once it is integrated. Every run is recorded under `docs/metrics/` with its
   repository; every failure of the hidden acceptance is diagnosed and becomes a finding. A
   repeated weekly run comes later, when the owner says so.
@@ -120,8 +120,8 @@ The dispatcher starts the reviewer and the doc-writer as sub-agents from their p
 developer's role is its own.
 
 No idle slots. Three sub-agents run at once (`.agents/dispatcher-agent.md` § Defaults):
-implementors on stories whose scopes do not overlap, the improvement turn always one of them. A
-slot no implementor needs runs work that waits on nobody: a code review that hunts findings for the
+implementors on stories whose scopes do not overlap, `rsi` stories first. A slot no implementor
+needs runs work that waits on nobody: a code review that hunts findings for the
 next turns, a scope pass on the next wave's stories, a docs or site refresh. A watch on a ref is
 not work.
 
@@ -219,7 +219,9 @@ goes to standard error.
 
 From the design's Roles table, and the limit on a delegation (§ Owns):
 
-- writes takt code
+- writes takt code. This binds the planner's role alone: the dispatcher session, which also
+  holds the developer's role, writes a fix of under 20 lines itself, reviewed in the wave's
+  adversarial pass like any unit (`.agents/dispatcher-agent.md`)
 - grants without a reviewer verdict on that exact sha
 - grants the merge of a judge-surface diff without a delegation on record naming the planner, or
   after that delegation was revoked

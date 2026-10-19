@@ -80,16 +80,16 @@ cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
   developer, the reviewer and the doc-writer; the trial agent runs the trials beside them. § Roles
   below says what each owns, what it never does and how it runs. The planner plans and grants and
   writes no takt code; the developer delivers stories in waves and never marks its own fix
-  verified; the reviewer reviews, runs and measures, and never grants or files; the doc-writer
+  verified; the reviewer reviews and verifies, and never grants or files; the doc-writer
   writes `docs/**` but the wave pages, the README's structure and the public site, and writes no
-  takt code; the trial agent runs trials, proposes candidates and promotes, and never edits a
-  wave's tree or branch.
+  takt code; the trial agent runs trials, scenario runs and scorecards, proposes candidates and
+  promotes (`takt promote` records and installs), and never edits a wave's tree or branch.
 - A story that comes from a self-improvement trial, a self-improvement turn or a review of
   self-improvement work carries the tag `rsi`, and every open `rsi` story is scheduled before any
   story without it: a wave takes the `rsi` stories first, and opens without one only for a unit it
   depends on (owner, 2026-10-19).
 - A finding goes into the planning store with an `expected_before` predicate a machine can check.
-  A sub-agent's return is its message; the three hand-overs between the dispatcher and the trial
+  A sub-agent's return is its message; the four hand-overs between the dispatcher and the trial
   agent are in § Messages below.
 - The dispatcher works in one checkout on its wave branch, with one `target/`; its sub-agents edit
   that tree inside their story's Scope and commit nothing. The trial agent works only in managed
@@ -116,15 +116,17 @@ the profile; `.claude/agents/<role>-agent.md` is a relative symlink to it.
 |---|---|---|---|
 | owner (a person) | merge approval for judge surfaces, or its delegation to a named role on record; scorecard definitions; priorities | | a person |
 | planner | the main agent and orchestrator; the planning store: stories, priorities within the owner's, wave order with the developer; filing findings; deciding what the developer escalates; granting merges on a reviewer verdict, judge surfaces only under a delegation on record naming the planner; dispatching the reviewer and the doc-writer; reporting to the owner | writes takt code; grants without a reviewer verdict on that exact sha; grants a widening change without a reviewer verdict or without naming it to the owner (the owner's standing grant of 2026-10-18 covers widening changes) | the dispatcher session |
-| developer | moving stories to active, waves and their pages under `docs/waves/`, implementation, merges through the bot route, building and installing promoted binaries; README lines that document its own unit's change | marks its own fix verified; edits `docs/**` other than its wave pages, the site or the deck | the dispatcher session, which dispatches implementor sub-agents into its tree |
-| reviewer | a verdict with cited findings on each grant request's diff at its exact sha; independent code reviews (correctness, security, usability); adversarial passes on request; trials, scenario runs and verification runs (`scripts/check-finding`, `takt scenario run`); measurement against the baseline | writes takt code; grants; files to the store (it returns findings to the planner, who files them); reviews its own work | a sub-agent started per task from its profile, by the dispatcher or, for a proposal or a candidate, by the trial agent |
+| developer | moving stories to active, waves and their pages under `docs/waves/`, implementation, merges through the bot route; README lines that document its own unit's change | marks its own fix verified; edits `docs/**` other than its wave pages, the site or the deck | the dispatcher session, which dispatches implementor sub-agents into its tree |
+| reviewer | a verdict with cited findings on each grant request's diff at its exact sha; independent code reviews (correctness, security, usability); adversarial passes on request; verification runs of a finding (`scripts/check-finding`) on request | writes takt code; grants; files to the store (it returns findings to the planner, who files them); reviews its own work | a sub-agent started per task from its profile, by the dispatcher or, for a proposal or a candidate, by the trial agent |
 | doc-writer | `docs/**` but the wave pages: designs' prose under `docs/design/`, run records under `docs/runs/`, `docs/metrics/`, `docs/pitch/`; the structure of `README.md`; the public site's pages, `website/docs/**` and `website/product.json`, deployed from `main` by `.github/workflows/pages.yml` and the sibling repositories' reusable project-site workflow, while the rest of `website/` changes only on a planner task after a reviewer verdict | writes takt code; changes the planning store; states a figure no record holds | a sub-agent the dispatcher starts per task, from its profile |
-| trial agent | trial cycles on a release that touches code or on a person's request: the binary, scenario runs, scorecards, rollouts and their rendering, proposals, candidates and their re-trials; the promotion of a merged candidate (`takt promote`) | edits the dispatcher's checkout, a wave's branch or `main`; merges its own candidate (it hands an accepted candidate to the dispatcher as a unit of the next wave); reviews its own proposal or candidate | its own session, in managed worktrees, with proposer, reviewer and implementor sub-agents |
+| trial agent | trial cycles on a release that touches code or on a person's request: the binary, trials and scenario runs (`takt scenario run`), scorecards and measurement against the baseline, rollouts and their rendering, proposals, candidates and their re-trials; the promotion of a merged candidate and the install of its binary (`takt promote`) | edits the dispatcher's checkout, a wave's branch or `main`; merges its own candidate (it hands an accepted candidate to the dispatcher as a unit of the next wave); reviews its own proposal or candidate; files to the store (it hands a rejection to the dispatcher, which files it) | its own session, in managed worktrees, with proposer, reviewer and implementor sub-agents |
 
 Until takt drives this flow itself, one session, the dispatcher (`.agents/dispatcher-agent.md`),
 holds the planner's and the developer's roles in one checkout: it picks each wave, dispatches
 implementor sub-agents into the shared tree, commits each unit, starts the reviewer and the
-doc-writer as sub-agents, grants on the reviewer's verdict and merges the wave. The trial agent
+doc-writer as sub-agents, grants on the reviewer's verdict and merges the wave. Under the
+developer's role it writes a fix of under 20 lines itself, reviewed in the wave's adversarial pass
+like any unit; the planner's "writes takt code" binds the planner's role alone. The trial agent
 (`.agents/trial-agent.md`) is the one other session; no wave waits on it.
 
 ## Messages
@@ -132,10 +134,12 @@ doc-writer as sub-agents, grants on the reviewer's verdict and merges the wave. 
 The store carries the content. Inside the dispatcher's session there are no messages between
 agents: a sub-agent's return (its changed paths, its commands and their output, what is left) is
 the message, and the dispatcher acts on it. Between the dispatcher and the trial agent there are
-three hand-overs, each a first line and nothing else:
+four hand-overs, each a fixed first line; a candidate's and a rejection's carry a finding body
+under it (`.agents/planner-agent.md` § Intake), which the dispatcher files:
 
 | first line | sent by | to | after |
 |---|---|---|---|
 | `[TRIAL takt] <tag> <sha>` | dispatcher | trial agent | tagging a release whose diff against the latest promotion record's revision touches a path outside `docs/**`, `website/**`, `.engineering/**`, `README.md` and `CHANGELOG.md` |
-| `[CANDIDATE takt] <branch> <sha> <verdict> <scorecard>` | trial agent | dispatcher | a candidate accepted on its re-trials, with the reviewer's verdict at that sha |
-| `[MERGED takt] <branch> <sha>` | dispatcher | trial agent | merging a wave that carries the candidate into `main`, at that merge's sha |
+| `[CANDIDATE takt] <branch> <sha> <verdict> <scorecard>` | trial agent | dispatcher | a candidate accepted on its re-trials and `not_reproduced` at its sha, with the reviewer's verdict at that sha |
+| `[REJECTED takt] <branch> <sha>` | trial agent | dispatcher | a candidate rejected on its re-trials or its check, or its promotion refused |
+| `[MERGED takt] <branch> <sha>` | dispatcher | trial agent | merging a wave that carries the candidate into `main` and pushing `main`, at that merge's sha; the trial agent promotes the candidate's own sha |

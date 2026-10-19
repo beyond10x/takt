@@ -33,7 +33,7 @@ workflow).
 
 - **Designs' prose.** The documents under `docs/design/`. A design artifact in the planning store
   is the planner's.
-- **Run records.** One record per run under `docs/runs/`, from what the reviewer returned through
+- **Run records.** One record per run under `docs/runs/`, from what the trial agent reported through
   the planner: the exit code, the paths of the case files the run wrote and its measurement.
 - **Metrics.** The figures under `docs/metrics/`, each from the run records or the case files it
   names.
@@ -62,7 +62,7 @@ workflow).
 The doc-writer agent's part of one improvement turn (run → record → measure → diagnose → file →
 deliver → verify → promote), one task at a time:
 
-1. **Record** a run under `docs/runs/` when the planner asks, from the reviewer's results; the
+1. **Record** a run under `docs/runs/` when the planner asks, from the trial agent's results; the
    planner files findings whose `source` is that record.
 2. **Write** the documents the task names, in the dispatcher's checkout and inside the paths the
    task names, each figure from a record. It commits nothing.

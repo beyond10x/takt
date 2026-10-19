@@ -12,6 +12,11 @@ and the developer's (`.agents/developer-agent.md`), with their Owns and their Ne
 sub-agents it starts. Trials, scorecards and promotions are the trial agent's
 (`.agents/trial-agent.md`).
 
+One exception to the planner's Never "writes takt code": because this session also holds the
+developer's role, it writes a fix of under 20 lines itself (loop steps 5 and 6, § Compile
+errors). Such a fix is committed as a unit of its own and reviewed in the wave's adversarial
+pass like any unit; the planner's role grants nothing on code it wrote without that pass.
+
 ## Start
 
 Read, in this order, before acting:
@@ -49,7 +54,8 @@ Read, in this order, before acting:
    do"; after two such redispatches it is carried to the next wave.
 5. **Build.** When every story has returned, or four hours after the open:
    `cargo build --workspace && cargo test --workspace`, after `df -h /` (§ Limits). Red: a fix
-   sub-agent with the error text, or the dispatcher fixes it itself when the fix is under 20 lines.
+   sub-agent with the error text, or the dispatcher fixes it itself when the fix is under 20 lines
+   (the exception above).
 6. **Adversarial review.** One reviewer sub-agent, an adversarial pass on
    `git diff main...wave/<NN>` at the tip's sha. It returns a verdict, the sha and its findings.
    A finding fixable now gets one fix round (a sub-agent, or the dispatcher), then one more at
@@ -62,20 +68,24 @@ Read, in this order, before acting:
    one per wave.
 7. **Gate, once.** `task check` on the wave branch's tip. Red: fix, then run it again. This is
    the wave's only full gate run.
-8. **Close.**
-   - The reviewer confirms at the final sha: a short check of the diff since its verdict, not a
-     second full pass.
-   - The dispatcher grants on that verdict, at that exact sha, as the planner's role does
-     (`.agents/planner-agent.md` § Owns and § Never). A diff that touches a judge surface is
-     granted only under a delegation on record naming the planner; without one, one line to the
-     owner, and the merge waits for the owner's grant.
-   - The stories go to `implemented` with `aep plan artifact` verbs, and the wave page's figures
-     are copied from command output only.
-   - One store commit through the bot route, after `b10x-gates scan-text` and
-     `python3 -I scripts/check-citations --require-digests` (§ Citations).
-   - `b10x-gates bot -- merge --no-ff wave/<NN>` into `main`, with `main` checked out in the same
-     tree. A release tag or a push, when the wave cuts one, goes through the bot route too.
-   - One line to the owner.
+8. **Close**, in this order. Nothing is committed on the wave branch after the grant.
+   1. The stories go to `implemented` with `aep plan artifact` verbs, and the wave page's
+      figures are copied from command output only.
+   2. One store commit on the wave branch through the bot route, with the wave page, after
+      `b10x-gates scan-text` and `python3 -I scripts/check-citations --require-digests`
+      (§ Citations). A citation re-point is committed before it, as a commit of its own. The
+      wave branch's tip is now the final sha.
+   3. The reviewer confirms at that final sha: a short check of the diff since its verdict, not a
+      second full pass.
+   4. The dispatcher grants on that verdict, at that exact sha, as the planner's role does
+      (`.agents/planner-agent.md` § Owns and § Never). `.engineering/**` is a judge surface, so
+      the grant is under a delegation on record naming the planner; without one, one line to the
+      owner, and the merge waits for the owner's grant at that sha.
+   5. `b10x-gates bot -- merge --no-ff <final sha>` into `main`, with `main` checked out in the
+      same tree: exactly the granted sha. A new commit on the wave branch voids the grant and
+      starts the close again at step 3.
+   6. A release tag or a push, when the wave cuts one, goes through the bot route too.
+   7. One line to the owner.
 9. **Repeat.** Open the next wave at once.
 
 ## Implementor brief
@@ -108,13 +118,15 @@ Each implementor sub-agent gets these lines, verbatim, with the story's id and S
 ## Citations
 
 A store write or a merge can move lines that `ess/` cites (`relate` adds a frontmatter line; a
-`docs/**` change moves a cited generator line). Before the store commit and before the merge into
-`main`, run `python3 -I scripts/check-citations --require-digests` unpiped, in the same script as
+`docs/**` change moves a cited generator line). Before the store commit, and again before the
+merge into `main`, run `python3 -I scripts/check-citations --require-digests` unpiped, in the
+same script as
 `b10x-gates scan-text`, a bash file that starts with `set -euo pipefail` and is run by path. On an
 unresolved line, run `python3 -I scripts/check-citations fix` outside that script (it exits 1 even
 when it re-pointed every line), then the check again: when it exits 0, commit the re-point as a
 commit of its own; when it does not (the cited text changed, or a needle matches twice), merge
-nothing and report it to the owner.
+nothing and report it to the owner. A re-point found only after the grant is a new commit on the
+wave branch: the grant is void, and the close starts again at the reviewer's confirm.
 
 ## Self-improvement in this loop
 
@@ -129,9 +141,17 @@ promotion are the trial agent's (`.agents/trial-agent.md`).
 - A candidate the trial agent hands over (`[CANDIDATE takt] <branch> <sha> <verdict> <scorecard>`)
   is merged as a unit of the next wave, `--no-ff` into `wave/<NN>`; the reviewer's verdict at that
   sha stands as its review, and the wave's adversarial pass covers it with the rest. Its grant is
-  the grant of any unit. Once the wave merges into `main`, the dispatcher hands back
-  `[MERGED takt] <branch> <sha>` with the merge's sha.
-- No wave waits on a trial.
+  the grant of any unit. The finding body under the hand-over's first line is filed in the same
+  wave with `scripts/file-finding` (`.agents/planner-agent.md` § Intake), so the fix's
+  verification can read it from the store.
+- A rejection the trial agent hands over (`[REJECTED takt] <branch> <sha>` and a finding body
+  under it) is filed in the open wave with `scripts/file-finding`, tagged `rsi`, as any finding.
+- `takt promote` accepts only a revision that is an ancestor of `origin/main` as last fetched. A
+  wave that carries a candidate therefore pushes `main` through the bot route after its merge;
+  then the dispatcher hands back `[MERGED takt] <branch> <sha>` with the merge's sha. The trial
+  agent promotes the candidate's own sha, not the merge's.
+- No wave waits on a trial. Promotion and installing the promoted binary are the trial agent's
+  (`takt promote` records the promotion and installs the binary); this session does neither.
 
 ## Limits
 
@@ -179,7 +199,8 @@ The planner's Never and the developer's Never (their profiles' § Never), and:
 
 - grants a merge without the reviewer's verdict at that exact sha
 - verifies its own fix
-- runs a scenario, a scorecard or a promotion
+- runs a scenario, a scorecard or a promotion, or installs a promoted binary
+- commits on the wave branch after the grant, or merges a sha other than the granted one
 - edits the tree or a branch of the trial agent's candidates
 
 and nothing that breaks a rule in `AGENTS.md` § Rules.

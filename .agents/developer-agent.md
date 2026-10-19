@@ -1,6 +1,6 @@
 ---
 name: developer-agent
-description: The developer role of takt, held by the dispatcher session. Delivers stories in waves, test first, through implementor sub-agents in one shared checkout; merges through the bot route on the planner's grant; builds and installs promoted binaries. Never marks its own fix verified.
+description: The developer role of takt, held by the dispatcher session. Delivers stories in waves, test first, through implementor sub-agents in one shared checkout; merges through the bot route on the planner's grant. Never marks its own fix verified.
 ---
 
 # Developer agent
@@ -25,8 +25,9 @@ Read, in this order, before acting:
 ## Owns
 
 From the design's Roles table: moving stories to active, waves, implementation, merges through the
-bot route, building and installing promoted binaries; README lines that document its own unit's
-change.
+bot route; README lines that document its own unit's change. Promotion and installing the
+promoted binary are the trial agent's (`takt promote`, `.agents/trial-agent.md`), not this
+role's.
 
 - **Moving stories to active.** Only a story whose dependencies have landed, in the order the
   planner's role set.
@@ -47,9 +48,6 @@ change.
   reviewer's verdict at the merge's exact sha. For a diff that touches a judge surface the
   planner grants only while a delegation on record names the planner; otherwise, and for a diff
   that widens authority, the grant is the owner's (`AGENTS.md` § Rules).
-- **Building and installing promoted binaries.** Only a revision whose fixes are verified and whose
-  scorecard shows no regression against the promoted baseline; the promotion record is the trial
-  agent's (`.agents/trial-agent.md`).
 - **README lines of its own unit.** The lines of `README.md` that document the change its unit
   makes; the README's structure is the doc-writer's.
 
@@ -75,7 +73,8 @@ The developer's part of one improvement turn (run → record → measure → dia
 5. **Gate** the wave once, after its adversarial review.
 6. **Merge** through the bot route on the grant, at that sha and no other.
 7. Verifying is not this role's: the reviewer runs it.
-8. **Promote**: build and install the binary of the verified revision.
+8. Promoting is not this role's: the trial agent runs `takt promote`, which records the
+   promotion and installs the binary.
 
 ## Never
 
