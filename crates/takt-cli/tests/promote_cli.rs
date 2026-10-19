@@ -93,6 +93,14 @@ fn stand_in(revision: &str) -> String {
     format!("#!/bin/sh\necho \"takt 0.1.0 ({revision})\"\n")
 }
 
+/// A stand-in for a takt built before `--version` named its revision: prints `takt 0.1.0`.
+fn pre_revision_stand_in() -> String {
+    "#!/bin/sh\necho \"takt 0.1.0\"\n".to_owned()
+}
+
+/// A sha256 no file of a world hashes to.
+const OTHER_DIGEST: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
 /// The scratch takt's `build.rs`: the checkout's revision into `TAKT_REVISION`, `-dirty` when
 /// a tracked file differs, `unknown revision` outside a checkout.
 const TAKT_BUILD: &str = r#"use std::process::Command;
@@ -470,6 +478,36 @@ impl World {
         script(&self.installed(), &stand_in(revision));
     }
 
+    /// Installs the stand-in for a binary that names no revision at `<root>/bin/takt`; its
+    /// sha256.
+    fn install_pre_revision(&self) -> String {
+        script(&self.installed(), &pre_revision_stand_in());
+        sha256(&self.installed())
+    }
+
+    /// A scorecard the rule passes, saved under the candidate revision, each of its five runs
+    /// stating the binary `stated[n]` gives as a `binary.txt` beside its record: the first
+    /// line `<path>\t<sha256>`, then the note; no file for `None`.
+    fn stated_card(&self, label: &str, stated: [Option<(&str, &str)>; 5]) -> PathBuf {
+        let cases = self.outer.join(format!("cases-{label}"));
+        fs::create_dir_all(&cases).expect("a directory");
+        for (n, (tokens, stop)) in BASELINE_TOKENS.iter().zip(FIVE_APPROVALS).enumerate() {
+            let case = format!("scenario-1-trial-{}", n + 11);
+            run(&cases, &case, *tokens, stop);
+            if let Some((digest, note)) = stated[n] {
+                write(
+                    &cases.join(CASES_DIR).join(&case).join("binary.txt"),
+                    &format!("~/.cargo/bin/takt\t{digest}\n{note}"),
+                );
+            }
+        }
+        Self::save(
+            &cases,
+            &self.outer.join(format!("saves-{label}")),
+            &self.revision,
+        )
+    }
+
     /// Records the baseline: `--baseline-only` over the baseline scorecard, with the checkout
     /// standing in for the baseline revision's.
     fn record_baseline(&self) {
@@ -618,6 +656,404 @@ fn baseline_only_requires_the_installed_binary_to_name_the_revision() {
     world.install_stand_in(&world.revision);
     let (code, out, err) = world.promote(&card, &["--baseline-only"]);
     assert_eq!(code, 0, "{out}{err}");
+}
+
+/// `--baseline-only --revision <sha> --binary-sha256 <hex>` records a baseline for a binary
+/// built before `--version` named its revision: the installed binary names none and hashes to
+/// `<hex>`, every run of the scorecard states `<hex>` in a `binary.txt` beside its record, and
+/// the record names the revision and the digest, marks both as the operator's statement and
+/// carries each run's statement with its note, verbatim, as the scorecard copy does; nothing
+/// is installed. A dry run prints the record and writes nothing.
+#[test]
+fn a_stated_digest_records_a_baseline_for_a_binary_naming_no_revision() {
+    let world = World::new("stated", BASELINE_TOKENS, FIVE_APPROVALS);
+    let digest = world.install_pre_revision();
+    let note = "built from the clone of 2026-10-17\nkept beside the run\n";
+    let stated = Some((digest.as_str(), ""));
+    let card = world.stated_card(
+        "stated",
+        [
+            stated,
+            Some((digest.as_str(), note)),
+            stated,
+            stated,
+            stated,
+        ],
+    );
+    let flags = [
+        "--baseline-only",
+        "--revision",
+        world.revision.as_str(),
+        "--binary-sha256",
+        digest.as_str(),
+    ];
+    let mut dry = flags.to_vec();
+    dry.push("--dry-run");
+    let (code, out, err) = world.promote(&card, &dry);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("\"revision_stated_by\": \"operator\""),
+        "{out}"
+    );
+    assert_eq!(
+        world.records(),
+        Vec::<String>::new(),
+        "a dry run writes nothing"
+    );
+    let (code, out, err) = world.promote(&card, &flags);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(
+        world.records(),
+        vec![
+            format!("{}.json", world.revision),
+            format!("{}.scorecard.json", world.revision)
+        ]
+    );
+    let quoted_note = "\"note\": \"built from the clone of 2026-10-17\\nkept beside the run\\n\"";
+    let record = world.record(&format!("{}.json", world.revision));
+    for line in [
+        "\"kind\": \"baseline\"".to_owned(),
+        format!("\"revision\": \"{}\"", world.revision),
+        "\"revision_stated_by\": \"operator\"".to_owned(),
+        format!("\"binary\": \"{}\"", world.installed().display()),
+        format!("\"binary_sha256\": \"{digest}\""),
+        "\"case\": \"scenario-1-trial-12\"".to_owned(),
+        quoted_note.to_owned(),
+        "\"previous_sha256\": null".to_owned(),
+    ] {
+        assert!(record.contains(&line), "{line} in {record}");
+    }
+    assert_eq!(
+        record.matches("\"stated_by\": \"operator\"").count(),
+        5,
+        "one statement a run: {record}"
+    );
+    let copy = world.record(&format!("{}.scorecard.json", world.revision));
+    assert_eq!(
+        copy.matches(&format!("\"sha256\": \"{digest}\"")).count(),
+        5,
+        "{copy}"
+    );
+    assert!(copy.contains(quoted_note), "{copy}");
+    assert_eq!(
+        fs::read_to_string(world.installed()).expect("the stand-in"),
+        pre_revision_stand_in(),
+        "nothing is installed"
+    );
+}
+
+/// A stated digest the installed binary does not hash to is refused naming both digests, and
+/// nothing is written.
+#[test]
+fn a_stated_digest_the_installed_binary_does_not_hash_to_is_refused() {
+    let world = World::new("stated-mismatch", BASELINE_TOKENS, FIVE_APPROVALS);
+    let digest = world.install_pre_revision();
+    let card = world.stated_card("stated", [Some((OTHER_DIGEST, "")); 5]);
+    let (code, out, err) = world.promote(
+        &card,
+        &[
+            "--baseline-only",
+            "--revision",
+            world.revision.as_str(),
+            "--binary-sha256",
+            OTHER_DIGEST,
+        ],
+    );
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains(&format!(
+            "hashes to {digest}, not to the stated {OTHER_DIGEST}"
+        )),
+        "{err}"
+    );
+    assert_eq!(world.records(), Vec::<String>::new(), "nothing is written");
+    assert_eq!(
+        fs::read_to_string(world.installed()).expect("the stand-in"),
+        pre_revision_stand_in()
+    );
+}
+
+/// Without `--binary-sha256`, a binary that names no revision is refused as before, with or
+/// without `--revision`: `--revision` alone states nothing the binary is not asked to name.
+#[test]
+fn without_a_stated_digest_a_binary_naming_no_revision_is_refused_as_before() {
+    let world = World::new("stated-none", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.install_pre_revision();
+    let card = world.candidate_card("base", BASELINE_TOKENS, FIVE_APPROVALS);
+    for extra in [
+        vec!["--baseline-only"],
+        vec!["--baseline-only", "--revision", world.revision.as_str()],
+    ] {
+        let (code, out, err) = world.promote(&card, &extra);
+        assert_eq!(code, 1, "{out}{err}");
+        assert!(
+            err.contains("--version printed \"takt 0.1.0\", not `takt <version> (<revision>)`"),
+            "{err}"
+        );
+        assert_eq!(world.records(), Vec::<String>::new());
+    }
+}
+
+/// With `--binary-sha256`, a run of the scorecard that states no binary (no `binary.txt`
+/// beside its record), or another digest, is refused naming the run; nothing is written.
+#[test]
+fn a_run_stating_no_binary_or_another_is_refused_naming_it() {
+    let world = World::new("stated-runs", BASELINE_TOKENS, FIVE_APPROVALS);
+    let digest = world.install_pre_revision();
+    let flags = [
+        "--baseline-only",
+        "--revision",
+        world.revision.as_str(),
+        "--binary-sha256",
+        digest.as_str(),
+    ];
+    let stated = Some((digest.as_str(), ""));
+    let missing = world.stated_card("missing", [stated, stated, None, stated, stated]);
+    let (code, out, err) = world.promote(&missing, &flags);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("run scenario-1-trial-13#1 states no binary") && err.contains("binary.txt"),
+        "{err}"
+    );
+    assert_eq!(world.records(), Vec::<String>::new());
+    let other = world.stated_card(
+        "other",
+        [
+            stated,
+            stated,
+            stated,
+            stated,
+            Some((OTHER_DIGEST, "another build\n")),
+        ],
+    );
+    let (code, out, err) = world.promote(&other, &flags);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains(&format!(
+            "run scenario-1-trial-15#1 states the binary {OTHER_DIGEST}, not the stated {digest}"
+        )),
+        "{err}"
+    );
+    assert_eq!(world.records(), Vec::<String>::new());
+}
+
+/// `--binary-sha256` is refused when the installed binary's `--version` names a revision: such
+/// a binary is recorded by what it names, as before, and its record marks no statement.
+#[test]
+fn a_stated_digest_is_refused_when_the_binary_names_a_revision() {
+    let world = World::new("stated-named", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.install_stand_in(&world.revision);
+    let digest = sha256(&world.installed());
+    let card = world.stated_card("named", [Some((digest.as_str(), "")); 5]);
+    let (code, out, err) = world.promote(
+        &card,
+        &[
+            "--baseline-only",
+            "--revision",
+            world.revision.as_str(),
+            "--binary-sha256",
+            digest.as_str(),
+        ],
+    );
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains(&format!("names {}", world.revision))
+            && err.contains("--binary-sha256 are refused"),
+        "{err}"
+    );
+    assert_eq!(world.records(), Vec::<String>::new());
+    let (code, out, err) = world.promote(&card, &["--baseline-only"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let record = world.record(&format!("{}.json", world.revision));
+    for line in [
+        "\"revision_stated_by\": null",
+        "\"binary_sha256\": null",
+        "\"runs\": []",
+    ] {
+        assert!(record.contains(line), "{line} in {record}");
+    }
+}
+
+/// `--revision` and `--binary-sha256` are refused outside `--baseline-only`, `--binary-sha256`
+/// without `--revision`, a `--revision` that is no full commit id or not the scorecard's, and a
+/// `--binary-sha256` that is no sha256; each names what is wrong and writes nothing.
+#[test]
+fn the_stated_flags_are_refused_outside_baseline_only_or_malformed() {
+    let world = World::new("stated-flags", BASELINE_TOKENS, FIVE_APPROVALS);
+    let digest = world.install_pre_revision();
+    let card = world.stated_card("flags", [Some((digest.as_str(), "")); 5]);
+    let revision = world.revision.as_str();
+    for (extra, named) in [
+        (
+            vec!["--revision", revision, "--binary-sha256", digest.as_str()],
+            "with --baseline-only only",
+        ),
+        (
+            vec!["--baseline-only", "--binary-sha256", digest.as_str()],
+            "--binary-sha256 needs --revision",
+        ),
+        (
+            vec![
+                "--baseline-only",
+                "--revision",
+                BASELINE_REVISION,
+                "--binary-sha256",
+                digest.as_str(),
+            ],
+            "is not the scorecard's revision",
+        ),
+        (
+            vec![
+                "--baseline-only",
+                "--revision",
+                "abc123",
+                "--binary-sha256",
+                digest.as_str(),
+            ],
+            "is no full commit id",
+        ),
+        (
+            vec![
+                "--baseline-only",
+                "--revision",
+                revision,
+                "--binary-sha256",
+                "xyz",
+            ],
+            "is no sha256",
+        ),
+    ] {
+        let (code, out, err) = world.promote(&card, &extra);
+        assert_eq!(code, 1, "{out}{err}");
+        assert!(err.contains(named), "{named} in {err}");
+        assert_eq!(world.records(), Vec::<String>::new());
+    }
+}
+
+/// With a stated baseline recorded, a candidate promotion checks the installed binary by its
+/// digest: one that names no revision and hashes to the record's `binary_sha256` passes (a dry
+/// run reaches the verdict), and a replaced one with another digest is refused naming both
+/// digests; nothing is written either way.
+#[test]
+fn a_candidate_against_a_stated_baseline_checks_the_installed_binary_by_digest() {
+    let world = World::new("stated-next", BASELINE_TOKENS, FIVE_APPROVALS);
+    let digest = world.install_pre_revision();
+    let card = world.stated_card("stated", [Some((digest.as_str(), "")); 5]);
+    let (code, out, err) = world.promote(
+        &card,
+        &[
+            "--baseline-only",
+            "--revision",
+            world.revision.as_str(),
+            "--binary-sha256",
+            digest.as_str(),
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    let recorded = world.records();
+    write(&world.repo.join("f.txt"), "f\n");
+    let next = world.commit("f");
+    let next_card = world.passing_card("next", &next);
+    let (code, out, err) = world.promote(&next_card, &["--dry-run"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("verdict: no scenario worse than the baseline"),
+        "{out}"
+    );
+    assert_eq!(world.records(), recorded, "a dry run writes nothing");
+    script(
+        &world.installed(),
+        "#!/bin/sh\necho \"takt 0.1.0\"\n# replaced by hand\n",
+    );
+    let replaced = sha256(&world.installed());
+    assert_ne!(replaced, digest);
+    let (code, out, err) = world.promote(&next_card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains(&format!("hashes to {replaced}"))
+            && err.contains(&format!("whose binary hashes to {digest}"))
+            && err.contains("the binary was replaced"),
+        "{err}"
+    );
+    assert_eq!(world.records(), recorded);
+}
+
+/// With `--binary-sha256`, a run of the saved scorecard whose statement is not the operator's
+/// (`"stated_by": "record"`) is refused naming the run, whichever rows say it, so no stated
+/// baseline carries a statement the operator did not make; nothing is written.
+#[test]
+fn a_run_stated_by_other_than_the_operator_is_refused_naming_it() {
+    let world = World::new("stated-by", BASELINE_TOKENS, FIVE_APPROVALS);
+    let digest = world.install_pre_revision();
+    let flags = [
+        "--baseline-only",
+        "--revision",
+        world.revision.as_str(),
+        "--binary-sha256",
+        digest.as_str(),
+    ];
+    let operator = "\"stated_by\": \"operator\"";
+    for (label, rows, named) in [
+        ("third", vec![2], "scenario-1-trial-13#1"),
+        ("all", vec![0, 1, 2, 3, 4], "scenario-1-trial-11#1"),
+    ] {
+        let card = world.stated_card(label, [Some((digest.as_str(), "")); 5]);
+        let text = fs::read_to_string(&card).expect("the saved scorecard");
+        let at: Vec<usize> = text.match_indices(operator).map(|(at, _)| at).collect();
+        assert_eq!(at.len(), 5, "{text}");
+        let mut edited = text.clone();
+        for row in rows.iter().rev() {
+            edited.replace_range(
+                at[*row]..at[*row] + operator.len(),
+                "\"stated_by\": \"record\"",
+            );
+        }
+        fs::write(&card, &edited).expect("the edited scorecard");
+        let (code, out, err) = world.promote(&card, &flags);
+        assert_eq!(code, 1, "{label}: {out}{err}");
+        assert!(
+            err.contains(&format!("run {named} states its binary by the record")),
+            "{label}: {err}"
+        );
+        assert_eq!(world.records(), Vec::<String>::new(), "{label}");
+    }
+}
+
+/// A binary replaced by one that prints the stated baseline's revision under another digest is
+/// refused by digest, naming both digests: a stated baseline is checked by its `binary_sha256`
+/// whatever the installed binary prints; nothing is written.
+#[test]
+fn a_replaced_binary_printing_the_stated_revision_is_refused_by_digest() {
+    let world = World::new("stated-replaced", BASELINE_TOKENS, FIVE_APPROVALS);
+    let digest = world.install_pre_revision();
+    let card = world.stated_card("stated", [Some((digest.as_str(), "")); 5]);
+    let (code, out, err) = world.promote(
+        &card,
+        &[
+            "--baseline-only",
+            "--revision",
+            world.revision.as_str(),
+            "--binary-sha256",
+            digest.as_str(),
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    let recorded = world.records();
+    write(&world.repo.join("f.txt"), "f\n");
+    let next = world.commit("f");
+    let next_card = world.passing_card("next", &next);
+    world.install_stand_in(&world.revision);
+    let replaced = sha256(&world.installed());
+    assert_ne!(replaced, digest);
+    let (code, out, err) = world.promote(&next_card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains(&format!("hashes to {replaced}"))
+            && err.contains(&format!("whose binary hashes to {digest}"))
+            && err.contains("the binary was replaced"),
+        "{err}"
+    );
+    assert_eq!(world.records(), recorded, "nothing is written");
 }
 
 /// A candidate within the rule (one case worse, tokens within the maximum) is built, installed
@@ -837,6 +1273,10 @@ fn help_lists_the_exit_codes() {
         "  3  refused on the scorecard",
         "  5  ",
         "bubblewrap",
+        "--revision <SHA>",
+        "--binary-sha256 <HEX>",
+        "binary.txt",
+        "--binary-sha256 without --revision",
     ] {
         assert!(out.contains(line), "{line} in {out}");
     }
