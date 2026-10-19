@@ -1493,7 +1493,7 @@ types:
   # crash, a flag rejected, a command not found) or the predicate's `exit` without its `output`,
   # which makes no claim true.
   # read from: protocols/self-improvement/1.yaml:45-50
-  # read from: scripts/check-finding:518-532
+  # read from: scripts/check-finding:535-549
   - name: takt.work.ScenarioResult
     kind: enum
     variants: [reproduced, not_reproduced, error]
@@ -2073,7 +2073,7 @@ entities:
       # read from: protocols/self-improvement/1.yaml:28-32
       # read from: .engineering/planning/story/self-improvement-protocol.md:63
       # read from: crates/takt/src/case.rs:2318-2344
-      # read from: crates/takt/src/improvement.rs:1116-1125
+      # read from: crates/takt/src/improvement.rs:1117-1126
       - name: finding
         type: Optional<takt.work.FindingKey>
       # The producers the case declares independent of its work, each with the independence
@@ -2083,7 +2083,7 @@ entities:
       # other protocol (story:self-improvement-protocol).
       # read from: protocols/self-improvement/1.yaml:24-26
       # read from: crates/takt/src/case.rs:1959-1997
-      # read from: crates/takt/src/improvement.rs:73-87
+      # read from: crates/takt/src/improvement.rs:74-88
       - name: independence
         type: Map<takt.work.ProducerName, List<String>>
     relations:
@@ -2259,7 +2259,7 @@ entities:
       # read from: crates/takt-cli/src/main.rs:720-756
       # read from: crates/takt-cli/src/main.rs:850-854
       # read from: crates/takt/src/case.rs:2226-2422
-      # read from: crates/takt/src/improvement.rs:52-64
+      # read from: crates/takt/src/improvement.rs:52-65
       - name: inputs
         type: Map<takt.work.InputId, String>
       # The workflow the run follows, when one is given; not built, the kernel takes none yet.
@@ -2898,12 +2898,12 @@ entities:
   # read from: crates/takt/src/validator.rs:359-384
   # read from: crates/takt/src/validator.rs:151
   # read from: crates/takt/src/validator.rs:2590-2602
-  # read from: crates/takt/src/improvement.rs:506-514
-  # read from: crates/takt/src/improvement.rs:657-663
-  # read from: crates/takt/src/improvement.rs:836-846
+  # read from: crates/takt/src/improvement.rs:507-515
+  # read from: crates/takt/src/improvement.rs:658-664
+  # read from: crates/takt/src/improvement.rs:837-847
   # read from: crates/takt/src/validator.rs:2605-2623
-  # read from: crates/takt/src/improvement.rs:319-393
-  # read from: crates/takt/src/improvement.rs:397-466
+  # read from: crates/takt/src/improvement.rs:320-394
+  # read from: crates/takt/src/improvement.rs:398-467
   - name: takt.work.EvidenceProducer
     naming:
       summary: >-
@@ -3379,8 +3379,8 @@ entities:
   # read from: scripts/file-finding:11-56
   # read from: scripts/file-finding:117
   # read from: scripts/file-finding:256
-  # read from: scripts/check-finding:211-433
-  # read from: scripts/check-finding:479-508
+  # read from: scripts/check-finding:218-450
+  # read from: scripts/check-finding:496-525
   # One predicate on one scenario or one repository: a body with a second `expected_before`
   # block, a block that gives a key twice, or one that gives both `scenario` and `repository`, or
   # neither, is malformed and nothing is filed. `seed` and `test` go with `repository` only: a
@@ -3583,7 +3583,7 @@ entities:
   # changed, else `non_judge`; a given `surface` that disagrees is refused, naming the first
   # such path (story:self-improvement-protocol S5, 2026-10-19).
   # read from: protocols/self-improvement/1.yaml:18-22
-  # read from: crates/takt/src/improvement.rs:1206-1213
+  # read from: crates/takt/src/improvement.rs:1207-1214
   # read from: .engineering/planning/design/recursive-self-improvement.md:109-110
   # read from: .engineering/planning/story/judge-guard.md:86
   # read from: .engineering/planning/story/judge-guard.md:121

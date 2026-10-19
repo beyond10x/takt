@@ -58,9 +58,10 @@ pub const SCORECARDS: &str = "takt/scorecards";
 /// tree's script to the list).
 pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 1] = [
     // The script of story:check-finding-run-step-confined (its last commit f2a20e9), its build's
-    // checkout a repository made with no template that fetches the revision through git's
-    // transport, every object hashed and checked (story:self-improvement-protocol, part 1).
-    "bbabc93c2678c3e5449d84a7620883caab6dd2130dd528aff429326608b585e5",
+    // checkout a repository made with no template, by a git under a cleared environment, that
+    // fetches the revision through git's transport, every object hashed and checked
+    // (story:self-improvement-protocol, part 1).
+    "0dd150f221a686d90a28b1e1b654750d3378a54e353c31be78f150247ee30278",
 ];
 
 /// The file under a turn's `artifacts/` holding the sha256 of the takt `scripts/check-finding`
@@ -1910,5 +1911,89 @@ mod at {
         pub(super) fn remove(&self, _: &OsStr) -> Result<()> {
             bail!("unix only")
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    use super::{Scripts, at};
+
+    /// A scratch directory of this test's own, removed on drop.
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
+        let dir =
+            std::env::temp_dir().join(format!("takt-improvement-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        Scratch(dir)
+    }
+
+    fn git(tree: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
+            .args(args)
+            .current_dir(tree)
+            .output()
+            .expect("git runs");
+        assert!(output.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    /// The scripts' directory is removed through the descriptor of the `improvement/` it was
+    /// made in: with `improvement` replaced meanwhile by a link to an outside directory that
+    /// holds a directory of the same name, nothing behind the link is removed.
+    #[test]
+    fn the_scripts_directory_is_removed_through_its_parents_descriptor() {
+        let dir = scratch("drop");
+        let tree = dir.0.join("tree");
+        for script in ["check-finding", "file-finding"] {
+            let path = tree.join("scripts").join(script);
+            std::fs::create_dir_all(path.parent().expect("a parent")).expect("scripts");
+            std::fs::write(&path, "#!/bin/sh\n").expect("a script");
+        }
+        git(&tree, &["init", "-q", "-b", "main"]);
+        git(&tree, &["add", "-A"]);
+        git(&tree, &["commit", "-q", "-m", "scripts"]);
+        let head = git(&tree, &["rev-parse", "HEAD"]);
+        let cache = dir.0.join("cache");
+        let scripts = Scripts::at(&tree, &head, &cache, None)
+            .expect("the scripts are written")
+            .expect("the base holds them");
+        let improvement = cache.join("takt/improvement");
+        std::fs::rename(&improvement, cache.join("takt/improvement-moved")).expect("moved");
+        let outside = dir.0.join("outside");
+        let precious = outside.join(&scripts.name).join("precious.txt");
+        std::fs::create_dir_all(precious.parent().expect("a parent")).expect("outside");
+        std::fs::write(&precious, "keep me\n").expect("precious");
+        std::os::unix::fs::symlink(&outside, &improvement).expect("the link");
+        let held = cache.join("takt/improvement-moved").join(&scripts.name);
+        drop(scripts);
+        assert!(precious.is_file(), "removed through the link");
+        assert!(!held.exists(), "the scripts' own directory is removed");
+    }
+
+    /// A kept build that is a link is read as none: its target's bytes never stand for it.
+    #[test]
+    fn a_link_reads_as_no_regular_file() {
+        let dir = scratch("regular");
+        std::fs::write(dir.0.join("target"), "a binary\n").expect("a target");
+        std::os::unix::fs::symlink(dir.0.join("target"), dir.0.join("takt")).expect("the link");
+        std::fs::write(dir.0.join("file"), "a binary\n").expect("a file");
+        let held = at::Dir::open(&dir.0).expect("the directory");
+        assert_eq!(held.regular("takt".as_ref()).expect("read"), None);
+        assert_eq!(
+            held.regular("file".as_ref()).expect("read"),
+            Some(b"a binary\n".to_vec())
+        );
     }
 }
