@@ -80,6 +80,12 @@ fn judged(usage: TokenUsage) -> Event {
         tokens: Some(usage.total()),
         usage: Some(usage),
         revision: None,
+        model: None,
+        cost_usd: None,
+        duration_ms: None,
+        api_ms: None,
+        turns: None,
+        started_at: None,
     }
 }
 
@@ -92,6 +98,12 @@ fn observed() -> Event {
         tokens: None,
         usage: None,
         revision: Some("89abcdef0123456789abcdef0123456789abcdef".to_owned()),
+        model: None,
+        cost_usd: None,
+        duration_ms: None,
+        api_ms: None,
+        turns: None,
+        started_at: None,
     }
 }
 

@@ -2,12 +2,15 @@
 format: aep.planning-md/3
 id: story:docs-site-with-sidebar
 kind: story
-status: draft
+status: proposed
 title: The takt site is a beyond10x docs site with a sidebar, its pages generated from records
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 2
+- depends_on: story:main-history-names-no-private-repository
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T01:34:31Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 
@@ -33,3 +36,7 @@ Open, owner's decision (decision-blocker:site-publishing-path): publish by the d
 `npm --prefix website ci && npm --prefix website run build` exits 0; `task check` is green and fails after a hand edit of a generated file; the built site has a sidebar with the five sections above; after the first deploy `/takt/` and `/takt/protocols/` both answer 200.
 
 Visual acceptance (owner, 2026-10-19: the hand-written site "looks like garbage"; a headless-browser check of gh-pages 568ef20 at 1440 and 390 px found ten defects, among them 8 of 10 section links off-screen at 390 px, protocol-graph node text at about 5 px and overlapping chart labels): a `task site-check` screenshots every page at 1440 and 390 px wide with headless Chrome and fails when any page scrolls horizontally (`document.documentElement.scrollWidth > innerWidth`), when any HTML or SVG text renders below 11 px, or when two text boxes of one chart intersect; the screenshots go with every grant request that changes a page, and the reviewer looks at them.
+
+## Publishing (decided 2026-10-19)
+
+decision-blocker:site-publishing-path is cleared with option B: the site deploys from `main` through `.github/workflows/pages.yml` and the sibling repositories' reusable project-site workflow; the `AGENTS.md` § Roles sentence on `gh-pages` changes in the same unit, and the organisation site gets its one-time roster entry.

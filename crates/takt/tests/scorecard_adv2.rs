@@ -59,6 +59,12 @@ fn judged(tokens: u64) -> Event {
         tokens: Some(tokens),
         usage: None,
         revision: None,
+        model: None,
+        cost_usd: None,
+        duration_ms: None,
+        api_ms: None,
+        turns: None,
+        started_at: None,
     }
 }
 

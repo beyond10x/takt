@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-trace-and-report
 kind: story
-status: active
+status: implemented
 title: takt trace writes one takt-trace/1 file per run; takt report prints where its time and tokens went
 relations:
 - decomposes: epic:recursive-self-improvement
@@ -23,10 +23,11 @@ scope:
   path: docs/metrics/README.md
 - confidence: cited
   path: ess/domains/takt.yaml
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T02:00:18Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 

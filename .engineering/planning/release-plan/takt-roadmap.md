@@ -8,7 +8,7 @@ summary: Now (waves 10-11), Next (12-13), Later; outcomes in PRD order; the read
 relations:
 - derived_from: product-requirements:takt
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 5
 ---
 # Release plan: takt roadmap, from 2026-10-18
 

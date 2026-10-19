@@ -7,7 +7,7 @@ title: 'Benchmark integration: tasks agents can fail, under four arms'
 relations:
 - derived_from: design:benchmark-integration
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
 ---
 # Epic: benchmark-integration
 
