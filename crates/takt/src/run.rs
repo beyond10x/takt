@@ -5674,14 +5674,26 @@ impl<'a> Run<'a> {
         if self.options.iterations.is_none() && self.options.hours.is_none() {
             return None;
         }
-        Some(match self.options.hours {
-            Some(h) => {
-                let left = (h * 3600.0 - self.started.elapsed().as_secs_f64()).max(0.0);
-                self.poll
-                    .min(Duration::try_from_secs_f64(left).unwrap_or(Duration::MAX))
-            }
+        Some(match self.time_left() {
+            Some(left) => self.poll.min(left),
             None => self.poll,
         })
+    }
+
+    /// The instant the hour budget ends: the run's start and the budget. `None` for a run
+    /// without one, or with one too large for an [`Instant`] (infinite among them), which never
+    /// ends; a budget that is not a number ends at the start. Nothing here panics.
+    fn deadline(&self) -> Option<Instant> {
+        let h = self.options.hours?;
+        let budget = Duration::try_from_secs_f64((h * 3600.0).max(0.0)).ok()?;
+        self.started.checked_add(budget)
+    }
+
+    /// What is left of the hour budget now ([`Run::deadline`]); `None` for a run without an
+    /// end, zero once it is spent.
+    fn time_left(&self) -> Option<Duration> {
+        self.deadline()
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
     }
 
     /// Runs until a stop; prints one line per frontier, step and evidence to `out`, and appends
@@ -6300,8 +6312,9 @@ impl<'a> Run<'a> {
                 let (surface, surface_kept) =
                     JudgeSurface::read(&self.runs(), globs, &self.modules, &self.tree)?;
                 let observed = validator
-                    .observe_waiting(&self.tree, &revision, seq)
+                    .observe_within(&self.tree, &revision, seq, self.deadline())
                     .with_context(|| format!("{} ({})", validator.action(), validator.name()));
+                let returned = Instant::now();
                 // What the observation left running is killed before anything is looked at;
                 // one that could not be killed is named with the rest of what it left.
                 let swept = crate::forge::sweep_left();
@@ -6416,6 +6429,30 @@ impl<'a> Run<'a> {
                         "  refused: {why}; the cases directory was put back, the change discarded and nothing recorded"
                     )?;
                     return Ok(Stop::StepRefused(why));
+                }
+                // An observation that failed when the hour budget ended, its child killed by it,
+                // records nothing, and the run stops on the budget.
+                if let Err(error) = &observed
+                    && self.deadline().is_some_and(|deadline| returned >= deadline)
+                    && let Some(h) = self.options.hours
+                {
+                    restore(&cases, &kept, &touched)?;
+                    let why = format!(
+                        "step {}: the hour budget ran out during {}; nothing recorded: {error:#}",
+                        self.steps,
+                        validator.action()
+                    );
+                    self.stepped(
+                        events,
+                        SteppedBy::Validator(Some(&revision)),
+                        validator.name(),
+                        validator.action(),
+                        "nothing recorded",
+                    )?;
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+                    writeln!(out, "  {why}")?;
+                    return Ok(Stop::Hours(h));
                 }
                 let (observation, waits) = observed?;
                 self.stepped(
@@ -6562,7 +6599,7 @@ impl<'a> Run<'a> {
                 .filter(|a| !shape.choices_of(a).is_empty())
                 .cloned()
                 .collect();
-            let context = StepContext {
+            let mut context = StepContext {
                 tree: &self.tree,
                 intent: &self.options.intent,
                 offered: &offered,
@@ -6571,6 +6608,7 @@ impl<'a> Run<'a> {
                 decision: &decision,
                 protocol: &self.case.protocol,
                 step: self.steps as usize,
+                time_left: None,
             };
             // The step is judged by what it did to the tree, against a checkpoint taken just
             // before it: `HEAD`, the index, every path already uncommitted (a validator's run
@@ -6654,11 +6692,15 @@ impl<'a> Run<'a> {
             // base or its own branch.
             let checkpoint =
                 crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
+            // What is left of the hour budget is read last, just before the call, so the step
+            // ends by the run's end and not by the time its preparation took after it.
+            context.time_left = self.time_left();
             // A harness that panics is put back like one that failed, then the panic goes on
             // to `run`, which records it and lets go of the case.
             let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.harness.step(&context)
             }));
+            let returned = Instant::now();
             // What the step left running (a writer in a process group of its own) is killed
             // before anything it did is looked at, so nothing lands after the step is judged.
             let swept = crate::forge::sweep_left();
@@ -6730,6 +6772,52 @@ impl<'a> Run<'a> {
             };
             if !touched.is_empty() {
                 restore(&cases, &kept, &touched)?;
+            }
+            // A step that returned when the hour budget ended, failed (killed by it) or not, is
+            // discarded whole like any failed step, recorded as a refusal, and the run stops on
+            // the budget. One that reported keeps its step line, with its tokens and their
+            // components and a summary saying it was discarded, so the steps' tokens add up to
+            // the run's; what of the git directory could not be put back is named. One that
+            // failed by itself before then failed as any other.
+            if let Some(h) = self.options.hours
+                && self.deadline().is_some_and(|deadline| returned >= deadline)
+            {
+                let ended = match &stepped {
+                    Ok(report) => {
+                        self.tokens += report.tokens.unwrap_or(0);
+                        format!("it reported {} at or after the run's end", report.action)
+                    }
+                    Err(error) => format!("{error:#}"),
+                };
+                let not_put_back = if git_dir.failed.is_empty() {
+                    String::new()
+                } else {
+                    format!("; not put back: {}", git_dir.failed.join("; "))
+                };
+                if let Err(undo) = undo() {
+                    return Err(anyhow::anyhow!(
+                        "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}{not_put_back}",
+                        self.steps
+                    ));
+                }
+                let why = format!(
+                    "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}{not_put_back}",
+                    self.steps
+                );
+                // Written after the cases directory was put back, which would take a line
+                // written before it along.
+                if let Ok(report) = &stepped {
+                    self.stepped(
+                        events,
+                        SteppedBy::Harness(report.tokens, self.harness.last_usage()),
+                        self.harness.name(),
+                        &report.action,
+                        &format!("discarded at the run's end: {}", report.summary),
+                    )?;
+                }
+                self.refused(events, BY_TAKT, &why)?;
+                writeln!(out, "{why}")?;
+                return Ok(Stop::Hours(h));
             }
             let report = match stepped {
                 Ok(report) => report,
