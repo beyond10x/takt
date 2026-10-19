@@ -1298,8 +1298,13 @@ fn a_message_is_scanned_as_the_commit_holds_it_whatever_its_encoding() {
         git(&tree, &["checkout", "-q", "-b", "takt/case"]);
         git(&tree, &["config", "i18n.commitEncoding", encoding]);
         fs::write(tree.join("work.txt"), "clean\n").expect("a file");
-        let head = takt::git::commit_paths(&tree, &["work.txt".to_owned()], &subject)
-            .expect("takt commits");
+        let head = takt::git::commit_paths(
+            &tree,
+            &takt::git::CommitIdentity::takt(),
+            &["work.txt".to_owned()],
+            &subject,
+        )
+        .expect("takt commits");
         scan_refused(&tree, &head, &format!("under the encoding {n}"));
     }
 }
@@ -1347,6 +1352,7 @@ fn takt_refuses_to_commit_a_new_gitlink() {
     fs::write(tree.join("work.txt"), "work\n").expect("a file");
     let error = takt::git::commit_paths(
         &tree,
+        &takt::git::CommitIdentity::takt(),
         &["nested".to_owned(), "work.txt".to_owned()],
         "implementation.edit: work",
     )

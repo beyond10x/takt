@@ -113,6 +113,11 @@ takt --version
 A harness, `aep` for story runs, `b10x-gates` and `gh` for pull requests, bubblewrap for
 `takt promote`: [What it needs](https://beyond10x.github.io/takt/docs/getting-started#what-it-needs).
 
+takt commits as the identity the repository names in `.engineering/commit-identity.conf`
+(`[identity]` with `name` and `email`), or as `--commit-identity '<name> <email>'`, never as
+your git configuration. With neither it commits as `takt <takt@localhost>`, and a run through
+the bot route, which pushes those commits, is refused before its case opens.
+
 bubblewrap is Linux only, so on macOS a promotion refuses with exit 1 before it judges;
 `--dry-run` and `--baseline-only`, which build nothing, still run. On macOS a run kills what a
 child process started in the child's process group only; on Linux takt also adopts and kills

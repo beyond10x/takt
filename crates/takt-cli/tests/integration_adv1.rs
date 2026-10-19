@@ -68,6 +68,11 @@ fn repository(name: &str, second: bool) -> (Scratch, PathBuf) {
     copy_dir(&Path::new(FIXTURES).join("one-ready"), &repo);
     fs::write(repo.join("Cargo.toml"), "[package]\nname = \"scratch\"\n").expect("a file");
     fs::write(repo.join(".engineering/gates.yaml"), GATES).expect("a file");
+    fs::write(
+        repo.join(".engineering/commit-identity.conf"),
+        "[identity]\n\tname = Test Bot\n\temail = bot@example.invalid\n",
+    )
+    .expect("the commit identity is written");
     if second {
         let stories = repo.join(".engineering/planning/story");
         let one = fs::read_to_string(stories.join("ready-one.md")).expect("ready-one");

@@ -96,6 +96,11 @@ fn world(name: &str) -> World {
     copy_dir(&Path::new(FIXTURES).join("one-ready"), &repo);
     fs::write(repo.join("Cargo.toml"), "[package]\nname = \"scratch\"\n").expect("a file");
     fs::write(repo.join(".engineering/gates.yaml"), GATES).expect("a file");
+    fs::write(
+        repo.join(".engineering/commit-identity.conf"),
+        "[identity]\n\tname = Test Bot\n\temail = bot@example.invalid\n",
+    )
+    .expect("the commit identity is written");
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "seed"]);

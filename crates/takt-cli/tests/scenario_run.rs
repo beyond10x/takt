@@ -118,6 +118,7 @@ fn world(name: &str) -> World {
         &repo,
         &format!("[scenario \"1\"]\n\tstory = story:ready-one\n\tseed = {seed}\n"),
     );
+    configure_identity(&repo);
     git(
         &repo,
         &["remote", "add", "origin", "git@github.com:owner/repo.git"],
@@ -139,6 +140,25 @@ fn world(name: &str) -> World {
         remote,
         seed,
     }
+}
+
+/// The identity the scratch repository configures for takt's commits.
+const IDENTITY: &str = "b10x-bot[bot] <316511680+b10x-bot[bot]@users.noreply.github.com>";
+
+/// Commits `.engineering/commit-identity.conf` naming [`IDENTITY`] on the branch the tree is on:
+/// a scenario run reads it at `--declared-on`, and through the bot route needs it.
+fn configure_identity(repo: &Path) {
+    let file = ".engineering/commit-identity.conf";
+    fs::write(
+        repo.join(file),
+        "[identity]\n\tname = b10x-bot[bot]\n\temail = 316511680+b10x-bot[bot]@users.noreply.github.com\n",
+    )
+    .expect("the identity is written");
+    git(repo, &["add", file]);
+    git(
+        repo,
+        &["commit", "-q", "-m", "configure the commit identity"],
+    );
 }
 
 /// Commits `text` as the scenario declaration on the branch the tree is on.
@@ -481,6 +501,48 @@ fn two_scenario_runs_in_a_row_each_open_their_pull_request_against_their_own_tri
         assert!(branch.contains(&format!("base: trial/{n}")), "{branch}");
     }
     assert_eq!(world.changed_outside_cases(), "");
+}
+
+/// story:takt-commits-with-the-repositorys-identity: a trial's commits, the take and the
+/// harness's edits, carry the identity `--declared-on` configures as author and committer, over
+/// the operator's identity variables in takt's environment and the operator's `author.*` and
+/// `committer.*` configuration; and so do the commits the bot route pushed.
+#[test]
+fn a_trials_commits_carry_the_identity_the_declaring_revision_configures() {
+    let world = world("identity");
+    git(&world.repo, &["config", "author.name", "Operator Author"]);
+    git(
+        &world.repo,
+        &["config", "committer.email", "committer@example.invalid"],
+    );
+    let repo = world.repo.to_str().expect("utf-8");
+    let (code, out, err) = world.takt_env(
+        &["scenario", "run", "--repo", repo, "1", "--test-cmd", "true"],
+        &[
+            ("GIT_AUTHOR_NAME", "Env Author"),
+            ("GIT_AUTHOR_EMAIL", "env-author@example.invalid"),
+            ("GIT_COMMITTER_NAME", "Env Committer"),
+            ("GIT_COMMITTER_EMAIL", "env-committer@example.invalid"),
+        ],
+    );
+    let said = format!("stdout {out} stderr {err}");
+    assert_eq!(code, 4, "{said}");
+    let range = "refs/heads/trial/0..refs/heads/takt/scenario-1-trial-0";
+    for (place, tree) in [("the checkout", &world.repo), ("the remote", &world.remote)] {
+        let commits = git_out(
+            tree,
+            &["log", "--format=%s|%an <%ae>|%cn <%ce>", range, "--"],
+        );
+        assert!(commits.lines().count() >= 2, "{place}: {commits}\n{said}");
+        for line in commits.lines() {
+            let (_, sides) = line.split_once('|').expect("a subject");
+            assert_eq!(
+                sides,
+                format!("{IDENTITY}|{IDENTITY}"),
+                "{place}: {commits}\n{said}"
+            );
+        }
+    }
 }
 
 /// The safety fact: a run that stopped before its first commit can leave the store file dirty,

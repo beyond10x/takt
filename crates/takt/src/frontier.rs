@@ -248,10 +248,11 @@ pub fn is_story_store_path(path: &str, story: &str) -> bool {
 /// changed nothing), as soon as the commit is made and before anything else: the two stand or
 /// fall together, and a record that cannot be written takes the commit back, the case's branch
 /// reset to where it was, and is the error. A refusal records nothing here; it is the
-/// caller's to record.
+/// caller's to record. The commit carries `identity`, the case's ([`crate::case::CaseDir::committer`]).
 pub fn write_on_case_branch(
     tree: &Path,
     branch: &str,
+    identity: &crate::git::CommitIdentity,
     story: &str,
     subject: &str,
     write: impl FnOnce() -> Result<Written>,
@@ -312,7 +313,7 @@ pub fn write_on_case_branch(
             "the store's write on {story} changed {outside}, outside the planning store and the story's evidence"
         )));
     }
-    let head = crate::git::commit_paths(tree, &changed, subject).map_err(|error| {
+    let head = crate::git::commit_paths(tree, identity, &changed, subject).map_err(|error| {
         discard(format!(
             "the store's write on {story} could not be committed on {branch}: {error:#}"
         ))
@@ -363,7 +364,8 @@ pub fn approve_subject(story: &str, capability: &str) -> String {
 /// authorises ([`crate::case::CaseDir::resume`]). So the tree must be on the case's branch and
 /// clean before anything is recorded, or the approval is refused with nothing recorded; a
 /// record that changes a path outside the store, or a commit that fails, is discarded with no
-/// grant written, and the same approval can be given again.
+/// grant written, and the same approval can be given again. The commit carries the identity the
+/// case was opened with ([`crate::case::commit_identity_of`]), takt's own when it recorded none.
 pub fn approve(
     tree: &Path,
     frontier: &dyn Frontier,
@@ -398,7 +400,10 @@ pub fn approve(
                     frontier.name()
                 )
             })?;
-        commit_record(tree, &branch, story, capability)?;
+        let identity =
+            crate::case::commit_identity_of(&tree.join(crate::case::CASES_DIR).join(case))?
+                .unwrap_or_else(crate::git::CommitIdentity::takt);
+        commit_record(tree, &identity, &branch, story, capability)?;
     }
     let reference = pending.approval().reference();
     let story = pending.approval().story.clone();
@@ -411,9 +416,16 @@ pub fn approve(
 }
 
 /// Commits what the approval's record changed, on a tree that was clean before it: exactly
-/// those paths, which must all lie in the planning store, as [`approve_subject`]. Anything else,
-/// or a commit that fails, discards the record and is the error; no grant is written then.
-fn commit_record(tree: &Path, branch: &str, story: &str, capability: &str) -> Result<()> {
+/// those paths, which must all lie in the planning store, as [`approve_subject`], by `identity`.
+/// Anything else, or a commit that fails, discards the record and is the error; no grant is
+/// written then.
+fn commit_record(
+    tree: &Path,
+    identity: &crate::git::CommitIdentity,
+    branch: &str,
+    story: &str,
+    capability: &str,
+) -> Result<()> {
     let changed = crate::git::uncommitted(tree)?;
     if changed.is_empty() {
         return Ok(());
@@ -433,13 +445,17 @@ fn commit_record(tree: &Path, branch: &str, story: &str, capability: &str) -> Re
             "recording the approval on {story} changed {outside}, outside the planning store"
         )));
     }
-    crate::git::commit_paths(tree, &changed, &approve_subject(story, capability)).map_err(
-        |error| {
-            discard(format!(
-                "the approval's record could not be committed on {branch}: {error:#}"
-            ))
-        },
-    )?;
+    crate::git::commit_paths(
+        tree,
+        identity,
+        &changed,
+        &approve_subject(story, capability),
+    )
+    .map_err(|error| {
+        discard(format!(
+            "the approval's record could not be committed on {branch}: {error:#}"
+        ))
+    })?;
     Ok(())
 }
 
