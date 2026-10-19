@@ -8,7 +8,7 @@ summary: three timing tests failed at load 63-69 and passed alone
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 3}
@@ -33,4 +33,6 @@ so the gate must hold under load.
 - Each of the three tests passes with the host loaded to twice its CPU count (a stress run in the
   test notes), and still fails on the defect it guards: a mutant per test.
 - No wall-clock bound in `crates/**/tests` is shorter than ten times the unloaded median it
-  measures, or the test measures work (steps, commits read) rather than time.
+  measures, or the test measures work (steps, commits read) rather than time. For a test that
+  holds a deadline, the bound is ten times the median past the designed wait; setup work keeps
+  the strict rule (planner, 2026-10-19).

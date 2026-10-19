@@ -8,7 +8,7 @@ summary: trial 1 needed a recording shim to read why a run looped
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:59:00Z", actor: "human:timo", revision: 3}
@@ -29,7 +29,10 @@ Reading transcripts is how improvement rounds find their next finding.
 
 ## Acceptance
 
-- After a run with the claude harness, `.engineering/cases/<id>/artifacts/step-<n>.jsonl` exists
-  for every harness step and holds the stream the harness printed: a test with a fake harness.
+- After a run with the claude harness,
+  `$XDG_STATE_HOME/takt/transcripts/<repo-key>/<case-id>/run-<r>/step-<n>.jsonl` exists for every
+  harness step and holds the stream the harness printed: a test with a fake harness. Outside the
+  cases directory, because the cases snapshot holds every file there in memory (planner,
+  2026-10-19, after the review's 700 MB measurement).
 - A step that errors still keeps its transcript.
 - The transcript is not on the judge surface's read path: no validator reads it.
