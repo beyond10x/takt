@@ -1019,7 +1019,7 @@ types:
   # candidate whose scorecard was worse, kept as `<revision>.refused.json` so the same revision is
   # not judged again until it changes (the design's "no re-run of an unchanged candidate").
   # Decided 2026-10-18.
-  # read from: .engineering/planning/story/promotion.md:91
+  # read from: .engineering/planning/story/promotion.md:95
   # read from: .engineering/planning/design/recursive-self-improvement.md:130-138
   # read from: crates/takt/src/promotion.rs:98-107
   - name: takt.work.PromotionKind
@@ -2059,9 +2059,9 @@ entities:
   # root, checked again, hashed, recorded, then moved into place in one rename and checked once
   # more in place against the revision and the digest; `--dry-run` prints the verdict and the
   # record and writes nothing.
-  # read from: .engineering/planning/story/promotion.md:35-40
-  # read from: .engineering/planning/story/promotion.md:48-50
-  # read from: .engineering/planning/story/promotion.md:137
+  # read from: .engineering/planning/story/promotion.md:39-44
+  # read from: .engineering/planning/story/promotion.md:52-54
+  # read from: .engineering/planning/story/promotion.md:141
   # read from: crates/takt/src/promotion.rs:488-494
   # read from: crates/takt/src/promotion.rs:1009-1119
   # read from: crates/takt/src/promotion.rs:1235-1433
@@ -2095,9 +2095,9 @@ entities:
   # (`previous_sha256`, absent on the first), and a chain with a gap refuses naming it;
   # `--baseline-only` requires the installed binary to name the revision it records; and
   # `promoted_at` is read after the build.
-  # read from: .engineering/planning/story/promotion.md:88-91
-  # read from: .engineering/planning/story/promotion.md:112
-  # read from: .engineering/planning/story/promotion.md:148
+  # read from: .engineering/planning/story/promotion.md:92-95
+  # read from: .engineering/planning/story/promotion.md:116
+  # read from: .engineering/planning/story/promotion.md:152
   # read from: crates/takt/src/promotion.rs:196-199
   # read from: crates/takt/src/promotion.rs:246-257
   # read from: crates/takt/src/promotion.rs:267-388
@@ -2105,7 +2105,7 @@ entities:
   # One scorecard backs at most one promotion, decided 2026-10-18: one-to-one, the promotion
   # referencing its scorecard. A relation entry carries no bound on the scorecard's side, so the
   # bound is stated here.
-  # read from: .engineering/planning/story/promotion.md:86
+  # read from: .engineering/planning/story/promotion.md:90
   # The rule's parameters, trials and margin, are recorded with the scorecard
   # (takt.work.ScorecardRule) and copied into the record that read it.
   # read from: .engineering/planning/design/recursive-self-improvement.md:132-138
