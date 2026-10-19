@@ -1,0 +1,50 @@
+#!/bin/sh
+# gate-exec <tool> [<arg>...]: runs one command of takt's gates document
+# (.engineering/gates.yaml). The gate runs it with the environment cleared and no PATH;
+# takt's gate validator sets CARGO_HOME to the invoking user's Cargo home. The tool is looked
+# up on that home's bin directory, then the system directories, and is refused when it
+# resolves, after symlinks, inside this repository, so a step cannot plant a tool the gate
+# would run. Exits with the tool's status, or 2 for a usage error, 126 for a refused tool and
+# 127 for a tool not found.
+set -eu
+
+if [ "$#" -eq 0 ]; then
+    echo "gate-exec: no tool named" >&2
+    exit 2
+fi
+
+system=/usr/local/bin:/usr/bin:/bin
+case "${CARGO_HOME-}" in
+    "") PATH=$system ;;
+    /*) PATH=$CARGO_HOME/bin:$system ;;
+    *)
+        echo "gate-exec: CARGO_HOME is not an absolute path: $CARGO_HOME" >&2
+        exit 2
+        ;;
+esac
+export PATH
+
+root=$(cd -P "$(dirname "$0")/.." && pwd -P)
+name=$1
+shift
+
+if ! tool=$(command -v "$name"); then
+    echo "gate-exec: $name: not found on $PATH" >&2
+    exit 127
+fi
+case "$tool" in
+    /*) ;;
+    *)
+        echo "gate-exec: $name: not a program on $PATH ($tool)" >&2
+        exit 126
+        ;;
+esac
+resolved=$(PATH=$system realpath "$tool")
+case "$resolved" in
+    "$root"/*)
+        echo "gate-exec: $name resolves inside the repository, refused: $resolved" >&2
+        exit 126
+        ;;
+esac
+
+exec "$tool" "$@"

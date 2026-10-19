@@ -177,8 +177,10 @@ name = "b10x-takt-cli"
 version = "0.2.2"
 dependencies = [
  "anyhow",
+ "b10x-canon-engineering-assertions",
  "b10x-takt",
  "clap",
+ "serde_yaml_ng",
 ]
 
 [[package]]
