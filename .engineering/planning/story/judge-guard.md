@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:judge-guard
 kind: story
-status: active
+status: implemented
 title: The promoted takt judges takt's cases; a judge-surface merge needs the owner's grant or a delegation on record
 summary: protocol and store from base, typed grants, allow-list and delegation record read at base, guard over base..head at merge
 relations:
@@ -38,10 +38,11 @@ scope:
   path: crates/takt/tests/authority_adv1.rs
 - confidence: inferred
   path: crates/takt/tests/merge_under_authority.rs
-revision: 26
+revision: 27
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T06:11:27Z", actor: "human:timo", revision: 24}
 - {from: "proposed", to: "active", at: "2026-10-19T06:11:27Z", actor: "human:timo", revision: 25}
+- {from: "active", to: "implemented", at: "2026-10-19T14:11:44Z", actor: "human:timo", revision: 27, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: judge-guard
 
