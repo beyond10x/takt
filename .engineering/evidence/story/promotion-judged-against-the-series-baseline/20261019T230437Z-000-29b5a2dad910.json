@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T23:04:37Z",
+  "actor": "human:timo",
+  "artifact": "story:promotion-judged-against-the-series-baseline",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "check.yml, task check, on main bee77822 (release 0.3.0)",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/39337681698"
+  }
+}

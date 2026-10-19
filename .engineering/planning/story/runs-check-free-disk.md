@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:runs-check-free-disk
 kind: story
-status: active
+status: implemented
 title: takt runs stop with a named refusal when free disk is low
 summary: ENOSPC at 64M free killed edits mid-step on 2026-10-19
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T23:14:30Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: runs-check-free-disk
 

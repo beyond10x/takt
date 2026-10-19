@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:delivery-refuses-an-obligation-nobody-performs
 kind: story
-status: active
+status: implemented
 title: A case stops when its next obligation has no performer, instead of looping
 summary: 'trial 1: 457k of 539k tokens looped on pr.open needing gate.green with no gates document'
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:58Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:58:58Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T23:14:28Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: delivery-refuses-an-obligation-nobody-performs
 

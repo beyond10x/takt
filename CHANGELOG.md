@@ -22,7 +22,8 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   its code commits are replayed on the base under the configured identity, kept under
   `refs/takt/candidates/<case-id>`, and the run prints `candidate: <id>`, which a
   `self.improvement/1` turn opens on. With no configured identity, or when the replay conflicts,
-  it prints `candidate: none:` and why.
+  it prints `candidate: none:` and why, and a candidate an earlier run of the case made is no
+  longer named by the ref.
 
 ### Gates
 
@@ -48,6 +49,8 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   its committer date and the grant's time. A grant that records no tip (a turn opened before
   the forge was recorded), whose tip cannot be fetched, or whose tip is not on the mainline now
   is refused too.
+- A turn resumed through another forge than the one it recorded when it opened is refused, exit
+  1, before anything is written, naming both and `--forge <recorded>` as the way past.
 
 ## [0.3.0] — 2026-10-20
 

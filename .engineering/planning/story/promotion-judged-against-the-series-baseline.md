@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:promotion-judged-against-the-series-baseline
 kind: story
-status: active
+status: implemented
 title: takt promote also judges against the first record of the series
 summary: without the daily cap, one-case-worse steps can add up
 tags:
@@ -11,10 +11,11 @@ relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 - depends_on: story:promotion-without-daily-cap
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:58Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:58:58Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T23:14:26Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: promotion-judged-against-the-series-baseline
 

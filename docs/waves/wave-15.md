@@ -1,6 +1,6 @@
 # Wave 15: the first self-improvement round: a judge on the whole corpus, runs that stop by name, unique trials, tests that hold under load, kept transcripts
 
-Skill: `aep:implementing` 0.23.1, wave mode. Stage: **running**. Approval: the planner role granted this lane plan with eight rulings, after the owner's word to keep going and self-improve; the units are the stories filed from the self-improvement trials of 2026-10-19. Every unit is a judge surface; each merge needs the planner's grant of its exact commit, on a reviewer verdict. Mode: interactive, up to five implementors in parallel.
+Skill: `aep:implementing` 0.23.1, wave mode. Stage: **closed**. Approval: the planner role granted this lane plan with eight rulings, after the owner's word to keep going and self-improve; the units are the stories filed from the self-improvement trials of 2026-10-19. Every unit is a judge surface; each merge needs the planner's grant of its exact commit, on a reviewer verdict. Mode: interactive, up to five implementors in parallel.
 
 ## Units
 
@@ -41,3 +41,4 @@ One opening commit (this page), each unit's commits on its own branch, the merge
 ## Log
 
 - 2026-10-19: wave opened from main at c4613a74; A1, B1, C, D1 and E dispatched.
+- 2026-10-20: wave tip 0fae6305. Close gate there: `task check`, `cargo test --workspace --locked --no-fail-fast` and `task fuzz` each exited 0. The wave-close adversarial review approved at 0fae6305 (the nine integration merges lost nothing; five later findings filed, four as stories with predicates, one closed by wave 16). Merged into `main` as b17a8290 and released as 0.3.0 at bee77822 (check.yml and release.yml green).

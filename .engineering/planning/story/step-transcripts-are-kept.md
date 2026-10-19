@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:step-transcripts-are-kept
 kind: story
-status: active
+status: implemented
 title: Each harness step's stream is kept under the case's artifacts
 summary: trial 1 needed a recording shim to read why a run looped
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:59:00Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T23:14:33Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: step-transcripts-are-kept
 

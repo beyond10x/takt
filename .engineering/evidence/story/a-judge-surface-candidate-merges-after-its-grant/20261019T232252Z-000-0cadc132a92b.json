@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-19T23:22:52Z",
+  "actor": "human:timo",
+  "artifact": "story:a-judge-surface-candidate-merges-after-its-grant",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check on wave/16 at 622e8a0d: 1381 passed, 0 failed"
+  }
+}

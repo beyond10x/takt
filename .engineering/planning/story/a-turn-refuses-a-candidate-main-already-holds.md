@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-turn-refuses-a-candidate-main-already-holds
 kind: story
-status: draft
+status: active
 title: A self-improvement turn refuses at open a candidate the mainline already holds
 summary: the first real turn's candidate was merged before its grant and the turn still opened on it
 tags:
@@ -10,7 +10,21 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: inferred
+  path: crates/takt-cli/tests/self_improvement_cli.rs
+- confidence: cited
+  path: crates/takt/src/case.rs
+- confidence: inferred
+  path: crates/takt/src/improvement.rs
+- confidence: cited
+  path: ess/domains/takt.citations.tsv
+- confidence: cited
+  path: ess/domains/takt.yaml
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T22:44:32Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-19T22:44:33Z", actor: "human:timo", revision: 3}
 ---
 # Story: a-turn-refuses-a-candidate-main-already-holds
 
