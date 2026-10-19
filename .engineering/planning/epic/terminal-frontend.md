@@ -8,7 +8,7 @@ summary: 'spec-first TUI: views and an ess-http/1 binding, an ess-ui/1 document,
 relations:
 - serves: vision:safe-agentic-coding
 - derived_from: product-requirements:takt
-revision: 4
+revision: 6
 ---
 # Epic: terminal-frontend
 
@@ -44,4 +44,15 @@ Sequencing: after release 0.2.0. No story of this epic joins a wave while the RS
 
 ## Acceptance
 
-On a repository with recorded cases, `takt tui --repo <path> --screen-once 120x40` prints the case list naming a recorded case; a case shows its claims, actions and outcomes from its latest decision and its run events; the approvals page shows a case at `ApprovalRequired` with its `takt approve` line; every view the app reads passes `ess verify conform` against `takt serve`; and `takt serve` answers 405 or 404 to every non-GET request with no file under the repository changed.
+On a repository with recorded cases:
+
+- `takt tui --repo <path> --screen-once 120x40` prints the case list naming a recorded case (story:takt-tui-crate);
+- `ess ui test --path ess/ui/takt.ui.yaml ess/ui/tests/*.yaml` passes, with tests that open a case's detail page (its claims, actions and outcomes from its latest decision, and its run events) and the approvals page (a case at `ApprovalRequired` with its `takt approve` line) (story:tui-ui-document);
+- `cargo test -p b10x-takt-serve --test views` passes: `takt serve` over the fixture repository answers every route of `ess/http/takt.http.yaml` with a body byte-equal to the committed fixture the UI tests read, so the pages tested on fixtures are the pages served (story:takt-serve-read-only);
+- `takt serve` answers 405 to every non-GET request and 404 to an undeclared path, with the repository's tree digest unchanged.
+
+`ess verify conform` has no HTTP target in ESS 0.60.0 (`ess verify conform run --target` takes `billing`, `oracle-fixture`, `interpreted`); when an ESS release takt pins ships one, a story adds it.
+
+## Sequencing
+
+After release 0.2.0. The order is recorded as edges, not only here: story:tui-read-model `depends_on` every active story whose scope holds `ess/domains/takt.yaml` or `ess/domains/takt.citations.tsv` (story:story-delivery-tests-first, story:scorecard-save-checks-binary, story:promotion-chain-head-anchored, story:check-finding-run-step-confined) and on story:self-improvement-protocol and story:judge-guard; story:takt-serve-read-only and story:takt-tui-crate `depends_on` story:judge-guard and story:self-improvement-protocol, which share `crates/takt-cli/src/main.rs`; story:tui-approve-action `depends_on` story:judge-guard, whose rules and typed approvers it uses.

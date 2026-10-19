@@ -8,6 +8,12 @@ summary: six views (cases, case detail, run events, approvals pending, scorecard
 relations:
 - decomposes: epic:terminal-frontend
 - serves: vision:safe-agentic-coding
+- depends_on: story:story-delivery-tests-first
+- depends_on: story:scorecard-save-checks-binary
+- depends_on: story:promotion-chain-head-anchored
+- depends_on: story:check-finding-run-step-confined
+- depends_on: story:self-improvement-protocol
+- depends_on: story:judge-guard
 scope:
 - confidence: inferred
   path: ess/domains/takt.citations.tsv

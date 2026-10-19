@@ -9,6 +9,7 @@ relations:
 - decomposes: epic:terminal-frontend
 - serves: vision:safe-agentic-coding
 - depends_on: story:takt-tui-crate
+- depends_on: story:judge-guard
 scope:
 - confidence: inferred
   path: crates/takt-serve
