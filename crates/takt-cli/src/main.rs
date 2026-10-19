@@ -71,6 +71,15 @@ enum Commands {
     /// shares, a row per step, the defects and what the sources did not record.
     #[command(after_help = REPORT_EXIT_CODES)]
     Report(ReportArgs),
+    /// Write one offline HTML page of the runs under a directory: every `takt-trace/1` file
+    /// under it is a run and a lane on one time axis, each operation a mark at its time naming
+    /// its step, action and outcome; a click on a harness step's mark opens that step's
+    /// transcript (`<repo-key>/<case>/run-<r>/step-<n>.jsonl` under the directory, as the
+    /// case's step line or the layout names it; past 256 KiB, its head and tail). The page
+    /// holds its stylesheet, script and data inline and fetches nothing; it is written `0600`,
+    /// as a transcript carries what the model read.
+    #[command(after_help = VIEW_EXIT_CODES)]
+    View(ViewArgs),
     /// Promote a takt revision: compare its saved scorecard with the promoted baseline's under
     /// the scorecard's rule, and with the series start's on its scenarios, the latest
     /// --baseline-only record or --rebaseline under a newer metric definition, so steps each
@@ -239,6 +248,23 @@ struct ReportArgs {
     #[arg(long, value_name = "FILE")]
     trace: Vec<PathBuf>,
 }
+
+#[derive(clap::Args)]
+struct ViewArgs {
+    /// The directory to read: every `takt-trace/1` file and step transcript under it, never
+    /// through a link, `.git` and `target` skipped.
+    dir: PathBuf,
+    /// Write the page there, replacing a file there; `takt-view.html` in the current
+    /// directory without it.
+    #[arg(long, value_name = "FILE", default_value = "takt-view.html")]
+    output: PathBuf,
+}
+
+/// What `takt view --help` says about the exit codes.
+const VIEW_EXIT_CODES: &str = "Exit codes:
+  0  written
+  1  refused: the directory is not one or holds no takt-trace/1 trace (the directory named), a file that begins as a trace does not read as one (the file named), or the page cannot be written; nothing written, the reason on stderr
+  2  the arguments do not parse";
 
 /// What `takt trace --help` says about the exit codes.
 const TRACE_EXIT_CODES: &str = "Exit codes:
@@ -632,6 +658,19 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 traces.push(takt::trace::Trace::load(path)?);
             }
             takt::report::print(&traces, out)?;
+            Ok(EXIT_DONE)
+        }
+        Commands::View(ViewArgs { dir, output }) => {
+            let rendered = takt::view::write(&dir, &output)?;
+            writeln!(
+                out,
+                "written: {} ({} runs, {} operations, {} of {} harness steps with a transcript)",
+                output.display(),
+                rendered.runs,
+                rendered.ops,
+                rendered.transcripts,
+                rendered.transcripts + rendered.missing
+            )?;
             Ok(EXIT_DONE)
         }
         Commands::Promote(PromoteArgs {
