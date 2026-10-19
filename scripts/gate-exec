@@ -2,9 +2,13 @@
 # gate-exec <tool> [<arg>...]: runs one command of takt's gates document
 # (.engineering/gates.yaml). The gate runs it with the environment cleared and no PATH;
 # takt's gate validator sets CARGO_HOME to the invoking user's Cargo home. The tool is looked
-# up on that home's bin directory, then the system directories, and is refused when it
-# resolves, after symlinks, inside this repository, so a step cannot plant a tool the gate
-# would run. Exits with the tool's status, or 2 for a usage error, 126 for a refused tool and
+# up on the system directories first, then that home's bin directory, so a file in the
+# user-writable Cargo bin cannot shadow python3 or another system tool; rustup's cargo proxy
+# in the system directories still resolves the toolchain, and ess is found in the Cargo bin.
+# A tool that resolves, after symlinks, inside this repository is refused. That is all this
+# script vouches for: cargo clippy compiles and runs build code the step wrote, so the gate
+# cannot vouch for code that runs at build time; the merge of such a change stays guarded by
+# the owner. Exits with the tool's status, or 2 for a usage error, 126 for a refused tool and
 # 127 for a tool not found.
 set -eu
 
@@ -16,7 +20,7 @@ fi
 system=/usr/local/bin:/usr/bin:/bin
 case "${CARGO_HOME-}" in
     "") PATH=$system ;;
-    /*) PATH=$CARGO_HOME/bin:$system ;;
+    /*) PATH=$system:$CARGO_HOME/bin ;;
     *)
         echo "gate-exec: CARGO_HOME is not an absolute path: $CARGO_HOME" >&2
         exit 2

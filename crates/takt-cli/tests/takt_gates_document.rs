@@ -1,12 +1,12 @@
 //! story:takt-has-a-gates-document: takt's own repository names its gate. The gates document
 //! binds the four fast commands of `Taskfile.yml`'s `check` task, each through
-//! `scripts/gate-exec`, which finds the tool on the Cargo bin directory and the system
-//! directories and refuses one that resolves inside the repository; the fifth, the workspace's
+//! `scripts/gate-exec`, which finds the tool on the system directories, then the Cargo bin
+//! directory, and refuses one that resolves inside the repository; the fifth, the workspace's
 //! tests, is a delivery's test command. A delivery on a scratch repository carrying copies of
 //! those three files offers `gate.run` after the implementation and reaches `pr.open`; a gate
-//! command that fails holds `gate.green` false and opens no pull request. The tools are stubs in
-//! a scratch Cargo bin directory, the forge and the harness doubles on the program path; nothing
-//! reaches a network or a model, and takt's own tests are not run from here.
+//! command that fails holds `gate.green` false and opens no pull request. The tools are stubs
+//! (see [`World`]), the forge and the harness doubles on the program path; nothing reaches a
+//! network or a model, and takt's own tests are not run from here.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -183,10 +183,19 @@ fn stub(dir: &Path, name: &str, log: &Path, code: i32) {
 
 /// One scratch world: a repository with the fixture store's one story `proposed`, copies of
 /// takt's gates document, project file and `gate-exec` (those takt has), and an `origin` on
-/// github.com; the forge's and the harness's doubles in `bin`, their state in `state`; the gate's
-/// tools as stubs in `cargo-home/bin`, logging to `gate-log`; a `cargo` on the program path, the
-/// test command's, logging to `test-log`; a home, a state home and a temporary directory of its
-/// own.
+/// github.com; the forge's and the harness's doubles in `bin`, their state in `state`; a `cargo`
+/// on the program path, the test command's, logging to `test-log`; a home, a state home and a
+/// temporary directory of its own.
+///
+/// The gate's tools log what they were run with to `gate-log`. `gate-exec` looks in the system
+/// directories first, which a test cannot change, so each tool is a stub wherever the system
+/// directories hand it on: `ess` in the scratch Cargo bin (`cargo-home/bin`); `python3` is the
+/// system's, running the repository's `scripts/check-citations`, a stub that also logs the
+/// interpreter to `python-log`; `cargo` is the scratch Cargo bin's stub on a host with no cargo
+/// in the system directories and the stub toolchain of the scratch rustup home (`rustup-home`)
+/// where the system's cargo is rustup's proxy. A host whose system directories hold `ess` or a
+/// cargo that is not rustup's runs the real one here. A `python3` planted in the scratch Cargo
+/// bin logs to `planted-log` and must never run.
 struct World {
     _scratch: Scratch,
     outer: PathBuf,
@@ -209,6 +218,21 @@ fn world(name: &str, clippy_fails: bool) -> World {
             fs::copy(&from, &to).expect("a copied file");
         }
     }
+    let log = outer.join("gate-log");
+    fs::create_dir_all(repo.join("scripts")).expect("a directory");
+    fs::write(
+        repo.join("scripts/check-citations"),
+        format!(
+            "import sys\n\
+             with open({log:?}, 'a') as log:\n    \
+             log.write(' '.join(['python3'] + (['-I'] if sys.flags.isolated else []) + sys.argv) + '\\n')\n\
+             with open({python:?}, 'a') as log:\n    \
+             log.write(sys.executable + '\\n')\n",
+            log = log.display().to_string(),
+            python = outer.join("python-log").display().to_string(),
+        ),
+    )
+    .expect("the citations stub is written");
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "seed"]);
@@ -226,18 +250,21 @@ fn world(name: &str, clippy_fails: bool) -> World {
     doubles(&bin, &state, &outer.join("remote.git"));
     stub(&bin, "cargo", &outer.join("test-log"), 0);
     let tools = outer.join("cargo-home/bin");
-    let log = outer.join("gate-log");
     stub(&tools, "ess", &log, 0);
-    stub(&tools, "python3", &log, 0);
-    executable(
-        &tools,
-        "cargo",
-        &format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$(basename \"$0\") $*\" >> '{}'\n[ \"$1\" = clippy ] && exit {}\nexit 0\n",
-            log.display(),
-            i32::from(clippy_fails)
-        ),
+    stub(&tools, "python3", &outer.join("planted-log"), 0);
+    let cargo = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$(basename \"$0\") $*\" >> '{}'\n[ \"$1\" = clippy ] && exit {}\nexit 0\n",
+        log.display(),
+        i32::from(clippy_fails)
     );
+    executable(&tools, "cargo", &cargo);
+    let rustup = outer.join("rustup-home");
+    executable(&rustup.join("toolchains/stub/bin"), "cargo", &cargo);
+    fs::write(
+        rustup.join("settings.toml"),
+        "version = \"12\"\ndefault_toolchain = \"stub\"\n",
+    )
+    .expect("the rustup settings are written");
     for dir in ["home", "xdg-state", "tmp"] {
         fs::create_dir_all(outer.join(dir)).expect("a directory");
     }
@@ -385,6 +412,7 @@ impl World {
             .env("HOME", self.outer.join("home"))
             .env("AEP_CACHE_DIR", aep_cache())
             .env("CARGO_HOME", self.outer.join("cargo-home"))
+            .env("RUSTUP_HOME", self.outer.join("rustup-home"))
             .env("XDG_STATE_HOME", self.outer.join("xdg-state"))
             .env("TMPDIR", self.outer.join("tmp"))
             .env(
@@ -411,6 +439,24 @@ impl World {
             .lines()
             .map(str::to_owned)
             .collect()
+    }
+
+    /// The `python3` planted in the scratch Cargo bin never ran, and every interpreter the
+    /// citations stub ran under is outside the scratch world: the system's.
+    fn assert_no_planted_python(&self) {
+        assert!(
+            !self.outer.join("planted-log").exists(),
+            "the python3 planted in the Cargo bin ran: {:?}",
+            self.log("planted-log")
+        );
+        let interpreters = self.log("python-log");
+        assert!(
+            !interpreters.is_empty()
+                && interpreters
+                    .iter()
+                    .all(|python| !Path::new(python).starts_with(&self.outer)),
+            "the citations stub ran under the system's python3: {interpreters:?}"
+        );
     }
 
     /// The pull requests the forge double was asked to open.
@@ -449,12 +495,12 @@ fn steps(out: &str) -> Vec<(String, Vec<String>)> {
 
 /// The story's acceptance: a delivery on a repository carrying takt's gate offers `gate.run`
 /// after the implementation, the gate passes with each of the four commands run once a gate run
-/// through `gate-exec` from the Cargo bin directory, the tests run as takt's test command, and
-/// the run reaches `pr.open`.
+/// through `gate-exec`, the tests run as takt's test command, and the run reaches `pr.open`
+/// within 20 steps, so a gate that never passes ends the run, red, instead of looping.
 #[test]
 fn a_delivery_on_takts_gate_runs_it_after_the_implementation_and_opens_the_pull_request() {
     let world = world("passes", false);
-    let (code, out, err) = world.deliver(&[]);
+    let (code, out, err) = world.deliver(&["--iterations", "20"]);
     let steps = steps(&out);
     let actions: Vec<&str> = steps.iter().map(|(action, _)| action.as_str()).collect();
     let edit = actions
@@ -502,6 +548,7 @@ fn a_delivery_on_takts_gate_runs_it_after_the_implementation_and_opens_the_pull_
         vec![TEST_COMMAND.to_owned(); tests],
         "stdout {out}"
     );
+    world.assert_no_planted_python();
     assert!(
         out.contains("stopped: ApprovalRequired (repository.merge)"),
         "stdout {out} stderr {err}"
@@ -540,6 +587,7 @@ fn a_failing_gate_command_holds_the_gate_red_and_opens_no_pull_request() {
         ran, expected,
         "each gate run ran its four commands: stdout {out}"
     );
+    world.assert_no_planted_python();
     assert!(
         !out.contains("stopped: Completed") && !out.contains("ApprovalRequired"),
         "stdout {out} stderr {err}"
@@ -547,66 +595,125 @@ fn a_failing_gate_command_holds_the_gate_red_and_opens_no_pull_request() {
 }
 
 /// Runs a copy of `gate-exec` at `<repo>/scripts/gate-exec` with `args`, the environment
-/// cleared as the gate clears it and `cargo_home` its Cargo home. The exit code and stderr.
-fn gate_exec(repo: &Path, cargo_home: &Path, args: &[&str]) -> (i32, String) {
+/// cleared as the gate clears it and `cargo_home` its Cargo home. The exit code, stdout and
+/// stderr.
+fn gate_exec(repo: &Path, cargo_home: &Path, args: &[&str]) -> (i32, String, String) {
     let script = repo.join(GATE_EXEC);
     fs::create_dir_all(script.parent().expect("a parent")).expect("a directory");
     fs::copy(root().join(GATE_EXEC), &script).expect("takt's gate-exec");
-    let output = Command::new(&script)
-        .args(args)
-        .env_clear()
-        .env("CARGO_HOME", cargo_home)
-        .current_dir(repo)
-        .output()
-        .expect("gate-exec runs");
+    // A script just written can be busy for a moment: a child another test thread forked
+    // holds its write descriptor until that child execs.
+    let mut tries = 0;
+    let output = loop {
+        match Command::new(&script)
+            .args(args)
+            .env_clear()
+            .env("CARGO_HOME", cargo_home)
+            .current_dir(repo)
+            .output()
+        {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 100 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            output => break output.expect("gate-exec runs"),
+        }
+    };
     (
         output.status.code().expect("an exit code"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
 }
 
-/// `gate-exec` runs the tool the Cargo bin directory has with its arguments and its exit code,
-/// and refuses one that resolves inside the repository, directly or through a symlink, naming
-/// the tool and the path, without running it.
+/// The directories `gate-exec` searches before the Cargo bin, in its order.
+const SYSTEM: [&str; 3] = ["/usr/local/bin", "/usr/bin", "/bin"];
+
+/// A tool name no system directory has, so the Cargo bin decides where it resolves.
+const PROBE: &str = "takt-gate-exec-probe";
+
+/// `gate-exec` runs a tool only the Cargo bin directory has with its arguments and its exit
+/// code, and refuses one that resolves inside the repository, directly or through a symlink,
+/// naming the tool and the path, without running it.
 #[test]
 fn gate_exec_refuses_a_tool_that_resolves_inside_the_repository() {
+    assert!(
+        SYSTEM
+            .iter()
+            .all(|dir| !Path::new(dir).join(PROBE).exists()),
+        "a system directory has {PROBE}"
+    );
     let (_scratch, outer) = scratch("gate-exec");
     let repo = outer.join("repo");
     fs::create_dir_all(&repo).expect("a directory");
     let log = outer.join("ran");
 
     let outside = outer.join("cargo-home");
-    stub(&outside.join("bin"), "cargo", &log, 3);
-    let (code, err) = gate_exec(&repo, &outside, &["cargo", "fmt", "--all", "--check"]);
+    stub(&outside.join("bin"), PROBE, &log, 3);
+    let (code, _, err) = gate_exec(&repo, &outside, &[PROBE, "fmt", "--all", "--check"]);
     assert_eq!(code, 3, "the tool's exit code: stderr {err}");
     assert_eq!(
         fs::read_to_string(&log).expect("the tool ran"),
-        "cargo fmt --all --check\n"
+        format!("{PROBE} fmt --all --check\n")
     );
     fs::remove_file(&log).expect("the log is cleared");
 
     let planted = repo.join("planted-home");
-    stub(&planted.join("bin"), "cargo", &log, 0);
-    let (code, err) = gate_exec(&repo, &planted, &["cargo", "fmt", "--all", "--check"]);
-    let resolved = planted.join("bin/cargo");
-    assert_ne!(code, 0, "a planted cargo is refused: stderr {err}");
+    stub(&planted.join("bin"), PROBE, &log, 0);
+    let (code, _, err) = gate_exec(&repo, &planted, &[PROBE, "fmt", "--all", "--check"]);
+    let resolved = planted.join("bin").join(PROBE);
+    assert_ne!(code, 0, "a planted tool is refused: stderr {err}");
     assert!(
-        err.contains("cargo") && err.contains(&resolved.display().to_string()),
+        err.contains(PROBE) && err.contains(&resolved.display().to_string()),
         "the refusal names the tool and where it resolves: {err}"
     );
-    assert!(!log.exists(), "the planted cargo ran");
+    assert!(!log.exists(), "the planted tool ran");
 
     let linked = outer.join("linked-home");
     fs::create_dir_all(linked.join("bin")).expect("a directory");
-    std::os::unix::fs::symlink(&resolved, linked.join("bin/cargo")).expect("a symlink");
-    let (code, err) = gate_exec(&repo, &linked, &["cargo", "fmt", "--all", "--check"]);
+    std::os::unix::fs::symlink(&resolved, linked.join("bin").join(PROBE)).expect("a symlink");
+    let (code, _, err) = gate_exec(&repo, &linked, &[PROBE, "fmt", "--all", "--check"]);
     assert_ne!(
         code, 0,
-        "a cargo linked into the repository is refused: stderr {err}"
+        "a tool linked into the repository is refused: stderr {err}"
     );
     assert!(
-        err.contains("cargo") && err.contains(&resolved.display().to_string()),
+        err.contains(PROBE) && err.contains(&resolved.display().to_string()),
         "the refusal names the tool and where it resolves: {err}"
     );
-    assert!(!log.exists(), "the linked cargo ran");
+    assert!(!log.exists(), "the linked tool ran");
+}
+
+/// The system directories come before the Cargo bin: a `python3` planted in the user-writable
+/// Cargo bin is not the one `gate-exec` runs; the system's is.
+#[test]
+fn gate_exec_runs_the_systems_python3_over_one_planted_in_the_cargo_bin() {
+    assert!(
+        SYSTEM
+            .iter()
+            .any(|dir| Path::new(dir).join("python3").exists()),
+        "no system directory has python3"
+    );
+    let (_scratch, outer) = scratch("gate-exec-python");
+    let repo = outer.join("repo");
+    fs::create_dir_all(&repo).expect("a directory");
+    let planted = outer.join("cargo-home");
+    let log = outer.join("planted-ran");
+    stub(&planted.join("bin"), "python3", &log, 0);
+    let (code, out, err) = gate_exec(
+        &repo,
+        &planted,
+        &["python3", "-I", "-c", "import sys; print(sys.executable)"],
+    );
+    assert_eq!(code, 0, "stdout {out} stderr {err}");
+    assert!(
+        !log.exists(),
+        "the planted python3 ran: {:?}",
+        fs::read_to_string(&log)
+    );
+    let ran = Path::new(out.trim());
+    assert!(
+        SYSTEM.iter().any(|dir| ran.starts_with(dir)) && !ran.starts_with(&outer),
+        "the system's python3 ran: {out}"
+    );
 }
