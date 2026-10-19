@@ -622,6 +622,26 @@ fn approval_required_and_completed_exit_with_different_documented_codes() {
         ))
         .expect("the record is written");
     }
+    // The change handed over at the revision, as takt records a `change.handover` step.
+    case.add_evidence(&takt::evidence::Record::new(
+        "handover",
+        "handover",
+        None,
+        "implementation",
+        &revision,
+        takt::run::CHOICE_PRODUCER,
+    ))
+    .expect("the record is written");
+    // A change to publish at the revision, as `change.read` records it.
+    case.add_evidence(&takt::evidence::Record::new(
+        "change-record",
+        "change_record",
+        Some("ahead".to_owned()),
+        "implementation",
+        &revision,
+        "takt.change-read",
+    ))
+    .expect("the record is written");
     let (approval, out, err) = takt(&[
         "run",
         "--repo",

@@ -128,6 +128,12 @@ impl<F: Fn(&Path)> Harness for Acting<F> {
         "acting"
     }
 
+    /// Most cases here have it answer `repository.inspect`, which only a harness that keeps state
+    /// is offered (story:no-inspect-for-stateless-harness).
+    fn keeps_state(&self) -> bool {
+        true
+    }
+
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
         (self.act)(context.tree);
         Ok(StepReport {

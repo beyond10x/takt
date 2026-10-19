@@ -423,7 +423,7 @@ fn the_loop_records_the_four_components_the_harness_parsed() {
     let program = scripts.join("claude.sh");
     fs::write(
         &program,
-        "#!/bin/sh\nprintf '%s' '{\"result\": \"{\\\"action\\\": \\\"repository.inspect\\\", \\\"summary\\\": \\\"read\\\"}\", \"usage\": {\"input_tokens\": 11, \"output_tokens\": 22, \"cache_read_input_tokens\": 33, \"cache_creation_input_tokens\": 44}}'\n",
+        "#!/bin/sh\nprintf '%s' '{\"result\": \"{\\\"action\\\": \\\"implementation.edit\\\", \\\"summary\\\": \\\"read\\\"}\", \"usage\": {\"input_tokens\": 11, \"output_tokens\": 22, \"cache_read_input_tokens\": 33, \"cache_creation_input_tokens\": 44}}'\n",
     )
     .expect("a script");
     fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("exec bit");

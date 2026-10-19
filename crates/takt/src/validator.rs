@@ -1,5 +1,5 @@
 //! Validators: programs that turn an observation into evidence: `tests.run`, `gate.run`,
-//! `pr.open`, `ci.read` and `repository.merge`.
+//! `pr.open`, `ci.read`, `repository.merge` and `change.read`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -68,6 +68,20 @@ pub trait Validator {
     ) -> Result<(Observation, bool)> {
         Ok((self.observe(tree, revision, seq)?, false))
     }
+    /// Observes as [`Self::observe_waiting`] does, a child it runs held to `deadline` (the
+    /// instant the run's hour budget ends, the run's own; `None` for a run without one) as well
+    /// as its own timeout. By default `deadline` is not read: the validator runs no child of its
+    /// own.
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        let _ = deadline;
+        self.observe_waiting(tree, revision, seq)
+    }
     /// The files under the case's directory the validator itself writes while it observes,
     /// relative to it. Nothing else under the cases directory may change during an
     /// observation: the loop puts back whatever else changed and refuses the observation,
@@ -124,8 +138,8 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
     // A link is never followed: one the base or the revision holds on the surface, or on the
     // way to a script, is named, and nothing is recorded while it is there.
     for commit in [at.as_str(), revision] {
-        let listed = crate::git::run(tree, &["ls-tree", "-r", "-z", "--full-tree", commit])?;
-        for entry in listed.split('\0') {
+        let listed = crate::git::bytes(tree, &["ls-tree", "-r", "-z", "--full-tree", commit])?;
+        for entry in nul_fields(&listed, "ls-tree", true)? {
             let Some((meta, path)) = entry.split_once('\t') else {
                 continue;
             };
@@ -137,7 +151,8 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
             }
         }
     }
-    let diff = crate::git::run(
+    // Paths, read byte for byte: the first path's leading white space is part of it.
+    let diff = crate::git::bytes(
         tree,
         &[
             "diff-tree",
@@ -150,7 +165,7 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
             "--",
         ],
     )?;
-    for path in diff.split('\0').filter(|path| !path.is_empty()) {
+    for path in nul_fields(&diff, "diff-tree", false)? {
         if surface.contains(path) {
             paths.push(path.to_owned());
         } else if crate::run::is_manifest(path) || crate::run::is_pyproject(path) {
@@ -174,6 +189,33 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
     } else {
         Judged::Changed { base, paths }
     })
+}
+
+/// The NUL-terminated fields of `listed`, what `git <command> -z` printed, each decoded as
+/// UTF-8. A field that is not UTF-8 is never decoded to a stand-in, which could read as another
+/// path: it is the error, naming the path with its bytes escaped (after the first tab when
+/// `after_tab`, as `ls-tree` prints the mode, type and object before it).
+fn nul_fields<'a>(listed: &'a [u8], command: &str, after_tab: bool) -> Result<Vec<&'a str>> {
+    listed
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .map(|field| {
+            std::str::from_utf8(field).map_err(|_| {
+                let path = if after_tab {
+                    field
+                        .splitn(2, |byte| *byte == b'\t')
+                        .last()
+                        .unwrap_or(field)
+                } else {
+                    field
+                };
+                anyhow!(
+                    "git {command} named a path that is not UTF-8: {}",
+                    path.escape_ascii()
+                )
+            })
+        })
+        .collect()
 }
 
 /// An observation that recorded nothing, its summary `summary`.
@@ -203,6 +245,11 @@ pub struct TestsRun {
 }
 
 impl TestsRun {
+    /// The action it performs.
+    pub const ACTION: &str = "tests.run";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "test_result";
+
     /// Splits `command` at white space.
     pub fn new(command: &str) -> Result<Self> {
         let command: Vec<String> = command.split_whitespace().map(str::to_owned).collect();
@@ -332,11 +379,11 @@ impl Validator for TestsRun {
     }
 
     fn action(&self) -> &str {
-        "tests.run"
+        Self::ACTION
     }
 
     fn kind(&self) -> &str {
-        "test_result"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {
@@ -348,6 +395,49 @@ impl Validator for TestsRun {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        self.observe_by(tree, revision, seq, None)
+    }
+
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        let observed = self.observe_by(tree, revision, seq, deadline);
+        Ok((ended_by(deadline, self.action(), observed)?, false))
+    }
+}
+
+/// What an observation held to `deadline` answers: an error once it returned at or after it,
+/// whatever it observed, so the budget that ended it records nothing; else `observed`.
+fn ended_by(
+    deadline: Option<std::time::Instant>,
+    action: &str,
+    observed: Result<Observation>,
+) -> Result<Observation> {
+    if !deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+        return observed;
+    }
+    match observed {
+        Err(error) => Err(error),
+        Ok(_) => {
+            bail!("{action} returned at or after the run's end; what it observed is not recorded")
+        }
+    }
+}
+
+impl TestsRun {
+    /// Observes, the test command held to the smaller of its own timeout and what is left
+    /// before `deadline` when it starts.
+    fn observe_by(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Observation> {
         let shown = self.command.join(" ");
         // A tree on no case's branch is no case's observation and has no base to compare with.
         if crate::git::current_branch(tree)?
@@ -373,7 +463,13 @@ impl Validator for TestsRun {
         let mut command = Command::new(&self.command[0]);
         command.args(&self.command[1..]).current_dir(tree);
         crate::forge::without_credentials(&mut command, |_| false);
-        let output = crate::forge::run_child(&mut command, self.limits)
+        let mut limits = self.limits;
+        if let Some(deadline) = deadline {
+            limits.timeout = limits
+                .timeout
+                .min(deadline.saturating_duration_since(std::time::Instant::now()));
+        }
+        let output = crate::forge::run_child(&mut command, limits)
             .with_context(|| format!("run {}", self.command.join(" ")))?;
         let result = if output.success() { "pass" } else { "fail" };
         let printed =
@@ -528,6 +624,11 @@ fn file_at(tree: &Path, at: &str, path: &Path) -> Result<Option<String>> {
 }
 
 impl GateRun {
+    /// The action it performs.
+    pub const ACTION: &str = "gate.run";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "gate_result";
+
     /// Over the gates document at `gates`, relative to the tree.
     #[must_use]
     pub fn new(gates: impl Into<PathBuf>) -> Self {
@@ -551,11 +652,11 @@ impl Validator for GateRun {
     }
 
     fn action(&self) -> &str {
-        "gate.run"
+        Self::ACTION
     }
 
     fn kind(&self) -> &str {
-        "gate_result"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {
@@ -563,6 +664,31 @@ impl Validator for GateRun {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        self.observe_by(tree, revision, seq, None)
+    }
+
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        let observed = self.observe_by(tree, revision, seq, deadline);
+        Ok((ended_by(deadline, self.action(), observed)?, false))
+    }
+}
+
+impl GateRun {
+    /// Observes, each command the gate runs held to the smaller of the project file's timeout
+    /// and what is left before `deadline` when the gate's commands are collected.
+    fn observe_by(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Observation> {
         let dir = current(tree)?;
         let Some((base, at)) = base_revision(tree, &dir)? else {
             return Ok(Observation {
@@ -649,7 +775,7 @@ impl Validator for GateRun {
                 .as_ref()
                 .map(|(path, text)| copy("project", path, text))
                 .transpose()?;
-            let prepared = canon_engineering_assertions::prepare(
+            let mut prepared = canon_engineering_assertions::prepare(
                 tree,
                 &gates,
                 copied.as_deref(),
@@ -662,6 +788,12 @@ impl Validator for GateRun {
                 ),
                 None => format!("prepare the gates document {document}"),
             })?;
+            if let Some(deadline) = deadline {
+                prepared.context.timeout = prepared
+                    .context
+                    .timeout
+                    .min(deadline.saturating_duration_since(std::time::Instant::now()));
+            }
             canon_engineering_assertions::collect(prepared, now)
                 .with_context(|| format!("collect the observations of {document}"))
         })();
@@ -795,7 +927,10 @@ fn above(revision: &str, head: &str) -> String {
 /// base with the pull request; anything else would not be what the claim is about, and nothing
 /// is pushed. A number the case directory carries is trusted only once the forge reports the pull
 /// request's head as the case's branch at the head pushed, else no record is written. A case
-/// with no base is refused before anything is pushed. The title is the intent's first line,
+/// with no base is refused before anything is pushed. Before a pull request is opened, a case
+/// whose base branch (`refs/heads/<base>`, never a tag of its name) is not there, or whose
+/// branch has no commit beyond it but the take, pushes nothing and writes no record, the
+/// summary saying why. The title is the intent's first line,
 /// the body the intent and the claims that hold; the forge passes both through `scan-text`
 /// before they leave the machine.
 pub struct PrOpen {
@@ -804,6 +939,11 @@ pub struct PrOpen {
 }
 
 impl PrOpen {
+    /// The action it performs.
+    pub const ACTION: &str = "pr.open";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "pull_request";
+
     /// Over `forge`.
     #[must_use]
     pub fn new(forge: Rc<dyn Forge>) -> Self {
@@ -908,11 +1048,11 @@ impl Validator for PrOpen {
     }
 
     fn action(&self) -> &str {
-        "pr.open"
+        Self::ACTION
     }
 
     fn kind(&self) -> &str {
-        "pull_request"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {
@@ -978,6 +1118,34 @@ impl Validator for PrOpen {
         // the story's status, not the work. Nothing is pushed and no record written; a commit
         // moves the revision and makes `pr.open` due again.
         if let Next::Open(request) = &next {
+            // The base is the branch, `refs/heads/<base>`, never a tag or a remote ref of its
+            // name; with the branch gone there is nothing to count against, and nothing to open
+            // a pull request against, as for a case with no commit beyond its base.
+            let Some(base_tip) = crate::git::run(
+                tree,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "--end-of-options",
+                    &format!("refs/heads/{}^{{commit}}", request.base),
+                ],
+            )
+            .ok()
+            .filter(|tip| !tip.is_empty()) else {
+                return Ok((
+                    Observation {
+                        summary: format!(
+                            "{name} at {}: the base branch {} is not there; nothing pushed, no pull request; the claim stays unknown",
+                            short(revision),
+                            request.base
+                        ),
+                        records: Vec::new(),
+                        artifact: None,
+                    },
+                    false,
+                ));
+            };
             let ahead = crate::git::run(
                 tree,
                 &[
@@ -986,7 +1154,7 @@ impl Validator for PrOpen {
                     "--invert-grep",
                     "--extended-regexp",
                     "--grep=^takt: take [^ ]+$",
-                    &format!("{}..{revision}", request.base),
+                    &format!("{base_tip}..{revision}"),
                 ],
             )?;
             if ahead.trim() == "0" {
@@ -1101,6 +1269,11 @@ pub struct CiRead {
 }
 
 impl CiRead {
+    /// The action it performs.
+    pub const ACTION: &str = "ci.read";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "ci_result";
+
     /// Over `forge`.
     #[must_use]
     pub fn new(forge: Rc<dyn Forge>) -> Self {
@@ -1132,11 +1305,11 @@ impl Validator for CiRead {
     }
 
     fn action(&self) -> &str {
-        "ci.read"
+        Self::ACTION
     }
 
     fn kind(&self) -> &str {
-        "ci_result"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {
@@ -1298,6 +1471,11 @@ pub struct PrMerged {
 }
 
 impl PrMerged {
+    /// The action it performs.
+    pub const ACTION: &str = "repository.merge";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "merge_observation";
+
     /// Over `forge`.
     #[must_use]
     pub fn new(forge: Rc<dyn Forge>) -> Self {
@@ -1319,11 +1497,11 @@ impl Validator for PrMerged {
     }
 
     fn action(&self) -> &str {
-        "repository.merge"
+        Self::ACTION
     }
 
     fn kind(&self) -> &str {
-        "merge_observation"
+        Self::KIND
     }
 
     fn subject(&self) -> &str {
@@ -1576,5 +1754,237 @@ impl Validator for PrMerged {
             },
             false,
         ))
+    }
+}
+
+/// A built-in validator: its type's name, the action it performs and the evidence kind it
+/// writes, each read from the type's own `ACTION` and `KIND`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltIn {
+    /// The type's name, as `impl Validator for` names it.
+    pub validator: &'static str,
+    /// The action it performs.
+    pub action: &'static str,
+    /// The evidence kind it writes.
+    pub kind: &'static str,
+}
+
+/// takt's built-in validators, whether or not a run has them configured. An action one of them
+/// performs is the run loop's to take, never the harness's, and a kind one of them writes is an
+/// observation, never a choice the step choice records (`crate::run`): a protocol in which an
+/// action no built-in validator performs may produce one with `effect: read` is refused, and so
+/// is one where an outcome or an obligation holds on choice records alone.
+pub const BUILT_IN: [BuiltIn; 6] = [
+    BuiltIn {
+        validator: "TestsRun",
+        action: TestsRun::ACTION,
+        kind: TestsRun::KIND,
+    },
+    BuiltIn {
+        validator: "GateRun",
+        action: GateRun::ACTION,
+        kind: GateRun::KIND,
+    },
+    BuiltIn {
+        validator: "PrOpen",
+        action: PrOpen::ACTION,
+        kind: PrOpen::KIND,
+    },
+    BuiltIn {
+        validator: "CiRead",
+        action: CiRead::ACTION,
+        kind: CiRead::KIND,
+    },
+    BuiltIn {
+        validator: "PrMerged",
+        action: PrMerged::ACTION,
+        kind: PrMerged::KIND,
+    },
+    BuiltIn {
+        validator: "ChangeRead",
+        action: ChangeRead::ACTION,
+        kind: ChangeRead::KIND,
+    },
+];
+
+/// Whether a built-in validator performs `action`.
+#[must_use]
+pub fn is_built_in_action(action: &str) -> bool {
+    BUILT_IN.iter().any(|built_in| built_in.action == action)
+}
+
+/// Whether a built-in validator writes `kind`.
+#[must_use]
+pub fn is_built_in_kind(kind: &str) -> bool {
+    BUILT_IN.iter().any(|built_in| built_in.kind == kind)
+}
+
+/// `change.read`: observes whether the implementation revision's tree differs from the case's
+/// base outside `.engineering/` (the planning store and the cases, which takt's own take,
+/// approval and records change), by content, not by its commits or their messages, and writes
+/// one `change_record`: `ahead` when merging the revision into the tip, now, of the base branch
+/// `branch.yaml` names (`git merge-tree`, nothing checked out) would change that tip's tree
+/// outside `.engineering/`, `none` when it would not: the same content landed on the base by
+/// another commit, with or without more beside it, is no change to publish; a merge that
+/// conflicts at any path outside `.engineering/` is `ahead`, whatever tree git writes for it,
+/// and the summary names the conflicted paths. When the base branch is not there, the revision's tree is
+/// compared with the commit pinned when the case opened instead; a case with neither writes no
+/// record. It reads git only, with no code from configuration: nothing is run from the tree and
+/// nothing leaves the machine, so it compares with the local base branch as it stands, and a
+/// forge's base that moved without a fetch is not seen.
+#[derive(Debug, Clone, Default)]
+pub struct ChangeRead;
+
+impl ChangeRead {
+    /// The action it performs.
+    pub const ACTION: &str = "change.read";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "change_record";
+}
+
+impl Validator for ChangeRead {
+    fn name(&self) -> &str {
+        "takt.change-read"
+    }
+
+    fn action(&self) -> &str {
+        Self::ACTION
+    }
+
+    fn kind(&self) -> &str {
+        Self::KIND
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        let dir = current(tree)?;
+        let pinned = base_revision(tree, &dir)?;
+        let tip = Branch::read(&dir)?.base.and_then(|name| {
+            crate::git::run(
+                tree,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "--end-of-options",
+                    &format!("refs/heads/{name}^{{commit}}"),
+                ],
+            )
+            .ok()
+            .filter(|tip| !tip.is_empty())
+            .map(|tip| (name, tip))
+        });
+        let (differs, summary) = if let Some((name, tip)) = tip {
+            // A merge that conflicts at any path outside `.engineering/` is `ahead`, by the paths
+            // merge-tree names: the tree it writes may keep the base's side (a file the case
+            // deleted that the base changed, a binary file both changed), and there is a change
+            // to publish all the same. A conflict only inside `.engineering/` is no change
+            // outside it; the summary names the conflicted paths either way.
+            let merged = crate::git::merged_tree(tree, &tip, revision)?;
+            let outside: Vec<&str> = merged
+                .conflicted
+                .iter()
+                .map(String::as_str)
+                .filter(|path| *path != ".engineering" && !path.starts_with(".engineering/"))
+                .collect();
+            let head = format!(
+                "merging {} into {name} at {}, its tip now,",
+                short(revision),
+                short(&tip)
+            );
+            if outside.is_empty() {
+                let differs =
+                    crate::git::trees_differ_outside(tree, &tip, &merged.tree, ".engineering")?;
+                let conflicts = if merged.conflicted.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " conflicts only inside .engineering/ at {} and",
+                        merged.conflicted.join(", ")
+                    )
+                };
+                (
+                    differs,
+                    format!(
+                        "{head}{conflicts} {} its tree outside .engineering/",
+                        if differs {
+                            "changes"
+                        } else {
+                            "leaves as it is"
+                        }
+                    ),
+                )
+            } else {
+                (
+                    true,
+                    format!(
+                        "{head} conflicts outside .engineering/ at {}, a change to publish",
+                        outside.join(", ")
+                    ),
+                )
+            }
+        } else if let Some((shown, base)) = pinned {
+            let differs = crate::git::trees_differ_outside(tree, &base, revision, ".engineering")?;
+            (
+                differs,
+                format!(
+                    "the base branch is not there to merge into; the tree of {} {} the tree of {shown} outside .engineering/",
+                    short(revision),
+                    if differs { "differs from" } else { "is" }
+                ),
+            )
+        } else {
+            return Ok(Observation {
+                summary: "the case records no base; nothing to compare, the claim stays unknown"
+                    .to_owned(),
+                records: Vec::new(),
+                artifact: None,
+            });
+        };
+        let result = if differs { "ahead" } else { "none" };
+        Ok(Observation {
+            summary: format!("{summary}: {result}"),
+            records: vec![Record::new(
+                format!("change-record-{seq}"),
+                self.kind(),
+                Some(result.to_owned()),
+                self.subject(),
+                revision,
+                self.name(),
+            )],
+            artifact: None,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn observed() -> Result<Observation> {
+        Ok(Observation {
+            summary: "observed".to_owned(),
+            records: Vec::new(),
+            artifact: None,
+        })
+    }
+
+    /// An observation that returns at the deadline it was given, the run's own, records
+    /// nothing, whatever it observed; one before it, or without one, is kept.
+    #[test]
+    fn an_observation_returning_at_the_deadline_is_not_recorded() {
+        let now = std::time::Instant::now();
+        let ended = ended_by(Some(now), "tests.run", observed());
+        let error = format!(
+            "{:#}",
+            ended.expect_err("an observation at the deadline ends")
+        );
+        assert!(error.contains("run's end"), "{error}");
+        let later = now + std::time::Duration::from_secs(60);
+        assert!(ended_by(Some(later), "tests.run", observed()).is_ok());
+        assert!(ended_by(None, "tests.run", observed()).is_ok());
     }
 }
