@@ -193,6 +193,11 @@ fn turn(
         ),
     )
     .expect("case.yaml");
+    fs::write(
+        dir.join("protocol.yaml"),
+        "format: protocol/1\nprotocol:\n  id: self.improvement\n  revision: 1\n",
+    )
+    .expect("protocol.yaml");
     if let Some(finding) = finding {
         fs::write(dir.join("story.yaml"), format!("id: story:{finding}\n")).expect("story.yaml");
     }

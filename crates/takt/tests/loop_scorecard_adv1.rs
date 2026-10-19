@@ -124,6 +124,11 @@ fn turn(tree: &Path, id: &str, decisions: &[At<'_>]) -> PathBuf {
         ),
     )
     .expect("case.yaml");
+    fs::write(
+        dir.join("protocol.yaml"),
+        "format: protocol/1\nprotocol:\n  id: self.improvement\n  revision: 1\n",
+    )
+    .expect("protocol.yaml");
     fs::write(dir.join("story.yaml"), format!("id: story:{id}\n")).expect("story.yaml");
     for (n, decision) in decisions.iter().enumerate() {
         let claims: serde_json::Map<String, serde_json::Value> = CLAIMS

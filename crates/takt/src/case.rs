@@ -79,7 +79,8 @@ fn opening_base(tree: &Path) -> Result<(Option<String>, Option<String>, Option<S
 /// lower-case hexadecimal digits) of a commit `tree` holds, on the base branch the case opens
 /// from, its metric definitions readable with every object on the way checked. A missing
 /// value, or any other (a short id, a name, a tree's id, an id the repository does not hold, a
-/// side branch's or an unreachable commit, a baseline whose objects do not hash to their ids),
+/// side branch's or an unreachable commit, a baseline whose objects do not hash to their ids,
+/// one whose definitions are absent or do not read),
 /// is refused, naming why, before anything is written. Until promotions are recorded the
 /// operator gives it; then the latest promotion's revision.
 pub fn loop_baseline(tree: &Path, value: Option<&str>) -> Result<String> {
@@ -97,16 +98,14 @@ pub fn loop_baseline(tree: &Path, value: Option<&str>) -> Result<String> {
             "--input {LOOP_BASELINE}={value}: a loop case's baseline is a full commit id, 40 or 64 lower-case hexadecimal digits; nothing was written"
         );
     }
-    let resolved = crate::git::run(
-        tree,
-        &[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("{value}^{{commit}}"),
-        ],
-    );
-    if resolved.as_deref().ok() != Some(value) {
+    // Every commit is read through one checked history: each against its id, capped, never
+    // parsed by git first.
+    let mut history = crate::loop_scorecard::History::open(tree, None)
+        .with_context(|| format!("--input {LOOP_BASELINE}={value}; nothing was written"))?;
+    let resolved = history
+        .resolve(value)
+        .with_context(|| format!("--input {LOOP_BASELINE}={value}; nothing was written"))?;
+    if resolved.as_deref() != Some(value) {
         bail!(
             "--input {LOOP_BASELINE}={value}: no commit of {} has that id; nothing was written",
             tree.display()
@@ -126,23 +125,44 @@ pub fn loop_baseline(tree: &Path, value: Option<&str>) -> Result<String> {
             "rev-parse",
             "--verify",
             "--quiet",
-            &format!("refs/heads/{base}^{{commit}}"),
+            &format!("refs/heads/{base}"),
         ],
     )
     .with_context(|| format!("--input {LOOP_BASELINE}={value}: the base branch {base}"))?;
-    if !crate::loop_scorecard::verified_descends(tree, value, &tip)
-        .with_context(|| format!("--input {LOOP_BASELINE}={value}; nothing was written"))?
-    {
+    let on_base = history
+        .descends(value, &tip)
+        .with_context(|| format!("--input {LOOP_BASELINE}={value}; nothing was written"))?;
+    if on_base == crate::loop_scorecard::Ancestry::Unknown {
+        bail!(
+            "--input {LOOP_BASELINE}={value}: the shallow history of {base} ends before it could say whether the commit is on it; nothing was written"
+        );
+    }
+    if on_base == crate::loop_scorecard::Ancestry::No {
         bail!(
             "--input {LOOP_BASELINE}={value}: the commit is not on {base}, the branch the case opens from; nothing was written"
         );
     }
     // Its metric definitions are read, every object on the way checked, before anything is
-    // written: one planted under another's id is refused here, naming it.
-    crate::loop_scorecard::Definitions::at(tree, value).with_context(|| {
+    // written: one planted under another's id is refused here, naming it, and so are
+    // definitions that are absent or do not read, which would open a case that never records.
+    let found = crate::loop_scorecard::Definitions::at(tree, value).with_context(|| {
         format!("--input {LOOP_BASELINE}={value}: its metric definitions; nothing was written")
     })?;
-    Ok(value.to_owned())
+    match found {
+        crate::loop_scorecard::Found::Definitions(_) => Ok(value.to_owned()),
+        crate::loop_scorecard::Found::Absent => bail!(
+            "--input {LOOP_BASELINE}={value}: the commit holds no {}; a loop case could record nothing; nothing was written",
+            crate::loop_scorecard::DEFINITIONS
+        ),
+        crate::loop_scorecard::Found::Malformed(why) => bail!(
+            "--input {LOOP_BASELINE}={value}: its {} do not read: {why}; nothing was written",
+            crate::loop_scorecard::DEFINITIONS
+        ),
+        crate::loop_scorecard::Found::NoCommit => bail!(
+            "--input {LOOP_BASELINE}={value}: no commit of {} has that id; nothing was written",
+            tree.display()
+        ),
+    }
 }
 
 /// Whether `path`, relative to the tree, is the cases directory or lies under it: what the

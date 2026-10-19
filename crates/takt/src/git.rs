@@ -118,6 +118,10 @@ fn command(tree: &Path, args: &[&str]) -> Result<Command> {
     // A replace ref (`refs/replace/<object>`) would make every read of an object return
     // another's content: no git takt runs honours one.
     command.env("GIT_NO_REPLACE_OBJECTS", "1");
+    // Nor does one fetch an object a partial clone lacks from its promisor remote: that fetch
+    // would run the repository's own `remote.<name>.uploadpack` through a shell, and outlive the
+    // git that started it. An object not in the repository is missing.
+    command.env("GIT_NO_LAZY_FETCH", "1");
     // Nor a commit-graph, a cache of the history a step can forge (a parent re-pointed, its
     // checksum fixed): every ancestry and history takt reads comes from the commits themselves.
     command
@@ -170,6 +174,64 @@ pub fn verified_object(tree: &Path, kind: &str, id: &str) -> Result<Vec<u8>> {
     }
 }
 
+/// What a commit's header says, read by git's own rule ([`parse_commit`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitHeader {
+    /// Its tree.
+    pub tree: String,
+    /// Its parents, in order.
+    pub parents: Vec<String>,
+    /// Its committer time, in seconds since the epoch; none when the header names none that
+    /// reads.
+    pub committer_time: Option<i64>,
+}
+
+/// The header of the commit `id` from its `bytes`, by git's rule: the first line is
+/// `tree <id>`, and the parents are the `parent <id>` lines directly after it, each line exact
+/// (no carriage return stripped); a `parent` line further down the header is no parent, as git
+/// takes none. A first line that is no tree, or a `parent` line there that is no object id of
+/// `hex` digits, is an error naming the commit.
+pub fn parse_commit(id: &str, bytes: &[u8], hex: usize) -> Result<CommitHeader> {
+    let header_end = bytes
+        .windows(2)
+        .position(|pair| pair == b"\n\n")
+        .unwrap_or(bytes.len());
+    let mut lines = bytes[..header_end].split(|b| *b == b'\n').peekable();
+    let is_id = |text: &[u8]| {
+        text.len() == hex
+            && text
+                .iter()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
+    };
+    let tree = lines
+        .next()
+        .and_then(|line| line.strip_prefix(b"tree "))
+        .filter(|tree| is_id(tree))
+        .ok_or_else(|| anyhow!("the commit {id} does not begin with its tree"))?;
+    let tree = String::from_utf8_lossy(tree).into_owned();
+    let mut parents = Vec::new();
+    while let Some(parent) = lines.peek().and_then(|line| line.strip_prefix(b"parent ")) {
+        if !is_id(parent) {
+            bail!("the commit {id} names a parent that is no object id");
+        }
+        parents.push(String::from_utf8_lossy(parent).into_owned());
+        lines.next();
+    }
+    let committer_time = lines
+        .find_map(|line| line.strip_prefix(b"committer "))
+        .and_then(|line| {
+            let text = String::from_utf8_lossy(line);
+            let mut words = text.rsplit(' ');
+            let _zone = words.next()?;
+            words.next()?.parse::<i64>().ok()
+        });
+    Ok(CommitHeader {
+        tree,
+        parents,
+        committer_time,
+    })
+}
+
 /// The repository's object format, from its `extensions.objectFormat`: `sha1` or `sha256`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectFormat {
@@ -190,17 +252,20 @@ impl ObjectFormat {
     }
 
     /// The id of an object of `kind` holding `bytes`: the hash of `<kind> <len>\0<bytes>`, in
-    /// lower-case hexadecimal.
-    #[must_use]
-    pub fn id(self, kind: &str, bytes: &[u8]) -> String {
+    /// lower-case hexadecimal. SHA-1 is computed with collision detection (SHA-1DC, as git
+    /// computes it): bytes made to collide are an error, never an id.
+    pub fn id(self, kind: &str, bytes: &[u8]) -> Result<String> {
         use sha2::Digest as _;
         let header = format!("{kind} {}\0", bytes.len());
         let digest: Vec<u8> = match self {
             Self::Sha1 => {
-                let mut hasher = sha1::Sha1::new();
+                let mut hasher = sha1_checked::Sha1::new();
                 hasher.update(header.as_bytes());
                 hasher.update(bytes);
-                hasher.finalize().to_vec()
+                match hasher.try_finalize() {
+                    sha1_checked::CollisionResult::Ok(hash) => hash.to_vec(),
+                    _ => bail!("the {kind}'s bytes are made to collide under SHA-1"),
+                }
             }
             Self::Sha256 => {
                 let mut hasher = sha2::Sha256::new();
@@ -209,7 +274,7 @@ impl ObjectFormat {
                 hasher.finalize().to_vec()
             }
         };
-        digest.iter().map(|byte| format!("{byte:02x}")).collect()
+        Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
     }
 }
 
@@ -285,11 +350,11 @@ impl Watchdog {
         }
     }
 
-    /// Arms the deadline of a read beginning now.
-    fn arm(&self) {
+    /// Arms the deadline of a read beginning now: `until`.
+    fn arm(&self, until: std::time::Instant) {
         let (lock, wake) = &*self.watch;
         if let Ok(mut watch) = lock.lock() {
-            watch.deadline = Some(std::time::Instant::now() + READ_DEADLINE);
+            watch.deadline = Some(until);
             watch.fired = false;
         }
         wake.notify_one();
@@ -320,12 +385,15 @@ impl Drop for Watchdog {
     }
 }
 
-/// Kills the process `pid`.
+/// Kills the reader's `git cat-file`, `pid`. It starts no process of its own: no git takt runs
+/// fetches lazily (`GIT_NO_LAZY_FETCH`), so nothing else is left to kill. It stays in takt's
+/// own process group: one of its own would be taken by the forge's sweep of what a child left
+/// behind ([`crate::forge::sweep_left`]) for a leftover and killed under a live reader.
 fn kill(pid: u32) {
     #[cfg(unix)]
     if let Ok(pid) = libc::pid_t::try_from(pid) {
         // SAFETY: `kill` takes a process id and a signal; the process is the reader's own
-        // child, not yet waited for.
+        // child, not yet waited for, so the id names no other.
         unsafe {
             libc::kill(pid, libc::SIGKILL);
         }
@@ -341,20 +409,29 @@ fn kill(pid: u32) {
 /// other than commit, tree or blob, or one git reports larger than its cap ([`MAX_BLOB`],
 /// [`MAX_COMMIT_OR_TREE`]), is refused before any of it is read, and a read that takes longer
 /// than [`READ_DEADLINE`] (a header that overstates the body, a git that stalls) kills the
-/// process and is an error naming the object. After any error the reader reads nothing more.
-/// One process reads any number of objects; it is killed and waited for when the reader is
-/// dropped.
+/// process and is an error naming the object; a reader
+/// opened until an instant ([`Self::open_until`], the run's deadline) ends each read at the
+/// earlier of the two. After any error the reader reads nothing more. One process reads any
+/// number of objects; it is killed and waited for when the reader is dropped.
 pub struct ObjectReader {
     child: std::process::Child,
     stdin: Option<std::process::ChildStdin>,
     stdout: std::io::BufReader<std::process::ChildStdout>,
     format: ObjectFormat,
     watchdog: Option<Watchdog>,
+    until: Option<std::time::Instant>,
 }
 
 impl ObjectReader {
-    /// A reader of the objects of the repository at `tree`.
+    /// A reader of the objects of the repository at `tree`, each read held to
+    /// [`READ_DEADLINE`].
     pub fn open(tree: &Path) -> Result<Self> {
+        Self::open_until(tree, None)
+    }
+
+    /// A reader as [`Self::open`] opens one, each read also ending by `until` (the run's
+    /// deadline) when that comes first.
+    pub fn open_until(tree: &Path, until: Option<std::time::Instant>) -> Result<Self> {
         let format = ObjectFormat::of(tree)?;
         let mut child = command(tree, &["cat-file", "--batch"])?
             .stdin(Stdio::piped())
@@ -375,6 +452,7 @@ impl ObjectReader {
             stdout,
             format,
             watchdog,
+            until,
         })
     }
 
@@ -391,16 +469,24 @@ impl ObjectReader {
         {
             bail!("{id} is no full object id");
         }
+        let own = std::time::Instant::now() + READ_DEADLINE;
+        let until = self.until.map_or(own, |until| until.min(own));
         if let Some(watchdog) = &self.watchdog {
-            watchdog.arm();
+            watchdog.arm(until);
         }
         let read = self.read_bounded(id);
         let fired = self.watchdog.as_ref().is_some_and(Watchdog::disarm);
         let read = if fired {
-            Err(anyhow!(
-                "reading the object {id} took longer than {} s; git cat-file was stopped and nothing was read from it",
-                READ_DEADLINE.as_secs()
-            ))
+            Err(if until < own {
+                anyhow!(
+                    "reading the object {id} did not end by the run's deadline; git cat-file was stopped and nothing was read from it"
+                )
+            } else {
+                anyhow!(
+                    "reading the object {id} took longer than {} s; git cat-file was stopped and nothing was read from it",
+                    READ_DEADLINE.as_secs()
+                )
+            })
         } else {
             read
         };
@@ -454,7 +540,10 @@ impl ObjectReader {
                     .read_exact(&mut bytes)
                     .with_context(|| format!("read the {kind} {id}"))?;
                 bytes.truncate(with_newline - 1);
-                let computed = self.format.id(kind, &bytes);
+                let computed = self
+                    .format
+                    .id(kind, &bytes)
+                    .with_context(|| format!("the {kind} {id}"))?;
                 if computed != id {
                     bail!(
                         "the {kind} {id} reads as bytes whose id is {computed}: the object store holds other bytes under its id; nothing was read from it"
@@ -473,6 +562,7 @@ impl Drop for ObjectReader {
         // and waited for, so no process is left, even one blocked writing a body nobody reads.
         self.watchdog = None;
         drop(self.stdin.take());
+        kill(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

@@ -166,6 +166,11 @@ fn turn(tree: &Path, id: &str, finding: Option<&str>, decisions: &[At<'_>], toke
         ),
     )
     .expect("case.yaml");
+    fs::write(
+        dir.join("protocol.yaml"),
+        "format: protocol/1\nprotocol:\n  id: self.improvement\n  revision: 1\n",
+    )
+    .expect("protocol.yaml");
     if let Some(finding) = finding {
         fs::write(dir.join("story.yaml"), format!("id: story:{finding}\n")).expect("story.yaml");
     }
@@ -1839,4 +1844,345 @@ fn an_object_whose_header_gives_the_largest_size_is_refused_naming_it() {
     let shown = format!("{error:#}");
     assert!(shown.contains(&blob), "{shown}");
     assert!(shown.contains(&u64::MAX.to_string()), "{shown}");
+}
+
+/// The planner's low finding: a loop validator is held to the run's deadline as well as its own
+/// 10 s per read. The candidate's definitions blob is planted with a header that overstates its
+/// size, so reading it blocks; with the run ending 1 s from now, `loop.definition.check` ends
+/// with an error naming the blob within 5 s, not at the 10 s read deadline.
+#[test]
+fn a_loop_validator_is_held_to_the_runs_deadline() {
+    let (tree, base) = scratch("run-deadline", DEFINED);
+    let candidate = commit(
+        &tree,
+        &DEFINED.replace("at_least: 0.75", "at_least: 0.8"),
+        "candidate",
+    );
+    let _case = loop_case(&tree, "loop-run-deadline", &base, &candidate);
+    let blob = git(&tree, &["rev-parse", &format!("{candidate}:{DEFINITIONS}")]);
+    let path = tree.join(".git/objects").join(&blob[..2]).join(&blob[2..]);
+    fs::remove_file(&path).expect("the object is removed");
+    let mut raw = b"blob 100000\0".to_vec();
+    raw.extend_from_slice(DEFINED.as_bytes());
+    fs::write(&path, zlib_stored(&raw)).expect("the object is written");
+    let started = std::time::Instant::now();
+    let observed = LoopDefinitionCheck.observe_within(
+        &tree,
+        &candidate,
+        1,
+        Some(started + std::time::Duration::from_secs(1)),
+    );
+    let took = started.elapsed();
+    assert!(
+        took < std::time::Duration::from_secs(5),
+        "the observation ended by the run's deadline: it took {took:?}"
+    );
+    let error = observed.expect_err("the read past the run's deadline is an error");
+    assert!(format!("{error:#}").contains(&blob), "{error:#}");
+}
+
+/// The second review's planter of a commit bomb: writes, under a commit's id, a loose commit
+/// whose body is the commit's bytes and `n` bytes more, compressed.
+const PLANT_BOMB: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/plant_commit_bomb.py"
+);
+
+/// A repository whose `HEAD` filed the finding `turn-a` (its store file committed at 09:00)
+/// and one recorded turn on it: the tree, the commit that added the store file, and `HEAD`.
+fn filed_turn(name: &str) -> (Scratch, String, String) {
+    let (tree, _) = scratch(name, DEFINED);
+    closed(
+        &tree,
+        "turn-a",
+        "2026-10-18T09:00:00Z",
+        "2026-10-18T10:00:00Z",
+        "accepted",
+        None,
+    );
+    // `closed` files the finding: `HEAD` is the commit that added its store file.
+    let head = git(&tree, &["rev-parse", "HEAD"]);
+    let filing = head.clone();
+    (tree, filing, head)
+}
+
+/// The second review's first high finding: the commit that added the finding's store file is
+/// rewritten under its id with another committer time. Plain `git log` reads the new time; the
+/// filing is read through the checked history and refused as a hash mismatch, naming the
+/// commit.
+#[test]
+fn a_filing_commit_rewritten_under_its_id_is_refused() {
+    let (tree, filing, head) = filed_turn("forged-filing");
+    let real = git(&tree, &["cat-file", "commit", &filing]);
+    let forged: String = real
+        .lines()
+        .map(|line| {
+            if line.starts_with("committer ") {
+                let mut words: Vec<&str> = line.split(' ').collect();
+                let at = words.len() - 2;
+                words[at] = "1791000000";
+                words.join(" ")
+            } else {
+                line.to_owned()
+            }
+        })
+        .map(|line| format!("{line}\n"))
+        .collect();
+    plant_object(&tree, "commit", &filing, forged.as_bytes());
+    let error =
+        LoopScorecard::read_at(&tree, Some(&head)).expect_err("the forged commit is refused");
+    let shown = format!("{error:#}");
+    assert!(shown.contains(&filing), "{shown}");
+    assert!(shown.contains("hash") || shown.contains("id is"), "{shown}");
+}
+
+/// The second review's second high finding: a small loose commit that inflates to 64 MiB,
+/// planted under the filing commit's id. It is refused at the commit cap, naming the commit and
+/// the cap, before any of it is read.
+#[test]
+fn a_commit_bomb_is_refused_at_the_cap() {
+    let (tree, filing, head) = filed_turn("commit-bomb");
+    let content = tree.join(".git/bomb-content");
+    fs::write(&content, git(&tree, &["cat-file", "commit", &filing])).expect("the content");
+    let planted = Command::new("python3")
+        .arg("-I")
+        .arg(PLANT_BOMB)
+        .arg(tree.join(".git"))
+        .arg(&filing)
+        .arg(&content)
+        .arg((64u64 << 20).to_string())
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("python3 runs");
+    assert!(planted.success(), "the bomb is planted");
+    let started = std::time::Instant::now();
+    let error = LoopScorecard::read_at(&tree, Some(&head)).expect_err("the bomb is refused");
+    let shown = format!("{error:#}");
+    assert!(shown.contains(&filing), "{shown}");
+    assert!(
+        shown.contains(&takt::git::MAX_COMMIT_OR_TREE.to_string()),
+        "the cap is named: {shown}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "refused before reading"
+    );
+}
+
+/// The second review's low finding on `parent` lines: git takes as parents only the `parent`
+/// lines right after the tree. A commit whose `parent` line comes after its author line names
+/// no parent, so the commit it points at is no ancestor.
+#[test]
+fn a_parent_line_after_another_header_names_no_parent() {
+    let (tree, root) = scratch("misplaced-parent", DEFINED);
+    let tree_id = git(&tree, &["rev-parse", &format!("{root}^{{tree}}")]);
+    let bytes = format!(
+        "tree {tree_id}\nauthor a <a@b> 1700000000 +0000\nparent {root}\ncommitter a <a@b> 1700000000 +0000\n\nmisplaced\n"
+    );
+    let mut hash = Command::new("git")
+        .args([
+            "hash-object",
+            "-t",
+            "commit",
+            "-w",
+            "--literally",
+            "--stdin",
+        ])
+        .current_dir(&*tree)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("git runs");
+    {
+        use std::io::Write as _;
+        hash.stdin
+            .take()
+            .expect("stdin")
+            .write_all(bytes.as_bytes())
+            .expect("the commit");
+    }
+    let output = hash.wait_with_output().expect("git ends");
+    assert!(output.status.success(), "the commit is written");
+    let misplaced = String::from_utf8(output.stdout)
+        .expect("utf-8")
+        .trim()
+        .to_owned();
+    assert!(
+        !takt::loop_scorecard::verified_descends(&tree, &root, &misplaced).expect("reads"),
+        "a parent line after the author line is no parent"
+    );
+}
+
+/// The second review's YAML bomb (yaml_bomb.py): a 128 KiB anchored string and a `previous`
+/// list of aliases to it. Read, the aliases would expand without bound (yaml_bomb.py's 30,000
+/// to about 3.7 GiB; this case keeps 300 so a red run cannot exhaust memory). Definitions
+/// holding an anchor or an alias are refused before they are parsed, naming the line.
+#[test]
+fn definitions_holding_yaml_aliases_are_refused_naming_the_line() {
+    let big = "a".repeat(128 * 1024);
+    let aliases = vec!["*p"; 300].join(", ");
+    let bomb = format!(
+        "format: takt-loop-metrics/1\nmetrics:\n  turns:\n    version: 1\n    definition: &s {big}\n    previous: [&p {{version: 2, definition: *s}}, {aliases}]\n"
+    );
+    let error = Definitions::parse(&bomb).expect_err("the anchors are refused");
+    let shown = format!("{error:#}");
+    assert!(shown.contains("line 5"), "{shown}");
+    Definitions::parse(DEFINED).expect("definitions without anchors read");
+}
+
+/// The second review's medium finding on the definition check: the figures come from code
+/// chosen by each metric's id and version, so a candidate could change a figure without
+/// touching the YAML. The code counts as part of the definitions: a candidate that changes it
+/// is `redefined`.
+#[test]
+fn a_candidate_that_changes_the_figures_code_is_redefined() {
+    let (tree, _) = scratch("figures-code", DEFINED);
+    let code = tree.join(takt::loop_scorecard::FIGURES_CODE);
+    fs::create_dir_all(code.parent().expect("a parent")).expect("the directory");
+    fs::write(&code, "// the figures as the baseline computes them\n").expect("the code");
+    let base = commit(&tree, DEFINED, "the baseline");
+    fs::write(&code, "// the accepted share computed otherwise\n").expect("the code");
+    let candidate = commit(&tree, DEFINED, "the candidate");
+    let _case = loop_case(&tree, "loop-figures-code", &base, &candidate);
+    let observation = LoopDefinitionCheck
+        .observe(&tree, &candidate, 1)
+        .expect("observes");
+    assert_eq!(
+        observation.records[0].result.as_deref(),
+        Some("redefined"),
+        "{}",
+        observation.summary
+    );
+}
+
+/// The second review's medium finding on the walk: in a `--depth 2` clone of a merge, the
+/// mainline parent is found first (first parent first), and an ancestor beyond the shallow
+/// boundary is unknown, not an error.
+#[test]
+fn a_shallow_clone_of_a_merge_walks_first_parents_and_answers_unknown_past_its_boundary() {
+    let (origin, _) = scratch("shallow-merge-origin", DEFINED);
+    for n in 1..=4 {
+        commit(&origin, DEFINED, &format!("c{n}"));
+    }
+    let early = git(&origin, &["rev-parse", "HEAD~3"]);
+    git(&origin, &["checkout", "-q", "-b", "side", "HEAD~3"]);
+    commit(&origin, DEFINED, "s1");
+    commit(&origin, DEFINED, "s2");
+    git(&origin, &["checkout", "-q", "main"]);
+    let mainline = commit(&origin, DEFINED, "b");
+    git(&origin, &["merge", "-q", "--no-ff", "-m", "m", "side"]);
+    let merge = git(&origin, &["rev-parse", "HEAD"]);
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "loop-scorecard-{}-shallow-merge-clone",
+        std::process::id()
+    ));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("a stale clone is removed");
+    }
+    let url = format!("file://{}", origin.display());
+    git(
+        &origin,
+        &[
+            "clone",
+            "-q",
+            "--depth",
+            "2",
+            &url,
+            dir.to_str().expect("utf-8"),
+        ],
+    );
+    let clone = Scratch(dir);
+    assert!(clone.join(".git/shallow").is_file(), "the clone is shallow");
+    let mut history = takt::loop_scorecard::History::open(&clone, None).expect("opens");
+    assert_eq!(
+        history.descends(&mainline, &merge).expect("walks"),
+        takt::loop_scorecard::Ancestry::Yes,
+        "the mainline parent is an ancestor"
+    );
+    assert_eq!(
+        history
+            .descends(&early, &merge)
+            .expect("no error at the boundary"),
+        takt::loop_scorecard::Ancestry::Unknown,
+        "past the shallow boundary the answer is unknown"
+    );
+}
+
+/// The second review's low finding on the comparison: its before side is the rows the
+/// measurement retained, not today's records; a measured turn gone from the cases is refused,
+/// with nothing recorded.
+#[test]
+fn a_measured_turn_gone_from_the_cases_makes_the_comparison_record_nothing() {
+    let (tree, _) = scratch("measured-gone", DEFINED);
+    for id in ["before-a", "before-b", "before-c"] {
+        closed(
+            &tree,
+            id,
+            "2026-10-18T09:00:00Z",
+            "2026-10-18T09:00:00Z",
+            "declined",
+            None,
+        );
+    }
+    let base = git(&tree, &["rev-parse", "HEAD"]);
+    let candidate = commit(&tree, DEFINED, "the loop candidate");
+    let mut case = loop_case(&tree, "loop-measured-gone", &base, &candidate);
+    let measurement = LoopMeasure.observe(&tree, &base, 1).expect("measures");
+    let retained = measurement.artifact.expect("the measurement retained");
+    let snapshot: serde_json::Value = serde_json::from_slice(&retained.bytes).expect("json");
+    assert_eq!(
+        snapshot["rows"].as_array().map(Vec::len),
+        Some(3),
+        "the measurement retains its rows"
+    );
+    fs::create_dir_all(case.dir.join("artifacts")).expect("artifacts");
+    fs::write(
+        case.dir.join("artifacts").join(&retained.name),
+        &retained.bytes,
+    )
+    .expect("retained");
+    case.add_evidence(&measurement.records[0]).expect("written");
+    merged(&mut case, "2026-10-18T10:00:00Z");
+    for id in ["after-a", "after-b", "after-c"] {
+        after(&tree, id, "2026-10-18T11:00:00Z", "accepted");
+    }
+    fs::remove_dir_all(tree.join(".engineering/cases/before-c")).expect("a measured turn goes");
+    let observation = LoopCompare.observe(&tree, &candidate, 2).expect("observes");
+    assert!(observation.records.is_empty(), "{}", observation.summary);
+    assert!(
+        observation.summary.contains("before-c"),
+        "the missing turn is named: {}",
+        observation.summary
+    );
+}
+
+/// The second review's low finding on protocols: a turn is a case on `self.improvement` at
+/// major 1, as its own `protocol.yaml` names it; one on another major is no row.
+#[test]
+fn a_case_on_another_major_of_the_protocol_is_no_turn() {
+    let (tree, _) = scratch("other-major", DEFINED);
+    closed(
+        &tree,
+        "turn-a",
+        "2026-10-18T09:00:00Z",
+        "2026-10-18T10:00:00Z",
+        "accepted",
+        None,
+    );
+    closed(
+        &tree,
+        "turn-b",
+        "2026-10-18T09:00:00Z",
+        "2026-10-18T10:00:00Z",
+        "accepted",
+        None,
+    );
+    fs::write(
+        tree.join(".engineering/cases/turn-b/protocol.yaml"),
+        "format: protocol/1\nprotocol:\n  id: self.improvement\n  revision: 2\n",
+    )
+    .expect("protocol.yaml");
+    let card = LoopScorecard::read(&tree).expect("reads");
+    let turns: Vec<&str> = card.rows.iter().map(|row| row.turn.as_str()).collect();
+    assert_eq!(turns, ["turn-a"]);
 }

@@ -92,6 +92,11 @@ fn repository(name: &str) -> (Scratch, String) {
         )
         .expect("case.yaml");
         fs::write(
+            case.join("protocol.yaml"),
+            "format: protocol/1\nprotocol:\n  id: self.improvement\n  revision: 1\n",
+        )
+        .expect("protocol.yaml");
+        fs::write(
             case.join("decisions/0000.json"),
             format!(
                 r#"{{"claims":{{"finding.cited":{{"value":"true"}}}},"outcomes":{{"{verdict}":{{"status":"legitimate"}}}},"explanation":{{"computed_from":{{"at":"2026-10-18T10:00:00Z"}}}}}}"#
@@ -581,4 +586,166 @@ fn definitions_above_their_cap_are_refused_naming_the_size() {
         big.len()
     );
     nothing_written(&repo, "big definitions");
+}
+
+/// A partial clone (`--filter=blob:none`) of a repository whose second commit holds [`DEFINED`]
+/// and whose third changes it, so the second commit's definitions blob is missing from the
+/// clone: the clone, its second commit (the baseline) and that blob's id.
+fn partial_clone(name: &str) -> (Scratch, PathBuf, String, String) {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("loop-case-cli-{}-{name}", std::process::id()));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
+    }
+    let src = dir.join("src");
+    fs::create_dir_all(src.join("protocols/loop-improvement")).expect("the directory");
+    git(&src, &["init", "-q", "-b", "main"]);
+    fs::write(src.join("README.md"), "a\n").expect("a file");
+    git(&src, &["add", "-A"]);
+    git(&src, &["commit", "-q", "-m", "c0"]);
+    let metrics = src.join("protocols/loop-improvement/metrics.yaml");
+    fs::write(&metrics, DEFINED).expect("the definitions");
+    git(&src, &["add", "-A"]);
+    git(&src, &["commit", "-q", "-m", "c1"]);
+    fs::write(&metrics, DEFINED.replace("0.75", "0.8")).expect("the definitions");
+    git(&src, &["commit", "-q", "-am", "c2"]);
+    git(&src, &["config", "uploadpack.allowFilter", "true"]);
+    git(&src, &["config", "uploadpack.allowAnySHA1InWant", "true"]);
+    let clone = dir.join("clone");
+    let url = format!("file://{}", src.display());
+    git(
+        &dir,
+        &[
+            "clone",
+            "-q",
+            "--filter=blob:none",
+            &url,
+            clone.to_str().expect("utf-8"),
+        ],
+    );
+    let baseline = git(&clone, &["rev-parse", "main~1"]);
+    let blob = git(
+        &clone,
+        &[
+            "rev-parse",
+            &format!("{baseline}:protocols/loop-improvement/metrics.yaml"),
+        ],
+    );
+    let missing = Command::new("git")
+        .args(["cat-file", "-e", &blob])
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .current_dir(&clone)
+        .status()
+        .expect("git runs");
+    assert!(
+        !missing.success(),
+        "the baseline's definitions blob is missing locally"
+    );
+    (Scratch(dir), clone, baseline, blob)
+}
+
+/// High 1 of the planner's review: in a partial clone whose promisor remote never answers, the
+/// baseline's definitions blob missing locally, reading it would start a lazy fetch that
+/// outlives the reader. No git takt runs fetches lazily: the run ends well within 30 s,
+/// refused, naming the blob, and leaves no fetch running.
+#[test]
+fn a_blob_missing_from_a_partial_clone_is_refused_without_fetching() {
+    let (_scratch, clone, baseline, blob) = partial_clone("partial-stalled");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let port = listener.local_addr().expect("an address").port();
+    std::thread::spawn(move || {
+        // Accepts and never answers: a remote that stalls.
+        let mut held = Vec::new();
+        for stream in listener.incoming() {
+            held.push(stream);
+        }
+    });
+    git(
+        &clone,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            &format!("http://127.0.0.1:{port}/x.git"),
+        ],
+    );
+    let bound = std::time::Duration::from_secs(30);
+    let (code, out, err, took) = run_bounded(&clone, &baseline, bound);
+    assert!(
+        took < bound,
+        "the run ended within {bound:?}: it took {took:?}\n{out}\n{err}"
+    );
+    assert_eq!(code, Some(1), "{out}\n{err}");
+    assert!(err.contains(&blob), "the blob is named: {err}");
+    assert!(
+        !clone.join(".engineering/cases/loop-1").exists(),
+        "no loop case was written"
+    );
+    let marker = format!("127.0.0.1:{port}");
+    for entry in fs::read_dir("/proc").expect("/proc") {
+        let Ok(entry) = entry else { continue };
+        if let Ok(cmdline) = fs::read(entry.path().join("cmdline")) {
+            let cmdline = String::from_utf8_lossy(&cmdline).replace('\0', " ");
+            assert!(!cmdline.contains(&marker), "left running: {cmdline}");
+        }
+    }
+}
+
+/// High 2 of the planner's review: the same lazy fetch would run the repository's own
+/// `remote.origin.uploadpack` through a shell. No git takt runs fetches lazily, so the command
+/// configured there never runs: its marker is not written, and the run is refused naming the
+/// blob.
+#[test]
+fn a_configured_upload_pack_never_runs_on_a_missing_blob() {
+    let (scratch, clone, baseline, blob) = partial_clone("partial-uploadpack");
+    let marker = scratch.join("MARKER");
+    git(
+        &clone,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            &format!("touch '{}'; git-upload-pack", marker.display()),
+        ],
+    );
+    let bound = std::time::Duration::from_secs(30);
+    let (code, out, err, took) = run_bounded(&clone, &baseline, bound);
+    assert!(
+        took < bound,
+        "the run ended within {bound:?}: it took {took:?}\n{out}\n{err}"
+    );
+    assert!(
+        !marker.exists(),
+        "the configured upload-pack ran: exit {code:?}\n{out}\n{err}"
+    );
+    assert_eq!(code, Some(1), "{out}\n{err}");
+    assert!(err.contains(&blob), "the blob is named: {err}");
+}
+
+/// The second review's low finding on the baseline: a baseline whose definitions are absent, or
+/// do not read, would open a case that never records. It is refused when the case would open,
+/// naming the reason, with nothing written.
+#[test]
+fn a_baseline_without_readable_definitions_is_refused_at_open() {
+    let (repo, _) = repository("no-definitions");
+    git(
+        &repo,
+        &["rm", "-q", "protocols/loop-improvement/metrics.yaml"],
+    );
+    git(&repo, &["commit", "-q", "-m", "no definitions"]);
+    let absent = git(&repo, &["rev-parse", "HEAD"]);
+    let (code, out, err) = run(&repo, Some(&absent));
+    assert_eq!(code, 1, "absent: {out}\n{err}");
+    assert!(err.contains("holds no"), "absent: {err}");
+    nothing_written(&repo, "absent definitions");
+
+    let metrics = repo.join("protocols/loop-improvement/metrics.yaml");
+    fs::create_dir_all(metrics.parent().expect("a parent")).expect("the directory");
+    fs::write(&metrics, "format: takt-loop-metrics/1\nmetrics: [\n").expect("the definitions");
+    git(&repo, &["add", "protocols/loop-improvement/metrics.yaml"]);
+    git(&repo, &["commit", "-q", "-m", "malformed definitions"]);
+    let malformed = git(&repo, &["rev-parse", "HEAD"]);
+    let (code, out, err) = run(&repo, Some(&malformed));
+    assert_eq!(code, 1, "malformed: {out}\n{err}");
+    assert!(err.contains("do not read"), "malformed: {err}");
+    nothing_written(&repo, "malformed definitions");
 }

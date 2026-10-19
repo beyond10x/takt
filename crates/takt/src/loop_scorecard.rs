@@ -29,6 +29,10 @@ use crate::validator::{Artifact, Observation, Validator};
 /// The metric definitions of the loop scorecard, a path of the repository, read at a revision.
 pub const DEFINITIONS: &str = "protocols/loop-improvement/metrics.yaml";
 
+/// The code that computes the figures each definition names, chosen by the metric's id and
+/// version: part of the definitions as far as `loop.definition.check` is concerned.
+pub const FIGURES_CODE: &str = "crates/takt/src/loop_scorecard.rs";
+
 /// The format of [`DEFINITIONS`].
 pub const DEFINITIONS_FORMAT: &str = "takt-loop-metrics/1";
 
@@ -38,11 +42,15 @@ pub const MEASUREMENT_FORMAT: &str = "takt-loop-measurement/1";
 /// The protocol of an improvement turn's case, as its `case.yaml` names it.
 pub const TURN_PROTOCOL: &str = "self.improvement";
 
+/// The major version of [`TURN_PROTOCOL`] a turn's case runs on, as its own `protocol.yaml`
+/// names it: a case of another major is no turn of this scorecard.
+pub const TURN_PROTOCOL_MAJOR: u64 = 1;
+
 /// The turns a measurement or a side of a comparison needs at least.
 pub const MIN_TURNS: usize = 3;
 
 /// One improvement turn's row.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoopScorecardRow {
     /// The turn: its case id.
     pub turn: String,
@@ -191,137 +199,350 @@ fn object_id(tree: &Path, revision: &str) -> Option<String> {
     crate::git::run(tree, &["rev-parse", "--verify", "--quiet", revision]).ok()
 }
 
-/// The parents a commit's bytes name, from its header.
-fn parents(commit: &[u8]) -> Vec<String> {
-    String::from_utf8_lossy(commit)
-        .lines()
-        .take_while(|line| !line.is_empty())
-        .filter_map(|line| line.strip_prefix("parent "))
-        .map(str::to_owned)
-        .collect()
+/// The most commits one walk of the history reads: a walk that would read more is refused,
+/// naming the cap, rather than reading a history without end.
+pub const MAX_WALK: usize = 100_000;
+
+/// A repository's history read through one checked reader ([`crate::git::ObjectReader`]):
+/// every commit, tree and blob checked against its id, capped and held to the reader's
+/// deadline, and every commit's header read by git's own rule ([`crate::git::parse_commit`]).
+/// Commits read once are kept, so one history serves every row of a validator's call. No
+/// `git log`, `merge-base`, `rev-list` or `cat-file -e` answers any part of what it says.
+pub struct History {
+    tree: std::path::PathBuf,
+    reader: crate::git::ObjectReader,
+    hex: usize,
+    commits: std::collections::HashMap<String, Option<crate::git::CommitHeader>>,
+    shallow: Option<std::collections::HashSet<String>>,
 }
 
-/// The bytes of the file at `path` in the commit `revision`, every object on the way read
-/// through one checked reader ([`crate::git::ObjectReader`]): the commit, each tree down the
-/// path and the blob, each one's id computed again from its bytes; none when the commit holds
-/// no file there. An object whose bytes do not hash to its id is an error naming it, so an
-/// object planted under another's id is never read as that one.
-pub fn verified_file(tree: &Path, revision: &str, path: &str) -> Result<Option<Vec<u8>>> {
-    let commit = object_id(tree, revision)
-        .ok_or_else(|| anyhow!("{revision} is no commit of {}", tree.display()))?;
-    let mut reader = crate::git::ObjectReader::open(tree)?;
-    let bytes = match reader.read(&commit)? {
-        Some((kind, bytes)) if kind == "commit" => bytes,
-        _ => bail!("{revision} is no commit of {}", tree.display()),
-    };
-    let text = String::from_utf8_lossy(&bytes);
-    let mut object = text
-        .lines()
-        .next()
-        .and_then(|line| line.strip_prefix("tree "))
-        .ok_or_else(|| anyhow!("the commit {commit} names no tree"))?
-        .to_owned();
-    let hash = object.len() / 2;
-    let parts: Vec<&str> = path.split('/').collect();
-    for (n, part) in parts.iter().enumerate() {
-        let entries = match reader.read(&object)? {
-            Some((kind, bytes)) if kind == "tree" => bytes,
-            _ => bail!("the tree {object} does not read as a tree"),
+/// What [`History::descends`] answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ancestry {
+    /// The revision descends from the ancestor, or is it.
+    Yes,
+    /// It does not, the whole history walked.
+    No,
+    /// The walk reached a commit the repository is shallow at without finding the ancestor:
+    /// the history that would say is not there.
+    Unknown,
+}
+
+impl History {
+    /// The history of the repository at `tree`, each read also ending by `until` (the run's
+    /// deadline) when that comes before its own 10 s.
+    pub fn open(tree: &Path, until: Option<std::time::Instant>) -> Result<Self> {
+        let hex = match crate::git::ObjectFormat::of(tree)? {
+            crate::git::ObjectFormat::Sha1 => 40,
+            crate::git::ObjectFormat::Sha256 => 64,
         };
-        let mut at = 0;
-        let mut found = None;
-        while at < entries.len() {
-            let space = entries[at..]
-                .iter()
-                .position(|b| *b == b' ')
-                .ok_or_else(|| anyhow!("the tree {object} does not read"))?;
-            let mode = &entries[at..at + space];
-            let nul = entries[at + space..]
-                .iter()
-                .position(|b| *b == 0)
-                .ok_or_else(|| anyhow!("the tree {object} does not read"))?;
-            let name = &entries[at + space + 1..at + space + nul];
-            let id_at = at + space + nul + 1;
-            let id = entries
-                .get(id_at..id_at + hash)
-                .ok_or_else(|| anyhow!("the tree {object} does not read"))?;
-            if name == part.as_bytes() {
-                let id: String = id.iter().map(|b| format!("{b:02x}")).collect();
-                found = Some((mode.to_vec(), id));
-                break;
-            }
-            at = id_at + hash;
+        Ok(Self {
+            tree: tree.to_path_buf(),
+            reader: crate::git::ObjectReader::open_until(tree, until)?,
+            hex,
+            commits: std::collections::HashMap::new(),
+            shallow: None,
+        })
+    }
+
+    /// The header of the commit `id` (a full object id); none when the repository holds no
+    /// such object, or it is no commit.
+    fn commit(&mut self, id: &str) -> Result<Option<crate::git::CommitHeader>> {
+        if let Some(known) = self.commits.get(id) {
+            return Ok(known.clone());
         }
-        let Some((mode, id)) = found else {
+        let header = match self.reader.read(id)? {
+            Some((kind, bytes)) if kind == "commit" => {
+                Some(crate::git::parse_commit(id, &bytes, self.hex)?)
+            }
+            _ => None,
+        };
+        self.commits.insert(id.to_owned(), header.clone());
+        Ok(header)
+    }
+
+    /// The full id of the commit `revision` names; none when it names no commit.
+    pub fn resolve(&mut self, revision: &str) -> Result<Option<String>> {
+        let Some(id) = object_id(&self.tree, revision) else {
             return Ok(None);
         };
-        let last = n + 1 == parts.len();
-        match (last, mode.as_slice()) {
-            (false, b"40000") => object = id,
-            (true, b"100644" | b"100755") => {
-                return match reader.read(&id)? {
-                    Some((kind, bytes)) if kind == "blob" => Ok(Some(bytes)),
-                    _ => bail!("the blob {id} does not read as a blob"),
-                };
+        Ok(self.commit(&id)?.map(|_| id))
+    }
+
+    /// The mode and the id of the entry at `path` under the tree `tree`; none when there is
+    /// none, or a part of the way is no tree.
+    fn entry(&mut self, tree: &str, path: &str) -> Result<Option<(Vec<u8>, String)>> {
+        let mut object = tree.to_owned();
+        let parts: Vec<&str> = path.split('/').collect();
+        for (n, part) in parts.iter().enumerate() {
+            let entries = match self.reader.read(&object)? {
+                Some((kind, bytes)) if kind == "tree" => bytes,
+                _ => bail!("the tree {object} does not read as a tree"),
+            };
+            let hash = self.hex / 2;
+            let mut at = 0;
+            let mut found = None;
+            while at < entries.len() {
+                let space = entries[at..]
+                    .iter()
+                    .position(|b| *b == b' ')
+                    .ok_or_else(|| anyhow!("the tree {object} does not read"))?;
+                let mode = &entries[at..at + space];
+                let nul = entries[at + space..]
+                    .iter()
+                    .position(|b| *b == 0)
+                    .ok_or_else(|| anyhow!("the tree {object} does not read"))?;
+                let name = &entries[at + space + 1..at + space + nul];
+                let id_at = at + space + nul + 1;
+                let id = entries
+                    .get(id_at..id_at + hash)
+                    .ok_or_else(|| anyhow!("the tree {object} does not read"))?;
+                if name == part.as_bytes() {
+                    let id: String = id.iter().map(|b| format!("{b:02x}")).collect();
+                    found = Some((mode.to_vec(), id));
+                    break;
+                }
+                at = id_at + hash;
             }
-            _ => return Ok(None),
+            let Some((mode, id)) = found else {
+                return Ok(None);
+            };
+            if n + 1 == parts.len() {
+                return Ok(Some((mode, id)));
+            }
+            if mode != b"40000" {
+                return Ok(None);
+            }
+            object = id;
         }
+        Ok(None)
     }
-    Ok(None)
-}
 
-/// Whether the commit `revision` descends from the commit `ancestor`, or is it, answered by
-/// walking the history from `revision` through the parents each commit's own bytes name, every
-/// commit read through one checked reader ([`crate::git::ObjectReader`]) and its id computed
-/// again from its bytes; neither `merge-base` nor `rev-list` answers any part of it. A commit
-/// seen once is not walked again, so a cycle a forged commit makes ends the walk. A commit on
-/// the way that cannot be read, or whose bytes hash to another id, is an error naming it, never
-/// `false`: a forged commit can neither add an ancestor nor hide one. `false` for a revision or
-/// an ancestor that is no commit of the repository.
-pub fn verified_descends(tree: &Path, ancestor: &str, revision: &str) -> Result<bool> {
-    let (Some(ancestor), Some(revision)) = (object_id(tree, ancestor), object_id(tree, revision))
-    else {
-        return Ok(false);
-    };
-    let mut reader = crate::git::ObjectReader::open(tree)?;
-    for start in [&ancestor, &revision] {
-        match reader.read(start)? {
-            Some((kind, _)) if kind == "commit" => {}
-            _ => return Ok(false),
-        }
+    /// The id of the file at `path` in the commit's tree `tree`; none when no file is there.
+    fn file_id(&mut self, tree: &str, path: &str) -> Result<Option<String>> {
+        Ok(self
+            .entry(tree, path)?
+            .filter(|(mode, _)| mode == b"100644" || mode == b"100755")
+            .map(|(_, id)| id))
     }
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut walk = vec![revision];
-    while let Some(commit) = walk.pop() {
-        if commit == ancestor {
-            return Ok(true);
-        }
-        if !seen.insert(commit.clone()) {
-            continue;
-        }
-        let bytes = match reader.read(&commit)? {
-            Some((kind, bytes)) if kind == "commit" => bytes,
-            Some((kind, _)) => bail!("{commit}, a parent on the way, is a {kind}, not a commit"),
-            None => bail!(
-                "the commit {commit} on the way is not in the repository; the history cannot be walked"
-            ),
+
+    /// The bytes of the file at `path` in the commit `revision`; none when the commit holds no
+    /// file there. A revision that names no commit is an error.
+    pub fn file(&mut self, revision: &str, path: &str) -> Result<Option<Vec<u8>>> {
+        let commit = self
+            .resolve(revision)?
+            .ok_or_else(|| anyhow!("{revision} is no commit of {}", self.tree.display()))?;
+        let header = self
+            .commit(&commit)?
+            .ok_or_else(|| anyhow!("{revision} is no commit of {}", self.tree.display()))?;
+        let Some(blob) = self.file_id(&header.tree, path)? else {
+            return Ok(None);
         };
-        walk.extend(parents(&bytes));
+        match self.reader.read(&blob)? {
+            Some((kind, bytes)) if kind == "blob" => Ok(Some(bytes)),
+            _ => bail!("the blob {blob} does not read as a blob"),
+        }
     }
-    Ok(false)
+
+    /// The commits the repository is shallow at, its `shallow` file: commits whose parents it
+    /// does not hold. Read once.
+    fn shallow(&mut self) -> Result<&std::collections::HashSet<String>> {
+        if self.shallow.is_none() {
+            let path = crate::git::run(&self.tree, &["rev-parse", "--git-path", "shallow"])?;
+            let path = self.tree.join(path);
+            let listed = match std::fs::read_to_string(&path) {
+                Ok(text) => text.lines().map(str::to_owned).collect(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    std::collections::HashSet::new()
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| format!("read {}", path.display()));
+                }
+            };
+            self.shallow = Some(listed);
+        }
+        Ok(self
+            .shallow
+            .get_or_insert_with(std::collections::HashSet::new))
+    }
+
+    /// Whether the commit `revision` descends from the commit `ancestor`, or is it: walked from
+    /// `revision` through the parents each commit's own checked header names, first parent
+    /// first, every commit seen once (a cycle a forged commit makes ends the walk), at most
+    /// [`MAX_WALK`] commits. A commit the repository is shallow at ends its branch of the walk:
+    /// when the ancestor is not found, the answer is then [`Ancestry::Unknown`]. A commit on the
+    /// way that cannot be read, or does not check out, is an error naming it, never `No`; so is
+    /// a walk past the cap. `No` for a revision or an ancestor that names no commit.
+    pub fn descends(&mut self, ancestor: &str, revision: &str) -> Result<Ancestry> {
+        let Some(revision) = self.resolve(revision)? else {
+            return Ok(Ancestry::No);
+        };
+        // An ancestor the repository does not hold may lie past a shallow boundary: a full
+        // commit id is then walked toward, and the walk ends unknown at the boundary.
+        let ancestor = match self.resolve(ancestor)? {
+            Some(id) => id,
+            None if ancestor.len() == self.hex
+                && is_commit_id(ancestor)
+                && !self.shallow()?.is_empty() =>
+            {
+                ancestor.to_owned()
+            }
+            None => return Ok(Ancestry::No),
+        };
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut walk = vec![revision];
+        let mut cut = false;
+        while let Some(commit) = walk.pop() {
+            if commit == ancestor {
+                return Ok(Ancestry::Yes);
+            }
+            if !seen.insert(commit.clone()) {
+                continue;
+            }
+            if seen.len() > MAX_WALK {
+                bail!(
+                    "walking the history for {ancestor} read more than {MAX_WALK} commits, the most takt reads in one walk"
+                );
+            }
+            let header = self.commit(&commit)?.ok_or_else(|| {
+                anyhow!(
+                    "the commit {commit} on the way is not in the repository; the history cannot be walked"
+                )
+            })?;
+            if self.shallow()?.contains(&commit) {
+                cut = true;
+                continue;
+            }
+            // The stack takes the first parent last, so it is walked first.
+            walk.extend(header.parents.into_iter().rev());
+        }
+        Ok(if cut { Ancestry::Unknown } else { Ancestry::No })
+    }
+
+    /// When the file at `path` was added to the history of `revision`: the committer time of
+    /// the commit, followed back along first parents from `revision`, whose tree holds a file
+    /// there while its first parent's does not (or that has no parent); none when `revision`'s
+    /// tree holds none, that commit names no committer time, or a first parent on the way is
+    /// not in the repository (a shallow history). At most [`MAX_WALK`] commits.
+    pub fn added(&mut self, revision: &str, path: &str) -> Result<Option<i64>> {
+        let Some(commit) = self.resolve(revision)? else {
+            return Ok(None);
+        };
+        let mut header = self
+            .commit(&commit)?
+            .ok_or_else(|| anyhow!("{commit} is no commit"))?;
+        if self.file_id(&header.tree, path)?.is_none() {
+            return Ok(None);
+        }
+        for _ in 0..MAX_WALK {
+            let Some(parent) = header.parents.first().cloned() else {
+                return Ok(header.committer_time);
+            };
+            // A first parent the repository does not hold (a shallow history) leaves the
+            // filing unknown; one that does not check out is an error, from the reader.
+            let Some(above) = self.commit(&parent)? else {
+                return Ok(None);
+            };
+            if self.file_id(&above.tree, path)?.is_none() {
+                return Ok(header.committer_time);
+            }
+            header = above;
+        }
+        bail!(
+            "following {path} back from {revision} read more than {MAX_WALK} commits, the most takt reads in one walk"
+        )
+    }
 }
 
-/// Whether `revision` is a commit id ([`is_commit_id`]) of a commit `repo` holds.
-fn is_commit(repo: &Path, revision: &str) -> bool {
-    is_commit_id(revision)
-        && crate::git::run(repo, &["cat-file", "-e", &format!("{revision}^{{commit}}")]).is_ok()
+/// The bytes of the file at `path` in the commit `revision`, read through one [`History`]: the
+/// commit, each tree down the path and the blob, each checked against its id; none when the
+/// commit holds no file there. An object whose bytes do not hash to its id is an error naming
+/// it, so an object planted under another's id is never read as that one.
+pub fn verified_file(tree: &Path, revision: &str, path: &str) -> Result<Option<Vec<u8>>> {
+    verified_file_within(tree, revision, path, None)
+}
+
+/// [`verified_file`], each read also ending by `until` (the run's deadline) when that comes
+/// before its own 10 s.
+pub fn verified_file_within(
+    tree: &Path,
+    revision: &str,
+    path: &str,
+    until: Option<std::time::Instant>,
+) -> Result<Option<Vec<u8>>> {
+    History::open(tree, until)?.file(revision, path)
+}
+
+/// Whether the commit `revision` descends from the commit `ancestor`, or is it, by
+/// [`History::descends`]: `true` only for [`Ancestry::Yes`], a shallow history's unknown included
+/// in `false`.
+pub fn verified_descends(tree: &Path, ancestor: &str, revision: &str) -> Result<bool> {
+    verified_descends_within(tree, ancestor, revision, None)
+}
+
+/// [`verified_descends`], each read also ending by `until` (the run's deadline) when that
+/// comes before its own 10 s.
+pub fn verified_descends_within(
+    tree: &Path,
+    ancestor: &str,
+    revision: &str,
+    until: Option<std::time::Instant>,
+) -> Result<bool> {
+    Ok(History::open(tree, until)?.descends(ancestor, revision)? == Ancestry::Yes)
+}
+
+/// The first line of `text` on which a YAML anchor (`&name`) or alias (`*name`) may begin a
+/// node: an `&` or a `*` right after the start of a line, white space or one of `[{,:-?`,
+/// followed by no white space, outside a string quoted at a node's start, before a comment.
+/// The scan is conservative: it may name a line YAML would read without an anchor (a plain
+/// scalar like `rows *2`), never miss one, since an alias expands without bound when it is
+/// read: a definitions file well under its cap can expand to gigabytes.
+fn anchor_line(text: &str) -> Option<usize> {
+    for (n, line) in text.lines().enumerate() {
+        let bytes = line.as_bytes();
+        let mut quote: Option<u8> = None;
+        let mut before = b' ';
+        for (at, &byte) in bytes.iter().enumerate() {
+            let node = matches!(
+                before,
+                b' ' | b'\t' | b'[' | b'{' | b',' | b':' | b'-' | b'?'
+            ) || at == 0;
+            match quote {
+                Some(open) if byte == open => quote = None,
+                Some(_) => {}
+                None => {
+                    if byte == b'#' && node {
+                        break;
+                    }
+                    if (byte == b'"' || byte == b'\'') && node {
+                        quote = Some(byte);
+                    } else if (byte == b'&' || byte == b'*')
+                        && node
+                        && bytes
+                            .get(at + 1)
+                            .is_some_and(|next| !next.is_ascii_whitespace())
+                    {
+                        return Some(n + 1);
+                    }
+                }
+            }
+            before = byte;
+        }
+    }
+    None
 }
 
 impl Definitions {
     /// Reads definitions from `text`: [`DEFINITIONS_FORMAT`], each target with exactly one
     /// bound, a finite number its metric's figures can take (a share's 0 to 1, any other's 0
-    /// and above), and no version of a metric defined twice.
+    /// and above), and no version of a metric defined twice. Definitions holding a YAML anchor
+    /// or alias are refused before they are parsed, naming the line ([`anchor_line`]).
     pub fn parse(text: &str) -> Result<Self> {
+        if let Some(line) = anchor_line(text) {
+            bail!(
+                "the loop metric definitions hold a YAML anchor or alias on line {line}; they are read without them"
+            );
+        }
         let definitions: Self =
             serde_yaml_ng::from_str(text).context("read the loop metric definitions")?;
         if definitions.format != DEFINITIONS_FORMAT {
@@ -371,15 +592,23 @@ impl Definitions {
 
     /// The definitions at `revision` of `tree`, read through git, never from the working tree.
     pub fn at(tree: &Path, revision: &str) -> Result<Found> {
-        // Whether it names a commit is read from the object's header only, never by parsing it,
-        // so a commit planted under another's id reaches the checked read and is refused there.
-        let is_commit = object_id(tree, revision).is_some_and(|id| {
-            crate::git::run(tree, &["cat-file", "-t", &id]).is_ok_and(|kind| kind == "commit")
-        });
-        if !is_commit {
+        Self::at_within(tree, revision, None)
+    }
+
+    /// [`Self::at`], each read also ending by `until` (the run's deadline) when that comes
+    /// before its own 10 s.
+    pub fn at_within(
+        tree: &Path,
+        revision: &str,
+        until: Option<std::time::Instant>,
+    ) -> Result<Found> {
+        // Whether it names a commit is read through the checked reader, so a commit planted
+        // under another's id is refused there, naming it.
+        let mut history = History::open(tree, until)?;
+        let Some(commit) = history.resolve(revision)? else {
             return Ok(Found::NoCommit);
-        }
-        let Some(bytes) = verified_file(tree, revision, DEFINITIONS)? else {
+        };
+        let Some(bytes) = history.file(&commit, DEFINITIONS)? else {
             return Ok(Found::Absent);
         };
         let Ok(text) = String::from_utf8(bytes) else {
@@ -624,25 +853,29 @@ fn store_path(artifact: &str) -> Option<(String, String)> {
     })
 }
 
-/// When the commit that added `path` to the history of `base` was made, its committer time as
-/// Canon writes an instant; the earliest when it was added more than once. None when `base` is
-/// no commit id or git cannot say.
-fn added_at(repo: &Path, base: &str, path: &str) -> Option<String> {
-    if !is_commit_id(base) {
-        return None;
-    }
-    let listed = crate::git::run(
-        repo,
-        &["log", "--diff-filter=A", "--format=%ct", base, "--", path],
-    )
-    .ok()?;
-    let seconds: i64 = listed.lines().last()?.trim().parse().ok()?;
+/// `seconds` since the epoch as Canon writes an instant.
+fn instant_of(seconds: i64) -> Option<String> {
     time::OffsetDateTime::from_unix_timestamp(seconds)
         .ok()?
         .format(&time::macros::format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second]Z"
         ))
         .ok()
+}
+
+/// Whether the case at `case_dir` runs [`TURN_PROTOCOL`] at [`TURN_PROTOCOL_MAJOR`], as its own
+/// `protocol.yaml` names them; a case without one runs on no protocol this scorecard reads.
+fn runs_turn_major(case_dir: &Path) -> Result<bool> {
+    let path = case_dir.join("protocol.yaml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    Ok(doc["protocol"]["id"].as_str() == Some(TURN_PROTOCOL)
+        && doc["protocol"]["revision"].as_u64() == Some(TURN_PROTOCOL_MAJOR))
 }
 
 impl LoopScorecard {
@@ -657,6 +890,22 @@ impl LoopScorecard {
     /// that row's `finding` revision, else its candidate's, never at `base`; with none, no row
     /// has one. A snapshot, a decision or a run record that does not read is an error naming it.
     pub fn read_at(repo: &Path, base: Option<&str>) -> Result<Self> {
+        Self::read_within(repo, base, None)
+    }
+
+    /// [`Self::read_at`], each object read also ending by `until` (the run's deadline) when
+    /// that comes before its own 10 s. The history is read through one [`History`] for every
+    /// row: each commit checked against its id, a filing found by following first parents and
+    /// comparing trees, never by `git log`.
+    pub fn read_within(
+        repo: &Path,
+        base: Option<&str>,
+        until: Option<std::time::Instant>,
+    ) -> Result<Self> {
+        let mut history = match base {
+            Some(_) => Some(History::open(repo, until)?),
+            None => None,
+        };
         let cases = repo.join(CASES_DIR);
         let mut names: Vec<String> = Vec::new();
         match std::fs::read_dir(&cases) {
@@ -685,7 +934,7 @@ impl LoopScorecard {
                 continue;
             }
             let doc = snapshot(&dir)?;
-            if doc["protocol"].as_str() != Some(TURN_PROTOCOL) {
+            if doc["protocol"].as_str() != Some(TURN_PROTOCOL) || !runs_turn_major(&dir)? {
                 continue;
             }
             let revision = |artifact: &str| {
@@ -714,11 +963,14 @@ impl LoopScorecard {
             // baseline it was observed on, so the baseline's history never holds it. A filing
             // later than the verification is no filing time: the store was committed after the
             // run, and the time from finding to verified would come out negative.
-            let source = revision_in(&doc, "finding")
-                .filter(|finding| is_commit(repo, finding))
-                .unwrap_or_else(|| candidate.clone());
-            let filed_at = match (base, &stored) {
-                (Some(_), Some((_, path))) => added_at(repo, &source, path),
+            let filed_at = match (history.as_mut(), &stored) {
+                (Some(history), Some((_, path))) => {
+                    let source = match revision_in(&doc, "finding") {
+                        Some(finding) if history.resolve(&finding)?.is_some() => finding,
+                        _ => candidate.clone(),
+                    };
+                    history.added(&source, path)?.and_then(instant_of)
+                }
                 _ => None,
             }
             .filter(|filed| {
@@ -850,21 +1102,12 @@ pub fn snapshot_baseline(tree: &Path, case: &CaseDir) -> Result<bool> {
     let Some(revision) = case.revision("loop_baseline") else {
         return Ok(false);
     };
-    if !is_commit_id(&revision) {
-        return Ok(false);
-    }
-    let Ok(commit) = crate::git::run(
-        tree,
-        &[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("{revision}^{{commit}}"),
-        ],
-    ) else {
+    let mut history = History::open(tree, None)?;
+    let Some(commit) = history.resolve(&revision)? else {
         return Ok(false);
     };
-    let definitions = verified_file(tree, &commit, DEFINITIONS)?
+    let definitions = history
+        .file(&commit, DEFINITIONS)?
         .map(|bytes| {
             String::from_utf8(bytes)
                 .map_err(|_| anyhow!("{DEFINITIONS} at {} is not UTF-8", short(&commit)))
@@ -910,6 +1153,26 @@ fn snapshotted(tree: &Path, base: &str) -> Result<Result<Definitions, String>> {
         .map_err(|error| format!("{DEFINITIONS} at {}: {error:#}", short(base))))
 }
 
+/// What a loop validator's observation held to `deadline` (the run's, from its hour budget)
+/// answers: an error once it returned at or after it, whatever it observed, so the budget that
+/// ended it records nothing; else `observed`. Each read the observation makes is held to the
+/// same deadline as well as its own 10 s ([`crate::git::ObjectReader::open_until`]).
+fn held_to(
+    deadline: Option<std::time::Instant>,
+    action: &str,
+    observed: Result<Observation>,
+) -> Result<Observation> {
+    if !deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+        return observed;
+    }
+    match observed {
+        Err(error) => Err(error),
+        Ok(_) => {
+            bail!("{action} returned at or after the run's end; what it observed is not recorded")
+        }
+    }
+}
+
 /// `loop.measure`: the loop scorecard over the recorded turns (at least [`MIN_TURNS`]), its
 /// figures under the baseline's definitions as the case snapshotted them when it opened
 /// ([`snapshot_baseline`]), never read from the object store after a step ran; writes one
@@ -945,60 +1208,75 @@ impl Validator for LoopMeasure {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
-        let definitions = match snapshotted(tree, revision)? {
-            Ok(definitions) => definitions,
-            Err(why) => return Ok(nothing(format!("the baseline: {why}; nothing recorded"))),
-        };
-        let card = LoopScorecard::read_at(tree, Some(revision))?;
-        if card.rows.len() < MIN_TURNS {
-            return Ok(nothing(format!(
-                "{} turns recorded under {CASES_DIR}, at least {MIN_TURNS} needed; nothing recorded",
-                card.rows.len()
-            )));
-        }
-        let figures = match card.figures(&definitions) {
-            Ok(figures) => figures,
-            Err(error) => return Ok(nothing(format!("{error:#}; nothing recorded"))),
-        };
-        let result = if figures
-            .iter()
-            .any(|figure| figure.current && figure.below_target)
-        {
-            "below_target"
-        } else {
-            "at_target"
-        };
-        let turns: Vec<String> = card.rows.iter().map(|row| row.turn.clone()).collect();
-        let artifact = format!("loop-measurement-{seq}.json");
-        let snapshot = serde_json::json!({
-            "format": MEASUREMENT_FORMAT,
-            "definitions_revision": revision,
-            "turns": turns,
-            "result": result,
-            "figures": figures,
-        });
-        Ok(Observation {
-            summary: format!(
-                "the loop scorecard over {} turns ({}) under the definitions at {}: {result}; {}; retained as {artifact}",
-                turns.len(),
-                turns.join(", "),
-                short(revision),
-                line(&figures)
-            ),
-            records: vec![Record::new(
-                format!("loop-measurement-{seq}"),
-                self.kind(),
-                Some(result.to_owned()),
-                self.subject(),
-                revision,
-                self.name(),
-            )],
-            artifact: Some(Artifact {
-                name: artifact,
-                bytes: serde_json::to_vec_pretty(&snapshot)
-                    .context("serialize the loop measurement")?,
-            }),
-        })
+        self.observe_within(tree, revision, seq, None)
+            .map(|(observation, _)| observation)
+    }
+
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        let observed = (|| -> Result<Observation> {
+            let definitions = match snapshotted(tree, revision)? {
+                Ok(definitions) => definitions,
+                Err(why) => return Ok(nothing(format!("the baseline: {why}; nothing recorded"))),
+            };
+            let card = LoopScorecard::read_within(tree, Some(revision), deadline)?;
+            if card.rows.len() < MIN_TURNS {
+                return Ok(nothing(format!(
+                    "{} turns recorded under {CASES_DIR}, at least {MIN_TURNS} needed; nothing recorded",
+                    card.rows.len()
+                )));
+            }
+            let figures = match card.figures(&definitions) {
+                Ok(figures) => figures,
+                Err(error) => return Ok(nothing(format!("{error:#}; nothing recorded"))),
+            };
+            let result = if figures
+                .iter()
+                .any(|figure| figure.current && figure.below_target)
+            {
+                "below_target"
+            } else {
+                "at_target"
+            };
+            let turns: Vec<String> = card.rows.iter().map(|row| row.turn.clone()).collect();
+            let artifact = format!("loop-measurement-{seq}.json");
+            let snapshot = serde_json::json!({
+                "format": MEASUREMENT_FORMAT,
+                "definitions_revision": revision,
+                "turns": turns,
+                "result": result,
+                "figures": figures,
+                "rows": card.rows,
+            });
+            Ok(Observation {
+                summary: format!(
+                    "the loop scorecard over {} turns ({}) under the definitions at {}: {result}; {}; retained as {artifact}",
+                    turns.len(),
+                    turns.join(", "),
+                    short(revision),
+                    line(&figures)
+                ),
+                records: vec![Record::new(
+                    format!("loop-measurement-{seq}"),
+                    self.kind(),
+                    Some(result.to_owned()),
+                    self.subject(),
+                    revision,
+                    self.name(),
+                )],
+                artifact: Some(Artifact {
+                    name: artifact,
+                    bytes: serde_json::to_vec_pretty(&snapshot)
+                        .context("serialize the loop measurement")?,
+                }),
+            })
+        })();
+        Ok((held_to(deadline, self.action(), observed)?, false))
     }
 }
 
@@ -1124,73 +1402,110 @@ impl Validator for LoopDefinitionCheck {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
-        let base = case_revision(tree, "loop_baseline")?;
-        let base_definitions = match snapshotted(tree, &base)? {
-            Ok(definitions) => definitions,
-            Err(why) => return Ok(nothing(format!("the baseline: {why}; nothing recorded"))),
-        };
-        let (candidate, why) = match Definitions::at(tree, revision)? {
-            Found::Definitions(definitions) => (Some(definitions), String::new()),
-            Found::Absent => (
-                None,
-                format!("; {} holds no {DEFINITIONS}", short(revision)),
-            ),
-            Found::Malformed(why) => (None, format!("; {DEFINITIONS}: {why}")),
-            Found::NoCommit => {
-                return Ok(nothing(format!(
-                    "the candidate {revision} is no commit; nothing recorded"
-                )));
-            }
-        };
-        let (mut result, mut each) = check(&base_definitions, candidate.as_ref());
-        let mut why = why;
-        if let Some(candidate) = &candidate {
-            let failed: Vec<(String, String)> = match LoopScorecard::read_at(tree, Some(&base)) {
-                Ok(card) => uncomputed(&card, candidate),
-                Err(error) => candidate
-                    .metrics
-                    .keys()
-                    .map(|id| (id.clone(), format!("{error:#}")))
-                    .collect(),
+        self.observe_within(tree, revision, seq, None)
+            .map(|(observation, _)| observation)
+    }
+
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        let observed = (|| -> Result<Observation> {
+            let base = case_revision(tree, "loop_baseline")?;
+            let base_definitions = match snapshotted(tree, &base)? {
+                Ok(definitions) => definitions,
+                Err(why) => return Ok(nothing(format!("the baseline: {why}; nothing recorded"))),
             };
-            for (id, reason) in &failed {
-                match each.iter_mut().find(|(each_id, _)| each_id == id) {
-                    Some((_, stands)) => *stands = DefinitionCheck::Redefined,
-                    None => each.push((id.clone(), DefinitionCheck::Redefined)),
+            let (candidate, why) = match Definitions::at_within(tree, revision, deadline)? {
+                Found::Definitions(definitions) => (Some(definitions), String::new()),
+                Found::Absent => (
+                    None,
+                    format!("; {} holds no {DEFINITIONS}", short(revision)),
+                ),
+                Found::Malformed(why) => (None, format!("; {DEFINITIONS}: {why}")),
+                Found::NoCommit => {
+                    return Ok(nothing(format!(
+                        "the candidate {revision} is no commit; nothing recorded"
+                    )));
                 }
-                why.push_str(&format!("; {id} does not print: {reason}"));
+            };
+            let (mut result, mut each) = check(&base_definitions, candidate.as_ref());
+            let mut why = why;
+            if let Some(candidate) = &candidate {
+                let failed: Vec<(String, String)> =
+                    match LoopScorecard::read_within(tree, Some(&base), deadline) {
+                        Ok(card) => uncomputed(&card, candidate),
+                        Err(error) => candidate
+                            .metrics
+                            .keys()
+                            .map(|id| (id.clone(), format!("{error:#}")))
+                            .collect(),
+                    };
+                for (id, reason) in &failed {
+                    match each.iter_mut().find(|(each_id, _)| each_id == id) {
+                        Some((_, stands)) => *stands = DefinitionCheck::Redefined,
+                        None => each.push((id.clone(), DefinitionCheck::Redefined)),
+                    }
+                    why.push_str(&format!("; {id} does not print: {reason}"));
+                }
+                if !failed.is_empty() {
+                    result = DefinitionCheck::Redefined;
+                }
             }
-            if !failed.is_empty() {
+            // The figures are computed by code chosen by each metric's id and version, so the
+            // code counts as part of the definitions: read at the baseline and at the candidate
+            // through the checked history, any difference redefines every metric.
+            let mut history = History::open(tree, deadline)?;
+            let code_was = history.file(&base, FIGURES_CODE)?;
+            let code_now = history.file(revision, FIGURES_CODE)?;
+            if code_was != code_now {
+                for (_, stands) in &mut each {
+                    *stands = DefinitionCheck::Redefined;
+                }
+                if let Some(candidate) = &candidate {
+                    for id in candidate.metrics.keys() {
+                        if !each.iter().any(|(each_id, _)| each_id == id) {
+                            each.push((id.clone(), DefinitionCheck::Redefined));
+                        }
+                    }
+                }
                 result = DefinitionCheck::Redefined;
+                why.push_str(&format!(
+                    "; {FIGURES_CODE}, the code that computes the figures, differs from the baseline's"
+                ));
             }
-        }
-        let changed: Vec<String> = each
-            .iter()
-            .filter(|(_, stands)| *stands != DefinitionCheck::Unchanged)
-            .map(|(id, stands)| format!("{id} {}", stands.as_str()))
-            .collect();
-        Ok(Observation {
-            summary: format!(
-                "the metric definitions at {} against the baseline's at {}: {}{}{why}",
-                short(revision),
-                short(&base),
-                result.as_str(),
-                if changed.is_empty() {
-                    String::new()
-                } else {
-                    format!(" ({})", changed.join(", "))
-                }
-            ),
-            records: vec![Record::new(
-                format!("definition-check-{seq}"),
-                self.kind(),
-                Some(result.as_str().to_owned()),
-                self.subject(),
-                revision,
-                self.name(),
-            )],
-            artifact: None,
-        })
+            let changed: Vec<String> = each
+                .iter()
+                .filter(|(_, stands)| *stands != DefinitionCheck::Unchanged)
+                .map(|(id, stands)| format!("{id} {}", stands.as_str()))
+                .collect();
+            Ok(Observation {
+                summary: format!(
+                    "the metric definitions at {} against the baseline's at {}: {}{}{why}",
+                    short(revision),
+                    short(&base),
+                    result.as_str(),
+                    if changed.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", changed.join(", "))
+                    }
+                ),
+                records: vec![Record::new(
+                    format!("definition-check-{seq}"),
+                    self.kind(),
+                    Some(result.as_str().to_owned()),
+                    self.subject(),
+                    revision,
+                    self.name(),
+                )],
+                artifact: None,
+            })
+        })();
+        Ok((held_to(deadline, self.action(), observed)?, false))
     }
 }
 
@@ -1235,7 +1550,7 @@ fn is_record(
 
 /// The turns the case's latest `loop_measurement` about `loop_baseline` at `base` read, as the
 /// measurement it retained names them; none without such a measurement or its retained file.
-fn measured_turns(tree: &Path, base: &str) -> Result<Option<Vec<String>>> {
+fn measured_rows(tree: &Path, base: &str) -> Result<Option<Vec<LoopScorecardRow>>> {
     let Some(id) = case_records(tree)?
         .iter()
         .rev()
@@ -1252,12 +1567,9 @@ fn measured_turns(tree: &Path, base: &str) -> Result<Option<Vec<String>>> {
     };
     let retained: serde_json::Value =
         serde_json::from_str(&text).with_context(|| format!("read {}", path.display()))?;
-    Ok(retained["turns"].as_array().map(|turns| {
-        turns
-            .iter()
-            .filter_map(|turn| turn.as_str().map(str::to_owned))
-            .collect()
-    }))
+    // The rows the measurement read, as it retained them; one that retained none is no
+    // measurement a comparison can stand on.
+    Ok(serde_json::from_value(retained["rows"].clone()).ok())
 }
 
 /// `loop.compare`: due once the case holds a `merge_observation` of the loop candidate (the
@@ -1297,118 +1609,156 @@ impl Validator for LoopCompare {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
-        let base = case_revision(tree, "loop_baseline")?;
-        let definitions = match snapshotted(tree, &base)? {
-            Ok(definitions) => definitions,
-            Err(why) => return Ok(nothing(format!("the baseline: {why}; nothing recorded"))),
-        };
-        let records = case_records(tree)?;
-        if !records.iter().any(|record| {
-            is_record(
-                record,
-                "merge_observation",
-                Some("merged"),
-                "loop_candidate",
-                revision,
-            )
-        }) {
-            return Ok(nothing(format!(
-                "no merge of the loop candidate {} is recorded; nothing recorded",
-                short(revision)
-            )));
-        }
-        let Some(measured) = measured_turns(tree, &base)? else {
-            return Ok(nothing(format!(
-                "no loop measurement of the baseline {} is retained in the case; nothing recorded",
-                short(&base)
-            )));
-        };
-        let card = LoopScorecard::read_at(tree, Some(&base))?;
-        let before: Vec<&LoopScorecardRow> = card
-            .rows
-            .iter()
-            .filter(|row| measured.contains(&row.turn))
-            .collect();
-        let mut after: Vec<&LoopScorecardRow> = Vec::new();
-        for row in &card.rows {
-            if verified_descends(tree, revision, &row.baseline)? {
-                after.push(row);
-            }
-        }
-        let ran = after.iter().filter(|row| row.verdict.is_some()).count();
-        if ran < MIN_TURNS {
-            return Ok(nothing(format!(
-                "{ran} turns with a verdict on a baseline that holds the candidate {}, at least {MIN_TURNS} needed; nothing recorded",
-                short(revision)
-            )));
-        }
-        let (was, now) = match (
-            figures_of(&before, &definitions),
-            figures_of(&after, &definitions),
-        ) {
-            (Ok(was), Ok(now)) => (was, now),
-            (Err(error), _) | (_, Err(error)) => {
-                return Ok(nothing(format!("{error:#}; nothing recorded")));
-            }
-        };
-        let mut compared = Vec::new();
-        let mut improved = true;
-        for figure in was.iter().filter(|f| f.current && f.below_target) {
-            compared.push(figure.metric.clone());
-            let later = now
-                .iter()
-                .find(|f| f.current && f.metric == figure.metric)
-                .and_then(|f| f.value);
-            // A metric below target for want of data before improved once it has a figure
-            // after that meets its target.
-            improved &= match (figure.value, later, figure.target) {
-                (Some(before), Some(after), Some(target)) => target.improves(before, after),
-                (None, Some(after), Some(target)) => !target.missed_by(after),
-                _ => false,
+        self.observe_within(tree, revision, seq, None)
+            .map(|(observation, _)| observation)
+    }
+
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        let observed = (|| -> Result<Observation> {
+            let base = case_revision(tree, "loop_baseline")?;
+            let definitions = match snapshotted(tree, &base)? {
+                Ok(definitions) => definitions,
+                Err(why) => return Ok(nothing(format!("the baseline: {why}; nothing recorded"))),
             };
-        }
-        let result = if improved && !compared.is_empty() {
-            "improved"
-        } else {
-            "not_improved"
-        };
-        let artifact = format!("loop-comparison-{seq}.json");
-        let retained = serde_json::json!({
-            "format": MEASUREMENT_FORMAT,
-            "definitions_revision": base,
-            "candidate": revision,
-            "compared": compared,
-            "result": result,
-            "before": { "turns": before.iter().map(|row| &row.turn).collect::<Vec<_>>(), "figures": was },
-            "after": { "turns": after.iter().map(|row| &row.turn).collect::<Vec<_>>(), "figures": now },
-        });
-        Ok(Observation {
-            summary: format!(
-                "{} turns before the merge of {} against {} after, on {}: {result}; before: {}; after: {}; retained as {artifact}",
-                before.len(),
-                short(revision),
-                after.len(),
-                if compared.is_empty() {
-                    "no metric below its target before".to_owned()
-                } else {
-                    compared.join(", ")
-                },
-                line(&was),
-                line(&now)
-            ),
-            records: vec![Record::new(
-                format!("loop-comparison-{seq}"),
-                self.kind(),
-                Some(result.to_owned()),
-                self.subject(),
-                revision,
-                self.name(),
-            )],
-            artifact: Some(Artifact {
-                name: artifact,
-                bytes: serde_json::to_vec_pretty(&retained)
-                    .context("serialize the loop comparison")?,
-            }),
-        })
+            let records = case_records(tree)?;
+            if !records.iter().any(|record| {
+                is_record(
+                    record,
+                    "merge_observation",
+                    Some("merged"),
+                    "loop_candidate",
+                    revision,
+                )
+            }) {
+                return Ok(nothing(format!(
+                    "no merge of the loop candidate {} is recorded; nothing recorded",
+                    short(revision)
+                )));
+            }
+            let Some(measured) = measured_rows(tree, &base)? else {
+                return Ok(nothing(format!(
+                    "no loop measurement of the baseline {} is retained in the case; nothing recorded",
+                    short(&base)
+                )));
+            };
+            let card = LoopScorecard::read_within(tree, Some(&base), deadline)?;
+            // The before side is the rows the measurement read, as it retained them, never
+            // recomputed from today's records; a measured turn gone from the cases is refused.
+            let missing: Vec<&str> = measured
+                .iter()
+                .filter(|row| !card.rows.iter().any(|now| now.turn == row.turn))
+                .map(|row| row.turn.as_str())
+                .collect();
+            if !missing.is_empty() {
+                return Ok(nothing(format!(
+                    "the measured turns {} are no longer recorded; nothing recorded",
+                    missing.join(", ")
+                )));
+            }
+            let before: Vec<&LoopScorecardRow> = measured.iter().collect();
+            // One history serves every row: each commit is read and checked once. A row whose
+            // ancestry the shallow history cannot say is left out, named, and not recorded.
+            let mut history = History::open(tree, deadline)?;
+            let mut after: Vec<&LoopScorecardRow> = Vec::new();
+            let mut unknown: Vec<&str> = Vec::new();
+            for row in &card.rows {
+                match history.descends(revision, &row.baseline)? {
+                    Ancestry::Yes => after.push(row),
+                    Ancestry::No => {}
+                    Ancestry::Unknown => unknown.push(&row.turn),
+                }
+            }
+            let ran = after.iter().filter(|row| row.verdict.is_some()).count();
+            if ran < MIN_TURNS {
+                return Ok(nothing(format!(
+                    "{ran} turns with a verdict on a baseline that holds the candidate {}, at least {MIN_TURNS} needed; nothing recorded",
+                    short(revision)
+                )));
+            }
+            let (was, now) = match (
+                figures_of(&before, &definitions),
+                figures_of(&after, &definitions),
+            ) {
+                (Ok(was), Ok(now)) => (was, now),
+                (Err(error), _) | (_, Err(error)) => {
+                    return Ok(nothing(format!("{error:#}; nothing recorded")));
+                }
+            };
+            let mut compared = Vec::new();
+            let mut improved = true;
+            for figure in was.iter().filter(|f| f.current && f.below_target) {
+                compared.push(figure.metric.clone());
+                let later = now
+                    .iter()
+                    .find(|f| f.current && f.metric == figure.metric)
+                    .and_then(|f| f.value);
+                // A metric below target for want of data before improved once it has a figure
+                // after that meets its target.
+                improved &= match (figure.value, later, figure.target) {
+                    (Some(before), Some(after), Some(target)) => target.improves(before, after),
+                    (None, Some(after), Some(target)) => !target.missed_by(after),
+                    _ => false,
+                };
+            }
+            let result = if improved && !compared.is_empty() {
+                "improved"
+            } else {
+                "not_improved"
+            };
+            let artifact = format!("loop-comparison-{seq}.json");
+            let retained = serde_json::json!({
+                "format": MEASUREMENT_FORMAT,
+                "definitions_revision": base,
+                "candidate": revision,
+                "compared": compared,
+                "result": result,
+                "before": { "turns": before.iter().map(|row| &row.turn).collect::<Vec<_>>(), "figures": was },
+                "after": { "turns": after.iter().map(|row| &row.turn).collect::<Vec<_>>(), "figures": now },
+                "unknown": unknown,
+            });
+            Ok(Observation {
+                summary: format!(
+                    "{} turns before the merge of {} against {} after, on {}: {result}; before: {}; after: {}{}; retained as {artifact}",
+                    before.len(),
+                    short(revision),
+                    after.len(),
+                    if compared.is_empty() {
+                        "no metric below its target before".to_owned()
+                    } else {
+                        compared.join(", ")
+                    },
+                    line(&was),
+                    line(&now),
+                    if unknown.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "; unknown in the shallow history, not recorded: {}",
+                            unknown.join(", ")
+                        )
+                    }
+                ),
+                records: vec![Record::new(
+                    format!("loop-comparison-{seq}"),
+                    self.kind(),
+                    Some(result.to_owned()),
+                    self.subject(),
+                    revision,
+                    self.name(),
+                )],
+                artifact: Some(Artifact {
+                    name: artifact,
+                    bytes: serde_json::to_vec_pretty(&retained)
+                        .context("serialize the loop comparison")?,
+                }),
+            })
+        })();
+        Ok((held_to(deadline, self.action(), observed)?, false))
     }
 }
