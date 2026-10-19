@@ -252,9 +252,11 @@ enum ScenarioCommands {
     /// for the story on `story.delivery/1`, whose pull request targets `trial/<n>`. The case is
     /// `scenario-<id>-trial-<n>`, refused before anything is cut when it or its branch exists;
     /// nothing of an earlier run is resumed. Without the bot route nothing is fetched or
-    /// pushed, and `<n>` is the instant to the second (UTC, `YYYYMMDDHHMMSS`) and a four-digit
-    /// nonce, a number the checkout knows passed over, so runs from different checkouts take
-    /// different ones: unique, not consecutive. A refusal before the push removes the branch and
+    /// pushed, and `<n>` is the instant to the second (UTC, `YYYYMMDDHHMMSS`) and a random
+    /// four-digit nonce, so runs from different checkouts very likely take different ones (two
+    /// runs in one second share one with a chance of 1 in 10,000), not consecutive ones. The
+    /// hard guard is the checkout's own: a number it knows is passed over, and `git checkout -b`
+    /// refuses a branch that exists. A refusal before the push removes the branch and
     /// puts the tree back.
     #[command(after_help = SCENARIO_EXIT_CODES)]
     Run(Box<ScenarioRunArgs>),
@@ -1415,12 +1417,14 @@ const TRIAL_NONCES: u64 = 10_000;
 /// The trial number and case id of a scenario run without the bot route, which has no remote
 /// to reserve a number on: the instant `at` (`YYYY-MM-DDTHH:MM:SSZ`, as [`takt::now`] gives it)
 /// to the second, its digits, then a four-digit nonce, all digits, so runs from different
-/// checkouts take different numbers and their cases go into one scorecard. The numbers are
-/// unique, not consecutive. The nonce is `nonce` (the process id, offset by the host's name,
-/// [`trial_nonce`]) when that number is free in this checkout, else the next free one after it,
-/// wrapping: a number whose trial branch is known, local or a remote's, or whose case or case
-/// branch is there, is passed over. A case id [`takt::case::check_id`] refuses is refused, and
-/// so is a second whose every number is taken, before any branch is cut.
+/// checkouts very likely take different numbers (two runs in one second share one with a
+/// chance of 1 in 10,000) and their cases go into one scorecard; not consecutive ones. The
+/// nonce is `nonce` (random, [`trial_nonce`]) when that number is free in this checkout, else
+/// the next free one after it, wrapping: a number whose trial branch is known, local or a
+/// remote's, or whose case or case branch is there, is passed over. That, and `git checkout
+/// -b` refusing a branch that exists, is the hard guard; it holds within a checkout only. A
+/// case id [`takt::case::check_id`] refuses is refused, and so is a second whose every number
+/// is taken, before any branch is cut.
 fn unique_trial(repo: &Path, scenario: &str, at: &str, nonce: u64) -> Result<(u64, String)> {
     let digits: String = at.chars().filter(char::is_ascii_digit).collect();
     let second: u64 = match digits.len() {
@@ -1450,17 +1454,30 @@ fn unique_trial(repo: &Path, scenario: &str, at: &str, nonce: u64) -> Result<(u6
     ))
 }
 
-/// The nonce of a trial number without the bot route ([`unique_trial`]): this process's id
-/// plus a digest of the host's name, modulo [`TRIAL_NONCES`]. Two runs alive at once on one
-/// host differ in it unless their process ids differ by a multiple of [`TRIAL_NONCES`]; runs on
-/// two hosts, whose process ids may repeat each other's (two containers started alike), are
-/// spread by their hosts' names. A host whose name does not read offsets nothing.
+/// The nonce of a trial number without the bot route ([`unique_trial`]): eight random bytes
+/// from the operating system (`/dev/urandom`), modulo [`TRIAL_NONCES`]. Nothing a run shares
+/// with another goes into it: runs each in a PID namespace of its own have the same process id,
+/// and containers started alike the same host name. Where `/dev/urandom` does not read, the
+/// standard library's hasher, keyed from the operating system's randomness per process, over
+/// the process id and the clock's nanoseconds.
 fn trial_nonce() -> u64 {
-    let host = std::fs::read("/proc/sys/kernel/hostname").unwrap_or_default();
-    let digest = host.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
-    });
-    (u64::from(std::process::id()) + digest % TRIAL_NONCES) % TRIAL_NONCES
+    use std::hash::{BuildHasher as _, Hasher as _};
+    use std::io::Read as _;
+    let mut bytes = [0_u8; 8];
+    let random = std::fs::File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map(|()| u64::from_le_bytes(bytes))
+        .unwrap_or_else(|_| {
+            let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+            hasher.write_u32(std::process::id());
+            hasher.write_u128(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| since.as_nanos()),
+            );
+            hasher.finish()
+        });
+    random % TRIAL_NONCES
 }
 
 /// `takt scenario run`: the scenario read, the tree found clean, `trial/<n>` cut from the seed

@@ -919,14 +919,23 @@ fn opened_by(events: &str, revision: &str) -> String {
         .collect()
 }
 
-/// story:trial-numbers-are-unique-across-checkouts: five scenario runs, each from its own fresh
-/// clone of one origin and without the bot route (the origin is a path, no forge), get five
-/// distinct trial numbers, all digits, and five distinct case ids; gathered into one
+/// How the five runs of [`five_clones_one_scorecard`] are started.
+#[derive(Clone, Copy, PartialEq)]
+enum Started {
+    /// One after another, each in this process's PID namespace.
+    InTurn,
+    /// All at once, each in a PID namespace of its own (`bwrap --unshare-pid`), as containers
+    /// or confined runners start them: every run has the same process id and host name.
+    AtOnceInOwnPidNamespaces,
+}
+
+/// Five scenario runs of scenario 1, each from its own fresh clone of one origin and without
+/// the bot route (the origin is a path, no forge), started as `started` says; asserts five
+/// distinct trial numbers, all digits, and five distinct case ids, and that, gathered into one
 /// repository, `takt scorecard --save` takes all five cases.
-#[test]
-fn five_runs_from_five_fresh_clones_get_five_trial_numbers_and_one_scorecard_takes_all() {
+fn five_clones_one_scorecard(name: &str, started: Started) {
     let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("scenario-run-{}-five-clones", std::process::id()));
+        .join(format!("scenario-run-{}-{name}", std::process::id()));
     if outer.exists() {
         fs::remove_dir_all(&outer).expect("a stale scratch tree is removed");
     }
@@ -949,15 +958,32 @@ fn five_runs_from_five_fresh_clones_get_five_trial_numbers_and_one_scorecard_tak
     );
     git(&source, &["push", "-q", "../origin.git", "main"]);
 
-    let mut trials: Vec<String> = Vec::new();
-    let mut cases: Vec<PathBuf> = Vec::new();
-    for k in 1..=5 {
-        let name = format!("clone-{k}");
-        git(&scratch.0, &["clone", "-q", "origin.git", &name]);
-        let clone = scratch.0.join(&name);
-        let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+    let clones: Vec<PathBuf> = (1..=5)
+        .map(|k| {
+            let name = format!("clone-{k}");
+            git(&scratch.0, &["clone", "-q", "origin.git", &name]);
+            scratch.0.join(&name)
+        })
+        .collect();
+    let command = |clone: &Path| {
+        let mut command = match started {
+            Started::InTurn => Command::new(env!("CARGO_BIN_EXE_takt")),
+            Started::AtOnceInOwnPidNamespaces => {
+                let mut bwrap = Command::new("bwrap");
+                bwrap.args([
+                    "--dev-bind",
+                    "/",
+                    "/",
+                    "--unshare-pid",
+                    "--die-with-parent",
+                    env!("CARGO_BIN_EXE_takt"),
+                ]);
+                bwrap
+            }
+        };
+        command
             .args(["scenario", "run", "--repo"])
-            .arg(&clone)
+            .arg(clone)
             .args([
                 "1",
                 "--harness",
@@ -967,9 +993,40 @@ fn five_runs_from_five_fresh_clones_get_five_trial_numbers_and_one_scorecard_tak
                 "--test-cmd",
                 "true",
             ])
-            .env_remove("B10X_GATES_POLICY")
-            .output()
-            .expect("takt runs");
+            .env_remove("B10X_GATES_POLICY");
+        command
+    };
+    let outputs: Vec<std::process::Output> = match started {
+        Started::InTurn => clones
+            .iter()
+            .map(|clone| command(clone).output().expect("takt runs"))
+            .collect(),
+        Started::AtOnceInOwnPidNamespaces => {
+            let children: Vec<std::process::Child> = clones
+                .iter()
+                .map(|clone| {
+                    command(clone)
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
+                        .spawn()
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "bwrap does not start ({error}): this case needs bubblewrap on the program path, as CI installs it"
+                            )
+                        })
+                })
+                .collect();
+            children
+                .into_iter()
+                .map(|child| child.wait_with_output().expect("takt runs"))
+                .collect()
+        }
+    };
+
+    let mut trials: Vec<String> = Vec::new();
+    let mut cases: Vec<PathBuf> = Vec::new();
+    for (k, (clone, output)) in clones.iter().zip(&outputs).enumerate() {
+        let name = format!("clone-{}", k + 1);
         let out = String::from_utf8_lossy(&output.stdout);
         let err = String::from_utf8_lossy(&output.stderr);
         assert!(
@@ -1040,4 +1097,22 @@ fn five_runs_from_five_fresh_clones_get_five_trial_numbers_and_one_scorecard_tak
             "the saved scorecard lacks trial {trial}: {saved}"
         );
     }
+}
+
+/// story:trial-numbers-are-unique-across-checkouts: five scenario runs, one after another, each
+/// from its own fresh clone of one origin and without the bot route, get five distinct trial
+/// numbers and case ids, and one scorecard takes all five.
+#[test]
+fn five_runs_from_five_fresh_clones_get_five_trial_numbers_and_one_scorecard_takes_all() {
+    five_clones_one_scorecard("five-clones", Started::InTurn);
+}
+
+/// The same five runs started at once, each in a PID namespace of its own (`bwrap
+/// --unshare-pid`), where every run has the same process id and host name: the nonce does not
+/// rest on either, so they still get five distinct trial numbers. Two runs in one second share
+/// a number with a chance of 1 in 10,000 per pair (about 1 in 1,000 for five). Bubblewrap is
+/// required, never skipped: without it the case fails, naming it.
+#[test]
+fn five_runs_started_at_once_in_their_own_pid_namespaces_get_five_trial_numbers() {
+    five_clones_one_scorecard("five-clones-pid-ns", Started::AtOnceInOwnPidNamespaces);
 }
