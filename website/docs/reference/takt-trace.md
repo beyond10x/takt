@@ -9,9 +9,8 @@ description: A case's run record rendered as one file in one vocabulary of opera
 file: a header line on the run, then one line per operation. An operation is a step, a wait on the
 forge, a refusal, a stop, or the resume after one.
 
-Times are seconds from the run's first instant. A step runs from the line before it to its own
-line; a wait from its line to the next; a stop is an instant, and the resume after it spans the
-gap. Token and cost figures come from the raw usage the harness reported and from nothing else: a
+A step runs from the line before it to its own line; a wait from its line to the next; a stop is
+an instant, and the resume after it spans the gap. Token and cost figures come from the raw usage the harness reported and from nothing else: a
 figure no source states is absent, never 0. Summaries and command text are classified, never
 copied, so a trace carries no local path and can be published.
 
@@ -44,7 +43,7 @@ copied, so a trace carries no local path and can be published.
 | `action`, `name` | the protocol action; the validator's or harness's name, or who refused |
 | `t_start`, `t_end` | seconds from `t0`, to the millisecond; absent where the record has no instant |
 | `tokens`, `tokens_sum`, `model`, `cost_usd`, `turns`, `duration_ms`, `api_ms` | what the harness reported about the call |
-| `outcome` | `pass`, `fail`, `pending`, `opened`, `pushed`, `merged`, `changed`, `unchanged`, `nothing`, `refused`, `approval`, `error`; a stop's, its outcome as the scorecard names it |
+| `outcome` | `pass`, `fail`, `pending`, `opened`, `pushed`, `merged`, `changed`, `unchanged`, `nothing`, `refused`, `approval`, `error`; for a stop, the outcome as the scorecard names it |
 | `paths` | the paths a judgement step committed |
 | `evidence` | `observed` (a record or exit status a validator observed) or `declared` (the model's own text) |
 | `label` | a pattern mark: `approval-only call`, `seed pr.open`, `2nd CI`, `inspect, then NoProgress`, `repeated failure (as step N)` |
