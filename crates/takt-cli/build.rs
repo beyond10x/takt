@@ -17,8 +17,9 @@ const UNKNOWN: &str = "unknown revision";
 /// (`crates/takt/src/protocol.rs`, `include_str!`), and the root `.cargo/`, whose
 /// configuration cargo reads on a build from the root (`rustflags`, `[patch]`, `[env]`). A
 /// root `.cargo/` made after a build is seen by the next build that reads the revision for
-/// another reason: a directory that does not exist is not watched, as cargo would run the
-/// script on every build.
+/// another reason, and until then a binary compiled with it prints the clean revision, a
+/// known limit: a directory that does not exist is not watched, as cargo would run the script,
+/// and build the crate again, on every build.
 const COMPILED_IN: [&str; 3] = ["crates", "protocols", ".cargo"];
 
 /// The untracked file under [`compiled_in`] that does not make a revision dirty: a
@@ -208,8 +209,9 @@ fn compiled_in(dir: &Path) -> Option<(PathBuf, Vec<String>)> {
 }
 
 /// The revision of the crate at `dir`: the sha of the commit its checkout is at, `-dirty` after
-/// it while `git status`, every configured filter driver turned off ([`no_filter_drivers`]),
-/// names a tracked file that differs from that commit, staged or not, or
+/// it while `git status`, every configured filter driver turned off ([`no_filter_drivers`]) and
+/// no submodule looked into (`--ignore-submodules=all`: no submodule's git runs its own
+/// filters, and a submodule at another commit is not seen), names a tracked file that differs from that commit, staged or not, or
 /// an untracked file no ignore rule covers lies under [`compiled_in`], a `Cargo.lock` aside
 /// ([`NOT_COMPILED_IN`]); [`UNKNOWN`] when no checkout with a commit tracks the crate, or git
 /// fails.
@@ -239,6 +241,7 @@ pub fn revision(dir: &Path) -> String {
         "status",
         "--porcelain",
         "--untracked-files=no",
+        "--ignore-submodules=all",
     ]);
     let Some(status) = git_with(
         dir,

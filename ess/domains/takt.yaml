@@ -263,7 +263,7 @@ types:
   # `takt.gate-run`). Carries
   # canon.protocol.Principal (protocol.yaml:241), an opaque principal Canon records as given.
   # read from: crates/takt/src/validator.rs:46-47
-  # read from: crates/takt/src/validator.rs:254
+  # read from: crates/takt/src/validator.rs:280
   # read from: crates/takt/src/evidence.rs:16
   - name: takt.work.ProducerName
     kind: newtype
@@ -272,7 +272,7 @@ types:
   # An evidence record's id, unique within the case (`test-result-<seq>`). Carries
   # canon.protocol.EvidenceId (protocol.yaml:538).
   # read from: crates/takt/src/evidence.rs:9
-  # read from: crates/takt/src/validator.rs:363
+  # read from: crates/takt/src/validator.rs:389
   # Takt's ids are `<kind>-<evaluation number>`, the number continued across the case's runs, so an
   # id is unique within a case.
   # read from: crates/takt/src/case.rs:1678
@@ -467,15 +467,19 @@ types:
   # commit's sha, `-dirty` after it when a tracked file differed from the commit or an
   # untracked, unignored file other than a `Cargo.lock` lay under the workspace's `crates/`,
   # `protocols/` or root `.cargo/` or the crate's own directory, or `unknown revision` when no git
-  # checkout with a commit tracked the crate. The binary gives it to every run; absent on a line
-  # an earlier takt wrote and on a run through the library whose caller gave none.
+  # checkout with a commit tracked the crate. A known limit: a root `.cargo/` made after the
+  # build last read the revision is seen only when the build reads it again for another reason,
+  # since watching a path that does not exist would read it, and rebuild the binary, on every
+  # build; until then the binary can print a clean revision. The binary gives it to every run;
+  # absent on a line an earlier takt wrote and on a run through the library whose caller gave
+  # none.
   # read from: crates/takt/src/events.rs:63-76
   # read from: crates/takt/src/run.rs:3912-3927
   # read from: crates/takt/src/run.rs:3103-3106
   # read from: crates/takt/src/case.rs:287-291
   # read from: crates/takt-cli/src/main.rs:20-22
   # read from: crates/takt-cli/src/main.rs:794
-  # read from: crates/takt-cli/build.rs:210-262
+  # read from: crates/takt-cli/build.rs:211-265
   - name: takt.work.RunOpened
     kind: struct
     fields:
@@ -725,12 +729,12 @@ types:
   # `--test-cmd` split at white space; the `gate.run` validator over the gates document `--gates`
   # names, taken from the case's base commit; `pr.open`, `ci.read` and `repository.merge` through
   # the forge, the last admissible only under a recorded grant at the case's revision.
-  # read from: crates/takt/src/validator.rs:1352
-  # read from: crates/takt/src/validator.rs:820
-  # read from: crates/takt/src/validator.rs:1147
-  # read from: crates/takt/src/validator.rs:400
+  # read from: crates/takt/src/validator.rs:1378
+  # read from: crates/takt/src/validator.rs:846
+  # read from: crates/takt/src/validator.rs:1173
+  # read from: crates/takt/src/validator.rs:426
   # read from: docs/design/takt.md:56
-  # read from: crates/takt/src/validator.rs:213-215
+  # read from: crates/takt/src/validator.rs:239-241
   # read from: crates/takt-cli/src/main.rs:180-182
   - name: takt.work.DeterministicStep
     kind: struct
@@ -1396,7 +1400,7 @@ entities:
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/authority.rs:7-21
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/mod.rs:359-365
       # read from: crates/takt/src/case.rs:1907-1908
-      # read from: crates/takt/src/validator.rs:1472
+      # read from: crates/takt/src/validator.rs:1498
       - name: authority
         type: Map<takt.work.CapabilityId, takt.work.Grant>
       # read from: crates/takt/src/case.rs:1411-1412
@@ -1829,7 +1833,7 @@ entities:
   # read from: crates/takt/src/run.rs:2266-2277
   # read from: crates/takt/src/run.rs:165-181
   # read from: crates/takt/src/run.rs:4952-5021
-  # read from: crates/takt/src/validator.rs:1656-1692
+  # read from: crates/takt/src/validator.rs:1682-1718
   # read from: crates/takt/src/run.rs:112-118
   # read from: crates/takt/src/run.rs:662-671
   # read from: crates/takt/src/run.rs:3156-3158
@@ -1903,7 +1907,7 @@ entities:
       # every observation, record or not.
       # read from: crates/takt/src/validator.rs:16-32
       # read from: crates/takt/src/run.rs:4267-4280
-      # read from: crates/takt/src/validator.rs:715
+      # read from: crates/takt/src/validator.rs:741
       - name: artifact
         type: Optional<String>
         summary: The retained file's name under the case's `artifacts/`.
@@ -1959,7 +1963,9 @@ entities:
   # scanner cannot read), since the case's pinned base, the surface extended by the repository's
   # own list at that base, while a link stands where it would read through it at either
   # revision, while the list does not parse, or when the case pins none, the summary naming the
-  # paths. The second is
+  # paths. A path git lists that is not UTF-8, anywhere in the tree at either revision, is never
+  # decoded to a stand-in: the observation is an error naming it, its bytes escaped, and nothing
+  # is run, a limit accepted for `tests.run` and `ci.read` alike. The second is
   # `takt.gate-run`: action `gate.run`, kind `gate_result`, subject `implementation`, the
   # repository's `engineering-gates/1` document evaluated through the assertions library with the
   # project file `--project` names, or `.engineering/assertions-project.yaml` when that is a file,
@@ -2002,40 +2008,43 @@ entities:
   # merge-tree`, nothing checked out) would change that tip's tree outside `.engineering/`, by
   # content and not by commits or their messages, `none` when it would not (the same content
   # landed on the base by another commit, with or without more beside it, is no change to
-  # publish); a merge that conflicts is `ahead`, its summary saying the merge conflicts; with the
-  # base branch gone, the revision's tree compared with the base pinned at open instead; no
+  # publish); a merge that conflicts at any path outside `.engineering/` is `ahead`, whatever
+  # tree git writes for it, and one that conflicts only inside it is read by that tree, the
+  # summary naming the conflicted paths either way; with the base branch gone, the revision's tree compared with the base pinned at open instead; no
   # record for a case with no base; it reads git only, with no code from configuration, and
   # compares with the local base branch as it stands, fetching nothing. Each built-in validator
   # defines its action and kind,
   # and the list the step choice reads is built from them.
-  # read from: crates/takt/src/validator.rs:1357-1361
+  # read from: crates/takt/src/validator.rs:1383-1387
   # read from: crates/takt/src/run.rs:108-110
-  # read from: crates/takt/src/validator.rs:825-829
-  # read from: crates/takt/src/validator.rs:1155-1159
-  # read from: crates/takt/src/validator.rs:386-398
-  # read from: crates/takt/src/validator.rs:417-421
-  # read from: crates/takt/src/validator.rs:618
+  # read from: crates/takt/src/validator.rs:851-855
+  # read from: crates/takt/src/validator.rs:1181-1185
+  # read from: crates/takt/src/validator.rs:412-424
+  # read from: crates/takt/src/validator.rs:443-447
+  # read from: crates/takt/src/validator.rs:644
   # read from: crates/takt/src/validator.rs:1-2
   # read from: crates/takt/src/validator.rs:45-90
-  # read from: crates/takt/src/validator.rs:252-266
-  # read from: crates/takt/src/validator.rs:204-206
-  # read from: crates/takt/src/validator.rs:342-350
+  # read from: crates/takt/src/validator.rs:278-292
+  # read from: crates/takt/src/validator.rs:230-232
+  # read from: crates/takt/src/validator.rs:368-376
   # read from: crates/takt/src/forge.rs:596-614
-  # read from: crates/takt/src/validator.rs:1040
-  # read from: crates/takt/src/validator.rs:1472
+  # read from: crates/takt/src/validator.rs:1066
+  # read from: crates/takt/src/validator.rs:1498
   # read from: docs/design/takt.md:47-49
   # read from: docs/design/takt.md:64-65
   # read from: crates/takt/src/forge.rs:734-754
   # read from: crates/takt/src/validator.rs:126-137
-  # read from: crates/takt/src/validator.rs:1706-1719
+  # read from: crates/takt/src/validator.rs:1732-1746
   # read from: crates/takt/src/git.rs:1433-1437
-  # read from: crates/takt/src/validator.rs:1747-1801
-  # read from: crates/takt/src/git.rs:1464-1469
-  # read from: crates/takt/src/validator.rs:277-286
+  # read from: crates/takt/src/validator.rs:1774-1857
+  # read from: crates/takt/src/git.rs:1475-1481
+  # read from: crates/takt/src/validator.rs:303-312
   # read from: crates/takt/src/run.rs:4231-4254
-  # read from: crates/takt/src/validator.rs:289-305
-  # read from: crates/takt/src/validator.rs:554-563
-  # read from: crates/takt/src/validator.rs:675-680
+  # read from: crates/takt/src/validator.rs:315-331
+  # read from: crates/takt/src/validator.rs:580-589
+  # read from: crates/takt/src/validator.rs:701-706
+  # read from: crates/takt/src/validator.rs:194-219
+  # read from: crates/takt/src/validator.rs:142
   - name: takt.work.EvidenceProducer
     naming:
       summary: >-
@@ -2076,8 +2085,8 @@ entities:
   # read from: crates/takt/src/case.rs:308-309
   # read from: crates/takt/src/case.rs:275-302
   # read from: crates/takt/src/case.rs:1502-1526
-  # read from: crates/takt/src/validator.rs:898-902
-  # read from: crates/takt/src/validator.rs:991
+  # read from: crates/takt/src/validator.rs:924-928
+  # read from: crates/takt/src/validator.rs:1017
   - name: takt.work.CaseBranch
     naming:
       summary: >-
@@ -2098,7 +2107,7 @@ entities:
       # the gates document and the project file from, whatever the base branch names later.
       # Absent for a case opened before it was recorded, whose gate then writes no record.
       # read from: crates/takt/src/case.rs:287-291
-      # read from: crates/takt/src/validator.rs:420-421
+      # read from: crates/takt/src/validator.rs:446-447
       - name: base_commit
         type: Optional<takt.work.Revision>
       # The branch the tree was on when the case opened, what discarding the case returns to;

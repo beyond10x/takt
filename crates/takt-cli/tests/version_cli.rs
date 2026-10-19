@@ -48,8 +48,9 @@ fn is_a_commit(sha: &str) -> bool {
 }
 
 /// The acceptance: the binary prints its version and, in parentheses, the revision it was
-/// built from: a commit's sha, `-dirty` after it or not, or `unknown revision`; the sha names a
-/// commit of this repository, whatever `HEAD` is now.
+/// built from: a commit's sha, `-dirty` after it or not, or `unknown revision`, never that in a
+/// git checkout of the workspace; the sha names a commit of this repository, whatever `HEAD`
+/// is now.
 #[test]
 fn version_prints_the_revision_the_binary_was_built_from() {
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
@@ -62,6 +63,15 @@ fn version_prints_the_revision_the_binary_was_built_from() {
         stdout,
         format!("takt {} ({BUILT_FROM})\n", env!("CARGO_PKG_VERSION"))
     );
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    if workspace.join(".git").exists() {
+        assert_ne!(
+            BUILT_FROM,
+            "unknown revision",
+            "built in the git checkout {}, and no revision read",
+            workspace.display()
+        );
+    }
     if BUILT_FROM != "unknown revision" {
         let sha = BUILT_FROM.strip_suffix("-dirty").unwrap_or(BUILT_FROM);
         assert!(matches!(sha.len(), 40 | 64), "{stdout}");

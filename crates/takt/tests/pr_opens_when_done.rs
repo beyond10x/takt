@@ -14,7 +14,7 @@ use takt::case::CASES_DIR;
 use takt::evidence::Record;
 use takt::forge::{Checks, Forge, Memory};
 use takt::harness::{Harness, StepContext, StepReport};
-use takt::validator::{ChangeRead, CiRead, Observation, PrOpen, Validator};
+use takt::validator::{ChangeRead, CiRead, Observation, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
 const PROTOCOL: &str = concat!(
@@ -971,4 +971,111 @@ fn change_read_reads_ahead_and_says_so_when_the_merge_into_the_base_conflicts() 
         read.summary
     );
     assert!(read.summary.contains("conflicts"), "{}", read.summary);
+}
+
+/// A merge that conflicts only inside `.engineering/`, here a planning note both sides change,
+/// is no change to publish outside it: `none`, and the summary names the conflicted path.
+#[test]
+fn change_read_reads_none_and_names_a_conflict_only_inside_engineering() {
+    let tree = scratch("conflict-inside");
+    fs::create_dir_all(tree.join(".engineering")).expect("a directory");
+    fs::write(tree.join(".engineering/notes.md"), "a note\n").expect("a note");
+    git(&tree, &["add", "--", ".engineering/notes.md"]);
+    git(&tree, &["commit", "-q", "-m", "a note"]);
+    let memory = Rc::new(Memory::default());
+    let forge: Rc<dyn Forge> = memory;
+    let validators: Vec<Box<dyn Validator>> = vec![Box::new(PrOpen::new(forge))];
+    let options = RunOptions {
+        protocol: PROTOCOL.to_owned(),
+        intent: "deliver".to_owned(),
+        inputs: Vec::new(),
+        iterations: Some(1),
+        hours: None,
+        tokens: None,
+        case_id: Some("conflict-inside".to_owned()),
+        gate: None,
+    };
+    let harness = Scripted::new(&[]);
+    let mut run = Run::open(&tree, options, &harness, &validators).expect("the case opens");
+    fs::write(tree.join(".engineering/notes.md"), "a note, mine\n").expect("an edit");
+    git(
+        &tree,
+        &["commit", "-q", "-m", "mine", "--", ".engineering/notes.md"],
+    );
+    let revision = git(&tree, &["rev-parse", "HEAD"]);
+    run.case
+        .set_revision("implementation", &revision)
+        .expect("the revision moves");
+    drop(run);
+    let other = tree.with_extension("other");
+    let _ = fs::remove_dir_all(&other);
+    git(
+        &tree,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            other.to_str().expect("utf-8"),
+            "main",
+        ],
+    );
+    fs::write(other.join(".engineering/notes.md"), "a note, theirs\n").expect("an edit");
+    git(&other, &["commit", "-q", "-am", "theirs"]);
+    git(
+        &tree,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            other.to_str().expect("utf-8"),
+        ],
+    );
+    let read = ChangeRead.observe(&tree, &revision, 1).expect("observes");
+    assert_eq!(
+        read.records[0].result.as_deref(),
+        Some("none"),
+        "{}",
+        read.summary
+    );
+    assert!(
+        read.summary.contains("conflicts") && read.summary.contains(".engineering/notes.md"),
+        "{}",
+        read.summary
+    );
+}
+
+/// `tests.run` and `ci.read` compare what the case's branch changed with its base on the judge
+/// surface, reading the paths git lists byte for byte. A path that is not UTF-8 is never
+/// decoded to a stand-in, which could read as off the surface: the observation is an error
+/// naming it, its bytes escaped, and the test command is not run.
+#[cfg(unix)]
+#[test]
+fn tests_run_refuses_a_path_that_is_not_utf8_on_the_case_branch_naming_it() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt as _;
+    let memory = Rc::new(Memory::default());
+    let (tree, _) = edited("not-utf8", &memory, "a story\nthe fix\n");
+    let ran = tree.join("ran.txt");
+    fs::write(tree.join(OsStr::from_bytes(b"r\xff.txt")), "a file\n").expect("a file");
+    git(&tree, &["add", "--", ":(glob)r*.txt"]);
+    git(&tree, &["commit", "-q", "-m", "a path that is not utf-8"]);
+    let revision = git(&tree, &["rev-parse", "HEAD"]);
+    let command = format!("touch {}", ran.display());
+    let observed = TestsRun::new(&command)
+        .expect("a command")
+        .observe(&tree, &revision, 1);
+    let error = match observed {
+        Ok(observation) => panic!(
+            "observed with the path decoded: {} ({:?})",
+            observation.summary,
+            observation
+                .records
+                .iter()
+                .map(|record| record.result.clone())
+                .collect::<Vec<_>>()
+        ),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(error.contains("r\\xff.txt"), "{error}");
+    assert!(!ran.exists(), "the test command ran: {error}");
 }
