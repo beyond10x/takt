@@ -305,6 +305,7 @@ fn row(case: &str, outcome: &str) -> Row {
         errors: u64::from(outcome == "error"),
         wall_ms: 1000,
         saturated: false,
+        binary: None,
     }
 }
 
