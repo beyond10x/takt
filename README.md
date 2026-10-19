@@ -88,7 +88,8 @@ request for the complete change (a test path and an implementation path both cha
 gate green at one revision), CI and merge, each a claim about the implementation revision,
 `accepted` once the pull request is merged. A test path is one under `tests/` or `test/`, or
 named `test_*`, `*_test.*`, `*.test.*`, `*.spec.*` or `*_spec.*`; every other path outside
-`.engineering/` is an implementation path. A
+`.engineering/` is an implementation path. Two `tests.write` steps in a row after which the tests
+still pass stop the run `NoProgress`, naming `tests.red` and the test command's result. A
 case opens only on a clean tree. `--protocol` takes a built-in id or a `protocol/1` file, read
 from the directory you run `takt` in. Bounds: `--iterations`, `--hours`, `--tokens`. The tests are
 `--test-cmd` (default `cargo test --quiet`); `.engineering/gates.yaml`, when the repository has
@@ -107,9 +108,10 @@ one, adds the gate. `takt run --help` lists every default and the exit codes:
 `takt scenario run` replays a declared scenario: `.engineering/scenarios.conf` on `main` names
 its story and seed commit. The run fetches the remote's `trial/*` branches, cuts the next free
 `trial/<n>` from the seed, pushes it (it must not exist yet), and runs the story on it, so its pull
-request targets `trial/<n>`. A trial branch is deleted afterwards with `b10x-gates bot
---repository <owner>/<repo> -- delete-branch trial/<n>`, which the bot route admits only while the
-branch's tip is merged into the default branch.
+request targets `trial/<n>`. Without `--iterations` a scenario run stops after 40 steps. A trial
+branch is deleted afterwards with `b10x-gates bot --repository <owner>/<repo> -- delete-branch
+trial/<n>`, which the bot route admits only while the branch's tip is merged into the default
+branch.
 
 ## Install
 

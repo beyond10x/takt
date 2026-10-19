@@ -194,7 +194,7 @@ fn the_claude_code_harness_is_not_offered_repository_inspect() {
         !text.contains("repository.inspect (claude-code)"),
         "an inspect step was taken: {text}"
     );
-    assert_ne!(stop, Ok(Stop::NoProgress), "{text}");
+    assert!(!matches!(stop, Ok(Stop::NoProgress(_))), "{text}");
 }
 
 /// Keeps what it is offered at its one step, says whether it keeps state as it was built to,

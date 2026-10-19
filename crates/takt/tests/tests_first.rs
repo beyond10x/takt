@@ -942,3 +942,134 @@ fn the_second_revision_orders_the_steps_by_its_claims() {
     );
     assert_eq!(status(&decision, "pr.open"), "blocked", "{}", decision.json);
 }
+
+/// A test command that passes at every revision, whatever the tests say.
+struct AlwaysPass;
+
+impl Validator for AlwaysPass {
+    fn name(&self) -> &str {
+        "always-pass"
+    }
+
+    fn action(&self) -> &str {
+        "tests.run"
+    }
+
+    fn kind(&self) -> &str {
+        "test_result"
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(&self, _: &Path, revision: &str, seq: usize) -> anyhow::Result<Observation> {
+        Ok(Observation {
+            summary: "pass".to_owned(),
+            artifact: None,
+            records: vec![record_of(
+                self.kind(),
+                "pass",
+                self.subject(),
+                revision,
+                self.name(),
+                seq,
+            )],
+        })
+    }
+}
+
+/// A developer that only ever writes tests: offered `tests.write`, it appends one more line to
+/// the story's test file, so every step commits a change; offered nothing else it could take, it
+/// hands over. One that `hands_over` takes `change.handover` whenever it is offered, a step
+/// that changes no file between two of its test writes.
+struct TestWriter {
+    hands_over: bool,
+}
+
+impl Harness for TestWriter {
+    fn name(&self) -> &str {
+        "test-writer"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> anyhow::Result<StepReport> {
+        let handover = context.offered.contains(&"change.handover".to_owned());
+        let action = if self.hands_over && handover {
+            "change.handover"
+        } else if context.offered.contains(&"tests.write".to_owned()) {
+            let at = context.tree.join(TEST_PATH);
+            fs::create_dir_all(at.parent().expect("a parent"))?;
+            let mut text = fs::read_to_string(&at).unwrap_or_default();
+            text.push_str("one more test\n");
+            fs::write(&at, text)?;
+            "tests.write"
+        } else {
+            "change.handover"
+        };
+        Ok(StepReport {
+            action: action.to_owned(),
+            summary: format!("played {action}"),
+            tokens: Some(100),
+        })
+    }
+}
+
+/// On `story.delivery/2` a `tests.write` step after which the tests still pass is no progress
+/// toward `tests.red`, which the implementation step needs: after two such steps in a row the
+/// run stops `NoProgress`, naming `tests.red` and the test command's result, instead of being
+/// offered `tests.write` again without end. A hand-over between them, which changes no file,
+/// moves nothing toward `tests.red` either and does not start the count again. The step budget
+/// here is only a guard: a run that does not stop on its own ends on it, and fails, rather than
+/// hanging the suite.
+#[test]
+fn tests_that_still_pass_after_two_tests_write_steps_stop_the_run_naming_tests_red() {
+    for hands_over in [false, true] {
+        let name = if hands_over {
+            "always-pass-handover"
+        } else {
+            "always-pass"
+        };
+        let tree = scratch(name);
+        let validators: Vec<Box<dyn Validator>> =
+            vec![Box::new(AlwaysPass), Box::new(Green), Box::new(ChangeRead)];
+        let options = RunOptions {
+            protocol: PROTOCOL.to_owned(),
+            intent: "remove a todo by its number".to_owned(),
+            inputs: Vec::new(),
+            iterations: Some(40),
+            hours: None,
+            tokens: None,
+            case_id: Some(name.to_owned()),
+            gate: Some("repository.merge".to_owned()),
+        };
+        let harness = TestWriter { hands_over };
+        let mut run = Run::open(&tree, options, &harness, &validators).expect("the case opens");
+        let mut out = Vec::new();
+        let stop = run.run(&mut out).expect("the run stops without an error");
+        let text = String::from_utf8(out).expect("utf-8");
+        let written = text
+            .lines()
+            .filter(|line| {
+                line.starts_with("step ") && line.ends_with(": tests.write (test-writer)")
+            })
+            .count();
+        let stopped = stop.to_string();
+        assert!(
+            stopped.starts_with("NoProgress (") && stopped.contains("tests.red"),
+            "hands over {hands_over}: the run did not stop NoProgress naming tests.red: {stopped}\n{text}"
+        );
+        assert!(
+            stopped.contains("pass"),
+            "the stop does not name the test command's result: {stopped}"
+        );
+        assert_eq!(
+            written, 2,
+            "hands over {hands_over}: tests.write steps before the stop: {text}"
+        );
+        let events = fs::read_to_string(run.case.dir.join("events.jsonl")).expect("events");
+        let last: serde_json::Value =
+            serde_json::from_str(events.lines().last().expect("a line")).expect("json");
+        assert_eq!(last["event"], "stop", "{events}");
+        assert_eq!(last["stop"], stopped.as_str(), "{events}");
+    }
+}

@@ -208,7 +208,7 @@ fn a_claim_an_edit_could_still_change_keeps_the_judgement_step() {
         offered[0].contains(&"implementation.edit".to_owned()),
         "{offered:?}\n{text}"
     );
-    assert_eq!(stop, Stop::NoProgress, "{text}");
+    assert_eq!(stop, Stop::NoProgress(None), "{text}");
 }
 
 /// The rule reads the protocol, not the story protocol's names: a claim decided only by

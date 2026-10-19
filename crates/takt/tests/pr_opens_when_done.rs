@@ -406,7 +406,7 @@ fn at_the_seed_pr_open_waits_for_the_hand_over_and_nothing_reaches_the_forge() {
     });
     let harness = Scripted::new(&[]);
     let (stop, text, _) = delivered("seed", &memory, &harness);
-    assert_eq!(stop, Stop::NoProgress, "{text}");
+    assert_eq!(stop, Stop::NoProgress(None), "{text}");
     assert!(text.contains("pr.open (blocked)"), "{text}");
     assert_eq!(validator_steps(&text, "pr.open"), 0, "{text}");
     assert_eq!(validator_steps(&text, "ci.read"), 0, "{text}");
@@ -488,7 +488,7 @@ fn after_a_failed_ci_the_next_change_is_pushed_once_it_is_handed_over_again() {
         Move::HandOver,
     ]);
     let (stop, text, case_dir) = delivered("ci-failed", &memory, &harness);
-    assert_eq!(stop, Stop::NoProgress, "{text}");
+    assert_eq!(stop, Stop::NoProgress(None), "{text}");
     let calls = memory.calls.borrow().clone();
     assert_eq!(
         calls.iter().filter(|c| c.starts_with("push ")).count(),

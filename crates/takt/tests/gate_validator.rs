@@ -642,7 +642,7 @@ fn an_unknown_gate_stops_the_run_as_no_progress_after_one_step() {
     let ran = run_with(&tree, "unknown-stops", PROTOCOL, &NoHarness, 10);
     assert_eq!(
         ran.stop.expect("the run stops"),
-        Stop::NoProgress,
+        Stop::NoProgress(None),
         "{}",
         ran.text
     );

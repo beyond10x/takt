@@ -67,8 +67,12 @@ pub enum Stop {
     Tokens(u64),
     /// The harness did something the frontier did not admit; its change was discarded.
     StepRefused(String),
-    /// A judgement step changed no file and the decision did not move: another step would not either.
-    NoProgress,
+    /// No step moves the case on: a judgement step changed no file and the decision did not
+    /// move, so another would not either (`None`); or, on a protocol whose implementation step
+    /// needs `tests.red`, [`RED_MISSES`] `tests.write` steps in a row each left the tests
+    /// passing, so `tests.red` stayed false (`Some`, naming the claim and the test command's
+    /// result).
+    NoProgress(Option<String>),
     /// The run waited on the forge (checks still running, a pull request's head behind the head
     /// pushed) and may wait no longer: its step or hour budget is spent, or it has neither to
     /// wait in. Nothing is recorded for what is awaited; the case stays open, and the next run
@@ -93,7 +97,8 @@ impl std::fmt::Display for Stop {
             Stop::Hours(h) => write!(f, "Hours ({h})"),
             Stop::Tokens(t) => write!(f, "Tokens ({t})"),
             Stop::StepRefused(why) => write!(f, "StepRefused ({why})"),
-            Stop::NoProgress => write!(f, "NoProgress"),
+            Stop::NoProgress(None) => write!(f, "NoProgress"),
+            Stop::NoProgress(Some(why)) => write!(f, "NoProgress ({why})"),
             Stop::Waiting { on, budget } => match budget {
                 Some(budget) => write!(f, "Waiting ({}; {budget})", on.join(", ")),
                 None => write!(f, "Waiting ({}; no step or hour budget)", on.join(", ")),
@@ -108,6 +113,20 @@ pub const ACCEPTED: &str = "accepted";
 /// The producer of a record takt writes from a judgement step that records a choice: the
 /// record attests the harness's choice, not an observation's outcome.
 pub const CHOICE_PRODUCER: &str = "takt.choice";
+
+/// The judgement action that writes a story's tests, the claim that its new tests detect the
+/// missing behaviour, and the claim that the tests pass: on a protocol that declares
+/// [`TESTS_RED`] (`story.delivery/2`), a `tests.write` step after which the tests still pass
+/// is no progress toward it.
+const TESTS_WRITE: &str = "tests.write";
+const TESTS_RED: &str = "tests.red";
+const TESTS_PASS: &str = "tests.pass";
+
+/// How many `tests.write` steps in a row may leave the tests passing, on a protocol that
+/// declares `tests.red`, before the run stops [`Stop::NoProgress`]: one is a test that did not
+/// detect the missing behaviour, which the next may; two is a harness that does not move toward
+/// the claim, and the implementation step it needs is never offered.
+pub const RED_MISSES: u32 = 2;
 
 /// `text` on one line: every run of white space, line breaks among them, as one space. A
 /// judgement step's commit message is `<action>: <summary>`, the summary the harness reported;
@@ -3855,6 +3874,27 @@ impl<'a> Run<'a> {
         Ok(None)
     }
 
+    /// Why the run stops after `misses` `tests.write` steps in a row left the tests passing:
+    /// the claim, the test command the `tests.run` validator runs and its result, at the
+    /// revision the last of them committed.
+    fn red_missed(&self, misses: u32) -> String {
+        let revision = self.case.revision("implementation");
+        let at = revision.as_deref().map_or("no revision", short);
+        let command = self
+            .validators
+            .iter()
+            .find(|v| v.action() == crate::validator::TestsRun::ACTION)
+            .map(|v| v.runs().join(" "))
+            .filter(|command| !command.is_empty());
+        let tests = match command {
+            Some(command) => format!("the test command `{command}`"),
+            None => "the tests".to_owned(),
+        };
+        format!(
+            "{TESTS_RED} not true after {misses} {TESTS_WRITE} steps in a row: {tests} passed after each, last at {at} (test_result pass), so the new tests detect no missing behaviour"
+        )
+    }
+
     /// Records a refusal by `by`, its reason verbatim.
     fn refused(&self, events: &Events, by: &str, reason: &str) -> Result<()> {
         events.emit(
@@ -3947,6 +3987,11 @@ impl<'a> Run<'a> {
         let mut awaited: Vec<(String, String, String)> = Vec::new();
         // Whether the story's records were written before a granted step this run.
         let mut recorded_before = false;
+        // On a protocol that declares `tests.red`: the `tests.write` steps in a row after which
+        // the tests still passed, and whether the last committed step was one whose tests are
+        // still to be read.
+        let mut red_misses: u32 = 0;
+        let mut red_due = false;
         let waiting = |awaited: &[(String, String, String)], budget: Option<Stop>| {
             let mut on: Vec<String> = Vec::new();
             for (_, action, _) in awaited {
@@ -3978,7 +4023,7 @@ impl<'a> Run<'a> {
                 decision.claims, decision.obligations, decision.actions
             );
             if last_idle.as_deref() == Some(state.as_str()) {
-                return Ok(Stop::NoProgress);
+                return Ok(Stop::NoProgress(None));
             }
             let legitimate = decision.legitimate();
             if let Some(outcome) = legitimate.first() {
@@ -4360,6 +4405,23 @@ impl<'a> Run<'a> {
                     observed_without_record.remove(&(name.clone(), revision.clone()));
                 }
                 continue;
+            }
+            // A committed `tests.write` step, read once no validator is due at its revision: the
+            // tests still passing and `tests.red` not true is no progress toward the claim the
+            // implementation step needs, and [`RED_MISSES`] in a row stop the run, as a step that
+            // changes nothing does. Tests that fail there, or any other committed step, start
+            // the count again; a step that changes no file (a hand-over) moves nothing toward
+            // the claim and leaves the count as it is.
+            if red_due {
+                red_due = false;
+                if decision.holds(TESTS_PASS) && !decision.holds(TESTS_RED) {
+                    red_misses += 1;
+                } else {
+                    red_misses = 0;
+                }
+                if red_misses >= RED_MISSES {
+                    return Ok(Stop::NoProgress(Some(self.red_missed(red_misses))));
+                }
             }
             // No judgement step when only a grant stands between the case and its outcome:
             // every claim still open is decided by evidence only an action waiting for an
@@ -5039,6 +5101,11 @@ impl<'a> Run<'a> {
                     )));
                 }
             };
+            if report.action == TESTS_WRITE && decision.claims.contains_key(TESTS_RED) {
+                red_due = true;
+            } else {
+                red_misses = 0;
+            }
             self.case.set_revision("implementation", &head)?;
             record_step(self)?;
             events.emit(

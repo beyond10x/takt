@@ -657,7 +657,15 @@ fn the_trial_fetch_goes_over_https_with_no_user_credential_and_no_prompt() {
     let agent = agent.to_str().expect("utf-8");
     let repo = world.repo.to_str().expect("utf-8");
     let (code, out, err) = world.takt_env(
-        &["scenario", "run", "--repo", repo, "1", "--test-cmd", "true"],
+        &[
+            "scenario",
+            "run",
+            "--repo",
+            repo,
+            "1",
+            "--test-cmd",
+            "sh check.sh",
+        ],
         &[
             ("SSH_AUTH_SOCK", agent),
             ("GIT_TERMINAL_PROMPT", "1"),
@@ -696,6 +704,40 @@ fn the_trial_fetch_goes_over_https_with_no_user_credential_and_no_prompt() {
         out.contains("scenario 1: story:ready-one proposed on trial/0 at "),
         "stdout {out} stderr {err}"
     );
+}
+
+/// A scenario run on `story.delivery/2` whose test command passes at every revision, `true`,
+/// with no budget given: the harness writes a test, the tests still pass, `tests.red` never
+/// holds and the implementation may not be edited. The run stops on its own, exit 3, either
+/// `NoProgress` naming `tests.red` after two such `tests.write` steps or on the scenario run's
+/// default step budget, and never runs on.
+#[test]
+fn a_scenario_run_whose_tests_always_pass_stops_on_its_own() {
+    let world = world("always-pass");
+    let repo = world.repo.to_str().expect("utf-8");
+    let (code, out, err) =
+        world.takt(&["scenario", "run", "--repo", repo, "1", "--test-cmd", "true"]);
+    assert_eq!(code, 3, "stdout {out} stderr {err}");
+    let stopped = out
+        .lines()
+        .find(|line| line.starts_with("stopped: "))
+        .unwrap_or_else(|| panic!("no stop line: stdout {out} stderr {err}"));
+    let steps: u64 = stopped
+        .split("; steps ")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no step count: {stopped}"));
+    assert!(steps <= 40, "{stopped}");
+    assert!(
+        stopped.starts_with("stopped: NoProgress (") && stopped.contains("tests.red"),
+        "{stopped}\n{out}"
+    );
+    let written = out
+        .lines()
+        .filter(|line| line.starts_with("step ") && line.ends_with(": tests.write (claude-code)"))
+        .count();
+    assert_eq!(written, 2, "{out}");
 }
 
 /// `origin` in each form git writes for a repository on github.com, SSH or HTTPS, with or

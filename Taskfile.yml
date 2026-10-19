@@ -12,7 +12,18 @@ tasks:
       - python3 -I scripts/check-citations --require-digests
       - cargo fmt --all --check
       - cargo clippy --workspace --all-targets --locked -- -D warnings
-      - cargo test --workspace --locked
+      - cargo test --workspace --locked --no-run
+      - |
+        set -o pipefail
+        mkdir -p target
+        status=0
+        timeout 1800 cargo test --workspace --locked 2>&1 | tee target/check-test.log || status=$?
+        if [ "$status" -eq 124 ]; then
+          echo "task check: cargo test ran past 1800 s and was killed; the test binary still running:" >&2
+          grep -E '^ *(Running|Doc-tests) ' target/check-test.log | tail -n 1 >&2
+          grep -E 'has been running for over' target/check-test.log | tail -n 5 >&2
+        fi
+        exit "$status"
 
   build:
     desc: Build the takt binary.

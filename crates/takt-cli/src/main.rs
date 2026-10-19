@@ -168,7 +168,8 @@ struct RunArgs {
 /// What a run's loop is given, a scenario run's as a plain run's.
 #[derive(clap::Args)]
 struct LoopArgs {
-    /// Stop after this many steps.
+    /// Stop after this many steps. Not given, `takt run` has no step budget and `takt scenario
+    /// run` stops after 40.
     #[arg(long)]
     iterations: Option<u64>,
     /// Stop after this many hours.
@@ -1080,13 +1081,24 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             None => "not pushed: no forge".to_owned(),
         }
     )?;
-    let options = looping.options(STORY_DELIVERY.to_owned(), Vec::new(), Some(case_id));
+    let mut options = looping.options(STORY_DELIVERY.to_owned(), Vec::new(), Some(case_id));
+    options.iterations = Some(scenario_iterations(looping.iterations));
     let store = Aep::default();
     let mut run = take_story(&repo, options, story, harness, &validators, out)?;
     // As `takt run`: a case that terminates accepted records its test result and its move in
     // the store, on the case's branch.
     run.record_on(&store);
     finish(&mut run, forge.line.as_deref(), out)
+}
+
+/// The step budget of a scenario run when `--iterations` is not given: twice the longest real
+/// scenario run's steps (about 20), so a run that loops without a stop of its own ends there,
+/// exit 3, rather than running on.
+const SCENARIO_ITERATIONS: u64 = 40;
+
+/// A scenario run's step budget: `given`, else [`SCENARIO_ITERATIONS`].
+fn scenario_iterations(given: Option<u64>) -> u64 {
+    given.unwrap_or(SCENARIO_ITERATIONS)
 }
 
 /// Why `story`, `proposed`, is not ready among `all`, as [`takt::frontier::is_ready`] reads it:
@@ -1445,6 +1457,15 @@ mod tests {
             .collect();
         assert_eq!(cases.len(), 1, "{cases:?}");
         cases.remove(0)
+    }
+
+    /// A scenario run with no `--iterations` stops after 40 steps; one given keeps its own,
+    /// zero among them.
+    #[test]
+    fn a_scenario_run_without_a_step_budget_gets_forty() {
+        assert_eq!(super::scenario_iterations(None), 40);
+        assert_eq!(super::scenario_iterations(Some(3)), 3);
+        assert_eq!(super::scenario_iterations(Some(0)), 0);
     }
 
     #[test]
