@@ -464,6 +464,267 @@ pub fn without_credentials(command: &mut Command, keep: fn(&str) -> bool) {
     }
 }
 
+/// The variables that tell a program where a login of the user's is found besides `HOME`: the
+/// session bus and the runtime directory it is found in (the keyring is reached through it), the
+/// XDG base directories, and the configuration a forge client, git, GnuPG, a cloud or container
+/// client reads its login from. [`without_login`] removes every one.
+pub const LOGIN_LOCATIONS: [&str; 16] = [
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "GNOME_KEYRING_CONTROL",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "GH_CONFIG_DIR",
+    "GIT_CONFIG_GLOBAL",
+    "GNUPGHOME",
+    "NETRC",
+    "AWS_CONFIG_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "CLOUDSDK_CONFIG",
+    "DOCKER_CONFIG",
+    "KUBECONFIG",
+];
+
+/// The files under the toolchain's `CARGO_HOME` that hold a registry login.
+const CARGO_LOGINS: [&str; 2] = ["credentials.toml", "credentials"];
+
+/// A home directory of its own for a child, empty and readable by this user only, under the
+/// system's temporary directory; removed with what is in it when dropped.
+#[derive(Debug)]
+pub struct ScratchHome(PathBuf);
+
+impl ScratchHome {
+    /// Makes a new one; an error when it cannot be made.
+    pub fn new() -> Result<Self> {
+        static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "takt-home-{}-{}",
+            std::process::id(),
+            MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder
+            .create(&dir)
+            .with_context(|| format!("make the scratch home {}", dir.display()))?;
+        Ok(Self(dir))
+    }
+
+    /// Where it is.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Starts `command` with no login of the user's in reach: `HOME` is `home`, every variable of
+/// [`LOGIN_LOCATIONS`] is removed, and the toolchain stays where it was (`CARGO_HOME` and
+/// `RUSTUP_HOME`, when unset, name the user's `~/.cargo` and `~/.rustup`). On Linux the process
+/// starts in a user and a mount namespace of its own, which every child of it inherits, where
+/// `/run/user` and the runtime directory `XDG_RUNTIME_DIR` names (unless it holds `home` or the
+/// command's directory) are empty and read-only, and where each socket
+/// `DBUS_SESSION_BUS_ADDRESS` names by path and each registry login under `CARGO_HOME` is
+/// `/dev/null`; with no capability left once it executes, nothing it runs can unmount them. The
+/// spawn fails when the host refuses the namespaces: the command is never run with the user's
+/// session in reach. Not hidden: an abstract socket a bus address names, and the user's home
+/// read by its path.
+pub fn without_login(command: &mut Command, home: &Path) {
+    let user_home = std::env::var_os("HOME")
+        .filter(|dir| Path::new(dir).is_absolute())
+        .map(PathBuf::from);
+    for name in LOGIN_LOCATIONS {
+        command.env_remove(name);
+    }
+    let mut cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from);
+    if let Some(user_home) = &user_home {
+        for (name, dir) in [("CARGO_HOME", ".cargo"), ("RUSTUP_HOME", ".rustup")] {
+            let dir = user_home.join(dir);
+            if std::env::var_os(name).is_none() && dir.is_dir() {
+                command.env(name, &dir);
+                if name == "CARGO_HOME" {
+                    cargo_home = Some(dir);
+                }
+            }
+        }
+    }
+    command.env("HOME", home);
+    #[cfg(target_os = "linux")]
+    {
+        let mut dirs = vec![PathBuf::from("/run/user")];
+        if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)
+            && runtime.is_absolute()
+        {
+            dirs.push(runtime);
+        }
+        let kept: Vec<PathBuf> = [Some(home), command.get_current_dir()]
+            .into_iter()
+            .flatten()
+            .filter_map(|dir| dir.canonicalize().ok())
+            .collect();
+        let mut hidden: Vec<PathBuf> = Vec::new();
+        for dir in dirs.iter().filter_map(|dir| dir.canonicalize().ok()) {
+            if dir.is_dir()
+                && !hidden.iter().any(|outer| dir.starts_with(outer))
+                && !kept.iter().any(|inner| inner.starts_with(&dir))
+            {
+                hidden.push(dir);
+            }
+        }
+        let dirs = hidden;
+        let mut files: Vec<PathBuf> = std::env::var("DBUS_SESSION_BUS_ADDRESS")
+            .unwrap_or_default()
+            .split(';')
+            .filter_map(|address| address.split_once(':').map(|(_, keys)| keys))
+            .flat_map(|keys| keys.split(','))
+            .filter_map(|key| key.strip_prefix("path="))
+            .map(PathBuf::from)
+            .collect();
+        if let Some(cargo_home) = cargo_home {
+            files.extend(CARGO_LOGINS.iter().map(|name| cargo_home.join(name)));
+        }
+        let files: Vec<PathBuf> = files
+            .into_iter()
+            .filter(|file| file.exists() && !file.is_dir())
+            .filter_map(|file| file.canonicalize().ok())
+            .filter(|file| !dirs.iter().any(|dir| file.starts_with(dir)))
+            .collect();
+        session::hide(command, &dirs, &files);
+    }
+}
+
+/// The namespaces [`without_login`] starts a child in.
+#[cfg(target_os = "linux")]
+mod session {
+    use std::ffi::{CStr, CString};
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::os::unix::process::CommandExt as _;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    /// Writes `text` to the file at `path`, as the child between fork and exec may: system
+    /// calls only, nothing allocated.
+    fn write(path: &CStr, text: &[u8]) -> std::io::Result<()> {
+        // SAFETY: `path` is a NUL-terminated string; `open` reads it only.
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `text` is valid for `text.len()` bytes; `write` reads them only.
+        let written = unsafe { libc::write(fd, text.as_ptr().cast(), text.len()) };
+        let error = std::io::Error::last_os_error();
+        // SAFETY: `fd` was opened above and is closed once.
+        unsafe {
+            libc::close(fd);
+        }
+        if usize::try_from(written).ok() == Some(text.len()) {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+
+    /// Fails with the last error when `result` is negative.
+    fn check(result: libc::c_int) -> std::io::Result<()> {
+        if result < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Has `command` start in a user namespace mapping this user to itself and a mount
+    /// namespace of its own, with an empty read-only tmpfs over each of `dirs` and `/dev/null`
+    /// bound over each of `files`.
+    pub fn hide(command: &mut Command, dirs: &[PathBuf], files: &[PathBuf]) {
+        let c = |path: &PathBuf| CString::new(path.as_os_str().as_bytes()).ok();
+        let dirs: Vec<CString> = dirs.iter().filter_map(c).collect();
+        let files: Vec<CString> = files.iter().filter_map(c).collect();
+        // SAFETY: `getuid` and `getgid` take nothing and cannot fail.
+        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+        let uid_map = format!("{uid} {uid} 1\n").into_bytes();
+        let gid_map = format!("{gid} {gid} 1\n").into_bytes();
+        let hidden = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
+        let steps = move || -> std::io::Result<()> {
+            // SAFETY: each call below is a system call given integers or NUL-terminated
+            // strings that live as long as the closure; none allocates, so each is safe
+            // between fork and exec.
+            unsafe {
+                check(libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS))?;
+                write(c"/proc/self/setgroups", b"deny")?;
+                write(c"/proc/self/uid_map", &uid_map)?;
+                write(c"/proc/self/gid_map", &gid_map)?;
+                check(libc::mount(
+                    std::ptr::null(),
+                    c"/".as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_REC | libc::MS_PRIVATE,
+                    std::ptr::null(),
+                ))?;
+                for dir in &dirs {
+                    check(libc::mount(
+                        c"tmpfs".as_ptr(),
+                        dir.as_ptr(),
+                        c"tmpfs".as_ptr(),
+                        hidden,
+                        c"mode=0755".as_ptr().cast(),
+                    ))?;
+                }
+                for file in &files {
+                    check(libc::mount(
+                        c"/dev/null".as_ptr(),
+                        file.as_ptr(),
+                        std::ptr::null(),
+                        libc::MS_BIND,
+                        std::ptr::null(),
+                    ))?;
+                }
+            }
+            Ok(())
+        };
+        // Whichever step the host refuses, and with whatever error, the spawn fails with
+        // `EPERM`, which [`super::refused_namespaces`] names; building the error allocates
+        // nothing.
+        let child = move || steps().map_err(|_| std::io::Error::from_raw_os_error(libc::EPERM));
+        // SAFETY: the closure runs between fork and exec and makes system calls only.
+        unsafe {
+            command.pre_exec(child);
+        }
+    }
+}
+
+/// What a test command that cannot run in the user and mount namespace [`without_login`]
+/// starts it in is told.
+#[cfg(target_os = "linux")]
+pub const NAMESPACES_REFUSED: &str = "the test command runs in a user and a mount namespace of its own, where no login of the user's is in reach, and this host refuses unprivileged user namespaces (as with `kernel.apparmor_restrict_unprivileged_userns = 1` or `kernel.unprivileged_userns_clone = 0`); allow them, or run takt where they are allowed";
+
+/// `error`, from starting a command [`without_login`] confined, with the cause named when it
+/// is the refusal of its namespaces: on Linux an `EPERM` (`PermissionDenied`), which every
+/// refused namespace step fails with, gets [`NAMESPACES_REFUSED`] as its context. Any other
+/// error, and an `EACCES` (`PermissionDenied` too: a program that is not executable), is
+/// returned as it was.
+#[must_use]
+pub fn refused_namespaces(error: anyhow::Error) -> anyhow::Error {
+    #[cfg(target_os = "linux")]
+    if error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|cause| {
+            cause.kind() == std::io::ErrorKind::PermissionDenied
+                && cause.raw_os_error() == Some(libc::EPERM)
+        })
+    }) {
+        return error.context(NAMESPACES_REFUSED);
+    }
+    error
+}
+
 /// Reads `stream` to its end on a thread of its own, keeping its last `limit` bytes; answers
 /// on the channel with them and whether anything was dropped.
 fn tail(

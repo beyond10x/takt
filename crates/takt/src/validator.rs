@@ -395,7 +395,7 @@ fn nothing_recorded(summary: String) -> Observation {
 /// `tests.run`: runs the test command without a shell; exit 0 is `pass`, anything else `fail`.
 /// The command is code from the tree: it gets no credential, no standard input, a timeout past
 /// which it is killed with what it started, and only a bounded summary of its output is kept
-/// ([`summarise_tests`]).
+/// ([`summarise_tests`]), and no login of the user's ([`crate::forge::without_login`]).
 /// What decides it besides the code under test is on the run's judge surface, which no step
 /// changes: the cargo configuration, the toolchain, build scripts and the command's own script
 /// ([`crate::run::JudgeSurface`]). In a case, nothing is run and no record written while the
@@ -630,6 +630,7 @@ impl TestsRun {
         crate::forge::without_credentials(&mut command, |_| false);
         let home = FreshHome::new()?;
         home.apply(&mut command);
+        crate::forge::without_login(&mut command, home.dir());
         let mut limits = self.limits;
         if let Some(deadline) = deadline {
             limits.timeout = limits
@@ -637,6 +638,7 @@ impl TestsRun {
                 .min(deadline.saturating_duration_since(std::time::Instant::now()));
         }
         let output = crate::forge::run_child(&mut command, limits)
+            .map_err(crate::forge::refused_namespaces)
             .with_context(|| format!("run {}", self.command.join(" ")))?;
         drop(home);
         let result = if output.success() { "pass" } else { "fail" };
