@@ -300,6 +300,8 @@ fn the_token_sum_equals_the_scorecards() {
             case.join("events.jsonl"),
         )
         .expect("a copy");
+        fs::write(case.join(takt::scorecard::HELD_OUT_FILE), "PASS\n")
+            .expect("the held-out result");
         let card = Scorecard::read(&repo).expect("the scorecard reads");
         assert_eq!(card.rows.len(), 1, "{name}: {card:?}");
         assert_eq!(Some(card.rows[0].tokens), trace.header.tokens.sum, "{name}");

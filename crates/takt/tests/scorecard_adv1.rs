@@ -77,10 +77,14 @@ fn stop(stop: &str, steps: u64, tokens: u64) -> Event {
     }
 }
 
-/// Writes `runs` to the case `case`'s record under `repo` through `takt::events`.
+/// Writes `runs` to the case `case`'s record under `repo` through `takt::events`, and for a
+/// scenario case a held-out result that passed beside it.
 fn record(repo: &Path, case: &str, runs: &[Vec<Event>]) -> PathBuf {
     let dir = repo.join(CASES_DIR).join(case);
     fs::create_dir_all(&dir).expect("a case directory");
+    if takt::scorecard::scenario_of(case).is_some() {
+        fs::write(dir.join(takt::scorecard::HELD_OUT_FILE), "PASS\n").expect("the held-out result");
+    }
     let events = Events::new(&dir);
     for run in runs {
         let mut step = 0;
@@ -94,7 +98,12 @@ fn record(repo: &Path, case: &str, runs: &[Vec<Event>]) -> PathBuf {
     dir
 }
 
+/// `card` compared with the scorecard saved at `saved`, under a rule of one trial: these cases
+/// are about the ranks, the definitions and the wall time on fewer than five cases, and five
+/// trials are story:scorecard-against-needs-the-trials'.
 fn against(card: &Scorecard, saved: &Path) -> (usize, String) {
+    let mut card = card.clone();
+    card.rule.trials = 1;
     let mut out = Vec::new();
     let worse = card
         .against(

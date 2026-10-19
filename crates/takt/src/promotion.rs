@@ -17,10 +17,15 @@
 //!
 //! `takt promote` reads the candidate's saved scorecard (a file outside the candidate's
 //! repository with one link, whose `revision` field equals its name and the checkout's `HEAD`,
-//! a full commit id, whose rule is takt's own and whose metric definitions takt knows),
-//! compares it with the baseline's copy in the store under takt's [`Rule`], and refuses a
-//! candidate that is worse, writing a `refused` record so the same revision, or the same tree
-//! under another commit, is not judged again; a candidate that holds is built from a fresh
+//! a full commit id that is an ancestor of the checkout's [`MAINLINE`] branch, whose rule is
+//! takt's own and whose metric definitions takt knows, every run of which was made with the
+//! binary of that revision, as its `opened` line names it, and every scenario run of which
+//! carries its held-out result), refuses a candidate with a scenario of fewer cases than the
+//! rule's trials, compares it with the baseline's copy in the store under takt's [`Rule`], and
+//! refuses a candidate that is worse, writing a `refused` record so the same revision, or the
+//! same tree under another commit, is not judged again until the operator supplies a scorecard
+//! of new runs (`--rejudge`), whose record names the refusal before it ([`Rejudged`]); a
+//! candidate that holds is built from a fresh
 //! clone of the exact commit, confined in bubblewrap ([`Confinement`]): only the clone, a
 //! scratch `CARGO_HOME` with the host's registry cache bound read-only, the toolchain takt
 //! resolves and the system directories are visible, the environment is cleared, the process and
@@ -61,6 +66,9 @@ pub const STORE: &str = "takt/promotions";
 /// writing so that two promotions at once record one; the only file in the store that is no
 /// record and no scorecard copy.
 pub const LOCK: &str = ".lock";
+
+/// The branch of the candidate's checkout a promoted revision must be an ancestor of.
+pub const MAINLINE: &str = "main";
 
 /// The sandbox the candidate is built in and its binary run under: bubblewrap, found on `PATH`.
 pub const BWRAP: &str = "bwrap";
@@ -111,7 +119,8 @@ pub enum Kind {
 }
 
 /// One promotion record, `<store>/<revision>.json`, or `<store>/<revision>.refused.json` for a
-/// refusal; a baseline or a promotion has the scorecard it read copied beside it as
+/// refusal, `<store>/<revision>.refused-<scorecard_sha256>.json` for a refusal of a candidate
+/// judged again; a baseline or a promotion has the scorecard it read copied beside it as
 /// `<store>/<revision>.scorecard.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Promotion {
@@ -154,6 +163,18 @@ pub struct Promotion {
     /// The sha256 of the record file written before this one, lower-case hex, so a record
     /// removed from between two is noticed; none on the first record only.
     pub previous_sha256: Option<String>,
+    /// On a candidate judged again (`--rejudge`), the latest refusal of its revision or tree;
+    /// none on every other record, and on one written before it had the field.
+    #[serde(default)]
+    pub rejudges: Option<Rejudged>,
+}
+
+/// The refusal a candidate judged again on new runs was refused by before: its record's file
+/// name in the store and that file's sha256, lower-case hex.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rejudged {
+    pub record: String,
+    pub sha256: String,
 }
 
 /// One run of the scorecard a stated baseline read, with the binary it states, copied from the
@@ -203,6 +224,9 @@ pub struct Request<'a> {
     pub binary_sha256: Option<&'a str>,
     /// Print the verdict and the record that would be written; write and install nothing.
     pub dry_run: bool,
+    /// Judge again a candidate whose revision or tree was refused, on a scorecard other than
+    /// every one it was refused on; the record names the latest refusal.
+    pub rejudge: bool,
     /// The clock: read once when the store is read, and again, after the build, for the instant
     /// the record carries.
     pub clock: fn() -> String,
@@ -273,11 +297,18 @@ fn cargo_home() -> Option<PathBuf> {
     dir.is_dir().then_some(dir)
 }
 
-/// The record's file in `store`.
-fn record_path(store: &Path, revision: &str, kind: Kind) -> PathBuf {
-    match kind {
-        Kind::Refused => store.join(format!("{revision}.refused.json")),
-        Kind::Baseline | Kind::Promotion => store.join(format!("{revision}.json")),
+/// The record's file in `store`: by its revision and kind, and for a refusal of a candidate
+/// judged again also by the digest of the scorecard it read, which differs from every earlier
+/// refusal's of that candidate.
+fn record_path(store: &Path, record: &Promotion) -> PathBuf {
+    let revision = &record.revision;
+    match (record.kind, &record.rejudges) {
+        (Kind::Refused, None) => store.join(format!("{revision}.refused.json")),
+        (Kind::Refused, Some(_)) => store.join(format!(
+            "{revision}.refused-{}.json",
+            record.scorecard_sha256
+        )),
+        (Kind::Baseline | Kind::Promotion, _) => store.join(format!("{revision}.json")),
     }
 }
 
@@ -338,10 +369,11 @@ pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
                 path.display()
             );
         };
-        let (named_revision, named_kind) = match stem.strip_suffix(".refused") {
-            Some(revision) => (revision, Kind::Refused),
-            None => (stem, Kind::Promotion),
-        };
+        let (named_revision, named_kind) =
+            match (stem.strip_suffix(".refused"), stem.split_once(".refused-")) {
+                (Some(revision), _) | (None, Some((revision, _))) => (revision, Kind::Refused),
+                (None, None) => (stem, Kind::Promotion),
+            };
         let record = load(&path)?;
         if record.revision != named_revision {
             bail!(
@@ -364,6 +396,14 @@ pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
                     "a baseline or a promotion"
                 },
                 record.kind
+            );
+        }
+        let named = record_path(store, &record);
+        if named != path {
+            bail!(
+                "{}: the record names its file {}; the store is not read past this",
+                path.display(),
+                named.display()
             );
         }
         if !is_instant(&record.promoted_at) {
@@ -390,7 +430,7 @@ pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
         if !copies.remove(&record.revision) {
             bail!(
                 "{}: the record's scorecard copy {} is missing; the store is not read past this",
-                record_path(store, &record.revision, record.kind).display(),
+                record_path(store, record).display(),
                 copy.display()
             );
         }
@@ -429,14 +469,14 @@ fn chained(store: &Path, records: Vec<Promotion>) -> Result<Vec<Promotion>> {
     let mut after: std::collections::BTreeMap<String, Promotion> =
         std::collections::BTreeMap::new();
     for record in records {
-        let path = record_path(store, &record.revision, record.kind);
+        let path = record_path(store, &record);
         match record.previous_sha256.clone() {
             None => {
                 if let Some(other) = &first {
                     bail!(
                         "{}: carries no previous_sha256, but {} is the first record already; the chain of records is broken, and the store is not read past this",
                         path.display(),
-                        record_path(store, &other.revision, other.kind).display()
+                        record_path(store, other).display()
                     );
                 }
                 first = Some(record);
@@ -446,7 +486,7 @@ fn chained(store: &Path, records: Vec<Promotion>) -> Result<Vec<Promotion>> {
                     bail!(
                         "{}: its previous_sha256 {previous} is the one {} carries too; two records follow one, and the store is not read past this",
                         path.display(),
-                        record_path(store, &other.revision, other.kind).display()
+                        record_path(store, other).display()
                     );
                 }
                 after.insert(previous, record);
@@ -456,7 +496,7 @@ fn chained(store: &Path, records: Vec<Promotion>) -> Result<Vec<Promotion>> {
     let mut ordered = Vec::with_capacity(total);
     let mut cursor = first;
     while let Some(record) = cursor {
-        let path = record_path(store, &record.revision, record.kind);
+        let path = record_path(store, &record);
         if let Some(before) = ordered
             .last()
             .map(|earlier: &Promotion| earlier.promoted_at.clone())
@@ -474,7 +514,7 @@ fn chained(store: &Path, records: Vec<Promotion>) -> Result<Vec<Promotion>> {
     if let Some((previous, record)) = after.into_iter().next() {
         bail!(
             "{}: its previous_sha256 {previous} is the digest of no record in the chain; the record before it is missing or changed, and the store is not read past this",
-            record_path(store, &record.revision, record.kind).display()
+            record_path(store, &record).display()
         );
     }
     Ok(ordered)
@@ -668,7 +708,7 @@ fn publish(path: &Path, text: &[u8]) -> Result<()> {
 /// refusal, the copy first; a record that cannot be written leaves no copy. The record's path.
 fn write(store: &Path, record: &Promotion, scorecard_text: &[u8]) -> Result<PathBuf> {
     std::fs::create_dir_all(store).with_context(|| format!("create {}", store.display()))?;
-    let path = record_path(store, &record.revision, record.kind);
+    let path = record_path(store, record);
     let mut text = serde_json::to_string_pretty(record).context("write the record")?;
     text.push('\n');
     if record.kind == Kind::Refused {
@@ -687,7 +727,7 @@ fn write(store: &Path, record: &Promotion, scorecard_text: &[u8]) -> Result<Path
 /// Removes `record` and its scorecard copy from the store, after the install that followed the
 /// record failed; what could not be removed is the error.
 fn unwrite(store: &Path, record: &Promotion) -> Result<()> {
-    let mut paths = vec![record_path(store, &record.revision, record.kind)];
+    let mut paths = vec![record_path(store, record)];
     if record.kind != Kind::Refused {
         paths.push(copy_path(store, &record.revision));
     }
@@ -1043,7 +1083,8 @@ struct Staged {
 
 /// Checks the candidate scorecard and the checkout agree: the scorecard, the store, the install
 /// root and the build directory lie outside the repository, the scorecard has one link, its
-/// `revision` is a full commit id equal to its file name and to `HEAD`, its rule is takt's and
+/// `revision` is a full commit id equal to its file name and to `HEAD` and an ancestor of the
+/// [`MAINLINE`] branch, its rule is takt's and
 /// its metric definitions are the ones takt knows, the checkout is clean (no tracked file
 /// differs from `HEAD`, no untracked file, no entry marked assume-unchanged or skip-worktree),
 /// and the commit names no toolchain of its own (a `rust-toolchain.toml` with a `path`). The
@@ -1121,6 +1162,7 @@ fn candidate(request: &Request<'_>) -> Result<(Scorecard, Vec<u8>, String, Strin
             repo.display()
         );
     }
+    merged(repo, &revision)?;
     let tree = git(repo, &["rev-parse", "--verify", "-q", "HEAD^{tree}"])?;
     let dirty = git(repo, &["status", "--porcelain", "--untracked-files=normal"])?;
     if !dirty.is_empty() {
@@ -1151,6 +1193,85 @@ fn candidate(request: &Request<'_>) -> Result<(Scorecard, Vec<u8>, String, Strin
     }
     no_own_toolchain(repo)?;
     Ok((card, text, revision, tree))
+}
+
+/// `revision` is an ancestor of the tip of `repo`'s [`MAINLINE`] branch, or that tip: a
+/// promotion installs a merged revision and never a branch's tip that is not; a checkout
+/// without the branch is refused naming it.
+fn merged(repo: &Path, revision: &str) -> Result<()> {
+    let tip = git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "-q",
+            &format!("refs/heads/{MAINLINE}^{{commit}}"),
+        ],
+    )
+    .map_err(|_| {
+        anyhow!(
+            "{} has no branch {MAINLINE}: a promotion installs a revision merged into {MAINLINE}",
+            repo.display()
+        )
+    })?;
+    let status = Command::new("git")
+        .args([
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "merge-base",
+            "--is-ancestor",
+            revision,
+            &tip,
+        ])
+        .current_dir(repo)
+        .status()
+        .with_context(|| format!("run git merge-base in {}", repo.display()))?;
+    match status.code() {
+        Some(0) => Ok(()),
+        Some(1) => bail!(
+            "{revision} is not an ancestor of {MAINLINE} ({tip}) in {}: a promotion installs a revision merged into {MAINLINE}, so merge it first",
+            repo.display()
+        ),
+        _ => bail!(
+            "git merge-base --is-ancestor {revision} {tip} in {} exited {status}",
+            repo.display()
+        ),
+    }
+}
+
+/// Every run of `card` was made with the binary of `revision` when one is given, as its
+/// `opened` line names it (`<sha>-dirty` and no revision are other binaries), and every run of a
+/// scenario case carries its held-out result: a promotion judges a revision on runs of its own
+/// binary, judged by the held-out check. The first run that is not is the refusal, named
+/// `<case>#<n>`.
+fn runs_judged(card: &Scorecard, revision: Option<&str>, shown: &Path) -> Result<()> {
+    let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
+    for row in &card.rows {
+        let n = counted.entry(row.case.as_str()).or_insert(0);
+        *n += 1;
+        let run = format!("{}#{n}", row.case);
+        if let Some(revision) = revision
+            && row.opened_binary.as_deref() != Some(revision)
+        {
+            let made = match &row.opened_binary {
+                Some(binary) => format!("the binary of {binary}"),
+                None => "a binary that recorded no revision".to_owned(),
+            };
+            bail!(
+                "{}: run {run} was made with {made}, not with the binary of {revision}; a promotion judges a revision on runs of its own binary, read from each run's `opened` line, so nothing is judged",
+                shown.display()
+            );
+        }
+        if row.scenario.is_some() && row.held_out.is_none() {
+            bail!(
+                "{}: run {run} carries no held-out result; a scenario run's outcome comes from the held-out check, so nothing is judged",
+                shown.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// The commit at `HEAD` of `repo` carries no `rust-toolchain.toml` with a `path`: a promotion
@@ -1218,7 +1339,7 @@ fn known_metrics(card: &Scorecard, shown: &Path) -> Result<()> {
 /// the record carries one, a mismatch refused naming both digests, and without one refused as
 /// a binary naming no revision.
 fn installed_names_latest(installed: &Path, store: &Path, latest: &Promotion) -> Result<()> {
-    let path = record_path(store, &latest.revision, latest.kind);
+    let path = record_path(store, latest);
     if !installed.exists() {
         bail!(
             "{}: no binary is installed, but the store records {} as the latest baseline or promotion ({}); a candidate is compared with the revision that is installed, so nothing is judged until they agree",
@@ -1632,6 +1753,16 @@ fn install(
 pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     let (card, text, revision, tree) = candidate(request)?;
     let stated = stated_digest(request, &revision)?;
+    runs_judged(
+        &card,
+        stated.is_none().then_some(revision.as_str()),
+        request.scorecard,
+    )?;
+    if request.rejudge && request.baseline_only {
+        bail!(
+            "--rejudge judges a refused candidate again and --baseline-only records a baseline, which is never refused; give one of them"
+        );
+    }
     let store = request.store;
     let installed = request.install_root.join("bin/takt");
     let confinement = if request.dry_run || request.baseline_only {
@@ -1647,11 +1778,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     let now = (request.clock)();
     let existing = records(store, &now)?;
     let previous_sha256 = match existing.last() {
-        Some(latest) => Some(sha256_of(&record_path(
-            store,
-            &latest.revision,
-            latest.kind,
-        ))?),
+        Some(latest) => Some(sha256_of(&record_path(store, latest))?),
         None => None,
     };
     let mut record = Promotion {
@@ -1671,7 +1798,9 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         binary_sha256: None,
         runs: Vec::new(),
         previous_sha256,
+        rejudges: None,
     };
+    let mut refusals: Vec<&Promotion> = Vec::new();
     for earlier in &existing {
         let same = if earlier.revision == revision {
             format!("{revision} is recorded already")
@@ -1683,16 +1812,55 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         } else {
             continue;
         };
+        if earlier.kind == Kind::Refused && request.rejudge {
+            refusals.push(earlier);
+            continue;
+        }
         let kind = match earlier.kind {
-            Kind::Refused => "refused; a refused candidate is not judged again until it changes",
+            Kind::Refused => {
+                "refused; a refused candidate is not judged again until it changes, or on a scorecard of new runs with --rejudge"
+            }
             Kind::Baseline => "as a baseline",
             Kind::Promotion => "as a promotion",
         };
         bail!(
             "{same}: {kind}, at {} ({})",
             earlier.promoted_at,
-            record_path(store, &earlier.revision, earlier.kind).display()
+            record_path(store, earlier).display()
         );
+    }
+    if request.rejudge {
+        let Some(latest) = refusals.last() else {
+            bail!(
+                "--rejudge: {revision} was never refused, nor its tree; there is nothing to judge again"
+            );
+        };
+        if let Some(same) = refusals
+            .iter()
+            .find(|earlier| earlier.scorecard_sha256 == record.scorecard_sha256)
+        {
+            bail!(
+                "--rejudge judges a refused candidate on a scorecard of new runs, and {} is the scorecard refused at {} ({}, digest {}); run the candidate again and save their scorecard",
+                request.scorecard.display(),
+                same.promoted_at,
+                record_path(store, same).display(),
+                same.scorecard_sha256
+            );
+        }
+        let path = record_path(store, latest);
+        record.rejudges = Some(Rejudged {
+            record: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            sha256: sha256_of(&path)?,
+        });
+        writeln!(
+            out,
+            "judged again: refused at {} ({})",
+            latest.promoted_at,
+            path.display()
+        )?;
     }
     if request.baseline_only {
         if let Some(base) = existing.iter().rfind(|record| record.kind != Kind::Refused) {
@@ -1701,7 +1869,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
                 store.display(),
                 base.revision,
                 base.promoted_at,
-                record_path(store, &base.revision, base.kind).display()
+                record_path(store, base).display()
             );
         }
         match &stated {
@@ -1731,7 +1899,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
             writeln!(
                 out,
                 "dry run: would write {} and {}",
-                record_path(store, &revision, Kind::Baseline).display(),
+                record_path(store, &record).display(),
                 copy_path(store, &revision).display()
             )?;
             writeln!(out, "{}", serde_json::to_string_pretty(&record)?)?;
@@ -1761,7 +1929,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
             "a promotion was made this UTC day already: {} at {} ({}); one promotion a day",
             earlier.revision,
             earlier.promoted_at,
-            record_path(store, &earlier.revision, earlier.kind).display()
+            record_path(store, earlier).display()
         );
     }
     let base_copy = copy_path(store, &base.revision);
@@ -1805,7 +1973,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
             writeln!(
                 out,
                 "dry run: would write {}",
-                record_path(store, &revision, Kind::Refused).display()
+                record_path(store, &record).display()
             )?;
             writeln!(out, "{}", serde_json::to_string_pretty(&record)?)?;
             return Ok(Outcome::WouldRefuse(record));
@@ -1824,7 +1992,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
             request.repo.display(),
             request.build_dir.display(),
             request.install_root.display(),
-            record_path(store, &revision, Kind::Promotion).display(),
+            record_path(store, &record).display(),
             copy_path(store, &revision).display()
         )?;
         writeln!(out, "{}", serde_json::to_string_pretty(&record)?)?;
@@ -1864,8 +2032,10 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     Ok(Outcome::Promoted(record))
 }
 
-/// Every scenario the baseline has holds at least the rule's trials on the candidate's side,
-/// and at least the rule's trials on the baseline's own side; fewer is a refusal, not a verdict.
+/// Every scenario the baseline has holds at least the rule's trials on the baseline's own side,
+/// and every scenario either side has holds at least the rule's trials on the candidate's side,
+/// so a candidate never becomes a baseline with a scenario that judges nothing; fewer is a
+/// refusal, not a verdict.
 fn enough_trials(card: &Scorecard, base_card: &Scorecard, shown: &Path) -> Result<()> {
     let trials = usize::try_from(card.rule.trials).unwrap_or(usize::MAX);
     let count = |card: &Scorecard, scenario: &str| {
@@ -1874,20 +2044,22 @@ fn enough_trials(card: &Scorecard, base_card: &Scorecard, shown: &Path) -> Resul
             .filter(|case| case.scenario.as_deref() == Some(scenario))
             .count()
     };
-    let scenarios: BTreeSet<String> = base_card
-        .cases()
-        .iter()
-        .filter_map(|case| case.scenario.clone())
-        .collect();
-    for scenario in scenarios {
-        let n = count(base_card, &scenario);
-        if n < trials {
+    let of = |card: &Scorecard| -> BTreeSet<String> {
+        card.cases()
+            .iter()
+            .filter_map(|case| case.scenario.clone())
+            .collect()
+    };
+    let (base_scenarios, scenarios) = (of(base_card), of(card));
+    for scenario in base_scenarios.union(&scenarios) {
+        let n = count(base_card, scenario);
+        if base_scenarios.contains(scenario) && n < trials {
             bail!(
                 "scenario {scenario}: the baseline has {n} case{}, the rule needs {trials}; a baseline with fewer judges nothing",
                 if n == 1 { "" } else { "s" }
             );
         }
-        let n = count(card, &scenario);
+        let n = count(card, scenario);
         if n < trials {
             bail!(
                 "scenario {scenario}: the candidate {} has {n} case{}, the rule needs {trials}; run it {} more time{} before judging",
