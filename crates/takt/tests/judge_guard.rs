@@ -16,8 +16,9 @@ use anyhow::anyhow;
 use takt::case::{AUTHORITY_FILE, Authority, Branch, grant};
 use takt::evidence::Record;
 use takt::forge::{Checks, Forge, Memory, Outgoing, PullRequest, PullRequestView};
+use takt::frontier::{Aep, approve};
 use takt::harness::{Harness, StepContext, StepReport};
-use takt::validator::{CiRead, Observation, PrMerged, PrOpen, Validator};
+use takt::validator::{ChangeRead, CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
 /// The delivery protocol, relative to this crate.
@@ -199,6 +200,14 @@ impl Harness for Requester {
                 tokens: None,
             });
         }
+        // The work committed is complete: hand it over, changing nothing.
+        if context.offered.contains(&"change.handover".to_owned()) {
+            return Ok(StepReport {
+                action: "change.handover".to_owned(),
+                summary: "hand it over".to_owned(),
+                tokens: None,
+            });
+        }
         Err(anyhow!(
             "the gate was not offered; a judgement step among {} is left",
             context.offered.join(", ")
@@ -233,6 +242,24 @@ fn at_the_gate_on(
     commits: &[&[(&str, &str)]],
     protocol: &str,
 ) -> (String, Vec<String>) {
+    at_the_gate_with(tree, id, commits.len(), protocol, |n, tree| {
+        for (path, text) in commits[n] {
+            let path = tree.join(path);
+            fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
+            fs::write(path, text).expect("a file");
+        }
+    })
+}
+
+/// As [`at_the_gate_on`], each of the `count` commits written by `write` (given its index and
+/// the tree) before it is committed.
+fn at_the_gate_with(
+    tree: &Path,
+    id: &str,
+    count: usize,
+    protocol: &str,
+    write: impl Fn(usize, &Path),
+) -> (String, Vec<String>) {
     let memory = Rc::new(Memory {
         checks: Checks::Pass,
         ..Memory::default()
@@ -246,12 +273,8 @@ fn at_the_gate_on(
     let mut run =
         Run::open(tree, options(id, protocol), &Requester, &validators).expect("the case opens");
     let mut made = Vec::new();
-    for files in commits {
-        for (path, text) in *files {
-            let path = tree.join(path);
-            fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
-            fs::write(path, text).expect("a file");
-        }
+    for n in 0..count {
+        write(n, tree);
         git(tree, &["add", "-A", "--", ".", ":!.engineering/cases"]);
         git(tree, &["commit", "-q", "-m", "a candidate commit"]);
         made.push(git(tree, &["rev-parse", "HEAD"]));
@@ -429,7 +452,8 @@ fn a_judge_surface_merge_under_agent_planner_follows_the_delegation_on_record() 
 
 /// The added acceptance: a case whose base commit is set, outside the loop, to a candidate
 /// commit that adds `crates/**` to the allow-list is refused at the merge naming the base, under
-/// `agent:planner` with no delegation.
+/// `agent:planner` with no delegation. The case's only judge-surface edit is that commit, below
+/// the moved base, so the change from the base is docs alone: only the ancestry refuses it.
 #[test]
 fn a_base_commit_that_is_not_an_ancestor_of_the_target_refuses_the_merge_naming_the_base() {
     let (_scratch, tree) = repository("moved-base", None);
@@ -439,7 +463,7 @@ fn a_base_commit_that_is_not_an_ancestor_of_the_target_refuses_the_merge_naming_
         "moved-base",
         &[
             &[(".engineering/judge-allow.yaml", widened.as_str())],
-            JUDGE_EDIT,
+            &[("docs/guide.md", "a guide past the moved base\n")],
         ],
     );
     grant(&tree, "moved-base", "repository.merge", "agent:planner").expect("granted");
@@ -447,20 +471,258 @@ fn a_base_commit_that_is_not_an_ancestor_of_the_target_refuses_the_merge_naming_
     let mut branch = Branch::read(&dir).expect("the branch record");
     branch.base_commit = Some(made[0].clone());
     branch.write(&dir).expect("written");
+    assert_eq!(
+        git(&tree, &["diff", "--name-only", &made[0], &revision]),
+        "docs/guide.md",
+        "the change from the moved base is docs alone"
+    );
 
     let (observation, calls) = merge(&tree, "moved-base", &revision);
-    assert_refused(&observation, &calls, "moved base", &["base", &made[0][..8]]);
+    assert_refused(
+        &observation,
+        &calls,
+        "moved base",
+        &[
+            &format!(
+                "the case's base {} is not an ancestor of main",
+                &made[0][..8]
+            ),
+            "the merge target's tip",
+        ],
+    );
+}
+
+/// The fixture stores, relative to this crate.
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+
+/// The story's file in the planning store.
+const STORY_FILE: &str = ".engineering/planning/story/ready-one.md";
+
+/// The subject of the approval's commit the store makes for `story:ready-one`.
+const APPROVE_SUBJECT: &str = "takt: approve story:ready-one repository.merge";
+
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir_all(to).expect("a directory");
+    for entry in fs::read_dir(from).expect("a readable fixture") {
+        let entry = entry.expect("an entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("a file type").is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).expect("a copied file");
+        }
+    }
+}
+
+/// A scratch repository on `main` holding a committed copy of the `one-ready` store, a doc and
+/// `allow` as the allow-list: the work tree is the scratch directory itself.
+fn story_repository(name: &str, allow: &str) -> Scratch {
+    let scratch = fresh(name);
+    copy_dir(&Path::new(FIXTURES).join("one-ready"), &scratch);
+    fs::create_dir_all(scratch.join("docs")).expect("a directory");
+    fs::write(scratch.join("docs/guide.md"), "a guide\n").expect("a file");
+    fs::write(scratch.join(".engineering/judge-allow.yaml"), allow).expect("a file");
+    git(&scratch, &["init", "-q", "-b", "main"]);
+    git(&scratch, &["add", "-A"]);
+    git(&scratch, &["commit", "-q", "-m", "start"]);
+    scratch
+}
+
+/// `gate.run` without a gate: one `gate_result` pass at the revision.
+struct GatePass;
+
+impl Validator for GatePass {
+    fn name(&self) -> &str {
+        "record.gate-pass"
+    }
+
+    fn action(&self) -> &str {
+        "gate.run"
+    }
+
+    fn kind(&self) -> &str {
+        "gate_result"
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(&self, _: &Path, revision: &str, seq: usize) -> Result<Observation, anyhow::Error> {
+        Ok(Observation {
+            summary: "pass".to_owned(),
+            records: vec![Record::new(
+                format!("gate-result-{seq}"),
+                self.kind(),
+                Some("pass".to_owned()),
+                self.subject(),
+                revision,
+                self.name(),
+            )],
+            artifact: None,
+        })
+    }
+}
+
+/// The validators of a delivery run through `forge`: the real tests validator, its command
+/// `true`, `change.read`, a gate that passes, and the forge's three.
+fn delivery(forge: Rc<dyn Forge>) -> Vec<Box<dyn Validator>> {
+    vec![
+        Box::new(TestsRun::new("true").expect("a command")),
+        Box::new(ChangeRead),
+        Box::new(GatePass),
+        Box::new(PrOpen::new(forge.clone())),
+        Box::new(CiRead::new(forge.clone())),
+        Box::new(PrMerged::new(forge)),
+    ]
+}
+
+fn story_options() -> RunOptions {
+    RunOptions {
+        protocol: PROTOCOL.to_owned(),
+        intent: String::new(),
+        inputs: Vec::new(),
+        iterations: Some(12),
+        hours: None,
+        tokens: None,
+        case_id: None,
+        gate: Some("repository.merge".to_owned()),
+    }
+}
+
+/// A case of `story:ready-one` taken, its work a change to `docs/guide.md` alone, run to the
+/// gate through a forge double whose checks pass with the store recording, and granted the
+/// merge through the store by `approver`, whose approval's commit rides above the grant.
+struct StoryCase {
+    repo: Scratch,
+    memory: Rc<Memory>,
+    id: String,
+    /// The case's pinned base commit.
+    base: String,
+    /// The revision the grant authorises.
+    granted: String,
+}
+
+fn story_case(name: &str, approver: &str, allow: &str) -> StoryCase {
+    let repo = story_repository(name, allow);
+    let memory = Rc::new(Memory {
+        checks: Checks::Pass,
+        ..Memory::default()
+    });
+    let forge: Rc<dyn Forge> = memory.clone();
+    let validators = delivery(forge);
+    let store = Aep::default();
+    let mut out = Vec::new();
+    let opened = Run::open_next(
+        &repo,
+        story_options(),
+        &store,
+        &Requester,
+        &validators,
+        &mut out,
+    )
+    .expect("the frontier answers")
+    .expect("story:ready-one is taken");
+    let id = opened.case.id.clone();
+    let dir = opened.case.dir.clone();
+    drop(opened);
+    fs::write(repo.join("docs/guide.md"), "a better guide\n").expect("a file");
+    git(&repo, &["commit", "-q", "-am", "the work"]);
+    let granted = git(&repo, &["rev-parse", "HEAD"]);
+    let mut run = Run::resume(&repo, story_options(), &id, &Requester, &validators)
+        .expect("the case resumes");
+    run.record_on(&store);
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).expect("the run stops without an error");
+    drop(run);
+    assert_eq!(
+        stop,
+        Stop::ApprovalRequired(vec!["repository.merge".to_owned()]),
+        "{}",
+        String::from_utf8_lossy(&out)
+    );
+    approve(&repo, &store, &id, "repository.merge", approver).expect("the approval is given");
+    assert_eq!(
+        git(&repo, &["log", "--format=%s", &format!("{granted}..HEAD")]),
+        APPROVE_SUBJECT,
+        "the approval's own commit rides above the grant"
+    );
+    let base = Branch::read(&dir)
+        .expect("the branch record")
+        .base_commit
+        .expect("a pinned base");
+    StoryCase {
+        repo,
+        memory,
+        id,
+        base,
+        granted,
+    }
 }
 
 /// The added acceptance's second half: a head that carries only takt's approval riders above
-/// the granted revision merges as before (here under the owner's grant).
+/// the granted revision merges as before. A docs-only change granted by `agent:planner` with no
+/// delegation, the store's approval record committed above the grant: the guard judges the
+/// change up to the grant, never the rider in `.engineering/evidence/`. The allow-list on
+/// `main` admits `.engineering/planning/**` besides, because every story's case carries its
+/// take below the grant ([`a_docs_only_story_case_touches_the_planning_store_end_to_end`]).
 #[test]
 fn a_head_with_only_approval_records_above_the_grant_merges_as_before() {
-    let (_scratch, tree) = repository("riders", None);
-    let (revision, _) = at_the_gate(&tree, "riders", &[JUDGE_EDIT]);
-    grant(&tree, "riders", "repository.merge", "human:owner").expect("granted");
-    let (observation, calls) = merge(&tree, "riders", &revision);
-    assert_merged(&observation, &calls, "the revision itself");
+    let allow = format!("{ALLOW}  - .engineering/planning/**\n");
+    let case = story_case("riders", "agent:planner", &allow);
+    let head = git(&case.repo, &["rev-parse", "HEAD"]);
+    assert_ne!(head, case.granted, "a rider sits above the grant");
+    let (observation, calls) = merge(&case.repo, &case.id, &case.granted);
+    assert_merged(
+        &observation,
+        &calls,
+        "approval riders above a docs-only grant",
+    );
+}
+
+/// Whether every story case touches `.engineering/planning`, measured end to end: a story's
+/// case whose work is a change to `docs/guide.md` alone, taken from the store, run to the gate
+/// with the store recording, approved by `agent:planner` through the store with no delegation
+/// on record, and run past the gate. The take is committed on the case's branch above its
+/// pinned base (`takt: take story:ready-one`), so the change up to the grant holds the story's
+/// file in the planning store, a judge surface under the allow-list as shipped: the merge is
+/// refused, naming that file, and nothing is merged.
+#[test]
+fn a_docs_only_story_case_touches_the_planning_store_end_to_end() {
+    let case = story_case("story-docs", "agent:planner", ALLOW);
+    assert_eq!(
+        git(
+            &case.repo,
+            &["diff", "--name-only", &case.base, &case.granted]
+        ),
+        format!("{STORY_FILE}\ndocs/guide.md"),
+        "the change up to the grant"
+    );
+    let forge: Rc<dyn Forge> = case.memory.clone();
+    let validators = delivery(forge);
+    let store = Aep::default();
+    let mut run = Run::resume(
+        &case.repo,
+        story_options(),
+        &case.id,
+        &Requester,
+        &validators,
+    )
+    .expect("the case resumes");
+    run.record_on(&store);
+    run.poll = std::time::Duration::from_millis(5);
+    let mut out = Vec::new();
+    // Refused, the run goes on to a judgement step the requester does not take.
+    let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
+    let text = String::from_utf8_lossy(&out);
+    assert!(case.memory.merged.borrow().is_empty(), "{stop:?}\n{text}");
+    assert_ne!(stop, Ok(Stop::Completed("accepted".to_owned())), "{text}");
+    assert!(
+        text.contains(&format!(
+            "does not admit or that are no regular file: {STORY_FILE}"
+        )),
+        "{stop:?}\n{text}"
+    );
 }
 
 /// The same case merges under `human:<id>`, with or without a delegation on record.
@@ -525,6 +787,90 @@ fn a_candidate_admitting_itself_in_the_lists_is_refused() {
         let (observation, calls) = merge(&tree, name, &revision);
         assert_refused(&observation, &calls, name, &["agent:planner"]);
     }
+}
+
+/// A delegation change merges only on the owner's grant: a case whose change touches
+/// `.engineering/judge-allow.yaml` or `.engineering/delegations.yaml` is refused under
+/// `agent:planner` although the delegation record at the target's tip delegates
+/// `repository.merge.judge_surface` to it, naming the file; and so it is when the allow-list at
+/// the tip admits `.engineering/**`, so the file is no judge surface by its name.
+#[test]
+fn a_change_to_the_lists_merges_under_the_owners_grant_alone() {
+    let delegated = delegation("agent:planner", false);
+    let widened = format!("{ALLOW}  - crates/**\n");
+    let developer = delegation("agent:developer", false);
+    let admitting = format!("{ALLOW}  - .engineering/**\n");
+    for (name, allow, file, text) in [
+        (
+            "delegated-allow",
+            None,
+            ".engineering/judge-allow.yaml",
+            widened.as_str(),
+        ),
+        (
+            "delegated-delegations",
+            None,
+            ".engineering/delegations.yaml",
+            developer.as_str(),
+        ),
+        (
+            "admitted-delegations",
+            Some(admitting.as_str()),
+            ".engineering/delegations.yaml",
+            developer.as_str(),
+        ),
+    ] {
+        let (_scratch, tree) = repository(name, Some(&delegated));
+        if let Some(allow) = allow {
+            fs::write(tree.join(".engineering/judge-allow.yaml"), allow).expect("a file");
+            git(
+                &tree,
+                &["commit", "-q", "-am", "the owner widens the allow-list"],
+            );
+        }
+        let (revision, _) = at_the_gate(&tree, name, &[&[(file, text)]]);
+        grant(&tree, name, "repository.merge", "agent:planner").expect("granted");
+        let (observation, calls) = merge(&tree, name, &revision);
+        assert_refused(
+            &observation,
+            &calls,
+            name,
+            &[
+                file,
+                "agent:planner",
+                "under the owner's grant (human:<id>) alone",
+            ],
+        );
+    }
+}
+
+/// A symbolic link under `docs/` is a judge surface whatever its name: what it points at is not
+/// the doc its name stands for. `agent:planner` with no delegation does not merge it.
+#[test]
+fn a_symlink_under_docs_is_a_judge_surface() {
+    let (_scratch, tree) = repository("docs-link", None);
+    let (revision, _) = at_the_gate_with(&tree, "docs-link", 1, PROTOCOL, |_, tree| {
+        std::os::unix::fs::symlink(
+            "../crates/takt/src/validator.rs",
+            tree.join("docs/judge.md"),
+        )
+        .expect("a link");
+    });
+    assert_eq!(
+        git(&tree, &["ls-tree", &revision, "docs/judge.md"])
+            .split_whitespace()
+            .next(),
+        Some("120000"),
+        "committed as a link"
+    );
+    grant(&tree, "docs-link", "repository.merge", "agent:planner").expect("granted");
+    let (observation, calls) = merge(&tree, "docs-link", &revision);
+    assert_refused(
+        &observation,
+        &calls,
+        "a link under docs",
+        &["docs/judge.md", "agent:planner"],
+    );
 }
 
 /// A candidate branch's own `protocols/story-delivery/1.yaml` is not the protocol its case is

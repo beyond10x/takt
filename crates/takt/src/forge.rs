@@ -332,7 +332,8 @@ pub trait Forge {
     /// The commit the branch `base`, a merge's target, is at as the repository reports it when
     /// the merge is decided: where `repository.merge` reads the judge allow-list and the
     /// delegation record from, never the case's tree. Refused by default, so an adapter that
-    /// cannot say merges nothing: without the target's tip every path is a judge surface.
+    /// cannot say merges nothing: without the target's tip every path is a judge surface. An
+    /// adapter that answers leaves the commit it names held by the tree's repository.
     fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
         let _ = tree;
         bail!(
@@ -1033,6 +1034,28 @@ impl BotRoute {
                 "{tracking} is at {tracked}, but the repository's {base} is at {remote}: what the repository holds is not what the tracking ref says; refused, nothing was pushed"
             ),
         }
+    }
+
+    /// The line that fetches the commit `object` and what it reaches through the bot route into
+    /// no ref: the object id alone as the refspec, so no branch, tag or tracking ref moves, and
+    /// no `FETCH_HEAD` (`--no-write-fetch-head`), no tag and no submodule, the options last as
+    /// on a push. `object` is an id the repository reported, never a name git would resolve.
+    #[must_use]
+    pub fn fetch_object_argv(&self, object: &str) -> Vec<String> {
+        let url = self.push_url();
+        [
+            "b10x-gates",
+            "bot",
+            "--",
+            "fetch",
+            &url,
+            object,
+            "--no-write-fetch-head",
+            "--no-tags",
+            "--recurse-submodules=no",
+        ]
+        .map(str::to_owned)
+        .to_vec()
     }
 
     /// The options every `b10x-gates` line that reads the policy carries, the scan and the API
@@ -1756,15 +1779,36 @@ impl Forge for BotRoute {
     }
 
     /// The repository's own `base`, read through the bot route's dry-run fetch
-    /// ([`Self::remote_base`]), which writes nothing; a repository with no such branch is the
-    /// error.
+    /// ([`Self::remote_base`]), then its commit fetched into no ref
+    /// ([`Self::fetch_object_argv`]): a tip newer than anything the tree's repository holds is
+    /// then held, so the allow-list and the delegation record at it can be read, and no ref a
+    /// step or the tree sees has moved. A repository with no such branch, an answer that is no
+    /// object id, or a fetch that fails is the error.
     fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
-        self.remote_base(tree, base)?.ok_or_else(|| {
+        let tip = self.remote_base(tree, base)?.ok_or_else(|| {
             anyhow!(
                 "the repository {} has no branch {base} to merge into",
                 self.repository
             )
-        })
+        })?;
+        if !(matches!(tip.len(), 40 | 64) && tip.bytes().all(|byte| byte.is_ascii_hexdigit())) {
+            bail!(
+                "the repository {} reports {base} at `{}`, which is no object id",
+                self.repository,
+                tip.escape_debug()
+            );
+        }
+        let argv = self.fetch_object_argv(&tip);
+        let exit = self.runner.run_env(tree, &argv, &Self::PUSH_ENV)?;
+        if !exit.success() {
+            return Err(Failed {
+                line: argv.join(" "),
+                code: exit.code,
+                stderr: exit.stderr.trim().to_owned(),
+            }
+            .into());
+        }
+        Ok(tip)
     }
 }
 
@@ -1941,6 +1985,13 @@ impl Forge for Memory {
 
     /// The tree's own `refs/heads/<base>`: the double's repository is the tree. Not logged, so
     /// the calls read as the forge's writes and reads of the pull request.
+    ///
+    /// A test double, never a production forge: D3 of story:judge-guard forbids reading the
+    /// merge target's tip from a local branch at merge time, because a step's test command can
+    /// move it. The double may, because it stands for a repository the test itself owns: the
+    /// test moves `refs/heads/<base>` as the owner's merge on the forge would, and no step runs
+    /// between that move and this read. The CLI never builds a `Memory`; `--forge none`
+    /// registers no merge validator at all.
     fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
         crate::git::run(
             tree,

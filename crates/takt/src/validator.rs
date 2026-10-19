@@ -1528,6 +1528,46 @@ pub const DELEGATIONS: &str = ".engineering/delegations.yaml";
 /// judge surface.
 pub const JUDGE_SURFACE_CAPABILITY: &str = "repository.merge.judge_surface";
 
+/// The files a change to which merges under the owner's grant alone, never a delegation's,
+/// whatever the allow-list admits: the guard's own inputs, every file it reads at the target's
+/// tip. A delegated role that could merge a change to either could widen its own delegation or
+/// the allow-list.
+pub const OWNER_ONLY: [&str; 2] = [JUDGE_ALLOW, DELEGATIONS];
+
+/// The modes a changed path may have for its name alone to decide whether it is a judge
+/// surface: a regular file, plain or executable, or none (the path deleted). Any other, a
+/// symbolic link (`120000`) or a submodule's commit (`160000`) above all, is a judge surface
+/// whatever its name: what it points at is not the text its name stands for.
+const NAMED_BY_PATH: [&str; 3] = ["100644", "100755", "000000"];
+
+/// Each change of `git diff-tree -r -z --raw` output `raw` as its new mode and its path; an
+/// error when a field does not read, a path that is not UTF-8 among them.
+fn raw_changes(raw: &[u8]) -> Result<Vec<(&str, &str)>> {
+    let mut fields = raw
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty());
+    let mut changes = Vec::new();
+    while let Some(change) = fields.next() {
+        let path = fields
+            .next()
+            .ok_or_else(|| anyhow!("git diff-tree gave a change with no path"))?;
+        let path = std::str::from_utf8(path).map_err(|_| {
+            anyhow!(
+                "git diff-tree named a path that is not UTF-8: {}",
+                path.escape_ascii()
+            )
+        })?;
+        let change = std::str::from_utf8(change)
+            .map_err(|_| anyhow!("git diff-tree gave a change line that is not UTF-8"))?;
+        let parts: Vec<&str> = change.trim_start_matches(':').split(' ').collect();
+        let [_, to_mode, _, _, _] = parts.as_slice() else {
+            bail!("git diff-tree gave a change line it does not document: {change}");
+        };
+        changes.push((*to_mode, path));
+    }
+    Ok(changes)
+}
+
 /// [`JUDGE_ALLOW`] as it is written: `paths`, a list of path globs.
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1617,11 +1657,13 @@ impl PrMerged {
     /// change compared is not the one the target would take. The change is the case's base
     /// commit to the granted revision (what lies above it is takt's riders alone, which
     /// [`carries`] holds the head to); a path in it that [`JUDGE_ALLOW`] at the tip does not
-    /// admit is a judge surface. A change to one merges under the owner's grant (`human:`), or
-    /// under an agent role's (`agent:`) when [`DELEGATIONS`] at the tip names an unrevoked
-    /// delegation of [`JUDGE_SURFACE_CAPABILITY`] to that role; any other approver grants it
-    /// nothing. Neither file is read from the tree or at the base commit, so a candidate's own
-    /// edit of either counts for nothing, and is itself a judge surface.
+    /// admit, or whose new mode is no regular file's ([`NAMED_BY_PATH`]), is a judge surface. A
+    /// change to one merges under the owner's grant (`human:`), or under an agent role's
+    /// (`agent:`) when [`DELEGATIONS`] at the tip names an unrevoked delegation of
+    /// [`JUDGE_SURFACE_CAPABILITY`] to that role; any other approver grants it nothing. A change
+    /// to a file of [`OWNER_ONLY`] merges under the owner's grant alone, whatever the allow-list
+    /// admits. Neither file is read from the tree or at the base commit, so a candidate's own
+    /// edit of either counts for nothing.
     fn judge_guard(
         &self,
         tree: &Path,
@@ -1688,17 +1730,27 @@ impl PrMerged {
                 "-r",
                 "-z",
                 "--no-renames",
-                "--name-only",
+                "--raw",
                 &at,
                 revision,
                 "--",
             ],
         )?;
-        let surfaces: Vec<&str> = nul_fields(&diff, "diff-tree", false)?
-            .into_iter()
-            .filter(|path| !globs.iter().any(|glob| crate::run::glob_admits(glob, path)))
+        let changes = raw_changes(&diff)?;
+        let surfaces: Vec<&str> = changes
+            .iter()
+            .filter(|(mode, path)| {
+                !NAMED_BY_PATH.contains(mode)
+                    || !globs.iter().any(|glob| crate::run::glob_admits(glob, path))
+            })
+            .map(|(_, path)| *path)
             .collect();
-        if surfaces.is_empty() {
+        let owner_only: Vec<&str> = changes
+            .iter()
+            .map(|(_, path)| *path)
+            .filter(|path| OWNER_ONLY.contains(path))
+            .collect();
+        if surfaces.is_empty() && owner_only.is_empty() {
             return Ok(None);
         }
         let shown = if surfaces.len() > 5 {
@@ -1710,11 +1762,19 @@ impl PrMerged {
         } else {
             surfaces.join(", ")
         };
-        let touches = format!(
-            "its change from the base {} touches judge surfaces, paths {JUDGE_ALLOW} at {base} {} does not admit{unread}: {shown}",
-            short(&at),
-            short(&tip)
-        );
+        let touches = if surfaces.is_empty() {
+            format!(
+                "its change from the base {} touches {}",
+                short(&at),
+                owner_only.join(", ")
+            )
+        } else {
+            format!(
+                "its change from the base {} touches judge surfaces, paths {JUDGE_ALLOW} at {base} {} does not admit or that are no regular file{unread}: {shown}",
+                short(&at),
+                short(&tip)
+            )
+        };
         let typed = crate::case::is_approver(approver);
         if typed && approver.starts_with("human:") {
             return Ok(None);
@@ -1723,6 +1783,12 @@ impl PrMerged {
             return Ok(Some(format!(
                 "{touches}; the approver `{}` is neither the owner (human:<id>) nor an agent role (agent:<role>), and grants nothing there",
                 approver.escape_debug()
+            )));
+        }
+        if !owner_only.is_empty() {
+            return Ok(Some(format!(
+                "{touches}; a change to {} merges under the owner's grant (human:<id>) alone, never under a delegation, and {approver} is not the owner",
+                owner_only.join(" or ")
             )));
         }
         let delegated = match record_at::<DelegationRecord>(tree, &tip, DELEGATIONS)? {

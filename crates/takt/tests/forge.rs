@@ -2134,7 +2134,7 @@ impl Runner for Fetching {
 }
 
 /// D7: the bot route reports the target's tip through its dry-run fetch of the base branch,
-/// writing nothing.
+/// then fetches that commit into no ref, so the tree's repository holds it.
 #[test]
 fn the_bot_route_reports_the_target_tip_through_a_dry_run_fetch() {
     let tree = scratch("bot-tip");
@@ -2161,10 +2161,131 @@ fn the_bot_route_reports_the_target_tip_through_a_dry_run_fetch() {
     let answered = forge.target_tip(&tree, "main").expect("a tip");
     assert_eq!(answered, tip);
     let lines = runner.lines.borrow();
-    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(lines[0].contains("--dry-run"), "{lines:?}");
     assert!(
         lines[0].contains("refs/heads/main:refs/remotes/origin/main"),
         "{lines:?}"
     );
+    assert_eq!(
+        lines[1],
+        format!(
+            "b10x-gates bot -- fetch https://github.com/owner/repo.git {tip} --no-write-fetch-head --no-tags --recurse-submodules=no"
+        ),
+        "{lines:?}"
+    );
+}
+
+/// A runner that runs the bot route's lines as plain git against the bare repository `remote`
+/// in place of the repository's URL: the dry-run fetch answered from `git ls-remote`, which
+/// stores no object, as a dry run is documented to change nothing; every other line run as
+/// git. The environment is dropped: it allows HTTPS alone, and `remote` is a path.
+struct LocalRemote {
+    remote: PathBuf,
+    url: String,
+    lines: RefCell<Vec<String>>,
+}
+
+impl Runner for LocalRemote {
+    fn run_env(&self, tree: &Path, argv: &[String], _: &[(&str, &str)]) -> anyhow::Result<Exit> {
+        self.run(tree, argv)
+    }
+
+    fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
+        self.lines.borrow_mut().push(argv.join(" "));
+        let [bot, sub, dashes, rest @ ..] = argv else {
+            return Err(anyhow!("not a bot line: {argv:?}"));
+        };
+        assert_eq!([bot, sub, dashes], ["b10x-gates", "bot", "--"], "{argv:?}");
+        let args: Vec<String> = rest
+            .iter()
+            .map(|arg| {
+                if *arg == self.url {
+                    self.remote.display().to_string()
+                } else {
+                    arg.clone()
+                }
+            })
+            .collect();
+        if args.iter().any(|arg| arg == "--dry-run") {
+            let (source, target) = args[2].split_once(':').expect("a refspec");
+            let listed = git(&self.remote, &["ls-remote", ".", source]);
+            let new = listed.split_whitespace().next().expect("the branch");
+            return Ok(Exit {
+                code: Some(0),
+                stdout: format!("* {} {new} {target}\n", "0".repeat(40)),
+                stderr: String::new(),
+            });
+        }
+        let output = Command::new("git").args(&args).current_dir(tree).output()?;
+        Ok(Exit {
+            code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+}
+
+/// The merge target's tip newer than anything the tree's repository holds: the bot route
+/// reports it, and the tree then holds its commit, so the allow-list and the delegation record
+/// at it read; no ref of the tree has moved and no `FETCH_HEAD` is written.
+#[test]
+fn the_bot_route_brings_a_target_tip_newer_than_the_tree_into_no_ref() {
+    let tree = scratch("bot-newer");
+    let remote = scratch("bot-newer-remote");
+    fs::remove_dir_all(&*remote).expect("emptied");
+    git(
+        &tree,
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            ".",
+            remote.to_str().expect("utf-8"),
+        ],
+    );
+    let newer = git(
+        &remote,
+        &["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "newer"],
+    );
+    git(&remote, &["update-ref", "refs/heads/main", &newer]);
+    let held = |at: &str| {
+        Command::new("git")
+            .args(["cat-file", "-e", &format!("{at}^{{commit}}")])
+            .current_dir(&*tree)
+            .status()
+            .expect("git runs")
+            .success()
+    };
+    assert!(!held(&newer), "the tree holds nothing of the newer tip yet");
+    let refs = git(&tree, &["for-each-ref"]);
+    let runner = Rc::new(LocalRemote {
+        remote: remote.to_path_buf(),
+        url: "https://github.com/owner/repo.git".to_owned(),
+        lines: RefCell::new(Vec::new()),
+    });
+    struct Shared(Rc<LocalRemote>);
+    impl Runner for Shared {
+        fn run_env(
+            &self,
+            tree: &Path,
+            argv: &[String],
+            env: &[(&str, &str)],
+        ) -> anyhow::Result<Exit> {
+            self.0.run_env(tree, argv, env)
+        }
+        fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
+            self.0.run(tree, argv)
+        }
+    }
+    let forge = BotRoute::new("owner/repo", None, Box::new(Shared(runner.clone())));
+    let answered = forge.target_tip(&tree, "main").expect("a tip");
+    assert_eq!(answered, newer);
+    assert!(
+        held(&newer),
+        "the tree holds the tip it was told: {:?}",
+        runner.lines.borrow()
+    );
+    assert_eq!(git(&tree, &["for-each-ref"]), refs, "no ref moved");
+    assert!(!tree.join(".git/FETCH_HEAD").exists(), "no FETCH_HEAD");
 }
