@@ -51,10 +51,13 @@ adversarial passes on request; trials, scenario runs and verification runs (`scr
   `B10X_GATES_POLICY` set to the gates policy's path. A run's outcome is its exit code and the
   files it wrote, never its printed text.
 - **Verification runs.** `scripts/check-finding --scenarios <scratch checkout> <id> <revision>` on
-  the promoted revision and on the candidate. It prints `reproduced` or `not_reproduced`; when it
-  exits non-zero it printed no result. A fix is verified when the promoted revision gives
-  `reproduced` and the candidate `not_reproduced`. Until story:promotion records a promoted
-  revision, the revision the run was taken with stands in for it.
+  the promoted revision and on the candidate. It builds the revision confined in bubblewrap and
+  prints `reproduced`, `not_reproduced` or `error`; when it exits non-zero it printed no result.
+  `not_reproduced` needs the command to end with the predicate's `healthy_exit` (0 when it names
+  none); `error` is any status the predicate does not name (a crash, a flag rejected, a command
+  not found), named on standard error, and verifies nothing. A fix is verified when the promoted
+  revision gives `reproduced` and the candidate `not_reproduced`. Until story:promotion records
+  a promoted revision, the revision the run was taken with stands in for it.
 - **Measurement.** Per scenario run: outcome, steps, tokens, refusals, `NoProgress` and errors,
   wall time, each against the promoted revision's baseline for that scenario. Tokens are read from
   the run's events under `.engineering/cases/`.

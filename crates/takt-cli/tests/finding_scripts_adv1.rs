@@ -371,6 +371,7 @@ fn a_scenario_include_naming_a_fifo_does_not_hang_the_check() {
 /// Lead 2: scripts/check-finding:24 says the environment holds only PATH, HOME, LANG, TAKT and
 /// SCENARIO, "so no credential of the caller reaches it"; the profile's Intake table says the
 /// same. HOME is the caller's, so the caller's git credential helper answers the predicate.
+/// Without a credential `git credential fill` dies with 128, the predicate's healthy exit.
 #[test]
 fn the_predicate_reaches_no_credential_under_home() {
     let world = world("home");
@@ -386,11 +387,13 @@ fn the_predicate_reaches_no_credential_under_home() {
     world.file(
         "credential",
         &format!(
-            r"scenario: 1
-command: printf 'protocol=https\nhost=example.invalid\n\n' | GIT_TERMINAL_PROMPT=0 git credential fill
+            r#"scenario: 1
+command: "$TAKT" --version >/dev/null; printf 'protocol=https\nhost=example.invalid\n\n' | GIT_TERMINAL_PROMPT=0 git credential fill
+exit: 0
+healthy_exit: 128
 output: PLANTED-SECRET
 source: {SOURCE}
-"
+"#
         ),
     );
     let output = world.check(

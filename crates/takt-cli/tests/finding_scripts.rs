@@ -3,11 +3,13 @@
 //! predicate, its source and the reference `finding:<key>`; a key already in the store, or a
 //! finding without a predicate that parses, is refused with nothing written. `check-finding`
 //! builds takt from a revision of a scratch takt source, in a checkout of that revision so the
-//! binary names it, runs the predicate on a fresh checkout of the scenario's seed, or of the
-//! repository and seed the predicate names itself, and prints `reproduced` or `not_reproduced`,
-//! the results of the `scenario_result` evidence kind (`protocols/self-improvement/1.yaml`). The
-//! scratch takt is a workspace with no dependencies, so each build takes seconds; nothing
-//! reaches a network.
+//! binary names it, confined in bubblewrap so the build reads nothing of the caller's home or
+//! environment and writes nothing outside its own build directory, runs the predicate on a
+//! fresh checkout of the scenario's seed, or of the repository and seed the predicate names
+//! itself, and prints `reproduced`, `not_reproduced` (only when the command ended with the exit
+//! the predicate names as the healthy one) or `error`, the results of the `scenario_result`
+//! evidence kind (`protocols/self-improvement/1.yaml`). The scratch takt is a workspace with no
+//! dependencies, so each build takes seconds; nothing reaches a network.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -125,10 +127,12 @@ fn body(predicate: Option<&str>) -> String {
     text
 }
 
-/// The predicate of the default-protocol finding against scenario 1, citing [`SOURCE`].
+/// The predicate of the default-protocol finding against scenario 1, citing [`SOURCE`]. The
+/// fixed takt opens its case on the right protocol and exits 3 as the defect's does, so the
+/// predicate names 3 as the healthy exit too and the output tells the two apart.
 fn predicate() -> String {
     format!(
-        "scenario: 1\ncommand: \"$TAKT\" run --repo . --harness none\nexit: 3\noutput: on software.change/1\nsource: {SOURCE}\n"
+        "scenario: 1\ncommand: \"$TAKT\" run --repo . --harness none\nexit: 3\nhealthy_exit: 3\noutput: on software.change/1\nsource: {SOURCE}\n"
     )
 }
 
@@ -327,6 +331,53 @@ fn every_malformed_finding_is_refused_and_nothing_is_written() {
         ),
         ("an exit past 255", body(Some(&replaced("exit", "256")))),
         (
+            "a healthy exit that is no number",
+            body(Some(&replaced("healthy_exit", "zero"))),
+        ),
+        (
+            "a healthy exit past 255",
+            body(Some(&replaced("healthy_exit", "256"))),
+        ),
+        (
+            "a healthy exit the check reads as its timeout",
+            body(Some(&replaced("healthy_exit", "124"))),
+        ),
+        (
+            "a command that never runs the takt under test",
+            body(Some(&replaced(
+                "command",
+                "echo on software.change/1; exit 3",
+            ))),
+        ),
+        (
+            "a command naming only a variable that starts like TAKT",
+            body(Some(&replaced("command", "\"$TAKTX\" run --repo ."))),
+        ),
+        (
+            "an output shorter than 8 characters",
+            body(Some(&replaced("output", "on soft"))),
+        ),
+        (
+            "a defect's exit that is the healthy one, with no output to tell them apart",
+            body(Some(&without("output"))),
+        ),
+        (
+            "a defect's exit 0, the healthy exit when none is named, with no output",
+            body(Some(
+                &without("output")
+                    .lines()
+                    .filter(|line| !line.starts_with("healthy_exit:"))
+                    .map(|line| {
+                        if line.starts_with("exit:") {
+                            "exit: 0\n".to_owned()
+                        } else {
+                            format!("{line}\n")
+                        }
+                    })
+                    .collect::<String>(),
+            )),
+        ),
+        (
             "a scenario id a run refuses",
             body(Some(&replaced("scenario", "a b"))),
         ),
@@ -383,6 +434,16 @@ fn every_malformed_finding_is_refused_and_nothing_is_written() {
         );
         assert_eq!(status(&repo), before, "key {key:?}: nothing was written");
     }
+    // At the edges: `${TAKT}` runs the takt under test, and 8 characters are output enough.
+    let edges = replaced("command", "${TAKT} run --repo . --harness none")
+        .replace("output: on software.change/1", "output: change/1");
+    let output = file(&repo, "edges", &body(Some(&edges)), &[]);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "filed\n",
+        "{}",
+        shown(&output)
+    );
 }
 
 /// The scratch takt's `build.rs`: the revision of the checkout the crate is built in, read with
@@ -551,10 +612,10 @@ impl World {
 
     /// The default-protocol finding's predicate in its repository form: the repository by its
     /// URL and seed, the task's test command, citing [`SOURCE`]; the command checks that `$TEST`
-    /// reached it.
+    /// reached it. The fixed takt exits 3 as well, its healthy exit.
     fn repository_predicate(&self) -> String {
         format!(
-            "repository: {REPOSITORY_URL}\nseed: {}\ntest: ./check.sh\ncommand: test \"$TEST\" = ./check.sh && \"$TAKT\" run --repo .\nexit: 3\noutput: on software.change/1\nsource: {SOURCE}\n",
+            "repository: {REPOSITORY_URL}\nseed: {}\ntest: ./check.sh\ncommand: test \"$TEST\" = ./check.sh && \"$TAKT\" run --repo .\nexit: 3\nhealthy_exit: 3\noutput: on software.change/1\nsource: {SOURCE}\n",
             self.seed
         )
     }
@@ -649,14 +710,553 @@ fn the_predicate_is_not_reproduced_with_a_takt_built_from_the_revision_that_fixe
     );
 }
 
+/// The run directory a check names on standard error (`check-finding: record: <dir>`).
+fn record(output: &Output) -> PathBuf {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("check-finding: record: "))
+        .unwrap_or_else(|| panic!("no record named: {}", shown(output)));
+    PathBuf::from(line)
+}
+
+/// story:check-finding-positive-control: a check says `not_reproduced` only when the command
+/// ended with the exit the predicate names as the healthy one (`healthy_exit`, 0 when the
+/// predicate names none) and the defect's expectations did not all hold. A command that panics,
+/// rejects its flags, never starts, or ends with any other status the predicate does not name
+/// as the healthy one gives `error`, exit 0, the status named on standard error and in the
+/// check's record; `reproduced` still needs every expectation, and an exit the predicate names.
+#[test]
+fn a_command_that_does_not_end_healthy_or_with_the_defect_gives_error_naming_its_status() {
+    let world = world("positive-control");
+    // Every command runs the takt under test first, as a filed predicate must.
+    let defect = |command: &str| {
+        format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; {command}\nexit: 3\noutput: on software.change/1\nsource: {SOURCE}\n"
+        )
+    };
+    let cases: Vec<(&str, String, &str, &str, i32)> = vec![
+        (
+            "panic",
+            defect("echo \"thread 'main' panicked at src/main.rs:9:5\" >&2; exit 101"),
+            world.defect.as_str(),
+            "error",
+            101,
+        ),
+        (
+            "flag-rejected",
+            defect("echo \"error: unexpected argument '--harness' found\" >&2; exit 2"),
+            world.defect.as_str(),
+            "error",
+            2,
+        ),
+        (
+            "not-started",
+            defect("no-such-command-of-check-finding --repo ."),
+            world.defect.as_str(),
+            "error",
+            127,
+        ),
+        (
+            "defect-exit-without-its-output",
+            defect("echo case on story.delivery/1; exit 3"),
+            world.defect.as_str(),
+            "error",
+            3,
+        ),
+        (
+            "healthy-without-the-output",
+            defect("echo case on story.delivery/1"),
+            world.defect.as_str(),
+            "not_reproduced",
+            0,
+        ),
+        (
+            "healthy-with-the-output",
+            defect("echo case on software.change/1"),
+            world.defect.as_str(),
+            "not_reproduced",
+            0,
+        ),
+        (
+            "the-defect",
+            defect("echo case on software.change/1; exit 3"),
+            world.defect.as_str(),
+            "reproduced",
+            3,
+        ),
+        (
+            "a-named-healthy-exit",
+            format!(
+                "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; echo case on story.delivery/1; exit 3\nexit: 3\nhealthy_exit: 3\noutput: on software.change/1\nsource: {SOURCE}\n"
+            ),
+            world.defect.as_str(),
+            "not_reproduced",
+            3,
+        ),
+        (
+            "output-only-crash",
+            format!(
+                "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; echo case on software.change/1; exit 101\noutput: on software.change/1\nsource: {SOURCE}\n"
+            ),
+            world.defect.as_str(),
+            "error",
+            101,
+        ),
+        // The takt the fix builds opens its case on the right protocol and exits 3, as the
+        // defect's does: a predicate that names no healthy exit cannot call that fixed.
+        (
+            "fixed-takt-no-healthy-exit",
+            defect("\"$TAKT\" run --repo . --harness none"),
+            world.fixed.as_str(),
+            "error",
+            3,
+        ),
+        (
+            "defect-takt-no-healthy-exit",
+            defect("\"$TAKT\" run --repo . --harness none"),
+            world.defect.as_str(),
+            "reproduced",
+            3,
+        ),
+    ];
+    for (key, predicate, revision, result, status) in &cases {
+        let filed = file(&world.takt, key, &body(Some(predicate)), &[]);
+        assert!(filed.status.success(), "{key}: {}", shown(&filed));
+        let output = world.check(&format!("story:{key}"), revision, &[]);
+        assert!(output.status.success(), "{key}: {}", shown(&output));
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("{result}\n"),
+            "{key}: {}",
+            shown(&output)
+        );
+        let recorded = fs::read_to_string(record(&output).join("result"))
+            .unwrap_or_else(|error| panic!("{key}: the check's record: {error}"));
+        assert!(
+            recorded.contains(&format!("exit: {status}\nresult: {result}\n")),
+            "{key}: {recorded}"
+        );
+        if *result == "error" {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains(&format!("exit {status}, which the predicate names")),
+                "{key}: the status is named: {}",
+                shown(&output)
+            );
+        }
+    }
+}
+
+/// The `build.rs` of a revision that probes its build's confinement, the paths it tries filled
+/// in by [`probe_build`]: it writes `$HOME/canary`, writes and reads under the caller's home by
+/// its path, overwrites another revision's kept binary and plants a file beside it, and copies
+/// its whole environment; each attempt and the environment go to `probe.txt` in its `OUT_DIR`,
+/// which the binary prints for `--probe`. Every attempt is recorded, none fails the build.
+const PROBE_BUILD: &str = r#"use std::fmt::Write as _;
+
+fn attempt(what: &str, result: std::io::Result<()>, out: &mut String) {
+    match result {
+        Ok(()) => writeln!(out, "{what}: done").unwrap(),
+        Err(error) => writeln!(out, "{what}: refused: {error}").unwrap(),
+    }
+}
+
+fn main() {
+    let mut out = String::new();
+    let home = std::env::var("HOME").unwrap_or_default();
+    attempt("home-canary", std::fs::write(format!("{home}/canary"), "build.rs\n"), &mut out);
+    attempt("callers-home-canary", std::fs::write("@HOME@/canary", "build.rs\n"), &mut out);
+    attempt(
+        "callers-home-secret",
+        std::fs::read_to_string("@HOME@/.secret").map(|_| ()),
+        &mut out,
+    );
+    attempt("other-build", std::fs::write("@OTHER@/takt", "build.rs\n"), &mut out);
+    attempt("other-build-planted", std::fs::write("@OTHER@/planted", "build.rs\n"), &mut out);
+    for (name, value) in std::env::vars() {
+        writeln!(out, "env {name}={value}").unwrap();
+    }
+    let dir = std::env::var("OUT_DIR").unwrap();
+    std::fs::write(format!("{dir}/probe.txt"), out).unwrap();
+    println!("cargo:rustc-env=TAKT_REVISION=probe");
+}
+"#;
+
+/// The probing revision's `main.rs`: `--probe` prints what its build script recorded.
+const PROBE_MAIN: &str = r#"fn main() {
+    if std::env::args().any(|arg| arg == "--probe") {
+        print!("{}", include_str!(concat!(env!("OUT_DIR"), "/probe.txt")));
+        return;
+    }
+    println!("takt 0.1.0 ({})", env!("TAKT_REVISION"));
+}
+"#;
+
+/// [`PROBE_BUILD`] with the caller's home `home` and the other revision's kept build directory
+/// `other`.
+fn probe_build(home: &Path, other: &Path) -> String {
+    PROBE_BUILD
+        .replace("@HOME@", home.to_str().expect("UTF-8"))
+        .replace("@OTHER@", other.to_str().expect("UTF-8"))
+}
+
+/// The variables a confined build's script may see: those the check sets (`HOME`, `TMPDIR`,
+/// `PATH`, `LANG`, `TERM`, `CARGO_HOME`, `RUSTC`), the working directory bubblewrap sets, and
+/// those cargo sets for a build script (`CARGO`, `CARGO_*`, `DEP_*` and the names below; the
+/// two `SSL_CERT_*` cargo sets in its own environment, naming the system's certificates).
+fn allowed_in_a_build(name: &str) -> bool {
+    const SET: [&str; 22] = [
+        "CARGO",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "HOME",
+        "TMPDIR",
+        "PATH",
+        "LANG",
+        "TERM",
+        "PWD",
+        "RUSTC",
+        "RUSTDOC",
+        "RUSTC_LINKER",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "OUT_DIR",
+        "TARGET",
+        "HOST",
+        "NUM_JOBS",
+        "OPT_LEVEL",
+        "PROFILE",
+        "DEBUG",
+        "LD_LIBRARY_PATH",
+    ];
+    SET.contains(&name) || name.starts_with("CARGO_") || name.starts_with("DEP_")
+}
+
+/// story:check-finding-builds-confined: the build of the revision under check runs confined.
+/// A revision whose `build.rs` writes `$HOME/canary`, writes and reads under the caller's home,
+/// overwrites another revision's kept binary and copies its environment still builds, and
+/// leaves no canary in the caller's home and the other revision's build as it was; its
+/// environment holds the allow-list only, nothing the caller set, and not the caller's home.
+#[test]
+fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes_only_its_own() {
+    let world = world("confined");
+    let filed = file(
+        &world.takt,
+        "default-protocol",
+        &body(Some(&predicate())),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = world.check("story:default-protocol", &world.defect, &[]);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "the ordinary build works: {}",
+        shown(&output)
+    );
+    let other = world
+        .cache()
+        .join("takt/check-finding/builds")
+        .join(&world.defect);
+    let kept = fs::read(other.join("takt")).expect("the defect's kept binary");
+
+    let home = world.outer.0.join("callers-home");
+    write(&home.join(".secret"), "PLANTED-HOME-SECRET\n");
+    write(
+        &world.takt.join("crates/takt-cli/build.rs"),
+        &probe_build(&home, &other),
+    );
+    write(&world.takt.join("crates/takt-cli/src/main.rs"), PROBE_MAIN);
+    git(&world.takt, &["add", "-A"]);
+    git(&world.takt, &["commit", "-q", "-m", "probe"]);
+    let probe = git_out(&world.takt, &["rev-parse", "HEAD"]);
+    let filed = file(
+        &world.takt,
+        "probe",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --probe\nexit: 0\noutput: other-build:\nsource: {SOURCE}\n"
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let shared = world.outer.0.join("shared-target");
+    let output = world.check(
+        "story:probe",
+        &probe,
+        &[
+            ("HOME", home.to_str().expect("UTF-8")),
+            ("CHECK_FINDING_PLANTED", "PLANTED-CREDENTIAL"),
+            ("GITHUB_TOKEN", "PLANTED-CREDENTIAL"),
+            ("CARGO_TARGET_DIR", shared.to_str().expect("UTF-8")),
+        ],
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "the probing revision builds: {}",
+        shown(&output)
+    );
+    let printed = Command::new(
+        world
+            .cache()
+            .join("takt/check-finding/builds")
+            .join(&probe)
+            .join("takt"),
+    )
+    .arg("--probe")
+    .output()
+    .expect("the probe's binary runs");
+    let printed = String::from_utf8_lossy(&printed.stdout).into_owned();
+
+    assert!(
+        !home.join("canary").exists(),
+        "the build wrote into the caller's home:\n{printed}"
+    );
+    assert_eq!(
+        fs::read(other.join("takt")).expect("the defect's kept binary"),
+        kept,
+        "the build overwrote another revision's kept binary:\n{printed}"
+    );
+    assert!(
+        !other.join("planted").exists(),
+        "the build wrote into another revision's build directory:\n{printed}"
+    );
+    assert!(
+        !shared.exists(),
+        "the build used the caller's CARGO_TARGET_DIR"
+    );
+    for attempt in [
+        "callers-home-canary",
+        "callers-home-secret",
+        "other-build",
+        "other-build-planted",
+    ] {
+        assert!(
+            printed
+                .lines()
+                .any(|line| line.starts_with(&format!("{attempt}: refused: "))),
+            "{attempt} is refused, and the record says why:\n{printed}"
+        );
+    }
+    let environment: Vec<(&str, &str)> = printed
+        .lines()
+        .filter_map(|line| line.strip_prefix("env "))
+        .filter_map(|line| line.split_once('='))
+        .collect();
+    assert!(
+        environment.iter().any(|(name, _)| *name == "OUT_DIR"),
+        "the environment was copied:\n{printed}"
+    );
+    let outside: Vec<_> = environment
+        .iter()
+        .filter(|(name, _)| !allowed_in_a_build(name))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "variables outside the allow-list reached the build: {outside:?}"
+    );
+    let home_text = home.to_str().expect("UTF-8");
+    let leaked: Vec<_> = environment
+        .iter()
+        .filter(|(_, value)| value.contains("PLANTED") || value.contains(home_text))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "the caller's environment or home reached the build: {leaked:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("confined in bwrap"),
+        "the check says the build is confined: {}",
+        shown(&output)
+    );
+}
+
+/// Without bubblewrap on `PATH` a revision is never built unconfined: the check gives no
+/// result, says why, and keeps no binary.
+#[test]
+fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
+    use std::os::unix::fs::symlink;
+
+    let world = world("no-bwrap");
+    let filed = file(
+        &world.takt,
+        "default-protocol",
+        &body(Some(&predicate())),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    // A PATH holding every program of the caller's but bubblewrap.
+    let bin = world.outer.0.join("bin-without-bwrap");
+    fs::create_dir_all(&bin).expect("a directory");
+    let path = std::env::var_os("PATH").expect("a PATH");
+    for dir in std::env::split_paths(&path) {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name == "bwrap" || bin.join(&name).symlink_metadata().is_ok() {
+                continue;
+            }
+            symlink(entry.path(), bin.join(&name)).expect("a link");
+        }
+    }
+    let output = world.check(
+        "story:default-protocol",
+        &world.defect,
+        &[("PATH", bin.to_str().expect("UTF-8"))],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", shown(&output));
+    assert!(output.stdout.is_empty(), "{}", shown(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("bubblewrap"),
+        "{}",
+        shown(&output)
+    );
+    assert!(
+        !world
+            .cache()
+            .join("takt/check-finding/builds")
+            .join(&world.defect)
+            .join("takt")
+            .exists(),
+        "a binary was built without bubblewrap"
+    );
+}
+
+/// The binary kept for a revision is the one cargo reports building, never a file the revision
+/// commits where a build would put it: a revision whose `.cargo/config.toml` sends the build to
+/// `target/<host triple>/` and which commits a stand-in `target/debug/takt` is built and its
+/// own takt kept, the stand-in never run.
+#[test]
+fn the_binary_kept_is_the_one_cargo_built_not_one_the_revision_commits() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let world = world("committed-binary");
+    let rustc = Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .expect("rustc runs");
+    let host = String::from_utf8_lossy(&rustc.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("host: ").map(str::to_owned))
+        .expect("rustc names its host");
+    git(&world.takt, &["checkout", "-q", &world.defect]);
+    write(
+        &world.takt.join(".cargo/config.toml"),
+        &format!("[build]\ntarget = \"{host}\"\n"),
+    );
+    let fake = world.takt.join("target/debug/takt");
+    write(
+        &fake,
+        "#!/bin/sh\necho FAKE-TAKT-RAN\necho case story-ready-one on story.delivery/1\nexit 3\n",
+    );
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).expect("executable");
+    git(
+        &world.takt,
+        &["add", "-f", ".cargo/config.toml", "target/debug/takt"],
+    );
+    git(&world.takt, &["commit", "-q", "-m", "a committed stand-in"]);
+    let planted = git_out(&world.takt, &["rev-parse", "HEAD"]);
+    git(&world.takt, &["checkout", "-q", "main"]);
+    let filed = file(
+        &world.takt,
+        "default-protocol",
+        &body(Some(&predicate())),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = world.check("story:default-protocol", &planted, &[]);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "the revision's own takt ran: {}",
+        shown(&output)
+    );
+    let ran = fs::read_to_string(record(&output).join("output")).expect("the command's output");
+    assert!(!ran.contains("FAKE-TAKT-RAN"), "the stand-in ran: {ran}");
+    let kept = world
+        .cache()
+        .join("takt/check-finding/builds")
+        .join(&planted)
+        .join("takt");
+    let version = Command::new(&kept)
+        .arg("--version")
+        .output()
+        .expect("the kept binary runs");
+    assert_eq!(
+        String::from_utf8_lossy(&version.stdout),
+        format!("takt 0.1.0 ({planted})\n"),
+        "the kept binary is the one built from the revision"
+    );
+}
+
+/// The protocol sources `aep` reads are bound read-only into the predicate's home under
+/// bubblewrap, neither linked nor copied: a command that writes through them changes nothing in
+/// the caller's cache, and the home on disk holds no copy.
+#[test]
+fn the_predicate_cannot_write_the_callers_protocol_sources() {
+    let world = world("protocol-sources");
+    let sources = world.cache().join("aep/protocol-sources");
+    let original = "kind: protocol\n";
+    write(&sources.join("abc/protocol.yaml"), original);
+    let command = "\"$TAKT\" --version >/dev/null; d=\"$HOME/.cache/aep/protocol-sources\"; \
+                   test -f \"$d/abc/protocol.yaml\" && echo sources-are-there; \
+                   { echo changed > \"$d/abc/protocol.yaml\"; } 2>/dev/null || echo file-write-refused; \
+                   { echo new > \"$d/abc/planted\"; } 2>/dev/null || echo dir-write-refused; true";
+    let filed = file(
+        &world.takt,
+        "sources",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: {command}\nexit: 0\noutput: sources-are-there\nsource: {SOURCE}\n"
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = world.check("story:sources", &world.defect, &[]);
+    let ran = fs::read_to_string(record(&output).join("output")).unwrap_or_default();
+    let mount_point = record(&output).join("home/.cache/aep/protocol-sources");
+    let held: Vec<_> = fs::read_dir(&mount_point)
+        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default();
+    assert!(
+        held.is_empty() && !fs::symlink_metadata(&mount_point).is_ok_and(|meta| meta.is_symlink()),
+        "the predicate's home holds a copy or a link of the sources: {held:?}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "the predicate sees the sources: {}",
+        shown(&output)
+    );
+    for line in ["file-write-refused", "dir-write-refused"] {
+        assert!(ran.lines().any(|ran| ran == line), "{line} in {ran}");
+    }
+    assert_eq!(
+        fs::read_to_string(sources.join("abc/protocol.yaml")).expect("the caller's source"),
+        original,
+        "the predicate wrote the caller's protocol source"
+    );
+    assert!(
+        !sources.join("abc/planted").exists(),
+        "the predicate wrote into the caller's protocol sources"
+    );
+    assert!(
+        fs::symlink_metadata(&sources).is_ok_and(|meta| meta.is_dir()),
+        "the caller's protocol sources are still a directory"
+    );
+}
+
 #[test]
 fn the_predicate_runs_without_the_callers_credentials() {
     let world = world("credentials");
     let seen = format!(
         "scenario: 1\ncommand: env; test -x \"$TAKT\"\nexit: 0\noutput: SCENARIO=\nsource: {SOURCE}\n"
     );
-    let leaked =
-        format!("scenario: 1\ncommand: env\noutput: PLANTED-CREDENTIAL\nsource: {SOURCE}\n");
+    let leaked = format!(
+        "scenario: 1\ncommand: env; test -x \"$TAKT\"\noutput: PLANTED-CREDENTIAL\nsource: {SOURCE}\n"
+    );
     for (key, predicate) in [("env-seen", &seen), ("env-leaked", &leaked)] {
         let filed = file(&world.takt, key, &body(Some(predicate)), &[]);
         assert!(filed.status.success(), "{}", shown(&filed));
@@ -777,6 +1377,8 @@ fn a_finding_on_a_repository_is_filed_with_its_repository_seed_and_test() {
         format!("seed\t{}", world.seed),
         "test\t./check.sh".to_owned(),
         "command\ttest \"$TEST\" = ./check.sh && \"$TAKT\" run --repo .".to_owned(),
+        "exit\t3".to_owned(),
+        "healthy_exit\t3".to_owned(),
     ] {
         assert!(
             printed.lines().any(|printed| printed == line),

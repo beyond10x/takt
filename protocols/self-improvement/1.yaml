@@ -45,7 +45,8 @@ evidence_kinds:
   scenario_result:
     description: >-
       the finding's predicate run on its scenario, or on its repository at its seed, with a takt built from a revision; its result is
-      reproduced or not_reproduced
+      reproduced or not_reproduced, or error when the command ended with a status the predicate
+      names neither as the defect's nor as the healthy one, which makes no claim true
   merge_observation:
     description: the candidate revision merged into the mainline; its result is merged
   scorecard_result:

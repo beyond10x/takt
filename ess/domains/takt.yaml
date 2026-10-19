@@ -956,8 +956,8 @@ types:
   # lower-case letters and digits in words joined by `-`. One key is one finding: a filing of a
   # key the store holds already, under whatever kind, is refused.
   # read from: .engineering/planning/design/recursive-self-improvement.md:84-85
-  # read from: scripts/file-finding:242
-  # read from: scripts/file-finding:258-281
+  # read from: scripts/file-finding:267
+  # read from: scripts/file-finding:283-306
   - name: takt.work.FindingKey
     kind: newtype
     of: String
@@ -966,8 +966,8 @@ types:
   # (`story:<key>`) or a blocker (`blocker:<key>`), never both and never neither; decided
   # 2026-10-18. No blocker is declared in this specification, so the blocker variant carries the
   # artifact id as text.
-  # read from: scripts/file-finding:231
-  # read from: scripts/file-finding:283
+  # read from: scripts/file-finding:256
+  # read from: scripts/file-finding:308
   # read from: .engineering/planning/story/finding-intake.md:51
   - name: takt.work.FindingArtifact
     kind: union
@@ -978,19 +978,22 @@ types:
 
   # What filing a finding came to, the result of a `finding_record` record.
   # read from: protocols/self-improvement/1.yaml:41-44
-  # read from: scripts/file-finding:70
-  # read from: scripts/file-finding:288
+  # read from: scripts/file-finding:79
+  # read from: scripts/file-finding:313
   - name: takt.work.FilingResult
     kind: enum
     variants: [filed, malformed]
 
   # What a finding's predicate came to on its scenario with a takt built from one revision, the
-  # result of a `scenario_result` record.
-  # read from: protocols/self-improvement/1.yaml:45-48
-  # read from: scripts/check-finding:293-299
+  # result of a `scenario_result` record: `reproduced` when every expectation held and the
+  # command ended with a status the predicate names; `not_reproduced` only when the command ended
+  # with the predicate's healthy exit; else `error`, a status the predicate does not name (a
+  # crash, a flag rejected, a command not found), which makes no claim true.
+  # read from: protocols/self-improvement/1.yaml:45-49
+  # read from: scripts/check-finding:433-447
   - name: takt.work.ScenarioResult
     kind: enum
-    variants: [reproduced, not_reproduced]
+    variants: [reproduced, not_reproduced, error]
 
   # Who performed a step, the `by` of a `step` line: `validator` for a deterministic step,
   # `harness` for a judgement one; the run writes no other value.
@@ -1009,7 +1012,7 @@ types:
 
   # What comparing the installed binary's embedded revision with the merged candidate revision
   # came to, the result of a `promotion_record` record of `self.improvement/1`.
-  # read from: protocols/self-improvement/1.yaml:56-59
+  # read from: protocols/self-improvement/1.yaml:57-60
   - name: takt.work.PromotionResult
     kind: enum
     variants: [promoted, mismatch]
@@ -2188,10 +2191,10 @@ entities:
   # read from: .engineering/planning/story/finding-intake.md (§ Domain relations)
   # read from: .engineering/planning/story/finding-on-any-repository.md (§ Outcome)
   # read from: .engineering/planning/story/check-finding-builds-name-their-revision.md (§ Outcome)
-  # read from: scripts/file-finding:11-47
-  # read from: scripts/file-finding:108
-  # read from: scripts/file-finding:231
-  # read from: scripts/check-finding:161-274
+  # read from: scripts/file-finding:11-56
+  # read from: scripts/file-finding:117
+  # read from: scripts/file-finding:256
+  # read from: scripts/check-finding:183-398
   # One predicate on one scenario or one repository: a body with a second `expected_before`
   # block, a block that gives a key twice, or one that gives both `scenario` and `repository`, or
   # neither, is malformed and nothing is filed. `seed` and `test` go with `repository` only: a
@@ -2202,17 +2205,20 @@ entities:
   # id. A filed repository names a public host: a dotted DNS name, not `localhost` or a name
   # under it, or a dotted-decimal IPv4 address outside the zero, loopback, private, link-local
   # and shared ranges, and no IPv6 literal. The check is a lint on the URL's text, not a
-  # boundary.
-  # read from: scripts/file-finding:111
-  # read from: scripts/file-finding:116
-  # read from: scripts/file-finding:122-182
+  # boundary. The command runs the takt under test (`$TAKT` or `${TAKT}` in its text), and an
+  # `output` is at least 8 characters; a predicate otherwise is malformed.
+  # read from: scripts/file-finding:120
+  # read from: scripts/file-finding:125
+  # read from: scripts/file-finding:136-196
+  # read from: scripts/file-finding:131-135
+  # read from: scripts/file-finding:200-203
   # A finding is filed as exactly one store artifact, a story or a blocker, and that artifact is
   # filed for that finding alone (its id is `<kind>:<key>`, the finding's key): one-to-one,
   # decided 2026-10-18, held in `artifact` (takt.work.FindingArtifact). A relation entry needs a
   # field typed by the target's identity, and the story variant sits inside a union beside a
   # blocker this specification does not declare, so no relation to takt.work.Story is declared and
   # the one-to-one is stated here.
-  # read from: scripts/file-finding:283
+  # read from: scripts/file-finding:308
   # read from: .engineering/planning/story/finding-intake.md:51
   - name: takt.work.Finding
     naming:
@@ -2252,6 +2258,11 @@ entities:
       - name: exit
         type: Optional<Integer>
         summary: The exit status the command gives while the defect is present.
+      - name: healthy_exit
+        type: Optional<Integer>
+        summary: >-
+          The exit status the command gives once the defect is gone, 0 when absent; the one
+          status the check reads as not reproduced. An `exit` equal to it needs `output`.
       - name: output
         type: Optional<String>
         summary: A fixed string the command's output holds while the defect is present.

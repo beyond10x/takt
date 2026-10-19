@@ -15,6 +15,7 @@
 #   scenario: 1
 #   command: "$TAKT" run --repo . --harness none --forge none --iterations 1
 #   exit: 3
+#   healthy_exit: 3
 #   output: on software.change/1
 #   source: docs/runs/trial-1.md
 #   ```
@@ -36,15 +37,23 @@
 #               `$TEST`
 #   command     one shell line, run by `scripts/check-finding` in a fresh checkout of the
 #               scenario's seed, or of `repository` at `seed`, with `$TAKT` the takt binary
-#               under test and `$SCENARIO` the checkout
+#               under test and `$SCENARIO` the checkout; it runs `$TAKT` (or `${TAKT}`), or its
+#               result could not depend on the revision
 #   exit        the exit status the command gives while the defect is present, 0 to 255 but 124
 #               and 137, which `scripts/check-finding` reads as its timeout
-#   output      a fixed string its standard output or standard error then holds
+#   healthy_exit
+#               optional: the exit status the command gives once the defect is gone, 0 when
+#               not given, 0 to 255 but 124 and 137; `scripts/check-finding` says
+#               `not_reproduced` only for this status, and `error` for one the predicate names
+#               neither here nor as `exit`
+#   output      a fixed string its standard output or standard error then holds, at least 8
+#               characters
 #   source      the run record or review that produced the finding, a path relative to the
 #               repository that exists
 #
 # `scenario` or `repository`, one of the two; `exit`, `output` or both; the predicate holds when
-# every one given does.
+# every one given does. An `exit` that is the healthy exit needs `output`: the status alone
+# cannot tell the defect from its fix.
 #
 # Standard output is one line, the result of the `finding_record` evidence kind
 # (protocols/self-improvement/1.yaml): `filed` (exit 0) or `malformed` (exit 2). Everything else
@@ -105,8 +114,8 @@ read_predicate() {
         value=${value#"${value%%[![:space:]]*}"}
         value=${value%"${value##*[![:space:]]}"}
         case $key in
-        scenario | repository | seed | test | command | exit | output | source) ;;
-        *) malformed "the expected_before block gives \`$key\`, which nothing reads; it gives scenario or repository, seed and test, command, exit, output and source" ;;
+        scenario | repository | seed | test | command | exit | healthy_exit | output | source) ;;
+        *) malformed "the expected_before block gives \`$key\`, which nothing reads; it gives scenario or repository, seed and test, command, exit, healthy_exit, output and source" ;;
         esac
         [[ -v PREDICATE[$key] ]] && malformed "the expected_before block gives \`$key\` twice"
         [[ -n $value ]] || malformed "the expected_before block gives \`$key\` no value"
@@ -119,6 +128,11 @@ read_predicate() {
     for name in command source; do
         [[ -v PREDICATE[$name] ]] || malformed "the expected_before block gives no \`$name\`"
     done
+    # The command runs the takt under test, `$TAKT` or `${TAKT}` in its text; one that never
+    # names it gives the same result at every revision, so it shows nothing about any of them.
+    local runs_takt='\$(TAKT([^A-Za-z0-9_]|$)|\{TAKT\})'
+    [[ ${PREDICATE[command]} =~ $runs_takt ]] ||
+        malformed "the command never runs \`\$TAKT\`, the takt under test, so its result would be the same at every revision; run it"
     # One form: a scenario the scenario repository declares, or a repository and a seed the
     # predicate names itself.
     if [[ -v PREDICATE[scenario] && -v PREDICATE[repository] ]]; then
@@ -183,12 +197,23 @@ read_predicate() {
     fi
     [[ -v PREDICATE[exit] || -v PREDICATE[output] ]] ||
         malformed "the expected_before block gives neither \`exit\` nor \`output\`: nothing to check the command against"
-    if [[ -v PREDICATE[exit] ]]; then
-        [[ ${PREDICATE[exit]} =~ ^[0-9]{1,3}$ ]] && ((10#${PREDICATE[exit]} <= 255)) ||
-            malformed "exit \`${PREDICATE[exit]}\` is no exit status, 0 to 255"
-        case $((10#${PREDICATE[exit]})) in
-        124 | 137) malformed "exit \`${PREDICATE[exit]}\` is what scripts/check-finding reads as its timeout, so the check could never give a result; expect another status, or the output" ;;
+    # A fixed string of a few characters turns up in almost any output.
+    if [[ -v PREDICATE[output] ]] && ((${#PREDICATE[output]} < 8)); then
+        malformed "output \`${PREDICATE[output]}\` is ${#PREDICATE[output]} characters; an output is at least 8, so it does not turn up in any output by chance"
+    fi
+    for name in exit healthy_exit; do
+        [[ -v PREDICATE[$name] ]] || continue
+        [[ ${PREDICATE[$name]} =~ ^[0-9]{1,3}$ ]] && ((10#${PREDICATE[$name]} <= 255)) ||
+            malformed "$name \`${PREDICATE[$name]}\` is no exit status, 0 to 255"
+        case $((10#${PREDICATE[$name]})) in
+        124 | 137) malformed "$name \`${PREDICATE[$name]}\` is what scripts/check-finding reads as its timeout, so the check could never give a result; name another status, or the output" ;;
         esac
+    done
+    # The healthy exit is the one status `scripts/check-finding` reads as the defect gone; an
+    # `exit` equal to it tells the defect from its fix only by the output.
+    local healthy=$((10#${PREDICATE[healthy_exit]:-0}))
+    if [[ -v PREDICATE[exit] && ! -v PREDICATE[output] ]] && ((10#${PREDICATE[exit]} == healthy)); then
+        malformed "exit \`${PREDICATE[exit]}\` is the healthy exit too (healthy_exit, 0 when not given), and with no \`output\` the check could never tell the defect from its fix; give the output, or the status the command gives once the defect is gone as healthy_exit"
     fi
 }
 
@@ -219,7 +244,7 @@ if [[ -n $predicate_only ]]; then
     [[ -f $predicate_only && -r $predicate_only ]] || usage "--predicate $predicate_only: no readable file"
     read_body "$predicate_only" || usage "--predicate $predicate_only: unreadable"
     read_predicate "$BODY"
-    for name in scenario repository seed test command exit output source; do
+    for name in scenario repository seed test command exit healthy_exit output source; do
         [[ -v PREDICATE[$name] ]] && printf '%s\t%s\n' "$name" "${PREDICATE[$name]}"
     done
     exit 0
