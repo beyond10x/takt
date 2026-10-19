@@ -913,6 +913,7 @@ fn every_part_of_a_discarded_observation_is_put_back_when_the_reset_fails() {
     let id = "every-part-observation";
     let scratch = repository_with_test(id, &writes_everywhere(id), &[("src/a", "a\n")]);
     let (_, text) = observe(&scratch, id);
+    refs_seen(&scratch, &text);
     assert_every_part_put_back(&scratch, id, &text);
 }
 
