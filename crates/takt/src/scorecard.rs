@@ -840,7 +840,9 @@ impl Scorecard {
         Ok(path)
     }
 
-    /// A saved scorecard; one that does not read, or of another format, is an error naming it.
+    /// A saved scorecard; one that does not read, or of another format, is an error naming it,
+    /// and so is one with a run whose outcome is not what its held-out result makes it
+    /// ([`FAILED`] unless it passed, else its stop).
     pub fn load(path: &Path) -> Result<Self> {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
@@ -852,6 +854,28 @@ impl Scorecard {
                 path.display(),
                 card.format
             );
+        }
+        let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
+        for row in &card.rows {
+            let n = counted.entry(row.case.as_str()).or_insert(0);
+            *n += 1;
+            let Some(held) = &row.held_out else {
+                continue;
+            };
+            let expected = if held.passed {
+                row.stop.as_str()
+            } else {
+                FAILED
+            };
+            if row.outcome != expected {
+                bail!(
+                    "{}: run {}#{n} gives the outcome {}, but its held-out result {:?} makes it {expected:?}; a saved scorecard whose outcomes disagree with their held-out results is not read",
+                    path.display(),
+                    row.case,
+                    row.outcome,
+                    held.result
+                );
+            }
         }
         Ok(card)
     }
@@ -866,11 +890,12 @@ impl Scorecard {
     /// under the current definition; when its median of tokens exceeds the saved maximum, the
     /// token definition unchanged; or when the saved scorecard has the scenario and the
     /// candidate has no run of it (`no run`). A scorecard is never worse than itself; one case
-    /// lowered is within a margin of one, two cases lowered in one scenario never are. A
-    /// scenario both sides have whose candidate has fewer cases than the rule's trials gets no
-    /// verdict: it is printed as `too few cases (<n> of <trials>)`, and once every scenario is
-    /// printed the comparison is an error naming each such scenario, as a promotion refuses
-    /// one. A case a run of which disagrees with its held-out check is named so beside its
+    /// lowered is within a margin of one, two cases lowered in one scenario never are. The
+    /// trials apply as a promotion applies them: a scenario the saved scorecard has with fewer
+    /// cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), and
+    /// any scenario with fewer on the candidate's side, none included (`too few cases (<n> of
+    /// <trials>)`), gets no verdict, and once every scenario is printed the comparison is an
+    /// error naming each such scenario, as a promotion refuses one. A case a run of which disagrees with its held-out check is named so beside its
     /// outcome. The number of scenarios marked worse.
     pub fn against(&self, saved: &Scorecard, out: &mut dyn Write) -> Result<usize> {
         let version = |card: &Scorecard, metric: &str| {
@@ -927,16 +952,20 @@ impl Scorecard {
                     None => writeln!(out, "{}  scenario {scenario}  {}", case.case, case.outcome)?,
                 }
             }
-            if baseline.is_empty() {
-                writeln!(out, "scenario {scenario}  no baseline")?;
+            let needed = usize::try_from(trials).unwrap_or(usize::MAX);
+            if !baseline.is_empty() && baseline.len() < needed {
+                writeln!(
+                    out,
+                    "scenario {scenario}  too few cases on the saved side ({} of {trials})",
+                    baseline.len()
+                )?;
+                too_few.push(format!(
+                    "scenario {scenario} (the saved side, {} of {trials})",
+                    baseline.len()
+                ));
                 continue;
             }
-            if candidate.is_empty() {
-                worse += 1;
-                writeln!(out, "scenario {scenario}  no run  worse")?;
-                continue;
-            }
-            if candidate.len() < usize::try_from(trials).unwrap_or(usize::MAX) {
+            if candidate.len() < needed {
                 writeln!(
                     out,
                     "scenario {scenario}  too few cases ({} of {trials})",
@@ -946,6 +975,15 @@ impl Scorecard {
                     "scenario {scenario} ({} of {trials})",
                     candidate.len()
                 ));
+                continue;
+            }
+            if baseline.is_empty() {
+                writeln!(out, "scenario {scenario}  no baseline")?;
+                continue;
+            }
+            if candidate.is_empty() {
+                worse += 1;
+                writeln!(out, "scenario {scenario}  no run  worse")?;
                 continue;
             }
             let median = |cases: &[Case], metric: &str| {

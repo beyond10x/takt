@@ -24,7 +24,10 @@
 //! rule's trials, compares it with the baseline's copy in the store under takt's [`Rule`], and
 //! refuses a candidate that is worse, writing a `refused` record so the same revision, or the
 //! same tree under another commit, is not judged again until the operator supplies a scorecard
-//! of new runs (`--rejudge`), whose record names the refusal before it ([`Rejudged`]); a
+//! of new runs, none of whose cases is in a scorecard it was refused on (`--rejudge`), whose
+//! record names the refusal before it ([`Rejudged`]); a baseline saved under an older metric
+//! definition is replaced, nothing built or installed, by a scorecard of the same revision and
+//! cases under the newer one ([`rebaseline`], `--rebaseline`); a
 //! candidate that holds is built from a fresh
 //! clone of the exact commit, confined in bubblewrap ([`Confinement`]): only the clone, a
 //! scratch `CARGO_HOME` with the host's registry cache bound read-only, the toolchain takt
@@ -67,8 +70,13 @@ pub const STORE: &str = "takt/promotions";
 /// record and no scorecard copy.
 pub const LOCK: &str = ".lock";
 
-/// The branch of the candidate's checkout a promoted revision must be an ancestor of.
+/// The mainline a promoted revision must be an ancestor of: the remote's branch
+/// [`MAINLINE_REMOTE`]`/`[`MAINLINE`] as the candidate's checkout last fetched it, which a
+/// local branch moved by hand does not move.
 pub const MAINLINE: &str = "main";
+
+/// The remote whose [`MAINLINE`] branch is the mainline.
+pub const MAINLINE_REMOTE: &str = "origin";
 
 /// The sandbox the candidate is built in and its binary run under: bubblewrap, found on `PATH`.
 pub const BWRAP: &str = "bwrap";
@@ -108,20 +116,25 @@ pub const CACHED: [&str; 4] = [
 ];
 
 /// What a record is: the first baseline (`takt promote --baseline-only`, nothing installed), a
-/// promotion that installed a binary, or a candidate refused on its scorecard, kept so the same
-/// revision is not judged again.
+/// promotion that installed a binary, a candidate refused on its scorecard, kept so the same
+/// revision is not judged again but on new runs, or the baseline's scorecard replaced by one of
+/// the same revision and cases under newer metric definitions (`--rebaseline`), which installs
+/// nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Baseline,
     Promotion,
     Refused,
+    Rebaseline,
 }
 
 /// One promotion record, `<store>/<revision>.json`, or `<store>/<revision>.refused.json` for a
 /// refusal, `<store>/<revision>.refused-<scorecard_sha256>.json` for a refusal of a candidate
-/// judged again; a baseline or a promotion has the scorecard it read copied beside it as
-/// `<store>/<revision>.scorecard.json`.
+/// judged again, `<store>/<revision>.rebaseline-<scorecard_sha256>.json` for a rebaseline; a
+/// baseline or a promotion has the scorecard it read copied beside it as
+/// `<store>/<revision>.scorecard.json`, a rebaseline as
+/// `<store>/<revision>.rebaseline-<scorecard_sha256>.scorecard.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Promotion {
     /// [`FORMAT`].
@@ -167,6 +180,15 @@ pub struct Promotion {
     /// none on every other record, and on one written before it had the field.
     #[serde(default)]
     pub rejudges: Option<Rejudged>,
+    /// On a rebaseline, the sha256 of the baseline's scorecard it replaces, lower-case hex; none
+    /// on every other record, and on one written before it had the field.
+    #[serde(default)]
+    pub replaces_sha256: Option<String>,
+    /// On a refusal, the case ids of the scorecard refused, so a candidate judged again is
+    /// judged on new runs only; empty on every other record, and on one written before it had
+    /// the field.
+    #[serde(default)]
+    pub cases: Vec<String>,
 }
 
 /// The refusal a candidate judged again on new runs was refused by before: its record's file
@@ -232,9 +254,26 @@ pub struct Request<'a> {
     pub clock: fn() -> String,
 }
 
+/// What `takt promote --rebaseline` asks for.
+pub struct Rebaseline<'a> {
+    /// The scorecard that replaces the baseline's: of the baseline's revision, its cases exactly,
+    /// under metric definitions at or above the stored ones and one of them newer.
+    pub scorecard: &'a Path,
+    /// The store of promotion records.
+    pub store: &'a Path,
+    /// Where the binary is installed: its `bin/takt` must be the baseline's.
+    pub install_root: &'a Path,
+    /// Print the record that would be written; write nothing.
+    pub dry_run: bool,
+    /// The clock: read when the store is read and again for the instant the record carries.
+    pub clock: fn() -> String,
+}
+
 /// How a request ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
+    /// The rebaseline record is written beside the scorecard that replaces the baseline's.
+    Rebaselined(Promotion),
     /// The binary is installed and the record written.
     Promoted(Promotion),
     /// The baseline record is written.
@@ -308,13 +347,33 @@ fn record_path(store: &Path, record: &Promotion) -> PathBuf {
             "{revision}.refused-{}.json",
             record.scorecard_sha256
         )),
+        (Kind::Rebaseline, _) => store.join(format!(
+            "{revision}.rebaseline-{}.json",
+            record.scorecard_sha256
+        )),
         (Kind::Baseline | Kind::Promotion, _) => store.join(format!("{revision}.json")),
     }
 }
 
-/// The store's copy of the scorecard a baseline or a promotion read.
-fn copy_path(store: &Path, revision: &str) -> PathBuf {
-    store.join(format!("{revision}.scorecard.json"))
+/// The store's copy of the scorecard a baseline, a promotion or a rebaseline read, beside its
+/// record.
+fn copy_path(store: &Path, record: &Promotion) -> PathBuf {
+    let revision = &record.revision;
+    match record.kind {
+        Kind::Rebaseline => store.join(format!(
+            "{revision}.rebaseline-{}.scorecard.json",
+            record.scorecard_sha256
+        )),
+        _ => store.join(format!("{revision}.scorecard.json")),
+    }
+}
+
+/// Whether `stem` names a scorecard copy: `<revision>` or `<revision>.rebaseline-<sha256>`.
+fn is_copy_stem(stem: &str) -> bool {
+    match stem.split_once(".rebaseline-") {
+        Some((revision, digest)) => is_full_revision(revision) && is_sha256(digest),
+        None => is_full_revision(stem),
+    }
 }
 
 /// Whether `candidate` is a full commit id, 40 or 64 lower-case hex digits.
@@ -353,14 +412,14 @@ pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
         if name == LOCK {
             continue;
         }
-        if let Some(revision) = name.strip_suffix(".scorecard.json") {
-            if !is_full_revision(revision) {
+        if let Some(stem) = name.strip_suffix(".scorecard.json") {
+            if !is_copy_stem(stem) {
                 bail!(
-                    "{}: a scorecard copy is named by a full commit id; the store is not read past this",
+                    "{}: a scorecard copy is named by a full commit id, a rebaseline's by `<revision>.rebaseline-<sha256>`; the store is not read past this",
                     path.display()
                 );
             }
-            copies.insert(revision.to_owned());
+            copies.insert(name.into_owned());
             continue;
         }
         let Some(stem) = name.strip_suffix(".json") else {
@@ -369,11 +428,15 @@ pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
                 path.display()
             );
         };
-        let (named_revision, named_kind) =
-            match (stem.strip_suffix(".refused"), stem.split_once(".refused-")) {
-                (Some(revision), _) | (None, Some((revision, _))) => (revision, Kind::Refused),
-                (None, None) => (stem, Kind::Promotion),
-            };
+        let (named_revision, named_kind) = match (
+            stem.strip_suffix(".refused"),
+            stem.split_once(".refused-"),
+            stem.split_once(".rebaseline-"),
+        ) {
+            (Some(revision), _, _) | (None, Some((revision, _)), _) => (revision, Kind::Refused),
+            (None, None, Some((revision, _))) => (revision, Kind::Rebaseline),
+            (None, None, None) => (stem, Kind::Promotion),
+        };
         let record = load(&path)?;
         if record.revision != named_revision {
             bail!(
@@ -383,17 +446,19 @@ pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
             );
         }
         let kind_agrees = match named_kind {
-            Kind::Refused => record.kind == Kind::Refused,
-            _ => record.kind != Kind::Refused,
+            Kind::Refused | Kind::Rebaseline => record.kind == named_kind,
+            Kind::Baseline | Kind::Promotion => {
+                matches!(record.kind, Kind::Baseline | Kind::Promotion)
+            }
         };
         if !kind_agrees {
             bail!(
                 "{}: the file name says {} and the record says {:?}; the store is not read past this",
                 path.display(),
-                if named_kind == Kind::Refused {
-                    "refused"
-                } else {
-                    "a baseline or a promotion"
+                match named_kind {
+                    Kind::Refused => "refused",
+                    Kind::Rebaseline => "a rebaseline",
+                    Kind::Baseline | Kind::Promotion => "a baseline or a promotion",
                 },
                 record.kind
             );
@@ -426,8 +491,12 @@ pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
         if record.kind == Kind::Refused {
             continue;
         }
-        let copy = copy_path(store, &record.revision);
-        if !copies.remove(&record.revision) {
+        let copy = copy_path(store, record);
+        let copy_name = copy
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if !copies.remove(&copy_name) {
             bail!(
                 "{}: the record's scorecard copy {} is missing; the store is not read past this",
                 record_path(store, record).display(),
@@ -446,7 +515,7 @@ pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
     if let Some(orphan) = copies.iter().next() {
         bail!(
             "{}: a scorecard copy without its record; the store is not read past this",
-            copy_path(store, orphan).display()
+            store.join(orphan).display()
         );
     }
     records.sort_by(|a, b| {
@@ -454,7 +523,44 @@ pub fn records(store: &Path, now: &str) -> Result<Vec<Promotion>> {
             .cmp(&b.promoted_at)
             .then_with(|| a.revision.cmp(&b.revision))
     });
-    chained(store, records)
+    let ordered = chained(store, records)?;
+    rejudges_in_chain(store, &ordered)?;
+    Ok(ordered)
+}
+
+/// Every record that judges a candidate again names, in `rejudges`, a refusal before it in the
+/// chain `records`, of its revision or its tree, by that record's file name and the file's
+/// sha256; one that names anything else is an error naming both.
+fn rejudges_in_chain(store: &Path, records: &[Promotion]) -> Result<()> {
+    for (n, record) in records.iter().enumerate() {
+        let Some(rejudged) = &record.rejudges else {
+            continue;
+        };
+        let mut found = false;
+        for earlier in records[..n].iter().filter(|earlier| {
+            earlier.kind == Kind::Refused
+                && (earlier.revision == record.revision || earlier.tree == record.tree)
+        }) {
+            let path = record_path(store, earlier);
+            if path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy() == rejudged.record)
+                && sha256_of(&path)? == rejudged.sha256
+            {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            bail!(
+                "{}: its rejudges names {} with the digest {}, which is no refusal of its revision or tree before it in the chain; the store is not read past this",
+                record_path(store, record).display(),
+                rejudged.record,
+                rejudged.sha256
+            );
+        }
+    }
+    Ok(())
 }
 
 /// `records` in the order of their chain: the one record that carries no `previous_sha256`
@@ -715,7 +821,7 @@ fn write(store: &Path, record: &Promotion, scorecard_text: &[u8]) -> Result<Path
         publish(&path, text.as_bytes())?;
         return Ok(path);
     }
-    let copy = copy_path(store, &record.revision);
+    let copy = copy_path(store, record);
     publish(&copy, scorecard_text)?;
     if let Err(error) = publish(&path, text.as_bytes()) {
         let _ = std::fs::remove_file(&copy);
@@ -729,7 +835,7 @@ fn write(store: &Path, record: &Promotion, scorecard_text: &[u8]) -> Result<Path
 fn unwrite(store: &Path, record: &Promotion) -> Result<()> {
     let mut paths = vec![record_path(store, record)];
     if record.kind != Kind::Refused {
-        paths.push(copy_path(store, &record.revision));
+        paths.push(copy_path(store, record));
     }
     let mut failed = Vec::new();
     for path in paths {
@@ -1195,9 +1301,11 @@ fn candidate(request: &Request<'_>) -> Result<(Scorecard, Vec<u8>, String, Strin
     Ok((card, text, revision, tree))
 }
 
-/// `revision` is an ancestor of the tip of `repo`'s [`MAINLINE`] branch, or that tip: a
-/// promotion installs a merged revision and never a branch's tip that is not; a checkout
-/// without the branch is refused naming it.
+/// `revision` is an ancestor of the tip of `repo`'s remote-tracking branch
+/// [`MAINLINE_REMOTE`]`/`[`MAINLINE`], or that tip: a promotion installs a revision merged
+/// into the remote's mainline, as the checkout last fetched it, and never a branch's tip that is
+/// not; a local `main` moved onto that tip moves nothing here. A checkout without the
+/// remote-tracking branch is refused naming it.
 fn merged(repo: &Path, revision: &str) -> Result<()> {
     let tip = git(
         repo,
@@ -1205,12 +1313,12 @@ fn merged(repo: &Path, revision: &str) -> Result<()> {
             "rev-parse",
             "--verify",
             "-q",
-            &format!("refs/heads/{MAINLINE}^{{commit}}"),
+            &format!("refs/remotes/{MAINLINE_REMOTE}/{MAINLINE}^{{commit}}"),
         ],
     )
     .map_err(|_| {
         anyhow!(
-            "{} has no branch {MAINLINE}: a promotion installs a revision merged into {MAINLINE}",
+            "{} has no {MAINLINE_REMOTE}/{MAINLINE}: a promotion installs a revision merged into the remote's {MAINLINE}, so fetch it first",
             repo.display()
         )
     })?;
@@ -1231,7 +1339,7 @@ fn merged(repo: &Path, revision: &str) -> Result<()> {
     match status.code() {
         Some(0) => Ok(()),
         Some(1) => bail!(
-            "{revision} is not an ancestor of {MAINLINE} ({tip}) in {}: a promotion installs a revision merged into {MAINLINE}, so merge it first",
+            "{revision} is not an ancestor of {MAINLINE_REMOTE}/{MAINLINE} ({tip}) in {}: a promotion installs a revision merged into the remote's {MAINLINE}, so merge it there and fetch first",
             repo.display()
         ),
         _ => bail!(
@@ -1487,15 +1595,30 @@ fn installed_hashes_to(installed: &Path, revision: &str, stated: &str) -> Result
 /// Every run of `card` states the binary at `stated` (a [`BINARY_FILE`] beside its record), by
 /// the operator: a run that states none, states it by anything but the operator, or states
 /// another digest, is a refusal naming it, so the scorecard recorded is the stated binary's and
-/// every statement the record copies is the operator's. The runs with their statements, for
-/// the record.
-fn runs_stating(card: &Scorecard, stated: &str, shown: &Path) -> Result<Vec<RecordedRun>> {
+/// every statement the record copies is the operator's. A run whose `opened` line names a
+/// revision must name `revision`; only a run that names none (no `binary`, or `unknown
+/// revision`) is taken on its statement alone. The runs with their statements, for the record.
+fn runs_stating(
+    card: &Scorecard,
+    stated: &str,
+    revision: &str,
+    shown: &Path,
+) -> Result<Vec<RecordedRun>> {
     let mut runs = Vec::new();
     let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
     for row in &card.rows {
         let n = counted.entry(row.case.as_str()).or_insert(0);
         *n += 1;
         let run = format!("{}#{n}", row.case);
+        if let Some(named) = row.opened_binary.as_deref()
+            && named != "unknown revision"
+            && named != revision
+        {
+            bail!(
+                "{}: run {run} was made with the binary of {named}, not of the stated revision {revision}; a run whose `opened` line names a revision is taken on it, so nothing is recorded",
+                shown.display()
+            );
+        }
         match &row.binary {
             None => bail!(
                 "{}: run {run} states no binary (no {BINARY_FILE} beside its record); with --binary-sha256 every run states the binary measured, so nothing is recorded",
@@ -1799,6 +1922,8 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         runs: Vec::new(),
         previous_sha256,
         rejudges: None,
+        replaces_sha256: None,
+        cases: Vec::new(),
     };
     let mut refusals: Vec<&Promotion> = Vec::new();
     for earlier in &existing {
@@ -1820,7 +1945,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
             Kind::Refused => {
                 "refused; a refused candidate is not judged again until it changes, or on a scorecard of new runs with --rejudge"
             }
-            Kind::Baseline => "as a baseline",
+            Kind::Baseline | Kind::Rebaseline => "as a baseline",
             Kind::Promotion => "as a promotion",
         };
         bail!(
@@ -1835,17 +1960,23 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
                 "--rejudge: {revision} was never refused, nor its tree; there is nothing to judge again"
             );
         };
-        if let Some(same) = refusals
-            .iter()
-            .find(|earlier| earlier.scorecard_sha256 == record.scorecard_sha256)
-        {
-            bail!(
-                "--rejudge judges a refused candidate on a scorecard of new runs, and {} is the scorecard refused at {} ({}, digest {}); run the candidate again and save their scorecard",
-                request.scorecard.display(),
-                same.promoted_at,
-                record_path(store, same).display(),
-                same.scorecard_sha256
-            );
+        let cases = case_ids(&card);
+        for earlier in &refusals {
+            if earlier.cases.is_empty() {
+                bail!(
+                    "--rejudge judges a refused candidate on new runs, and the refusal at {} ({}) records no case ids, so its runs cannot be told from new ones",
+                    earlier.promoted_at,
+                    record_path(store, earlier).display()
+                );
+            }
+            if let Some(case) = earlier.cases.iter().find(|case| cases.contains(*case)) {
+                bail!(
+                    "--rejudge judges a refused candidate on new runs, and case {case} of {} is in the scorecard refused at {} ({}); run the candidate again on new cases and save their scorecard",
+                    request.scorecard.display(),
+                    earlier.promoted_at,
+                    record_path(store, earlier).display()
+                );
+            }
         }
         let path = record_path(store, latest);
         record.rejudges = Some(Rejudged {
@@ -1875,7 +2006,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         match &stated {
             Some(digest) => {
                 installed_hashes_to(&installed, &revision, digest)?;
-                record.runs = runs_stating(&card, digest, request.scorecard)?;
+                record.runs = runs_stating(&card, digest, &revision, request.scorecard)?;
                 record.binary = Some(installed.clone());
                 record.binary_sha256 = Some(digest.clone());
                 record.revision_stated_by = Some(StatedBy::Operator);
@@ -1900,7 +2031,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
                 out,
                 "dry run: would write {} and {}",
                 record_path(store, &record).display(),
-                copy_path(store, &revision).display()
+                copy_path(store, &record).display()
             )?;
             writeln!(out, "{}", serde_json::to_string_pretty(&record)?)?;
             return Ok(Outcome::WouldWrite(record));
@@ -1932,7 +2063,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
             record_path(store, earlier).display()
         );
     }
-    let base_copy = copy_path(store, &base.revision);
+    let base_copy = copy_path(store, &base);
     let base_card = Scorecard::load(&base_copy)?;
     if base_card.revision.as_deref() != Some(base.revision.as_str()) {
         bail!(
@@ -1964,6 +2095,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     record.worse = u32::try_from(worse).unwrap_or(u32::MAX);
     if worse > 0 {
         record.kind = Kind::Refused;
+        record.cases = case_ids(&card).into_iter().collect();
         writeln!(
             out,
             "verdict: refused, {worse} scenario{} worse than the baseline; nothing installed",
@@ -1993,7 +2125,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
             request.build_dir.display(),
             request.install_root.display(),
             record_path(store, &record).display(),
-            copy_path(store, &revision).display()
+            copy_path(store, &record).display()
         )?;
         writeln!(out, "{}", serde_json::to_string_pretty(&record)?)?;
         return Ok(Outcome::WouldWrite(record));
@@ -2030,6 +2162,188 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         path.display()
     )?;
     Ok(Outcome::Promoted(record))
+}
+
+/// The case ids of `card`'s runs.
+fn case_ids(card: &Scorecard) -> BTreeSet<String> {
+    card.rows.iter().map(|row| row.case.clone()).collect()
+}
+
+/// `takt promote --rebaseline <scorecard>`: replaces the scorecard of the baseline, the latest
+/// record that is no refusal, with `scorecard`, which a promotion then compares candidates
+/// with. Accepted only when the scorecard's revision is the baseline's, its case ids are the
+/// stored scorecard's exactly, and every metric definition is at or above the stored one's
+/// version with one of them higher; its runs are checked as a baseline's are (made with the
+/// baseline revision's binary, or stating the baseline's digest when its revision is stated,
+/// each scenario run with its held-out result) and the installed binary must be the baseline's.
+/// The record appended to the chain carries the baseline's revision, tree and binary, and names
+/// the scorecard it replaces by its sha256 (`replaces_sha256`); nothing is built or installed.
+/// Anything else is refused naming the reason, nothing written.
+pub fn rebaseline(request: &Rebaseline<'_>, out: &mut dyn Write) -> Result<Outcome> {
+    let shown = request.scorecard;
+    let metadata =
+        std::fs::metadata(shown).with_context(|| format!("--rebaseline {}", shown.display()))?;
+    if !metadata.is_file() {
+        bail!("--rebaseline {}: not a regular file", shown.display());
+    }
+    if metadata.nlink() > 1 {
+        bail!(
+            "--rebaseline {}: the file has {} links; a scorecard that may also lie elsewhere under another name is not read",
+            shown.display(),
+            metadata.nlink()
+        );
+    }
+    let text = std::fs::read(shown).with_context(|| format!("read {}", shown.display()))?;
+    let card = Scorecard::load(shown)?;
+    if card.rule != Rule::default() {
+        bail!(
+            "{}: its rule is trials {} margin {}; this takt judges under trials {} margin {}",
+            shown.display(),
+            card.rule.trials,
+            card.rule.margin,
+            Rule::default().trials,
+            Rule::default().margin
+        );
+    }
+    known_metrics(&card, shown)?;
+    let Some(revision) = card.revision.clone() else {
+        bail!(
+            "{}: the scorecard names no revision; save it with `takt scorecard --save --revision`",
+            shown.display()
+        );
+    };
+    let store = request.store;
+    let _lock = if request.dry_run {
+        None
+    } else {
+        Some(lock(store)?)
+    };
+    let now = (request.clock)();
+    let existing = records(store, &now)?;
+    let Some(base) = existing
+        .iter()
+        .rfind(|record| record.kind != Kind::Refused)
+        .cloned()
+    else {
+        bail!(
+            "the store {} holds no baseline, so there is nothing to rebaseline; record one with `takt promote --baseline-only`",
+            store.display()
+        );
+    };
+    if revision != base.revision {
+        bail!(
+            "{}: its revision {revision} is not the baseline's {} ({}); --rebaseline replaces the scorecard of the baseline revision and no other",
+            shown.display(),
+            base.revision,
+            record_path(store, &base).display()
+        );
+    }
+    let base_copy = copy_path(store, &base);
+    let stored = Scorecard::load(&base_copy)?;
+    let (cases, stored_cases) = (case_ids(&card), case_ids(&stored));
+    if let Some(case) = cases.symmetric_difference(&stored_cases).next() {
+        bail!(
+            "{}: case {case} is {}; --rebaseline re-scores the baseline's cases exactly",
+            shown.display(),
+            if stored_cases.contains(case) {
+                format!(
+                    "among the baseline's ({}) and not this scorecard's",
+                    base_copy.display()
+                )
+            } else {
+                format!(
+                    "in this scorecard and not among the baseline's ({})",
+                    base_copy.display()
+                )
+            }
+        );
+    }
+    let mut newer = false;
+    for (metric, stored_version) in &stored.metrics {
+        match card.metrics.get(metric) {
+            Some(version) if version < stored_version => bail!(
+                "{}: metric {metric} is at definition version {version}, below the stored {stored_version} ({}); --rebaseline takes every definition at or above the stored one",
+                shown.display(),
+                base_copy.display()
+            ),
+            Some(version) if version > stored_version => newer = true,
+            Some(_) => {}
+            None => bail!(
+                "{}: metric {metric} has no definition version, and the stored scorecard ({}) has version {stored_version}",
+                shown.display(),
+                base_copy.display()
+            ),
+        }
+    }
+    newer |= card
+        .metrics
+        .keys()
+        .any(|metric| !stored.metrics.contains_key(metric));
+    if !newer {
+        bail!(
+            "{}: no metric definition is newer than the stored scorecard's ({}); --rebaseline replaces a baseline's scorecard only under a newer definition",
+            shown.display(),
+            base_copy.display()
+        );
+    }
+    let runs = match (base.revision_stated_by, &base.binary_sha256) {
+        (Some(_), Some(digest)) => {
+            runs_judged(&card, None, shown)?;
+            runs_stating(&card, digest, &revision, shown)?
+        }
+        _ => {
+            runs_judged(&card, Some(&revision), shown)?;
+            Vec::new()
+        }
+    };
+    enough_trials(&card, &card, shown)?;
+    installed_names_latest(&request.install_root.join("bin/takt"), store, &base)?;
+    let previous_sha256 = match existing.last() {
+        Some(latest) => Some(sha256_of(&record_path(store, latest))?),
+        None => None,
+    };
+    let mut record = Promotion {
+        format: FORMAT.to_owned(),
+        revision: revision.clone(),
+        revision_stated_by: base.revision_stated_by,
+        tree: base.tree.clone(),
+        promoted_at: now,
+        kind: Kind::Rebaseline,
+        scorecard: revision.clone(),
+        scorecard_file: resolved(shown),
+        scorecard_sha256: format!("{:x}", Sha256::digest(&text)),
+        against: None,
+        rule: card.rule,
+        worse: 0,
+        binary: base.binary.clone(),
+        binary_sha256: base.binary_sha256.clone(),
+        runs,
+        previous_sha256,
+        rejudges: None,
+        replaces_sha256: Some(base.scorecard_sha256.clone()),
+        cases: Vec::new(),
+    };
+    writeln!(
+        out,
+        "rebaseline {revision}: {} replaces the scorecard {} ({}) under newer metric definitions; nothing compared, nothing installed",
+        shown.display(),
+        base.scorecard_sha256,
+        base_copy.display()
+    )?;
+    if request.dry_run {
+        writeln!(
+            out,
+            "dry run: would write {} and {}",
+            record_path(store, &record).display(),
+            copy_path(store, &record).display()
+        )?;
+        writeln!(out, "{}", serde_json::to_string_pretty(&record)?)?;
+        return Ok(Outcome::WouldWrite(record));
+    }
+    record.promoted_at = write_instant(request.clock, &existing)?;
+    let path = write(store, &record, &text)?;
+    writeln!(out, "recorded: {}", path.display())?;
+    Ok(Outcome::Rebaselined(record))
 }
 
 /// Every scenario the baseline has holds at least the rule's trials on the baseline's own side,

@@ -75,7 +75,7 @@ enum Commands {
     /// `cargo install --locked --path crates/takt-cli`, record the promotion under
     /// `$XDG_STATE_HOME/takt/promotions/` (`~/.local/state/takt/promotions/`), where the latest
     /// record is the next baseline, and then move the binary into place. The revision must be
-    /// an ancestor of the checkout's `main`, and every run of its scorecard made with its own
+    /// an ancestor of the checkout's `origin/main`, and every run of its scorecard made with its own
     /// binary, as the run's `opened` line names it. One promotion a UTC day, one at a time
     /// under the store's lock; a refused candidate is recorded and not judged again until it
     /// changes, or on a scorecard of new runs with --rejudge; the installed binary must name the
@@ -87,13 +87,34 @@ enum Commands {
 #[derive(clap::Args)]
 struct PromoteArgs {
     /// The takt checkout at the candidate revision, clean: `HEAD` must equal the scorecard's
-    /// revision and no tracked file may differ from it.
-    #[arg(long)]
-    repo: PathBuf,
+    /// revision and no tracked file may differ from it. Not with --rebaseline.
+    #[arg(
+        long,
+        required_unless_present = "rebaseline",
+        conflicts_with = "rebaseline"
+    )]
+    repo: Option<PathBuf>,
     /// The candidate's saved scorecard, `scorecard-<revision>.json` with a full commit id,
-    /// outside the repository.
-    #[arg(long, value_name = "FILE")]
-    scorecard: PathBuf,
+    /// outside the repository. Not with --rebaseline.
+    #[arg(
+        long,
+        value_name = "FILE",
+        required_unless_present = "rebaseline",
+        conflicts_with = "rebaseline"
+    )]
+    scorecard: Option<PathBuf>,
+    /// Replace the baseline's scorecard with FILE, nothing built or installed: accepted only
+    /// when its revision is the baseline's, its case ids are the stored scorecard's exactly, and
+    /// every metric definition is at or above the stored version with one of them higher (a
+    /// baseline saved before a definition changed, re-scored under the new one). The record
+    /// appended to the chain names the scorecard it replaces by its sha256. With --dry-run and
+    /// --install-root only.
+    #[arg(
+        long,
+        value_name = "FILE",
+        conflicts_with_all = ["baseline_only", "revision", "binary_sha256", "rejudge"]
+    )]
+    rebaseline: Option<PathBuf>,
     /// Record the baseline only: the scorecard of the revision installed today, compared with
     /// nothing; nothing is built or installed. Refused when the store holds a baseline already.
     #[arg(long)]
@@ -129,8 +150,8 @@ struct PromoteArgs {
 
 /// What `takt promote --help` says about the exit codes.
 const PROMOTE_EXIT_CODES: &str = "Exit codes:
-  0  promoted and recorded; or the baseline recorded (--baseline-only); or, with --dry-run, the candidate would be promoted or the baseline would be recorded
-  1  refused, nothing written or installed: the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, is no ancestor of the checkout's main (or there is no main), was saved under another rule or metric definition, holds a run made with another binary than the revision's (the run named; its `opened` line names another revision, the revision -dirty, or none; with --binary-sha256 the binary.txt statements are checked instead) or a scenario run without its held-out result; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree, or commits a rust-toolchain.toml with a `path`; bubblewrap (`bwrap`) or a toolchain is not found; another promotion holds the store's lock; no baseline is recorded; the installed binary does not name the latest record's revision, or names none and hashes to another digest than the record's binary_sha256, or to none it records (with --baseline-only, the revision recorded); --revision or --binary-sha256 without --baseline-only, --binary-sha256 without --revision, a --revision that is no full commit id or not the scorecard's, a --binary-sha256 that is no sha256; with --binary-sha256, an installed binary whose --version names a revision or that hashes to another digest (both named), or a run of the scorecard that states no binary or another (the run named); the revision or its tree was refused (without --rejudge) or recorded already; --rejudge without an earlier refusal of the revision or its tree, with --baseline-only, or on a scorecard it was refused on; a promotion was made this UTC day; a scenario the baseline has has fewer cases than the rule's trials on either side, or a scenario only the candidate has fewer on its side; the store holds a file takt does not read, a record that disagrees with its name, instant or scorecard copy, or a chain of records with a gap; the record could not be written; the reason on stderr
+  0  promoted and recorded; or the baseline recorded (--baseline-only); or the baseline's scorecard replaced (--rebaseline); or, with --dry-run, the candidate would be promoted or the baseline would be recorded
+  1  refused, nothing written or installed: the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, is no ancestor of the checkout's origin/main as last fetched (or there is none), a local main moved by hand counting for nothing, was saved under another rule or metric definition, holds a run made with another binary than the revision's (the run named; its `opened` line names another revision, the revision -dirty, or none; with --binary-sha256 the binary.txt statements are checked instead) or a scenario run without its held-out result; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree, or commits a rust-toolchain.toml with a `path`; bubblewrap (`bwrap`) or a toolchain is not found; another promotion holds the store's lock; no baseline is recorded; the installed binary does not name the latest record's revision, or names none and hashes to another digest than the record's binary_sha256, or to none it records (with --baseline-only, the revision recorded); --revision or --binary-sha256 without --baseline-only, --binary-sha256 without --revision, a --revision that is no full commit id or not the scorecard's, a --binary-sha256 that is no sha256; with --binary-sha256, an installed binary whose --version names a revision or that hashes to another digest (both named), or a run of the scorecard that states no binary or another (the run named); the revision or its tree was refused (without --rejudge) or recorded already; --rejudge without an earlier refusal of the revision or its tree, with --baseline-only, or on a scorecard sharing a case with one it was refused on (the case named); --rebaseline with a scorecard of another revision than the baseline's, of other cases than the stored scorecard's (the first named), under a metric definition below the stored one (named) or none newer, or with no baseline; a promotion was made this UTC day; a scenario the baseline has has fewer cases than the rule's trials on either side, or a scenario only the candidate has fewer on its side; the store holds a file takt does not read, a record that disagrees with its name, instant or scorecard copy, or a chain of records with a gap; the record could not be written; the reason on stderr
   2  the arguments do not parse
   3  refused on the scorecard: a scenario is worse than the baseline's; the refusal is recorded (not with --dry-run), nothing installed
   5  the candidate held but its clone, its confined build or its install failed, the built binary names another revision, or the binary names another revision or hashes differently once in place (then the binary before it is back in place and the record removed); nothing recorded, the installed binary unchanged";
@@ -164,7 +185,7 @@ struct ScorecardArgs {
 /// What `takt scorecard --help` says about the exit codes.
 const SCORECARD_EXIT_CODES: &str = "Exit codes:
   0  printed (and saved); with --against, no scenario is worse than the saved one
-  1  refused: the repository, a case's events.jsonl, or the saved scorecard does not read (a binary.txt that does not read leaves its case's runs stating no binary, the case listed with the reason); a scenario case has no held-out.txt beside its record, or one that does not read or states no result (the case named); --save without --revision, onto a file that exists, or that cannot be written; with --against, a scenario both sides have has fewer cases on this side than the rule's trials: printed as `too few cases (<n> of <trials>)`, no verdict given; the reason on stderr
+  1  refused: the repository, a case's events.jsonl, or the saved scorecard does not read (a binary.txt that does not read leaves its case's runs stating no binary, the case listed with the reason); a scenario case has no held-out.txt beside its record, or one that does not read or states no result (the case named); --save without --revision, onto a file that exists, or that cannot be written; with --against, a scenario the saved scorecard has with fewer cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), or any scenario with fewer on this side, none included (`too few cases (<n> of <trials>)`): no verdict given, as a promotion refuses; a saved scorecard with a run whose outcome disagrees with its held-out result; the reason on stderr
   2  the arguments do not parse
   3  with --against: a scenario is worse: at some outcome rank its cases at that rank or better fall short of the saved share by more than the rule's margin, its median of tokens exceeds the saved maximum, or it has no run";
 
@@ -524,6 +545,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
         Commands::Promote(PromoteArgs {
             repo,
             scorecard,
+            rebaseline,
             baseline_only,
             revision,
             binary_sha256,
@@ -531,14 +553,30 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             rejudge,
             install_root,
         }) => {
-            let repo = repo
-                .canonicalize()
-                .with_context(|| format!("--repo {}", repo.display()))?;
             let store = takt::promotion::store()?;
             let install_root = match install_root {
                 Some(root) => root,
                 None => takt::promotion::install_root()?,
             };
+            if let Some(scorecard) = rebaseline {
+                let request = takt::promotion::Rebaseline {
+                    scorecard: &scorecard,
+                    store: &store,
+                    install_root: &install_root,
+                    dry_run,
+                    clock: takt::now,
+                };
+                takt::promotion::rebaseline(&request, out)?;
+                return Ok(EXIT_DONE);
+            }
+            let (Some(repo), Some(scorecard)) = (repo, scorecard) else {
+                return Err(anyhow!(
+                    "--repo and --scorecard are needed without --rebaseline"
+                ));
+            };
+            let repo = repo
+                .canonicalize()
+                .with_context(|| format!("--repo {}", repo.display()))?;
             let build_dir = takt::promotion::build_dir()?;
             let request = takt::promotion::Request {
                 repo: &repo,

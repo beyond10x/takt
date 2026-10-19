@@ -224,11 +224,26 @@ fn a_baseline_scenario_the_candidate_never_ran_is_not_passed_silently() {
     let candidate = scratch("missing-candidate");
     fs::create_dir_all(candidate.join(CASES_DIR).join("scenario-1-trial-2"))
         .expect("a case directory without a record");
-    let card = Scorecard::read(&candidate).expect("the scorecard reads");
-    let (worse, text) = against(&card, &saved);
+    let mut card = Scorecard::read(&candidate).expect("the scorecard reads");
+    // Under a rule of one trial, as `against` compares; no case is fewer than one, so the
+    // comparison gives no verdict and refuses, as a promotion does (review N7).
+    card.rule.trials = 1;
+    let mut out = Vec::new();
+    let compared = card.against(
+        &Scorecard::load(&saved).expect("the saved scorecard reads"),
+        &mut out,
+    );
+    let text = String::from_utf8(out).expect("utf-8");
+    let error = format!(
+        "{:#}",
+        compared.expect_err(&format!(
+            "scenario 1 has a saved run and no candidate run, and the comparison is clean:\n{text}"
+        ))
+    );
+    assert!(error.contains("scenario 1 (0 of 1)"), "{error}");
     assert!(
-        worse > 0,
-        "scenario 1 has a saved run and no candidate run, and the comparison is clean:\n{text}"
+        text.contains("scenario 1  too few cases (0 of 1)"),
+        "{text}"
     );
 }
 

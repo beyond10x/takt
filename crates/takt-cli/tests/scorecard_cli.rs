@@ -420,3 +420,76 @@ fn against_gives_no_verdict_on_fewer_cases_than_the_trials() {
     );
     assert!(!text.contains("too few"), "{text}");
 }
+
+/// story:scorecard-against-needs-the-trials, review N7: `--against` applies the trials as a
+/// promotion does: a saved side with fewer cases than the rule's trials, and a scenario only the
+/// candidate has with fewer, get no verdict, and the command exits non-zero naming them.
+#[test]
+fn against_applies_the_trials_to_the_saved_side_and_to_new_scenarios() {
+    let names: Vec<String> = (1..=13).map(|n| format!("scenario-1-trial-{n}")).collect();
+    fn accepted(cases: &[String]) -> Vec<(&str, u64, &str)> {
+        cases
+            .iter()
+            .map(|case| (case.as_str(), 500, "Completed (accepted)"))
+            .collect()
+    }
+    let thin = repository("trials-thin", &accepted(&names[..3]));
+    let saves = scratch("trials-thin-saves");
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &thin.display().to_string(),
+        "--save",
+        &saves.display().to_string(),
+        "--revision",
+        REVISION,
+    ]);
+    assert_eq!(code, 0, "{text}{stderr}");
+    let saved = saves.join(format!("scorecard-{REVISION}.json"));
+    let five = repository("trials-five-cases", &accepted(&names[3..8]));
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &five.display().to_string(),
+        "--against",
+        &saved.display().to_string(),
+    ]);
+    assert_ne!(code, 0, "{text}{stderr}");
+    assert!(
+        text.contains("scenario 1  too few cases on the saved side (3 of 5)"),
+        "{text}{stderr}"
+    );
+    assert!(
+        !text.contains("scenario 1  outcomes by rank"),
+        "no verdict: {text}"
+    );
+
+    let full = repository("trials-full", &accepted(&names[8..13]));
+    let saves = scratch("trials-full-saves");
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &full.display().to_string(),
+        "--save",
+        &saves.display().to_string(),
+        "--revision",
+        REVISION,
+    ]);
+    assert_eq!(code, 0, "{text}{stderr}");
+    let saved = saves.join(format!("scorecard-{REVISION}.json"));
+    let mut runs = accepted(&names[3..8]);
+    runs.push(("scenario-2-trial-1", 500, "Completed (accepted)"));
+    let new = repository("trials-new-scenario", &runs);
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &new.display().to_string(),
+        "--against",
+        &saved.display().to_string(),
+    ]);
+    assert_ne!(code, 0, "{text}{stderr}");
+    assert!(
+        text.contains("scenario 2  too few cases (1 of 5)") && stderr.contains("scenario 2"),
+        "{text}{stderr}"
+    );
+}
