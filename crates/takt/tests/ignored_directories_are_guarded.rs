@@ -225,7 +225,7 @@ fn a_step_that_plants_bytecode_in_an_ignored_directory_is_refused_and_the_file_r
     let mut run =
         Run::open(tree, options(protocol.clone(), 3), &harness, &validators).expect("opens");
     let aside = scratch.root.join("aside");
-    run.set_aside = Some(aside.clone());
+    run.set_aside_in(aside.clone()).expect("a set-aside root");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -282,7 +282,7 @@ fn a_step_that_plants_bytecode_in_an_ignored_directory_is_refused_and_the_file_r
         &validators,
     )
     .expect("the case resumes");
-    resumed.set_aside = Some(aside);
+    resumed.set_aside_in(aside).expect("a set-aside root");
     let mut out = Vec::new();
     let stop = resumed.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -326,7 +326,8 @@ fn a_step_that_adds_a_file_to_an_ignored_directory_is_refused_and_only_that_file
     let validators: Vec<Box<dyn Validator>> =
         vec![Box::new(TestsRun::new("false").expect("a command"))];
     let mut run = Run::open(tree, options(protocol, 3), &AddsToBuild, &validators).expect("opens");
-    run.set_aside = Some(scratch.root.join("aside"));
+    run.set_aside_in(scratch.root.join("aside"))
+        .expect("a set-aside root");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -371,7 +372,7 @@ fn a_refused_tests_run_leaves_its_build_output_in_place_and_moves_nothing_aside(
         vec![Box::new(TestsRun::new("./build.sh").expect("a command"))];
     let mut run = Run::open(tree, options(protocol, 2), &Notes, &validators).expect("opens");
     let aside = scratch.root.join("aside");
-    run.set_aside = Some(aside.clone());
+    run.set_aside_in(aside.clone()).expect("a set-aside root");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();

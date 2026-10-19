@@ -170,7 +170,8 @@ fn go<F: Fn(&Path)>(scratch: &Scratch, attack: F) -> (anyhow::Result<Stop>, Stri
         gate: None,
     };
     let mut run = Run::open(&scratch.repo, options, &harness, &validators).expect("opens");
-    run.set_aside = Some(scratch.root.join("aside"));
+    run.set_aside_in(scratch.root.join("aside"))
+        .expect("a set-aside root");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     (stop, String::from_utf8_lossy(&out).into_owned())
