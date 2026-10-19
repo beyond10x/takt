@@ -74,7 +74,18 @@ const REDIRECTING_ENV: [&str; 15] = [
 /// than find a repository further up; and for a tree without a `.git` git searches no further
 /// than the tree itself.
 fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
+    output_with(tree, args, input, &[])
+}
+
+/// [`output`] with `env` set in git's environment over the caller's.
+fn output_with(
+    tree: &Path,
+    args: &[&str],
+    input: Option<&[u8]>,
+    env: &[(&str, &str)],
+) -> Result<Output> {
     let mut child = command(tree, args)?
+        .envs(env.iter().copied())
         .stdin(if input.is_some() {
             Stdio::piped()
         } else {
@@ -301,7 +312,17 @@ fn command(tree: &Path, args: &[&str]) -> Result<Command> {
 /// Runs `git <args>` in `tree`, `input` on its standard input; answers its standard output as
 /// it is, byte for byte, or an error naming what git said when it exits non-zero.
 fn raw(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
-    let output = output(tree, args, input)?;
+    raw_with(tree, args, input, &[])
+}
+
+/// [`raw`] with `env` set in git's environment over the caller's.
+fn raw_with(
+    tree: &Path,
+    args: &[&str],
+    input: Option<&[u8]>,
+    env: &[(&str, &str)],
+) -> Result<Vec<u8>> {
+    let output = output_with(tree, args, input, env)?;
     if !output.status.success() {
         bail!(
             "git {} in {} exited {}: {}",
@@ -1018,8 +1039,129 @@ fn dirty(entries: &[Entry]) -> BTreeSet<String> {
         .collect()
 }
 
-/// The identity takt commits under.
-const IDENTITY: [&str; 4] = ["-c", "user.name=takt", "-c", "user.email=takt@localhost"];
+/// Where a repository configures the identity takt commits with, in git's configuration syntax:
+/// `[identity]` with `name` and `email`, read at a revision ([`configured_identity`]).
+pub const COMMIT_IDENTITY_FILE: &str = ".engineering/commit-identity.conf";
+
+/// The author and committer of a commit takt makes ([`commit_paths`]): a name and an email,
+/// each exactly as git records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitIdentity {
+    /// The name, `b10x-bot[bot]`.
+    pub name: String,
+    /// The email, without its angle brackets.
+    pub email: String,
+}
+
+impl CommitIdentity {
+    /// takt's own identity, `takt <takt@localhost>`: what a commit carries when no identity is
+    /// configured and none is required.
+    #[must_use]
+    pub fn takt() -> Self {
+        Self {
+            name: "takt".to_owned(),
+            email: "takt@localhost".to_owned(),
+        }
+    }
+
+    /// The identity `name <email>`, refused when git would not record it exactly: either part
+    /// empty, holding `<`, `>` or a control character, starting or ending with a character git
+    /// strips there (white space, `.`, `,`, `:`, `;`, `"`, `\`, `'`), or an email holding white
+    /// space.
+    pub fn new(name: &str, email: &str) -> Result<Self> {
+        fn check(part: &str, what: &str) -> Result<()> {
+            let stripped = |c: char| c <= ' ' || ".,:;<>\"\\'".contains(c);
+            if part.is_empty() {
+                bail!("the {what} is empty");
+            }
+            if part.contains(['<', '>']) || part.chars().any(char::is_control) {
+                bail!("the {what} `{part}` holds `<`, `>` or a control character");
+            }
+            if part.starts_with(stripped) || part.ends_with(stripped) {
+                bail!("the {what} `{part}` starts or ends with a character git strips there");
+            }
+            Ok(())
+        }
+        check(name, "name")?;
+        check(email, "email")?;
+        if email.chars().any(char::is_whitespace) {
+            bail!("the email `{email}` holds white space");
+        }
+        Ok(Self {
+            name: name.to_owned(),
+            email: email.to_owned(),
+        })
+    }
+
+    /// Reads `name <email>`, as git prints an identity and `--commit-identity` takes one.
+    pub fn parse(text: &str) -> Result<Self> {
+        let refused = || anyhow!("`{text}` is no identity: give it as `<name> <email>`");
+        let inner = text.strip_suffix('>').ok_or_else(refused)?;
+        let (name, email) = inner.rsplit_once(" <").ok_or_else(refused)?;
+        Self::new(name, email).with_context(refused)
+    }
+}
+
+impl std::fmt::Display for CommitIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} <{}>", self.name, self.email)
+    }
+}
+
+impl std::str::FromStr for CommitIdentity {
+    type Err = anyhow::Error;
+
+    fn from_str(text: &str) -> Result<Self> {
+        Self::parse(text)
+    }
+}
+
+/// The refusal of a run whose commits leave the machine when `revision`, where the identity was
+/// read, configures none and none was given: it names the file, its keys and the flag.
+#[must_use]
+pub fn no_identity(revision: &str) -> anyhow::Error {
+    anyhow!(
+        "no commit identity: {revision} holds no {COMMIT_IDENTITY_FILE} giving `identity.name` and `identity.email`, and no --commit-identity '<name> <email>' was given; this run's commits leave the machine, and takt pushes none as {} or under the operator's git configuration; nothing was written",
+        CommitIdentity::takt()
+    )
+}
+
+/// The identity [`COMMIT_IDENTITY_FILE`] names at `revision`, read without a checkout as
+/// [`config_at`] reads a file: `None` when `revision` holds no such file, or names no commit.
+/// A file that does not give `identity.name` and `identity.email` once each, gives any other
+/// key, or names an identity git would not record exactly ([`CommitIdentity::new`]) is refused,
+/// naming the file and the key; it is never read as none.
+pub fn configured_identity(tree: &Path, revision: &str) -> Result<Option<CommitIdentity>> {
+    let Some(entries) = config_at(tree, revision, COMMIT_IDENTITY_FILE)? else {
+        return Ok(None);
+    };
+    let at = format!("{revision}:{COMMIT_IDENTITY_FILE}");
+    let (mut name, mut email) = (None, None);
+    for (key, value) in entries {
+        let slot = match key.as_str() {
+            "identity.name" => &mut name,
+            "identity.email" => &mut email,
+            other => bail!(
+                "{at} gives `{other}`, which takt does not read; it gives `identity.name` and `identity.email`"
+            ),
+        };
+        let value = value.ok_or_else(|| anyhow!("{at} gives `{key}` no value"))?;
+        if slot.replace(value).is_some() {
+            bail!("{at} gives `{key}` twice");
+        }
+    }
+    let missing =
+        |key: &str| anyhow!("{at} gives no `{key}`; it gives `identity.name` and `identity.email`");
+    let name = name.ok_or_else(|| missing("identity.name"))?;
+    let email = email.ok_or_else(|| missing("identity.email"))?;
+    CommitIdentity::new(&name, &email)
+        .with_context(|| {
+            format!(
+                "{at} names no identity git records as given (`identity.name`, `identity.email`)"
+            )
+        })
+        .map(Some)
+}
 
 /// The paths, NUL-separated, for `--pathspec-from-file=- --pathspec-file-nul`.
 fn pathspec(paths: &[String]) -> Vec<u8> {
@@ -1037,12 +1179,28 @@ fn pathspec(paths: &[String]) -> Vec<u8> {
 /// standard input, so no count or name of them is too many for a command line. Answers the
 /// new `HEAD`. A nested repository among `paths`, which git would record as a gitlink `HEAD`
 /// does not have, is refused and nothing committed ([`new_gitlinks`]).
-pub fn commit_paths(tree: &Path, paths: &[String], message: &str) -> Result<String> {
-    let mut commit: Vec<&str> = Vec::from(IDENTITY);
-    commit.extend(["commit", "-q", "--only", "-m", message]);
+///
+/// `identity` is the commit's author and committer both, set as `GIT_AUTHOR_NAME`,
+/// `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` in the commit's own
+/// environment, which outrank every `user.*`, `author.*` and `committer.*` of git's
+/// configuration and replace the same variables in takt's environment: nothing of the
+/// operator's identity reaches the commit. Every commit takt makes is made here.
+pub fn commit_paths(
+    tree: &Path,
+    identity: &CommitIdentity,
+    paths: &[String],
+    message: &str,
+) -> Result<String> {
+    let env = [
+        ("GIT_AUTHOR_NAME", identity.name.as_str()),
+        ("GIT_AUTHOR_EMAIL", identity.email.as_str()),
+        ("GIT_COMMITTER_NAME", identity.name.as_str()),
+        ("GIT_COMMITTER_EMAIL", identity.email.as_str()),
+    ];
+    let mut commit: Vec<&str> = vec!["commit", "-q", "--only", "-m", message];
     if paths.is_empty() {
         commit.push("--allow-empty");
-        raw(tree, &commit, None)?;
+        raw_with(tree, &commit, None, &env)?;
     } else {
         let list = pathspec(paths);
         let from_input = ["--pathspec-from-file=-", "--pathspec-file-nul"];
@@ -1059,7 +1217,7 @@ pub fn commit_paths(tree: &Path, paths: &[String], message: &str) -> Result<Stri
         let mut literal = vec!["--literal-pathspecs"];
         literal.extend(commit);
         literal.extend(from_input);
-        raw(tree, &literal, Some(&list))?;
+        raw_with(tree, &literal, Some(&list), &env)?;
     }
     head(tree)
 }

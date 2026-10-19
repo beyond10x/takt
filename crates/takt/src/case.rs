@@ -1,7 +1,8 @@
 //! A Canon case on disk: `<tree>/.engineering/cases/<id>/` holds `case.yaml`, `protocol.ir.json`,
 //! `evidence/*.json`, `decisions/*.json`, `branch.yaml`, the case's branch and its pull
 //! request, `story.yaml`, the story the case was opened for, when it was, and `authority.yaml`,
-//! the authority the operator granted the case, once granted, and `riders/<revision>/`, what the
+//! the authority the operator granted the case, once granted, `commit-identity`, the identity
+//! its commits carry when it opened with one, and `riders/<revision>/`, what the
 //! run's store writes on the story committed, which its riders must equal byte for byte
 //! ([`approvals_only`]). Every evaluation reads the files
 //! and asks Canon. A case is opened once and resumed by every later run on it.
@@ -39,6 +40,44 @@ pub const STORY_FILE: &str = "story.yaml";
 /// while it is checked, recorded and written. Created with `create_new`, so of two that try at
 /// once exactly one holds; no grant lands and no second run starts meanwhile.
 pub const LOCK_FILE: &str = "run.lock";
+
+/// The file under the case directory that names the identity every commit of the case carries
+/// (`<name> <email>` on one line), written when the case opens; absent when it opened with
+/// none, and then its commits are takt's own ([`CaseDir::committer`]).
+pub const COMMIT_IDENTITY_RECORD: &str = "commit-identity";
+
+/// The identity a case's commits carry, as the case is opened with it ([`CaseDir::open_as`]),
+/// recorded in the case so every resume and approval commits with the same one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum CommitAs {
+    /// None recorded: the case commits as [`crate::git::CommitIdentity::takt`]. A library run
+    /// given no identity opens its case so.
+    #[default]
+    Takt,
+    /// This identity, whatever the repository configures: the operator's `--commit-identity`,
+    /// or one the caller read elsewhere (a scenario's declaring revision).
+    Given(crate::git::CommitIdentity),
+    /// The identity [`crate::git::COMMIT_IDENTITY_FILE`] names at the commit the case forks
+    /// from, read when it opens; with none there, as [`CommitAs::Takt`], unless `required` (a run
+    /// whose commits leave the machine): then the case is refused before anything is written.
+    Configured {
+        /// Whether a case finding none configured is refused.
+        required: bool,
+    },
+}
+
+/// The identity the case at `case_dir` was opened with ([`COMMIT_IDENTITY_RECORD`]); none when
+/// it recorded none. A record that does not read as an identity is an error.
+pub fn commit_identity_of(case_dir: &Path) -> Result<Option<crate::git::CommitIdentity>> {
+    let path = case_dir.join(COMMIT_IDENTITY_RECORD);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => crate::git::CommitIdentity::parse(text.trim_end_matches('\n'))
+            .with_context(|| format!("read {}", path.display()))
+            .map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
+}
 
 /// The protocol whose cases open with a baseline the run is given: `loop.improvement/1`.
 pub const LOOP_PROTOCOL: &str = "loop.improvement/1";
@@ -1613,13 +1652,29 @@ impl CaseDir {
     /// `HEAD`, the inputs and the branch are in order, and an open that fails after the branch
     /// was made takes the directory, the cases directory when it was the last, and the branch
     /// with it, the tree back where it was, so a case directory exists only with its
-    /// `case.yaml` and a `takt/<id>` branch only with its case.
+    /// `case.yaml` and a `takt/<id>` branch only with its case. Its commits are takt's own
+    /// ([`CommitAs::Takt`]); [`CaseDir::open_as`] opens one with another identity.
     pub fn open(
         tree: &Path,
         protocol: LoadedProtocol,
         id: &str,
         intent: &str,
         inputs: &[(String, String)],
+    ) -> Result<Self> {
+        Self::open_as(tree, protocol, id, intent, inputs, &CommitAs::Takt)
+    }
+
+    /// [`CaseDir::open`], the case's commits carrying the identity `commit_as` says, recorded
+    /// in the case ([`COMMIT_IDENTITY_RECORD`]). [`CommitAs::Configured`] reads it at the commit
+    /// the case's branch forks from, once the tree is found clean and before the branch is made;
+    /// one that must be there and is not refuses the case with nothing written.
+    pub fn open_as(
+        tree: &Path,
+        protocol: LoadedProtocol,
+        id: &str,
+        intent: &str,
+        inputs: &[(String, String)],
+        commit_as: &CommitAs,
     ) -> Result<Self> {
         check_id(id)?;
         refuse_link_on_the_way(tree, id, "opened")?;
@@ -1690,13 +1745,29 @@ impl CaseDir {
         // another case's commits. `left` is the branch the tree was on, which a discarded case
         // returns to.
         let (left, base, from) = opening_base(tree)?;
+        let base_commit = crate::git::run(
+            tree,
+            &["rev-parse", "--verify", from.as_deref().unwrap_or("HEAD")],
+        )?;
+        let identity = match commit_as {
+            CommitAs::Takt => None,
+            CommitAs::Given(identity) => Some(identity.clone()),
+            CommitAs::Configured { required } => {
+                match crate::git::configured_identity(tree, &base_commit)? {
+                    Some(identity) => Some(identity),
+                    None if *required => {
+                        return Err(crate::git::no_identity(
+                            &base_commit[..12.min(base_commit.len())],
+                        ));
+                    }
+                    None => None,
+                }
+            }
+        };
         let branch = Branch {
             name: Branch::name_of(id),
             base,
-            base_commit: Some(crate::git::run(
-                tree,
-                &["rev-parse", "--verify", from.as_deref().unwrap_or("HEAD")],
-            )?),
+            base_commit: Some(base_commit),
             left,
             pushed: None,
             pull_request: None,
@@ -1724,6 +1795,11 @@ impl CaseDir {
                 case.doc["artifacts"]["implementation"]["revision"] = tip.into();
             }
             case.create(intent, &branch)?;
+            if let Some(identity) = &identity {
+                let path = case.dir.join(COMMIT_IDENTITY_RECORD);
+                std::fs::write(&path, format!("{identity}\n"))
+                    .with_context(|| format!("write {}", path.display()))?;
+            }
             Ok(case)
         })();
         opened.map_err(|error: anyhow::Error| {
@@ -2099,6 +2175,20 @@ impl CaseDir {
                 .with_context(|| format!("write {}", path.display()))?;
         }
         self.set_story(&opening.finding)
+    }
+
+    /// The identity the case was opened with ([`commit_identity_of`]); none when it recorded
+    /// none.
+    pub fn commit_identity(&self) -> Result<Option<crate::git::CommitIdentity>> {
+        commit_identity_of(&self.dir)
+    }
+
+    /// The identity every commit of the case carries: the one it was opened with, else takt's
+    /// own ([`crate::git::CommitIdentity::takt`]).
+    pub fn committer(&self) -> Result<crate::git::CommitIdentity> {
+        Ok(self
+            .commit_identity()?
+            .unwrap_or_else(crate::git::CommitIdentity::takt))
     }
 
     /// Moves `artifact` to `revision`; evidence about the old revision no longer applies.

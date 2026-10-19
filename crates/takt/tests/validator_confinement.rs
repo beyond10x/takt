@@ -892,7 +892,13 @@ fn takt_git_runs_no_code_the_repository_configures() {
     git(&tree, &["config", "core.hooksPath", "hooks"]);
     fs::write(tree.join("README.md"), "changed\n").expect("a change");
     takt::git::changed_paths(&tree).expect("status");
-    takt::git::commit_paths(&tree, &["README.md".to_owned()], "a change").expect("commits");
+    takt::git::commit_paths(
+        &tree,
+        &takt::git::CommitIdentity::takt(),
+        &["README.md".to_owned()],
+        "a change",
+    )
+    .expect("commits");
     assert!(!marker("fsmonitor").exists(), "core.fsmonitor ran");
     assert!(!marker("hook").exists(), "a post-commit hook ran");
 }

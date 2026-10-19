@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::case::{CASES_DIR, CaseDir, KEPT_MOVE, KEPT_TEST_RESULT};
+use crate::case::{CASES_DIR, CaseDir, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT};
 use crate::events::{BY_STORE, BY_TAKT, Event, Events};
 use crate::frontier::{Frontier, IMPLEMENTED, Story, TEST_RESULT, Take, Unit};
 use crate::harness::{Harness, StepContext, is_test_path};
@@ -6244,6 +6244,13 @@ pub fn free_space(path: &Path) -> std::io::Result<FreeSpace> {
 /// A run over one case. Its stop [`Stop::Unperformable`] is off by default in the library: a
 /// library caller opts in with [`Run::stop_when_unperformable`], and the CLI turns it on for
 /// every run in its `finish`, so the library's default is not the product's behaviour.
+///
+/// Every commit the run makes carries the identity its case was opened with, as author and
+/// committer, never the operator's git configuration ([`Run::committer`]). A run given no
+/// identity, through [`Run::open`], [`Run::open_unit`] or [`Run::take_next`], opens its case
+/// with none, and its commits are takt's own fixed `takt <takt@localhost>`: an opt-in, as
+/// [`Run::stop_when_unperformable`] is. [`Run::open_unit_as`] and [`Run::take_next_as`] give
+/// one ([`CommitAs`]); the CLI does for every case it opens.
 pub struct Run<'a> {
     /// The worktree.
     pub tree: PathBuf,
@@ -6301,6 +6308,9 @@ pub struct Run<'a> {
     read_free: FreeSpaceReader,
     /// Whether a free-space read that failed was said: once a run.
     free_unread_said: bool,
+    /// The author and committer of every commit the run makes, the case's
+    /// ([`CaseDir::committer`]), read when the run is opened or resumed.
+    committer: crate::git::CommitIdentity,
 }
 
 impl<'a> Run<'a> {
@@ -6320,11 +6330,25 @@ impl<'a> Run<'a> {
 
     /// Opens the case on `unit` and prepares the run. For a story, `intent.md` is the story's
     /// title followed by its body, and the case id, unless `options` gives one, is derived from
-    /// the story id and the instant.
+    /// the story id and the instant. Its commits are takt's own ([`CommitAs::Takt`]).
     pub fn open_unit(
+        tree: &Path,
+        options: RunOptions,
+        unit: Unit,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        Self::open_unit_as(tree, options, unit, &CommitAs::Takt, harness, validators)
+    }
+
+    /// [`Run::open_unit`], the case opened with the identity `commit_as` says
+    /// ([`CaseDir::open_as`]); a case that must have one and finds none is refused before
+    /// anything is written.
+    pub fn open_unit_as(
         tree: &Path,
         mut options: RunOptions,
         unit: Unit,
+        commit_as: &CommitAs,
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
     ) -> Result<Self> {
@@ -6351,7 +6375,21 @@ impl<'a> Run<'a> {
             .case_id
             .clone()
             .unwrap_or_else(|| format!("takt-{}", crate::now().replace([':', '-'], "")));
-        let case = CaseDir::open(tree, protocol, &id, &options.intent, &options.inputs)?;
+        let case = CaseDir::open_as(
+            tree,
+            protocol,
+            &id,
+            &options.intent,
+            &options.inputs,
+            commit_as,
+        )?;
+        let committer = match case.committer() {
+            Ok(committer) => committer,
+            Err(error) => {
+                case.discard()?;
+                return Err(error);
+            }
+        };
         // A case with no base cannot open its pull request. With a validator for `pr.open`
         // registered that is known now, so the run is refused before its first step rather
         // than after the tests, the gate and the harness have run; the case is discarded.
@@ -6405,7 +6443,15 @@ impl<'a> Run<'a> {
             build_dir: None,
             read_free: Box::new(free_space),
             free_unread_said: false,
+            committer,
         })
+    }
+
+    /// The author and committer of every commit the run makes: the identity its case was opened
+    /// with, else takt's own ([`CaseDir::committer`]).
+    #[must_use]
+    pub fn committer(&self) -> &crate::git::CommitIdentity {
+        &self.committer
     }
 
     /// Gives the run the planning store `store`: a story's run records there the `test_result`
@@ -6491,6 +6537,8 @@ impl<'a> Run<'a> {
         let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
         let modules = Modules::of_case(&case.dir, &runs, tree)?;
         let outside_dirs = OutsideDirs::of(&runs, tree, &modules);
+        // The identity the case was opened with, whatever the repository configures by now.
+        let committer = case.committer()?;
         Ok(Self {
             tree: tree.to_path_buf(),
             case,
@@ -6514,6 +6562,7 @@ impl<'a> Run<'a> {
             build_dir: None,
             read_free: Box::new(free_space),
             free_unread_said: false,
+            committer,
         })
     }
 
@@ -6575,11 +6624,35 @@ impl<'a> Run<'a> {
     /// case already records is not taken again, and one whose minted case id the case id rule
     /// refuses ([`crate::case::check_id`]) is not opened: each is skipped with a line on `out`
     /// naming it. `None`,
-    /// with no case opened, when nothing else is ready, such a skipped case included.
+    /// with no case opened, when nothing else is ready, such a skipped case included. The case
+    /// commits as takt's own ([`CommitAs::Takt`]).
     pub fn take_next(
         tree: &Path,
         options: RunOptions,
         frontier: &dyn Frontier,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+        out: &mut dyn Write,
+    ) -> Result<Option<Self>> {
+        Self::take_next_as(
+            tree,
+            options,
+            frontier,
+            &CommitAs::Takt,
+            harness,
+            validators,
+            out,
+        )
+    }
+
+    /// [`Run::take_next`], each case opened with the identity `commit_as` says
+    /// ([`Run::open_unit_as`]), the take committed with it: a case that must have one and finds
+    /// none is refused, and that refusal is the error, with nothing taken.
+    pub fn take_next_as(
+        tree: &Path,
+        options: RunOptions,
+        frontier: &dyn Frontier,
+        commit_as: &CommitAs,
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
@@ -6608,7 +6681,14 @@ impl<'a> Run<'a> {
                 }
                 options.case_id = Some(minted);
             }
-            let mut run = Self::open_unit(tree, options, Unit::Story(story), harness, validators)?;
+            let mut run = Self::open_unit_as(
+                tree,
+                options,
+                Unit::Story(story),
+                commit_as,
+                harness,
+                validators,
+            )?;
             let taken = match frontier.take(tree, &id) {
                 Ok(taken) => taken,
                 Err(error) => return Err(Self::discarded(run, error)),
@@ -6619,7 +6699,12 @@ impl<'a> Run<'a> {
                         Ok(changed) => changed,
                         Err(error) => return Err(Self::discarded(run, error)),
                     };
-                    let head = match crate::git::commit_paths(tree, &changed, &take_subject(&id)) {
+                    let head = match crate::git::commit_paths(
+                        tree,
+                        &run.committer,
+                        &changed,
+                        &take_subject(&id),
+                    ) {
                         Ok(head) => head,
                         Err(error) => return Err(Self::discarded(run, error)),
                     };
@@ -6985,6 +7070,7 @@ impl<'a> Run<'a> {
     ) -> Result<Vec<String>> {
         let recorded = events.read()?;
         let branch = &self.case.branch;
+        let identity = &self.committer;
         let mut refusals: Vec<String> = Vec::new();
         let committed = |commit: &Option<String>| match commit {
             Some(commit) => format!(" (committed {} on {branch})", short(commit)),
@@ -7009,6 +7095,7 @@ impl<'a> Run<'a> {
                 crate::frontier::write_on_case_branch(
                     &self.tree,
                     branch,
+                    identity,
                     story,
                     &evidence_subject,
                     || store.record_test_result(&self.tree, story, &reference, &at),
@@ -7056,6 +7143,7 @@ impl<'a> Run<'a> {
             match crate::frontier::write_on_case_branch(
                 &self.tree,
                 branch,
+                identity,
                 story,
                 &move_subject,
                 || store.implemented(&self.tree, story),
@@ -8589,6 +8677,7 @@ impl<'a> Run<'a> {
             // of the step behind either.
             let head = match crate::git::commit_paths(
                 &self.tree,
+                &self.committer,
                 changed,
                 &format!("{}: {}", report.action, one_line(&report.summary)),
             ) {
