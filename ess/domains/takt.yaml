@@ -1555,7 +1555,7 @@ types:
   # baseline before it: `replaces_sha256` is that record's scorecard digest, of the same
   # revision, and both scorecard copies hold the same case ids.
   # read from: .engineering/planning/story/promotion-refusal-is-not-final.md (§ Outcome)
-  # read from: crates/takt/src/promotion.rs:2545-2732
+  # read from: crates/takt/src/promotion.rs:2534-2721
   # read from: crates/takt/src/promotion.rs:768-879
   # read from: crates/takt/src/promotion.rs:730-766
   - name: takt.work.PromotionKind
@@ -3163,10 +3163,9 @@ entities:
   # latest record that is no refusal names the promoted baseline the next candidate is compared
   # with; the first is written by `takt promote --baseline-only`, which installs nothing. A
   # candidate is refused when a scenario is worse than the baseline's under the scorecard's rule
-  # (takt.work.Comparison), and that refusal is recorded; before any comparison, when another
-  # promotion was made the same UTC day (naming it), when the revision is recorded already, when a
-  # scenario has fewer candidate cases than the rule's trials, when the scorecard lies inside the
-  # repository or is not named by a full commit id equal to the checkout's `HEAD`, or when the
+  # (takt.work.Comparison), and that refusal is recorded; before any comparison, when the revision
+  # is recorded already, when a scenario has fewer candidate cases than the rule's trials, when
+  # the scorecard lies inside the repository or is not named by a full commit id equal to the checkout's `HEAD`, or when the
   # checkout has uncommitted changes, or when the installed binary's `--version` does not name
   # the latest baseline or promotion recorded (a record removed from the end of the store, or a
   # binary replaced by hand; a binary that names no revision is checked by its sha256 against
@@ -3176,22 +3175,25 @@ entities:
   # revision`), installed with `cargo install --locked --path crates/takt-cli` into a fresh
   # root, checked again, hashed, recorded, then moved into place in one rename and checked once
   # more in place against the revision and the digest; `--dry-run` prints the verdict and the
-  # record and writes nothing.
+  # record and writes nothing. No cap a day, decided by the owner 2026-10-19
+  # (story:promotion-without-daily-cap, replacing story:promotion's one a UTC day): a promotion
+  # of another revision the same UTC day is judged against the latest record like any other and,
+  # when it holds, recorded after it.
   # read from: .engineering/planning/story/promotion.md:39-44
   # read from: .engineering/planning/story/promotion.md:52-54
-  # read from: .engineering/planning/story/promotion.md:141
+  # read from: crates/takt-cli/tests/promote_cli.rs:1296-1301
   # read from: crates/takt/src/promotion.rs:1014-1020
   # read from: crates/takt/src/promotion.rs:1554-1665
   # read from: crates/takt/src/promotion.rs:2042-2240
-  # read from: crates/takt/src/promotion.rs:2246-2537
+  # read from: crates/takt/src/promotion.rs:2246-2526
   # Where it is kept, decided 2026-10-18: one JSON file per promotion at
   # `$XDG_STATE_HOME/takt/promotions/<revision>.json` (`~/.local/state/takt/promotions/` without
   # `XDG_STATE_HOME`; a refusal as `<revision>.refused.json`; the scorecard a baseline or a
   # promotion read copied as `<revision>.scorecard.json`), outside every repository a candidate
   # changes, which the scorecard-reader review asked for and `takt promote` refuses to break; the
   # latest record by `promoted_at` that is no refusal is the baseline, and the comparison reads
-  # its scorecard copy after checking its digest. `promoted_at` is the instant the one-a-UTC-day
-  # rule reads, and `kind` tells the records apart (takt.work.PromotionKind). The store is read
+  # its scorecard copy after checking its digest. `promoted_at` is the instant the chain's order
+  # checks, and `kind` tells the records apart (takt.work.PromotionKind). The store is read
   # fail-closed: a file that is no record or copy, a record whose name, kind or instant disagrees
   # with its content, a copy with another digest, or a copy without its record refuses every
   # promotion until someone looks. A record is never overwritten. Decided 2026-10-19 after the
@@ -3283,7 +3285,7 @@ entities:
   # read from: .engineering/planning/story/promotion-refusal-is-not-final.md (§ Outcome)
   # read from: crates/takt/src/promotion.rs:1668-1746
   # read from: crates/takt/src/promotion.rs:2301-2367
-  # read from: crates/takt/src/promotion.rs:2735-2774
+  # read from: crates/takt/src/promotion.rs:2724-2763
   # read from: crates/takt/src/promotion.rs:881-914
   # Decided 2026-10-19 (story:promotion-chain-head-anchored): the chain's last record is anchored
   # by its head (takt.work.PromotionHead), written by every write of a record and pointed back by
@@ -3338,7 +3340,7 @@ entities:
           must match it when read.
       - name: promoted_at
         type: Timestamp
-        summary: When the record was written, RFC 3339 in UTC; the one-a-UTC-day rule reads it.
+        summary: When the record was written, RFC 3339 in UTC; none lies before the record before it.
       - name: kind
         type: takt.work.PromotionKind
         summary: Whether the record installed a binary, recorded the first baseline or refused a candidate.
