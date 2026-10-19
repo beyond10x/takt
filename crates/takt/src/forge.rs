@@ -255,14 +255,27 @@ pub struct Head {
     pub sha: String,
 }
 
-/// What the forge reports about a pull request: its state and its head. A validator checks
-/// the head against the case's branch and revision before it trusts a number.
+/// What the forge reports about a pull request: its state, its head and its base. A validator
+/// checks the head against the case's branch and revision before it trusts a number; the
+/// base is the branch a merge goes into, whatever the case's own records name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullRequestView {
     /// The state.
     pub state: PullRequestState,
     /// The head.
     pub head: Head,
+    /// The base branch, the merge's target, as the forge holds it.
+    pub base: String,
+}
+
+/// Whether `text` is a full object id as git writes one: 40 (SHA-1) or 64 (SHA-256) lowercase
+/// hexadecimal digits, never a name or an expression git would resolve.
+#[must_use]
+pub fn is_object_id(text: &str) -> bool {
+    matches!(text.len(), 40 | 64)
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// What an `origin` URL names: the host and the `<owner>/<repo>` on it.
@@ -1144,7 +1157,7 @@ impl BotRoute {
             "view".to_owned(),
             number.to_string(),
             "--json".to_owned(),
-            "state,mergedAt,headRefName,headRefOid".to_owned(),
+            "state,mergedAt,headRefName,headRefOid,baseRefName".to_owned(),
             "--repo".to_owned(),
             self.repository.clone(),
         ]
@@ -1710,6 +1723,7 @@ impl Forge for BotRoute {
                 branch: field("headRefName")?,
                 sha: field("headRefOid")?,
             },
+            base: field("baseRefName")?,
         })
     }
 
@@ -1791,7 +1805,7 @@ impl Forge for BotRoute {
                 self.repository
             )
         })?;
-        if !(matches!(tip.len(), 40 | 64) && tip.bytes().all(|byte| byte.is_ascii_hexdigit())) {
+        if !is_object_id(&tip) {
             bail!(
                 "the repository {} reports {base} at `{}`, which is no object id",
                 self.repository,
@@ -1959,7 +1973,8 @@ impl Forge for Memory {
         } else {
             self.state
         };
-        Ok(PullRequestView { state, head })
+        let base = self.opened.borrow()[index].base.clone();
+        Ok(PullRequestView { state, head, base })
     }
 
     fn checks(&self, _: &Path, number: u64) -> Result<Checks> {

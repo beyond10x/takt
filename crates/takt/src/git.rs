@@ -2129,7 +2129,8 @@ pub struct Merged {
 /// the index, with no code from configuration ([`NO_CONFIGURED_CODE`]): the tree and the paths
 /// it conflicts at, read byte for byte. A merge with conflicts (exit 1) still answers its tree;
 /// any exit but 0 (clean) or 1, a conflict that names no path, or a path that is not UTF-8 is
-/// an error naming what git said.
+/// an error naming what git said. `--write-tree` needs git 2.38 or later; an older git exits
+/// with a usage error, which is that error, so nothing is judged or merged on it.
 pub fn merged_tree(tree: &Path, base: &str, revision: &str) -> Result<Merged> {
     let args = [
         "merge-tree",

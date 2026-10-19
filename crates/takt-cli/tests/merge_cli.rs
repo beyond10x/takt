@@ -214,7 +214,7 @@ exit 2
             r#"#!/bin/sh
 state='{state_text}'
 case "$2" in
-  view) printf '{{"state":"%s","mergedAt":null,"headRefName":"%s","headRefOid":"%s"}}' "$(cat "$state/state")" "$(cat "$state/branch")" "$(tr -d '\n' < "$state/pushed")"; exit 0 ;;
+  view) printf '{{"state":"%s","mergedAt":null,"headRefName":"%s","headRefOid":"%s","baseRefName":"main"}}' "$(cat "$state/state")" "$(cat "$state/branch")" "$(tr -d '\n' < "$state/pushed")"; exit 0 ;;
   checks) printf '[{{"bucket":"pass"}}]'; exit 0 ;;
 esac
 echo "gh double: $*" >&2

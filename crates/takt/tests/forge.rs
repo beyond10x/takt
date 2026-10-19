@@ -615,7 +615,7 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
     git(&tree, &["branch", "takt/c1"]);
     let c1 = git(&tree, &["rev-parse", "takt/c1"]);
     let recording = Rc::new(Recording::new(
-        r#"{"mergedAt":null,"state":"OPEN","headRefName":"takt/c1","headRefOid":"abc123"}"#,
+        r#"{"mergedAt":null,"state":"OPEN","headRefName":"takt/c1","headRefOid":"abc123","baseRefName":"main"}"#,
         r#"[{"bucket":"pass"},{"bucket":"skipping"}]"#,
     ));
     struct Shared(Rc<Recording>);
@@ -659,6 +659,7 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
                 branch: "takt/c1".to_owned(),
                 sha: "abc123".to_owned(),
             },
+            base: "main".to_owned(),
         }
     );
     assert_eq!(forge.checks(&tree, number).expect("reads"), Checks::Pass);
@@ -680,7 +681,7 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
                 input.display(),
                 output.display()
             ),
-            "gh pr view 7 --json state,mergedAt,headRefName,headRefOid --repo owner/repo"
+            "gh pr view 7 --json state,mergedAt,headRefName,headRefOid,baseRefName --repo owner/repo"
                 .to_owned(),
             "gh pr checks 7 --json bucket --repo owner/repo".to_owned(),
         ]
@@ -703,7 +704,7 @@ fn the_bot_route_adapter_reads_states_and_checks_from_gh() {
         (forge.pull_request(&tree, 3), forge.checks(&tree, 3))
     };
     let (state, checks) = read(
-        r#"{"mergedAt":"2026-01-01T00:00:00Z","state":"MERGED","headRefName":"takt/c3","headRefOid":"def"}"#,
+        r#"{"mergedAt":"2026-01-01T00:00:00Z","state":"MERGED","headRefName":"takt/c3","headRefOid":"def","baseRefName":"main"}"#,
         r#"[{"bucket":"pass"},{"bucket":"pending"}]"#,
     );
     let view = state.expect("reads");
@@ -712,7 +713,7 @@ fn the_bot_route_adapter_reads_states_and_checks_from_gh() {
     assert_eq!(view.head.sha, "def");
     assert_eq!(checks.expect("reads"), Checks::Pending);
     let (state, checks) = read(
-        r#"{"mergedAt":null,"state":"CLOSED","headRefName":"takt/c3","headRefOid":"def"}"#,
+        r#"{"mergedAt":null,"state":"CLOSED","headRefName":"takt/c3","headRefOid":"def","baseRefName":"main"}"#,
         r#"[{"bucket":"pass"},{"bucket":"fail"},{"bucket":"pending"}]"#,
     );
     assert_eq!(state.expect("reads").state, PullRequestState::Closed);
@@ -827,6 +828,7 @@ impl Forge for AnyNumber {
                 branch: "someone/else".to_owned(),
                 sha: "0".repeat(40),
             },
+            base: "main".to_owned(),
         })
     }
 
@@ -2288,4 +2290,111 @@ fn the_bot_route_brings_a_target_tip_newer_than_the_tree_into_no_ref() {
     );
     assert_eq!(git(&tree, &["for-each-ref"]), refs, "no ref moved");
     assert!(!tree.join(".git/FETCH_HEAD").exists(), "no FETCH_HEAD");
+}
+
+/// A runner that answers the dry-run fetch with `main` at `tip`, and the object fetch with
+/// `fetch_code`.
+struct Scripted {
+    tip: String,
+    fetch_code: i32,
+    lines: RefCell<Vec<String>>,
+}
+
+impl Runner for Scripted {
+    fn run_env(&self, tree: &Path, argv: &[String], _: &[(&str, &str)]) -> anyhow::Result<Exit> {
+        self.run(tree, argv)
+    }
+
+    fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
+        self.lines.borrow_mut().push(argv.join(" "));
+        if argv.iter().any(|arg| arg == "--dry-run") {
+            return Ok(Exit {
+                code: Some(0),
+                stdout: format!(
+                    "  {} {} refs/remotes/origin/main\n",
+                    "0".repeat(40),
+                    self.tip
+                ),
+                stderr: String::new(),
+            });
+        }
+        Ok(Exit {
+            code: Some(self.fetch_code),
+            stdout: String::new(),
+            stderr: "fatal: remote error: upload-pack: not our ref".to_owned(),
+        })
+    }
+}
+
+/// A bot route over `runner`, shared so the test reads its lines.
+fn scripted(runner: &Rc<Scripted>) -> BotRoute {
+    struct Shared(Rc<Scripted>);
+    impl Runner for Shared {
+        fn run_env(
+            &self,
+            tree: &Path,
+            argv: &[String],
+            env: &[(&str, &str)],
+        ) -> anyhow::Result<Exit> {
+            self.0.run_env(tree, argv, env)
+        }
+        fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
+            self.0.run(tree, argv)
+        }
+    }
+    BotRoute::new("owner/repo", None, Box::new(Shared(runner.clone())))
+}
+
+/// The bot route's answer for the target's tip is a full lowercase object id, never a name
+/// or an expression git would resolve; anything else is refused before any object is fetched.
+#[test]
+fn the_bot_route_refuses_a_target_tip_that_is_no_object_id() {
+    let tree = scratch("bot-no-id");
+    for tip in [
+        "abc1234".to_owned(),
+        "main".to_owned(),
+        "refs/heads/main".to_owned(),
+        "HEAD".to_owned(),
+        "g".repeat(40),
+        "a".repeat(39),
+        "a".repeat(41),
+        "a".repeat(63),
+        "A".repeat(40),
+        format!("{}^{{tree}}", "a".repeat(40)),
+        format!("-{}", "a".repeat(39)),
+        format!("{}~1", "a".repeat(38)),
+    ] {
+        let runner = Rc::new(Scripted {
+            tip: tip.clone(),
+            fetch_code: 0,
+            lines: RefCell::new(Vec::new()),
+        });
+        let error = scripted(&runner)
+            .target_tip(&tree, "main")
+            .expect_err(&format!("{tip} is refused"));
+        assert!(
+            format!("{error:#}").contains("which is no object id"),
+            "{tip}: {error:#}"
+        );
+        assert_eq!(runner.lines.borrow().len(), 1, "{tip}: nothing fetched");
+    }
+}
+
+/// An object fetch that fails is the error: the target's tip is not held, so nothing is read
+/// at it and nothing is merged.
+#[test]
+fn the_bot_route_reports_no_target_tip_when_the_object_fetch_fails() {
+    let tree = scratch("bot-fetch-fails");
+    let runner = Rc::new(Scripted {
+        tip: "a".repeat(40),
+        fetch_code: 128,
+        lines: RefCell::new(Vec::new()),
+    });
+    let error = scripted(&runner)
+        .target_tip(&tree, "main")
+        .expect_err("a failed fetch is the error");
+    let shown = format!("{error:#}");
+    assert!(shown.contains("--no-write-fetch-head"), "{shown}");
+    assert!(shown.contains("not our ref"), "{shown}");
+    assert_eq!(runner.lines.borrow().len(), 2);
 }

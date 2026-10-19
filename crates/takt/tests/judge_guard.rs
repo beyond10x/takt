@@ -501,6 +501,9 @@ const STORY_FILE: &str = ".engineering/planning/story/ready-one.md";
 /// The subject of the approval's commit the store makes for `story:ready-one`.
 const APPROVE_SUBJECT: &str = "takt: approve story:ready-one repository.merge";
 
+/// The message of takt's take commit for `story:ready-one`.
+const TAKE_SUBJECT: &str = "takt: take story:ready-one";
+
 fn copy_dir(from: &Path, to: &Path) {
     fs::create_dir_all(to).expect("a directory");
     for entry in fs::read_dir(from).expect("a readable fixture") {
@@ -603,8 +606,14 @@ struct StoryCase {
     granted: String,
 }
 
-fn story_case(name: &str, approver: &str, allow: &str) -> StoryCase {
-    let repo = story_repository(name, allow);
+fn story_case(name: &str, approver: &str) -> StoryCase {
+    story_case_with(name, approver, |_| {})
+}
+
+/// As [`story_case`], `tamper` run on the tree right after the take is committed (its `HEAD`
+/// the take commit), before the work is.
+fn story_case_with(name: &str, approver: &str, tamper: impl Fn(&Path)) -> StoryCase {
+    let repo = story_repository(name, ALLOW);
     let memory = Rc::new(Memory {
         checks: Checks::Pass,
         ..Memory::default()
@@ -626,6 +635,12 @@ fn story_case(name: &str, approver: &str, allow: &str) -> StoryCase {
     let id = opened.case.id.clone();
     let dir = opened.case.dir.clone();
     drop(opened);
+    assert_eq!(
+        git(&repo, &["log", "-1", "--format=%s"]),
+        TAKE_SUBJECT,
+        "the take is committed"
+    );
+    tamper(&repo);
     fs::write(repo.join("docs/guide.md"), "a better guide\n").expect("a file");
     git(&repo, &["commit", "-q", "-am", "the work"]);
     let granted = git(&repo, &["rev-parse", "HEAD"]);
@@ -662,14 +677,12 @@ fn story_case(name: &str, approver: &str, allow: &str) -> StoryCase {
 
 /// The added acceptance's second half: a head that carries only takt's approval riders above
 /// the granted revision merges as before. A docs-only change granted by `agent:planner` with no
-/// delegation, the store's approval record committed above the grant: the guard judges the
-/// change up to the grant, never the rider in `.engineering/evidence/`. The allow-list on
-/// `main` admits `.engineering/planning/**` besides, because every story's case carries its
-/// take below the grant ([`a_docs_only_story_case_touches_the_planning_store_end_to_end`]).
+/// delegation, the allow-list as shipped, the store's approval record committed above the
+/// grant: the guard judges what merging the granted revision does, never the rider in
+/// `.engineering/evidence/`, and takt's own take of the story is no judge-surface change.
 #[test]
 fn a_head_with_only_approval_records_above_the_grant_merges_as_before() {
-    let allow = format!("{ALLOW}  - .engineering/planning/**\n");
-    let case = story_case("riders", "agent:planner", &allow);
+    let case = story_case("riders", "agent:planner");
     let head = git(&case.repo, &["rev-parse", "HEAD"]);
     assert_ne!(head, case.granted, "a rider sits above the grant");
     let (observation, calls) = merge(&case.repo, &case.id, &case.granted);
@@ -680,16 +693,13 @@ fn a_head_with_only_approval_records_above_the_grant_merges_as_before() {
     );
 }
 
-/// Whether every story case touches `.engineering/planning`, measured end to end: a story's
-/// case whose work is a change to `docs/guide.md` alone, taken from the store, run to the gate
-/// with the store recording, approved by `agent:planner` through the store with no delegation
-/// on record, and run past the gate. The take is committed on the case's branch above its
-/// pinned base (`takt: take story:ready-one`), so the change up to the grant holds the story's
-/// file in the planning store, a judge surface under the allow-list as shipped: the merge is
-/// refused, naming that file, and nothing is merged.
+/// A case whose diff touches only `docs/` merges under `agent:planner` with no delegation, on a
+/// story's case end to end: taken from the store, run to the gate with the store recording,
+/// approved through the store, and run past the gate to the merge. The change up to the grant
+/// holds the story's file besides, changed by takt's take commit alone, which is exempt.
 #[test]
-fn a_docs_only_story_case_touches_the_planning_store_end_to_end() {
-    let case = story_case("story-docs", "agent:planner", ALLOW);
+fn a_docs_only_story_case_merges_under_agent_planner_end_to_end() {
+    let case = story_case("story-docs", "agent:planner");
     assert_eq!(
         git(
             &case.repo,
@@ -712,17 +722,85 @@ fn a_docs_only_story_case_touches_the_planning_store_end_to_end() {
     run.record_on(&store);
     run.poll = std::time::Duration::from_millis(5);
     let mut out = Vec::new();
-    // Refused, the run goes on to a judgement step the requester does not take.
-    let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
+    let stop = run.run(&mut out).expect("the run stops without an error");
     let text = String::from_utf8_lossy(&out);
-    assert!(case.memory.merged.borrow().is_empty(), "{stop:?}\n{text}");
-    assert_ne!(stop, Ok(Stop::Completed("accepted".to_owned())), "{text}");
-    assert!(
-        text.contains(&format!(
-            "does not admit or that are no regular file: {STORY_FILE}"
-        )),
-        "{stop:?}\n{text}"
-    );
+    assert_eq!(stop, Stop::Completed("accepted".to_owned()), "{text}");
+    assert_eq!(case.memory.merged.borrow().as_slice(), [1], "{text}");
+}
+
+/// The take commit replaced by one whose message is `message`, on `parent` (the take's own
+/// parent when `None`), its tree the take's: the branch moved to it, the index already its tree.
+fn retake(tree: &Path, parent: Option<&str>, message: &[&str]) {
+    let taken = git(tree, &["rev-parse", "HEAD^{tree}"]);
+    let parent = parent.map_or_else(|| git(tree, &["rev-parse", "HEAD~1"]), str::to_owned);
+    let mut args = vec!["commit-tree", taken.as_str(), "-p", parent.as_str()];
+    for paragraph in message {
+        args.extend(["-m", paragraph]);
+    }
+    let commit = git(tree, &args);
+    git(tree, &["reset", "-q", "--soft", &commit]);
+}
+
+/// R3 (i), the parent: a take commit whose parent is not the case's base commit (an empty
+/// commit sits between them) exempts nothing; the story's file is a judge surface.
+#[test]
+fn a_take_commit_on_another_parent_exempts_nothing() {
+    let case = story_case_with("take-parent", "agent:planner", |tree| {
+        let base = git(tree, &["rev-parse", "HEAD~1"]);
+        let between = git(
+            tree,
+            &[
+                "commit-tree",
+                &format!("{base}^{{tree}}"),
+                "-p",
+                &base,
+                "-m",
+                "a commit between",
+            ],
+        );
+        retake(tree, Some(&between), &[TAKE_SUBJECT]);
+    });
+    let (observation, calls) = merge(&case.repo, &case.id, &case.granted);
+    assert_refused(&observation, &calls, "another parent", &[STORY_FILE]);
+}
+
+/// R3 (i), the message: a take commit whose subject is right but whose message says more
+/// exempts nothing.
+#[test]
+fn a_take_commit_with_another_message_exempts_nothing() {
+    let case = story_case_with("take-message", "agent:planner", |tree| {
+        retake(tree, None, &[TAKE_SUBJECT, "and more"]);
+    });
+    let (observation, calls) = merge(&case.repo, &case.id, &case.granted);
+    assert_refused(&observation, &calls, "another message", &[STORY_FILE]);
+}
+
+/// R3 (i), the one path: a take commit that changes a second path, an admitted doc, exempts
+/// nothing.
+#[test]
+fn a_take_commit_with_a_second_path_exempts_nothing() {
+    let case = story_case_with("take-second", "agent:planner", |tree| {
+        fs::write(tree.join("docs/extra.md"), "an extra doc\n").expect("a file");
+        git(tree, &["add", "docs/extra.md"]);
+        git(tree, &["commit", "-q", "--amend", "--no-edit"]);
+    });
+    let (observation, calls) = merge(&case.repo, &case.id, &case.granted);
+    assert_refused(&observation, &calls, "a second path", &[STORY_FILE]);
+}
+
+/// R3 (ii): under a valid take commit, the work also edits the story's body below its
+/// frontmatter; the body differs between the target's tip and the merge, and the file is a
+/// judge surface.
+#[test]
+fn a_story_body_edit_under_a_valid_take_is_a_judge_surface() {
+    let case = story_case_with("take-body", "agent:planner", |tree| {
+        let path = tree.join(STORY_FILE);
+        let mut text = fs::read_to_string(&path).expect("the story");
+        text.push_str("\nA line the candidate adds below the frontmatter.\n");
+        fs::write(&path, text).expect("a file");
+    });
+    let (observation, calls) = merge(&case.repo, &case.id, &case.granted);
+    assert_refused(&observation, &calls, "a body edit", &[STORY_FILE]);
 }
 
 /// The same case merges under `human:<id>`, with or without a delegation on record.
@@ -949,6 +1027,114 @@ fn a_grant_by_an_untyped_approver_is_refused() {
     grant(&tree, "approver", "repository.merge", "agent:planner").expect("granted");
 }
 
+/// D5: takt's own actor, `agent:takt`, written into `authority.yaml` by hand, grants nothing at
+/// a judge-surface merge, even with a delegation on record naming it: it is no role the store
+/// writes a grant as.
+#[test]
+fn takts_own_actor_grants_nothing_even_when_a_delegation_names_it() {
+    let (_scratch, tree) = repository("own-actor", Some(&delegation("agent:takt", false)));
+    let (revision, _) = at_the_gate(&tree, "own-actor", &[JUDGE_EDIT]);
+    grant(&tree, "own-actor", "repository.merge", "human:owner").expect("granted");
+    let dir = case_dir(&tree, "own-actor");
+    let mut authority = Authority::read(&dir).expect("reads").expect("a grant");
+    authority.decisions[0].approver = "agent:takt".to_owned();
+    authority.write(&dir).expect("written");
+    let (observation, calls) = merge(&tree, "own-actor", &revision);
+    assert_refused(
+        &observation,
+        &calls,
+        "takt's own actor",
+        &["`agent:takt` is neither the owner"],
+    );
+}
+
+/// R1: a candidate whose merge into the target conflicts is refused, naming the path, even a
+/// doc under the owner's grant: what the merge would change is not known.
+#[test]
+fn a_merge_that_conflicts_with_the_target_is_refused() {
+    let (_scratch, tree) = repository("conflict", None);
+    let (revision, _) = at_the_gate(&tree, "conflict", &[&[("docs/guide.md", "ours\n")]]);
+    record_on_main(&tree, &[("docs/guide.md", "theirs\n")]);
+    grant(&tree, "conflict", "repository.merge", "human:owner").expect("granted");
+    let (observation, calls) = merge(&tree, "conflict", &revision);
+    assert_refused(
+        &observation,
+        &calls,
+        "a conflict",
+        &["conflicts at docs/guide.md"],
+    );
+}
+
+/// A forge wrapping the double that reports the target's tip as `answer`.
+struct Answering(Rc<Memory>, String);
+
+impl Forge for Answering {
+    fn name(&self) -> &str {
+        "answering"
+    }
+    fn scan_outgoing(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        outgoing: &Outgoing<'_>,
+    ) -> anyhow::Result<()> {
+        self.0.scan_outgoing(tree, dir, outgoing)
+    }
+    fn push(&self, tree: &Path, branch: &str) -> anyhow::Result<()> {
+        self.0.push(tree, branch)
+    }
+    fn open_pull_request(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        request: &PullRequest,
+    ) -> anyhow::Result<u64> {
+        self.0.open_pull_request(tree, dir, request)
+    }
+    fn pull_request(&self, tree: &Path, number: u64) -> anyhow::Result<PullRequestView> {
+        self.0.pull_request(tree, number)
+    }
+    fn checks(&self, tree: &Path, number: u64) -> anyhow::Result<Checks> {
+        self.0.checks(tree, number)
+    }
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> anyhow::Result<()> {
+        self.0.merge(tree, dir, number, head)
+    }
+    fn target_tip(&self, _: &Path, _: &str) -> anyhow::Result<String> {
+        Ok(self.1.clone())
+    }
+}
+
+/// The forge's answer for the target's tip is an object id, never a name git would resolve: a
+/// branch, a ref, `HEAD`, an abbreviation or the tip's id in capitals merge nothing, even a
+/// docs-only change under the owner's grant.
+#[test]
+fn a_target_tip_that_is_no_object_id_merges_nothing() {
+    let (_scratch, tree) = repository("tip-name", None);
+    let (revision, _) = at_the_gate(&tree, "tip-name", &[&[("docs/guide.md", "more\n")]]);
+    grant(&tree, "tip-name", "repository.merge", "human:owner").expect("granted");
+    let main = git(&tree, &["rev-parse", "refs/heads/main"]);
+    for answer in [
+        "main".to_owned(),
+        "refs/heads/main".to_owned(),
+        "HEAD".to_owned(),
+        main[..12].to_owned(),
+        main.to_uppercase(),
+    ] {
+        let memory = open_pull_request("tip-name", &revision);
+        let observation = PrMerged::new(Rc::new(Answering(memory.clone(), answer.clone())))
+            .observe(&tree, &revision, 20)
+            .expect("repository.merge observes");
+        let calls = memory.calls.borrow().clone();
+        assert_refused(
+            &observation,
+            &calls,
+            &answer,
+            &["which is no commit this repository holds"],
+        );
+    }
+}
+
 /// A forge wrapping the double that does not say what the target's tip is.
 struct Silent(Rc<Memory>);
 
@@ -1007,4 +1193,252 @@ fn a_forge_that_cannot_report_the_target_tip_merges_nothing() {
         "{summary}"
     );
     assert!(summary.contains("tip"), "{summary}");
+}
+
+/// A delegation of `JUDGE_SURFACE` to `agent:developer`, as one more entry of a record.
+const DEVELOPER_ENTRY: &str = "  - owner: human:owner\n    role: agent:developer\n    capability: repository.merge.judge_surface\n    given_at: 2026-10-19T08:00:00Z\n";
+
+/// A record delegating to `agent:planner` and to `agent:developer`.
+fn both_delegated() -> String {
+    format!("{}{DEVELOPER_ENTRY}", delegation("agent:planner", false))
+}
+
+/// The same record with the developer's delegation revoked.
+fn developer_revoked() -> String {
+    format!(
+        "{}{DEVELOPER_ENTRY}    revoked_at: 2026-10-19T09:00:00Z\n",
+        delegation("agent:planner", false)
+    )
+}
+
+/// The paths merging `revision` into `main` changes: the three-way merge's tree against main's.
+fn merge_changes(tree: &Path, revision: &str) -> String {
+    let merged = git(tree, &["merge-tree", "--write-tree", "main", revision]);
+    let merged = merged.lines().next().expect("a tree").to_owned();
+    git(tree, &["diff", "--name-only", "main", &merged])
+}
+
+/// A hidden revert through a merge of the target: the owner revokes the developer's delegation
+/// on `main`; the case, granted by a delegated `agent:planner`, merges `main` and then restores
+/// the record to its content at the case's base. The change from the base shows nothing of the
+/// record, but merging the head into `main` undoes the revocation: refused, naming the record.
+#[test]
+fn a_merge_of_the_target_that_restores_a_revoked_delegation_is_refused() {
+    let before = both_delegated();
+    let revoked = developer_revoked();
+    let (_scratch, tree) = repository("revert-revocation", Some(&before));
+    let (revision, _) = at_the_gate_with(&tree, "revert-revocation", 2, PROTOCOL, |n, tree| {
+        if n == 0 {
+            record_on_main(tree, &[(".engineering/delegations.yaml", revoked.as_str())]);
+            git(tree, &["merge", "--no-commit", "--no-ff", "main"]);
+            fs::write(tree.join("docs/guide.md"), "a guide\nmore\n").expect("a file");
+        } else {
+            fs::write(tree.join(".engineering/delegations.yaml"), &before).expect("a file");
+        }
+    });
+    assert!(merge_changes(&tree, &revision).contains(".engineering/delegations.yaml"));
+    grant(
+        &tree,
+        "revert-revocation",
+        "repository.merge",
+        "agent:planner",
+    )
+    .expect("granted");
+    let (observation, calls) = merge(&tree, "revert-revocation", &revision);
+    assert_refused(
+        &observation,
+        &calls,
+        "a hidden revert of a revocation",
+        &[".engineering/delegations.yaml"],
+    );
+}
+
+/// The same with no delegation on record at all: the owner narrows the allow-list on `main`;
+/// the case merges `main`, changes a doc and restores the wide allow-list it was based on.
+#[test]
+fn a_merge_of_the_target_that_restores_a_narrowed_allow_list_is_refused() {
+    let wide = format!("{ALLOW}  - crates/**\n");
+    let (_scratch, tree) = repository("revert-allow", None);
+    fs::write(tree.join(".engineering/judge-allow.yaml"), &wide).expect("a file");
+    git(&tree, &["commit", "-q", "-am", "an old wide allow-list"]);
+    let (revision, _) = at_the_gate_with(&tree, "revert-allow", 2, PROTOCOL, |n, tree| {
+        if n == 0 {
+            record_on_main(tree, &[(".engineering/judge-allow.yaml", ALLOW)]);
+            git(tree, &["merge", "--no-commit", "--no-ff", "main"]);
+            fs::write(tree.join("docs/guide.md"), "a guide\nmore\n").expect("a file");
+        } else {
+            fs::write(tree.join(".engineering/judge-allow.yaml"), &wide).expect("a file");
+        }
+    });
+    assert!(merge_changes(&tree, &revision).contains(".engineering/judge-allow.yaml"));
+    grant(&tree, "revert-allow", "repository.merge", "agent:planner").expect("granted");
+    let (observation, calls) = merge(&tree, "revert-allow", &revision);
+    assert_refused(
+        &observation,
+        &calls,
+        "a hidden revert of the allow-list",
+        &[".engineering/judge-allow.yaml"],
+    );
+}
+
+/// A base commit that is an ancestor of the target's tip but older than the case's fork point:
+/// the candidate, branched from the tip that revoked the developer, restores the old record.
+/// The change from that old base shows nothing of the record; the merge undoes the revocation.
+#[test]
+fn an_older_ancestor_as_the_base_does_not_hide_a_revert() {
+    let before = both_delegated();
+    let revoked = developer_revoked();
+    let (_scratch, tree) = repository("old-base", Some(&before));
+    let old = git(&tree, &["rev-parse", "HEAD"]);
+    fs::write(tree.join(".engineering/delegations.yaml"), &revoked).expect("a file");
+    git(
+        &tree,
+        &["commit", "-q", "-am", "the owner revokes the developer"],
+    );
+    let (revision, _) = at_the_gate_with(&tree, "old-base", 1, PROTOCOL, |_, tree| {
+        fs::write(tree.join(".engineering/delegations.yaml"), &before).expect("a file");
+        fs::write(tree.join("docs/guide.md"), "a guide\nmore\n").expect("a file");
+    });
+    grant(&tree, "old-base", "repository.merge", "agent:planner").expect("granted");
+    let dir = case_dir(&tree, "old-base");
+    let mut branch = Branch::read(&dir).expect("the branch record");
+    branch.base_commit = Some(old);
+    branch.write(&dir).expect("written");
+    let (observation, calls) = merge(&tree, "old-base", &revision);
+    assert_refused(
+        &observation,
+        &calls,
+        "an older ancestor as the base",
+        &[".engineering/delegations.yaml"],
+    );
+}
+
+/// `branch.yaml`'s base redirected to a branch whose allow-list admits everything: the target
+/// is the pull request's base as the forge reports it, and a case that names another is
+/// refused, naming both.
+#[test]
+fn a_base_branch_redirected_in_the_case_is_refused_naming_both() {
+    let (_scratch, tree) = repository("base-redirect", None);
+    let main = git(&tree, &["rev-parse", "refs/heads/main"]);
+    let index = tree.parent().expect("a parent").join("index");
+    let everything = commit_on(
+        &tree,
+        &index,
+        &main,
+        &[(".engineering/judge-allow.yaml", "paths:\n  - \"**\"\n")],
+    );
+    git(&tree, &["update-ref", "refs/heads/everything", &everything]);
+    let (revision, _) = at_the_gate(&tree, "base-redirect", &[JUDGE_EDIT]);
+    grant(&tree, "base-redirect", "repository.merge", "agent:planner").expect("granted");
+    let dir = case_dir(&tree, "base-redirect");
+    let mut branch = Branch::read(&dir).expect("the branch record");
+    assert_eq!(branch.base.as_deref(), Some("main"));
+    branch.base = Some("everything".to_owned());
+    branch.write(&dir).expect("written");
+    let (observation, calls) = merge(&tree, "base-redirect", &revision);
+    assert_refused(
+        &observation,
+        &calls,
+        "a redirected base",
+        &["everything", "main"],
+    );
+}
+
+/// The lists changed in any shape, the planner delegated so only the owner-only rule can refuse:
+/// a mode change, a deletion, a rename, a submodule, a directory or a link at the path.
+#[test]
+fn a_change_to_the_lists_in_any_shape_merges_under_the_owner_alone() {
+    use std::os::unix::fs::PermissionsExt as _;
+    type Write = fn(&Path);
+    let cases: Vec<(&str, &str, Write)> = vec![
+        ("shape-mode", ".engineering/delegations.yaml", |tree| {
+            let path = tree.join(".engineering/delegations.yaml");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
+        }),
+        ("shape-delete", ".engineering/delegations.yaml", |tree| {
+            fs::remove_file(tree.join(".engineering/delegations.yaml")).expect("rm");
+        }),
+        ("shape-rename", ".engineering/judge-allow.yaml", |tree| {
+            fs::rename(
+                tree.join(".engineering/judge-allow.yaml"),
+                tree.join(".engineering/judge-allow.yml"),
+            )
+            .expect("mv");
+        }),
+        ("shape-gitlink", ".engineering/judge-allow.yaml", |tree| {
+            let path = tree.join(".engineering/judge-allow.yaml");
+            fs::remove_file(&path).expect("rm");
+            fs::create_dir_all(&path).expect("dir");
+            fs::write(path.join("x"), "x\n").expect("file");
+            git(&path, &["init", "-q"]);
+            git(&path, &["add", "x"]);
+            git(&path, &["commit", "-q", "-m", "sub"]);
+        }),
+        ("shape-dir", ".engineering/delegations.yaml", |tree| {
+            let path = tree.join(".engineering/delegations.yaml");
+            fs::remove_file(&path).expect("rm");
+            fs::create_dir_all(&path).expect("dir");
+            fs::write(path.join("x"), "x\n").expect("file");
+        }),
+        ("shape-link", ".engineering/delegations.yaml", |tree| {
+            let path = tree.join(".engineering/delegations.yaml");
+            fs::remove_file(&path).expect("rm");
+            std::os::unix::fs::symlink("../docs/guide.md", &path).expect("ln");
+        }),
+    ];
+    for (name, file, write) in cases {
+        let (_scratch, tree) = repository(name, Some(&both_delegated()));
+        let (revision, _) = at_the_gate_with(&tree, name, 1, PROTOCOL, |_, tree| write(tree));
+        grant(&tree, name, "repository.merge", "agent:planner").expect("granted");
+        let (observation, calls) = merge(&tree, name, &revision);
+        assert_refused(&observation, &calls, name, &[file]);
+    }
+}
+
+/// A submodule's commit under `docs/` is a judge surface by its mode: `agent:planner` with no
+/// delegation does not merge it.
+#[test]
+fn a_gitlink_under_docs_is_a_judge_surface() {
+    let (_scratch, tree) = repository("docs-gitlink", None);
+    let (revision, _) = at_the_gate_with(&tree, "docs-gitlink", 1, PROTOCOL, |_, tree| {
+        let path = tree.join("docs/sub");
+        fs::create_dir_all(&path).expect("dir");
+        fs::write(path.join("x"), "x\n").expect("file");
+        git(&path, &["init", "-q"]);
+        git(&path, &["add", "x"]);
+        git(&path, &["commit", "-q", "-m", "sub"]);
+    });
+    assert!(git(&tree, &["ls-tree", &revision, "docs/sub"]).starts_with("160000"));
+    grant(&tree, "docs-gitlink", "repository.merge", "agent:planner").expect("granted");
+    let (observation, calls) = merge(&tree, "docs-gitlink", &revision);
+    assert_refused(&observation, &calls, "a gitlink under docs", &["docs/sub"]);
+}
+
+/// A side branch that changes the delegation record, merged into the case's branch: refused
+/// under a delegated planner, naming the record.
+#[test]
+fn a_change_to_the_lists_through_a_merge_commit_is_refused() {
+    let (_scratch, tree) = repository("side-merge", Some(&both_delegated()));
+    let (revision, _) = at_the_gate_with(&tree, "side-merge", 1, PROTOCOL, |_, tree| {
+        let index = tree.parent().expect("a parent").join("index");
+        let side = commit_on(
+            tree,
+            &index,
+            "HEAD",
+            &[(
+                ".engineering/delegations.yaml",
+                &delegation("agent:developer", false),
+            )],
+        );
+        git(tree, &["merge", "--no-commit", "--no-ff", &side]);
+        fs::write(tree.join("docs/guide.md"), "a guide\nmore\n").expect("a file");
+    });
+    grant(&tree, "side-merge", "repository.merge", "agent:planner").expect("granted");
+    let (observation, calls) = merge(&tree, "side-merge", &revision);
+    assert_refused(
+        &observation,
+        &calls,
+        "a side merge",
+        &[".engineering/delegations.yaml"],
+    );
 }

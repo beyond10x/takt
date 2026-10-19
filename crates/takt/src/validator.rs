@@ -1650,34 +1650,159 @@ fn allow_list_at(tree: &Path, at: &str) -> Result<std::result::Result<Vec<String
     }))
 }
 
+/// The body of a story's file in the planning store, everything below its frontmatter: the
+/// bytes after the line `---` that closes the `---` line the file opens with; `None` for a
+/// file that opens with no frontmatter or never closes it.
+fn story_body(text: &[u8]) -> Option<&[u8]> {
+    let rest = text.strip_prefix(b"---\n")?;
+    let mut offset = 0;
+    for line in rest.split_inclusive(|byte| *byte == b'\n') {
+        offset += line.len();
+        if line == b"---\n" || line == b"---" {
+            return Some(&rest[offset..]);
+        }
+    }
+    None
+}
+
+/// The bytes of the regular file `path` (relative to the root) in the commit or tree `at`,
+/// nothing trimmed; `None` when `at` holds no blob there.
+fn blob_at(tree: &Path, at: &str, path: &str) -> Result<Option<Vec<u8>>> {
+    let spec = format!("{at}:{path}");
+    if crate::git::run(tree, &["cat-file", "-e", &spec]).is_err()
+        || crate::git::run(tree, &["cat-file", "-t", &spec])? != "blob"
+    {
+        return Ok(None);
+    }
+    crate::git::blob(tree, &spec).map(Some)
+}
+
 impl PrMerged {
+    /// The story file of the case at `dir` whose change the guard does not count, `None` when
+    /// none is exempt. The case's story is taken by a commit takt makes on the case's branch
+    /// (`takt: take <story>`, [`crate::run::take_subject`]), which changes the story's
+    /// frontmatter in the planning store, a judge surface; that one path is exempt in the change
+    /// the merge makes only when (i) a commit between the case's base commit `at` and
+    /// `revision` has `at` as its one parent, exactly that message, and exactly that one path
+    /// changed, to a regular file; and (ii) the file's body below its frontmatter
+    /// ([`story_body`]) is byte-equal at the target's tip `tip` and in the merge's tree
+    /// `merged`. Any other path in the planning store stays guarded.
+    fn exempt_take(
+        tree: &Path,
+        dir: &Path,
+        at: &str,
+        revision: &str,
+        tip: &str,
+        merged: &str,
+    ) -> Result<Option<String>> {
+        let Some(story) = crate::case::story_of(dir)? else {
+            return Ok(None);
+        };
+        let Some(name) = story.strip_prefix("story:").filter(|name| {
+            !name.is_empty()
+                && !name.starts_with('.')
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+        }) else {
+            return Ok(None);
+        };
+        let path = format!(".engineering/planning/story/{name}.md");
+        let message = format!("{}\n", crate::run::take_subject(&story));
+        let listed = crate::git::run(
+            tree,
+            &["rev-list", "--end-of-options", &format!("{at}..{revision}")],
+        )?;
+        let mut taken = false;
+        for id in listed.lines().filter(|id| crate::forge::is_object_id(id)) {
+            let bytes = crate::git::verified_object(tree, "commit", id)?;
+            let header = crate::git::parse_commit(id, &bytes, id.len())?;
+            let body = bytes
+                .windows(2)
+                .position(|pair| pair == b"\n\n")
+                .map(|end| &bytes[end + 2..]);
+            if header.parents != [at] || body != Some(message.as_bytes()) {
+                continue;
+            }
+            let diff = crate::git::bytes(
+                tree,
+                &[
+                    "diff-tree",
+                    "-r",
+                    "-z",
+                    "--no-renames",
+                    "--raw",
+                    at,
+                    id,
+                    "--",
+                ],
+            )?;
+            if let [(mode, changed)] = raw_changes(&diff)?.as_slice()
+                && *changed == path
+                && *mode == "100644"
+            {
+                taken = true;
+                break;
+            }
+        }
+        if !taken {
+            return Ok(None);
+        }
+        let (Some(at_tip), Some(at_merge)) =
+            (blob_at(tree, tip, &path)?, blob_at(tree, merged, &path)?)
+        else {
+            return Ok(None);
+        };
+        Ok(match (story_body(&at_tip), story_body(&at_merge)) {
+            (Some(before), Some(after)) if before == after => Some(path),
+            _ => None,
+        })
+    }
+
     /// Why a merge granted by `approver` of the case at `revision` is refused, `None` when it
-    /// is not. The merge target is the case's base branch, its tip as the forge reports it now
-    /// ([`Forge::target_tip`]); the case's pinned base commit must be an ancestor of it, or the
-    /// change compared is not the one the target would take. The change is the case's base
-    /// commit to the granted revision (what lies above it is takt's riders alone, which
-    /// [`carries`] holds the head to); a path in it that [`JUDGE_ALLOW`] at the tip does not
-    /// admit, or whose new mode is no regular file's ([`NAMED_BY_PATH`]), is a judge surface. A
-    /// change to one merges under the owner's grant (`human:`), or under an agent role's
+    /// is not. The merge target is `target`, the pull request's base as the forge reports it
+    /// ([`PullRequestView::base`](crate::forge::PullRequestView)); a case whose `branch.yaml`
+    /// names another base is refused, naming both. The target's tip is read through the forge
+    /// ([`Forge::target_tip`]); the case's pinned base commit must be an ancestor of it (D4).
+    /// The change judged is what the merge does to the target: the tip's tree against the tree
+    /// `git merge-tree --write-tree` makes of the tip and the granted revision
+    /// ([`crate::git::merged_tree`], git 2.38 or later), so a revert of the target's own change
+    /// hidden by a merge of the target, or by an older base, is a change like any other; a
+    /// merge that conflicts is refused. What lies above the granted revision is takt's riders
+    /// alone, which [`carries`] holds the head to. A path in that change that [`JUDGE_ALLOW`]
+    /// at the tip does not admit, or whose new mode is no regular file's ([`NAMED_BY_PATH`]),
+    /// is a judge surface, but the story file takt's own take changes ([`Self::exempt_take`]).
+    /// A change to one merges under the owner's grant (`human:`), or under an agent role's
     /// (`agent:`) when [`DELEGATIONS`] at the tip names an unrevoked delegation of
     /// [`JUDGE_SURFACE_CAPABILITY`] to that role; any other approver grants it nothing. A change
     /// to a file of [`OWNER_ONLY`] merges under the owner's grant alone, whatever the allow-list
     /// admits. Neither file is read from the tree or at the base commit, so a candidate's own
     /// edit of either counts for nothing.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one decision, read in the order it refuses"
+    )]
     fn judge_guard(
         &self,
         tree: &Path,
+        dir: &Path,
         branch: &Branch,
+        target: &str,
         revision: &str,
         approver: &str,
     ) -> Result<Option<String>> {
         let forge = self.forge.name();
-        let Some(base) = branch.base.as_deref() else {
-            return Ok(Some(
-                "the case has no base branch, the merge target whose allow-list decides what a judge surface is"
-                    .to_owned(),
-            ));
-        };
+        if branch.base.as_deref() != Some(target) {
+            return Ok(Some(format!(
+                "the forge {forge} reports the pull request's base as {}, but the case names {} as its base: the merge target is not the one the case was opened on",
+                target.escape_debug(),
+                branch.base.as_deref().map_or_else(
+                    || "no branch".to_owned(),
+                    |base| base.escape_debug().to_string()
+                )
+            )));
+        }
+        let base = target;
         let reported = self.forge.target_tip(tree, base).with_context(|| {
             format!("read the tip of {base}, the merge target, through the forge {forge}")
         })?;
@@ -1696,10 +1821,9 @@ impl PrMerged {
             .filter(|at| !at.is_empty())
         };
         // The forge's answer is an object id this repository holds, never a name git resolves.
-        let tip = (matches!(reported.len(), 40 | 64)
-            && reported.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .then(|| commit(&reported))
-        .flatten();
+        let tip = crate::forge::is_object_id(&reported)
+            .then(|| commit(&reported))
+            .flatten();
         let Some(tip) = tip else {
             return Ok(Some(format!(
                 "the forge {forge} reports {base}, the merge target, at `{}`, which is no commit this repository holds",
@@ -1719,6 +1843,15 @@ impl PrMerged {
                 short(&tip)
             )));
         }
+        let merged = crate::git::merged_tree(tree, &tip, revision)?;
+        if !merged.conflicted.is_empty() {
+            return Ok(Some(format!(
+                "merging {} into {base} at {} conflicts at {}, so what the merge would change is not known",
+                short(revision),
+                short(&tip),
+                merged.conflicted.join(", ")
+            )));
+        }
         let (globs, unread) = match allow_list_at(tree, &tip)? {
             Ok(globs) => (globs, String::new()),
             Err(why) => (Vec::new(), format!(" ({why}; it admits nothing)")),
@@ -1731,17 +1864,19 @@ impl PrMerged {
                 "-z",
                 "--no-renames",
                 "--raw",
-                &at,
-                revision,
+                &tip,
+                &merged.tree,
                 "--",
             ],
         )?;
         let changes = raw_changes(&diff)?;
+        let exempt = Self::exempt_take(tree, dir, &at, revision, &tip, &merged.tree)?;
         let surfaces: Vec<&str> = changes
             .iter()
             .filter(|(mode, path)| {
                 !NAMED_BY_PATH.contains(mode)
-                    || !globs.iter().any(|glob| crate::run::glob_admits(glob, path))
+                    || (exempt.as_deref() != Some(*path)
+                        && !globs.iter().any(|glob| crate::run::glob_admits(glob, path)))
             })
             .map(|(_, path)| *path)
             .collect();
@@ -1762,16 +1897,16 @@ impl PrMerged {
         } else {
             surfaces.join(", ")
         };
+        let change = format!(
+            "merging {} into {base} at {} changes",
+            short(revision),
+            short(&tip)
+        );
         let touches = if surfaces.is_empty() {
-            format!(
-                "its change from the base {} touches {}",
-                short(&at),
-                owner_only.join(", ")
-            )
+            format!("{change} {}", owner_only.join(", "))
         } else {
             format!(
-                "its change from the base {} touches judge surfaces, paths {JUDGE_ALLOW} at {base} {} does not admit or that are no regular file{unread}: {shown}",
-                short(&at),
+                "{change} judge surfaces, paths {JUDGE_ALLOW} at {base} {} does not admit or that are no regular file{unread}: {shown}",
                 short(&tip)
             )
         };
@@ -1779,6 +1914,8 @@ impl PrMerged {
         if typed && approver.starts_with("human:") {
             return Ok(None);
         }
+        // D5: an approver that is neither the owner nor an agent role the store writes as
+        // (untyped, or takt's own actor) grants nothing here, whatever a delegation names.
         if !(typed && approver.starts_with("agent:")) {
             return Ok(Some(format!(
                 "{touches}; the approver `{}` is neither the owner (human:<id>) nor an agent role (agent:<role>), and grants nothing there",
@@ -1945,7 +2082,9 @@ impl Validator for PrMerged {
                 let approver = authority
                     .decision(self.action())
                     .map_or("", |decision| decision.approver.as_str());
-                if let Some(refusal) = self.judge_guard(tree, &branch, revision, approver)? {
+                if let Some(refusal) =
+                    self.judge_guard(tree, &dir, &branch, &view.base, revision, approver)?
+                {
                     return Ok((
                         nothing(format!(
                             "pull request #{number} at {} is open and granted by {approver}, and {refusal}; nothing merged, the claim stays unknown",

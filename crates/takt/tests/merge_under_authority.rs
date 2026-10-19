@@ -2333,6 +2333,7 @@ impl Forge for StillOpen {
         Ok(PullRequestView {
             state: PullRequestState::Open,
             head: view.head,
+            base: view.base,
         })
     }
 

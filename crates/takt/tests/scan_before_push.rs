@@ -266,6 +266,7 @@ impl Runner for Gates {
                     "mergedAt": null,
                     "headRefName": branch,
                     "headRefOid": sha,
+                    "baseRefName": "main",
                 });
                 exit(0, &view.to_string(), "")
             }
