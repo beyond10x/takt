@@ -1,6 +1,6 @@
 # Wave 13: the check-finding confinement, promotion bound to its evidence, properties and fuzzing, the loop scorecard, scan before push
 
-Skill: `aep:implementing` 0.23.1, wave mode. Stage: **running**. Approval: the planner role named these units (the wave 13 lanes E1, E2 and property-and-fuzz-tests, and the carry-over of loop-scorecard, scan-before-push and improvement turn 4 from wave 12 under its close rule); each judge-surface merge needs the planner's grant of its exact commit, on a reviewer verdict. Mode: interactive, up to five implementors in parallel.
+Skill: `aep:implementing` 0.23.1, wave mode. Stage: **closed**. Approval: the planner role named these units (the wave 13 lanes E1, E2 and property-and-fuzz-tests, and the carry-over of loop-scorecard, scan-before-push and improvement turn 4 from wave 12 under its close rule); each judge-surface merge needs the planner's grant of its exact commit, on a reviewer verdict. Mode: interactive, up to five implementors in parallel.
 
 ## Units
 
@@ -11,7 +11,7 @@ Skill: `aep:implementing` 0.23.1, wave mode. Stage: **running**. Approval: the p
 | `story:property-and-fuzz-tests` | `vision:safe-agentic-coding` | `task check` runs every property with a fixed seed; `task fuzz` runs each target 60 s and exits 0; the mutated `Events::read` crashes the events target | yes |
 | `story:loop-scorecard` (from wave 12) | `vision:safe-agentic-coding` | over three recorded turns `loop.measure` writes a `loop_measurement` whose figures each name their case ids | yes |
 | `story:scan-before-push` (from wave 12) | `vision:safe-agentic-coding` | `pr.open` scans commit messages and the diff before anything is pushed; a refused scan pushes nothing | yes |
-| improvement turn 4: `story:step-guard-sees-test-script-imports` (from wave 12) | `vision:safe-agentic-coding` | a step cannot shadow the test runner the test script loads | yes |
+| improvement turn 4: `story:step-guard-sees-test-script-imports` (from wave 12; not merged, see the log) | `vision:safe-agentic-coding` | a step cannot shadow the test runner the test script loads | yes |
 
 ## Selection path
 
@@ -37,3 +37,5 @@ One opening commit (this page), each unit's commits on its own branch, the merge
 ## Log
 
 - 2026-10-19: wave opened from main at c9abebd.
+- 2026-10-19: merged on their grants, each noted on its merge: property-and-fuzz-tests at 0b01210 (ca938d5 with the review's ride-alongs at 218b33c), E2 at 69b4d35 (2ad69b0), E1 at 161b73f (3224311), scan-before-push at 136f53d (2e099b8, bc74652 after the history rewrite), loop-scorecard at bbe5bdb (64dbe18 with ride-alongs at f34c923). Integration fixes on this branch: 74c4e7e and 17e361c (the properties and the fuzz target set E2's row fields and compare under a one-trial rule), a568a05 (main's two follow-ups citations the scan-before-push merge dropped, back; a stale row out), 247bc89 (a torn-record scorecard case holds a held-out result). Main merged in at 41fecd0 and 16ff976.
+- 2026-10-19: closed. `task check` at 41fecd0, the code at the close: exit 0, 975 passed, 0 failed, 6 ignored; citations 658 of 658. Landed sections written and nine stories moved to implemented. Improvement turn 4 (step-guard-sees-test-script-imports) waits on its correction 4 after review and is not in this wave; story-delivery-tests-first was not gated against this base.

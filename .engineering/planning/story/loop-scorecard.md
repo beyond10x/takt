@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:loop-scorecard
 kind: story
-status: active
+status: implemented
 title: Validators drive loop.improvement/1 cases; the L2 turn runs after three L1 turns
 summary: loop scorecard, definition check, comparison; the weekly L2 turn
 relations:
@@ -21,10 +21,11 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/improvement_protocols.rs
-revision: 15
+revision: 17
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T20:13:47Z", actor: "human:timo", revision: 11, decided_on: {"recorded":{"review_outcome":3}}}
 - {from: "proposed", to: "active", at: "2026-10-18T20:13:47Z", actor: "human:timo", revision: 12, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "active", to: "implemented", at: "2026-10-19T06:14:34Z", actor: "human:timo", revision: 17, decided_on: {"recorded":{"test_result":1,"review_outcome":3}}}
 ---
 # Story: loop-scorecard
 
@@ -99,3 +100,32 @@ the case ids they were computed from.
 Automating the L2 turn and phase R3 (takt proposing stories from its scorecards).
 
 Escaped defects as human-sourced counts: a later, human-sourced figure, since no validator observes it (decided 2026-10-18).
+
+## Landed (wave 13)
+
+Read from `git diff --name-only bbe5bdb^1 bbe5bdb` (the unit's merge into the wave branch) at the close of wave 13 (wave branch head 16ff976). loop.measure, loop.definition.check and loop.compare over the recorded improvement turns, every read through a checked object reader and YAML refused on anchors. From wave 12.
+
+- `Cargo.lock`
+- `Cargo.toml`
+- `crates/takt-cli/src/main.rs`
+- `crates/takt-cli/tests/loop_case_cli.rs`
+- `crates/takt/Cargo.toml`
+- `crates/takt/src/case.rs`
+- `crates/takt/src/forge.rs`
+- `crates/takt/src/git.rs`
+- `crates/takt/src/lib.rs`
+- `crates/takt/src/loop_scorecard.rs`
+- `crates/takt/src/validator.rs`
+- `crates/takt/tests/fixtures/forge_commit_graph.py`
+- `crates/takt/tests/fixtures/plant_commit_bomb.py`
+- `crates/takt/tests/fixtures/plant_loose_object.py`
+- `crates/takt/tests/git_env.rs`
+- `crates/takt/tests/improvement_protocols.rs`
+- `crates/takt/tests/loop_scorecard.rs`
+- `crates/takt/tests/loop_scorecard_adv1.rs`
+- `crates/takt/tests/loop_scorecard_adv2.rs`
+- `crates/takt/tests/pr_opens_when_done.rs`
+- `crates/takt/tests/properties.proptest-regressions`
+- `ess/domains/takt.citations.tsv`
+- `ess/domains/takt.yaml`
+- `protocols/loop-improvement/metrics.yaml`

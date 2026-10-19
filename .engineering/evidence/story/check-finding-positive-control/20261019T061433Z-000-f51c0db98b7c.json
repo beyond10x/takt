@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T06:14:33Z",
+  "actor": "human:timo",
+  "artifact": "story:check-finding-positive-control",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check",
+    "reference": "wave/2026-10-19-w13 at 16ff976: task check exit 0 at 41fecd0 (the same code): 975 passed, 0 failed, 6 ignored; citations 658 of 658 at 16ff976"
+  }
+}
