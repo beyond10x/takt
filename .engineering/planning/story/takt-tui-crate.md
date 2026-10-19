@@ -10,6 +10,8 @@ relations:
 - serves: vision:safe-agentic-coding
 - depends_on: story:tui-ui-document
 - depends_on: story:takt-serve-read-only
+- depends_on: story:judge-guard
+- depends_on: story:self-improvement-protocol
 scope:
 - confidence: inferred
   path: AGENTS.md

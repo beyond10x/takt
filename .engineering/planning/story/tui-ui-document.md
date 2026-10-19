@@ -16,7 +16,7 @@ scope:
   path: ess/ui/takt.ui.yaml
 - confidence: inferred
   path: ess/ui/tests
-revision: 4
+revision: 5
 ---
 # Story: tui-ui-document
 
@@ -49,4 +49,6 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-`ess ui check --model ess ess/ui/takt.ui.yaml` reports no error; `ess ui test` passes every test in `ess/ui/tests/` headless, including one that opens the approvals page and finds the `takt approve` line of the fixture's pending case; `grep -c "command:" ess/ui/takt.ui.yaml` prints 0; and `ess ui run --tui --path ess/ui/takt.ui.yaml` shows an improvement turn's case at outcome `accepted` from its fixture.
+- `ess ui check --path ess/ui/takt.ui.yaml --model ess` exits 0 with no error finding;
+- `ess ui test --path ess/ui/takt.ui.yaml ess/ui/tests/*.yaml` exits 0, the tests including: the case list names an improvement turn's case at outcome `accepted`; a case's detail page shows its claims, actions and outcomes from its latest decision and its run events; the approvals page shows the fixture's pending case with its `takt approve` line;
+- `grep -c "command:" ess/ui/takt.ui.yaml` prints 0.
