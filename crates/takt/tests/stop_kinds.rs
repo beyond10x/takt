@@ -40,6 +40,7 @@ fn every_stop() -> Vec<Stop> {
         Stop::Waiting {
             on: vec!["ci.read".to_owned()],
             budget: None,
+            local: Vec::new(),
         },
         Stop::Unperformable {
             claim: "pr.opened".to_owned(),

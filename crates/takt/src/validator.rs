@@ -55,12 +55,12 @@ pub trait Validator {
     /// Performs the action in `tree` about `revision`; `seq` makes record ids unique.
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation>;
     /// Observes as [`Self::observe`] does, and says whether an observation that wrote no record
-    /// waits on the forge: on a state outside the tree that moves without a commit (checks
+    /// waits: on a state outside the tree that moves without a commit (on the forge: checks
     /// still running, a pull request's head not yet at the head pushed, a merge held for a
-    /// required check that has not reported), so the same observation made again after a while
-    /// may write one. The loop then observes again within its budget and offers no judgement
-    /// step meanwhile. Not waiting by default: an observation without a record is final at its
-    /// revision.
+    /// required check that has not reported; or locally, [`Self::waits_locally`]), so the same
+    /// observation made again after a while may write one. On the forge the loop then observes
+    /// again within its budget and offers no judgement step meanwhile. Not waiting by default:
+    /// an observation without a record is final at its revision.
     fn observe_waiting(
         &self,
         tree: &Path,
@@ -68,6 +68,15 @@ pub trait Validator {
         seq: usize,
     ) -> Result<(Observation, bool)> {
         Ok((self.observe(tree, revision, seq)?, false))
+    }
+    /// Whether what it waits on ([`Self::observe_waiting`]) is local: a file or a ref on this
+    /// machine that only someone outside the run moves (a saved scorecard, a promoted binary,
+    /// the local `main`). Observing it again within the run would spend the budget on the same
+    /// observation, so the loop stops [`crate::run::Stop::Waiting`] at once after the step, naming
+    /// what it waits for, and the next run observes again. Not local by default: a wait is on the
+    /// forge, and the loop pauses and observes it again within its budget.
+    fn waits_locally(&self) -> bool {
+        false
     }
     /// Observes as [`Self::observe_waiting`] does, a child it runs held to `deadline` (the
     /// instant the run's hour budget ends, the run's own; `None` for a run without one) as well

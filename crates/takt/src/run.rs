@@ -69,15 +69,22 @@ pub enum Stop {
     StepRefused(String),
     /// A judgement step changed no file and the decision did not move: another step would not either.
     NoProgress,
-    /// The run waited on the forge (checks still running, a pull request's head behind the head
-    /// pushed) and may wait no longer: its step or hour budget is spent, or it has neither to
-    /// wait in. Nothing is recorded for what is awaited; the case stays open, and the next run
+    /// The run waits, and may wait no longer. On the forge (checks still running, a pull
+    /// request's head behind the head pushed): its step or hour budget is spent, or it has
+    /// neither to wait in. On something local ([`crate::validator::Validator::waits_locally`]: a
+    /// saved scorecard, a promoted binary, the local `main`): at once after the step that
+    /// observed it, with no pause and no decision after it, since only someone outside the run
+    /// moves it. Nothing is recorded for what is awaited; the case stays open, and the next run
     /// resumes it and observes again.
     Waiting {
-        /// The actions whose observation waits on the forge.
+        /// The actions whose observation waits.
         on: Vec<String>,
-        /// The budget spent; `None` for a run with no step or hour budget, which does not wait.
+        /// The budget spent; `None` for a run with no step or hour budget, which does not wait,
+        /// and for a wait on something local.
         budget: Option<Box<Stop>>,
+        /// What each wait on something local waits for, as its observation named it (the file
+        /// it reads); empty for a wait on the forge.
+        local: Vec<String>,
     },
     /// No offered or due action produces evidence an open obligation's claim reads, and an
     /// admissible action nobody in the run performs is the only producer of a claim that does
@@ -120,7 +127,15 @@ impl std::fmt::Display for Stop {
             Stop::Tokens(t) => write!(f, "Tokens ({t})"),
             Stop::StepRefused(why) => write!(f, "StepRefused ({why})"),
             Stop::NoProgress => write!(f, "NoProgress"),
-            Stop::Waiting { on, budget } => match budget {
+            Stop::Waiting { on, budget, local } => match budget {
+                _ if !local.is_empty() => {
+                    write!(
+                        f,
+                        "Waiting ({}; locally: {})",
+                        on.join(", "),
+                        local.join("; ")
+                    )
+                }
                 Some(budget) => write!(f, "Waiting ({}; {budget})", on.join(", ")),
                 None => write!(f, "Waiting ({}; no step or hour budget)", on.join(", ")),
             },
@@ -7116,15 +7131,21 @@ impl<'a> Run<'a> {
         // observed at: not due again there, because the next observation would end the same
         // way; a commit moves the revision and makes them due again.
         let mut observed_without_record: BTreeSet<(String, String)> = BTreeSet::new();
-        // Of those, the ones whose observation waits on the forge, as `(name, action,
-        // revision)`: observed again after a pause, within the budget, and meanwhile no
-        // judgement step is offered, because what is missing is not the harness's to make.
-        let mut awaited: Vec<(String, String, String)> = Vec::new();
+        // Of those, the ones whose observation waits, as `(name, action, revision, local)`,
+        // `local` what a wait on something local waits for ([`Validator::waits_locally`]): on
+        // the forge, observed again after a pause, within the budget, and meanwhile no
+        // judgement step is offered, because what is missing is not the harness's to make; when
+        // every wait is local, the run stops at once instead.
+        let mut awaited: Vec<(String, String, String, Option<String>)> = Vec::new();
         // Whether the story's records were written before a granted step this run.
         let mut recorded_before = false;
-        let waiting = |awaited: &[(String, String, String)], budget: Option<Stop>| {
+        let all_local = |awaited: &[(String, String, String, Option<String>)]| {
+            awaited.iter().all(|(_, _, _, local)| local.is_some())
+        };
+        let waiting = |awaited: &[(String, String, String, Option<String>)],
+                       budget: Option<Stop>| {
             let mut on: Vec<String> = Vec::new();
-            for (_, action, _) in awaited {
+            for (_, action, _, _) in awaited {
                 if !on.contains(action) {
                     on.push(action.clone());
                 }
@@ -7132,6 +7153,14 @@ impl<'a> Run<'a> {
             Stop::Waiting {
                 on,
                 budget: budget.map(Box::new),
+                local: if all_local(awaited) {
+                    awaited
+                        .iter()
+                        .filter_map(|(_, _, _, local)| local.clone())
+                        .collect()
+                } else {
+                    Vec::new()
+                },
             }
         };
         loop {
@@ -7475,8 +7504,9 @@ impl<'a> Run<'a> {
                 // decision, no judgement step offered, no other validator due and none waiting
                 // on the forge: then the next pass would see the same decision, and the run
                 // stops there as no progress. One that waits on the forge is due again after
-                // the pause below.
-                awaited.retain(|(name, _, _)| name != validator.name());
+                // the pause below; when every wait is on something local, the run stops here,
+                // with no pause and no further decision.
+                awaited.retain(|(name, _, _, _)| name != validator.name());
                 if observation.records.is_empty() {
                     observed_without_record.insert((validator.name().to_owned(), revision.clone()));
                     if waits {
@@ -7484,7 +7514,13 @@ impl<'a> Run<'a> {
                             validator.name().to_owned(),
                             validator.action().to_owned(),
                             revision,
+                            validator
+                                .waits_locally()
+                                .then(|| observation.summary.clone()),
                         ));
+                        if all_local(&awaited) {
+                            return Ok(waiting(&awaited, None));
+                        }
                         last_idle = None;
                         continue;
                     }
@@ -7510,15 +7546,17 @@ impl<'a> Run<'a> {
             // No validator is due, and one waits on the forge whose action is still admissible:
             // the run pauses and observes it again, offering no judgement step meanwhile. A run
             // with no step or hour budget has nothing to wait in and stops waiting at once; the
-            // case stays open for the next run.
-            awaited.retain(|(_, action, _)| admissible.contains(action));
+            // case stays open for the next run, as it does when every wait left is on something
+            // local.
+            awaited.retain(|(_, action, _, _)| admissible.contains(action));
             if !awaited.is_empty() {
-                let Some(pause) = self.pause() else {
+                let pause = self.pause().filter(|_| !all_local(&awaited));
+                let Some(pause) = pause else {
                     return Ok(waiting(&awaited, None));
                 };
                 let on: Vec<&str> = awaited
                     .iter()
-                    .map(|(_, action, _)| action.as_str())
+                    .map(|(_, action, _, _)| action.as_str())
                     .collect();
                 events.emit(
                     self.steps,
@@ -7534,7 +7572,7 @@ impl<'a> Run<'a> {
                     on.join(", ")
                 )?;
                 std::thread::sleep(pause);
-                for (name, _, revision) in &awaited {
+                for (name, _, revision, _) in &awaited {
                     observed_without_record.remove(&(name.clone(), revision.clone()));
                 }
                 continue;

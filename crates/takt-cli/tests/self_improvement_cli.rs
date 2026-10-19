@@ -1630,6 +1630,132 @@ fn a_promotion_record_naming_no_installed_binary_is_not_promoted() {
     );
 }
 
+/// The turn's decision files and its run record's `decision` and `waiting` lines, counted.
+fn written(world: &World) -> (usize, usize, usize) {
+    let case = world.repo.join(".engineering/cases/turn-1");
+    let files = fs::read_dir(case.join("decisions"))
+        .map(Iterator::count)
+        .unwrap_or_default();
+    let events = fs::read_to_string(case.join("events.jsonl")).unwrap_or_default();
+    let lines = |event: &str| {
+        events
+            .lines()
+            .filter(|line| line.contains(&format!("\"event\":\"{event}\"")))
+            .count()
+    };
+    (files, lines("decision"), lines("waiting"))
+}
+
+/// A resume of the turn with a step budget of three, which a wait polled every 30 s would spend
+/// observing again: what it wrote, as [`written`] counts it, and its exit code and output.
+fn resumed_on_a_local_wait(world: &World) -> ((usize, usize, usize), (i32, String, String)) {
+    let before = written(world);
+    let ran = takt_in(world, &["run", "--case", "turn-1", "--iterations", "3"]);
+    let after = written(world);
+    (
+        (after.0 - before.0, after.1 - before.1, after.2 - before.2),
+        ran,
+    )
+}
+
+/// What `out` says besides the line a `--forge none` run opens with, which names the forge it
+/// chose: no other line of it says "forge".
+fn says_forge(out: &str) -> Vec<&str> {
+    out.lines()
+        .filter(|line| !line.starts_with("forge: none ("))
+        .filter(|line| line.contains("forge"))
+        .collect()
+}
+
+/// story:a-local-wait-exits-waiting: a turn whose `scorecard.compare` finds no saved scorecard
+/// of the candidate stops `Waiting` at once after that step, exit 6, naming the file it waits
+/// for: no pause, no observation again and no decision after the step, so a run with a budget
+/// writes one decision per step and no `waiting` line. A second look, the turn resumed, does
+/// the same in one step. Under `--forge none` no line of it says "forge".
+#[test]
+fn a_turn_without_the_candidates_scorecard_exits_waiting_after_the_step_naming_the_file() {
+    let world = world("local-wait", true, false);
+    let (code, out, err) = run(&world, &opening(&world));
+    assert_eq!(code, 4, "{out}\n{err}");
+    approve(&world, "repository.merge");
+    git(&world.repo, &["branch", "-f", "main", &world.candidate]);
+    let file = world
+        .state
+        .join(format!(
+            "takt/scorecards/scorecard-{}.json",
+            world.candidate
+        ))
+        .display()
+        .to_string();
+    // The merge observed, then the comparison, which waits: two steps, two decisions.
+    let (grew, (code, out, err)) = resumed_on_a_local_wait(&world);
+    assert_eq!(code, 6, "{out}\n{err}");
+    assert_eq!(grew, (2, 2, 0), "{out}\n{err}");
+    let stopped = out
+        .lines()
+        .find(|line| line.starts_with("stopped: "))
+        .unwrap_or_default();
+    assert!(
+        stopped.starts_with("stopped: Waiting (scorecard.compare; ") && stopped.contains(&file),
+        "{out}\n{err}"
+    );
+    assert!(stopped.contains("steps 2,"), "{out}\n{err}");
+    assert_eq!(says_forge(&out), Vec::<&str>::new(), "{out}\n{err}");
+    // The second look: one step, one decision, the same stop.
+    let (grew, (code, out, err)) = resumed_on_a_local_wait(&world);
+    assert_eq!(code, 6, "{out}\n{err}");
+    assert_eq!(grew, (1, 1, 0), "{out}\n{err}");
+    assert!(out.contains("steps 1,"), "{out}\n{err}");
+    assert!(out.contains("Waiting (scorecard.compare; "), "{out}\n{err}");
+    assert!(out.contains(&file), "{out}\n{err}");
+    assert_eq!(says_forge(&out), Vec::<&str>::new(), "{out}\n{err}");
+    assert!(
+        records(&world.repo)
+            .iter()
+            .all(|record| field(record, "kind") != "scorecard_result"),
+        "{out}\n{err}"
+    );
+}
+
+/// Under `--forge none` the mainline is the local `main`, which only the operator moves: a
+/// granted merge not yet there stops `Waiting` at once after `candidate.merge`, exit 6, naming
+/// the tip it read, and no line says "forge".
+#[test]
+fn a_forge_none_turn_waiting_for_the_local_merge_exits_waiting_after_the_step() {
+    let world = world("local-merge-wait", true, false);
+    let (code, out, err) = run(&world, &opening(&world));
+    assert_eq!(code, 4, "{out}\n{err}");
+    approve(&world, "repository.merge");
+    let (grew, (code, out, err)) = resumed_on_a_local_wait(&world);
+    assert_eq!(code, 6, "{out}\n{err}");
+    assert_eq!(grew, (1, 1, 0), "{out}\n{err}");
+    assert!(
+        out.contains("stopped: Waiting (candidate.merge; ") && out.contains("steps 1,"),
+        "{out}\n{err}"
+    );
+    assert!(out.contains(&world.baseline[..8]), "{out}\n{err}");
+    assert_eq!(says_forge(&out), Vec::<&str>::new(), "{out}\n{err}");
+}
+
+/// `binary.promote` waits on the promotion store and the binary installed, both local: granted
+/// and not yet promoted, the turn stops `Waiting` at once after the step, exit 6, naming the
+/// binary it read, and no line says "forge".
+#[test]
+fn a_turn_waiting_for_its_promotion_exits_waiting_after_the_step() {
+    let world = world("local-promote-wait", true, false);
+    up_to_the_promotion(&world);
+    let (grew, (code, out, err)) = resumed_on_a_local_wait(&world);
+    assert_eq!(code, 6, "{out}\n{err}");
+    assert_eq!(grew, (1, 1, 0), "{out}\n{err}");
+    assert!(
+        out.contains("stopped: Waiting (binary.promote; ") && out.contains("steps 1,"),
+        "{out}\n{err}"
+    );
+    let read = world.install.join("bin/takt").display().to_string();
+    assert!(out.contains(&read), "{read}: {out}\n{err}");
+    assert_eq!(says_forge(&out), Vec::<&str>::new(), "{out}\n{err}");
+}
+
 /// The reviewer's `rv_a_resume_by_another_binary_than_the_promoted_is_refused`: the turn
 /// recorded the binary that judges it when it opened; a resume by another binary (here a copy of
 /// it with bytes appended, as the candidate's build `takt promote` installed would be) is

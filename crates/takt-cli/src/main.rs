@@ -437,7 +437,8 @@ const EXIT_STOPPED: u8 = 3;
 const EXIT_APPROVAL: u8 = 4;
 /// Exit 5: the run ended on an error once its case was open, `stopped: error:`.
 const EXIT_ERROR: u8 = 5;
-/// Exit 6: the run waited on the forge and its budget ended first, `stopped: Waiting`.
+/// Exit 6: the run waited on the forge and its budget ended first, or it waits on something
+/// local and stopped at once, `stopped: Waiting`.
 const EXIT_WAITING: u8 = 6;
 /// Exit 7: no step can move the case, a claim left decided only by an action the run has no
 /// performer for, `stopped: Unperformable`.
@@ -451,7 +452,7 @@ const EXIT_CODES: &str = "Exit codes:
   3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
-  6  stopped: Waiting (<actions>; <the budget spent> or no step or hour budget): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; nothing recorded for it, the case stays open and the next run resumes it
+  6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and the next run resumes it
   7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open";
 
 /// What `takt scenario run --help` says about the exit codes: [`EXIT_CODES`] without `frontier:
@@ -463,7 +464,7 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
-  6  stopped: Waiting (<actions>; <the budget spent> or no step or hour budget): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
+  6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
   7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open";
 
 fn main() -> ExitCode {
@@ -490,7 +491,7 @@ fn main() -> ExitCode {
 /// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress` |
 /// | 4 | `ApprovalRequired`: `takt approve` is the next step |
 /// | 5 | `stopped: error:`, the run ended on an error once its case was open: a forge that refused, a validator or the harness that failed |
-/// | 6 | `Waiting`: the run waited on the forge until its budget ended; the next run resumes the case |
+/// | 6 | `Waiting`: the run waited on the forge until its budget ended, or waits on something local and stopped at once; the next run resumes the case |
 /// | 7 | `Unperformable`: no step can move the case; a claim left is decided only by an action the run has no performer for |
 fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
     match cli.command {
