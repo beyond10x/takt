@@ -1944,6 +1944,81 @@ fn an_undelegated_agent_cannot_grant_a_turns_judge_surface_merge() {
     );
 }
 
+/// A turn whose candidate touches a judge surface, opened by `takt run` under `--forge none`, at
+/// the gate of its judge-surface merge.
+fn judge_turn_at_the_gate(name: &str) -> World {
+    let world = world_with(
+        name,
+        &Setup {
+            touches: Some(("tools/judge.sh", "#!/bin/sh\nexit 0\n")),
+            ..Setup::plain(true, false)
+        },
+    );
+    let inputs = vec![
+        format!("finding={FINDING}"),
+        format!("candidate={}", world.candidate),
+    ];
+    let (code, out, err) = run_as(
+        &world,
+        &inputs,
+        None,
+        Some("the probe no longer shows the defect"),
+        &[],
+    );
+    assert_eq!(code, 4, "{out}\n{err}");
+    assert!(
+        out.contains("candidate.merge_judge_surface"),
+        "{out}\n{err}"
+    );
+    world
+}
+
+/// The reviewer's `rv_cli_owner_grant_then_merge_records_merged`: through the binary, the turn
+/// `takt run` opened records its forge, the owner's `takt approve` records `main`'s tip with the
+/// grant, and a merge after the grant records `merged`.
+#[test]
+fn a_judge_surface_merge_after_the_owners_approval_is_recorded() {
+    let world = judge_turn_at_the_gate("judge-after-approve");
+    let case = world.repo.join(".engineering/cases/turn-1");
+    let forge = fs::read_to_string(case.join("forge")).expect("the turn records its forge");
+    assert_eq!(forge, "none\n");
+    let main = git(&world.repo, &["rev-parse", "main"]);
+    let (code, shown) = approve_by(&world, "repository.merge.judge_surface", "human:owner");
+    assert_eq!(code, 0, "{shown}");
+    let authority = fs::read_to_string(case.join("authority.yaml")).expect("the authority");
+    assert!(
+        authority.contains(&format!("mainline_tip: {main}")),
+        "{authority}"
+    );
+    git(&world.repo, &["branch", "-f", "main", &world.candidate]);
+    let (_, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--hours", "0.001"]);
+    assert!(
+        records(&world.repo)
+            .iter()
+            .any(|record| field(record, "kind") == "merge_observation"),
+        "{out}\n{err}"
+    );
+}
+
+/// The reviewer's `rv_cli_fast_forward_before_approve_records_nothing`, the first real turn's
+/// shape through the binary: `main` fast-forwarded to the candidate before the owner's `takt
+/// approve`. No merge is recorded, and the run says why.
+#[test]
+fn a_judge_surface_merge_before_the_owners_approval_records_nothing() {
+    let world = judge_turn_at_the_gate("judge-before-approve");
+    git(&world.repo, &["branch", "-f", "main", &world.candidate]);
+    let (code, shown) = approve_by(&world, "repository.merge.judge_surface", "human:owner");
+    assert_eq!(code, 0, "{shown}");
+    let (_, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--hours", "0.001"]);
+    assert!(
+        records(&world.repo)
+            .iter()
+            .all(|record| field(record, "kind") != "merge_observation"),
+        "{out}\n{err}"
+    );
+    assert!(out.contains("held the candidate"), "{out}\n{err}");
+}
+
 /// The reviewer's `rv_a_turn_on_a_protocol_file_with_a_harness_action`, inverted as ruled: a
 /// protocol document of id `self.improvement/1` other than the embedded one (here with one more
 /// action, which no validator performs) opens no turn: refused before anything is written,

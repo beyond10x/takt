@@ -421,8 +421,8 @@ types:
   # read from: crates/takt/src/run.rs:7827-7837
   # read from: crates/takt/src/validator.rs:72-80
   # read from: crates/takt/src/improvement.rs:1104-1108
-  # read from: crates/takt/src/improvement.rs:1501-1505
-  # read from: crates/takt/src/improvement.rs:1713-1717
+  # read from: crates/takt/src/improvement.rs:1640-1644
+  # read from: crates/takt/src/improvement.rs:1852-1856
   # read from: crates/takt/src/run.rs:100-114
   # read from: crates/takt/src/run.rs:130
   # read from: crates/takt/src/run.rs:6851-6859
@@ -1761,7 +1761,23 @@ types:
   # file; `takt approve` takes the grant, and `candidate.merge_judge_surface` records nothing
   # on any other (story:self-improvement-protocol, part 2, correction 2).
   # read from: crates/takt/src/validator.rs:2231-2238
-  # read from: crates/takt/src/improvement.rs:1278-1284
+  # read from: crates/takt/src/improvement.rs:1294-1300
+  # A turn's judge-surface grant authorises only a merge made after it: `takt approve` records
+  # the mainline's tip with the grant, read once the grant's instant is taken through the forge
+  # the turn recorded when it opened (`Case.forge`), and `candidate.merge_judge_surface`
+  # records nothing when that tip already holds the candidate, decided by ancestry and never
+  # by a committer date, which the committer sets and a fast-forward takes from the candidate.
+  # The refusal names the merge, the first commit of the mainline's first-parent chain at that
+  # tip that holds the candidate, with its committer date, labelled the committer's clock, and
+  # the grant's instant. A grant that records no tip, whose tip does not arrive from the
+  # repository as its id, or whose tip is not on the mainline now (neither its tip nor an
+  # ancestor of it), records nothing either. `candidate.merge` shares the validator and
+  # is not held to it. Decided by the planner
+  # (story:a-judge-surface-candidate-merges-after-its-grant, 2026-10-19).
+  # read from: crates/takt/src/improvement.rs:1341-1353
+  # read from: crates/takt/src/improvement.rs:1411-1420
+  # read from: crates/takt/src/improvement.rs:1544-1545
+  # read from: crates/takt/src/case.rs:1045-1050
   - name: takt.work.Approver
     kind: union
     tag: kind
@@ -2250,18 +2266,23 @@ entities:
       # at the revision again before it merges. Each approval is also recorded as `approval`
       # evidence on the story in the planning store (`Story.approvals`), before the grant is
       # written. A grant names a capability some action of the case's protocol requires, or it is
-      # refused with nothing written.
-      # read from: crates/takt/src/case.rs:527-542
-      # read from: crates/takt/src/case.rs:549-552
-      # read from: crates/takt/src/case.rs:612-629
-      # read from: crates/takt/src/case.rs:955-968
-      # read from: crates/takt/src/case.rs:1051
+      # refused with nothing written. An improvement turn's grant of
+      # `repository.merge.judge_surface` carries besides the mainline's tip, read when the grant
+      # was given (`mainline_tip`), which Canon is never handed: none for a turn that recorded no
+      # forge, and a tip that cannot be read then refuses the grant with nothing written.
+      # read from: crates/takt/src/case.rs:488-503
+      # read from: crates/takt/src/case.rs:517-520
+      # read from: crates/takt/src/case.rs:580-597
+      # read from: crates/takt/src/case.rs:925-938
+      # read from: crates/takt/src/case.rs:1021
       # read from: crates/takt/src/protocol.rs:146-223
       # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:46-52
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/authority.rs:7-21
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/mod.rs:359-365
       # read from: crates/takt/src/case.rs:2290-2291
       # read from: crates/takt/src/validator.rs:2389
+      # read from: crates/takt/src/case.rs:504-510
+      # read from: crates/takt/src/case.rs:1077-1082
       - name: authority
         type: Map<takt.work.CapabilityId, takt.work.Grant>
       # read from: crates/takt/src/case.rs:1635-1636
@@ -2333,6 +2354,18 @@ entities:
       # read from: crates/takt/src/improvement.rs:1638-1646
       # read from: crates/takt-cli/src/main.rs:1923-1926
       - name: install_root
+        type: Optional<String>
+      # The forge an improvement turn reads the mainline through, `bot` or `none` (the local
+      # `main`), recorded when the turn opens (`forge` in the case directory), so `takt approve`
+      # reads the mainline's tip at a judge-surface grant through the same forge, with no
+      # `--forge` of its own. Absent for a case under any other protocol and for a turn opened
+      # before it was recorded, whose judge-surface grant records no tip and authorises no merge
+      # (story:a-judge-surface-candidate-merges-after-its-grant).
+      # read from: crates/takt/src/case.rs:2338-2343
+      # read from: crates/takt/src/case.rs:2145-2146
+      # read from: crates/takt/src/case.rs:2639
+      # read from: crates/takt/src/improvement.rs:1143-1149
+      - name: forge
         type: Optional<String>
     relations:
       # A case opened for a story references it; the story lives in the planning store and
@@ -3202,7 +3235,9 @@ entities:
   # `takt.candidate-merge-judge-surface` (`candidate.merge_judge_surface`), each a
   # `merge_observation` about `candidate`, `merged` once the case holds the grant its action
   # requires at the candidate and the mainline's tip holds the candidate, the forge and the tip
-  # retained beside the record, waiting while it does not; and the sixteenth
+  # retained beside the record, waiting while it does not, the judge-surface one recording
+  # nothing besides for a candidate the mainline's tip recorded with the grant already holds,
+  # or under a grant that records no such tip or one that does not arrive; and the sixteenth
   # `takt.binary-promote` (`binary.promote`, `promotion_record`, about `promotion`, the
   # candidate's revision), `promoted` once the case holds its grant and the promotion store's
   # latest record that is no refusal is a promotion (no baseline or rebaseline) of that revision
@@ -3255,6 +3290,7 @@ entities:
   # read from: crates/takt/src/forge.rs:580-598
   # read from: crates/takt/src/validator.rs:224-227
   # read from: crates/takt/src/validator.rs:292-303
+  # read from: crates/takt/src/improvement.rs:1544-1545
   - name: takt.work.EvidenceProducer
     naming:
       summary: >-
@@ -3977,7 +4013,7 @@ entities:
   # changed, else `non_judge`; a given `surface` that disagrees is refused, naming the first
   # such path (story:self-improvement-protocol S5, 2026-10-19).
   # read from: protocols/self-improvement/1.yaml:18-22
-  # read from: crates/takt/src/improvement.rs:1214-1224
+  # read from: crates/takt/src/improvement.rs:1230-1240
   # read from: .engineering/planning/design/recursive-self-improvement.md:109-110
   # read from: .engineering/planning/story/judge-guard.md:87
   # read from: .engineering/planning/story/judge-guard.md:122
