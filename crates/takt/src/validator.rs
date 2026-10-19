@@ -1749,6 +1749,9 @@ impl PrMerged {
                     "--",
                 ],
             )?;
+            // The path check is a second refusal: no test fails with it alone removed, as under
+            // R6 below a take that changed another path has nothing to exempt (the story file
+            // stays as at the base, and the merge must leave it so).
             if let [(mode, changed)] = raw_changes(&diff)?.as_slice()
                 && *changed == path
                 && *mode == "100644"
