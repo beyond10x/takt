@@ -14,6 +14,13 @@ tasks:
       - cargo clippy --workspace --all-targets --locked -- -D warnings
       - cargo test --workspace --locked
 
+  fuzz:
+    desc: Run each fuzz target for 60 s on nightly; exits 0 when none crashes.
+    dir: fuzz
+    cmds:
+      - for: [events, harness_reply, case_id, scorecard]
+        cmd: mkdir -p target/corpus/{{.ITEM}} && cargo +nightly fuzz run --fuzz-dir . {{.ITEM}} target/corpus/{{.ITEM}} corpus/{{.ITEM}} -- -max_total_time=60
+
   build:
     desc: Build the takt binary.
     cmds:

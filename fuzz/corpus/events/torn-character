@@ -1,0 +1,2 @@
+{"at":"2026-10-18T00:00:00.000000Z","step":0,"event":"opened","case":"a","protocol":"p","inputs":[]}
+{"at":"2026-10-18T00:00:01.000000Z","step":1,"event":"step","by":"harness","name":"h","action":"tests.write","summary":"grÃ

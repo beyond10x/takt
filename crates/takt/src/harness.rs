@@ -212,7 +212,7 @@ impl ClaudeCode {
         text
     }
 
-    fn parse(result: &str) -> Result<(String, String)> {
+    pub fn parse(result: &str) -> Result<(String, String)> {
         for line in result.lines().rev() {
             let line = line.trim();
             if line.starts_with('{') && line.contains("\"action\"") {
