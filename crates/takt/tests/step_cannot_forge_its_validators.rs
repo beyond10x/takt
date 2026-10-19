@@ -1364,14 +1364,44 @@ fn alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether this process is the child [`alone`] starts, which runs one case by itself.
+const ALONE: &str = "TAKT_TEST_ALONE";
+
+/// Runs the case `name` of this test binary again in a child process, by itself, and asserts
+/// it ran and passed there; true only in that child, which is where the case's body runs. A
+/// run sweeps what this process started in a process group of its own, so a sibling case's
+/// run, in the same process, would kill what the case leaves running before the case's own
+/// run is looked at.
+fn alone(name: &str) -> bool {
+    if std::env::var_os(ALONE).is_some() {
+        return true;
+    }
+    let child = Command::new(std::env::current_exe().expect("the test binary"))
+        .args([name, "--exact", "--test-threads", "1"])
+        .env(ALONE, "1")
+        .output()
+        .expect("the child test runs");
+    let stdout = String::from_utf8_lossy(&child.stdout);
+    assert!(
+        child.status.success() && stdout.contains("test result: ok. 1 passed"),
+        "{name}, run by itself:\n{stdout}\n{}",
+        String::from_utf8_lossy(&child.stderr)
+    );
+    false
+}
+
 /// A judgement step whose harness leaves a writer running in a process group of its own: the
 /// group is killed once the step is over, so nothing it would write lands in the tree after it,
 /// between steps or after the run. The case waits for the writer to be gone, killed or done
 /// writing, not for a time it would take to write: a writer the run left alive writes 1 s
-/// later, however loaded the host.
+/// later, however loaded the host. It runs by itself ([`alone`]): no sibling case's sweep
+/// kills the writer for it.
 #[test]
 fn a_writer_a_step_leaves_running_is_killed_with_its_group() {
     use std::os::unix::process::CommandExt as _;
+    if !alone("a_writer_a_step_leaves_running_is_killed_with_its_group") {
+        return;
+    }
     let tree = repository("late-writer", &[("check.sh", FAILING_CHECK, true)]);
     let ran = run(&tree, "./check.sh", |tree| {
         // Left running on purpose: the run kills and reaps it once the step is over.

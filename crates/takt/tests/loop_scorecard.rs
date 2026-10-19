@@ -1786,6 +1786,16 @@ const LONG_WALK: &str = "a_twenty_thousand_commit_history_is_walked_by_a_few_git
 /// length; one per commit would be 40,000.
 const WALK_GITS: usize = 20;
 
+/// How many objects the two walks of [`LONG_WALK`] may ask `git cat-file --batch` for: each
+/// commit once a walk (40,001 today), and a few more.
+const WALK_READS: usize = 2 * 20_001 + 20;
+
+/// The CPU time the two walks of [`LONG_WALK`] may take in the walking process: work a loaded
+/// host does not stretch as it stretches the wall clock. 1.4 to 1.8 s unloaded, 2.3 to 2.6 s on
+/// a host loaded to two and to four times its CPU count; a walk that keeps the commits it has
+/// seen in a list, cloning each to compare, took 11.6 s.
+const WALK_CPU: std::time::Duration = std::time::Duration::from_secs(6);
+
 /// The two walks of [`LONG_WALK`] in a debug build: over ten times their unloaded median
 /// (1.5 s), and under the 82 s the walks took starting a reader per commit.
 const WALK_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
@@ -1795,8 +1805,9 @@ const WALK_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
 /// end) and when it is off the history (the whole history walked). The work is counted, not
 /// only timed: the walks run in a child of this test whose `PATH` leads to a `git` that writes
 /// a line for each process it starts and refuses past the hundredth, so a walk that starts one
-/// per commit fails at once. They start at most [`WALK_GITS`] and take less than
-/// [`WALK_BOUND`].
+/// per commit fails at once, and that writes down every object its `cat-file --batch` is asked
+/// for. They start at most [`WALK_GITS`] processes, ask for at most [`WALK_READS`] objects,
+/// use less than [`WALK_CPU`] in the walking process and take less than [`WALK_BOUND`].
 #[test]
 fn a_twenty_thousand_commit_history_is_walked_by_a_few_git_processes() {
     if let Some(tree) = std::env::var_os("TAKT_LONG_WALK_TREE") {
@@ -1808,6 +1819,7 @@ fn a_twenty_thousand_commit_history_is_walked_by_a_few_git_processes() {
             named("TAKT_LONG_WALK_MAIN"),
         );
         let started = std::time::Instant::now();
+        let before = cpu_time();
         assert!(
             takt::loop_scorecard::verified_descends(&tree, &root, &tip).expect("walks"),
             "the root is an ancestor of the tip"
@@ -1816,7 +1828,12 @@ fn a_twenty_thousand_commit_history_is_walked_by_a_few_git_processes() {
             !takt::loop_scorecard::verified_descends(&tree, &main, &tip).expect("walks"),
             "main's commit is off the long history"
         );
-        println!("walked in {} ms", started.elapsed().as_millis());
+        let cpu = cpu_time().saturating_sub(before);
+        println!(
+            "walked in {} ms, {} ms of CPU",
+            started.elapsed().as_millis(),
+            cpu.as_millis()
+        );
         return;
     }
     let (tree, _) = scratch("long-history", DEFINED);
@@ -1861,12 +1878,16 @@ fn a_twenty_thousand_commit_history_is_walked_by_a_few_git_processes() {
         .find(|git| git.is_file())
         .expect("git on the PATH");
     let calls = bin.join("calls");
+    let requests = bin.join("requests");
     let counting = bin.join("git");
     fs::write(
         &counting,
         format!(
-            "#!/bin/sh\necho \"$*\" >> '{calls}'\n[ \"$(wc -l < '{calls}')\" -le 100 ] || exit 1\nexec '{real}' \"$@\"\n",
+            "#!/bin/sh\necho \"$*\" >> '{calls}'\n[ \"$(wc -l < '{calls}')\" -le 100 ] || exit 1\n\
+             case \"$*\" in\n  *' cat-file --batch') tee -a '{requests}' | '{real}' \"$@\"; exit $? ;;\nesac\n\
+             exec '{real}' \"$@\"\n",
             calls = calls.display(),
+            requests = requests.display(),
             real = real.display()
         ),
     )
@@ -1898,18 +1919,57 @@ fn a_twenty_thousand_commit_history_is_walked_by_a_few_git_processes() {
         (1..=WALK_GITS).contains(&gits),
         "two walks of 20,000 commits started {gits} git processes:\n{started}"
     );
-    let took = stdout
+    let read = fs::read_to_string(&requests)
+        .unwrap_or_default()
+        .lines()
+        .count();
+    assert!(
+        (1..=WALK_READS).contains(&read),
+        "two walks of 20,000 commits asked git for {read} objects"
+    );
+    let (took, cpu) = stdout
         .lines()
         .find_map(|line| {
-            let (_, ms) = line.split_once("walked in ")?;
-            ms.split_once(" ms")?.0.parse::<u64>().ok()
+            let (_, rest) = line.split_once("walked in ")?;
+            let (wall, rest) = rest.split_once(" ms, ")?;
+            let cpu = rest.strip_suffix(" ms of CPU")?;
+            Some((wall.parse::<u64>().ok()?, cpu.parse::<u64>().ok()?))
         })
-        .map(std::time::Duration::from_millis)
+        .map(|(wall, cpu)| {
+            (
+                std::time::Duration::from_millis(wall),
+                std::time::Duration::from_millis(cpu),
+            )
+        })
         .unwrap_or_else(|| panic!("the child says how long the walks took:\n{stdout}"));
+    assert!(
+        cpu < WALK_CPU,
+        "two walks of 20,000 commits took {cpu:?} of CPU in this process"
+    );
     assert!(
         took < WALK_BOUND,
         "two walks of 20,000 commits took {took:?}"
     );
+}
+
+/// The CPU time this process has used, in user and system mode.
+fn cpu_time() -> std::time::Duration {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: `getrusage` writes the usage of this process into the zeroed `rusage` it is
+    // given and touches nothing else; it is read only once the call says it was written.
+    let usage = unsafe {
+        assert_eq!(
+            libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()),
+            0,
+            "getrusage"
+        );
+        usage.assume_init()
+    };
+    let time = |at: libc::timeval| {
+        std::time::Duration::from_secs(u64::try_from(at.tv_sec).unwrap_or(0))
+            + std::time::Duration::from_micros(u64::try_from(at.tv_usec).unwrap_or(0))
+    };
+    time(usage.ru_utime) + time(usage.ru_stime)
 }
 
 /// The reviewer's L5: a loose object planted over the definitions blob whose header gives a

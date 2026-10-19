@@ -1,7 +1,9 @@
 //! Adversary cases, pass 2, for `--hours` bounding a step. Every harness is a double: a Rust
 //! fake or a `claude` script; nothing reaches a model. Every process a case starts writes its
 //! pid to a file outside the tree and is killed before the case ends. Timing margins are whole
-//! seconds: the hour budget is 3.6 s and the grace 10 s.
+//! seconds: the hour budget is 3.6 s, but 30 s for the gate's case, whose gate must start its
+//! command before the budget ends ([`GATE_HOURS`]); the grace is 10 s. The gate's case runs by
+//! itself in a child process with a `PATH` and `HOME` of its own ([`sealed`]).
 
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -157,6 +159,45 @@ impl Harness for Fails {
     }
 }
 
+/// Whether this process is the child [`sealed`] starts, which runs one case by itself.
+const SEALED: &str = "TAKT_TEST_SEALED";
+
+/// Runs the case `name` of this test binary again in a child process, by itself, in an
+/// environment of its own: `PATH` is `/usr/bin:/bin`, and `HOME`, `CARGO_HOME`, `RUSTUP_HOME`
+/// and `TMPDIR` are in a scratch directory; nothing else of this process's environment is
+/// passed. Asserts the case ran and passed there; true only in that child, which is where the
+/// case's body runs. A run guards every directory a program is found in that the user can
+/// write: on the host's `PATH` and `HOME`, a program another session installs while the gate
+/// runs would be taken for the gate's own write.
+fn sealed(name: &str) -> bool {
+    if std::env::var_os(SEALED).is_some() {
+        return true;
+    }
+    let root = directory("sealed");
+    let (home, tmp) = (root.join("home"), root.join("tmp"));
+    for dir in [&home, &tmp] {
+        fs::create_dir_all(dir).expect("a directory of the sealed environment");
+    }
+    let child = Command::new(std::env::current_exe().expect("the test binary"))
+        .args([name, "--exact", "--test-threads", "1"])
+        .env_clear()
+        .env(SEALED, "1")
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", &home)
+        .env("CARGO_HOME", home.join(".cargo"))
+        .env("RUSTUP_HOME", home.join(".rustup"))
+        .env("TMPDIR", &tmp)
+        .output()
+        .expect("the child test runs");
+    let stdout = String::from_utf8_lossy(&child.stdout);
+    assert!(
+        child.status.success() && stdout.contains("test result: ok. 1 passed"),
+        "{name}, run by itself in a sealed environment:\n{stdout}\n{}",
+        String::from_utf8_lossy(&child.stderr)
+    );
+    false
+}
+
 /// The hour budget of a run whose gate must start its command before the budget ends: 30 s,
 /// over ten times the gate's preparation unloaded (2.6 s in a debug build, most of it the
 /// digest of the test binary the gate's bundle names), which grew past 10 s on a host loaded to
@@ -172,6 +213,9 @@ const GATE_HOURS: f64 = 30.0 / 3600.0;
 #[test]
 fn a_gate_command_that_outlives_the_hour_budget_is_held_to_the_hour_budget() {
     let _serial = serial();
+    if !sealed("a_gate_command_that_outlives_the_hour_budget_is_held_to_the_hour_budget") {
+        return;
+    }
     let scripts = directory("gate-scripts");
     let pids = scripts.join("pids");
     let tree = repository(
