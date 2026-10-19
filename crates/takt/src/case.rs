@@ -2031,8 +2031,37 @@ impl CaseDir {
     /// [`crate::improvement::INDEPENDENT_ON`]: a validator is no agent run, so its record is
     /// another run's than the one that delivered the candidate. Nothing else declares
     /// independence. The sha256 of the binary that judges the turn goes into [`JUDGE_FILE`], and
-    /// the install root given into [`INSTALL_ROOT_FILE`].
+    /// the install root given, an existing directory named canonically, into
+    /// [`INSTALL_ROOT_FILE`]; any other root is refused before anything is written.
     pub fn open_turn(&mut self, opening: &TurnOpening) -> Result<()> {
+        // The install root is checked before anything is written: an existing directory named
+        // canonically, an absolute UTF-8 path on one line, so no `..` or link recorded could
+        // later lead elsewhere.
+        let install_root = match &opening.install_root {
+            None => None,
+            Some(root) => {
+                let canonical = std::fs::canonicalize(root)
+                    .with_context(|| format!("the install root {}", root.display()))?;
+                if canonical != *root || !canonical.is_dir() {
+                    bail!(
+                        "the install root {} is no directory named canonically ({}); a turn records the directory itself",
+                        root.display(),
+                        canonical.display()
+                    );
+                }
+                Some(
+                    root.to_str()
+                        .filter(|root| root.starts_with('/') && !root.contains('\n'))
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "the install root {} is no absolute UTF-8 path on one line",
+                                root.display()
+                            )
+                        })?
+                        .to_owned(),
+                )
+            }
+        };
         let Some(base) = Branch::read(&self.dir)?.base_commit else {
             bail!(
                 "the turn {} pins no base commit, which its finding artifact is",
@@ -2064,17 +2093,8 @@ impl CaseDir {
         let judge = self.dir.join(JUDGE_FILE);
         std::fs::write(&judge, format!("{}\n", opening.judge_sha256))
             .with_context(|| format!("write {}", judge.display()))?;
-        if let Some(root) = &opening.install_root {
+        if let Some(root) = &install_root {
             let path = self.dir.join(INSTALL_ROOT_FILE);
-            let root = root
-                .to_str()
-                .filter(|root| root.starts_with('/') && !root.contains('\n'))
-                .ok_or_else(|| {
-                    anyhow!(
-                        "the install root {} is no absolute UTF-8 path on one line",
-                        root.display()
-                    )
-                })?;
             std::fs::write(&path, format!("{root}\n"))
                 .with_context(|| format!("write {}", path.display()))?;
         }

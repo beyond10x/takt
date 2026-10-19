@@ -337,9 +337,10 @@ struct RunArgs {
     scenarios: Option<PathBuf>,
     /// The install root a `self.improvement/1` turn opened by this run reads the promoted
     /// binary under (`<root>/bin/takt`, where `takt promote --install-root` installs it),
-    /// recorded in the case so every resume reads the same one. Not given, `CARGO_INSTALL_ROOT`,
-    /// else `CARGO_HOME`, else `~/.cargo`, as `takt promote` takes it. Refused for a resumed
-    /// case, which keeps the one it was opened with; not read by any other case.
+    /// recorded in the case, canonical, so every resume reads the same one. Not given,
+    /// `CARGO_INSTALL_ROOT`, else `CARGO_HOME`, else `~/.cargo`, as `takt promote` takes it. A
+    /// root that does not exist opens no turn. Refused for a resumed case, which keeps the one it
+    /// was opened with; not read by any other case.
     #[arg(long)]
     install_root: Option<PathBuf>,
     #[command(flatten)]
@@ -754,46 +755,64 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // protocol, taken out of the inputs and checked here with the promoted baseline, so
             // a missing or wrong one is refused before anything is written; its `surface`, given
             // or not, is computed, and put back as the case input the computation says.
-            let turn =
-                if case.is_none() && resuming.is_none() && opens_on.id == takt::case::TURN_PROTOCOL
-                {
-                    if let Some(why) = takt::case::turn_protocol_refusal(&opens_on)? {
-                        return Err(anyhow!(why));
-                    }
-                    let mut taken = |name: &str| {
-                        inputs
-                            .iter()
-                            .position(|(given, _)| given == name)
-                            .map(|at| inputs.remove(at).1)
-                    };
-                    let finding = taken(takt::case::TURN_FINDING);
-                    let candidate = taken(takt::case::TURN_CANDIDATE);
-                    let surface = taken(takt::case::TURN_SURFACE);
-                    // The binary that judges the turn is this one, which must be the promoted:
-                    // read as it runs, whatever its path holds by now.
-                    let binary = PathBuf::from(RUNNING_BINARY);
-                    let mut opened = takt::case::turn_opening(
-                        &repo,
-                        finding.as_deref(),
-                        candidate.as_deref(),
-                        surface.as_deref(),
-                        &takt::promotion::store()?,
-                        &takt::case::Judge {
-                            revision: REVISION,
-                            binary: &binary,
-                        },
-                        &mainline,
-                    )?;
-                    inputs.push((takt::case::TURN_SURFACE.to_owned(), opened.surface.clone()));
-                    opened.install_root = Some(match &install_root {
-                        Some(root) => std::path::absolute(root)
-                            .with_context(|| format!("--install-root {}", root.display()))?,
-                        None => takt::promotion::install_root()?,
-                    });
-                    Some(opened)
-                } else {
-                    None
+            let turn = if case.is_none()
+                && resuming.is_none()
+                && opens_on.id == takt::case::TURN_PROTOCOL
+            {
+                if let Some(why) = takt::case::turn_protocol_refusal(&opens_on)? {
+                    return Err(anyhow!(why));
+                }
+                let mut taken = |name: &str| {
+                    inputs
+                        .iter()
+                        .position(|(given, _)| given == name)
+                        .map(|at| inputs.remove(at).1)
                 };
+                let finding = taken(takt::case::TURN_FINDING);
+                let candidate = taken(takt::case::TURN_CANDIDATE);
+                let surface = taken(takt::case::TURN_SURFACE);
+                // The binary that judges the turn is this one, which must be the promoted:
+                // read as it runs, whatever its path holds by now.
+                let binary = PathBuf::from(RUNNING_BINARY);
+                let mut opened = takt::case::turn_opening(
+                    &repo,
+                    finding.as_deref(),
+                    candidate.as_deref(),
+                    surface.as_deref(),
+                    &takt::promotion::store()?,
+                    &takt::case::Judge {
+                        revision: REVISION,
+                        binary: &binary,
+                    },
+                    &mainline,
+                )?;
+                inputs.push((takt::case::TURN_SURFACE.to_owned(), opened.surface.clone()));
+                // Recorded canonical, the directory itself: no `..` and no link left on the
+                // way, which could later lead elsewhere. A root that is not there opens no
+                // turn.
+                let root = match &install_root {
+                    Some(root) => root.clone(),
+                    None => takt::promotion::install_root()?,
+                };
+                opened.install_root = Some(match std::fs::canonicalize(&root) {
+                    Ok(root) if root.is_dir() => root,
+                    Ok(_) => {
+                        return Err(anyhow!(
+                            "the install root {} is no directory; a turn opens on the install root `takt promote` installs into; nothing was written",
+                            root.display()
+                        ));
+                    }
+                    Err(error) => {
+                        return Err(anyhow!(
+                            "the install root {} is not there ({error}); a turn opens on the install root `takt promote` installs into, which must exist; nothing was written",
+                            root.display()
+                        ));
+                    }
+                });
+                Some(opened)
+            } else {
+                None
+            };
             let intent = intent.or_else(|| turn.as_ref().map(|turn| turn.title.clone()));
             // A case keeps only the inputs its protocol declares: one it does not declare would
             // be dropped without a word, so a case to be opened refuses it before anything is.

@@ -355,6 +355,10 @@ fn world_with(name: &str, setup: &Setup) -> World {
 
     let cache = dir.join("cache");
     let install = dir.join("install");
+    // A turn opens only on an install root that exists: the one it is given, and the decoy the
+    // environment names.
+    fs::create_dir_all(&install).expect("the install root");
+    fs::create_dir_all(dir.join("decoy-install")).expect("the decoy install root");
     World {
         _scratch: Scratch(dir),
         repo,
@@ -1891,4 +1895,146 @@ fn a_turn_on_another_protocol_document_of_its_id_is_refused() {
         ran.1,
         ran.2
     );
+}
+
+/// `takt` run in `world` with `args` and the run's state and cache, the environment naming the
+/// decoy install root; its exit code, standard output and standard error.
+fn takt_plain(world: &World, args: &[&str]) -> (i32, String, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args(args)
+        .env("XDG_STATE_HOME", &world.state)
+        .env("XDG_CACHE_HOME", &world.cache)
+        .env("CARGO_INSTALL_ROOT", decoy(world))
+        .env_remove("B10X_GATES_POLICY")
+        .output()
+        .expect("takt runs");
+    (
+        output.status.code().expect("an exit code"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// The arguments of `takt run` opening the turn `turn-1` with the install root `root`.
+fn opening_with_root(world: &World, root: &str) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "run",
+        "--repo",
+        world.repo.to_str().expect("utf-8"),
+        "--protocol",
+        "self.improvement/1",
+        "--intent",
+        "the probe no longer shows the defect",
+        "--case-id",
+        "turn-1",
+        "--harness",
+        "none",
+        "--forge",
+        "none",
+        "--test-cmd",
+        "true",
+        "--iterations",
+        "6",
+        "--scenarios",
+        world.scenarios.to_str().expect("utf-8"),
+        "--install-root",
+        root,
+    ]
+    .iter()
+    .map(|arg| (*arg).to_owned())
+    .collect();
+    for input in opening(world) {
+        args.extend(["--input".to_owned(), input]);
+    }
+    args
+}
+
+/// The reviewer's `rv_b_install_root_recorded_and_fixed`: an install root given through `..`
+/// and a link is recorded canonical, the directory itself; a resume given `--install-root` is
+/// refused, naming the flag, since the case keeps the root it was opened with.
+#[test]
+fn the_install_root_is_recorded_canonical_and_fixed() {
+    let world = world("root-canonical", true, false);
+    let dir = world.repo.parent().expect("a parent").to_path_buf();
+    let link = dir.join("root-link");
+    std::os::unix::fs::symlink(&world.install, &link).expect("the link");
+    let given = format!(
+        "{}/../{}/root-link",
+        dir.display(),
+        dir.file_name().expect("a name").to_string_lossy()
+    );
+    let args = opening_with_root(&world, &given);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (code, out, err) = takt_plain(&world, &args);
+    assert_eq!(code, 4, "{out}\n{err}");
+    let recorded = fs::read_to_string(world.repo.join(".engineering/cases/turn-1/install-root"))
+        .expect("the recorded install root");
+    let canonical = fs::canonicalize(&world.install).expect("the install root");
+    assert_eq!(
+        recorded,
+        format!("{}\n", canonical.display()),
+        "given {given}"
+    );
+    let other = dir.join("other-root");
+    let (code, out, err) = takt_plain(
+        &world,
+        &[
+            "run",
+            "--case",
+            "turn-1",
+            "--repo",
+            world.repo.to_str().expect("utf-8"),
+            "--harness",
+            "none",
+            "--forge",
+            "none",
+            "--test-cmd",
+            "true",
+            "--scenarios",
+            world.scenarios.to_str().expect("utf-8"),
+            "--install-root",
+            other.to_str().expect("utf-8"),
+        ],
+    );
+    assert_ne!(code, 0, "{out}\n{err}");
+    assert!(err.contains("--install-root"), "{err}");
+}
+
+/// An install root that does not exist opens no turn: refused before anything is written,
+/// naming it.
+#[test]
+fn a_missing_install_root_is_refused_at_open() {
+    let world = world("root-missing", true, false);
+    let missing = world.repo.parent().expect("a parent").join("no-such-root");
+    let args = opening_with_root(&world, missing.to_str().expect("utf-8"));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let ran = takt_plain(&world, &args);
+    refused(&world, &ran, missing.to_str().expect("utf-8"));
+}
+
+/// The reviewer's `rv_c_resumed_case_on_another_document_is_refused`: a turn whose
+/// `protocol.yaml` is no longer the embedded document (one action more, as a case opened by an
+/// older binary on a protocol file could hold) is refused before any step when resumed, naming
+/// the embedded protocol.
+#[test]
+fn a_resumed_turn_on_another_protocol_document_is_refused() {
+    let world = world("resume-document", true, false);
+    let (code, out, err) = run(&world, &opening(&world));
+    assert_eq!(code, 4, "{out}\n{err}");
+    let path = world.repo.join(".engineering/cases/turn-1/protocol.yaml");
+    let text = fs::read_to_string(&path).expect("protocol.yaml");
+    fs::write(
+        &path,
+        text.replacen(
+            "\nactions:\n",
+            "\nactions:\n  turn.note:\n    description: a note\n    effect: write\n",
+            1,
+        ),
+    )
+    .expect("written");
+    let before = records(&world.repo).len();
+    let (code, out, err) = resume(&world);
+    assert_ne!(code, 0, "{out}\n{err}");
+    assert!(err.contains("embeds"), "{err}");
+    assert_eq!(records(&world.repo).len(), before, "{out}\n{err}");
 }
