@@ -1,17 +1,22 @@
 //! story:binary-embeds-revision through the binary: `takt --version` prints the git revision
 //! the binary was built from, `takt <version> (<sha>)`, with `-dirty` after the sha when the
-//! tree held uncommitted changes to tracked files or an untracked file under `crates/` or
-//! `protocols/`, and `(unknown revision)` when the crate was not built from a git checkout
-//! that tracks it.
+//! tree held uncommitted changes to tracked files or an untracked file under `crates/`,
+//! `protocols/` or a root `.cargo/`, and `(unknown revision)` when the crate was not built from
+//! a git checkout that tracks it. What `-dirty` means is decided by the build script's own
+//! cases (`revision_build.rs`); this one checks what the binary prints.
 
 use std::path::Path;
 use std::process::Command;
 
-/// `git <args>` in `dir`, with no code from configuration and none of the caller's
-/// environment that would point git at another repository, index or work tree (a build run by
-/// a git hook or alias inherits `GIT_DIR`); its trimmed standard output when it succeeds, else
-/// `None`.
-fn git(dir: &Path, args: &[&str]) -> Option<String> {
+/// The revision the build script read when this package was built: the one it embeds in the
+/// binary, and in this test, as `TAKT_REVISION`. Never `git rev-parse HEAD` read now: the
+/// checkout may move, or a file change, between the build and the run, and the binary still
+/// prints the revision it was built from.
+const BUILT_FROM: &str = env!("TAKT_REVISION");
+
+/// Whether `sha` names a commit of the repository this crate lies in, asked of git with no code
+/// from configuration and none of the caller's environment that would point git elsewhere.
+fn is_a_commit(sha: &str) -> bool {
     let mut command = Command::new("git");
     for name in [
         "GIT_DIR",
@@ -22,79 +27,29 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
         "GIT_CONFIG_PARAMETERS",
         "GIT_CONFIG_COUNT",
-        "GIT_GLOB_PATHSPECS",
-        "GIT_NOGLOB_PATHSPECS",
-        "GIT_ICASE_PATHSPECS",
-        "GIT_LITERAL_PATHSPECS",
         "GIT_NAMESPACE",
         "GIT_CEILING_DIRECTORIES",
     ] {
         command.env_remove(name);
     }
-    let output = command
+    command
         .args([
             "-c",
             "core.fsmonitor=false",
             "-c",
             "core.hooksPath=/dev/null",
+            "cat-file",
+            "-e",
+            &format!("{sha}^{{commit}}"),
         ])
-        .args(args)
-        .current_dir(dir)
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")))
         .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-}
-
-/// The revision this crate's tree is at, read here with git and not by the code under test:
-/// the commit's sha, `-dirty` after it while a tracked file differs from it or an untracked,
-/// unignored file other than a `Cargo.lock` lies under the workspace's `crates/` or
-/// `protocols/`, or `unknown revision` when the crate is not tracked by a git checkout with a
-/// commit.
-fn expected_revision() -> String {
-    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    if git(crate_dir, &["ls-files", "--error-unmatch", "Cargo.toml"]).is_none() {
-        return "unknown revision".to_owned();
-    }
-    let Some(sha) = git(crate_dir, &["rev-parse", "HEAD"]) else {
-        return "unknown revision".to_owned();
-    };
-    let status = git(
-        crate_dir,
-        &[
-            "--no-optional-locks",
-            "status",
-            "--porcelain",
-            "--untracked-files=no",
-        ],
-    )
-    .expect("git status reads the tree");
-    let untracked = git(
-        crate_dir,
-        &[
-            "ls-files",
-            "--others",
-            "--exclude-standard",
-            "--",
-            ":(top)crates",
-            ":(top)protocols",
-            ".",
-            ":(exclude,glob)**/Cargo.lock",
-        ],
-    )
-    .expect("git lists the untracked files");
-    if status.is_empty() && untracked.is_empty() {
-        sha
-    } else {
-        format!("{sha}-dirty")
-    }
+        .is_ok_and(|output| output.status.success())
 }
 
 /// The acceptance: the binary prints its version and, in parentheses, the revision it was
-/// built from: the sha of the commit this crate's tree is at, `-dirty` when a tracked file
-/// differs from it or an untracked file lies under `crates/`.
+/// built from: a commit's sha, `-dirty` after it or not, or `unknown revision`; the sha names a
+/// commit of this repository, whatever `HEAD` is now.
 #[test]
 fn version_prints_the_revision_the_binary_was_built_from() {
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
@@ -103,18 +58,18 @@ fn version_prints_the_revision_the_binary_was_built_from() {
         .expect("takt runs");
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).expect("utf-8");
-    let expected = expected_revision();
     assert_eq!(
         stdout,
-        format!("takt {} ({expected})\n", env!("CARGO_PKG_VERSION"))
+        format!("takt {} ({BUILT_FROM})\n", env!("CARGO_PKG_VERSION"))
     );
-    if expected != "unknown revision" {
-        let sha = expected.strip_suffix("-dirty").unwrap_or(&expected);
-        assert_eq!(sha.len(), 40, "{stdout}");
+    if BUILT_FROM != "unknown revision" {
+        let sha = BUILT_FROM.strip_suffix("-dirty").unwrap_or(BUILT_FROM);
+        assert!(matches!(sha.len(), 40 | 64), "{stdout}");
         assert!(
             sha.bytes()
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
             "{stdout}"
         );
+        assert!(is_a_commit(sha), "{sha} is no commit here: {stdout}");
     }
 }

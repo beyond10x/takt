@@ -116,7 +116,7 @@ fn is_unshowable(c: char) -> bool {
 
 /// `id` as it was typed, but for each character that does not show ([`is_unshowable`]),
 /// written as its code point (`\u{200b}`): a quote or a backslash shows as itself.
-fn shown(id: &str) -> String {
+pub(crate) fn shown(id: &str) -> String {
     id.chars()
         .map(|c| {
             if is_unshowable(c) {
@@ -185,7 +185,10 @@ pub fn check_id(id: &str) -> Result<()> {
     } else if id == "." {
         Some("it names the cases directory itself".to_owned())
     } else if id.contains("..") {
-        Some("it contains `..`".to_owned())
+        Some(format!(
+            "it contains `..`, which a path reads as the directory above, and git refuses {BRANCH_PREFIX}{} as a branch name",
+            shown(id)
+        ))
     } else if id.starts_with('/') {
         Some("it starts with `/`".to_owned())
     } else if id.contains(['/', '\\']) {
@@ -1321,10 +1324,11 @@ impl Change {
     }
 }
 
-/// Every change from `parent` to `commit`, read from `git diff-tree --raw -z`, byte for byte,
-/// not from quoted text; `None` when the output does not read.
+/// Every change from `parent` to `commit`, read from `git diff-tree --raw -z` byte for byte
+/// ([`crate::git::bytes`]), not from quoted, trimmed or decoded text; `None` when the output
+/// does not read, a path that is not UTF-8 among it.
 fn changes(tree: &Path, parent: &str, commit: &str) -> Result<Option<Vec<Change>>> {
-    let raw = crate::git::run(
+    let raw = crate::git::bytes(
         tree,
         &[
             "diff-tree",
@@ -1337,10 +1341,16 @@ fn changes(tree: &Path, parent: &str, commit: &str) -> Result<Option<Vec<Change>
             "--",
         ],
     )?;
-    let mut fields = raw.split('\0').filter(|field| !field.is_empty());
+    let mut fields = raw
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty());
     let mut changes = Vec::new();
     while let Some(change) = fields.next() {
-        let Some(path) = fields.next() else {
+        // A field that is not UTF-8, a path above all, does not read: never a decoded stand-in.
+        let (Ok(change), Some(Ok(path))) = (
+            std::str::from_utf8(change),
+            fields.next().map(std::str::from_utf8),
+        ) else {
             return Ok(None);
         };
         let parts: Vec<&str> = change.trim_start_matches(':').split(' ').collect();
@@ -1499,6 +1509,9 @@ impl CaseDir {
             .map(|name| (name, name.strip_prefix(BRANCH_PREFIX)))
         {
             Some((name, Some(other))) => {
+                // The name is joined to the cases directory only as a case id.
+                check_id(other)
+                    .with_context(|| format!("the branch {} names no case", shown(name)))?;
                 let Some(base) = Branch::read(&tree.join(CASES_DIR).join(other))
                     .ok()
                     .and_then(|branch| branch.base)

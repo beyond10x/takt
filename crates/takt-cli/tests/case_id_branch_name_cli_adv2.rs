@@ -27,7 +27,7 @@ impl Drop for Scratch {
 }
 
 #[test]
-fn run_with_case_reads_a_protocol_outside_the_cases_directory_before_check_id() {
+fn run_with_case_refuses_an_id_outside_the_cases_directory_before_reading_it() {
     let scratch = Scratch(
         Path::new(env!("CARGO_TARGET_TMPDIR"))
             .join(format!("case-id-cli-adv2-{}", std::process::id())),

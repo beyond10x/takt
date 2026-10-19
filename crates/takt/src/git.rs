@@ -128,10 +128,18 @@ fn raw(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
 
 /// Runs `git <args>` in `tree` and answers its standard output trimmed: for answers of one
 /// value (a revision, a branch, a count, a URL). Never for paths or `status`, whose leading
-/// white space is part of the answer; those are read byte for byte with `-z`.
+/// white space is part of the answer; those are read byte for byte with `-z` ([`bytes`]).
 pub fn run(tree: &Path, args: &[&str]) -> Result<String> {
     let stdout = raw(tree, args, None)?;
     Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
+}
+
+/// Runs `git <args>` in `tree` and answers its standard output byte for byte, nothing trimmed
+/// and nothing decoded: for answers that hold paths, asked for with `-z`, whose every byte,
+/// leading white space included, is part of the path. The caller decodes each path, and one
+/// that is not UTF-8 is its to refuse.
+pub fn bytes(tree: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    raw(tree, args, None)
 }
 
 /// The bytes of the blob `object` names (`<revision>:<path>`, or a blob id) as git holds them:
@@ -1453,12 +1461,12 @@ pub fn trees_differ_outside(tree: &Path, from: &str, to: &str, outside: &str) ->
     }
 }
 
-/// The tree merging `revision` into `base` would leave: `git merge-tree --write-tree`, which
-/// writes the merge's tree object and touches neither the work tree nor the index, with no code
-/// from configuration ([`NO_CONFIGURED_CODE`]). A merge with conflicts still answers its tree,
-/// the conflicted files in it as git leaves them; any exit but 0 (clean) or 1 (conflicts) is an
-/// error naming what git said.
-pub fn merged_tree(tree: &Path, base: &str, revision: &str) -> Result<String> {
+/// The tree merging `revision` into `base` would leave, and whether the merge conflicts: `git
+/// merge-tree --write-tree`, which writes the merge's tree object and touches neither the work
+/// tree nor the index, with no code from configuration ([`NO_CONFIGURED_CODE`]). A merge with
+/// conflicts (exit 1) still answers its tree, the conflicted files in it as git leaves them;
+/// any exit but 0 (clean) or 1 is an error naming what git said.
+pub fn merged_tree(tree: &Path, base: &str, revision: &str) -> Result<(String, bool)> {
     let args = [
         "merge-tree",
         "--write-tree",
@@ -1468,13 +1476,13 @@ pub fn merged_tree(tree: &Path, base: &str, revision: &str) -> Result<String> {
     ];
     let output = output(tree, &args, None)?;
     match output.status.code() {
-        Some(0 | 1) => {
+        Some(code @ (0 | 1)) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let merged = stdout.lines().next().unwrap_or_default().trim().to_owned();
             if merged.is_empty() {
                 bail!("git {} in {} named no tree", args.join(" "), tree.display());
             }
-            Ok(merged)
+            Ok((merged, code == 1))
         }
         _ => bail!(
             "git {} in {} exited {}: {}",
