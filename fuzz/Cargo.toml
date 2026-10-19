@@ -1,0 +1,45 @@
+[package]
+name = "b10x-takt-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+b10x-takt = { path = "../crates/takt" }
+libfuzzer-sys = "0.4"
+serde_json = "1"
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "events"
+path = "fuzz_targets/events.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "harness_reply"
+path = "fuzz_targets/harness_reply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "case_id"
+path = "fuzz_targets/case_id.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scorecard"
+path = "fuzz_targets/scorecard.rs"
+test = false
+doc = false
+bench = false

@@ -251,9 +251,9 @@ types:
   # other judgement step it ends the run with an error.
   # read from: crates/takt-cli/src/main.rs:337-360
   # read from: crates/takt/src/harness.rs:67-69
-  # read from: crates/takt/src/harness.rs:235
+  # read from: crates/takt/src/harness.rs:237
   # read from: crates/takt/src/harness.rs:163-167
-  # read from: crates/takt/src/harness.rs:293
+  # read from: crates/takt/src/harness.rs:295
   # read from: crates/takt-cli/src/main.rs:753-757
   - name: takt.work.HarnessName
     kind: newtype
@@ -532,11 +532,11 @@ types:
   # read from: crates/takt/src/run.rs:125-135
   # read from: crates/takt/src/harness.rs:41-50
   # read from: crates/takt/src/harness.rs:72-76
-  # read from: crates/takt/src/harness.rs:238-240
+  # read from: crates/takt/src/harness.rs:240-242
   # read from: crates/takt/src/harness.rs:52-64
   # read from: crates/takt/src/harness.rs:85-89
-  # read from: crates/takt/src/harness.rs:248-260
-  # read from: crates/takt/src/harness.rs:354-370
+  # read from: crates/takt/src/harness.rs:250-262
+  # read from: crates/takt/src/harness.rs:356-372
   - name: takt.work.RunStep
     kind: struct
     fields:
@@ -2069,7 +2069,7 @@ entities:
   # read from: crates/takt/src/run.rs:4041-4055
   # read from: crates/takt/src/run.rs:4120-4121
   # read from: crates/takt/src/harness.rs:118
-  # read from: crates/takt/src/harness.rs:294-300
+  # read from: crates/takt/src/harness.rs:296-302
   - name: takt.work.Step
     naming:
       summary: >-
