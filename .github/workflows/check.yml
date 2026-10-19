@@ -86,8 +86,6 @@ jobs:
           tar -xzf "$asset"
           echo "$RUNNER_TEMP/aep-$AEP_VERSION-x86_64-unknown-linux-gnu" >> "$GITHUB_PATH"
 
-      # The tests run aep in parallel; with its protocol cache empty they race to fetch the same
-      # snapshot and some read no frontier. One run fetches it first.
       - name: Fill aep's protocol cache
         run: aep plan artifact validate
 
