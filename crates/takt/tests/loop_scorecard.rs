@@ -2151,9 +2151,10 @@ fn every_anchor_and_alias_is_refused_from_the_parsers_events_naming_its_line() {
     );
 }
 
-/// Every other YAML file the loop validators read is held to the same rule as the definitions:
-/// a turn's `case.yaml` and `protocol.yaml`, and the loop case's evidence records, holding an
-/// anchor or an alias are refused, naming the file and the line, before anything expands.
+/// A turn's `case.yaml` and `protocol.yaml`, each in turn given an anchor on a line of its own,
+/// make the loop scorecard's read fail naming the file and that line, and read again once
+/// restored; an evidence record of the loop case holding an alias makes `loop.compare` fail
+/// naming the record and line 2. A turn's `story.yaml` is checked by the next test.
 #[test]
 fn every_yaml_file_the_loop_reads_is_refused_with_an_anchor_naming_the_file_and_line() {
     let (tree, head) = scratch("yaml-reads", DEFINED);
@@ -2192,6 +2193,35 @@ fn every_yaml_file_the_loop_reads_is_refused_with_an_anchor_naming_the_file_and_
     let shown = format!("{error:#}");
     assert!(shown.contains("zz.yaml"), "{shown}");
     assert!(shown.contains("YAML anchor or alias on line 2;"), "{shown}");
+}
+
+/// `loop.measure` reads each turn's `story.yaml` to find the story it was opened for; one
+/// holding an anchor is refused, naming the file and the line, as `case.yaml` is.
+#[test]
+fn loop_measure_refuses_a_turns_story_yaml_holding_an_anchor_naming_the_file_and_line() {
+    let (tree, _) = scratch("story-anchor", DEFINED);
+    closed(
+        &tree,
+        "turn-a",
+        "2026-10-18T09:00:00Z",
+        "2026-10-18T10:00:00Z",
+        "accepted",
+        None,
+    );
+    let head = git(&tree, &["rev-parse", "HEAD"]);
+    let path = tree.join(".engineering/cases/turn-a/story.yaml");
+    fs::write(&path, "id: &s story:turn-a\n").expect("the anchor");
+    loop_case(&tree, "loop-story", &head, &head);
+    let error = LoopMeasure
+        .observe(&tree, &head, 1)
+        .expect_err("the story.yaml is refused");
+    let shown = format!("{error:#}");
+    assert!(shown.contains("turn-a/story.yaml"), "{shown}");
+    assert!(shown.contains("YAML anchor or alias on line 1;"), "{shown}");
+    fs::write(&path, "id: story:turn-a\n").expect("restored");
+    LoopMeasure
+        .observe(&tree, &head, 2)
+        .expect("the turn reads without the anchor");
 }
 
 /// An abbreviated commit id is refused, naming it, and never resolved by a git subprocess

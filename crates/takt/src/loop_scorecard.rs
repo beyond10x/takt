@@ -505,9 +505,9 @@ pub fn verified_descends_within(
 /// what it reads as text (`rows *2`, `a 'b &c`) is not. The events are read one at a time and
 /// dropped, before anything is deserialized, so no alias expands: one would expand without
 /// bound once read, and a file well under its cap could expand to gigabytes. None when the
-/// stream holds none up to its end, or up to where it does not parse (the deserializer, on the
-/// same parser, then fails there before it builds anything). A parser that cannot be set up is
-/// an error.
+/// stream holds none up to its end, or up to where it does not parse: the deserializer reads
+/// the same events up to there, builds the partial document they hold, with no alias in it, and
+/// then fails with the parser's error. A parser that cannot be set up is an error.
 pub(crate) fn anchor_line(text: &str) -> Result<Option<usize>> {
     use unsafe_libyaml as unsafe_yaml;
     let size = u64::try_from(text.len()).context("the YAML text's size")?;
@@ -564,7 +564,7 @@ pub(crate) fn anchor_line(text: &str) -> Result<Option<usize>> {
 /// `text`, the file at `path`, read as YAML, of which a JSON record is one; one holding an
 /// anchor or an alias is refused, naming the file and its line, before anything is
 /// deserialized ([`anchor_line`]).
-fn read_yaml<T: serde::de::DeserializeOwned>(path: &Path, text: &str) -> Result<T> {
+pub(crate) fn read_yaml<T: serde::de::DeserializeOwned>(path: &Path, text: &str) -> Result<T> {
     if let Some(line) = anchor_line(text)? {
         bail!(
             "{} holds a YAML anchor or alias on line {line}; it is read without them",

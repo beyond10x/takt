@@ -1226,8 +1226,8 @@ types:
   # through the checked history, any difference makes every metric `redefined`. Definitions
   # holding a YAML anchor or alias are refused from the parser's own events, naming the line,
   # before anything is deserialized: an alias expands without bound, and a file well under its
-  # cap could expand to gigabytes. So are the turns' `case.yaml` and `protocol.yaml` and the
-  # loop case's evidence records the loop validators read. The other
+  # cap could expand to gigabytes. So are the turns' `case.yaml`, `protocol.yaml` and `story.yaml`
+  # and the loop case's evidence records the loop validators read. The other
   # reads at a revision (the step guard's judge-surface list at the base, `judge_list_at`) still
   # read the object store a step could write unchecked: the checkpoint guards refs, replace
   # refs, `commondir`, `gitdir`, `shallow`, `objects/info/alternates` and the commit-graph, and

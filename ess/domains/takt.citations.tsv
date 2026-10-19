@@ -133,7 +133,7 @@ takt.work.Case|- name: protocol|crates/takt/src/case.rs|5	case.doc["artifacts"][
 takt.work.Case|- name: intent|crates/takt/src/case.rs|1	std::fs::write(self.dir.join("intent.md"), intent)?;	sha256:13b4d7f8623023031435ee4cb987f591408657f59fdc9e921e3137ebe3d4284f
 takt.work.Case|- name: story|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|1	store. The next `takt run` on the repository && A story has at most one open case.	sha256:36a0de60ab256eb18f2148abb44703512c70bcc3a5879ef25b146c892494b89d
 takt.work.Case|- name: story|docs/design/takt.md|1	unit     := intent | frontier(repo) && case     := open(protocol, unit, worktree)	sha256:4a2836639ae123d0895d958ef3a38b6be261220ac83011ce252c48cdeec4b28f
-takt.work.Case|- name: story|crates/takt/src/case.rs|1	pub fn story_of(case_dir: &Path) -> Result<Option<String>> { && Ok(Some(story.id))	sha256:d692c439dd3723fa004829f3a690e10587bba6e641212481a396356838705c65
+takt.work.Case|- name: story|crates/takt/src/case.rs|1	pub fn story_of(case_dir: &Path) -> Result<Option<String>> { && Ok(Some(story.id))	sha256:c21ba8091bf2e7eea63571654904e70e89dc397e1693b066cb41053570627b68
 takt.work.Case|- name: story|crates/takt/src/run.rs|1	pub fn next_to_resume( && crate::case::resumable(tree, &active, out)	sha256:023034298920ecf0dbee6b80865942349f90fb4c963ae4242336f599ad68416b
 takt.work.Case|- name: story|crates/takt/src/run.rs|2	"frontier: {id} not taken: the case {case} was opened for it already"	sha256:bd5bd8212ce02173806c43825abc29fc3b88964ad38ff86e5e093a7069fba153
 takt.work.Case|- name: story|crates/takt/src/run.rs|3	&& let Err(error) = case.set_story(&story.id)	sha256:00e313c37046dcf0d1c4b6d6cde0bf81f3910e022b374c3d9c3af1fb4be4caeb

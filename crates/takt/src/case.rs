@@ -1035,8 +1035,8 @@ pub fn story_of(case_dir: &Path) -> Result<Option<String>> {
     }
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let story: StoryRef =
-        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    // An anchor or an alias is refused, naming the file and its line, before it deserializes.
+    let story: StoryRef = crate::loop_scorecard::read_yaml(&path, &text)?;
     Ok(Some(story.id))
 }
 
