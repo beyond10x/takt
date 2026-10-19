@@ -3029,8 +3029,8 @@ fn set_aside_named(
     }
 }
 
-/// Where discarding a step moves the files inside an ignored directory it rewrote, outside
-/// every repository and every case directory: `$XDG_STATE_HOME/takt/set-aside`
+/// Where discarding a harness step moves the files inside an ignored directory it rewrote,
+/// outside every repository and every case directory: `$XDG_STATE_HOME/takt/set-aside`
 /// (`~/.local/state/takt/set-aside` without it), state and not cache, since what is moved
 /// there may be the operator's own file, kept until the operator removes it. None when
 /// neither is set.
@@ -3155,8 +3155,9 @@ pub struct Run<'a> {
     /// on the `opened` line; none unless the caller sets it, since this library does not know
     /// the build it is linked into.
     pub binary: Option<String>,
-    /// Where discarding a step moves the files inside an ignored directory it rewrote, under the
-    /// case's id and the step's number: [`default_set_aside`] unless set.
+    /// Where discarding a harness step moves the files inside an ignored directory it rewrote,
+    /// under the case's id and the step's number: [`default_set_aside`] unless set. A
+    /// validator's observation moves nothing aside.
     pub set_aside: Option<PathBuf>,
     /// The planning store a story's run records its test result and its move in; none until
     /// [`Run::record_on`] gives one, and only a story's run writes to it.
@@ -3472,11 +3473,16 @@ impl<'a> Run<'a> {
     }
 
     /// The checkpoint of the tree before the step being taken, the branches of
-    /// [`Self::kept_branches`] guarded, and what discarding the step moves aside going to
-    /// `<set-aside>/<case id>/step-<n>` ([`Run::set_aside`]), a new directory: one a run before
-    /// this one left under the same case id and step gets `-2`, `-3` and so on after it.
-    fn checkpoint(&self) -> Result<crate::git::Checkpoint> {
+    /// [`Self::kept_branches`] guarded; for a harness step (`harness`), what discarding it moves
+    /// aside going to `<set-aside>/<case id>/step-<n>` ([`Run::set_aside`]), a new directory:
+    /// one a run before this one left under the same case id and step gets `-2`, `-3` and so on
+    /// after it. A validator's observation moves nothing aside: what its command rewrote inside
+    /// an ignored directory is its own build output, kept in place as a pass keeps it.
+    fn checkpoint(&self, harness: bool) -> Result<crate::git::Checkpoint> {
         let checkpoint = crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
+        if !harness {
+            return Ok(checkpoint);
+        }
         let root = self.set_aside.clone().or_else(default_set_aside);
         let (Some(root), Some(id)) = (root, self.case.dir.file_name()) else {
             return Ok(checkpoint);
@@ -4190,7 +4196,7 @@ impl<'a> Run<'a> {
                     writeln!(out, "  refused: {why}; nothing observed")?;
                     return Ok(Stop::StepRefused(why));
                 }
-                let checkpoint = self.checkpoint()?;
+                let checkpoint = self.checkpoint(false)?;
                 let cases = self.tree.join(CASES_DIR);
                 let kept = snapshot(&cases)?;
                 let globs = self.judge_list()?.unwrap_or_default();
@@ -4297,7 +4303,6 @@ impl<'a> Run<'a> {
                     if let Err(error) = &observed {
                         why.push_str(&format!("; the observation failed too: {error:#}"));
                     }
-                    why.push_str(&set_aside_named(&checkpoint, &self.tree, &change));
                     // Written after the cases directory was put back, which would take a
                     // line written before it along.
                     self.stepped(
@@ -4579,7 +4584,7 @@ impl<'a> Run<'a> {
             // base, and a sibling case's branch, which a step could otherwise move under it; a
             // branch another worktree has checked out is that session's, but never the case's
             // base or its own branch.
-            let checkpoint = self.checkpoint()?;
+            let checkpoint = self.checkpoint(true)?;
             // What is left of the hour budget is read last, just before the call, so the step
             // ends by the run's end and not by the time its preparation took after it.
             context.time_left = self.time_left();

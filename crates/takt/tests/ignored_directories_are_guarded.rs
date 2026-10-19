@@ -346,3 +346,68 @@ fn a_step_that_adds_a_file_to_an_ignored_directory_is_refused_and_only_that_file
     );
     assert!(!tree.join("notes.md").exists(), "{text}");
 }
+
+/// A refused `tests.run` whose command rewrote its own build output in a `target/` that was
+/// there before it: the output stays where it is, as it would on a pass, and nothing is moved
+/// aside; set-aside is a harness step's only.
+#[test]
+fn a_refused_tests_run_leaves_its_build_output_in_place_and_moves_nothing_aside() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let scratch = repository("validator-output");
+    let tree = &scratch.repo;
+    fs::write(tree.join(".gitignore"), "__pycache__/\ntarget/\n").expect("a file");
+    fs::write(
+        tree.join("build.sh"),
+        "#!/bin/sh\nprintf 'rebuilt\\n' > target/out.o\nprintf 'x\\n' > stray.txt\nexit 1\n",
+    )
+    .expect("a file");
+    fs::set_permissions(tree.join("build.sh"), fs::Permissions::from_mode(0o755)).expect("a mode");
+    git(tree, &["add", "-A"]);
+    git(tree, &["commit", "-q", "-m", "a build script"]);
+    fs::create_dir_all(tree.join("target")).expect("a directory");
+    fs::write(tree.join("target/out.o"), "built\n").expect("a file");
+    let protocol = scratch.root.join("protocol.yaml").display().to_string();
+    let validators: Vec<Box<dyn Validator>> =
+        vec![Box::new(TestsRun::new("./build.sh").expect("a command"))];
+    let mut run = Run::open(tree, options(protocol, 2), &Notes, &validators).expect("opens");
+    let aside = scratch.root.join("aside");
+    run.set_aside = Some(aside.clone());
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(
+        matches!(&stop, Ok(Stop::StepRefused(why))
+            if why.starts_with("tests.run") && why.contains("stray.txt")),
+        "the tests.run that wrote stray.txt was not refused: {stop:?}\n{text}"
+    );
+    assert!(!tree.join("stray.txt").exists(), "{text}");
+    assert_eq!(
+        fs::read_to_string(tree.join("target/out.o"))
+            .ok()
+            .as_deref(),
+        Some("rebuilt\n"),
+        "the test command's own build output did not stay in place: {stop:?}\n{text}"
+    );
+    let moved: Vec<PathBuf> = walk(&aside);
+    assert!(
+        moved.is_empty(),
+        "a refused tests.run moved {moved:?} aside: {stop:?}\n{text}"
+    );
+}
+
+/// Every file under `dir`, none when it does not exist.
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for entry in entries {
+        let path = entry.expect("an entry").path();
+        if path.is_dir() {
+            found.extend(walk(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
+}
