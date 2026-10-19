@@ -24,6 +24,12 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ### Added
 
+- `takt view <dir> [--output <file>]` writes one offline HTML page of the `takt-trace/1` runs under
+  a directory: one lane per run on a shared time axis, each operation a mark naming its step,
+  action and outcome, a click opening the step's transcript (its head and tail past 256 KiB). A
+  directory with no trace is refused, exit 1. The page's style and layout derive from the
+  MIT-licensed Context Lens dashboard; its notice is in `viewer/`.
+
 - A delivery under `--forge none` that stops at `pr.opened` hands its change over as a candidate:
   its code commits are replayed on the base under the configured identity, kept under
   `refs/takt/candidates/<case-id>`, and the run prints `candidate: <id>`, which a
