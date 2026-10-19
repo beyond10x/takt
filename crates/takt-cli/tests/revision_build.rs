@@ -363,10 +363,11 @@ fn the_watched_files_are_head_its_ref_the_index_the_tracked_tree_and_crates() {
 }
 
 /// Whether a second plain build of the workspace at `root` leaves the probe as it was: the
-/// build script is not run again, by `target/` or anything else a build writes.
+/// build script is not run again, by `target/` or anything else a build writes. Cargo's status
+/// line is read without colour, which would put escape codes between `Fresh` and the name.
 fn probe_is_fresh(root: &Path) -> bool {
     let built = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned()))
-        .args(["build", "--offline", "-v"])
+        .args(["build", "--offline", "-v", "--color", "never"])
         .current_dir(root)
         .env_remove("CARGO_TARGET_DIR")
         .output()
