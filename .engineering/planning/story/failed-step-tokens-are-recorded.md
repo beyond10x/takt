@@ -12,7 +12,8 @@ refs:
 relations:
 - informed_by: review-result:findings-hunt-3fe3f21
 - decomposes: epic:recursive-self-improvement
-revision: 1
+- informed_by: review-result:main-fe93286-areas
+revision: 2
 ---
 ## Outcome
 
@@ -37,3 +38,7 @@ source: .engineering/planning/review-result/findings-hunt-3fe3f21.md
 ## Acceptance
 
 In the predicate's run, the stop line and the scorecard show 1000 tokens, and a `--tokens` budget counts them.
+
+## From the review of main at fe93286 (2026-10-19)
+
+Finding N2, confirmed in code: `parse(result)?` at `crates/takt/src/harness.rs:262@fe93286` returns before `reported.set` at `:263`, and `run.rs:3928-3941` writes no step line, so a step that spent tokens and then failed (no JSON action line) is never counted (review-result:main-fe93286-areas).
