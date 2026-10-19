@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T18:21:00Z",
+  "actor": "human:timo",
+  "artifact": "story:claude-step-offers-tools-it-never-allows",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "release 0.2.3 (78c1a08e) task check on the tag; check-finding not_reproduced at 367809ec; real promotion: scenario-1 median 73,739 tokens against 121,952",
+    "reference": "78c1a08e"
+  }
+}

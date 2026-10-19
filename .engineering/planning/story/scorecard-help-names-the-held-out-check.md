@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scorecard-help-names-the-held-out-check
 kind: story
-status: proposed
+status: implemented
 title: takt scorecard --help says outcomes come from events.jsonl only; a scenario run's comes from the held-out check
 tags:
 - finding
@@ -12,9 +12,11 @@ refs:
 relations:
 - serves: vision:safe-agentic-coding
 - decomposes: epic:recursive-self-improvement
-revision: 2
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T17:13:45Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-19T18:22:21Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T18:22:22Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: scorecard-help-names-the-held-out-check
 

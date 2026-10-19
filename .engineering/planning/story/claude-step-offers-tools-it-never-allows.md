@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:claude-step-offers-tools-it-never-allows
 kind: story
-status: active
+status: implemented
 title: Each Claude step is offered 20 built-in tools where it may use 5; the 15 others cost 7,004 tokens a request
 summary: '--tools beside --allowedTools: first three Claude steps 122k -> 66k tokens (-45.7%)'
 tags:
@@ -13,10 +13,11 @@ refs:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T16:18:09Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T16:18:10Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T18:22:24Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: claude-step-offers-tools-it-never-allows
 

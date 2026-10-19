@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T18:21:00Z",
+  "actor": "human:timo",
+  "artifact": "story:scorecard-help-names-the-held-out-check",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "self.improvement/1 turn takt-20261019T180323Z accepted in the installed takt's store: check-finding reproduced at 78c1a08e, not_reproduced at 7ae5b05b; scorecard_cli help_names_the_held_out_check_as_a_scenario_runs_outcome passes; candidate 7ae5b05b promoted (record 7ae5b05b….json)",
+    "reference": "7ae5b05b"
+  }
+}
