@@ -3610,7 +3610,8 @@ impl<'a> Run<'a> {
         let events = Events::new(&self.case.dir);
         // A panic in the loop (a harness or a validator that broke) is recorded as the run's
         // `error` line and the case let go before the panic goes on: the record ends, and the
-        // case is not left held.
+        // case is not left held; unless the way to the case directory holds a link or a part
+        // that is not a directory, when neither is done (`unrecorded`).
         let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.run_held(&events, out).and_then(|stop| {
                 self.case.check_way()?;
