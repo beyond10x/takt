@@ -124,13 +124,14 @@ fn short(revision: &str) -> &str {
 
 /// Who took a step, with what its event records of it: a validator, and the revision it
 /// observed when it observed; or the harness, the tokens it reported, their components and
-/// what it reported about the call besides them.
+/// what it reported about the call besides them, and the path of the transcript takt kept.
 enum SteppedBy<'r> {
     Validator(Option<&'r str>),
     Harness(
         Option<u64>,
         Option<crate::events::TokenUsage>,
         Option<crate::harness::CallReport>,
+        Option<String>,
     ),
 }
 
@@ -5920,6 +5921,16 @@ pub fn default_set_aside() -> Option<PathBuf> {
         .map(|dir| dir.join("takt").join("set-aside"))
 }
 
+/// Where `takt run` keeps each harness step's transcript ([`Run::transcripts_in`]), outside
+/// every repository and every case directory: `$XDG_STATE_HOME/takt/transcripts`
+/// (`~/.local/state/takt/transcripts` without it). None when neither is set.
+#[must_use]
+pub fn default_transcripts() -> Option<PathBuf> {
+    crate::promotion::state_dir()
+        .ok()
+        .map(|dir| dir.join("takt").join("transcripts"))
+}
+
 /// The subject of the commit that records a take on the case's branch: `takt: take <story>`.
 #[must_use]
 pub fn take_subject(story: &str) -> String {
@@ -6039,6 +6050,10 @@ pub struct Run<'a> {
     /// opens, unless [`Run::set_aside_in`] gives another; none when nothing names one, and then
     /// no harness step is taken. A validator's observation moves nothing aside.
     set_aside: Option<PathBuf>,
+    /// Where each harness step's transcript is kept ([`crate::harness::keep_transcript`]): none
+    /// until [`Run::transcripts_in`] gives one (`takt run` gives [`default_transcripts`]), and
+    /// then no transcript is kept.
+    transcripts: Option<PathBuf>,
     /// The planning store a story's run records its test result and its move in; none until
     /// [`Run::record_on`] gives one, and only a story's run writes to it.
     store: Option<&'a dyn Frontier>,
@@ -6145,6 +6160,7 @@ impl<'a> Run<'a> {
             poll: Self::POLL,
             binary: None,
             set_aside,
+            transcripts: None,
             store: None,
             started: Instant::now(),
             outside: Outside::read(tree, &outside_dirs)?,
@@ -6180,6 +6196,23 @@ impl<'a> Run<'a> {
     /// else the error, and the run keeps the directory it had.
     pub fn set_aside_in(&mut self, dir: PathBuf) -> Result<()> {
         self.set_aside = Some(crate::git::set_aside_root(&dir, &self.tree)?);
+        Ok(())
+    }
+
+    /// Where each harness step's transcript is kept; none until [`Run::transcripts_in`].
+    #[must_use]
+    pub fn transcripts(&self) -> Option<&Path> {
+        self.transcripts.as_deref()
+    }
+
+    /// Keeps each harness step's transcript under `dir` ([`crate::harness::keep_transcript`]),
+    /// once it is accepted as a set-aside root is ([`crate::git::set_aside_root`]): absolute,
+    /// outside the tree, and makeable, every link on the way resolved now; else the error, and
+    /// the run keeps what it had.
+    pub fn transcripts_in(&mut self, dir: PathBuf) -> Result<()> {
+        let root = crate::git::set_aside_root(&dir, &self.tree)
+            .with_context(|| format!("the transcripts directory {}", dir.display()))?;
+        self.transcripts = Some(root);
         Ok(())
     }
 
@@ -6229,6 +6262,7 @@ impl<'a> Run<'a> {
             poll: Self::POLL,
             binary: None,
             set_aside,
+            transcripts: None,
             store: None,
             started: Instant::now(),
             outside: Outside::read(tree, &outside_dirs)?,
@@ -6924,9 +6958,11 @@ impl<'a> Run<'a> {
         action: &str,
         summary: &str,
     ) -> Result<()> {
-        let (by, tokens, usage, revision, call) = match by {
-            SteppedBy::Validator(revision) => ("validator", None, None, revision, None),
-            SteppedBy::Harness(tokens, usage, call) => ("harness", tokens, usage, None, call),
+        let (by, tokens, usage, revision, call, transcript) = match by {
+            SteppedBy::Validator(revision) => ("validator", None, None, revision, None, None),
+            SteppedBy::Harness(tokens, usage, call, transcript) => {
+                ("harness", tokens, usage, None, call, transcript)
+            }
         };
         let call = call.unwrap_or_default();
         events.emit(
@@ -6945,6 +6981,7 @@ impl<'a> Run<'a> {
                 api_ms: call.api_ms,
                 turns: call.turns,
                 started_at: call.started_at,
+                transcript,
             },
         )
     }
@@ -7570,16 +7607,18 @@ impl<'a> Run<'a> {
                 self.harness.step(&context)
             }));
             let returned = Instant::now();
-            // The step's transcript is kept as `artifacts/run-<r>/step-<n>.jsonl` when this is
-            // dropped: on every way out of the step below, the panic's and the errors' too, after
-            // its change was kept or put back, so neither the cases directory's comparison nor
-            // its put-back sees it.
-            let _transcript = crate::harness::KeptOnDrop::new(
+            // The step's transcript is kept now, before any way out of the step below, the
+            // panic's and the errors' too: under the transcripts directory, outside the tree
+            // and every case directory ([`Run::transcripts_in`]), so no snapshot of the step
+            // reads it and no put-back takes it along. The step's line names it.
+            let transcript = crate::harness::keep_step_transcript(
                 self.harness,
-                &self.case.dir,
+                self.transcripts.as_deref(),
+                &self.case.id,
                 run_number,
                 self.steps,
-            );
+            )
+            .map(|path| path.display().to_string());
             // What the step left running (a writer in a process group of its own) is killed
             // before anything it did is looked at, so nothing lands after the step is judged.
             let swept = crate::forge::sweep_left();
@@ -7710,6 +7749,7 @@ impl<'a> Run<'a> {
                             report.tokens,
                             self.harness.last_usage(),
                             self.harness.last_call(),
+                            transcript.clone(),
                         ),
                         self.harness.name(),
                         &report.action,
@@ -7744,7 +7784,12 @@ impl<'a> Run<'a> {
             let record_step = |run: &Self| {
                 run.stepped(
                     events,
-                    SteppedBy::Harness(report.tokens, harness.last_usage(), harness.last_call()),
+                    SteppedBy::Harness(
+                        report.tokens,
+                        harness.last_usage(),
+                        harness.last_call(),
+                        transcript.clone(),
+                    ),
                     harness.name(),
                     &report.action,
                     &report.summary,

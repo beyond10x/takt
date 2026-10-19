@@ -2,7 +2,7 @@
 //! which. The first adapter is Claude Code (`claude -p`), given file tools only: it reads and
 //! edits; takt runs the tests and writes the evidence. It runs on the user's claude.ai login:
 //! an `ANTHROPIC_API_KEY` in the environment is dropped, never spent. Each step's stream is
-//! kept as the case's `artifacts/run-<r>/step-<n>.jsonl` ([`keep_transcript`]).
+//! kept as `<transcripts>/<case>/run-<r>/step-<n>.jsonl`, outside the case ([`keep_transcript`]).
 
 use std::path::Path;
 use std::process::Command;
@@ -88,9 +88,10 @@ pub trait Harness {
     fn last_call(&self) -> Option<CallReport> {
         None
     }
-    /// The last step's transcript, the bytes takt keeps as the case's
-    /// `artifacts/run-<r>/step-<n>.jsonl` ([`keep_transcript`]): the prompt and what the harness
-    /// printed, whether the step succeeded, failed or was killed; none by default.
+    /// The last step's transcript, the bytes takt keeps as
+    /// `<transcripts>/<case>/run-<r>/step-<n>.jsonl` ([`keep_transcript`]): the prompt and
+    /// what the harness printed, whether the step succeeded, failed or was killed; none by
+    /// default.
     fn last_transcript(&self) -> Option<Vec<u8>> {
         None
     }
@@ -285,21 +286,33 @@ impl ClaudeCode {
         bounded(front, omitted, tail, TRANSCRIPT_CAP)
     }
 
-    /// The line a reply is read from: the last line of standard output that is not blank, its
-    /// end trimmed (the result event of `--output-format stream-json`, which reads as the one
-    /// document `--output-format json` prints). None when the output was cut and no line end
-    /// precedes it, so its start may be missing.
-    fn last_line(stdout: &[u8], cut: bool) -> Option<&[u8]> {
-        let end = stdout
-            .iter()
-            .rposition(|byte| !byte.is_ascii_whitespace())
-            .map_or(0, |at| at + 1);
-        let body = &stdout[..end];
-        match body.iter().rposition(|byte| *byte == b'\n') {
-            Some(at) => Some(&body[at + 1..]),
-            None if cut => None,
-            None => Some(body),
+    /// The line a reply is read from, trimmed: the last line of standard output that reads as a
+    /// JSON object whose `type` is `result` (the result event of `--output-format stream-json`,
+    /// which reads as the one document `--output-format json` prints), wherever it stands; a
+    /// line after it (a late event) does not hide it. When no line is a result event, the last
+    /// line that is not blank: a reply printed as one document with no `type`. Of output that
+    /// was cut, the part before its first line end is never read: its start may be missing.
+    fn result_line(stdout: &[u8], cut: bool) -> Option<&[u8]> {
+        let mut lines: Vec<&[u8]> = stdout
+            .split(|byte| *byte == b'\n')
+            .map(<[u8]>::trim_ascii)
+            .collect();
+        if cut {
+            if lines.len() < 2 {
+                return None;
+            }
+            lines.remove(0);
         }
+        lines.retain(|line| !line.is_empty());
+        lines
+            .iter()
+            .rev()
+            .find(|line| {
+                serde_json::from_slice::<serde_json::Value>(line)
+                    .is_ok_and(|doc| doc["type"] == "result")
+            })
+            .or_else(|| lines.last())
+            .copied()
     }
 }
 
@@ -339,23 +352,47 @@ fn bounded(mut front: Vec<u8>, omitted: u64, back: &[u8], cap: usize) -> Vec<u8>
     front
 }
 
-/// Writes `bytes` as `artifacts/run-<run>/step-<step>.jsonl` under `case_dir`, `run` the run's
-/// number in the case (1 for the run that opened it), so a resumed case keeps every run's;
-/// readable and writable by its owner only (`0600`, in a `0700` directory): a transcript can
-/// carry what the model read. What is at that path is replaced, never written through: a link
-/// there is removed, not followed. An `artifacts` or `run-<run>` that is there and is not a
-/// directory (a link to one) is refused. No validator reads the file.
+/// Writes `bytes` as `<root>/<case>/run-<run>/step-<step>.jsonl`, `root` the transcripts
+/// directory (`$XDG_STATE_HOME/takt/transcripts` for `takt run`, outside every repository and
+/// every case directory: [`crate::run::default_transcripts`]) and `run` the run's number in the
+/// case (1 for the run that opened it), so a resumed case keeps every run's; readable and
+/// writable by its owner only (`0600`, the case's and the run's directories `0700`): a
+/// transcript can carry what the model read. Every part of the way from `/` is a directory
+/// that is no link: a part that is not there is made (`0700`), and a link or a file on the way
+/// is refused. What is at the file's own path is replaced, never written through: a link there
+/// is removed, not followed. A case id that is not one plain name is refused. No validator
+/// reads the file.
 pub fn keep_transcript(
-    case_dir: &Path,
+    root: &Path,
+    case: &str,
     run: u64,
     step: u64,
     bytes: &[u8],
 ) -> Result<std::path::PathBuf> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
-    let artifacts = case_dir.join("artifacts");
-    plain_dir(&artifacts, None)?;
-    let dir = artifacts.join(format!("run-{run}"));
+    use std::path::Component;
+    if !root.is_absolute() {
+        bail!(
+            "the transcripts directory {} is not absolute",
+            root.display()
+        );
+    }
+    let mut parts = Path::new(case).components();
+    if !matches!(
+        (parts.next(), parts.next()),
+        (Some(Component::Normal(_)), None)
+    ) {
+        bail!("the case id {case:?} is not one plain name; no transcript is written for it");
+    }
+    let mut way: Vec<&Path> = root.ancestors().collect();
+    way.reverse();
+    for part in way {
+        plain_dir(part, None)?;
+    }
+    let case_dir = root.join(case);
+    plain_dir(&case_dir, Some(0o700))?;
+    let dir = case_dir.join(format!("run-{run}"));
     plain_dir(&dir, Some(0o700))?;
     let path = dir.join(format!("step-{step}.jsonl"));
     match std::fs::remove_file(&path) {
@@ -405,8 +442,8 @@ pub(crate) fn run_number(record: &Path) -> Result<u64> {
 }
 
 /// Makes `dir` a directory of its own, never through a link: one there is kept, given `mode`
-/// when one is named; none there is created with it; anything else there (a link, a file) is
-/// refused.
+/// when one is named; none there is created, with `mode` or else `0700`; anything else there
+/// (a link, a file) is refused.
 fn plain_dir(dir: &Path, mode: Option<u32>) -> Result<()> {
     use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
     match std::fs::symlink_metadata(dir) {
@@ -423,51 +460,29 @@ fn plain_dir(dir: &Path, mode: Option<u32>) -> Result<()> {
             "{} is not a directory; no transcript is written through it",
             dir.display()
         ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let mut builder = std::fs::DirBuilder::new();
-            if let Some(mode) = mode {
-                builder.mode(mode);
-            }
-            builder
-                .create(dir)
-                .with_context(|| format!("create {}", dir.display()))
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => std::fs::DirBuilder::new()
+            .mode(mode.unwrap_or(0o700))
+            .create(dir)
+            .with_context(|| format!("create {}", dir.display())),
         Err(error) => Err(error).with_context(|| format!("read {}", dir.display())),
     }
 }
 
-/// A harness step's transcript, kept ([`keep_transcript`]) when this is dropped: on every way
-/// out of the step, after its change was kept or put back, so putting the cases directory back
-/// never takes it along, and on none before. A write that fails is told on standard error and
-/// changes nothing about how the step ends.
-pub(crate) struct KeptOnDrop {
-    case_dir: std::path::PathBuf,
+/// Keeps what `harness` reports as its last step's transcript ([`keep_transcript`]) under
+/// `root`, for step `step` of run `run` of the case `case`, and answers its path; none when no
+/// root is given, the harness reports none, or the write fails, which is told on standard
+/// error and changes nothing about how the step ends.
+pub(crate) fn keep_step_transcript(
+    harness: &dyn Harness,
+    root: Option<&Path>,
+    case: &str,
     run: u64,
     step: u64,
-    bytes: Option<Vec<u8>>,
-}
-
-impl KeptOnDrop {
-    /// What `harness` reports as its last step's transcript, for the case at `case_dir`, its
-    /// run `run`.
-    pub(crate) fn new(harness: &dyn Harness, case_dir: &Path, run: u64, step: u64) -> Self {
-        Self {
-            case_dir: case_dir.to_path_buf(),
-            run,
-            step,
-            bytes: harness.last_transcript(),
-        }
-    }
-}
-
-impl Drop for KeptOnDrop {
-    fn drop(&mut self) {
-        if let Some(bytes) = self.bytes.take()
-            && let Err(error) = keep_transcript(&self.case_dir, self.run, self.step, &bytes)
-        {
-            eprintln!("step {}: its transcript was not kept: {error:#}", self.step);
-        }
-    }
+) -> Option<std::path::PathBuf> {
+    let (root, bytes) = root.zip(harness.last_transcript())?;
+    keep_transcript(root, case, run, step, &bytes)
+        .map_err(|error| eprintln!("step {step}: its transcript was not kept: {error:#}"))
+        .ok()
 }
 
 impl Harness for ClaudeCode {
@@ -584,7 +599,7 @@ impl Harness for ClaudeCode {
                     .collect::<String>()
             );
         }
-        let Some(last) = Self::last_line(&output.stdout, output.stdout_cut) else {
+        let Some(last) = Self::result_line(&output.stdout, output.stdout_cut) else {
             bail!(
                 "{} printed more than {} bytes; its reply was cut and is not read",
                 self.program,
@@ -769,22 +784,41 @@ mod tests {
         assert_eq!(short, b"p\nr\n".to_vec());
     }
 
-    /// The reply is read from the last line, the result event; a cut output whose last line
-    /// has no line end before it is not read.
+    /// The reply is read from the last result event wherever it stands, else from the last
+    /// line (one document with no `type`); a cut output's part before its first line end is
+    /// never read.
     #[test]
-    fn the_reply_is_the_last_line_and_a_cut_one_is_not_read() {
+    fn the_reply_is_the_result_event_and_a_cut_start_is_not_read() {
+        let result = br#"{"type":"result","result":"r"}"#;
+        let late = br#"{"type":"system","subtype":"late"}"#;
+        let stream = [
+            &br#"{"type":"system"}"#[..],
+            b"\n",
+            result,
+            b"\n",
+            late,
+            b"\n\n",
+        ]
+        .concat();
+        assert_eq!(ClaudeCode::result_line(&stream, false), Some(&result[..]));
         assert_eq!(
-            ClaudeCode::last_line(b"{\"a\":1}\n{\"b\":2}\n\n", false),
+            ClaudeCode::result_line(b"{\"a\":1}\n{\"b\":2}\n\n", false),
             Some(&b"{\"b\":2}"[..])
         );
         assert_eq!(
-            ClaudeCode::last_line(b"{\"b\":2}", false),
+            ClaudeCode::result_line(b"{\"b\":2}", false),
             Some(&b"{\"b\":2}"[..])
         );
         assert_eq!(
-            ClaudeCode::last_line(b"t\":1}\n{\"b\":2}\n", true),
+            ClaudeCode::result_line(b"t\":1}\n{\"b\":2}\n", true),
             Some(&b"{\"b\":2}"[..])
         );
-        assert_eq!(ClaudeCode::last_line(b"\"b\":2}", true), None);
+        let cut_result = [&b"\"result\"}\n"[..], late, b"\n"].concat();
+        assert_eq!(
+            ClaudeCode::result_line(&cut_result, true),
+            Some(&late[..]),
+            "a result event whose start was cut is not read as one"
+        );
+        assert_eq!(ClaudeCode::result_line(b"\"b\":2}", true), None);
     }
 }

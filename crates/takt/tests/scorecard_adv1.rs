@@ -66,6 +66,7 @@ fn judged(tokens: u64) -> Event {
         api_ms: None,
         turns: None,
         started_at: None,
+        transcript: None,
     }
 }
 

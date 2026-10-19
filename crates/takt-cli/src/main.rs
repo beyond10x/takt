@@ -1233,6 +1233,9 @@ fn finish(run: &mut Run<'_>, forge_line: Option<&str>, out: &mut dyn Write) -> R
         writeln!(out, "{line}")?;
     }
     run.binary = Some(REVISION.to_owned());
+    if let Some(transcripts) = takt::run::default_transcripts() {
+        run.transcripts_in(transcripts)?;
+    }
     run.take_default_gate();
     let stop = match run.run(out) {
         Ok(stop) => stop,

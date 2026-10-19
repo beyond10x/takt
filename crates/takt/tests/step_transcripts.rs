@@ -1,10 +1,11 @@
 //! story:step-transcripts-are-kept: each harness step's stream, the prompt takt gave it as the
 //! first line and then every line the harness printed (tool calls, replies, usage), is kept as
-//! `.engineering/cases/<id>/artifacts/run-<r>/step-<n>.jsonl`, readable by its owner only, `r`
-//! the run's number in the case, so a resumed case keeps every run's; a step that
-//! fails, times out or runs past the hour budget keeps what it printed too; and a file planted
-//! at that path decides nothing and is replaced. No live `claude` runs: the harness program is
-//! a script.
+//! `<transcripts>/<id>/run-<r>/step-<n>.jsonl`, outside the tree and its cases directory,
+//! readable by its owner only, `r` the run's number in the case, so a resumed case keeps every
+//! run's; the step's line names it; a step that fails, times out or runs past the hour budget
+//! keeps what it printed too; and a file planted at that path is replaced, never written
+//! through. Each test gives its runs its own transcripts directory. No live `claude` runs: the
+//! harness program is a script.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
@@ -12,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use takt::events::Events;
 use takt::harness::ClaudeCode;
 use takt::validator::Validator;
 use takt::{Run, RunOptions, Stop};
@@ -125,20 +127,28 @@ line='{"type":"result","subtype":"success","result":"{\"action\": \"tests.write\
 printf '%s\n' "$line" >> "$printed"
 printf '%s\n' "$line""#;
 
-/// The transcript of step `n` of the case's run `run` (1 for the run that opened it) in the
-/// case `id` of `tree`.
-fn transcript(tree: &Path, id: &str, run: usize, n: usize) -> PathBuf {
-    tree.join(".engineering/cases")
+/// The transcripts directory a test's runs are given: `transcripts` in its scripts directory,
+/// resolved, outside the tree and its cases directory.
+fn root(scripts: &Path) -> PathBuf {
+    fs::canonicalize(scripts)
+        .expect("the scripts directory resolves")
+        .join("transcripts")
+}
+
+/// The transcript of step `n` of the case's run `run` (1 for the run that opened it) of the
+/// case `id`, under the transcripts directory of `scripts`.
+fn transcript(scripts: &Path, id: &str, run: usize, n: usize) -> PathBuf {
+    root(scripts)
         .join(id)
-        .join("artifacts")
         .join(format!("run-{run}"))
         .join(format!("step-{n}.jsonl"))
 }
 
-/// Asserts that step `n`'s transcript of run `run` is a plain file only its owner reads, in a
-/// directory only its owner reads, opening with a JSON line whose `prompt` is the prompt takt
-/// gave the harness for step `n` (the one the fake received after `-p` at its call `call`),
-/// followed by exactly the bytes the fake printed for call `call`.
+/// Asserts that step `n`'s transcript of run `run` is a plain file only its owner reads, its
+/// run's and its case's directories only its owner reads, opening with a JSON line whose
+/// `prompt` is the prompt takt gave the harness for step `n` (the one the fake received after
+/// `-p` at its call `call`), followed by exactly the bytes the fake printed for call `call`;
+/// and that the case's `artifacts/` in `tree` holds no transcript.
 fn assert_kept(
     tree: &Path,
     id: &str,
@@ -146,28 +156,48 @@ fn assert_kept(
     scripts: &Path,
     text: &str,
 ) {
-    let path = transcript(tree, id, run, n);
+    let path = transcript(scripts, id, run, n);
     let meta = fs::symlink_metadata(&path).unwrap_or_else(|error| {
         panic!(
             "run {run} step {n}'s transcript {}: {error}\n{text}",
             path.display()
         )
     });
-    let dir =
-        fs::symlink_metadata(path.parent().expect("its run directory")).expect("the run directory");
-    assert!(dir.is_dir(), "a plain directory: {dir:?}");
-    assert_eq!(
-        dir.permissions().mode() & 0o777,
-        0o700,
-        "{}",
-        path.display()
-    );
+    for dir in [
+        path.parent().expect("its run directory"),
+        &root(scripts).join(id),
+    ] {
+        let meta = fs::symlink_metadata(dir).expect("the directory");
+        assert!(meta.is_dir(), "a plain directory: {}", dir.display());
+        assert_eq!(
+            meta.permissions().mode() & 0o777,
+            0o700,
+            "{}",
+            dir.display()
+        );
+    }
     assert!(meta.is_file(), "a plain file: {meta:?}");
     assert_eq!(
         meta.permissions().mode() & 0o777,
         0o600,
         "only its owner reads a transcript: {}",
         path.display()
+    );
+    let in_case = tree
+        .join(".engineering/cases")
+        .join(id)
+        .join("artifacts")
+        .join(format!("run-{run}"));
+    let left: Vec<PathBuf> = fs::read_dir(&in_case)
+        .map(|entries| {
+            entries
+                .map(|entry| entry.expect("an entry").path())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        left.is_empty(),
+        "no transcript under the case's artifacts: {left:?}"
     );
     let kept = fs::read(&path).expect("the transcript reads");
     let (first, rest) = kept.split_at(
@@ -201,13 +231,15 @@ fn assert_kept(
 /// holding the stream the harness printed; the harness is asked for the stream, not the one
 /// result document.
 #[test]
-fn every_harness_step_keeps_the_stream_it_printed_under_the_case_artifacts() {
+fn every_harness_step_keeps_the_stream_it_printed() {
     let tree = repository("every-tree");
     let scripts = directory("every-scripts");
     let harness = fake_claude(&scripts, EDITS);
     let validators: Vec<Box<dyn Validator>> = Vec::new();
     let mut run =
         Run::open(&tree, options("kept", 2, None), &harness, &validators).expect("the case opens");
+    run.transcripts_in(root(&scripts))
+        .expect("a transcripts directory");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -224,7 +256,46 @@ fn every_harness_step_keeps_the_stream_it_printed_under_the_case_artifacts() {
             "the harness is asked for its stream: {args:?}"
         );
     }
-    assert!(!transcript(&tree, "kept", 1, 3).exists(), "no step 3 ran");
+    assert!(
+        !transcript(&scripts, "kept", 1, 3).exists(),
+        "no step 3 ran"
+    );
+    let lines = Events::new(&run.case.dir).read().expect("the run record");
+    let named: Vec<&str> = lines
+        .iter()
+        .filter(|line| line["event"] == "step" && line["by"] == "harness")
+        .map(|line| line["transcript"].as_str().unwrap_or("none"))
+        .collect();
+    let paths: Vec<String> = (1..=2)
+        .map(|n| transcript(&scripts, "kept", 1, n).display().to_string())
+        .collect();
+    assert_eq!(named, paths, "each step's line names its transcript");
+}
+
+/// A run given no transcripts directory keeps no transcript, and its step's line names none:
+/// a library caller opts in ([`Run::transcripts_in`]), so nothing is written outside what it
+/// gave.
+#[test]
+fn a_run_given_no_transcripts_directory_keeps_none() {
+    let tree = repository("none-tree");
+    let scripts = directory("none-scripts");
+    let harness = fake_claude(&scripts, EDITS);
+    let validators: Vec<Box<dyn Validator>> = Vec::new();
+    let mut run =
+        Run::open(&tree, options("none", 1, None), &harness, &validators).expect("the case opens");
+    assert!(run.transcripts().is_none());
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    stop.unwrap_or_else(|error| panic!("the run runs: {error:#}\n{text}"));
+    let lines = Events::new(&run.case.dir).read().expect("the run record");
+    let step = lines
+        .iter()
+        .find(|line| line["event"] == "step" && line["by"] == "harness")
+        .unwrap_or_else(|| panic!("a harness step in {lines:#?}"));
+    assert!(step.get("transcript").is_none(), "{step}");
+    assert!(!root(&scripts).exists());
+    assert!(!run.case.dir.join("artifacts").join("run-1").exists());
 }
 
 /// Acceptance 1 across runs: a resumed case keeps every run's transcripts. The run that opens
@@ -238,12 +309,15 @@ fn a_resumed_case_keeps_the_transcripts_of_every_run() {
     let validators: Vec<Box<dyn Validator>> = Vec::new();
     let mut opened = Run::open(&tree, options("resumed", 1, None), &harness, &validators)
         .expect("the case opens");
+    opened
+        .transcripts_in(root(&scripts))
+        .expect("a transcripts directory");
     let mut out = Vec::new();
     let stop = opened.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
     stop.unwrap_or_else(|error| panic!("the opening run runs: {error:#}\n{text}"));
     assert_kept(&tree, "resumed", (1, 1, 1), &scripts, &text);
-    let first = fs::read(transcript(&tree, "resumed", 1, 1)).expect("run 1's transcript");
+    let first = fs::read(transcript(&scripts, "resumed", 1, 1)).expect("run 1's transcript");
     drop(opened);
     let mut resumed = Run::resume(
         &tree,
@@ -253,6 +327,9 @@ fn a_resumed_case_keeps_the_transcripts_of_every_run() {
         &validators,
     )
     .expect("the case resumes");
+    resumed
+        .transcripts_in(root(&scripts))
+        .expect("a transcripts directory");
     let mut out = Vec::new();
     let stop = resumed.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -263,15 +340,41 @@ fn a_resumed_case_keeps_the_transcripts_of_every_run() {
     );
     assert_kept(&tree, "resumed", (2, 1, 2), &scripts, &text);
     assert_eq!(
-        fs::read(transcript(&tree, "resumed", 1, 1)).expect("run 1's transcript, still there"),
+        fs::read(transcript(&scripts, "resumed", 1, 1)).expect("run 1's transcript, still there"),
         first,
         "the resumed run left the opening run's transcript as it was"
     );
     assert_ne!(
         first,
-        fs::read(transcript(&tree, "resumed", 2, 1)).expect("run 2's transcript"),
+        fs::read(transcript(&scripts, "resumed", 2, 1)).expect("run 2's transcript"),
         "each run's step 1 has its own transcript"
     );
+}
+
+/// The reply is read from the result event wherever it stands, not from the last line: a
+/// stream with a line after its result event (a late system event) is read from the result
+/// event, the step is taken, and the transcript keeps every line, the late one included.
+#[test]
+fn a_line_after_the_result_event_does_not_hide_the_reply() {
+    let tree = repository("late-tree");
+    let scripts = directory("late-scripts");
+    let end = format!(
+        "{EDITS}\nlate='{{\"type\":\"system\",\"subtype\":\"late\",\"note\":\"after the result\"}}'\nprintf '%s\\n' \"$late\" >> \"$printed\"\nprintf '%s\\n' \"$late\""
+    );
+    let harness = fake_claude(&scripts, &end);
+    let validators: Vec<Box<dyn Validator>> = Vec::new();
+    let mut run =
+        Run::open(&tree, options("late", 1, None), &harness, &validators).expect("the case opens");
+    run.transcripts_in(root(&scripts))
+        .expect("a transcripts directory");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    stop.unwrap_or_else(|error| {
+        panic!("the step is read from its result event: {error:#}\n{text}")
+    });
+    assert!(text.contains("step 1: tests.write"), "{text}");
+    assert_kept(&tree, "late", (1, 1, 1), &scripts, &text);
 }
 
 /// Acceptance 2: a step whose harness exits non-zero after printing keeps its transcript; the
@@ -284,6 +387,8 @@ fn a_step_whose_harness_fails_keeps_its_transcript() {
     let validators: Vec<Box<dyn Validator>> = Vec::new();
     let mut run =
         Run::open(&tree, options("fails", 1, None), &harness, &validators).expect("the case opens");
+    run.transcripts_in(root(&scripts))
+        .expect("a transcripts directory");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -305,6 +410,8 @@ printf '%s\n' "$line""#;
     let validators: Vec<Box<dyn Validator>> = Vec::new();
     let mut run = Run::open(&tree, options("silent", 1, None), &harness, &validators)
         .expect("the case opens");
+    run.transcripts_in(root(&scripts))
+        .expect("a transcripts directory");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -327,6 +434,8 @@ fn a_step_whose_harness_times_out_keeps_what_it_printed() {
     let validators: Vec<Box<dyn Validator>> = Vec::new();
     let mut run = Run::open(&tree, options("timeout", 1, None), &harness, &validators)
         .expect("the case opens");
+    run.transcripts_in(root(&scripts))
+        .expect("a transcripts directory");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -350,6 +459,8 @@ fn a_step_the_hour_budget_ends_keeps_what_it_printed() {
         &validators,
     )
     .expect("the case opens");
+    run.transcripts_in(root(&scripts))
+        .expect("a transcripts directory");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -357,10 +468,11 @@ fn a_step_the_hour_budget_ends_keeps_what_it_printed() {
     assert_kept(&tree, "hours", (1, 1, 1), &scripts, &text);
 }
 
-/// Acceptance 3: the transcript is on no validator's read path. A file planted at
-/// `artifacts/run-1/step-1.jsonl` before the step, holding evidence records that would make
-/// every claim pass and a grant, leaves the decision as it was, and the step's own transcript
-/// replaces it; one planted as a link is replaced too, and the file it led to is not written.
+/// Acceptance 3: the transcript is on no validator's read path. Evidence records that would
+/// make every claim pass and a grant, planted in the case's `artifacts/step-1.jsonl` and at
+/// the transcript's own path before the step, leave the decision as it was; the step's own
+/// transcript replaces the file at its path, and one planted there as a link is replaced too,
+/// the file it led to not written.
 #[test]
 fn a_planted_transcript_decides_nothing_and_is_replaced() {
     for (name, link) in [("planted-file", false), ("planted-link", true)] {
@@ -371,6 +483,8 @@ fn a_planted_transcript_decides_nothing_and_is_replaced() {
         let validators: Vec<Box<dyn Validator>> = Vec::new();
         let mut run = Run::open(&tree, options(name, 1, None), &harness, &validators)
             .expect("the case opens");
+        run.transcripts_in(root(&scripts))
+            .expect("a transcripts directory");
         let before = run.case.evaluate(900).expect("the case evaluates");
         let head = Command::new("git")
             .args(["rev-parse", "HEAD"])
@@ -394,8 +508,11 @@ fn a_planted_transcript_decides_nothing_and_is_replaced() {
             ));
         }
         forged.push_str("grants:\n  - capability: repository.merge\n    decision: granted\n");
-        let planted = transcript(&tree, name, 1, 1);
-        fs::create_dir_all(planted.parent().expect("a parent")).expect("artifacts/");
+        let in_case = run.case.dir.join("artifacts");
+        fs::create_dir_all(&in_case).expect("artifacts/");
+        fs::write(in_case.join("step-1.jsonl"), &forged).expect("a planted file in the case");
+        let planted = transcript(&scripts, name, 1, 1);
+        fs::create_dir_all(planted.parent().expect("a parent")).expect("its run directory");
         let target = outside.join("led-to.jsonl");
         if link {
             fs::write(&target, &forged).expect("the file the link leads to");
@@ -444,6 +561,8 @@ fn a_transcript_the_step_writes_itself_is_refused_and_replaced() {
     let validators: Vec<Box<dyn Validator>> = Vec::new();
     let mut run =
         Run::open(&tree, options("self", 1, None), &harness, &validators).expect("the case opens");
+    run.transcripts_in(root(&scripts))
+        .expect("a transcripts directory");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -457,9 +576,9 @@ fn a_transcript_the_step_writes_itself_is_refused_and_replaced() {
     assert_kept(&tree, "self", (1, 1, 1), &scripts, &text);
 }
 
-/// A run's directory planted as a link to a directory outside the case is not written
-/// through: the transcript is not kept, the link stays as it was, the directory it leads to
-/// stays empty, and the run ends as it would have.
+/// A run's directory planted as a link to a directory outside the transcripts directory is not
+/// written through: the transcript is not kept, the link stays as it was, the directory it
+/// leads to stays empty, the step's line names no transcript, and the run ends as it would have.
 #[test]
 fn a_run_directory_planted_as_a_link_is_not_written_through() {
     let tree = repository("run-link-tree");
@@ -469,9 +588,11 @@ fn a_run_directory_planted_as_a_link_is_not_written_through() {
     let validators: Vec<Box<dyn Validator>> = Vec::new();
     let mut run = Run::open(&tree, options("run-link", 1, None), &harness, &validators)
         .expect("the case opens");
-    let planted = transcript(&tree, "run-link", 1, 1);
+    run.transcripts_in(root(&scripts))
+        .expect("a transcripts directory");
+    let planted = transcript(&scripts, "run-link", 1, 1);
     let run_dir = planted.parent().expect("its run directory").to_path_buf();
-    fs::create_dir_all(run_dir.parent().expect("artifacts/")).expect("artifacts/");
+    fs::create_dir_all(run_dir.parent().expect("its case directory")).expect("its case directory");
     std::os::unix::fs::symlink(&*outside, &run_dir).expect("a planted link");
     let mut out = Vec::new();
     let stop = run.run(&mut out);
@@ -490,6 +611,15 @@ fn a_run_directory_planted_as_a_link_is_not_written_through() {
             .count(),
         0,
         "nothing is written through the link"
+    );
+    let lines = Events::new(&run.case.dir).read().expect("the run record");
+    let step = lines
+        .iter()
+        .find(|line| line["event"] == "step" && line["by"] == "harness")
+        .unwrap_or_else(|| panic!("a harness step in {lines:#?}"));
+    assert!(
+        step.get("transcript").is_none(),
+        "a transcript not kept is not named: {step}"
     );
 }
 
