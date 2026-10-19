@@ -4625,7 +4625,11 @@ impl<'a> Run<'a> {
                 if let Ok(report) = &stepped {
                     self.stepped(
                         events,
-                        SteppedBy::Harness(report.tokens, self.harness.last_usage()),
+                        SteppedBy::Harness(
+                            report.tokens,
+                            self.harness.last_usage(),
+                            self.harness.last_call(),
+                        ),
                         self.harness.name(),
                         &report.action,
                         &format!("discarded at the run's end: {}", report.summary),
