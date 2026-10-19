@@ -17,6 +17,17 @@ struct Recording {
 }
 
 impl Runner for Recording {
+    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+    /// dropped.
+    fn run_env(
+        &self,
+        tree: &std::path::Path,
+        argv: &[String],
+        _: &[(&str, &str)],
+    ) -> anyhow::Result<takt::forge::Exit> {
+        self.run(tree, argv)
+    }
+
     fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         match argv.get(1).map(String::as_str) {
             Some("scan-text") => {

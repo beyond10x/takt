@@ -1,7 +1,8 @@
 //! `pr.open` through the bot route scans the pull request under the forge's own policy file
 //! and repository, the same ones its API write carries; it scans the title and body as they
-//! are published, beside the JSON request; and a scan that refuses after the case's branch was
-//! pushed says the branch left, never that nothing did.
+//! are published, beside the JSON request, once with the commits before the push and once
+//! before the API write; and a scan that refuses after the case's branch was pushed says the
+//! branch left, never that nothing did.
 //!
 //! What this proves about the policy: with one given to `BotRoute::new`, the scan and the API
 //! write both carry it. From the command line the interface is `B10X_GATES_POLICY`: the forge
@@ -113,8 +114,9 @@ impl Harness for NoHarness {
 /// policy from `--policy`, else from `B10X_GATES_POLICY` in the environment it inherits
 /// (`environment`; the forge keeps `B10X_*` in a child's environment), else from the default
 /// file, which is not there. `bot -- push` passes; `scan-text` and `api` refuse without a
-/// policy, and `scan-text` refuses anyway when `refuse_scan` is set. `api` writes pull request
-/// #7 to its `--output`. Every line is recorded, and what each file `scan-text` names held.
+/// policy, and `scan-text` refuses anyway after a push when `refuse_scan` is set. `api` writes
+/// pull request #7 to its `--output`. Every line is recorded, and what each file `scan-text`
+/// names held.
 struct Gates {
     lines: RefCell<Vec<String>>,
     scanned: RefCell<Vec<String>>,
@@ -156,6 +158,17 @@ fn refused(stderr: &str) -> Exit {
 }
 
 impl Runner for Gates {
+    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+    /// dropped.
+    fn run_env(
+        &self,
+        tree: &std::path::Path,
+        argv: &[String],
+        _: &[(&str, &str)],
+    ) -> anyhow::Result<takt::forge::Exit> {
+        self.run(tree, argv)
+    }
+
     fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         self.lines.borrow_mut().push(argv.join(" "));
         let command = argv.get(1).map(String::as_str);
@@ -175,7 +188,16 @@ impl Runner for Gates {
         }
         match command {
             Some("scan-text" | "api") if !policy => return Ok(refused(NO_DEFAULT_POLICY)),
-            Some("scan-text") if self.refuse_scan => return Ok(refused("a private rule")),
+            Some("scan-text")
+                if self.refuse_scan
+                    && self
+                        .lines
+                        .borrow()
+                        .iter()
+                        .any(|line| line.contains(" push ")) =>
+            {
+                return Ok(refused("a private rule"));
+            }
             Some("api") => {
                 let output = argv
                     .iter()
@@ -198,6 +220,17 @@ impl Runner for Gates {
 struct Shared(Rc<Gates>);
 
 impl Runner for Shared {
+    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+    /// dropped.
+    fn run_env(
+        &self,
+        tree: &std::path::Path,
+        argv: &[String],
+        _: &[(&str, &str)],
+    ) -> anyhow::Result<takt::forge::Exit> {
+        self.run(tree, argv)
+    }
+
     fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         self.0.run(tree, argv)
     }
@@ -330,8 +363,10 @@ fn pr_open(tree: &Path, id: &str, forge: Rc<dyn Forge>) -> (Result<Stop, String>
 const PUBLISHED: &str = "pull-request.published.txt";
 
 /// With a policy given to `BotRoute::new` and none in the environment `b10x-gates` inherits,
-/// the scan and the API write both carry it, and the pull request is opened. One `scan-text`
-/// line reads the JSON request and, last, the title and body as published, decoded.
+/// the scans and the API write all carry it, and the pull request is opened. Before the push
+/// one `scan-text` line reads the JSON request, the title and body as published, decoded, and
+/// the commits' messages and diff; after it one reads the JSON request and, last, the title and
+/// body as published.
 #[test]
 fn with_a_policy_given_to_the_forge_pr_open_opens_the_pull_request() {
     let tree = scratch("opens");
@@ -347,14 +382,29 @@ fn with_a_policy_given_to_the_forge_pr_open_opens_the_pull_request() {
     assert!(text.contains("opened pull request #7"), "{text}");
     assert!(text.contains("evidence: pull_request open"), "{text}");
     let lines = gates.lines();
-    assert_eq!(lines.len(), 3, "{lines:?}");
-    assert_eq!(
-        lines[0], "b10x-gates bot -- push origin takt/opens",
-        "{lines:?}"
-    );
+    assert_eq!(lines.len(), 4, "{lines:?}");
     let artifacts = tree.join(".engineering/cases/opens/artifacts");
     assert_eq!(
+        lines[0],
+        format!(
+            "b10x-gates scan-text --repository owner/repo --policy {POLICY} {} {} {} {}",
+            artifacts.join("pull-request.request.json").display(),
+            artifacts.join(PUBLISHED).display(),
+            artifacts.join("push.messages.txt").display(),
+            artifacts.join("push.files.txt").display()
+        ),
+        "{lines:?}"
+    );
+    assert_eq!(
         lines[1],
+        format!(
+            "b10x-gates bot -- push https://github.com/owner/repo.git {}:refs/heads/takt/opens --no-follow-tags --recurse-submodules=no",
+            git(&tree, &["rev-parse", "refs/heads/takt/opens"])
+        ),
+        "{lines:?}"
+    );
+    assert_eq!(
+        lines[2],
         format!(
             "b10x-gates scan-text --repository owner/repo --policy {POLICY} {} {}",
             artifacts.join("pull-request.request.json").display(),
@@ -363,11 +413,11 @@ fn with_a_policy_given_to_the_forge_pr_open_opens_the_pull_request() {
         "{lines:?}"
     );
     assert!(
-        lines[2].starts_with("b10x-gates api --method POST "),
+        lines[3].starts_with("b10x-gates api --method POST "),
         "{lines:?}"
     );
     let scanned = gates.scanned();
-    assert_eq!(scanned.len(), 2, "{scanned:?}");
+    assert_eq!(scanned.len(), 6, "{scanned:?}");
     let published = &scanned[1];
     assert!(
         published.starts_with("deliver the story\n\n"),
@@ -381,10 +431,10 @@ fn with_a_policy_given_to_the_forge_pr_open_opens_the_pull_request() {
 }
 
 /// The command line's state with `B10X_GATES_POLICY` unset and no default policy file: the
-/// forge has no policy, no line names one, and the run still stops at the scan, now saying the
-/// branch was pushed. The variable is the interface; this change does not replace it.
+/// forge has no policy, no line names one, and the run stops at the scan before the push, saying
+/// nothing was pushed. The variable is the interface; this change does not replace it.
 #[test]
-fn without_the_variable_the_run_still_stops_at_the_scan_and_says_the_branch_left() {
+fn without_the_variable_the_run_stops_at_the_scan_before_anything_is_pushed() {
     let tree = scratch("unset");
     let gates = Gates::under(false, None);
     let forge = Rc::new(BotRoute::new(
@@ -395,13 +445,10 @@ fn without_the_variable_the_run_still_stops_at_the_scan_and_says_the_branch_left
     let (stop, text) = pr_open(&tree, "unset", forge);
     let error = stop.expect_err("no policy anywhere");
     assert!(error.contains("protected file"), "{error}\n{text}");
-    assert!(
-        error.contains("the branch takt/unset was pushed"),
-        "{error}"
-    );
-    assert!(!error.contains("nothing left the machine"), "{error}");
+    assert!(error.contains("nothing was pushed"), "{error}");
     let lines = gates.lines();
-    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("b10x-gates scan-text "), "{lines:?}");
     assert!(
         !lines.iter().any(|line| line.contains("--policy")),
         "{lines:?}"
@@ -430,9 +477,10 @@ fn with_the_variable_in_the_environment_the_program_reads_it_itself() {
     );
 }
 
-/// A scan that refuses the body after the case's branch was pushed stops the run with an error
-/// that names the pushed branch, the published text it scanned and says the pull request was
-/// not opened; it never says that nothing left the machine. The API write is not run.
+/// A scan that refuses the body after the case's branch was pushed (the scan before the push
+/// passed it) stops the run with an error that names the pushed branch, the published text it
+/// scanned and says the pull request was not opened; it never says that nothing left the
+/// machine. The API write is not run.
 #[test]
 fn a_scan_refusal_after_the_push_names_the_pushed_branch() {
     let tree = scratch("refused");
@@ -454,10 +502,15 @@ fn a_scan_refusal_after_the_push_names_the_pushed_branch() {
     assert!(error.contains("not opened"), "{error}");
     assert!(error.contains(PUBLISHED), "{error}");
     let lines = gates.lines();
-    assert_eq!(lines.len(), 2, "{lines:?}\n{text}");
+    assert_eq!(lines.len(), 3, "{lines:?}\n{text}");
+    assert!(lines[0].starts_with("b10x-gates scan-text "), "{lines:?}");
     assert_eq!(
-        lines[0], "b10x-gates bot -- push origin takt/refused",
+        lines[1],
+        format!(
+            "b10x-gates bot -- push https://github.com/owner/repo.git {}:refs/heads/takt/refused --no-follow-tags --recurse-submodules=no",
+            git(&tree, &["rev-parse", "refs/heads/takt/refused"])
+        ),
         "{lines:?}"
     );
-    assert!(lines[1].starts_with("b10x-gates scan-text "), "{lines:?}");
+    assert!(lines[2].starts_with("b10x-gates scan-text "), "{lines:?}");
 }

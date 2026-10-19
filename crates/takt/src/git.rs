@@ -68,6 +68,190 @@ const REDIRECTING_ENV: [&str; 12] = [
 /// than find a repository further up; and for a tree without a `.git` git searches no further
 /// than the tree itself.
 fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
+    let mut child = command(tree, args)?
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        stdin
+            .write_all(input)
+            .with_context(|| format!("write to git {}", args.join(" ")))?;
+    }
+    child
+        .wait_with_output()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))
+}
+
+/// Runs `git <args>` in `tree` as [`run`] does, with nothing on its standard input, and answers
+/// its standard output as text (invalid UTF-8 replaced, nothing trimmed), or `None` as soon as it
+/// passes `limit` bytes: git is killed then and nothing more is read. Git reads no replacement
+/// object (`GIT_NO_REPLACE_OBJECTS`): what it shows is what the repository holds, as a push sends
+/// it. Exiting non-zero is an error naming what git said.
+pub fn run_bounded(tree: &Path, args: &[&str], limit: usize) -> Result<Option<String>> {
+    use std::io::Read as _;
+    let mut child = command(tree, args)?
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
+    let stderr = child.stderr.take().map(|mut stream| {
+        std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = stream.by_ref().take(64 << 10).read_to_end(&mut said);
+            let _ = std::io::copy(&mut stream, &mut std::io::sink());
+            said
+        })
+    });
+    let mut kept = Vec::new();
+    let mut over = false;
+    if let Some(stdout) = child.stdout.take() {
+        let read = stdout
+            .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
+            .read_to_end(&mut kept);
+        read.with_context(|| format!("read git {}", args.join(" ")))?;
+        over = kept.len() > limit;
+    }
+    if over {
+        let _ = child.kill();
+    }
+    let status = child
+        .wait()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
+    let said = stderr
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    if over {
+        return Ok(None);
+    }
+    if !status.success() {
+        bail!(
+            "git {} in {} exited {}: {}",
+            args.join(" "),
+            tree.display(),
+            status,
+            String::from_utf8_lossy(&said).trim()
+        );
+    }
+    Ok(Some(String::from_utf8_lossy(&kept).into_owned()))
+}
+
+/// One object [`read_objects`] read: its id, its type and its bytes as the repository holds
+/// them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Object {
+    /// The object's id.
+    pub id: String,
+    /// Its type: `commit`, `tree`, `blob` or `tag`.
+    pub kind: String,
+    /// Its bytes, raw.
+    pub bytes: Vec<u8>,
+}
+
+/// Reads the objects `ids` in `tree` through one `git cat-file --batch`, raw and without
+/// replacement objects (`GIT_NO_REPLACE_OBJECTS`), in the order given; `None` as soon as what
+/// git prints for them passes `limit` bytes: git is killed then and nothing more is read. An id
+/// git does not hold, or a git that exits non-zero, is an error.
+pub fn read_objects(tree: &Path, ids: &[String], limit: usize) -> Result<Option<Vec<Object>>> {
+    use std::io::{BufRead as _, BufReader, Read as _};
+    let mut child = command(tree, &["cat-file", "--batch"])?
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("run git cat-file --batch in {}", tree.display()))?;
+    let mut input: Vec<u8> = Vec::new();
+    for id in ids {
+        input.extend_from_slice(id.as_bytes());
+        input.push(b'\n');
+    }
+    let writer = child.stdin.take().map(|mut stdin| {
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        })
+    });
+    let stderr = child.stderr.take().map(|mut stream| {
+        std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = stream.by_ref().take(64 << 10).read_to_end(&mut said);
+            let _ = std::io::copy(&mut stream, &mut std::io::sink());
+            said
+        })
+    });
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("git cat-file --batch gave no output stream"))?;
+    let mut out = BufReader::new(stdout);
+    let answer = (|| -> Result<Option<Vec<Object>>> {
+        let mut objects = Vec::with_capacity(ids.len());
+        let mut total = 0usize;
+        for id in ids {
+            let mut header = Vec::new();
+            out.read_until(b'\n', &mut header)
+                .context("read git cat-file --batch")?;
+            let header = String::from_utf8_lossy(&header).trim_end().to_owned();
+            let fields: Vec<&str> = header.split(' ').collect();
+            let [found, kind, size] = fields[..] else {
+                bail!("git cat-file --batch answered {header:?} for {id}");
+            };
+            let size: usize = size
+                .parse()
+                .with_context(|| format!("git cat-file --batch answered {header:?}"))?;
+            total = total.saturating_add(header.len() + 1).saturating_add(size);
+            if total > limit {
+                return Ok(None);
+            }
+            let mut bytes = vec![0; size];
+            out.read_exact(&mut bytes)
+                .context("read git cat-file --batch")?;
+            let mut end = [0_u8; 1];
+            out.read_exact(&mut end)
+                .context("read git cat-file --batch")?;
+            objects.push(Object {
+                id: found.to_owned(),
+                kind: kind.to_owned(),
+                bytes,
+            });
+        }
+        Ok(Some(objects))
+    })();
+    drop(out);
+    if !matches!(answer, Ok(Some(_))) {
+        let _ = child.kill();
+    }
+    let status = child
+        .wait()
+        .with_context(|| format!("run git cat-file --batch in {}", tree.display()))?;
+    if let Some(writer) = writer {
+        let _ = writer.join();
+    }
+    let said = stderr
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    let objects = answer?;
+    if objects.is_some() && !status.success() {
+        bail!(
+            "git cat-file --batch in {} exited {}: {}",
+            tree.display(),
+            status,
+            String::from_utf8_lossy(&said).trim()
+        );
+    }
+    Ok(objects)
+}
+
+/// The `git <args>` [`output`] and [`run_bounded`] run in `tree`: pinned to the tree, with no
+/// code from configuration and no credential or redirecting variable in its environment.
+fn command(tree: &Path, args: &[&str]) -> Result<Command> {
     let tree =
         std::path::absolute(tree).with_context(|| format!("make {} absolute", tree.display()))?;
     let tree = tree.as_path();
@@ -87,27 +271,11 @@ fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
     if let Some(parent) = tree.parent() {
         command.env("GIT_CEILING_DIRECTORIES", parent);
     }
-    let mut child = command
+    command
         .args(NO_CONFIGURED_CODE)
         .args(args)
-        .current_dir(tree)
-        .stdin(if input.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
-    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
-        stdin
-            .write_all(input)
-            .with_context(|| format!("write to git {}", args.join(" ")))?;
-    }
-    child
-        .wait_with_output()
-        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))
+        .current_dir(tree);
+    Ok(command)
 }
 
 /// Runs `git <args>` in `tree`, `input` on its standard input; answers its standard output as
@@ -441,7 +609,8 @@ fn pathspec(paths: &[String]) -> Vec<u8> {
 /// `message`, and nothing else: whatever else the index holds stays staged and uncommitted.
 /// With no path the commit is empty. The paths are literal, never patterns, and are passed on
 /// standard input, so no count or name of them is too many for a command line. Answers the
-/// new `HEAD`.
+/// new `HEAD`. A nested repository among `paths`, which git would record as a gitlink `HEAD`
+/// does not have, is refused and nothing committed ([`new_gitlinks`]).
 pub fn commit_paths(tree: &Path, paths: &[String], message: &str) -> Result<String> {
     let mut commit: Vec<&str> = Vec::from(IDENTITY);
     commit.extend(["commit", "-q", "--only", "-m", message]);
@@ -454,12 +623,58 @@ pub fn commit_paths(tree: &Path, paths: &[String], message: &str) -> Result<Stri
         let mut add = vec!["--literal-pathspecs", "add", "-A"];
         add.extend(from_input);
         raw(tree, &add, Some(&list))?;
+        let gitlinks = new_gitlinks(tree, paths)?;
+        if !gitlinks.is_empty() {
+            bail!(
+                "not committed: {} would be recorded as a gitlink, a nested repository's commit, which HEAD does not have",
+                gitlinks.join(", ")
+            );
+        }
         let mut literal = vec!["--literal-pathspecs"];
         literal.extend(commit);
         literal.extend(from_input);
         raw(tree, &literal, Some(&list))?;
     }
     head(tree)
+}
+
+/// The paths among `paths`, or under one of them, that the index holds as a gitlink (mode
+/// `160000`) where `HEAD` holds none: a nested repository `add` recorded. None when there is no
+/// `HEAD` to compare with.
+fn new_gitlinks(tree: &Path, paths: &[String]) -> Result<Vec<String>> {
+    if resolve(tree, "HEAD")?.is_none() {
+        return Ok(Vec::new());
+    }
+    let listed = raw(
+        tree,
+        &[
+            "diff-index",
+            "--cached",
+            "--raw",
+            "--no-renames",
+            "-z",
+            "HEAD",
+        ],
+        None,
+    )?;
+    let listed = String::from_utf8_lossy(&listed);
+    let mut tokens = listed.split('\0');
+    let mut found = Vec::new();
+    while let Some(meta) = tokens.next() {
+        let Some(path) = tokens.next() else { break };
+        let fields: Vec<&str> = meta.trim_start_matches(':').split_whitespace().collect();
+        let (Some(old), Some(new)) = (fields.first(), fields.get(1)) else {
+            continue;
+        };
+        let given = paths.iter().any(|given| {
+            let given = given.trim_end_matches('/');
+            path == given || path.starts_with(&format!("{given}/"))
+        });
+        if *new == "160000" && *old != "160000" && given {
+            found.push(path.to_owned());
+        }
+    }
+    Ok(found)
 }
 
 /// Discards every uncommitted change but what is under the cases directory: the index and the
@@ -748,14 +963,15 @@ fn config_files(dir: &Path, own: &Path) -> Vec<PathBuf> {
 /// lower case), runs code or changes what git does: `core.*`, `filter.*`, `diff.*`,
 /// `merge.*`, `alias.*`, `include.*`, `includeIf.*`, `credential.*`, `remote.<name>.*`,
 /// `url.*`, `gpg.*`, `sequence.*`, `pager.*`, `trailer.*`, `difftool.*`, `mergetool.*`,
-/// `submodule.*`, `extensions.*`. Any other key (`branch.<name>.vscode-merge-base`, a tool's
+/// `submodule.*`, `extensions.*`; and what changes what a push sends, where it goes or how a
+/// commit records its message: `push.*`, `http.*`, `i18n.*`. Any other key (`branch.<name>.vscode-merge-base`, a tool's
 /// own section) is not.
 fn is_guarded_key(key: &str) -> bool {
     let section = key.split('.').next().unwrap_or_default();
     match section {
         "core" | "filter" | "diff" | "merge" | "alias" | "include" | "includeif" | "credential"
         | "url" | "gpg" | "sequence" | "pager" | "trailer" | "difftool" | "mergetool"
-        | "submodule" | "extensions" => true,
+        | "submodule" | "extensions" | "push" | "http" | "i18n" => true,
         "remote" => key.split('.').count() >= 3,
         _ => false,
     }
@@ -945,9 +1161,10 @@ pub struct GitDirPutBack {
 
 /// The tree as it was before a judgement step or a validator's observation: what its change is
 /// measured against and what a refused or failed one is put back to. `HEAD` and its branch,
-/// and every other branch and tag of the repository (the case's base, a sibling case's branch)
-/// but one checked out in another worktree, which is that session's ([`unguarded_refs`]), the
-/// case's base and its own branch excepted ([`Checkpoint::take_guarding`]); the index's entries
+/// and every other ref of the repository (the case's base, a sibling case's branch, a tag, a
+/// remote-tracking ref) but a branch checked out in another worktree, which is that session's
+/// ([`unguarded_refs`]), the case's base and its own branch excepted
+/// ([`Checkpoint::take_guarding`]); the index's entries
 /// and the index file itself; every uncommitted path outside the cases directory with what was
 /// at it (a validator's run may leave one); the ignored paths with what is at each a file git
 /// names; and what git runs or
@@ -1034,17 +1251,15 @@ fn unguarded_refs(tree: &Path, branch: Option<&str>, kept: &[String]) -> Result<
     Ok(refs)
 }
 
-/// The refs a checkpoint guards beside `HEAD`: every branch and tag of the repository, each with
-/// the object it names, but those `unguarded` names ([`unguarded_refs`]).
+/// The refs a checkpoint guards beside `HEAD`: every ref of the repository, branches, tags and
+/// remote-tracking refs (what the scan before a push reads as what a remote holds) and any other
+/// (`refs/notes/`, `refs/replace/`, a ref named like another, which git's lookup of a short
+/// name would find), each with the object it names, but those `unguarded` names
+/// ([`unguarded_refs`]).
 fn guarded_refs(tree: &Path, unguarded: &BTreeSet<String>) -> Result<BTreeMap<String, String>> {
     let listed = raw(
         tree,
-        &[
-            "for-each-ref",
-            "--format=%(objectname) %(refname)",
-            "refs/heads/",
-            "refs/tags/",
-        ],
+        &["for-each-ref", "--format=%(objectname) %(refname)"],
         None,
     )?;
     let listed = String::from_utf8(listed).map_err(|_| anyhow!("git named a ref not in UTF-8"))?;

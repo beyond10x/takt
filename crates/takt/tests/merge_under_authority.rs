@@ -783,6 +783,17 @@ struct Recording {
 }
 
 impl Runner for Recording {
+    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+    /// dropped.
+    fn run_env(
+        &self,
+        tree: &std::path::Path,
+        argv: &[String],
+        _: &[(&str, &str)],
+    ) -> anyhow::Result<takt::forge::Exit> {
+        self.run(tree, argv)
+    }
+
     fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         self.lines.borrow_mut().push(argv.join(" "));
         if argv.get(1).map(String::as_str) == Some("api") {
@@ -814,6 +825,17 @@ fn the_bot_route_adapter_merges_through_the_api_with_the_head_to_match() {
     });
     struct Shared(Rc<Recording>);
     impl Runner for Shared {
+        /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+        /// dropped.
+        fn run_env(
+            &self,
+            tree: &std::path::Path,
+            argv: &[String],
+            _: &[(&str, &str)],
+        ) -> anyhow::Result<takt::forge::Exit> {
+            self.run(tree, argv)
+        }
+
         fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
             self.0.run(tree, argv)
         }
@@ -2263,6 +2285,16 @@ fn adv2_a_refused_case_write_discards_the_tree_change_with_it() {
 struct StillOpen(Rc<Memory>);
 
 impl Forge for StillOpen {
+    /// Scans nothing: the double publishes nothing off the machine.
+    fn scan_outgoing(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &takt::forge::Outgoing<'_>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn name(&self) -> &str {
         "still-open"
     }

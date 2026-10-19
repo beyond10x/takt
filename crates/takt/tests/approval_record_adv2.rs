@@ -472,6 +472,16 @@ struct NeverReaches {
 }
 
 impl Forge for NeverReaches {
+    /// Scans nothing: the double publishes nothing off the machine.
+    fn scan_outgoing(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &takt::forge::Outgoing<'_>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn name(&self) -> &str {
         "never-reaches"
     }
@@ -583,6 +593,16 @@ impl PerHead {
 }
 
 impl Forge for PerHead {
+    /// Scans nothing: the double publishes nothing off the machine.
+    fn scan_outgoing(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &takt::forge::Outgoing<'_>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn name(&self) -> &str {
         "per-head"
     }

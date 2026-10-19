@@ -644,6 +644,16 @@ struct FailingOn {
 }
 
 impl Forge for FailingOn {
+    /// Scans nothing: the double publishes nothing off the machine.
+    fn scan_outgoing(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &takt::forge::Outgoing<'_>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn name(&self) -> &str {
         "failing-on"
     }
