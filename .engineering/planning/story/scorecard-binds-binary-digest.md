@@ -7,6 +7,7 @@ title: A scorecard row names the sha256 of the binary that ran
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
+- depends_on: story:scorecard-save-checks-binary
 revision: 1
 ---
 ## Outcome
