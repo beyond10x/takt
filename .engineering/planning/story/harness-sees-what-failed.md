@@ -11,7 +11,7 @@ refs:
   reference: harness-sees-what-failed
 relations:
 - decomposes: epic:composable-agentic-work
-revision: 1
+revision: 2
 ---
 ## Outcome
 
@@ -38,3 +38,13 @@ source: .engineering/planning/review-result/variety-ops-a29d8c7.md
 ## Acceptance
 
 With `done()` broken on scenario 1, the next judgement step's prompt contains `test_done_marks_one_item` and the assertion line; a passing run's prompt is unchanged; the prompt's failure section is bounded in bytes.
+
+## From the review of test-summary-keeps-the-totals (merged at 4cd2dd4)
+
+Three low findings, never filed before, folded here because this story reads the same test output:
+
+- Only the last `failures:` list of the test output is read; a run whose earlier binaries failed names only the last binary's tests.
+- The doc comment at `crates/takt/src/validator.rs:232-239@4cd2dd4` no longer describes what the summary keeps.
+- Under `--no-fail-fast`, when a test binary aborts, the kept line is the target name, not a failing test.
+
+Acceptance, added: with cargo output holding two `failures:` lists, the step is told the failing tests of both; with an aborted binary under `--no-fail-fast`, it is told the abort and the binary.
