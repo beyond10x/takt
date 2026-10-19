@@ -45,7 +45,7 @@
 #               optional: the exit status the command gives once the defect is gone, 0 when
 #               not given, 0 to 255 but 124 and 137; `scripts/check-finding` says
 #               `not_reproduced` only for this status, and `error` for one the predicate names
-#               neither here nor as `exit`
+#               neither here nor as `exit`, or for `exit` without `output`
 #   output      a fixed string its standard output or standard error then holds, at least 8
 #               characters
 #   source      the run record or review that produced the finding, a path relative to the

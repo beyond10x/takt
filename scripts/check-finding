@@ -83,7 +83,8 @@
 # started, a flag rejected, or any status the predicate does not name as the healthy one. An
 # `error` verifies nothing. All three exit 0. A check that cannot run its predicate (no such
 # finding, a predicate that does not parse, a revision that names no commit, a scenario not
-# declared, no bubblewrap or no toolchain for a build, a build that fails, a command past
+# declared, no bubblewrap or no toolchain for a build, a build that fails, a bubblewrap that
+# did not run the command to its end, its error named on standard error, a command past
 # CHECK_FINDING_TIMEOUT seconds, 900 by default) prints nothing on standard output and exits 1;
 # a usage error, a CHECK_FINDING_TIMEOUT that is no whole number of seconds among them, exits 64.
 set -euo pipefail
@@ -412,8 +413,11 @@ environment=(PATH="$PATH" HOME="$home" LANG="${LANG:-C.UTF-8}" TAKT="$takt" SCEN
 # namespace bwrap needs for that, so the command reaches the network, the processes and every
 # path it reached before, as the caller's user. `--die-with-parent`, so the command dies with
 # bwrap when `timeout` kills it. bwrap clears nothing of the environment `env -i` gives it.
-# Its status file names the command's pid once the command started; without that line the exit
-# is bwrap's own, not the command's, and there is no result.
+# Its status file names the command's pid as soon as bwrap forked, before its mount setup, so
+# that line proves nothing; the `exit-code` line it writes once the command ended does. Without
+# it, or with one that is not the status bwrap exited with, the exit is bwrap's own (a mount
+# setup that failed exits 1, the status a predicate may name), not the command's, and there is
+# no result.
 set +e
 (cd "$clone" && env -i "${environment[@]}" timeout --kill-after=10 "$limit" \
     "$bwrap" --die-with-parent --json-status-fd 3 --dev-bind / / "${binds[@]}" --chdir "$clone" \
@@ -422,8 +426,11 @@ set +e
 status=$?
 set -e
 ((status != 124 && status != 137)) || fail "the command ran past $limit seconds"
-grep -q '"child-pid"' "$run/bwrap-status" ||
-    fail "bubblewrap did not start the command (exit $status): $(tail -n 1 "$run/output")"
+ended=$(sed -n 's/^{ *"exit-code": *\([0-9][0-9]*\) *}$/\1/p' "$run/bwrap-status" | tail -n 1)
+if [[ -z $ended ]] || ((10#$ended != status)); then
+    error=$({ grep '^bwrap: ' "$run/output" || true; } | tail -n 1)
+    fail "bubblewrap did not run the command to its end (exit $status${ended:+, the command ended $ended}): ${error:-bubblewrap printed no error}"
+fi
 
 # The result. `reproduced` needs every expectation the predicate gives and an exit it names:
 # its `exit`, or with none its `healthy_exit`. `not_reproduced` needs the healthy exit, the one

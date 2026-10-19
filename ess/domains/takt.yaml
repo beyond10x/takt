@@ -988,9 +988,10 @@ types:
   # result of a `scenario_result` record: `reproduced` when every expectation held and the
   # command ended with a status the predicate names; `not_reproduced` only when the command ended
   # with the predicate's healthy exit; else `error`, a status the predicate does not name (a
-  # crash, a flag rejected, a command not found), which makes no claim true.
-  # read from: protocols/self-improvement/1.yaml:45-49
-  # read from: scripts/check-finding:433-447
+  # crash, a flag rejected, a command not found) or the predicate's `exit` without its `output`,
+  # which makes no claim true.
+  # read from: protocols/self-improvement/1.yaml:45-50
+  # read from: scripts/check-finding:440-454
   - name: takt.work.ScenarioResult
     kind: enum
     variants: [reproduced, not_reproduced, error]
@@ -1012,7 +1013,7 @@ types:
 
   # What comparing the installed binary's embedded revision with the merged candidate revision
   # came to, the result of a `promotion_record` record of `self.improvement/1`.
-  # read from: protocols/self-improvement/1.yaml:57-60
+  # read from: protocols/self-improvement/1.yaml:58-61
   - name: takt.work.PromotionResult
     kind: enum
     variants: [promoted, mismatch]
@@ -2194,7 +2195,7 @@ entities:
   # read from: scripts/file-finding:11-56
   # read from: scripts/file-finding:117
   # read from: scripts/file-finding:256
-  # read from: scripts/check-finding:183-398
+  # read from: scripts/check-finding:184-399
   # One predicate on one scenario or one repository: a body with a second `expected_before`
   # block, a block that gives a key twice, or one that gives both `scenario` and `repository`, or
   # neither, is malformed and nothing is filed. `seed` and `test` go with `repository` only: a

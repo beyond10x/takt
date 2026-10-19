@@ -1008,19 +1008,32 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
     .output()
     .expect("the probe's binary runs");
     let printed = String::from_utf8_lossy(&printed.stdout).into_owned();
+    // A message names the build's variables, never their values: under a confinement that
+    // fails, a value is the caller's, a credential among them.
+    let attempts: String = printed
+        .lines()
+        .filter(|line| !line.starts_with("env "))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let environment: Vec<(&str, &str)> = printed
+        .lines()
+        .filter_map(|line| line.strip_prefix("env "))
+        .filter_map(|line| line.split_once('='))
+        .collect();
+    let names: Vec<&str> = environment.iter().map(|(name, _)| *name).collect();
 
     assert!(
         !home.join("canary").exists(),
-        "the build wrote into the caller's home:\n{printed}"
+        "the build wrote into the caller's home:\n{attempts}"
     );
     assert_eq!(
         fs::read(other.join("takt")).expect("the defect's kept binary"),
         kept,
-        "the build overwrote another revision's kept binary:\n{printed}"
+        "the build overwrote another revision's kept binary:\n{attempts}"
     );
     assert!(
         !other.join("planted").exists(),
-        "the build wrote into another revision's build directory:\n{printed}"
+        "the build wrote into another revision's build directory:\n{attempts}"
     );
     assert!(
         !shared.exists(),
@@ -1036,21 +1049,17 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
             printed
                 .lines()
                 .any(|line| line.starts_with(&format!("{attempt}: refused: "))),
-            "{attempt} is refused, and the record says why:\n{printed}"
+            "{attempt} is refused, and the record says why:\n{attempts}"
         );
     }
-    let environment: Vec<(&str, &str)> = printed
-        .lines()
-        .filter_map(|line| line.strip_prefix("env "))
-        .filter_map(|line| line.split_once('='))
-        .collect();
     assert!(
-        environment.iter().any(|(name, _)| *name == "OUT_DIR"),
-        "the environment was copied:\n{printed}"
+        names.contains(&"OUT_DIR"),
+        "the environment was copied: {names:?}"
     );
     let outside: Vec<_> = environment
         .iter()
         .filter(|(name, _)| !allowed_in_a_build(name))
+        .map(|(name, _)| *name)
         .collect();
     assert!(
         outside.is_empty(),
@@ -1060,6 +1069,7 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
     let leaked: Vec<_> = environment
         .iter()
         .filter(|(_, value)| value.contains("PLANTED") || value.contains(home_text))
+        .map(|(name, _)| *name)
         .collect();
     assert!(
         leaked.is_empty(),
@@ -1123,6 +1133,64 @@ fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
             .exists(),
         "a binary was built without bubblewrap"
     );
+}
+
+/// A bubblewrap that forks the command's process and then fails its mount setup never runs the
+/// command, and its own exit 1 is not the command's: a predicate naming 1 as the defect's exit,
+/// or as the healthy one, gets no result, and the check names bubblewrap's error. The status
+/// file names the command's pid in both cases; only its `exit-code` line says the command ran.
+#[test]
+fn a_bubblewrap_that_fails_before_the_command_runs_gives_no_result() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let world = world("bwrap-setup-fails");
+    let real = Command::new("sh")
+        .args(["-c", "command -v bwrap"])
+        .output()
+        .expect("sh runs");
+    let real = String::from_utf8_lossy(&real.stdout).trim().to_owned();
+    assert!(!real.is_empty(), "bubblewrap is on PATH");
+    // The predicate's call alone (the one with a status fd) gets a bind whose source is absent,
+    // so bubblewrap's mount setup fails after it forked; the build's call runs as it is.
+    let bin = world.outer.0.join("bin-failing-bwrap");
+    write(
+        &bin.join("bwrap"),
+        &format!(
+            "#!/bin/sh\ncase \" $* \" in *' --json-status-fd '*) exec {real} --ro-bind /nonexistent-check-finding /srv/absent \"$@\";; esac\nexec {real} \"$@\"\n"
+        ),
+    );
+    fs::set_permissions(bin.join("bwrap"), fs::Permissions::from_mode(0o755)).expect("executable");
+    let path = std::env::var("PATH").expect("a PATH");
+    let path = format!("{}:{path}", bin.display());
+    let cases = [
+        (
+            "exit-one",
+            format!("scenario: 1\ncommand: \"$TAKT\" --version\nexit: 1\nsource: {SOURCE}\n"),
+        ),
+        (
+            "healthy-one",
+            format!(
+                "scenario: 1\ncommand: \"$TAKT\" run --repo .\nexit: 3\nhealthy_exit: 1\noutput: on software.change/1\nsource: {SOURCE}\n"
+            ),
+        ),
+    ];
+    for (key, predicate) in cases {
+        let filed = file(&world.takt, key, &body(Some(&predicate)), &[]);
+        assert!(filed.status.success(), "{key}: {}", shown(&filed));
+        let output = world.check(&format!("story:{key}"), &world.defect, &[("PATH", &path)]);
+        assert_eq!(output.status.code(), Some(1), "{key}: {}", shown(&output));
+        assert!(output.stdout.is_empty(), "{key}: {}", shown(&output));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("bwrap: Can't find source path /nonexistent-check-finding"),
+            "{key}: the check names bubblewrap's error: {}",
+            shown(&output)
+        );
+        assert!(
+            !record(&output).join("result").exists(),
+            "{key}: a result was recorded"
+        );
+    }
 }
 
 /// The binary kept for a revision is the one cargo reports building, never a file the revision

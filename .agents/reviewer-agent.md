@@ -55,7 +55,8 @@ adversarial passes on request; trials, scenario runs and verification runs (`scr
   prints `reproduced`, `not_reproduced` or `error`; when it exits non-zero it printed no result.
   `not_reproduced` needs the command to end with the predicate's `healthy_exit` (0 when it names
   none); `error` is any status the predicate does not name (a crash, a flag rejected, a command
-  not found), named on standard error, and verifies nothing. A fix is verified when the promoted
+  not found), or the predicate's `exit` without its `output`, named on standard error, and
+  verifies nothing. A fix is verified when the promoted
   revision gives `reproduced` and the candidate `not_reproduced`. Until story:promotion records
   a promoted revision, the revision the run was taken with stands in for it.
 - **Measurement.** Per scenario run: outcome, steps, tokens, refusals, `NoProgress` and errors,
