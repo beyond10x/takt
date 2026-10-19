@@ -118,18 +118,26 @@ enum Judged {
     NoBase,
 }
 
-/// Whether the case's branch changed what decides `tests.run` and `ci.read` between the case's
-/// base at `dir` and `revision`: the run's judge surface ([`crate::run::JudgeSurface`]) but the
-/// planning store, a link on it or on the way to a script at either commit, and the entries of a
-/// cargo manifest that decide how cargo builds or runs the tests
-/// ([`crate::run::manifest_build_changes`]) and of `pyproject.toml`'s pytest tables, the surface
-/// extended by the repository's own list ([`crate::run::JUDGE_LIST`]) read at the base, which
-/// records nothing when it does not parse. A change no step
+/// Whether the case's branch changed what decides `tests.run`, `ci.read` and `gate.run` between
+/// the case's base at `dir` and `revision`: the run's judge surface
+/// ([`crate::run::JudgeSurface`]) but the planning store, a link on it or on the way to a script
+/// at either commit, and the entries of a cargo manifest that decide how cargo builds or runs the
+/// tests ([`crate::run::manifest_build_changes`]) and of `pyproject.toml`'s pytest tables, the
+/// surface extended by the repository's own list ([`crate::run::JUDGE_LIST`]) read at the base,
+/// which records nothing when it does not parse, and by the caller's folded globs `extra`; with
+/// `lints`, the lint tables of every cargo manifest besides ([`lint_changes`]). A change no step
 /// could make, because the step guard refuses it, but one that reached the branch by another
 /// route (a commit made outside the loop) would decide the verdict all the same. The store is
 /// guarded at the step too, but it decides no test and no check, and takt itself writes it on
 /// the case's branch (the take, an accepted case's test result and move): it is not compared.
-fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Judged> {
+fn judged(
+    tree: &Path,
+    dir: &Path,
+    revision: &str,
+    runs: &[String],
+    extra: Vec<String>,
+    lints: bool,
+) -> Result<Judged> {
     let Some((base, at)) = base_revision(tree, dir)? else {
         return Ok(Judged::NoBase);
     };
@@ -151,6 +159,7 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
     let surface = crate::run::JudgeSurface::new(runs, tree)
         .without_store()
         .with_globs(globs)
+        .with_globs(extra)
         .with_modules(crate::run::Modules::read(dir))
         .provided_by(at_base.split('\0').filter(|path| !path.is_empty()));
     // A link is never followed: one the base or the revision holds on the surface, or on the
@@ -206,6 +215,21 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
                 Err(line) => paths.push(format!(
                     "{path}: a line the manifest scanner cannot read with certainty, {line}"
                 )),
+            }
+            if lints && crate::run::is_manifest(path) {
+                match lint_changes(&before, &after) {
+                    Ok(keys) => {
+                        for key in keys {
+                            let named = format!("{path}: {key}");
+                            if !paths.contains(&named) {
+                                paths.push(named);
+                            }
+                        }
+                    }
+                    Err(side) => paths.push(format!(
+                        "{path}: a line the lints scanner cannot read with certainty, {side}"
+                    )),
+                }
             }
         }
     }
@@ -662,7 +686,7 @@ impl TestsRun {
             .is_some_and(|branch| branch.starts_with(crate::case::BRANCH_PREFIX))
         {
             let dir = current(tree)?;
-            match judged(tree, &dir, revision, &self.command)? {
+            match judged(tree, &dir, revision, &self.command, Vec::new(), false)? {
                 Judged::Unchanged => {}
                 Judged::NoBase => {
                     return Ok(nothing_recorded(format!(
@@ -735,6 +759,18 @@ pub const DEFAULT_PROJECT: &str = ".engineering/assertions-project.yaml";
 /// model edits, and a gate it rewrote would decide its own verdict. What the gates observe is
 /// the tree. The two files are copied for the evaluation into the case's directory, which the
 /// tree's source identity leaves out, and removed again before the observation ends.
+///
+/// What the gates observe runs from the tree only while the base revision and the observed one
+/// agree on it: with a project file, the executables and catalogs it admits, every file its
+/// commands take as an argument, the tool configuration ([`GATE_TOOL_CONFIG`]), the `[lints]`
+/// and `[workspace.lints]` tables of every cargo manifest ([`lint_changes`]) and the judge
+/// surface the test command's is compared on. One that differs, was added or was deleted runs
+/// nothing and writes no record; the summary names it.
+///
+/// Code that runs while cargo builds (a build script, a procedural macro, a dependency's) is
+/// not closed by comparing files: the step writes the code under test, and a gate whose
+/// commands build it runs what the step wrote. `gate.green` cannot vouch for such code; the
+/// merge of the change stays the owner's to grant.
 #[derive(Debug, Clone)]
 pub struct GateRun {
     /// The gates document, relative to the tree.
@@ -797,7 +833,12 @@ fn admitted_files(project: &str) -> Result<Vec<String>> {
     if let Some(catalogs) = doc["catalogs"].as_sequence() {
         paths.extend(catalogs.iter().filter_map(named));
     }
-    // Relative to the tree and normalised; one that leads out of the tree is not the tree's.
+    Ok(inside_tree(&paths))
+}
+
+/// `paths` relative to the tree and normalised, sorted and each once; one that leads out of the
+/// tree is not the tree's.
+fn inside_tree(paths: &[String]) -> Vec<String> {
     let mut inside: Vec<String> = paths
         .iter()
         .filter(|path| Path::new(path).is_relative())
@@ -817,7 +858,199 @@ fn admitted_files(project: &str) -> Result<Vec<String>> {
         .collect();
     inside.sort();
     inside.dedup();
-    Ok(inside)
+    inside
+}
+
+/// The arguments of the commands and providers a project file admits, as paths relative to the
+/// tree ([`inside_tree`]): each argument as it is written, and an option's value after its `=`
+/// (`--path=dir`). Which of them a commit holds is the caller's to read.
+fn argument_paths(project: &str) -> Result<Vec<String>> {
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(project).context("read the project file")?;
+    let mut bindings: Vec<&serde_yaml_ng::Value> = Vec::new();
+    if let Some(commands) = doc["commands"].as_mapping() {
+        bindings.extend(commands.values());
+    }
+    if let Some(providers) = doc["providers"].as_mapping() {
+        bindings.extend(providers.values().map(|provider| &provider["command"]));
+    }
+    let mut paths = Vec::new();
+    for argument in bindings
+        .iter()
+        .filter_map(|binding| binding["args"].as_sequence())
+        .flatten()
+        .filter_map(serde_yaml_ng::Value::as_str)
+    {
+        paths.push(argument.to_owned());
+        if let Some((_, value)) = argument
+            .strip_prefix('-')
+            .and_then(|option| option.split_once('='))
+        {
+            paths.push(value.to_owned());
+        }
+    }
+    Ok(inside_tree(&paths))
+}
+
+/// The tool configuration a gate's commands read from the tree, at any depth: cargo's, clippy's,
+/// rustfmt's and task's. The toolchain file is on every judge surface already.
+const GATE_TOOL_CONFIG: [&str; 7] = [
+    "**/.cargo/config",
+    "**/.cargo/config.toml",
+    "**/clippy.toml",
+    "**/.clippy.toml",
+    "**/rustfmt.toml",
+    "**/.rustfmt.toml",
+    "**/Taskfile.yml",
+];
+
+/// The parts of the TOML key `key` (`a.b`, `"a".'b'`): bare, or quoted without an escape. `None`
+/// for anything else, which the caller does not read with certainty.
+fn key_parts(key: &str) -> Option<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut rest = key.trim();
+    loop {
+        let (part, after) = if let Some(quoted) = rest.strip_prefix('"') {
+            let end = quoted.find('"')?;
+            if quoted[..end].contains('\\') {
+                return None;
+            }
+            (&quoted[..end], &quoted[end + 1..])
+        } else if let Some(quoted) = rest.strip_prefix('\'') {
+            let end = quoted.find('\'')?;
+            (&quoted[..end], &quoted[end + 1..])
+        } else {
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                .unwrap_or(rest.len());
+            if end == 0 {
+                return None;
+            }
+            (&rest[..end], &rest[end..])
+        };
+        parts.push(part.to_owned());
+        let after = after.trim_start();
+        if after.is_empty() {
+            return Some(parts);
+        }
+        rest = after.strip_prefix('.')?.trim_start();
+    }
+}
+
+/// `line` up to its comment, and how many brackets and braces it opens less those it closes,
+/// strings left out. `None` for a multi-line string or a string the line does not close.
+fn toml_code(line: &str) -> Option<(&str, i32)> {
+    let mut depth = 0;
+    let mut quote: Option<char> = None;
+    let mut chars = line.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        match (quote, c) {
+            (Some('"'), '\\') => {
+                chars.next();
+            }
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => {
+                if line[at..].starts_with("\"\"\"") || line[at..].starts_with("'''") {
+                    return None;
+                }
+                quote = Some(c);
+            }
+            (None, '#') => return Some((&line[..at], depth)),
+            (None, '[' | '{') => depth += 1,
+            (None, ']' | '}') => depth -= 1,
+            (None, _) => {}
+        }
+    }
+    quote.is_none().then_some((line, depth))
+}
+
+/// The entries of the cargo manifest `text` that decide its lints, `[lints]` and
+/// `[workspace.lints]` as a table, a dotted key or an inline table, each by its key path with its
+/// value as written: a strict scanner of one-line headers and keys whose values may span lines in
+/// brackets, not a TOML parser. `None` for a line it cannot read with certainty (a multi-line
+/// string, an escape in a key, a header with anything after it).
+fn lint_entries(text: &str) -> Option<Vec<(String, String)>> {
+    // Under `lints` or `workspace.lints`; or the root key `workspace` itself, an inline table.
+    let under = |key: &[String]| {
+        key.first().is_some_and(|first| first == "lints")
+            || (key.first().is_some_and(|first| first == "workspace")
+                && key.get(1).is_some_and(|second| second == "lints"))
+    };
+    let lints = |key: &[String]| under(key) || key == ["workspace"];
+    let mut table: Vec<String> = Vec::new();
+    let mut entries = Vec::new();
+    let mut open: Option<(Vec<String>, String, i32)> = None;
+    for line in text.lines() {
+        let (code, delta) = toml_code(line)?;
+        if let Some((key, mut value, depth)) = open.take() {
+            value.push(' ');
+            value.push_str(code.trim());
+            match depth + delta {
+                0 => entries.push((key, value)),
+                depth if depth > 0 => open = Some((key, value, depth)),
+                _ => return None,
+            }
+            continue;
+        }
+        let code = code.trim();
+        if code.is_empty() {
+            continue;
+        }
+        if code.starts_with('[') {
+            let inner = code
+                .strip_prefix("[[")
+                .and_then(|inner| inner.strip_suffix("]]"))
+                .or_else(|| code.strip_prefix('[')?.strip_suffix(']'))?;
+            table = key_parts(inner)?;
+            if under(&table) {
+                entries.push((table.clone(), String::new()));
+            }
+            continue;
+        }
+        // The first `=` outside a string ends the key.
+        let at = code
+            .char_indices()
+            .find(|(at, c)| *c == '=' && toml_code(&code[..*at]).is_some())?
+            .0;
+        let mut key = table.clone();
+        key.extend(key_parts(&code[..at])?);
+        let value = code[at + 1..].trim().to_owned();
+        match delta {
+            0 => entries.push((key, value)),
+            depth if depth > 0 => open = Some((key, value, depth)),
+            _ => return None,
+        }
+    }
+    if open.is_some() {
+        return None;
+    }
+    let mut kept: Vec<(String, String)> = entries
+        .into_iter()
+        .filter(|(key, _)| lints(key))
+        .map(|(key, value)| {
+            let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+            (key.join("."), value)
+        })
+        .collect();
+    kept.sort();
+    Some(kept)
+}
+
+/// The lint entries ([`lint_entries`]) that differ between the manifests `before` and `after`,
+/// by key path; the error names a side the scanner cannot read with certainty.
+fn lint_changes(before: &str, after: &str) -> std::result::Result<Vec<String>, &'static str> {
+    let before = lint_entries(before).ok_or("before")?;
+    let after = lint_entries(after).ok_or("after")?;
+    let mut keys: Vec<String> = before
+        .iter()
+        .filter(|entry| !after.contains(entry))
+        .chain(after.iter().filter(|entry| !before.contains(entry)))
+        .map(|(key, _)| key.clone())
+        .collect();
+    keys.sort();
+    keys.dedup();
+    Ok(keys)
 }
 
 /// What git stores at `path` in the commit `at`: its mode and object, or `None` when the commit
@@ -913,15 +1146,14 @@ impl GateRun {
         deadline: Option<std::time::Instant>,
     ) -> Result<Observation> {
         let dir = current(tree)?;
+        let unpinned = || {
+            Ok(nothing_recorded(format!(
+                "the gates document {}: not run; the case pins no base commit ({BRANCH_FILE} has no base_commit; it was opened before takt recorded one), and the gate is read from nothing else; no record, the claim stays unknown; abandon the case and open it again",
+                self.gates.display()
+            )))
+        };
         let Some((base, at)) = base_revision(tree, &dir)? else {
-            return Ok(Observation {
-                summary: format!(
-                    "the gates document {}: not run; the case pins no base commit ({BRANCH_FILE} has no base_commit; it was opened before takt recorded one), and the gate is read from nothing else; no record, the claim stays unknown; abandon the case and open it again",
-                    self.gates.display()
-                ),
-                records: Vec::new(),
-                artifact: None,
-            });
+            return unpinned();
         };
         let document = format!("{} from {base}", self.gates.display());
         let gates = file_at(tree, &at, &self.gates)?
@@ -939,29 +1171,48 @@ impl GateRun {
             None => file_at(tree, &at, Path::new(DEFAULT_PROJECT))?
                 .map(|text| (PathBuf::from(DEFAULT_PROJECT), text)),
         };
-        // What the project file admits runs from the tree: an executable or a catalog the case's
-        // branch changed would let a model's edit decide the gate the base revision defines.
-        // Nothing is run and no record written while one differs from the base revision.
+        // What the gate's commands run or read from the tree: a file the case's branch changed
+        // would let a model's edit decide the gate the base revision defines. Compared at the
+        // base as the test command's surface is ([`judged`]), with what the project file admits
+        // (its executables and catalogs), every file its commands take as an argument and the
+        // tool configuration ([`GATE_TOOL_CONFIG`]) added, and every manifest's lint tables
+        // ([`lint_changes`]). A directory the base holds at an argument is the data a command
+        // checks, not code it runs, and is not compared; a name the glob dialect cannot hold as
+        // written is compared as a path by itself. Nothing is run and no record written while
+        // one differs, is added or is deleted. Without a project file the gate admits no
+        // command, and runs nothing from the tree.
         if let Some((path, text)) = &project {
+            let read = || format!("read the project file {}", path.display());
+            let mut globs: Vec<String> = GATE_TOOL_CONFIG.iter().map(|g| (*g).to_owned()).collect();
             let mut changed = Vec::new();
-            for file in admitted_files(text)
-                .with_context(|| format!("read the project file {}", path.display()))?
-            {
-                if object_at(tree, &at, &file)? != object_at(tree, revision, &file)? {
-                    changed.push(file);
+            let mut files = admitted_files(text).with_context(read)?;
+            for argument in argument_paths(text).with_context(read)? {
+                if !object_at(tree, &at, &argument)?.is_some_and(|o| o.starts_with("040000 ")) {
+                    files.push(argument);
                 }
             }
+            for file in files {
+                if file.contains(['*', '?', '\\']) || file.trim() != file {
+                    if object_at(tree, &at, &file)? != object_at(tree, revision, &file)? {
+                        changed.push(file);
+                    }
+                } else {
+                    globs.push(file);
+                }
+            }
+            let globs = crate::run::parse_judge_list(&serde_yaml_ng::to_string(&globs)?)
+                .map_err(|why| anyhow!("the paths the gate compares at the base: {why}"))?;
+            match judged(tree, &dir, revision, &[], globs, true)? {
+                Judged::Unchanged => {}
+                Judged::NoBase => return unpinned(),
+                Judged::Changed { paths, .. } => changed.extend(paths),
+            }
             if !changed.is_empty() {
-                return Ok(Observation {
-                    summary: format!(
-                        "the gates document {document}: not run; what the project file {} admits differs from the base revision at {}: {}; no record, the claim stays unknown",
-                        path.display(),
-                        short(revision),
-                        changed.join(", ")
-                    ),
-                    records: Vec::new(),
-                    artifact: None,
-                });
+                return Ok(nothing_recorded(format!(
+                    "the gates document {document}: not run; what its commands run or read from the tree differs from the base revision at {}: {}; no record, the claim stays unknown",
+                    short(revision),
+                    changed.join(", ")
+                )));
             }
         }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
@@ -1598,7 +1849,7 @@ impl Validator for CiRead {
                 waits,
             )
         };
-        match judged(tree, &dir, revision, &self.runs)? {
+        match judged(tree, &dir, revision, &self.runs, Vec::new(), false)? {
             Judged::Unchanged => {}
             Judged::NoBase => {
                 return Ok(nothing(
@@ -2893,5 +3144,56 @@ mod tests {
         let later = now + std::time::Duration::from_secs(60);
         assert!(ended_by(Some(later), "tests.run", observed()).is_ok());
         assert!(ended_by(None, "tests.run", observed()).is_ok());
+    }
+
+    /// The lint tables of a manifest in each form TOML writes them, and what the scanner does
+    /// not read with certainty.
+    #[test]
+    fn lint_changes_reads_every_form_of_the_lint_tables() {
+        let package = "[package]\nname = \"a\"\n";
+        let changed = |after: &str| lint_changes(package, &format!("{package}{after}"));
+        assert_eq!(
+            changed("[lints.clippy]\nall = \"allow\"\n"),
+            Ok(vec![
+                "lints.clippy".to_owned(),
+                "lints.clippy.all".to_owned()
+            ])
+        );
+        assert_eq!(
+            changed("[lints]\nworkspace = true\n"),
+            Ok(vec!["lints".to_owned(), "lints.workspace".to_owned()])
+        );
+        assert_eq!(
+            lint_changes("", "\"lints\" . 'clippy'.all = \"allow\"\n"),
+            Ok(vec!["lints.clippy.all".to_owned()])
+        );
+        assert_eq!(
+            lint_changes(
+                "",
+                "workspace = { lints = { clippy = { all = \"allow\" } } }\n"
+            ),
+            Ok(vec!["workspace".to_owned()])
+        );
+        assert_eq!(
+            lint_changes(
+                "[workspace]\nmembers = [\n  \"a\",\n]\n",
+                "[workspace]\nmembers = [\n  \"a\",\n  [\"b\"],\n]\n[workspace.lints.rust]\nwarnings = \"allow\" # off\n"
+            ),
+            Ok(vec![
+                "workspace.lints.rust".to_owned(),
+                "workspace.lints.rust.warnings".to_owned()
+            ])
+        );
+        assert_eq!(
+            changed("[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n"),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            changed("[\"lint\\u0073\".clippy]\nall = \"allow\"\n"),
+            Err("after")
+        );
+        assert_eq!(changed("[lints] x\n"), Err("after"));
+        assert_eq!(changed("d = \"\"\"\n[package]\n\"\"\"\n"), Err("after"));
+        assert_eq!(changed("d = [\n"), Err("after"));
     }
 }
