@@ -55,6 +55,12 @@ fn repository(name: &str, url: &str) -> (Scratch, PathBuf) {
     let repo = outer.join("repo");
     fs::create_dir_all(&repo).expect("a directory");
     fs::write(repo.join("README.md"), "a story\n").expect("a file");
+    fs::create_dir_all(repo.join(".engineering")).expect("a directory");
+    fs::write(
+        repo.join(".engineering/commit-identity.conf"),
+        "[identity]\n\tname = Test Bot\n\temail = bot@example.invalid\n",
+    )
+    .expect("the commit identity is written");
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "start"]);

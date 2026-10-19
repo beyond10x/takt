@@ -417,6 +417,15 @@ struct LoopArgs {
     /// cannot be read stops nothing and is said once.
     #[arg(long, value_name = "GIB", default_value_t = 10)]
     min_free_gib: u64,
+    /// The author and committer of every commit of the case this run opens, `'<name>
+    /// <email>'`, over the one `.engineering/commit-identity.conf` names (`[identity]` `name` and
+    /// `email`), read at the commit the case forks from, or for a scenario run at
+    /// --declared-on. Neither given, the commits are `takt <takt@localhost>`, never the
+    /// operator's git configuration; a run whose forge is the bot route, which pushes them, is
+    /// refused before its case opens. Recorded in the case: a resumed case and `takt approve`
+    /// commit with the identity it was opened with, and another given for it is refused.
+    #[arg(long, value_name = "'NAME <EMAIL>'")]
+    commit_identity: Option<takt::git::CommitIdentity>,
 }
 
 /// A harness that performs nothing. Asked while an approval is pending, it requests the gate
@@ -481,7 +490,7 @@ const EXIT_CODES: &str = "Exit codes:
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and the next run resumes it
-  7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open";
+  7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open; at pr.opened the delivery first prints `candidate: <full commit id>`, its code commits (not takt's take, record or approval commits) replayed on the base branch's tip under the configured identity and named by refs/takt/candidates/<case>, or `candidate: none: <why>` (no identity configured, or a code commit that needs what was left out)";
 
 /// What `takt scenario run --help` says about the exit codes: [`EXIT_CODES`] without `frontier:
 /// nothing ready`, which only `takt run` prints; a scenario whose story is not ready is exit 1.
@@ -493,7 +502,7 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
-  7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open";
+  7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open; at pr.opened the delivery first prints `candidate: <full commit id>`, its code commits (not takt's take, record or approval commits) replayed on the base branch's tip under the configured identity and named by refs/takt/candidates/<case>, or `candidate: none: <why>` (no identity configured, or a code commit that needs what was left out)";
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -778,6 +787,36 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // The forge, read before the turn, whose mainline it reads: the forge's `main`, or the
             // local `main` with none.
             let forge = forge_of(&repo, looping.forge.as_deref())?;
+            // A resumed turn reads the mainline through the forge it recorded when it opened,
+            // as `takt approve` does: a run through another is refused before anything is
+            // written.
+            if let Some(resuming) = &resuming {
+                let run_forge = forge.forge.as_ref().map_or("none", |forge| forge.name());
+                if let Some(why) = takt::case::turn_forge_refusal(
+                    &repo.join(takt::case::CASES_DIR).join(&resuming.id),
+                    &resuming.id,
+                    run_forge,
+                )? {
+                    return Err(anyhow!(why));
+                }
+            }
+            // The identity a case opened here commits with: the one given, else the one the
+            // repository configures at the commit the case forks from, required when the run
+            // pushes its commits. A resumed case keeps its own, and is refused here when it has
+            // none and the run pushes, or when another is given.
+            let pushes = forge.forge.is_some();
+            let commit_as = match &looping.commit_identity {
+                Some(given) => takt::case::CommitAs::Given(given.clone()),
+                None => takt::case::CommitAs::Configured { required: pushes },
+            };
+            if let Some(resuming) = &resuming {
+                refuse_identity_for_resume(
+                    &repo,
+                    &resuming.id,
+                    looping.commit_identity.as_ref(),
+                    pushes,
+                )?;
+            }
             let mainline = forge.forge.clone().map_or(
                 takt::improvement::Mainline::Local,
                 takt::improvement::Mainline::Forge,
@@ -902,9 +941,14 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     ));
                 }
                 (Some(case), None, _) => Run::resume(&repo, options, &case, harness, &validators)?,
-                (None, Some(intent), _) => {
-                    Run::open_unit(&repo, options, Unit::Intent(intent), harness, &validators)?
-                }
+                (None, Some(intent), _) => Run::open_unit_as(
+                    &repo,
+                    options,
+                    Unit::Intent(intent),
+                    &commit_as,
+                    harness,
+                    &validators,
+                )?,
                 // The open case of an active story, found and checked above: resumed as found,
                 // the store not read again.
                 (None, None, Some(resuming)) => {
@@ -925,7 +969,15 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 // is resumed whatever the store says by now, so no case runs that was not
                 // checked.
                 (None, None, None) => {
-                    match Run::take_next(&repo, options, &store, harness, &validators, out)? {
+                    match Run::take_next_as(
+                        &repo,
+                        options,
+                        &store,
+                        &commit_as,
+                        harness,
+                        &validators,
+                        out,
+                    )? {
                         Some(run) => run,
                         None => {
                             writeln!(out, "frontier: nothing ready")?;
@@ -1577,6 +1629,18 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         )
     })?;
     let forge = forge_of(&repo, looping.forge.as_deref())?;
+    // The identity the trial's commits carry: the one given, else the one `--declared-on`
+    // configures (the pinned seed predates any such file); none through the bot route, which
+    // pushes them, is refused before anything is fetched, cut or pushed.
+    let identity = match &looping.commit_identity {
+        Some(given) => Some(given.clone()),
+        None => takt::git::configured_identity(&repo, &declared_on)?,
+    };
+    if identity.is_none() && forge.forge.is_some() {
+        return Err(takt::git::no_identity(&declared_on))
+            .with_context(|| format!("scenario {}", scenario.id));
+    }
+    let commit_as = identity.map_or(takt::case::CommitAs::Takt, takt::case::CommitAs::Given);
     // The fetch is read-only and comes first, so the number is chosen and checked once, on
     // everything the checkout knows after it, and before anything is cut or pushed.
     if let Some(trials) = &forge.trials {
@@ -1673,7 +1737,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     )?;
     let options = looping.options(STORY_DELIVERY.to_owned(), Vec::new(), Some(case_id));
     let store = Aep::default();
-    let mut run = take_story(&repo, options, story, harness, &validators, out)?;
+    let mut run = take_story(&repo, options, story, &commit_as, harness, &validators, out)?;
     // As `takt run`: a case that terminates accepted records its test result and its move in
     // the store, on the case's branch.
     run.record_on(&store);
@@ -1722,11 +1786,13 @@ fn short(revision: &str) -> &str {
 /// `takt: take <story>`, exactly the paths the store changed, and the case's implementation at
 /// that commit. A refusal or a failure removes the case. Unlike `take_next` it is not skipped
 /// for a case an earlier scenario run opened for the same story on another trial base: each
-/// run of a scenario is a case of its own.
+/// run of a scenario is a case of its own. The case is opened with, and the take committed by,
+/// the identity `commit_as` says.
 fn take_story<'a>(
     repo: &Path,
     options: RunOptions,
     story: takt::Story,
+    commit_as: &takt::case::CommitAs,
     harness: &'a dyn Harness,
     validators: &'a [Box<dyn Validator>],
     out: &mut dyn Write,
@@ -1735,7 +1801,15 @@ fn take_story<'a>(
     let id = story.id.clone();
     let id = id.as_str();
     let title = story.title.clone();
-    let mut run = Run::open_unit(repo, options, Unit::Story(story), harness, validators)?;
+    let mut run = Run::open_unit_as(
+        repo,
+        options,
+        Unit::Story(story),
+        commit_as,
+        harness,
+        validators,
+    )?;
+    let committer = run.committer().clone();
     let taken = (|| -> Result<String> {
         match aep.take(repo, id)? {
             takt::frontier::Take::Taken => {}
@@ -1744,7 +1818,7 @@ fn take_story<'a>(
             }
         }
         let changed = takt::git::uncommitted(repo)?;
-        takt::git::commit_paths(repo, &changed, &takt::run::take_subject(id))
+        takt::git::commit_paths(repo, &committer, &changed, &takt::run::take_subject(id))
     })();
     let head = match taken {
         Ok(head) => head,
@@ -1892,6 +1966,52 @@ fn resume_install_root(repo: &Path, id: &str, protocol: &str, given: &Path) -> R
             given.display()
         ))),
     }
+}
+
+/// Refuses, before the case `id` is resumed, a `--commit-identity` (`given`) other than the
+/// identity the case was opened with, and a run whose commits leave the machine (`pushes`, the
+/// bot route) when the case was opened with none: its commits carry `takt <takt@localhost>`.
+fn refuse_identity_for_resume(
+    repo: &Path,
+    id: &str,
+    given: Option<&takt::git::CommitIdentity>,
+    pushes: bool,
+) -> Result<()> {
+    let recorded = takt::case::commit_identity_of(&repo.join(takt::case::CASES_DIR).join(id))?;
+    if let Some(given) = given
+        && recorded.as_ref() != Some(given)
+    {
+        return Err(anyhow!(
+            "--commit-identity {given}: the case {id} was opened with {}, and a resumed case keeps the identity it was opened with; resume it without --commit-identity; nothing was resumed",
+            recorded.as_ref().map_or_else(
+                || format!(
+                    "none, so its commits are {}",
+                    takt::git::CommitIdentity::takt()
+                ),
+                ToString::to_string
+            )
+        ));
+    }
+    if recorded.is_none() && pushes {
+        // No command closes or drops a case: the way past one is to finish it without pushing,
+        // or to remove its branch and its directory, after which no run finds it and its story
+        // is taken again, the take having been committed on that branch only.
+        let dir = repo.join(takt::case::CASES_DIR).join(id);
+        let base = takt::case::Branch::read(&dir)
+            .ok()
+            .and_then(|branch| branch.base)
+            .unwrap_or_else(|| "its base branch".to_owned());
+        let branch = takt::case::Branch::name_of(id);
+        return Err(anyhow!(
+            "no commit identity: the case {id} was opened with none, so its commits are {}, and this run's commits leave the machine (the bot route); a case pushes only under the identity it was opened with. Finish it without pushing (`takt run --case {id} --forge none`), or drop it: `git -C {} checkout {base}`, `git -C {} branch -D {branch}` and remove {}; the next run then takes its story again under {} (`identity.name`, `identity.email`) at the base, or under --commit-identity '<name> <email>'; nothing was resumed",
+            takt::git::CommitIdentity::takt(),
+            repo.display(),
+            repo.display(),
+            dir.display(),
+            takt::git::COMMIT_IDENTITY_FILE
+        ));
+    }
+    Ok(())
 }
 
 /// `text` on one line: its lines, trimmed, the empty ones left out, joined with ` | `.
@@ -2374,7 +2494,12 @@ mod tests {
         let (code, out) = takt(&delivery_args(
             repo.to_str().expect("utf-8"),
             "default-bot",
-            &["--iterations", "1"],
+            &[
+                "--iterations",
+                "1",
+                "--commit-identity",
+                "Test Bot <bot@example.invalid>",
+            ],
         ));
         assert_eq!(code, 3, "{out}");
         assert!(out.contains("forge: bot (owner/repo)"), "{out}");

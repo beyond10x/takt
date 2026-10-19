@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:takt-has-a-gates-document
 kind: story
-status: active
+status: implemented
 title: takt's repository names its gate so delivery on takt reaches pr.open
 summary: 'trials 1 and 2: delivery stalled on gate.green'
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T23:14:33Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: takt-has-a-gates-document
 

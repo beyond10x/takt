@@ -485,3 +485,335 @@ fn an_unperformable_stop_ranks_with_the_budget_stops() {
         takt::scorecard::rank("Iterations")
     );
 }
+
+/// The story a candidate's case delivers, and its file in the planning store.
+const STORY: &str = "story:the-story";
+const STORY_FILE: &str = ".engineering/planning/story/the-story.md";
+
+/// The story's file as the store holds it with `status`.
+fn story_text(status: &str) -> String {
+    format!(
+        "---\nformat: aep.planning-md/3\nid: {STORY}\nkind: story\nstatus: {status}\ntitle: The story\n---\n# Story: the-story\n\nThe body.\n"
+    )
+}
+
+/// The identity the candidate's repository configures.
+const IDENTITY: &str = "The Bot <bot@example.invalid>";
+
+/// A committed scratch repository with a manifest, the story `proposed` in its planning store
+/// and, when `identity`, `.engineering/commit-identity.conf` naming [`IDENTITY`].
+fn story_scratch(name: &str, identity: bool) -> Scratch {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("unperformable-{}-{name}", std::process::id()));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
+    }
+    fs::create_dir_all(dir.join(".engineering/planning/story")).expect("scratch dir");
+    fs::write(dir.join("Cargo.toml"), "[package]\nname = \"scratch\"\n").expect("a file");
+    fs::write(dir.join(STORY_FILE), story_text("proposed")).expect("a file");
+    if identity {
+        fs::write(
+            dir.join(".engineering/commit-identity.conf"),
+            "[identity]\n\tname = The Bot\n\temail = bot@example.invalid\n",
+        )
+        .expect("a file");
+    }
+    git(&dir, &["init", "-q", "-b", "main"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-q", "-m", "start"]);
+    Scratch(dir)
+}
+
+/// Writes each `(path, text)` of `files` and commits exactly them with `message`, as the
+/// operator's own git does: the commit's author is not the identity the repository configures.
+fn commit(tree: &Path, files: &[(&str, &str)], message: &str) -> String {
+    for (path, text) in files {
+        let at = tree.join(path);
+        fs::create_dir_all(at.parent().expect("a parent")).expect("a directory");
+        fs::write(at, text).expect("a file");
+        git(tree, &["add", "--", path]);
+    }
+    git(tree, &["commit", "-q", "-m", message]);
+    git(tree, &["rev-parse", "HEAD"])
+}
+
+/// Opens the case `name` for [`STORY`] in `tree`, commits its take as `takt: take <story>`
+/// (the story `active`), then each of `steps` (`(files, message)`) on the case's branch, and
+/// moves the case to "ahead" at the last, as [`ahead`] does. The step commits, in order.
+fn ahead_story(
+    tree: &Path,
+    name: &str,
+    validators: &[Box<dyn Validator>],
+    harness: &dyn Harness,
+    steps: &[(&[(&str, &str)], &str)],
+) -> Vec<String> {
+    let story = takt::Story {
+        id: STORY.to_owned(),
+        title: "The story".to_owned(),
+        body: "The body.\n".to_owned(),
+    };
+    let mut run = Run::open_unit(
+        tree,
+        options(name),
+        takt::Unit::Story(story),
+        harness,
+        validators,
+    )
+    .expect("the case opens");
+    commit(
+        tree,
+        &[(STORY_FILE, &story_text("active"))],
+        &takt::run::take_subject(STORY),
+    );
+    let made: Vec<String> = steps
+        .iter()
+        .map(|(files, message)| commit(tree, files, message))
+        .collect();
+    let revision = git(tree, &["rev-parse", "HEAD"]);
+    run.case
+        .set_revision("implementation", &revision)
+        .expect("the revision moves");
+    for evidence in [
+        record("e1", "test_result", Some("pass"), &revision, "test"),
+        record("e2", "gate_result", Some("pass"), &revision, "test"),
+        record(
+            "e3",
+            "handover",
+            None,
+            &revision,
+            takt::run::CHOICE_PRODUCER,
+        ),
+        record(
+            "e4",
+            "change_record",
+            Some("ahead"),
+            &revision,
+            "takt.change-read",
+        ),
+    ] {
+        run.case.add_evidence(&evidence).expect("written");
+    }
+    made
+}
+
+/// The full commit id a `candidate: <id>` line of `text` names, if one does.
+fn candidate_of(text: &str) -> Option<String> {
+    text.lines()
+        .filter_map(|line| line.strip_prefix("candidate: "))
+        .find(|id| id.len() == 40 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(str::to_owned)
+}
+
+/// The tree's `HEAD`, its status outside the cases directory (which the run's own records
+/// change) and its index, which making a candidate must not touch.
+fn untouched(tree: &Path) -> [String; 3] {
+    [
+        git(tree, &["rev-parse", "HEAD"]),
+        git(
+            tree,
+            &[
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--",
+                ".",
+                ":(exclude).engineering/cases",
+            ],
+        ),
+        git(tree, &["ls-files", "--stage"]),
+    ]
+}
+
+/// The two step commits of a delivery: a code commit, and a step commit that changes a file
+/// under `.engineering/` beside the code, which is a code commit as well and kept whole.
+const WORK: &[(&str, &str)] = &[("work.txt", "done\n")];
+const NOTES: &[(&str, &str)] = &[
+    ("work.txt", "done\nand more\n"),
+    (".engineering/notes.md", "a note\n"),
+];
+
+/// story:a-delivery-hands-its-candidate-to-a-turn, its first bullet: the forge-none stop at
+/// `pr.opened` prints `candidate: <full id>`, the case's code commits replayed in order on the
+/// base's tip, the take left out: each keeps its message and its author and committer dates and
+/// carries the identity the repository configures as author and committer; the candidate's
+/// tree is the base's with the code commits' changes, the story's file the base's; the work
+/// tree, the index and `HEAD` are untouched, and `refs/takt/candidates/<case>` names it.
+#[test]
+fn a_forge_none_stop_hands_over_the_code_commits_on_the_base_without_the_take() {
+    let tree = story_scratch("candidate", true);
+    let harness = Counting::default();
+    let validators = validators(false, None);
+    let base = git(&tree, &["rev-parse", "main"]);
+    let steps = ahead_story(
+        &tree,
+        "candidate",
+        &validators,
+        &harness,
+        &[
+            (WORK, "implementation.edit: the work"),
+            (NOTES, "implementation.edit: notes and more work"),
+        ],
+    );
+    let before = untouched(&tree);
+
+    let (stop, text) = resume(&tree, "candidate", &validators, &harness);
+    assert_eq!(
+        stop, "Unperformable (pr.opened; nothing performs it without the forge)",
+        "{text}"
+    );
+    let candidate = candidate_of(&text).unwrap_or_else(|| panic!("no candidate line: {text}"));
+    assert_eq!(untouched(&tree), before, "{text}");
+    assert_eq!(
+        git(&tree, &["rev-parse", "refs/takt/candidates/candidate"]),
+        candidate
+    );
+
+    let replayed: Vec<String> = git(
+        &tree,
+        &["rev-list", "--reverse", &format!("{base}..{candidate}")],
+    )
+    .lines()
+    .map(str::to_owned)
+    .collect();
+    assert_eq!(replayed.len(), steps.len(), "{replayed:?}");
+    assert_eq!(
+        git(&tree, &["rev-parse", &format!("{}^", replayed[0])]),
+        base
+    );
+    for (made, original) in replayed.iter().zip(&steps) {
+        let shown = |revision: &str| {
+            git(
+                &tree,
+                &["show", "-s", "--format=%B%n%ad|%cd", "--date=raw", revision],
+            )
+        };
+        assert_eq!(shown(made), shown(original), "message and dates");
+        assert_eq!(
+            git(&tree, &["show", "-s", "--format=%an <%ae>|%cn <%ce>", made]),
+            format!("{IDENTITY}|{IDENTITY}")
+        );
+    }
+    let at = |path: &str| git(&tree, &["show", &format!("{candidate}:{path}")]);
+    assert_eq!(at("work.txt"), "done\nand more");
+    assert_eq!(at(".engineering/notes.md"), "a note");
+    assert_eq!(
+        at(STORY_FILE),
+        git(&tree, &["show", &format!("{base}:{STORY_FILE}")]),
+        "the take rode on the candidate"
+    );
+}
+
+/// The same case gives the same candidate on a resume, a second later: the replay keeps every
+/// date and identity, so nothing of the moment it runs enters the commits.
+#[test]
+fn a_resume_prints_the_same_candidate() {
+    let tree = story_scratch("candidate-resume", true);
+    let harness = Counting::default();
+    let validators = validators(false, None);
+    ahead_story(
+        &tree,
+        "candidate-resume",
+        &validators,
+        &harness,
+        &[(WORK, "implementation.edit: the work")],
+    );
+    let (_, first) = resume(&tree, "candidate-resume", &validators, &harness);
+    let first = candidate_of(&first).unwrap_or_else(|| panic!("no candidate line: {first}"));
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let (stop, text) = resume(&tree, "candidate-resume", &validators, &harness);
+    assert_eq!(
+        stop, "Unperformable (pr.opened; nothing performs it without the forge)",
+        "{text}"
+    );
+    assert_eq!(
+        candidate_of(&text).as_deref(),
+        Some(first.as_str()),
+        "{text}"
+    );
+    assert_eq!(harness.calls.get(), 0, "{text}");
+}
+
+/// With no identity configured (none recorded in the case, none in
+/// `.engineering/commit-identity.conf` at the base) no candidate is made: the line names the
+/// file, its keys and the flag, no candidate ref is written, and the stop stays as it is.
+#[test]
+fn with_no_identity_configured_no_candidate_is_made_and_the_setting_is_named() {
+    let tree = story_scratch("candidate-anonymous", false);
+    let harness = Counting::default();
+    let validators = validators(false, None);
+    ahead_story(
+        &tree,
+        "candidate-anonymous",
+        &validators,
+        &harness,
+        &[(WORK, "implementation.edit: the work")],
+    );
+    let (stop, text) = resume(&tree, "candidate-anonymous", &validators, &harness);
+    assert_eq!(
+        stop, "Unperformable (pr.opened; nothing performs it without the forge)",
+        "{text}"
+    );
+    assert_eq!(candidate_of(&text), None, "{text}");
+    let line = text
+        .lines()
+        .find(|line| line.starts_with("candidate: none"))
+        .unwrap_or_else(|| panic!("no refusal line: {text}"));
+    for named in [
+        ".engineering/commit-identity.conf",
+        "identity.name",
+        "identity.email",
+        "--commit-identity",
+    ] {
+        assert!(line.contains(named), "{named} unnamed: {line}");
+    }
+    assert!(
+        takt::git::refs(&tree, &["refs/takt/candidates/"])
+            .expect("the refs read")
+            .is_empty(),
+        "{text}"
+    );
+}
+
+/// A code commit that changes what the take changed does not apply on the base without it: no
+/// candidate is made, the line names that commit, no candidate ref is written, and the stop
+/// stays as it is.
+#[test]
+fn a_code_commit_that_needs_the_take_is_named_and_no_candidate_is_made() {
+    let tree = story_scratch("candidate-conflict", true);
+    let harness = Counting::default();
+    let validators = validators(false, None);
+    let done = story_text("implemented");
+    let steps = ahead_story(
+        &tree,
+        "candidate-conflict",
+        &validators,
+        &harness,
+        &[
+            (WORK, "implementation.edit: the work"),
+            (
+                &[(STORY_FILE, done.as_str())],
+                "implementation.edit: the story is done",
+            ),
+        ],
+    );
+    let before = untouched(&tree);
+    let (stop, text) = resume(&tree, "candidate-conflict", &validators, &harness);
+    assert_eq!(
+        stop, "Unperformable (pr.opened; nothing performs it without the forge)",
+        "{text}"
+    );
+    assert_eq!(candidate_of(&text), None, "{text}");
+    let line = text
+        .lines()
+        .find(|line| line.starts_with("candidate: none"))
+        .unwrap_or_else(|| panic!("no refusal line: {text}"));
+    assert!(line.contains(&steps[1]), "the commit unnamed: {line}");
+    assert!(line.contains(STORY_FILE), "the path unnamed: {line}");
+    assert_eq!(untouched(&tree), before, "{text}");
+    assert!(
+        takt::git::refs(&tree, &["refs/takt/candidates/"])
+            .expect("the refs read")
+            .is_empty(),
+        "{text}"
+    );
+}

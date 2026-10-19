@@ -88,6 +88,11 @@ fn repository(fixture: &str, name: &str) -> Scratch {
     copy_dir(&Path::new(FIXTURES).join(fixture), &dir);
     fs::write(dir.join("Cargo.toml"), "[package]\nname = \"scratch\"\n").expect("a file");
     fs::write(dir.join(".engineering/gates.yaml"), GATES).expect("a file");
+    fs::write(
+        dir.join(".engineering/commit-identity.conf"),
+        "[identity]\n\tname = Test Bot\n\temail = bot@example.invalid\n",
+    )
+    .expect("the commit identity is written");
     git(&dir, &["init", "-q", "-b", "main"]);
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-q", "-m", "start"]);

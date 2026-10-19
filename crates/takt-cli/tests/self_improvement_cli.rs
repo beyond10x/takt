@@ -1944,6 +1944,81 @@ fn an_undelegated_agent_cannot_grant_a_turns_judge_surface_merge() {
     );
 }
 
+/// A turn whose candidate touches a judge surface, opened by `takt run` under `--forge none`, at
+/// the gate of its judge-surface merge.
+fn judge_turn_at_the_gate(name: &str) -> World {
+    let world = world_with(
+        name,
+        &Setup {
+            touches: Some(("tools/judge.sh", "#!/bin/sh\nexit 0\n")),
+            ..Setup::plain(true, false)
+        },
+    );
+    let inputs = vec![
+        format!("finding={FINDING}"),
+        format!("candidate={}", world.candidate),
+    ];
+    let (code, out, err) = run_as(
+        &world,
+        &inputs,
+        None,
+        Some("the probe no longer shows the defect"),
+        &[],
+    );
+    assert_eq!(code, 4, "{out}\n{err}");
+    assert!(
+        out.contains("candidate.merge_judge_surface"),
+        "{out}\n{err}"
+    );
+    world
+}
+
+/// The reviewer's `rv_cli_owner_grant_then_merge_records_merged`: through the binary, the turn
+/// `takt run` opened records its forge, the owner's `takt approve` records `main`'s tip with the
+/// grant, and a merge after the grant records `merged`.
+#[test]
+fn a_judge_surface_merge_after_the_owners_approval_is_recorded() {
+    let world = judge_turn_at_the_gate("judge-after-approve");
+    let case = world.repo.join(".engineering/cases/turn-1");
+    let forge = fs::read_to_string(case.join("forge")).expect("the turn records its forge");
+    assert_eq!(forge, "none\n");
+    let main = git(&world.repo, &["rev-parse", "main"]);
+    let (code, shown) = approve_by(&world, "repository.merge.judge_surface", "human:owner");
+    assert_eq!(code, 0, "{shown}");
+    let authority = fs::read_to_string(case.join("authority.yaml")).expect("the authority");
+    assert!(
+        authority.contains(&format!("mainline_tip: {main}")),
+        "{authority}"
+    );
+    git(&world.repo, &["branch", "-f", "main", &world.candidate]);
+    let (_, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--hours", "0.001"]);
+    assert!(
+        records(&world.repo)
+            .iter()
+            .any(|record| field(record, "kind") == "merge_observation"),
+        "{out}\n{err}"
+    );
+}
+
+/// The reviewer's `rv_cli_fast_forward_before_approve_records_nothing`, the first real turn's
+/// shape through the binary: `main` fast-forwarded to the candidate before the owner's `takt
+/// approve`. No merge is recorded, and the run says why.
+#[test]
+fn a_judge_surface_merge_before_the_owners_approval_records_nothing() {
+    let world = judge_turn_at_the_gate("judge-before-approve");
+    git(&world.repo, &["branch", "-f", "main", &world.candidate]);
+    let (code, shown) = approve_by(&world, "repository.merge.judge_surface", "human:owner");
+    assert_eq!(code, 0, "{shown}");
+    let (_, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--hours", "0.001"]);
+    assert!(
+        records(&world.repo)
+            .iter()
+            .all(|record| field(record, "kind") != "merge_observation"),
+        "{out}\n{err}"
+    );
+    assert!(out.contains("held the candidate"), "{out}\n{err}");
+}
+
 /// The reviewer's `rv_a_turn_on_a_protocol_file_with_a_harness_action`, inverted as ruled: a
 /// protocol document of id `self.improvement/1` other than the embedded one (here with one more
 /// action, which no validator performs) opens no turn: refused before anything is written,
@@ -2266,4 +2341,185 @@ fn a_resumed_turn_on_another_protocol_document_is_refused() {
     assert_ne!(code, 0, "{out}\n{err}");
     assert!(err.contains("embeds"), "{err}");
     assert_eq!(records(&world.repo).len(), before, "{out}\n{err}");
+}
+
+/// `takt` run in `world` with `args` alone, the run's state and cache given, and `PATH` set to
+/// `path` when some.
+fn takt_on_path(world: &World, args: &[&str], path: Option<&Path>) -> (i32, String, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
+    command
+        .args(args)
+        .env("XDG_STATE_HOME", &world.state)
+        .env("XDG_CACHE_HOME", &world.cache)
+        .env("CARGO_INSTALL_ROOT", decoy(world))
+        .env_remove("B10X_GATES_POLICY");
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let output = command.output().expect("takt runs");
+    (
+        output.status.code().expect("an exit code"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// A turn opened by `takt run` under `--forge none` with a commit identity, so that a resume
+/// through the bot route is not refused for want of one, stopped at its merge's grant.
+fn turn_opened_under_forge_none(name: &str) -> World {
+    let world = world(name, true, false);
+    let mut args: Vec<String> = [
+        "run",
+        "--gate",
+        "repository.merge",
+        "--intent",
+        "the probe no longer shows the defect",
+        "--repo",
+        world.repo.to_str().expect("utf-8"),
+        "--protocol",
+        PROTOCOL,
+        "--install-root",
+        world.install.to_str().expect("utf-8"),
+        "--case-id",
+        "turn-1",
+        "--harness",
+        "none",
+        "--forge",
+        "none",
+        "--commit-identity",
+        "Probe <probe@example.com>",
+        "--test-cmd",
+        "true",
+        "--iterations",
+        "6",
+        "--scenarios",
+        world.scenarios.to_str().expect("utf-8"),
+    ]
+    .iter()
+    .map(|arg| (*arg).to_owned())
+    .collect();
+    for input in opening(&world) {
+        args.extend(["--input".to_owned(), input]);
+    }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (code, out, err) = takt_on_path(&world, &args, None);
+    assert_eq!(code, 4, "{out}\n{err}");
+    let forge = fs::read_to_string(world.repo.join(".engineering/cases/turn-1/forge"))
+        .expect("the turn records its forge");
+    assert_eq!(forge, "none\n");
+    world
+}
+
+/// Every file under `dir` with its bytes, by path, and the repository's refs and `HEAD`: what a
+/// refusal before anything is written leaves as it was.
+fn state_of(repo: &Path) -> (Vec<(PathBuf, Vec<u8>)>, String, String) {
+    fn walk(dir: &Path, into: &mut Vec<(PathBuf, Vec<u8>)>) {
+        for entry in fs::read_dir(dir).expect("the directory reads") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                walk(&path, into);
+            } else {
+                let bytes = fs::read(&path).expect("the file reads");
+                into.push((path, bytes));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&repo.join(".engineering/cases"), &mut files);
+    files.sort();
+    (
+        files,
+        git(repo, &["for-each-ref"]),
+        git(repo, &["rev-parse", "--symbolic-full-name", "HEAD"]),
+    )
+}
+
+/// A `PATH` holding `git` alone, so a run that went on through the bot route could reach no
+/// forge: neither `gh` nor `b10x-gates` is found.
+fn git_only_path(world: &World) -> PathBuf {
+    let bin = world.repo.parent().expect("a parent").join("git-only-bin");
+    fs::create_dir_all(&bin).expect("the directory");
+    let git = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("sh runs");
+    let git = String::from_utf8_lossy(&git.stdout).trim().to_owned();
+    std::os::unix::fs::symlink(&git, bin.join("git")).expect("the link");
+    bin
+}
+
+/// Review finding N1 of wave 16: a turn opened under `--forge none` records `none`, and `takt
+/// approve` reads the mainline through it; resumed by default through the bot route (`origin` on
+/// github.com), the merge validators would read another `main`. The resume is refused before
+/// anything is written, naming both forges and the way past, `--forge none`.
+#[test]
+fn a_turn_resumed_through_another_forge_than_it_opened_with_is_refused() {
+    let world = turn_opened_under_forge_none("forge-switch");
+    git(
+        &world.repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/turn.git",
+        ],
+    );
+    let before = state_of(&world.repo);
+    let path = git_only_path(&world);
+    let repo = world.repo.to_str().expect("utf-8");
+    let scenarios = world.scenarios.to_str().expect("utf-8");
+    let (code, out, err) = takt_on_path(
+        &world,
+        &[
+            "run",
+            "--case",
+            "turn-1",
+            "--repo",
+            repo,
+            "--harness",
+            "none",
+            "--test-cmd",
+            "true",
+            "--scenarios",
+            scenarios,
+            "--hours",
+            "0.001",
+        ],
+        Some(&path),
+    );
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert!(err.contains("`none`"), "{err}");
+    assert!(err.contains("`bot`"), "{err}");
+    assert!(err.contains("--forge none"), "{err}");
+    assert!(err.contains("nothing was resumed"), "{err}");
+    assert!(!out.contains("stopped: "), "a step was taken: {out}\n{err}");
+    assert!(state_of(&world.repo) == before, "{out}\n{err}");
+}
+
+/// The reverse of N1: a turn that recorded the bot route, resumed under `--forge none`, would
+/// read the local `main` in its merge validators while `takt approve` reads the forge's. Refused
+/// before anything is written, naming the way past, `--forge bot`.
+#[test]
+fn a_turn_recorded_with_the_bot_route_resumed_under_forge_none_is_refused() {
+    let world = turn_opened_under_forge_none("forge-switch-back");
+    fs::write(world.repo.join(".engineering/cases/turn-1/forge"), "bot\n").expect("written");
+    let before = state_of(&world.repo);
+    let (code, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--hours", "0.001"]);
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert!(err.contains("`bot`"), "{err}");
+    assert!(err.contains("`none`"), "{err}");
+    assert!(err.contains("--forge bot"), "{err}");
+    assert!(!out.contains("stopped: "), "a step was taken: {out}\n{err}");
+    assert!(state_of(&world.repo) == before, "{out}\n{err}");
+}
+
+/// A turn that recorded no forge, opened before turns recorded one, resumes as it did: no
+/// refusal for its forge.
+#[test]
+fn a_turn_that_recorded_no_forge_resumes_under_any() {
+    let world = turn_opened_under_forge_none("forge-unrecorded");
+    fs::remove_file(world.repo.join(".engineering/cases/turn-1/forge")).expect("removed");
+    let (_, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--hours", "0.001"]);
+    assert!(!err.contains("recorded the forge"), "{err}");
+    assert!(out.contains("stopped: "), "{out}\n{err}");
 }

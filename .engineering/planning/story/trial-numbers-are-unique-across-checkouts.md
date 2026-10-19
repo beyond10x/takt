@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:trial-numbers-are-unique-across-checkouts
 kind: story
-status: active
+status: implemented
 title: Scenario runs from fresh checkouts never share a trial number
 summary: 'trial 2: four aborted runs, 239,745 tokens'
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T23:14:31Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: trial-numbers-are-unique-across-checkouts
 

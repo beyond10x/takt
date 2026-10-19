@@ -233,6 +233,11 @@ fn world(name: &str, clippy_fails: bool) -> World {
         ),
     )
     .expect("the citations stub is written");
+    fs::write(
+        repo.join(".engineering/commit-identity.conf"),
+        "[identity]\n\tname = Test Bot\n\temail = bot@example.invalid\n",
+    )
+    .expect("the commit identity is written");
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "seed"]);

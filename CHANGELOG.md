@@ -6,6 +6,52 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+### Changed
+
+- Every commit takt makes (the take, the store's writes on the case's branch, an approval's
+  record, a step's change) carries one identity as author and committer: `--commit-identity
+  '<name> <email>'`, else the one `.engineering/commit-identity.conf` names at the commit the case
+  forks from, else `takt <takt@localhost>`. The case records it when it opens and a resume keeps
+  it. Neither the operator's git configuration nor the identity variables in takt's environment
+  reach a commit. A run whose commits leave the machine (the bot route) is refused at open, exit
+  1, when no identity is configured; a run under `--forge none` is not.
+
+### Added
+
+- A delivery under `--forge none` that stops at `pr.opened` hands its change over as a candidate:
+  its code commits are replayed on the base under the configured identity, kept under
+  `refs/takt/candidates/<case-id>`, and the run prints `candidate: <id>`, which a
+  `self.improvement/1` turn opens on. With no configured identity, or when the replay conflicts,
+  it prints `candidate: none:` and why, and a candidate an earlier run of the case made is no
+  longer named by the ref.
+
+### Gates
+
+- `gate.run` with a project file compares at the case's pinned base, besides the executables and
+  catalogs it admits, every file a gate command takes as an argument, the tool configuration
+  (`.cargo/config`, `.cargo/config.toml`, `clippy.toml`, `.clippy.toml`, `rustfmt.toml`,
+  `.rustfmt.toml`, `Taskfile.yml`, `Taskfile.yaml`, `Taskfile.dist.yml`, `Taskfile.dist.yaml`, by
+  file name at any depth), the `[lints]` and `[workspace.lints]` entries of
+  every `Cargo.toml`, and the judge surface `tests.run` is compared on, `rust-toolchain*` and the
+  repository's own `.engineering/judge-surface.yaml` included. One that differs, was added or was
+  deleted runs nothing and writes no record, and the summary names it. A directory the base holds
+  where an argument points is the data a command checks and is not compared. Build-time code (a
+  build script, a procedural macro) is not closed by comparison: `gate.green` does not vouch for
+  it, and the merge stays owner-granted. takt's repository lists `scripts/**` on its judge
+  surface.
+
+### Improvement turns
+
+- `candidate.merge_judge_surface` records `merged` only for a candidate that reached the mainline
+  after the grant. `takt approve` records the mainline's tip with a turn's judge-surface grant,
+  read through the forge the turn recorded when it opened. A candidate that tip already holds is
+  refused, decided by ancestry, not by a committer date. The refusal names the merge commit with
+  its committer date and the grant's time. A grant that records no tip (a turn opened before
+  the forge was recorded), whose tip cannot be fetched, or whose tip is not on the mainline now
+  is refused too.
+- A turn resumed through another forge than the one it recorded when it opened is refused, exit
+  1, before anything is written, naming both and `--forge <recorded>` as the way past.
+
 ## [0.3.0] — 2026-10-20
 
 The minor version moves because `takt promote` now refuses scorecards that 0.2.x accepted.

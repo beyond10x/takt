@@ -1140,6 +1140,22 @@ impl std::fmt::Debug for Mainline {
 }
 
 impl Mainline {
+    /// The mainline of the forge named `forge`, as a turn records it when it opens
+    /// ([`crate::case::FORGE_FILE`]): `none` the local `main`, `bot` the bot route's report of
+    /// `main` for `tree` ([`crate::forge::BotRoute::for_tree`]); any other name is refused.
+    pub fn recorded(tree: &Path, forge: &str) -> Result<Self> {
+        match forge {
+            "none" => Ok(Self::Local),
+            "bot" => Ok(Self::Forge(Rc::new(crate::forge::BotRoute::for_tree(
+                tree,
+            )?))),
+            other => bail!(
+                "the turn records the forge `{}`, which takt does not read the mainline through: bot or none",
+                other.escape_debug()
+            ),
+        }
+    }
+
     /// The forge's name, or `none` for the local `main`.
     #[must_use]
     pub fn forge(&self) -> String {
@@ -1322,6 +1338,114 @@ fn judge_surface_refusal(
     )
 }
 
+/// Why the case at `dir`'s grant of [`crate::validator::JUDGE_SURFACE_CAPABILITY`] does not
+/// authorise recording the candidate `revision` merged because of when the merge was made: the
+/// grant records no tip of the mainline read when it was given
+/// ([`crate::case::AuthorityDecision::mainline_tip`]), that tip does not arrive from `tree`'s
+/// repository as its id, or it holds the candidate already, so the candidate reached the
+/// mainline before the grant, which authorises no merge already made. That refusal names the
+/// merge, the first commit of the mainline's first-parent chain at that tip that holds the
+/// candidate (the candidate itself for a fast-forward), with its committer date, labelled as the
+/// committer's clock, and the grant's instant. Decided by ancestry against the tip takt read,
+/// never by a date: the committer sets the date, and a fast-forward carries the candidate's own.
+/// A tip at the grant that is not on the mainline at `now`, neither `now` nor an ancestor of it,
+/// is refused too; none when the tip at the grant is on it and does not hold the candidate.
+fn merged_before_grant(
+    dir: &Path,
+    tree: &Path,
+    now: &str,
+    revision: &str,
+) -> Result<Option<String>> {
+    let capability = crate::validator::JUDGE_SURFACE_CAPABILITY;
+    let main = crate::promotion::MAINLINE;
+    let authority = crate::case::Authority::read(dir)?.unwrap_or_default();
+    let Some(decision) = authority.decision(capability) else {
+        return Ok(Some(format!("the case holds no grant of {capability}")));
+    };
+    let granted_at = &decision.granted_at;
+    let Some(tip) = decision.mainline_tip.as_deref() else {
+        return Ok(Some(format!(
+            "the grant given at {granted_at} records no tip of {main} read when it was given, so whether the candidate reached {main} after the grant is not known"
+        )));
+    };
+    if !crate::forge::is_object_id(tip) {
+        return Ok(Some(format!(
+            "the grant given at {granted_at} records `{}` as the tip of {main}, which is no object id",
+            tip.escape_debug()
+        )));
+    }
+    let mirror = match crate::git::Mirror::of(tree, &[tip, revision, now])? {
+        Ok(mirror) => mirror,
+        Err(why) => {
+            return Ok(Some(format!(
+                "{main} at the grant given at {granted_at}, {}, {main} now, {}, and the candidate {} do not arrive from this repository as their ids, every object hashed again ({why})",
+                short(tip),
+                short(now),
+                short(revision)
+            )));
+        }
+    };
+    // The tip recorded is the mainline's only while the mainline now is it or descends from it.
+    if !is_ancestor(&mirror, tip, now)? {
+        return Ok(Some(format!(
+            "{main} at the grant given at {granted_at}, {}, is not on {main} now, {}, neither its tip nor an ancestor of it, so the tip recorded with the grant is not the mainline's",
+            short(tip),
+            short(now)
+        )));
+    }
+    if !is_ancestor(&mirror, revision, tip)? {
+        return Ok(None);
+    }
+    // The commits holding the candidate are the newest stretch of the first-parent chain: the
+    // oldest of them is where the candidate reached the mainline.
+    let descendants: std::collections::HashSet<String> = mirror
+        .run(&[
+            "rev-list",
+            "--ancestry-path",
+            "--end-of-options",
+            &format!("{revision}..{tip}"),
+        ])?
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let chain = mirror.run(&["rev-list", "--first-parent", "--end-of-options", tip])?;
+    let merge = chain
+        .lines()
+        .take_while(|commit| *commit == revision || descendants.contains(*commit))
+        .last()
+        .unwrap_or(tip)
+        .to_owned();
+    let committed = mirror.run(&["show", "-s", "--format=%cI", "--end-of-options", &merge])?;
+    Ok(Some(format!(
+        "{main} held the candidate when the grant was given at {granted_at}: {main} was at {} then, and holds the candidate since {}, committed at {committed} by the committer's clock, the first commit of its first-parent chain that holds it; a grant authorises no merge made before it",
+        short(tip),
+        short(&merge)
+    )))
+}
+
+/// Whether `ancestor` is `descendant` or an ancestor of it, read on `mirror`; any answer of git
+/// but yes or no is an error.
+fn is_ancestor(mirror: &crate::git::Mirror, ancestor: &str, descendant: &str) -> Result<bool> {
+    let ancestry = mirror.output(&[
+        "merge-base",
+        "--is-ancestor",
+        "--end-of-options",
+        ancestor,
+        descendant,
+    ])?;
+    match ancestry.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => bail!(
+            "git merge-base --is-ancestor {} {} on the judge's copy exited {}: {}",
+            short(ancestor),
+            short(descendant),
+            ancestry.status,
+            String::from_utf8_lossy(&ancestry.stderr).trim()
+        ),
+    }
+}
+
 /// `candidate.merge` and `candidate.merge_judge_surface`, one type for both: observes, never
 /// merges. Writes one `merge_observation` about `candidate`, `merged`, when the case holds the
 /// grant its protocol requires for the action at the candidate revision
@@ -1331,8 +1455,11 @@ fn judge_surface_refusal(
 /// hold the candidate it records nothing and waits, naming the tip; without the grant it records
 /// nothing. `candidate.merge_judge_surface` holds its grant to story:judge-guard's rule besides
 /// ([`judge_surface_refusal`]): the owner's, or an agent role's under an unrevoked delegation on
-/// record at the mainline's tip; any other grant records nothing. The merge itself happens in
-/// the candidate's own delivery case, under the judge guard, or by the owner.
+/// record at the mainline's tip; any other grant records nothing. Nor does it record a
+/// candidate the mainline held when the grant was given, or under a grant that records no such
+/// tip or one that does not arrive ([`merged_before_grant`]); `candidate.merge` is not held to
+/// that. The merge itself happens in the candidate's own delivery case, under the judge guard,
+/// or by the owner.
 #[derive(Clone)]
 pub struct CandidateMerged {
     action: &'static str,
@@ -1404,6 +1531,18 @@ impl CandidateMerged {
         let tip = self.mainline.tip(tree)?;
         if self.action == Self::JUDGE_SURFACE_ACTION
             && let Some(why) = judge_surface_refusal(&dir, tree, &tip, revision)?
+        {
+            return Ok((
+                nothing(format!(
+                    "{} at {} is granted, but {why}; nothing recorded",
+                    self.action,
+                    short(revision)
+                )),
+                false,
+            ));
+        }
+        if self.action == Self::JUDGE_SURFACE_ACTION
+            && let Some(why) = merged_before_grant(&dir, tree, &tip, revision)?
         {
             return Ok((
                 nothing(format!(

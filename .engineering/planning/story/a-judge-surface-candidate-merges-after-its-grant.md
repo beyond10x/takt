@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-judge-surface-candidate-merges-after-its-grant
 kind: story
-status: active
+status: implemented
 title: A judge-surface candidate counts as merged only after the turn holds its grant
 summary: the first real turn's candidate was merged before the grant
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T18:37:47Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T18:37:47Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T23:22:52Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: a-judge-surface-candidate-merges-after-its-grant
 

@@ -1,7 +1,8 @@
 //! A Canon case on disk: `<tree>/.engineering/cases/<id>/` holds `case.yaml`, `protocol.ir.json`,
 //! `evidence/*.json`, `decisions/*.json`, `branch.yaml`, the case's branch and its pull
 //! request, `story.yaml`, the story the case was opened for, when it was, and `authority.yaml`,
-//! the authority the operator granted the case, once granted, and `riders/<revision>/`, what the
+//! the authority the operator granted the case, once granted, `commit-identity`, the identity
+//! its commits carry when it opened with one, and `riders/<revision>/`, what the
 //! run's store writes on the story committed, which its riders must equal byte for byte
 //! ([`approvals_only`]). Every evaluation reads the files
 //! and asks Canon. A case is opened once and resumed by every later run on it.
@@ -39,6 +40,44 @@ pub const STORY_FILE: &str = "story.yaml";
 /// while it is checked, recorded and written. Created with `create_new`, so of two that try at
 /// once exactly one holds; no grant lands and no second run starts meanwhile.
 pub const LOCK_FILE: &str = "run.lock";
+
+/// The file under the case directory that names the identity every commit of the case carries
+/// (`<name> <email>` on one line), written when the case opens; absent when it opened with
+/// none, and then its commits are takt's own ([`CaseDir::committer`]).
+pub const COMMIT_IDENTITY_RECORD: &str = "commit-identity";
+
+/// The identity a case's commits carry, as the case is opened with it ([`CaseDir::open_as`]),
+/// recorded in the case so every resume and approval commits with the same one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum CommitAs {
+    /// None recorded: the case commits as [`crate::git::CommitIdentity::takt`]. A library run
+    /// given no identity opens its case so.
+    #[default]
+    Takt,
+    /// This identity, whatever the repository configures: the operator's `--commit-identity`,
+    /// or one the caller read elsewhere (a scenario's declaring revision).
+    Given(crate::git::CommitIdentity),
+    /// The identity [`crate::git::COMMIT_IDENTITY_FILE`] names at the commit the case forks
+    /// from, read when it opens; with none there, as [`CommitAs::Takt`], unless `required` (a run
+    /// whose commits leave the machine): then the case is refused before anything is written.
+    Configured {
+        /// Whether a case finding none configured is refused.
+        required: bool,
+    },
+}
+
+/// The identity the case at `case_dir` was opened with ([`COMMIT_IDENTITY_RECORD`]); none when
+/// it recorded none. A record that does not read as an identity is an error.
+pub fn commit_identity_of(case_dir: &Path) -> Result<Option<crate::git::CommitIdentity>> {
+    let path = case_dir.join(COMMIT_IDENTITY_RECORD);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => crate::git::CommitIdentity::parse(text.trim_end_matches('\n'))
+            .with_context(|| format!("read {}", path.display()))
+            .map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
+}
 
 /// The protocol whose cases open with a baseline the run is given: `loop.improvement/1`.
 pub const LOOP_PROTOCOL: &str = "loop.improvement/1";
@@ -501,6 +540,13 @@ pub struct AuthorityDecision {
     /// revision) authorises none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
+    /// The commit the mainline was at when the grant was given, read by `takt approve` through
+    /// the forge the improvement turn recorded at open ([`FORGE_FILE`]): what
+    /// `candidate.merge_judge_surface` decides a merge made before the grant by, never a date.
+    /// Recorded for a turn's grant of [`crate::validator::JUDGE_SURFACE_CAPABILITY`] only; a
+    /// grant without one authorises no judge-surface merge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mainline_tip: Option<String>,
 }
 
 impl AuthorityDecision {
@@ -912,7 +958,9 @@ pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<
 /// approval-required, or was computed at another revision of that artifact than the case is at
 /// now), and a capability the case already decides at that revision. A grant given at another
 /// revision is replaced: it authorises nothing here, and Canon refuses a capability decided
-/// twice.
+/// twice. An improvement turn's grant of [`crate::validator::JUDGE_SURFACE_CAPABILITY`] records
+/// the mainline's tip read once the grant's instant is taken ([`mainline_at_grant`]), none for a
+/// turn that recorded no forge; a tip that cannot be read is refused with nothing written.
 pub fn prepare_grant(
     tree: &Path,
     id: &str,
@@ -1033,12 +1081,21 @@ pub fn prepare_grant(
         .decisions
         .retain(|decision| decision.capability != capability);
     let granted_at = crate::now();
+    // A turn's judge-surface grant records the mainline's tip, read after its instant, so a
+    // merge made before the grant is found by ancestry, never by a date.
+    let mainline_tip =
+        if protocol == TURN_PROTOCOL && capability == crate::validator::JUDGE_SURFACE_CAPABILITY {
+            mainline_at_grant(tree, &dir, id)?
+        } else {
+            None
+        };
     authority.decisions.push(AuthorityDecision {
         capability: capability.to_owned(),
         decision: Grant::Granted,
         approver: approver.to_owned(),
         granted_at: granted_at.clone(),
         revision: Some(revision.clone()),
+        mainline_tip,
     });
     let approval = Approval {
         case: id.to_owned(),
@@ -1053,6 +1110,22 @@ pub fn prepare_grant(
         authority,
         approval,
         _held: held,
+    })
+}
+
+/// The commit the mainline is at now for the turn `id` at `dir` under `tree`, read through the
+/// forge the turn recorded when it opened ([`turn_forge`],
+/// [`crate::improvement::Mainline::recorded`]): what its judge-surface grant records. None for
+/// a turn that recorded no forge, whose grant then authorises no judge-surface merge; a tip that
+/// cannot be read is an error, and nothing is written then.
+fn mainline_at_grant(tree: &Path, dir: &Path, id: &str) -> Result<Option<String>> {
+    let main = crate::promotion::MAINLINE;
+    let Some(forge) = turn_forge(dir)? else {
+        return Ok(None);
+    };
+    let mainline = crate::improvement::Mainline::recorded(tree, &forge)?;
+    mainline.tip(tree).map(Some).with_context(|| {
+        format!("the tip of {main} at this grant to the turn {id} could not be read; nothing was written")
     })
 }
 
@@ -1613,13 +1686,29 @@ impl CaseDir {
     /// `HEAD`, the inputs and the branch are in order, and an open that fails after the branch
     /// was made takes the directory, the cases directory when it was the last, and the branch
     /// with it, the tree back where it was, so a case directory exists only with its
-    /// `case.yaml` and a `takt/<id>` branch only with its case.
+    /// `case.yaml` and a `takt/<id>` branch only with its case. Its commits are takt's own
+    /// ([`CommitAs::Takt`]); [`CaseDir::open_as`] opens one with another identity.
     pub fn open(
         tree: &Path,
         protocol: LoadedProtocol,
         id: &str,
         intent: &str,
         inputs: &[(String, String)],
+    ) -> Result<Self> {
+        Self::open_as(tree, protocol, id, intent, inputs, &CommitAs::Takt)
+    }
+
+    /// [`CaseDir::open`], the case's commits carrying the identity `commit_as` says, recorded
+    /// in the case ([`COMMIT_IDENTITY_RECORD`]). [`CommitAs::Configured`] reads it at the commit
+    /// the case's branch forks from, once the tree is found clean and before the branch is made;
+    /// one that must be there and is not refuses the case with nothing written.
+    pub fn open_as(
+        tree: &Path,
+        protocol: LoadedProtocol,
+        id: &str,
+        intent: &str,
+        inputs: &[(String, String)],
+        commit_as: &CommitAs,
     ) -> Result<Self> {
         check_id(id)?;
         refuse_link_on_the_way(tree, id, "opened")?;
@@ -1690,13 +1779,29 @@ impl CaseDir {
         // another case's commits. `left` is the branch the tree was on, which a discarded case
         // returns to.
         let (left, base, from) = opening_base(tree)?;
+        let base_commit = crate::git::run(
+            tree,
+            &["rev-parse", "--verify", from.as_deref().unwrap_or("HEAD")],
+        )?;
+        let identity = match commit_as {
+            CommitAs::Takt => None,
+            CommitAs::Given(identity) => Some(identity.clone()),
+            CommitAs::Configured { required } => {
+                match crate::git::configured_identity(tree, &base_commit)? {
+                    Some(identity) => Some(identity),
+                    None if *required => {
+                        return Err(crate::git::no_identity(
+                            &base_commit[..12.min(base_commit.len())],
+                        ));
+                    }
+                    None => None,
+                }
+            }
+        };
         let branch = Branch {
             name: Branch::name_of(id),
             base,
-            base_commit: Some(crate::git::run(
-                tree,
-                &["rev-parse", "--verify", from.as_deref().unwrap_or("HEAD")],
-            )?),
+            base_commit: Some(base_commit),
             left,
             pushed: None,
             pull_request: None,
@@ -1724,6 +1829,11 @@ impl CaseDir {
                 case.doc["artifacts"]["implementation"]["revision"] = tip.into();
             }
             case.create(intent, &branch)?;
+            if let Some(identity) = &identity {
+                let path = case.dir.join(COMMIT_IDENTITY_RECORD);
+                std::fs::write(&path, format!("{identity}\n"))
+                    .with_context(|| format!("write {}", path.display()))?;
+            }
             Ok(case)
         })();
         opened.map_err(|error: anyhow::Error| {
@@ -2032,8 +2142,18 @@ impl CaseDir {
     /// another run's than the one that delivered the candidate. Nothing else declares
     /// independence. The sha256 of the binary that judges the turn goes into [`JUDGE_FILE`], and
     /// the install root given, an existing directory named canonically, into
-    /// [`INSTALL_ROOT_FILE`]; any other root is refused before anything is written.
+    /// [`INSTALL_ROOT_FILE`]; any other root is refused before anything is written. The forge
+    /// given goes into [`FORGE_FILE`]; a name that is empty or holds white space is refused
+    /// before anything is written.
     pub fn open_turn(&mut self, opening: &TurnOpening) -> Result<()> {
+        if let Some(forge) = &opening.forge
+            && (forge.is_empty() || forge.chars().any(|c| c.is_whitespace() || c.is_control()))
+        {
+            bail!(
+                "the forge `{}` is no forge's name; a turn records the forge it reads the mainline through",
+                forge.escape_debug()
+            );
+        }
         // The install root is checked before anything is written: an existing directory named
         // canonically, an absolute UTF-8 path on one line, so no `..` or link recorded could
         // later lead elsewhere.
@@ -2098,7 +2218,26 @@ impl CaseDir {
             std::fs::write(&path, format!("{root}\n"))
                 .with_context(|| format!("write {}", path.display()))?;
         }
+        if let Some(forge) = &opening.forge {
+            let path = self.dir.join(FORGE_FILE);
+            std::fs::write(&path, format!("{forge}\n"))
+                .with_context(|| format!("write {}", path.display()))?;
+        }
         self.set_story(&opening.finding)
+    }
+
+    /// The identity the case was opened with ([`commit_identity_of`]); none when it recorded
+    /// none.
+    pub fn commit_identity(&self) -> Result<Option<crate::git::CommitIdentity>> {
+        commit_identity_of(&self.dir)
+    }
+
+    /// The identity every commit of the case carries: the one it was opened with, else takt's
+    /// own ([`crate::git::CommitIdentity::takt`]).
+    pub fn committer(&self) -> Result<crate::git::CommitIdentity> {
+        Ok(self
+            .commit_identity()?
+            .unwrap_or_else(crate::git::CommitIdentity::takt))
     }
 
     /// Moves `artifact` to `revision`; evidence about the old revision no longer applies.
@@ -2254,6 +2393,11 @@ pub struct TurnOpening {
     /// installed binary under, recorded at open ([`INSTALL_ROOT_FILE`]); none, and it is read
     /// from the environment when the validator observes.
     pub install_root: Option<PathBuf>,
+    /// The forge whose mainline the turn reads ([`crate::improvement::Mainline::forge`]: `bot`,
+    /// or `none` for the local `main`), recorded at open ([`FORGE_FILE`]) for `takt approve` to
+    /// read the mainline's tip at a judge-surface grant through; none records nothing, and such
+    /// a grant records no tip and authorises no judge-surface merge.
+    pub forge: Option<String>,
 }
 
 /// The file of an improvement turn's case that holds the install root it was opened with, an
@@ -2279,6 +2423,48 @@ pub fn install_root_of(case_dir: &Path) -> Result<Option<PathBuf>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
     }
+}
+
+/// The file of an improvement turn's case that holds the forge it was opened with, its name on
+/// one line ([`TurnOpening::forge`]).
+pub const FORGE_FILE: &str = "forge";
+
+/// The forge the turn at `case_dir` was opened with ([`FORGE_FILE`]); none when it recorded none.
+pub fn turn_forge(case_dir: &Path) -> Result<Option<String>> {
+    let path = case_dir.join(FORGE_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let forge = text.strip_suffix('\n').unwrap_or(&text);
+            if forge.is_empty() || forge.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                bail!(
+                    "{} names `{}`, which is no forge's name",
+                    path.display(),
+                    forge.escape_debug()
+                );
+            }
+            Ok(Some(forge.to_owned()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
+}
+
+/// Why a resume of the case `id` at `case_dir` by a run whose forge is `run_forge` (`bot`, or
+/// `none` for the local `main`, [`crate::improvement::Mainline::forge`]) is refused before
+/// anything is written, or none: a turn reads the mainline through the forge it recorded when it
+/// opened ([`turn_forge`]), `takt approve` at a judge-surface grant and the merge validators
+/// alike, so a run through another forge would read another `main`. A case that recorded no
+/// forge, any case but a turn and a turn opened before turns recorded one, is not refused here.
+pub fn turn_forge_refusal(case_dir: &Path, id: &str, run_forge: &str) -> Result<Option<String>> {
+    let Some(recorded) = turn_forge(case_dir)? else {
+        return Ok(None);
+    };
+    if recorded == run_forge {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{TURN_PROTOCOL}: the turn {id} recorded the forge `{recorded}` when it opened, and this run's forge is `{run_forge}`; a turn reads the mainline through the forge it opened with, `takt approve` and the merge validators alike, so resume it with `--forge {recorded}`; nothing was resumed"
+    )))
 }
 
 /// The case input a turn's judge surface is, `surface`.
@@ -2558,6 +2744,7 @@ pub fn turn_opening(
         title: finding_title(finding, filed.as_deref().unwrap_or_default()),
         judge_sha256: digest,
         install_root: None,
+        forge: Some(mainline.forge()),
     })
 }
 

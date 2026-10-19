@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-local-wait-exits-waiting
 kind: story
-status: active
+status: implemented
 title: A wait on a local file exits 6 at once instead of polling
 summary: 'trial 2: 35 polls, 70 decision records in 17 min'
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T23:14:29Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: a-local-wait-exits-waiting
 

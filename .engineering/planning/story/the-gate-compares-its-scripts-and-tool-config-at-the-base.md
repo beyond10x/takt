@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-gate-compares-its-scripts-and-tool-config-at-the-base
 kind: story
-status: active
+status: implemented
 title: gate.run compares every script and tool config a gate reads at the base
 summary: a step could edit scripts/check-citations to exit 0 and gate.green would hold
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T20:05:24Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T20:05:25Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T23:22:53Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: the-gate-compares-its-scripts-and-tool-config-at-the-base
 
