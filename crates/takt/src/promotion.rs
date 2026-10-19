@@ -58,7 +58,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::scorecard::{
-    BINARY_FILE, METRICS, Row, Rule, RunBinary, Scorecard, StatedBy, is_sha256,
+    BINARY_FILE, METRICS, Row, Rule, RunBinary, Scorecard, StatedBy, is_sha256, rank,
 };
 
 /// The promotion record's format.
@@ -574,14 +574,26 @@ fn rebaselines_in_chain(store: &Path, records: &[Promotion]) -> Result<()> {
 /// field whose definition did not change is equal: the steps, tokens, refusals, `NoProgress`,
 /// errors and wall time under unchanged metric versions, the outcome when its definition is
 /// unchanged, and always the stop (the stored outcome under the outcome definition of version 1,
-/// which was the stop) and the revision the run's `opened` line names. The first run that is
-/// not is the refusal, named with the field and both figures.
+/// which was the stop) and the revision the run's `opened` line names. A stored run saved
+/// without that revision accepts a run naming exactly the revision of `base`, the record whose
+/// scorecard is replaced, and, when `base` states its revision (a binary that names none), a
+/// run naming none; anything else is refused. No run's outcome may rank below the stored one's,
+/// so a rebaseline keeps or raises the bar and never lowers it. A stored scorecard with no
+/// outcome metric is refused. The first run that is not bound is the refusal, named with the
+/// field and both figures.
 fn runs_bound(
     card: &Scorecard,
     stored: &Scorecard,
+    base: &Promotion,
     shown: &Path,
     stored_path: &Path,
 ) -> Result<()> {
+    if !stored.metrics.contains_key("outcome") {
+        bail!(
+            "{}: the stored scorecard has no outcome metric, so its outcomes cannot be bound to a re-read; --rebaseline is refused",
+            stored_path.display()
+        );
+    }
     let runs_of = |card: &'_ Scorecard| {
         let mut runs: BTreeMap<String, Vec<Row>> = BTreeMap::new();
         for row in &card.rows {
@@ -630,12 +642,20 @@ fn runs_bound(
                     fields.push((field, figure.to_string(), stored_figure.to_string()));
                 }
             }
-            let revision = |row: &Row| {
-                row.opened_binary
-                    .clone()
-                    .unwrap_or_else(|| "(none)".to_owned())
-            };
-            fields.push(("opened_binary", revision(run), revision(was)));
+            let named = run
+                .opened_binary
+                .clone()
+                .unwrap_or_else(|| "(none)".to_owned());
+            match (&run.opened_binary, &was.opened_binary) {
+                (_, Some(then)) => fields.push(("opened_binary", named, then.clone())),
+                (Some(now), None) if *now == base.revision => {}
+                (None, None) if base.revision_stated_by.is_some() => {}
+                (_, None) => fields.push((
+                    "opened_binary",
+                    named,
+                    format!("(none, which accepts {} only)", base.revision),
+                )),
+            }
             if let Some((field, figure, stored_figure)) = fields
                 .into_iter()
                 .find(|(_, figure, stored)| figure != stored)
@@ -644,6 +664,16 @@ fn runs_bound(
                     "{}: run {case}#{} gives {field} {figure:?}, the stored run {stored_figure:?} ({}); --rebaseline re-derives what a newer definition changes and nothing else",
                     shown.display(),
                     n + 1,
+                    stored_path.display()
+                );
+            }
+            if rank(&run.outcome) < rank(&was.outcome) {
+                bail!(
+                    "{}: run {case}#{} has the outcome {}, which ranks below the stored {} ({}); a rebaseline keeps or raises the bar and never lowers it",
+                    shown.display(),
+                    n + 1,
+                    run.outcome,
+                    was.outcome,
                     stored_path.display()
                 );
             }
@@ -2421,7 +2451,7 @@ pub fn rebaseline(request: &Rebaseline<'_>, out: &mut dyn Write) -> Result<Outco
             base_copy.display()
         );
     }
-    runs_bound(&card, &stored, shown, &base_copy)?;
+    runs_bound(&card, &stored, &base, shown, &base_copy)?;
     let runs = match (base.revision_stated_by, &base.binary_sha256) {
         (Some(_), Some(digest)) => {
             runs_judged(&card, None, shown)?;

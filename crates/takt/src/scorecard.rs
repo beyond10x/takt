@@ -841,8 +841,9 @@ impl Scorecard {
     }
 
     /// A saved scorecard; one that does not read, or of another format, is an error naming it,
-    /// and so is one with a run whose outcome is not what its held-out result makes it
-    /// ([`FAILED`] unless it passed, else its stop).
+    /// and so is one with a run whose scenario is not the one its case id names
+    /// ([`scenario_of`]), or whose outcome is not what its held-out result makes it ([`FAILED`]
+    /// unless it passed, else its stop).
     pub fn load(path: &Path) -> Result<Self> {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
@@ -859,6 +860,15 @@ impl Scorecard {
         for row in &card.rows {
             let n = counted.entry(row.case.as_str()).or_insert(0);
             *n += 1;
+            if row.scenario.as_deref() != scenario_of(&row.case) {
+                bail!(
+                    "{}: run {}#{n} gives the scenario {}, but its case id names {}; a scenario is read from the case id, so the scorecard is not read",
+                    path.display(),
+                    row.case,
+                    row.scenario.as_deref().unwrap_or("none"),
+                    scenario_of(&row.case).unwrap_or("none")
+                );
+            }
             let Some(held) = &row.held_out else {
                 continue;
             };

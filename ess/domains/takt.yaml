@@ -898,10 +898,11 @@ types:
   # A saved scorecard with a run whose outcome is not what its held-out result makes it
   # (`failed` unless it passed, else the run's stop), as a hand edit leaves it, is refused on
   # load naming the run (review of 2026-10-19); whether a run passed is derived from its `result`,
-  # and a saved `passed` that disagrees with it is refused the same way.
+  # and a saved `passed` that disagrees with it is refused the same way; so is a run whose
+  # `scenario` is not the one its case id names, the scenario being derived from the case id.
   # read from: crates/takt/src/scorecard.rs:50-58
   # read from: crates/takt/src/scorecard.rs:142-169
-  # read from: crates/takt/src/scorecard.rs:843-895
+  # read from: crates/takt/src/scorecard.rs:843-905
   - name: takt.work.HeldOut
     kind: struct
     fields:
@@ -1077,11 +1078,11 @@ types:
   # on the saved side (<n> of <trials>)` or `too few cases (<n> of <trials>)`, and the
   # comparison ends in a refusal naming each such scenario.
   # read from: .engineering/planning/design/recursive-self-improvement.md:130-138
-  # read from: crates/takt/src/scorecard.rs:897-913
-  # read from: crates/takt/src/scorecard.rs:1019-1043
-  # read from: crates/takt/src/scorecard.rs:1066-1094
-  # read from: crates/takt/src/scorecard.rs:969-993
-  # read from: crates/takt/src/scorecard.rs:1099-1104
+  # read from: crates/takt/src/scorecard.rs:907-923
+  # read from: crates/takt/src/scorecard.rs:1029-1053
+  # read from: crates/takt/src/scorecard.rs:1076-1104
+  # read from: crates/takt/src/scorecard.rs:979-1003
+  # read from: crates/takt/src/scorecard.rs:1109-1114
   - name: takt.work.Comparison
     kind: enum
     variants: [no_regression, regression]
@@ -1171,12 +1172,17 @@ types:
   # field whose definition is unchanged equal (steps, tokens, refusals, `NoProgress`, errors,
   # wall time, the outcome under an unchanged outcome definition, the revision the `opened` line
   # names) and the stop equal to the stored one, or to the stored outcome under the outcome
-  # definition of version 1. On every read of the store a rebaseline must replace the latest
+  # definition of version 1. A stored run saved without `opened_binary` (every scorecard saved
+  # before the field) accepts a re-read naming exactly the replaced record's revision, or naming
+  # none when that record states its revision; anything else is refused. No run's outcome may
+  # rank below the stored run's, so the held-out results a v1 to v2 rebaseline brings in keep
+  # or raise the bar and never lower it; a stored scorecard with no outcome metric is refused.
+  # On every read of the store a rebaseline must replace the latest
   # baseline before it: `replaces_sha256` is that record's scorecard digest, of the same
   # revision, and both scorecard copies hold the same case ids.
   # read from: .engineering/planning/story/promotion-refusal-is-not-final.md (§ Outcome)
-  # read from: crates/takt/src/promotion.rs:2296-2482
-  # read from: crates/takt/src/promotion.rs:572-653
+  # read from: crates/takt/src/promotion.rs:2326-2513
+  # read from: crates/takt/src/promotion.rs:572-683
   # read from: crates/takt/src/promotion.rs:534-570
   - name: takt.work.PromotionKind
     kind: enum
@@ -2288,7 +2294,7 @@ entities:
   # read from: crates/takt/src/scorecard.rs:1-35
   # read from: crates/takt/src/scorecard.rs:47-76
   # read from: crates/takt/src/scorecard.rs:324-347
-  # read from: crates/takt/src/scorecard.rs:897-1105
+  # read from: crates/takt/src/scorecard.rs:907-1115
   - name: takt.work.Scorecard
     naming:
       summary: >-
@@ -2367,10 +2373,10 @@ entities:
   # read from: .engineering/planning/story/promotion.md:39-44
   # read from: .engineering/planning/story/promotion.md:52-54
   # read from: .engineering/planning/story/promotion.md:141
-  # read from: crates/takt/src/promotion.rs:788-794
-  # read from: crates/takt/src/promotion.rs:1314-1425
-  # read from: crates/takt/src/promotion.rs:1794-1992
-  # read from: crates/takt/src/promotion.rs:1998-2288
+  # read from: crates/takt/src/promotion.rs:818-824
+  # read from: crates/takt/src/promotion.rs:1344-1455
+  # read from: crates/takt/src/promotion.rs:1824-2022
+  # read from: crates/takt/src/promotion.rs:2028-2318
   # Where it is kept, decided 2026-10-18: one JSON file per promotion at
   # `$XDG_STATE_HOME/takt/promotions/<revision>.json` (`~/.local/state/takt/promotions/` without
   # `XDG_STATE_HOME`; a refusal as `<revision>.refused.json`; the scorecard a baseline or a
@@ -2406,7 +2412,7 @@ entities:
   # read from: crates/takt/src/promotion.rs:291-294
   # read from: crates/takt/src/promotion.rs:341-369
   # read from: crates/takt/src/promotion.rs:389-528
-  # read from: crates/takt/src/promotion.rs:907-946
+  # read from: crates/takt/src/promotion.rs:937-976
   # A baseline for a binary built before `--version` named its revision, decided 2026-10-19
   # (story:baseline-for-a-pre-revision-binary): the operator states both, `takt promote
   # --baseline-only --revision <sha> --binary-sha256 <hex>`. Either flag without
@@ -2431,10 +2437,10 @@ entities:
   # refused naming both digests when it does not, or naming the record when it carries none; a
   # binary that names a revision is checked by it as before. The chain, the lock and the
   # fail-closed reads are untouched.
-  # read from: crates/takt/src/promotion.rs:1655-1690
-  # read from: crates/takt/src/promotion.rs:1692-1717
-  # read from: crates/takt/src/promotion.rs:1719-1767
-  # read from: crates/takt/src/promotion.rs:1563-1602
+  # read from: crates/takt/src/promotion.rs:1685-1720
+  # read from: crates/takt/src/promotion.rs:1722-1747
+  # read from: crates/takt/src/promotion.rs:1749-1797
+  # read from: crates/takt/src/promotion.rs:1593-1632
   # One scorecard backs at most one promotion, decided 2026-10-18: one-to-one, the promotion
   # referencing its scorecard. A relation entry carries no bound on the scorecard's side, so the
   # bound is stated here.
@@ -2466,10 +2472,10 @@ entities:
   # judged again.
   # read from: .engineering/planning/story/promote-binds-scorecard-and-merge.md (§ Outcome)
   # read from: .engineering/planning/story/promotion-refusal-is-not-final.md (§ Outcome)
-  # read from: crates/takt/src/promotion.rs:1428-1506
-  # read from: crates/takt/src/promotion.rs:2052-2118
-  # read from: crates/takt/src/promotion.rs:2485-2524
-  # read from: crates/takt/src/promotion.rs:655-688
+  # read from: crates/takt/src/promotion.rs:1458-1536
+  # read from: crates/takt/src/promotion.rs:2082-2148
+  # read from: crates/takt/src/promotion.rs:2515-2554
+  # read from: crates/takt/src/promotion.rs:685-718
   - name: takt.work.Promotion
     naming:
       summary: >-

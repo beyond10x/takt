@@ -2731,3 +2731,218 @@ fn a_held_out_passed_flag_contradicting_its_result_is_refused() {
     assert_eq!(code, 1, "{out}{err}");
     assert!(err.contains("scenario-1-trial-11#1"), "{err}");
 }
+
+/// Five cases each of scenarios 1 and 2, trials `from` to `from + 4`: scenario 1's runs stop
+/// `s1`, scenario 2's `s2`, each run opened by `binary`.
+fn two_scenarios(cases: &Path, from: usize, s1: &str, s2: &str, binary: &str) {
+    for (n, tokens) in BASELINE_TOKENS.iter().enumerate() {
+        run(
+            cases,
+            &format!("scenario-1-trial-{}", n + from),
+            *tokens,
+            s1,
+            Some(binary),
+        );
+        run(
+            cases,
+            &format!("scenario-2-trial-{}", n + from),
+            *tokens,
+            s2,
+            Some(binary),
+        );
+    }
+}
+
+/// The scorecard at `card` with the scenario labels 1 and 2 swapped in its rows, nothing else,
+/// written in a directory of its own named by `label`; the file.
+fn swap_labels(world: &World, card: &Path, label: &str) -> PathBuf {
+    let text = fs::read_to_string(card).expect("the scorecard");
+    let swapped = text
+        .replace("\"scenario\": \"1\"", "\"scenario\": \"X\"")
+        .replace("\"scenario\": \"2\"", "\"scenario\": \"1\"")
+        .replace("\"scenario\": \"X\"", "\"scenario\": \"2\"");
+    assert_ne!(text, swapped);
+    let path = world
+        .outer
+        .join(format!("saves-{label}"))
+        .join(card.file_name().expect("a file name"));
+    write(&path, &swapped);
+    path
+}
+
+/// Correction 3, item 1: a scenario label is derived from the case id on load, so a rebaseline
+/// whose rows carry swapped labels is refused, naming the run; the honest one is accepted and a
+/// candidate that regressed on scenario 1 is worse against it.
+#[test]
+fn a_rebaseline_relabelling_scenarios_is_refused() {
+    let world = World::new("relabel-rebaseline", BASELINE_TOKENS, FIVE_APPROVALS);
+    let cases = world.outer.join("two-scenario-cases");
+    two_scenarios(&cases, 1, APPROVAL, ERROR, BASELINE_REVISION);
+    let v2 = World::save(&cases, &world.outer.join("saves-two"), BASELINE_REVISION);
+    world.record_baseline_of(&outcome_v1(&world, &v2, "v1", &[]));
+    let forged = swap_labels(&world, &v2, "forged");
+    let (code, out, err) = rebaseline(&world, &forged);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("run scenario-1-trial-1#1 ") && err.contains("scenario"),
+        "{err}"
+    );
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+    let (code, out, err) = rebaseline(&world, &v2);
+    assert_eq!(code, 0, "{out}{err}");
+    let candidate_cases = world.outer.join("cases-candidate");
+    two_scenarios(&candidate_cases, 11, ERROR, APPROVAL, &world.revision);
+    let candidate = World::save(
+        &candidate_cases,
+        &world.outer.join("saves-candidate"),
+        &world.revision,
+    );
+    let (code, out, err) = world.promote(&candidate, &["--dry-run"]);
+    assert_eq!(code, 3, "{out}{err}");
+}
+
+/// Correction 3, item 1: the candidate's own scorecard with its scenario labels swapped is
+/// refused on load, naming the run, where the honest one is worse (exit 3).
+#[test]
+fn a_candidate_relabelling_scenarios_is_refused() {
+    let world = World::new("relabel-candidate", BASELINE_TOKENS, FIVE_APPROVALS);
+    let cases = world.outer.join("two-scenario-cases");
+    two_scenarios(&cases, 1, APPROVAL, ERROR, BASELINE_REVISION);
+    let v2 = World::save(&cases, &world.outer.join("saves-two"), BASELINE_REVISION);
+    world.record_baseline_of(&v2);
+    let candidate_cases = world.outer.join("cases-candidate");
+    two_scenarios(&candidate_cases, 11, ERROR, APPROVAL, &world.revision);
+    let candidate = World::save(
+        &candidate_cases,
+        &world.outer.join("saves-candidate"),
+        &world.revision,
+    );
+    let (code, out, err) = world.promote(&candidate, &["--dry-run"]);
+    assert_eq!(code, 3, "{out}{err}");
+    let forged = swap_labels(&world, &candidate, "forged");
+    let (code, out, err) = world.promote(&forged, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("run scenario-1-trial-11#1 ") && err.contains("scenario"),
+        "{err}"
+    );
+}
+
+/// Correction 3, item 3: in a rebaseline from outcome definition 1 to 2 the held-out results
+/// are new input; one that lowers a run's outcome below the stored one is refused, naming the
+/// run, so a rebaseline only keeps or raises the bar.
+#[test]
+fn a_rebaseline_cannot_lower_an_outcome() {
+    let world = World::new("rebaseline-lower", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline_of(&outcome_v1(&world, &world.baseline, "v1", &[]));
+    let cases = world.outer.join("baseline-cases");
+    for n in 1..=5 {
+        write(
+            &cases
+                .join(CASES_DIR)
+                .join(format!("scenario-1-trial-{n}"))
+                .join(HELD_OUT),
+            "FAIL: written by hand\n",
+        );
+    }
+    let card = World::save(&cases, &world.outer.join("saves-failed"), BASELINE_REVISION);
+    let (code, out, err) = rebaseline(&world, &card);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("run scenario-1-trial-1#1 ") && err.contains("ranks below"),
+        "{err}"
+    );
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// Correction 3, item 4: a stored scorecard with no outcome metric is refused by name.
+#[test]
+fn a_rebaseline_over_a_scorecard_without_an_outcome_metric_is_refused() {
+    let world = World::new("rebaseline-no-outcome", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline_of(&outcome_v1(
+        &world,
+        &world.baseline,
+        "v1",
+        &[("\"outcome\": 1,\n", "")],
+    ));
+    let (code, out, err) = rebaseline(&world, &world.baseline);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("no outcome metric"), "{err}");
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// `scorecard` as a takt before the held-out check saved it: outcome definition 1, and no
+/// `stop`, `held_out` or `opened_binary` in its rows, written in a directory of its own named
+/// by `label`; the file.
+fn as_saved_before(world: &World, scorecard: &Path, label: &str) -> PathBuf {
+    let text = fs::read_to_string(scorecard).expect("the scorecard");
+    let mut kept: Vec<String> = Vec::new();
+    let mut in_held = false;
+    for line in text.lines() {
+        let key = line.trim_start();
+        if in_held {
+            in_held = !key.starts_with('}');
+            continue;
+        }
+        if key.starts_with("\"stop\":") || key.starts_with("\"opened_binary\":") {
+            continue;
+        }
+        if key.starts_with("\"held_out\":") {
+            in_held = key.ends_with('{');
+            continue;
+        }
+        kept.push(line.replace("\"outcome\": 2,", "\"outcome\": 1,"));
+    }
+    let mut joined = kept.join("\n") + "\n";
+    while joined.contains(",\n    }") {
+        joined = joined.replace(",\n    }", "\n    }");
+    }
+    assert!(
+        !joined.contains("opened_binary") && !joined.contains("held_out"),
+        "{joined}"
+    );
+    let path = world
+        .outer
+        .join(format!("saves-{label}"))
+        .join(scorecard.file_name().expect("a file name"));
+    write(&path, &joined);
+    path
+}
+
+/// Correction 3, item 2, the shape the first rebaseline after the merge meets: a stored
+/// scorecard saved before the held-out check (outcome definition 1, no `opened_binary` in its
+/// rows) whose runs' `opened` lines name the stored record's revision. The re-read is accepted,
+/// and a candidate under the current definitions is judged against it; a re-read naming another
+/// revision is refused.
+#[test]
+fn a_rebaseline_of_rows_saved_without_opened_binary_is_accepted() {
+    let world = World::new("rebaseline-real-shape", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline_of(&as_saved_before(&world, &world.baseline, "before"));
+    let others = world.outer.join("cases-others");
+    for (n, tokens) in BASELINE_TOKENS.iter().enumerate() {
+        run(
+            &others,
+            &format!("scenario-1-trial-{}", n + 1),
+            *tokens,
+            APPROVAL,
+            Some(&world.revision),
+        );
+    }
+    let other = World::save(
+        &others,
+        &world.outer.join("saves-others"),
+        BASELINE_REVISION,
+    );
+    let (code, out, err) = rebaseline(&world, &other);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("opened_binary"), "{err}");
+    let (code, out, err) = rebaseline(&world, &world.baseline);
+    assert_eq!(code, 0, "{out}{err}");
+    let card = world.candidate_card("candidate", BASELINE_TOKENS, FIVE_APPROVALS);
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(&format!("against baseline {BASELINE_REVISION}")),
+        "{out}"
+    );
+}
