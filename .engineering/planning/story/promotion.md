@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:promotion
 kind: story
-status: draft
+status: implemented
 title: takt promote installs a binary only when the scorecard shows no regression
 summary: revision in --version, no scenario worse (one case of margin, n=5), median tokens within the baseline's maximum, one a day, promotion record as next baseline
 relations:
@@ -26,7 +26,11 @@ scope:
   path: crates/takt/src/promotion.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 14
+revision: 17
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T00:57:40Z", actor: "human:timo", revision: 15, decided_on: {"recorded":{"test_result":1}}}
+- {from: "proposed", to: "active", at: "2026-10-19T00:57:40Z", actor: "human:timo", revision: 16, decided_on: {"recorded":{"test_result":1}}}
+- {from: "active", to: "implemented", at: "2026-10-19T00:57:40Z", actor: "human:timo", revision: 17, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: promotion
 

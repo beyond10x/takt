@@ -20,13 +20,13 @@ scope:
   path: .engineering/judge-allow.yaml
 - confidence: cited
   path: crates/takt-cli/src/main.rs
-- confidence: inferred
+- confidence: cited
   path: crates/takt/src/case.rs
 - confidence: inferred
   path: crates/takt/src/frontier.rs
 - confidence: inferred
   path: crates/takt/src/protocol.rs
-- confidence: cited
+- confidence: inferred
   path: crates/takt/src/run.rs
 - confidence: cited
   path: crates/takt/src/validator.rs
@@ -36,7 +36,7 @@ scope:
   path: crates/takt/tests/authority_adv1.rs
 - confidence: inferred
   path: crates/takt/tests/merge_under_authority.rs
-revision: 11
+revision: 21
 ---
 # Story: judge-guard
 
@@ -72,32 +72,31 @@ story:promotion installed, so this story follows it.
 
 ## Scope
 
-Derived 2026-10-18 by `story-scoper`. Line numbers from `fix/2026-10-18-review` at 768db1c unless marked VC (`impl/validator-confinement` at c0e8f4e). Every line is **cited** (read from the story or the tree) or **inferred** (a reading that could be wrong).
+Derived 2026-10-19 by `story-scoper`, read-only at `main` 3e87bca (code unchanged at a388adf, which changes only the planning store), `headstart/promotion` df9681a and `wave/2026-10-18-w12` 3b0b748. Line numbers are `path:line@rev`. Every line is **cited** (read from the story or the tree) or **inferred** (a reading that could be wrong).
 
-- **Primary surface:** `crates/takt` merge validator and grant path, plus the `approve` subcommand of `crates/takt-cli` — cited, the story names `validator.rs`, `run.rs:22-23` and `main.rs:49`
-- **Files:** `crates/takt/src/validator.rs:676-791` (`PrMerged::observe`: the grant check at 764-784 and the forge merge at 786-787 are the only merge effect; the guard over `base..head` belongs beside them) — cited, read from the tree; the story placed the guard in `run.rs`
-- **Files:** `crates/takt/src/validator.rs:193-216` (`GateRun::observe` reads gates inputs from the tree; VC moves them to `base_revision` at VC 194-214 and `file_at` at VC 274-285, which the allow-list read would reuse) — cited
-- **Files:** `crates/takt-cli/src/main.rs:49-50` (`by: String`), `:197-208` (`approve` passes `by` straight to `frontier::approve`) — cited
-- **Files:** `crates/takt/src/run.rs:23-24` (`RunOptions.protocol`), `:249-252` (protocol loaded from a file path when one exists) — cited
-- **Files:** `.engineering/judge-allow.yaml`, new, holding `docs/**`, `README.md`, `CHANGELOG.md`; not present in `.engineering/` today — cited
-- **Symbols:** `PrMerged::observe`, `Authority::grants_at` (`case.rs:338`), `ApproveArgs.by`, `RunOptions.protocol`, VC `Branch.base_commit` (VC `case.rs:88`) — cited
-- **Also likely:** `crates/takt/src/case.rs:266-280,520-522,598-611` (`AuthorityDecision.approver: String`, the only approver check is non-empty, `prepare_grant` writes it) — inferred, typed grants checked in the library because tests call `grant()` directly
-- **Also likely:** `crates/takt/src/protocol.rs:62-75` (`resolve` and `from_file` read `--protocol` from a path) and `crates/takt-cli/src/main.rs:262-265,521-528` — inferred, where "protocol from base" would change; the embedded built-in (`protocol.rs:33-37`) already comes from the binary's revision
-- **Also likely:** `crates/takt/src/frontier.rs:231-240` (`Aep::plan` runs `aep` with `current_dir(repo)`, the case's tree) — inferred, where "store from base, outside the worktree" lands; tree-hygiene's `to_base` instead checks the base out in the same tree
-- **Also likely:** `crates/takt/tests/merge_under_authority.rs`, `authority.rs`, `authority_adv1.rs` (about 30 calls grant as the bare `"operator"`) — inferred, they break once grants are typed
-- **Documents:** `.engineering/judge-allow.yaml` only — cited
-- **Confidence:** medium — the story cites three code sites and the tree confirms them, but the guard site differs from the story's guess and the store-from-base mechanism is not named
-- **Would collide with:** any unit touching `PrMerged` or `GateRun` in `crates/takt/src/validator.rs`, `prepare_grant`/`AuthorityDecision`/`Branch` in `crates/takt/src/case.rs`, the case-open and protocol-load path in `crates/takt/src/run.rs`, the `approve` subcommand or argument struct in `crates/takt-cli/src/main.rs`, or the `Aep` adapter in `crates/takt/src/frontier.rs`
-- **Safety fact:** the allow-list and the base of `base..head` are read at the case's `base_commit`, pinned when the case opened (VC `case.rs:84-88`, resolved by VC `validator.rs:194-214`, read by `file_at` at VC `validator.rs:274-285`), never from the tree or a branch name, so a candidate that edits `.engineering/judge-allow.yaml` cannot admit its own paths — level 2, unproven
+- **Primary surface:** the `repository.merge` validator in `crates/takt` (`PrMerged`), the grant path in `crates/takt/src/case.rs`, and the `approve` subcommand of `crates/takt-cli` — cited, read from the tree at all three revisions
+- **Files:** `crates/takt/src/validator.rs:1349-1518@3e87bca` (`PrMerged::observe_waiting`: the grant check `grants_at(self.action(), revision)` at 1407-1431 and the forge merge at 1494-1497 are the only merge effect; at 3b0b748 the check is 1438 and the merge 1523-1526, and the wave adds `PrMerged::ACTION`/`KIND` at 1324-1330); the guard belongs beside the grant check — cited
+- **Files:** `crates/takt/src/validator.rs:87-177@3e87bca` (`judged`: `git diff-tree -r -z --no-renames --name-only <base_commit> <revision>` at 140-152, already used by `tests.run` and `ci.read`; 122 and 154-166@3b0b748), `base_revision` at 437-458 and `file_at` at 517-528 (415 and 495@3b0b748), which the allow-list and delegation reads would reuse — cited
+- **Files:** `crates/takt-cli/src/main.rs:120-131@3e87bca` (`ApproveArgs.by: String`) and `:301-312` (the `approve` arm passes `by` straight to `frontier::approve`); 122-133 and 312-323@3b0b748; 166-178 and 348-359@df9681a — cited
+- **Files:** `.engineering/judge-allow.yaml`, new, holding `docs/**`, `README.md`, `CHANGELOG.md`, and `.engineering/delegations.yaml`, new; neither exists at any of the three revisions (`git ls-tree .engineering/` lists only `cases`, `evidence`, `planning`, `project.yaml`) — cited
+- **Symbols:** `PrMerged::observe_waiting`, `Authority::grants_at` (`case.rs:347@3e87bca`, 432@3b0b748), `AuthorityDecision.approver` (279; 364@3b0b748), `is_approver`/`APPROVER_KINDS` (452-466; 545@3b0b748), `prepare_grant` (673-707; 758@3b0b748), `ApproveArgs.by`, `judged`, `base_revision`, `file_at`, `Branch.base_commit` (`case.rs:203`; 288@3b0b748) — cited
+- **Also likely:** `crates/takt/src/run.rs:2581-2585@3e87bca` (case open loads `options.protocol` from a file when one exists; 3146-3149@3b0b748) and `JudgeSurface`/`JUDGE_LIST`/`judge_list_at` at 1313-1370 (1878-1930@3b0b748), the existing base-read glob list an allow-list matcher would sit beside — inferred, the story cites `run.rs` but no edit there is forced
+- **Also likely:** `crates/takt/src/protocol.rs:62-76` (`resolve`, `from_file` read a path; the built-in `EMBEDDED` at 33-37 already comes from the binary's revision), `case.rs:1523@3e87bca` (resume recompiles the case's own `protocol.yaml` inside the tree; 1615@3b0b748) and `main.rs:1205-1211@3e87bca` (`case_protocol`) — inferred, where "a candidate's own protocol is not its judge" lands
+- **Also likely:** `crates/takt/src/frontier.rs:480-490` (`Aep::plan_as` runs `aep` with `current_dir(repo)`, the case's tree; unchanged at all three revisions); `run.rs:2482-2500@3e87bca` `to_base` checks the base branch out in the same tree — inferred, where "store from base, outside the worktree" lands
+- **Also likely:** `crates/takt/tests/merge_under_authority.rs` (14 bare grants; +213 lines in wave 12), `authority.rs` (8), `authority_adv1.rs` (1); 32 single-line `grant(..., "operator"|"owner")` calls over 6 test files at 3e87bca and 3b0b748 — inferred, they break only if typed approvers extend to intent cases
+- **Documents:** `.engineering/judge-allow.yaml` and `.engineering/delegations.yaml`; `AGENTS.md:65-74@3e87bca` and `.agents/planner-agent.md:57-62@3e87bca` already state the rule from this story on and need no edit — cited
+- **Confidence:** medium — the merge site, the pinned-base read and the existing approver check are read in the tree; the store-from-base mechanism, how takt's riders are excluded from `base..head`, and how the allow-list relates to the existing deny-list are not (the planner's decisions below settle the three)
+- **Would collide with:** any unit touching `PrMerged`, `judged`, `base_revision` or `file_at` in `crates/takt/src/validator.rs`; `Authority`, `AuthorityDecision`, `is_approver` or `prepare_grant` in `crates/takt/src/case.rs`; `ApproveArgs`, the `Approve` arm, `Forged::register` (712-723@3e87bca) or the protocol default (374-386@3e87bca) in `crates/takt-cli/src/main.rs`; `JudgeSurface` or the case-open protocol load in `crates/takt/src/run.rs`; the `Aep` adapter in `crates/takt/src/frontier.rs`
+- **Safety fact:** the allow-list and the delegation record are read with `file_at` at the case's `base_commit` (`validator.rs:517-528,437-458@3e87bca`), pinned at open (`case.rs:1424-1430@3e87bca`), never from the tree, so a candidate's own edit of either is just another `base..head` path outside the allow-list — level 2, unproven; `base_commit` itself lives in the case's tracked `branch.yaml` under `.engineering/cases/**`, which is off the step judge surface (`run.rs:357@3e87bca`), and `base_revision` only `rev-parse`s it with no ancestry check
 
-Not established: the approver is free text in `authority.yaml` and the store evidence, a test asserts `--by operator` (`main.rs:1227`): whether typed grants still read old files; capability (`repository.merge.judge_surface` in `protocols/self-improvement/1.yaml:15-22,151-157`) or grant-type check; no mechanism for "store outside the case's worktree"; where `base..head` paths are computed; this story depends on validator-confinement and tree-hygiene being merged (line numbers move).
+Not established: the approver is free text in `authority.yaml` — partly answered: a story's case already takes only `human:`/`agent:` at grant time (`case.rs:700-707,460-466@3e87bca`) and the CLI test asserts `--by human:operator` (`main.rs:1877-1895@3e87bca`), but an intent case takes any non-empty text (694-696), `AuthorityDecision.approver` is still `String` (279), `Authority::read` (317-327) checks nothing and `PrMerged` checks only `grants_at`, so an old untyped file still reads and still merges. Capability or grant-type check — partly answered: self-improvement's `candidate.merge_judge_surface` requires `repository.merge.judge_surface` (`protocols/self-improvement/1.yaml:162-176@3e87bca`; loop-improvement 131), but the opener declares `surface` as a case input (16-22) instead of having it computed, and story-delivery's merge requires only `repository.merge` (`protocols/story-delivery/1.yaml:145-146@3e87bca`, 200-201@3b0b748). Store outside the case's worktree — not answered: no mechanism at any revision; promotion records the promoted revision (`promotion.rs:113-144,490-494@df9681a`) but only `takt promote` reads it (`main.rs:405-421@df9681a`). Where `base..head` paths are computed — partly answered: `judged` diffs `base_commit..revision` (`validator.rs:140-152@3e87bca`) and `PrMerged` computes none; the merged head carries takt's riders in `.engineering/planning/`/`.engineering/evidence/` (`frontier.rs:337@3e87bca`, `approvals_only` at `case.rs:1067`) and the case directory. Dependency on validator-confinement and tree-hygiene — answered: both are on main. New: main already has a deny-list judge surface (`JUDGE_SURFACE`, `.engineering/judge-surface.yaml`, `run.rs:357,1327@3e87bca`) for steps and validators.
 
-Typed entries: `crates/takt/src/validator.rs`, `crates/takt-cli/src/main.rs`, `crates/takt/src/run.rs`, `.engineering/judge-allow.yaml` (cited); `crates/takt/src/case.rs`, `crates/takt/src/protocol.rs`, `crates/takt/src/frontier.rs`, `crates/takt/tests/merge_under_authority.rs`, `crates/takt/tests/authority.rs`, `crates/takt/tests/authority_adv1.rs` (inferred).
+Typed entries: `crates/takt/src/validator.rs`, `crates/takt-cli/src/main.rs`, `crates/takt/src/case.rs`, `.engineering/judge-allow.yaml`, `.engineering/delegations.yaml` (cited); `crates/takt/src/run.rs`, `crates/takt/src/protocol.rs`, `crates/takt/src/frontier.rs`, `crates/takt/tests/merge_under_authority.rs`, `crates/takt/tests/authority.rs`, `crates/takt/tests/authority_adv1.rs` (inferred).
 
 ## Ordering
 
-- depends_on story:promotion: the judge is the promoted binary; both edit `crates/takt-cli/src/main.rs`, so this story follows it on that file.
-- depends_on story:validator-confinement, story:tree-hygiene and story:authority-hardening (epic:composable-agentic-work, on a branch not yet on main on 2026-10-18; the edges are added once it lands): base-revision gates inputs and the grant bound to a revision are what this story extends.
+- depends_on story:promotion: the judge is the promoted binary, and both edit `crates/takt-cli/src/main.rs` (promotion adds `Promote`, `PromoteArgs` and its arm at `main.rs:52-89,395-435@df9681a`, near `ApproveArgs` and the `approve` arm at 166-178 and 348-359@df9681a), so this story follows it on that file.
+- depends_on story:validator-confinement, story:tree-hygiene and story:authority-hardening (epic:composable-agentic-work, all three on main): gates inputs read at the pinned base, the store read from the base and a grant bound to one revision are what this story extends. Wave 12 (`wave/2026-10-18-w12` at 3b0b748) also lands first and renumbers `validator.rs`, `case.rs`, `run.rs` and `main.rs`, so this story is cut from main after both.
 
 ## Acceptance
 
@@ -124,3 +123,15 @@ From the reviewer verdict on story:grant-binds-to-action-subject at 938cc5a (app
 
 - `crates/takt/src/protocol.rs:195-225` finds a grant's subject by walking the raw protocol YAML for the evidence-reading forms Canon 0.6.0 has (`evidence`, `first`, `before`); a form a later Canon adds would be missed with no error. The judge should read the subject from Canon's typed predicates, or refuse a protocol whose forms it does not know.
 - `crates/takt/src/case.rs:1517`: an edit to a case's `protocol.yaml` made outside a run is not detected; no digest pins it and the IR is recompiled from it (`protocol.rs:72`). The judge pins the protocol by digest at open and refuses a case whose copy differs.
+
+## Planner decisions
+
+The planner's decisions on the questions the 2026-10-19 scope left open, inside the design this story states (revised after the reviewer's verdict on them, 2026-10-19):
+
+- D1, the guarded range: the guard diffs `base_commit..<granted revision>`, the range `judged` already computes (`validator.rs:140-152@3e87bca`). This is the design's `base..head` (`recursive-self-improvement.md:111`) split at the grant: `granted..head` may carry only approval records, which `carries`/`approvals_only` already enforce (`validator.rs:1374,1437-1442@3e87bca`, `case.rs:1067@3e87bca`), so the guard need not judge it. A path in `granted..head` that `approvals_only` does not admit stops the merge as today.
+- D2, allow-list and deny-list: `.engineering/judge-allow.yaml` gates only the merge; the existing deny-list `.engineering/judge-surface.yaml` keeps gating what steps and validators may write. Neither replaces the other.
+- D3, which revision the lists are read at: the allow-list and `.engineering/delegations.yaml` are read at the merge target's tip as the forge reports it when the merge is decided, never at `base_commit` and never from the tree. Under `--forge none` the target's tip is the local base ref as recorded by the step checkpoint (`Checkpoint::take_guarding`, `git.rs:1075@3156517`, over the refs `kept_branches` lists, `run.rs:2840-2847@3156517`), not as read at merge time, since a test command can move the local ref. "The promoted takt" is the binary named by story:promotion's latest record, which runs the case.
+- D4, the base: the guard refuses the merge when `base_commit` is not an ancestor of the merge target's tip as the forge reports it. `branch.yaml` is the only copy of `base_commit` (`case.rs:1427@3e87bca`), so no comparison with "the value pinned at open" is possible; the target's tip is the independent fact.
+- D5, untyped approvers: an `authority.yaml` approver that is neither `human:` nor `agent:` grants nothing at a judge-surface merge; on any other merge it reads as before.
+
+Acceptance, added: a case whose `base_commit` is set, outside the loop, to a candidate commit that adds `crates/**` to `.engineering/judge-allow.yaml` is refused at the merge naming the base, under an `agent:planner` grant with no delegation; a case whose `granted..head` holds only approval records merges as before.
