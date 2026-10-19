@@ -191,7 +191,9 @@ const OUTCOMES: [&str; 12] = [
     "unfinished",
 ];
 
-/// A scorecard of one scenario, `s`, a case a `(outcome, tokens)`, compared under `margin`.
+/// A scorecard of one scenario, `s`, a case a `(outcome, tokens)`, compared under `margin` with a
+/// rule of one trial, so the 1 to 7 cases the properties draw compare; the trials rule itself is
+/// the scorecard tests' to check.
 fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
     Scorecard {
         format: FORMAT.to_owned(),
@@ -201,7 +203,7 @@ fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
             .iter()
             .map(|(metric, version)| ((*metric).to_owned(), *version))
             .collect(),
-        rule: Rule { trials: 5, margin },
+        rule: Rule { trials: 1, margin },
         rows: cases
             .iter()
             .enumerate()

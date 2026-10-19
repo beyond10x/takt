@@ -37,7 +37,7 @@ fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
             .iter()
             .map(|(metric, version)| ((*metric).to_owned(), *version))
             .collect(),
-        rule: Rule { trials: 5, margin },
+        rule: Rule { trials: 1, margin },
         rows: cases
             .iter()
             .enumerate()
