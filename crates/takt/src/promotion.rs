@@ -16,10 +16,11 @@
 //! `<state>/takt/promotions.head`), written with every record, so a chain that ends before the
 //! head, its latest record removed or replaced, is refused naming that record, a refusal
 //! included; and before anything is judged the installed binary's `--version` must name the
-//! latest baseline or promotion. A store with records and no head is read on trust once: the
-//! head is written from the chain as it stands and the run says so on stderr. The head detects
-//! a record removed or replaced by accident or by a tool; a process running as the same user
-//! can rewrite both.
+//! latest baseline or promotion. A store with records and no head is read on trust, again
+//! whenever no head is found: the head is written from the chain as it stands and the run says
+//! so on stderr. The head detects a record removed or replaced by accident or by a tool; a
+//! process running as the same user can rewrite both, and removing the latest record and the
+//! head together leaves a shorter chain that is read on trust.
 //!
 //! `takt promote` reads the candidate's saved scorecard (a file outside the candidate's
 //! repository with one link, whose `revision` field equals its name and the checkout's `HEAD`,
@@ -431,8 +432,9 @@ fn ends_at_head(store: &Path, head: &Head, records: &[Promotion]) -> Result<()> 
     )
 }
 
-/// A store with records and no head is read on trust once: the head is written from the chain
-/// `records` as it stands, and stderr says so; a dry run says so and writes nothing.
+/// A store with records and no head is read on trust, again whenever no head is found: the head
+/// is written from the chain `records` as it stands, and stderr says so; a dry run says so and
+/// writes nothing.
 fn trust(store: &Path, records: &[Promotion], head: Option<&Head>, dry_run: bool) -> Result<()> {
     let Some(latest) = records.last().filter(|_| head.is_none()) else {
         return Ok(());

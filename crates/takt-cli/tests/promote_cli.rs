@@ -2136,11 +2136,12 @@ fn a_latest_refusal_replaced_by_an_older_records_bytes_is_refused_naming_it() {
     assert_eq!(world.records(), expected, "nothing recorded");
 }
 
-/// story:promotion-chain-head-anchored D2, D3: a store with records and no head is read once on
-/// trust, said on stderr; a dry run writes no head, a promotion writes it from the chain as it
-/// stands and then names each record it writes; a later read says nothing of trust.
+/// story:promotion-chain-head-anchored D2, D3: a store with records and no head is read on
+/// trust whenever no head is found, said on stderr; a dry run writes no head, a promotion writes
+/// it from the chain as it stands and then names each record it writes; a later read, the head
+/// in place, says nothing of trust.
 #[test]
-fn a_store_without_a_head_is_read_once_on_trust() {
+fn a_store_without_a_head_is_read_on_trust_whenever_none_is_found() {
     let world = World::new("head-trust", BASELINE_TOKENS, FIVE_APPROVALS);
     world.record_baseline();
     let card = world.candidate_card("trust", WITHIN_TOKENS, TWO_WORSE);

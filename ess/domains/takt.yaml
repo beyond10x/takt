@@ -1047,7 +1047,7 @@ types:
 
   # One run of the scorecard a stated baseline read, copied into the promotion record with the
   # binary it states (takt.work.RunBinary): the digest, who stated it and the operator's note.
-  # read from: crates/takt/src/promotion.rs:222-230
+  # read from: crates/takt/src/promotion.rs:223-231
   - name: takt.work.RecordedRun
     kind: struct
     fields:
@@ -1059,7 +1059,7 @@ types:
   # The refusal a candidate judged again on new runs (`takt promote --rejudge`) was refused by
   # before: that record's file name in the store and the sha256 of the file. Decided 2026-10-19
   # (story:promotion-refusal-is-not-final).
-  # read from: crates/takt/src/promotion.rs:214-220
+  # read from: crates/takt/src/promotion.rs:215-221
   - name: takt.work.Rejudged
     kind: struct
     fields:
@@ -1073,7 +1073,7 @@ types:
   # `<state>/takt/promotions.head`, outside it, and written with every record under the store's
   # lock. Decided 2026-10-19 (story:promotion-chain-head-anchored).
   # read from: .engineering/planning/story/promotion-chain-head-anchored.md:50
-  # read from: crates/takt/src/promotion.rs:204-212
+  # read from: crates/takt/src/promotion.rs:205-213
   - name: takt.work.PromotionHead
     kind: struct
     fields:
@@ -1527,7 +1527,7 @@ types:
   # Decided 2026-10-18.
   # read from: .engineering/planning/story/promotion.md:95
   # read from: .engineering/planning/design/recursive-self-improvement.md:130-138
-  # read from: crates/takt/src/promotion.rs:128-138
+  # read from: crates/takt/src/promotion.rs:129-139
   # Decided 2026-10-19 (story:promotion-refusal-is-not-final): a refusal is final no longer. The
   # operator judges a refused candidate again with `--rejudge` on a scorecard of new runs, none
   # of whose case ids is in a scorecard it was refused on (each refusal records its scorecard's
@@ -1552,9 +1552,9 @@ types:
   # baseline before it: `replaces_sha256` is that record's scorecard digest, of the same
   # revision, and both scorecard copies hold the same case ids.
   # read from: .engineering/planning/story/promotion-refusal-is-not-final.md (§ Outcome)
-  # read from: crates/takt/src/promotion.rs:2543-2730
-  # read from: crates/takt/src/promotion.rs:766-877
-  # read from: crates/takt/src/promotion.rs:728-764
+  # read from: crates/takt/src/promotion.rs:2545-2732
+  # read from: crates/takt/src/promotion.rs:768-879
+  # read from: crates/takt/src/promotion.rs:730-766
   - name: takt.work.PromotionKind
     kind: enum
     variants: [baseline, promotion, refused, rebaseline]
@@ -2939,7 +2939,7 @@ entities:
   # showed no regression (story:promotion, `takt promote`).
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ The judge)
   # read from: .engineering/planning/story/promotion.md
-  # read from: crates/takt/src/promotion.rs:1-54
+  # read from: crates/takt/src/promotion.rs:1-55
   # The promotion record names the revision the binary embeds and the scorecard it read, and the
   # latest record that is no refusal names the promoted baseline the next candidate is compared
   # with; the first is written by `takt promote --baseline-only`, which installs nothing. A
@@ -2961,10 +2961,10 @@ entities:
   # read from: .engineering/planning/story/promotion.md:39-44
   # read from: .engineering/planning/story/promotion.md:52-54
   # read from: .engineering/planning/story/promotion.md:141
-  # read from: crates/takt/src/promotion.rs:1012-1018
-  # read from: crates/takt/src/promotion.rs:1552-1663
-  # read from: crates/takt/src/promotion.rs:2040-2238
-  # read from: crates/takt/src/promotion.rs:2244-2535
+  # read from: crates/takt/src/promotion.rs:1014-1020
+  # read from: crates/takt/src/promotion.rs:1554-1665
+  # read from: crates/takt/src/promotion.rs:2042-2240
+  # read from: crates/takt/src/promotion.rs:2246-2537
   # Where it is kept, decided 2026-10-18: one JSON file per promotion at
   # `$XDG_STATE_HOME/takt/promotions/<revision>.json` (`~/.local/state/takt/promotions/` without
   # `XDG_STATE_HOME`; a refusal as `<revision>.refused.json`; the scorecard a baseline or a
@@ -2997,10 +2997,10 @@ entities:
   # read from: .engineering/planning/story/promotion.md:92-95
   # read from: .engineering/planning/story/promotion.md:116
   # read from: .engineering/planning/story/promotion.md:152
-  # read from: crates/takt/src/promotion.rs:309-312
-  # read from: crates/takt/src/promotion.rs:504-532
-  # read from: crates/takt/src/promotion.rs:552-722
-  # read from: crates/takt/src/promotion.rs:1131-1185
+  # read from: crates/takt/src/promotion.rs:310-313
+  # read from: crates/takt/src/promotion.rs:506-534
+  # read from: crates/takt/src/promotion.rs:554-724
+  # read from: crates/takt/src/promotion.rs:1133-1187
   # A baseline for a binary built before `--version` named its revision, decided 2026-10-19
   # (story:baseline-for-a-pre-revision-binary): the operator states both, `takt promote
   # --baseline-only --revision <sha> --binary-sha256 <hex>`. Either flag without
@@ -3027,10 +3027,10 @@ entities:
   # fail-closed reads are untouched. A run whose `opened` line names no revision (no `binary`, or
   # `unknown revision`) beside a run whose line names one is refused naming it, the mix a save
   # refuses (story:scorecard-save-checks-binary, decided 2026-10-19).
-  # read from: crates/takt/src/promotion.rs:1893-1928
-  # read from: crates/takt/src/promotion.rs:1930-1955
-  # read from: crates/takt/src/promotion.rs:1957-2013
-  # read from: crates/takt/src/promotion.rs:1801-1840
+  # read from: crates/takt/src/promotion.rs:1895-1930
+  # read from: crates/takt/src/promotion.rs:1932-1957
+  # read from: crates/takt/src/promotion.rs:1959-2015
+  # read from: crates/takt/src/promotion.rs:1803-1842
   # One scorecard backs at most one promotion, decided 2026-10-18: one-to-one, the promotion
   # referencing its scorecard. A relation entry carries no bound on the scorecard's side, so the
   # bound is stated here.
@@ -3038,7 +3038,7 @@ entities:
   # The rule's parameters, trials and margin, are recorded with the scorecard
   # (takt.work.ScorecardRule) and copied into the record that read it.
   # read from: .engineering/planning/design/recursive-self-improvement.md:132-138
-  # read from: crates/takt/src/promotion.rs:142-202
+  # read from: crates/takt/src/promotion.rs:143-203
   # Decided 2026-10-19 (story:promote-binds-scorecard-and-merge,
   # story:promotion-refusal-is-not-final): a promotion installs a merged revision only, an
   # ancestor of the tip of the checkout's remote-tracking `origin/main` as last fetched, which a
@@ -3062,10 +3062,10 @@ entities:
   # judged again.
   # read from: .engineering/planning/story/promote-binds-scorecard-and-merge.md (§ Outcome)
   # read from: .engineering/planning/story/promotion-refusal-is-not-final.md (§ Outcome)
-  # read from: crates/takt/src/promotion.rs:1666-1744
-  # read from: crates/takt/src/promotion.rs:2299-2365
-  # read from: crates/takt/src/promotion.rs:2733-2772
-  # read from: crates/takt/src/promotion.rs:879-912
+  # read from: crates/takt/src/promotion.rs:1668-1746
+  # read from: crates/takt/src/promotion.rs:2301-2367
+  # read from: crates/takt/src/promotion.rs:2735-2774
+  # read from: crates/takt/src/promotion.rs:881-914
   # Decided 2026-10-19 (story:promotion-chain-head-anchored): the chain's last record is anchored
   # by its head (takt.work.PromotionHead), written by every write of a record and pointed back by
   # the removal of one after a failed install. Every read checks it, `--dry-run` included: a
@@ -3079,9 +3079,9 @@ entities:
   # a store whose head was removed is read on trust again.
   # read from: .engineering/planning/story/promotion-chain-head-anchored.md:28
   # read from: .engineering/planning/story/promotion-chain-head-anchored.md:50-53
-  # read from: crates/takt/src/promotion.rs:314-457
-  # read from: crates/takt/src/promotion.rs:552-586
-  # read from: crates/takt/src/promotion.rs:1161-1213
+  # read from: crates/takt/src/promotion.rs:315-459
+  # read from: crates/takt/src/promotion.rs:554-588
+  # read from: crates/takt/src/promotion.rs:1163-1215
   - name: takt.work.Promotion
     naming:
       summary: >-
