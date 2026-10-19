@@ -893,7 +893,7 @@ types:
   # open; and each row carries when its finding was filed and, once it was, verified. Decided
   # 2026-10-18.
   # read from: .engineering/planning/story/loop-scorecard.md:33-36
-  # read from: .engineering/planning/story/loop-scorecard.md:51-53
+  # read from: .engineering/planning/story/loop-scorecard.md:53-55
   # read from: .engineering/planning/design/recursive-self-improvement.md:185-187
   # read from: crates/takt/src/scorecard.rs:58-84
   - name: takt.work.LoopScorecardRow
@@ -932,8 +932,8 @@ types:
   # are computed from the rows each time it is printed and never stored, so no field holds them.
   # Escaped defects are not among them: a later, human-sourced figure no validator observes.
   # Decided 2026-10-18; declared ahead of the code (story:loop-scorecard).
-  # read from: .engineering/planning/story/loop-scorecard.md:54
-  # read from: .engineering/planning/story/loop-scorecard.md:98
+  # read from: .engineering/planning/story/loop-scorecard.md:56
+  # read from: .engineering/planning/story/loop-scorecard.md:101
   - name: takt.work.LoopScorecard
     kind: struct
     fields:
@@ -1201,7 +1201,8 @@ types:
   # read from: docs/metrics/README.md:35
   # read from: docs/metrics/journey.py:40
   # read from: .engineering/planning/design/benchmark-integration.md:35
-  # Maps to bench.arm and bench.harness of the organization's benchmark instrument: an arm there is a treatment (`raw`,
+  # Maps to bench.arm and bench.harness of the organization's benchmark instrument: an arm there is
+  # a treatment (`raw`,
   # `plugin`, `driven`, `native`) with its framework and pin, a harness is what ran the case
   # (`claude`, `codex`, `b10x`), and a bench run names both.
   # read from: bench 0.1.0 at e3c44fd, docs/design/bench-entities-v0.1.md:78-95
@@ -1223,7 +1224,8 @@ types:
   # read from: docs/metrics/README.md:51
   # read from: .engineering/planning/design/benchmark-integration.md:32
   # read from: .engineering/planning/story/bench-subset-and-budget.md:39
-  # Maps to bench.fact of the organization's benchmark instrument with `source: hidden-test`: a hidden test that passes
+  # Maps to bench.fact of the organization's benchmark instrument with `source: hidden-test`: a
+  # hidden test that passes
   # is `held`, one that fails `contradicted`, one that could not run `unknown`.
   # read from: bench 0.1.0 at e3c44fd, docs/design/bench-entities-v0.1.md:274-277
   # UNMAPPED: bench records one fact per hidden test, keyed by the test's id, and grades a run
@@ -1243,7 +1245,8 @@ types:
   # read from: docs/metrics/README.md:19-22
   # read from: docs/metrics/README.md:43-48
   # read from: .engineering/planning/story/bench-run-export.md:42
-  # Maps in part to bench.run of the organization's benchmark instrument, which holds the cost alone, as integer micro-USD
+  # Maps in part to bench.run of the organization's benchmark instrument, which holds the cost
+  # alone, as integer micro-USD
   # with its basis (`provider-reported`, `assumed`, `unknown`), and no token figure.
   # read from: bench 0.1.0 at e3c44fd, docs/design/bench-entities-v0.1.md:217-219
   # UNMAPPED: where the token figures go in bench, since no field of bench.run holds them; and
@@ -2444,7 +2447,8 @@ entities:
   # read from: .engineering/planning/design/benchmark-integration.md:32-33
   # read from: .engineering/planning/design/benchmark-integration.md:37
   # read from: .engineering/planning/story/bench-task-protocol.md:38
-  # Maps to bench.case of the organization's benchmark instrument, one task with its expectations and its hidden tests;
+  # Maps to bench.case of the organization's benchmark instrument, one task with its expectations
+  # and its hidden tests;
   # and the benchmark subset it belongs to maps to bench.corpus, a set of cases pinned to where
   # they came from: takt's design makes each benchmark a bench corpus.
   # read from: .engineering/planning/design/benchmark-integration.md:28
@@ -2494,7 +2498,8 @@ entities:
   # read from: docs/metrics/README.md:4-5
   # read from: docs/metrics/README.md:36
   # read from: docs/metrics/README.md:38
-  # Maps to bench.run of the organization's benchmark instrument, one arm of one case on one harness, once: takt exports
+  # Maps to bench.run of the organization's benchmark instrument, one arm of one case on one
+  # harness, once: takt exports
   # each run in bench's run shape, so bench's grader and fact table cover takt beside the other
   # harnesses.
   # read from: .engineering/planning/design/benchmark-integration.md:28
