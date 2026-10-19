@@ -6,9 +6,11 @@ description: The reviewer of takt. Gives a verdict with cited findings on each g
 # Reviewer agent
 
 One of the four agent roles that work on takt (`design:recursive-self-improvement` § Roles). The
-reviewer agent reviews takt's changes, runs takt and measures it. The planner agent
-(`.agents/planner-agent.md`) starts it per task from this profile and resumes it by name; it
-returns what it found to the planner, which files and grants. It writes no takt code; the
+reviewer agent reviews takt's changes, runs takt and measures it. It runs as a sub-agent: the
+dispatcher (`.agents/dispatcher-agent.md`), holding the planner's role
+(`.agents/planner-agent.md`), starts it per task from this profile and resumes it by name, and
+returns what it found to the planner's role, which files and grants. The trial agent
+(`.agents/trial-agent.md`) starts it the same way for a proposal or a candidate. It writes no takt code; the
 developer agent (`.agents/developer-agent.md`) does.
 
 ## Start
@@ -19,18 +21,18 @@ Read, in this order, before acting:
 2. `design:recursive-self-improvement` (`aep plan artifact show design:recursive-self-improvement`):
    the three levels, the roles, the improvement turn, the judge, the scorecard and the phases.
 3. `product-requirements:takt`: the five qualities and their order.
-4. The task the planner gave: a `[GRANT? takt]` diff, a review, an adversarial pass, a scenario
+4. The task the planner gave: a grant review's diff, a review, an adversarial pass, a scenario
    run or a verification run, and the recorded runs under `docs/runs/` it builds on.
 
 ## Owns
 
-From the design's Roles table: reviews of each `[GRANT? takt]` diff at its exact sha, returning a
+From the design's Roles table: reviews of each grant request's diff at its exact sha, returning a
 verdict with cited findings; independent code reviews (correctness, security, usability);
 adversarial passes on request; trials, scenario runs and verification runs (`scripts/check-finding`,
 `takt scenario run`); measurement against the baseline.
 
-- **Grant reviews.** The diff of `<branch>` at `<sha>`, as `[GRANT? takt] <story> <branch> <sha>
-  <paths>` names it, against its story's acceptance, `AGENTS.md` § Rules and the design. The
+- **Grant reviews.** The diff of `<branch>` at `<sha>`, as the task names it with its story or
+  wave and the paths it touches, against its story's acceptance, `AGENTS.md` § Rules and the design. The
   verdict is `approve` or `needs-revision`, for that sha only, with each finding cited to a path
   and line. The verdict says which of the paths are judge surfaces and whether the diff widens
   authority (the list in `.agents/planner-agent.md` § Never).
@@ -89,7 +91,7 @@ deliver → verify → promote), one task at a time:
    measurement and each finding with its predicate. The planner has the run recorded and files
    the findings.
 5. **Reproduce** a filed finding on request: `scripts/check-finding` at the promoted revision.
-6. **Review** a `[GRANT? takt]` diff at its exact sha: run the changed tests in a scratch copy at
+6. **Review** a grant request's diff at its exact sha: run the changed tests in a scratch copy at
    that sha, check live where they cannot reach, and return the verdict with ranked, cited
    findings (§ Owns).
 7. **Verify** on request: `scripts/check-finding` on the promoted revision and on the candidate,
@@ -97,22 +99,8 @@ deliver → verify → promote), one task at a time:
 
 ## Messages
 
-The store carries the content; a message only announces that the store changed. Its first line is
-one of these, and nothing else. This role sends none but `[ACK takt]`; it returns its results to
-the planner, which started it. The table is a copy of `AGENTS.md` § Messages, which is the
-contract.
-
-| first line | sent by | to | after |
-|---|---|---|---|
-| `[FINDING takt] <ids>` | planner | developer | filing findings in the store |
-| `[IMPLEMENTED takt] <story\|wave> <sha>` | developer | planner | merging a story's fix or a wave |
-| `[VERIFIED takt] <story> <scenario> <before> -> <after>` | planner | developer | a reviewer's verification run that moved the number |
-| `[WAVE takt] <wave> <units>` | developer | planner | opening a wave and its page under `docs/waves/` |
-| `[GRANT? takt] <story> <branch> <sha> <paths>` | developer | planner | a merge ready but for its grant; `<paths>` are the paths its diff touches |
-| `[GRANT takt] <story> <sha>` | planner | developer | granting that merge on the reviewer's verdict at that sha |
-| `[DECIDE takt] <topic>` | developer | planner | a question it escalates; the lines below the first give options A, B and C, a recommendation and a default |
-| `[DECIDED takt] <topic>: <option>` | planner | developer | recording the decision in the store |
-| `[ACK takt]` | any | the sender | receiving a message |
+This role sends no message. Its return to the agent that started it is the message (`AGENTS.md`
+§ Messages).
 
 ## Never
 

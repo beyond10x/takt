@@ -8,7 +8,7 @@ summary: Three levels (work, takt, the loop), four agent roles, a pinned judge, 
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 15
+revision: 17
 ---
 # Design: recursive self-improvement of takt
 
@@ -42,10 +42,13 @@ takt; and improve the self-improvement.
 | reviewer agent | a verdict with cited findings on each grant request's diff at its exact sha; independent code reviews (correctness, security, usability); adversarial passes on request; trials, scenario runs and verification runs (`scripts/check-finding`, `takt scenario run`); measurement against the baseline | writes takt code; grants; files to the store (it returns findings to the planner, who files them); reviews its own work |
 | doc-writer agent | `docs/**` (designs' prose in `docs/design/`, run records under `docs/runs/`, `docs/metrics/`, `docs/pitch/`; wave pages are the developer's), the structure of `README.md`, the public site on the `gh-pages` branch (publishing pushes only `gh-pages`, never `main`) | writes takt code; changes the planning store; states a figure no record holds |
 
-How each role runs: the planner is the main session; the developer is its own long-running
-session; the reviewer and the doc-writer are started by the planner per task, from their profiles,
-and resumed by name. Until takt drives this flow itself, the planner is the main agent: it starts
-the reviewer and the doc-writer, and the developer reports to it.
+How each role runs: one session, the dispatcher, holds the planner's and the developer's roles
+in one checkout; the reviewer and the doc-writer are sub-agents it starts per task, from their
+profiles, and resumes by name. Until takt drives this flow itself, the dispatcher is the main
+agent: it picks each wave, dispatches implementor sub-agents into its tree, grants on the
+reviewer's verdict and merges the wave. Trials, scorecards and promotions run in one other
+session, the trial agent, which hands an accepted candidate to the dispatcher as a unit of its
+next wave.
 
 Grants are typed: `takt approve --by human:<id>` or `--by agent:<role>`. The owner may delegate a
 grant reserved for the owner, judge surfaces included, to a named role. The delegation is a record
@@ -61,18 +64,12 @@ Merge authority split by surface is the owner's decision (2026-10-18), and so ar
 record (2026-10-18) and the four agent roles, which split the operator role into planner,
 reviewer and doc-writer (2026-10-18).
 
-The store carries the content between the agents. A message only says that something changed,
-with a fixed first line:
-
-- from the planner: `[FINDING takt] <ids>`, `[GRANT takt] <story> <sha>`,
-  `[DECIDED takt] <topic>: <option>`, and
-  `[VERIFIED takt] <story> <scenario> <before> -> <after>` on the reviewer's run;
-- from the developer: `[IMPLEMENTED takt] <story|wave> <sha>`, `[WAVE takt] <wave> <units>`,
-  `[GRANT? takt] <story> <branch> <sha> <paths>`, and `[DECIDE takt] <topic>` with options A, B
-  and C, a recommendation and a default;
-- from any role: `[ACK takt]`.
-
-`AGENTS.md` § Messages holds them as a table.
+The store carries the content. Inside the dispatcher's session a sub-agent's return is the message;
+between the dispatcher and the trial agent three hand-overs carry a fixed first line:
+`[TRIAL takt] <tag> <sha>` from the dispatcher after a release that touches code,
+`[CANDIDATE takt] <branch> <sha> <verdict> <scorecard>` from the trial agent for an accepted
+candidate, and `[MERGED takt] <branch> <sha>` from the dispatcher once the wave carrying it is
+merged. `AGENTS.md` § Messages holds them as a table.
 
 ## One improvement turn
 
