@@ -2090,7 +2090,7 @@ entities:
       # `candidate.merge` observes a candidate merged once that `main` holds it. Decided by the
       # planner (story:self-improvement-protocol, part 2, 2026-10-19).
       # read from: protocols/self-improvement/1.yaml:28-32
-      # read from: .engineering/planning/story/self-improvement-protocol.md:63
+      # read from: .engineering/planning/story/self-improvement-protocol.md:64
       # read from: crates/takt/src/case.rs:2454-2480
       # read from: crates/takt/src/improvement.rs:1118-1127
       - name: finding
@@ -2157,7 +2157,7 @@ entities:
       # `finding` artifact is the finding the turn verifies. Decided 2026-10-18: an improvement
       # case references exactly one finding, and a finding may have many cases (a retried or
       # re-opened turn); many-to-one, the case side references.
-      # read from: .engineering/planning/story/self-improvement-protocol.md:61-63
+      # read from: .engineering/planning/story/self-improvement-protocol.md:62-64
       # read from: protocols/self-improvement/1.yaml:28-32
       - name: finding
         kind: references
