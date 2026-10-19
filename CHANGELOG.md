@@ -84,8 +84,7 @@ The minor version moves because `takt promote` now refuses scorecards that 0.2.x
 ### Known limits
 
 - `Unperformable` ranks with the budget stops, so a `--forge none` run that stopped `NoProgress`
-  under 0.2.x ranks one higher against an older baseline. Real promotions measure with the
-  GitHub forge and a gates document, where `Unperformable` does not fire.
+  under 0.2.x ranks one higher against an older baseline.
 - The `lint` gate runs `cargo clippy`, which compiles and runs build code a step wrote; the gate
   cannot vouch for that code, and the merge of such a change stays guarded by the owner.
 
