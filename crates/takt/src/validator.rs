@@ -132,9 +132,17 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
             Vec::new()
         }
     };
+    // The case's module names, and the top-level modules the base held: a name the base held
+    // in an import directory is the project's own, one the branch added there is not.
+    let at_base = crate::git::run(
+        tree,
+        &["ls-tree", "-r", "-z", "--name-only", "--full-tree", &at],
+    )?;
     let surface = crate::run::JudgeSurface::new(runs, tree)
         .without_store()
-        .with_globs(globs);
+        .with_globs(globs)
+        .with_modules(crate::run::Modules::read(dir))
+        .provided_by(at_base.split('\0').filter(|path| !path.is_empty()));
     // A link is never followed: one the base or the revision holds on the surface, or on the
     // way to a script, is named, and nothing is recorded while it is there.
     for commit in [at.as_str(), revision] {
@@ -166,7 +174,14 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
         ],
     )?;
     for path in nul_fields(&diff, "diff-tree", false)? {
-        if surface.contains(path) {
+        // While a line of the test command's script fails closed every program is on the
+        // surface: one the base held is as much one as the tree's now.
+        // In a directory on `PATH` an entry the base held executable is a program a lookup
+        // finds, as one executable now is.
+        if surface.contains(path)
+            || (surface.guards_programs() && program_at(tree, &at, path)?)
+            || (surface.in_a_path_dir(path) && executable_at(tree, &at, path)?)
+        {
             paths.push(path.to_owned());
         } else if crate::run::is_manifest(path) || crate::run::is_pyproject(path) {
             let before = crate::run::manifest_at(tree, &at, path)?;
@@ -184,11 +199,160 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
             }
         }
     }
+    // Where the module names came from, when one of the paths is such a module.
+    let note = surface.modules_note(&paths);
+    if let Some(last) = paths.last_mut() {
+        last.push_str(&note);
+    }
     Ok(if paths.is_empty() {
         Judged::Unchanged
     } else {
         Judged::Changed { base, paths }
     })
+}
+
+/// An empty home made for one run of a test command or a gate's commands, outside the tree,
+/// removed when dropped. The command runs with `HOME` there and `PYTHONNOUSERSITE=1`, so
+/// nothing a step wrote in the caller's home (Python's user site, its start-up files) runs
+/// with it, and `PYTHONDONTWRITEBYTECODE=1`, so its Python writes no byte code into a directory
+/// outside the tree takt snapshots; cargo and rustup keep the caller's homes ([`FreshHome::vars`]).
+pub(crate) struct FreshHome(PathBuf);
+
+impl FreshHome {
+    /// A new empty directory under the system's temporary directory, readable by its owner
+    /// alone.
+    pub(crate) fn new() -> Result<Self> {
+        static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.subsec_nanos());
+        let dir =
+            std::env::temp_dir().join(format!("takt-home-{}-{made}-{nanos}", std::process::id()));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder
+            .create(&dir)
+            .with_context(|| format!("create a home for the command at {}", dir.display()))?;
+        Ok(Self(dir))
+    }
+
+    /// What the command runs with, given what it would inherit (`inherited`): `HOME` this
+    /// directory, `PYTHONNOUSERSITE=1`, `PYTHONDONTWRITEBYTECODE=1`, and `CARGO_HOME` and
+    /// `RUSTUP_HOME`, when it would inherit none, the caller's (its own variable, or `.cargo` and
+    /// `.rustup` in its home).
+    fn vars(&self, inherited: impl Fn(&str) -> bool) -> Vec<(&'static str, std::ffi::OsString)> {
+        let caller_home = std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .map(PathBuf::from)
+            .or_else(std::env::home_dir);
+        let mut vars = vec![
+            ("HOME", self.0.clone().into_os_string()),
+            ("PYTHONNOUSERSITE", "1".into()),
+            ("PYTHONDONTWRITEBYTECODE", "1".into()),
+        ];
+        for (name, under) in [("CARGO_HOME", ".cargo"), ("RUSTUP_HOME", ".rustup")] {
+            if inherited(name) {
+                continue;
+            }
+            let caller = std::env::var_os(name)
+                .filter(|value| !value.is_empty())
+                .or_else(|| caller_home.as_ref().map(|home| home.join(under).into()));
+            vars.extend(caller.map(|value| (name, value)));
+        }
+        vars
+    }
+
+    /// The assertions project file `project` with every command it admits, and every
+    /// provider's, run in this home ([`FreshHome::vars`]): the gate's commands inherit nothing,
+    /// so `CARGO_HOME` and `RUSTUP_HOME` are set unless the binding sets them.
+    fn admitting(&self, project: &str) -> Result<String> {
+        let mut doc: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(project).context("read the project file")?;
+        let Some(top) = doc.as_mapping_mut() else {
+            bail!("the project file is not a mapping");
+        };
+        let mut bindings: Vec<&mut serde_yaml_ng::Mapping> = Vec::new();
+        for (key, value) in top.iter_mut() {
+            let Some(entries) = value.as_mapping_mut() else {
+                continue;
+            };
+            match key.as_str() {
+                Some("commands") => bindings.extend(
+                    entries
+                        .values_mut()
+                        .filter_map(serde_yaml_ng::Value::as_mapping_mut),
+                ),
+                Some("providers") => {
+                    bindings.extend(entries.values_mut().filter_map(|provider| {
+                        provider
+                            .get_mut("command")
+                            .and_then(serde_yaml_ng::Value::as_mapping_mut)
+                    }));
+                }
+                _ => {}
+            }
+        }
+        for binding in bindings {
+            let env = binding
+                .entry("env".into())
+                .or_insert_with(|| serde_yaml_ng::Value::Mapping(serde_yaml_ng::Mapping::new()));
+            let Some(env) = env.as_mapping_mut() else {
+                bail!("the project file binds an `env` that is not a mapping");
+            };
+            let set: Vec<String> = env
+                .keys()
+                .filter_map(|key| key.as_str().map(str::to_owned))
+                .collect();
+            for (name, value) in self.vars(|name| set.iter().any(|key| key == name)) {
+                env.insert(name.into(), value.to_string_lossy().into_owned().into());
+            }
+        }
+        serde_yaml_ng::to_string(&doc).context("write the project file")
+    }
+
+    /// The directory.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.0
+    }
+
+    /// Runs `command` in this home ([`FreshHome::vars`]).
+    pub(crate) fn apply(&self, command: &mut Command) {
+        for (name, value) in self.vars(|name| std::env::var_os(name).is_some()) {
+            command.env(name, value);
+        }
+    }
+}
+
+impl Drop for FreshHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Whether the commit `at` holds an executable entry at `path`: a file with an exec bit, or a
+/// link.
+fn executable_at(tree: &Path, at: &str, path: &str) -> Result<bool> {
+    Ok(object_at(tree, at, path)?
+        .is_some_and(|object| object.starts_with("100755 ") || object.starts_with("120000 ")))
+}
+
+/// Whether the commit `at` holds a program at `path`: a file with an exec bit, or one whose
+/// first two bytes are `#!`.
+fn program_at(tree: &Path, at: &str, path: &str) -> Result<bool> {
+    let Some(object) = object_at(tree, at, path)? else {
+        return Ok(false);
+    };
+    let mut fields = object.split_whitespace();
+    let (mode, kind, id) = (fields.next(), fields.next(), fields.next());
+    if mode == Some("100755") {
+        return Ok(true);
+    }
+    match (kind, id) {
+        (Some("blob"), Some(id)) => Ok(crate::git::blob(tree, id)?.starts_with(b"#!")),
+        _ => Ok(false),
+    }
 }
 
 /// The NUL-terminated fields of `listed`, what `git <command> -z` printed, each decoded as
@@ -463,6 +627,8 @@ impl TestsRun {
         let mut command = Command::new(&self.command[0]);
         command.args(&self.command[1..]).current_dir(tree);
         crate::forge::without_credentials(&mut command, |_| false);
+        let home = FreshHome::new()?;
+        home.apply(&mut command);
         let mut limits = self.limits;
         if let Some(deadline) = deadline {
             limits.timeout = limits
@@ -471,6 +637,7 @@ impl TestsRun {
         }
         let output = crate::forge::run_child(&mut command, limits)
             .with_context(|| format!("run {}", self.command.join(" ")))?;
+        drop(home);
         let result = if output.success() { "pass" } else { "fail" };
         let printed =
             String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
@@ -769,11 +936,13 @@ impl GateRun {
             _ => Ok(()),
         };
         clear()?;
+        // The gate's commands run in a home of their own, as the test command does.
+        let home = FreshHome::new()?;
         let collected = (|| -> Result<_> {
             let gates = copy("gates", &self.gates, &gates)?;
             let copied = project
                 .as_ref()
-                .map(|(path, text)| copy("project", path, text))
+                .map(|(path, text)| copy("project", path, &home.admitting(text)?))
                 .transpose()?;
             let mut prepared = canon_engineering_assertions::prepare(
                 tree,
@@ -797,6 +966,7 @@ impl GateRun {
             canon_engineering_assertions::collect(prepared, now)
                 .with_context(|| format!("collect the observations of {document}"))
         })();
+        drop(home);
         let cleared = clear();
         let bundle = collected?;
         cleared?;

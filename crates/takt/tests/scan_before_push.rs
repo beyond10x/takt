@@ -1451,7 +1451,14 @@ fn a_rewrite_to_a_local_path_is_refused() {
     let sink = tree.join(".git/sink.git");
     git(
         &tree,
-        &["init", "-q", "--bare", sink.to_str().expect("utf-8")],
+        &[
+            "init",
+            "-q",
+            "-b",
+            "main",
+            "--bare",
+            sink.to_str().expect("utf-8"),
+        ],
     );
     git(
         &tree,

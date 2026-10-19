@@ -507,7 +507,7 @@ pub fn verified_descends_within(
 /// bound once read, and a file well under its cap could expand to gigabytes. None when the
 /// stream holds none up to its end, or up to where it does not parse: the deserializer reads
 /// the same events up to there, builds the partial document they hold, with no alias in it, and
-/// then fails with the parser's error. A parser that cannot be set up is an error.
+/// then fails, with the parser's error or its own. A parser that cannot be set up is an error.
 pub(crate) fn anchor_line(text: &str) -> Result<Option<usize>> {
     use unsafe_libyaml as unsafe_yaml;
     let size = u64::try_from(text.len()).context("the YAML text's size")?;

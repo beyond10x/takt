@@ -586,9 +586,9 @@ fn half(twice: i128) -> String {
     format!("{sign}{}{}", abs / 2, if abs % 2 == 1 { ".5" } else { "" })
 }
 
-/// Whether `revision` can name a scorecard: a commit id, 7 to 64 lower-case hex digits.
-fn is_revision(revision: &str) -> bool {
-    (7..=64).contains(&revision.len())
+/// Whether `revision` can name a scorecard: the full commit id, 40 lower-case hex digits.
+fn is_full_revision(revision: &str) -> bool {
+    revision.len() == 40
         && revision
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -602,6 +602,39 @@ fn disagreement(run: &Row) -> Option<String> {
         "its own stop says {}, the held-out check says {}; scored {}",
         run.stop, held.result, run.outcome
     ))
+}
+
+/// What `takt --version` prints, and so a run's `opened` line names, for a binary built where
+/// no git checkout held it: a binary that names no revision.
+pub const UNKNOWN_REVISION: &str = "unknown revision";
+
+/// Whether an `opened` line's `binary` names no revision: none, as a binary built before
+/// `--version` named its revision left it; [`UNKNOWN_REVISION`]; or empty. The one predicate a
+/// save ([`Scorecard::save`]), a stated baseline (`takt promote --binary-sha256`) and a trace's
+/// revision read it with.
+#[must_use]
+pub fn names_no_revision(binary: Option<&str>) -> bool {
+    binary.is_none_or(|binary| binary.is_empty() || binary == UNKNOWN_REVISION)
+}
+
+/// The mix rule: the first run of `rows` whose `opened` line names no revision
+/// ([`names_no_revision`]) while another run's names one, as `<case>#<n>` with its row; none
+/// when every run names one or none does. A save and a stated baseline refuse such a run.
+#[must_use]
+pub fn unnamed_in_a_mix(rows: &[Row]) -> Option<(String, &Row)> {
+    let unnamed = |row: &Row| names_no_revision(row.opened_binary.as_deref());
+    if rows.iter().all(unnamed) || !rows.iter().any(unnamed) {
+        return None;
+    }
+    let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
+    for row in rows {
+        let n = counted.entry(row.case.as_str()).or_insert(0);
+        *n += 1;
+        if unnamed(row) {
+            return Some((format!("{}#{n}", row.case), row));
+        }
+    }
+    None
 }
 
 impl Scorecard {
@@ -804,15 +837,17 @@ impl Scorecard {
         Ok(())
     }
 
-    /// Saves the scorecard as `<dir>/scorecard-<revision>.json`, named by `revision`, a commit
-    /// id, which `named` says the source of; the path. A file there already is not
-    /// overwritten: the save is refused.
+    /// Saves the scorecard as `<dir>/scorecard-<revision>.json`, named by `revision`, the full
+    /// commit id, checked before anything else, which `named` says the source of; the path. A
+    /// file there already is not overwritten: the save is refused. So is a scorecard holding a
+    /// run of another binary than `revision`'s ([`Scorecard::made_with`]): nothing is written.
     pub fn save(mut self, dir: &Path, revision: &str, named: Named) -> Result<PathBuf> {
-        if !is_revision(revision) {
+        if !is_full_revision(revision) {
             bail!(
-                "the revision {revision:?} cannot name a scorecard file: give a commit id, 7 to 64 lower-case hex digits"
+                "the revision {revision:?} cannot name a scorecard file: give the full commit id, 40 lower-case hex digits"
             );
         }
+        self.made_with(revision)?;
         self.revision = Some(revision.to_owned());
         self.named_by = Some(named);
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
@@ -838,6 +873,38 @@ impl Scorecard {
         file.write_all(text.as_bytes())
             .with_context(|| format!("write {}", path.display()))?;
         Ok(path)
+    }
+
+    /// Every run was made with the binary of `revision`, as its `opened` line names it,
+    /// compared exactly (`<sha>-dirty` is another binary); or no run's line names a revision
+    /// ([`names_no_revision`]). A run that names none beside one that names one
+    /// ([`unnamed_in_a_mix`]) is the refusal, else the first run that names another revision,
+    /// named `<case>#<n>` with both revisions.
+    fn made_with(&self, revision: &str) -> Result<()> {
+        if let Some((run, row)) = unnamed_in_a_mix(&self.rows) {
+            bail!(
+                "run {run} names no revision ({}), beside runs that name one; saved under {revision}, a scorecard's runs all name {revision} or all name none, so nothing is saved",
+                row.opened_binary.as_deref().map_or_else(
+                    || "its `opened` line has no `binary`".to_owned(),
+                    |binary| format!("its `opened` line says {binary:?}")
+                )
+            );
+        }
+        let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
+        for row in &self.rows {
+            let n = counted.entry(row.case.as_str()).or_insert(0);
+            *n += 1;
+            if let Some(named) = row.opened_binary.as_deref()
+                && !names_no_revision(Some(named))
+                && named != revision
+            {
+                bail!(
+                    "run {}#{n} was made with the binary of {named}, not with the binary of {revision}; a scorecard is saved under the full revision every run's `opened` line names, so nothing is saved",
+                    row.case
+                );
+            }
+        }
+        Ok(())
     }
 
     /// A saved scorecard; one that does not read, or of another format, is an error naming it,

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:self-improvement-protocol
 kind: story
-status: draft
+status: active
 title: Validators drive self.improvement/1 cases, with producer independence in the case
 summary: validators for the L1 protocol's actions; independence written by the kernel
 relations:
@@ -15,20 +15,28 @@ relations:
 - depends_on: story:loop-scorecard
 - depends_on: story:scorecard-save-checks-binary
 - informed_by: story:confinement-seam
+- depends_on: story:check-finding-run-step-confined
 scope:
 - confidence: cited
   path: crates/takt-cli/src/main.rs
 - confidence: cited
   path: crates/takt/src/case.rs
-- confidence: inferred
+- confidence: cited
   path: crates/takt/src/improvement.rs
 - confidence: inferred
-  path: crates/takt/src/run.rs
+  path: crates/takt/src/lib.rs
 - confidence: cited
   path: crates/takt/src/validator.rs
 - confidence: cited
   path: crates/takt/tests/improvement_protocols.rs
-revision: 15
+- confidence: cited
+  path: crates/takt/tests/pr_opens_when_done.rs
+- confidence: inferred
+  path: crates/takt/tests/self_improvement.rs
+revision: 22
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T06:32:42Z", actor: "human:timo", revision: 21, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "proposed", to: "active", at: "2026-10-19T06:32:43Z", actor: "human:timo", revision: 22, decided_on: {"recorded":{"review_outcome":3}}}
 ---
 # Story: self-improvement-protocol
 
@@ -57,26 +65,28 @@ defects, a review's value) stays a `decision:` requirement or human-sourced evid
 
 ## Scope
 
-Derived 2026-10-19 by `story-scoper` against `main` at 1ded28f (code unchanged at 02b8655), `headstart/promotion` at
-2d10b7f and `wave/2026-10-18-w12` at 76be9ed; story:loop-scorecard's code is not in 76be9ed and was read on
-`impl/loop-scorecard` at 2052a61. Every line is **cited** (read from the story or the tree) or **inferred** (a reading that could be wrong).
+Derived 2026-10-19 by `story-scoper`, read-only at `wave/2026-10-19-w13` 4e1aa08 (main plus wave 13). `crates/`, `scripts/` and `protocols/` are identical at bbe5bdb and 4e1aa08, so story:judge-guard's citations hold here. Line numbers are `path:line@4e1aa08`. Every line is **cited** (read from the story or the tree) or **inferred** (a reading that could be wrong).
 
-- **Primary surface:** `crates/takt/src/validator.rs`: validators behind the `Validator` trait (`crates/takt/src/validator.rs:45-85@1ded28f`) for `finding.file`, `scenario.reproduce`, `scenario.verify`, `scorecard.compare`, `binary.promote` and the two candidate merges, each also a row of `BUILT_IN`, the table of takt's built-in validators (`crates/takt/src/validator.rs:1611-1671@76be9ed`) — cited (story Context; trait and table read)
-- **Files:** `crates/takt/src/case.rs`: `CaseDir::open` writes `format`, `id`, `protocol`, `artifacts` and `inputs` and no `independence` (`crates/takt/src/case.rs:1371-1399@1ded28f`), and opens every artifact but `intent` and `implementation` at `r0` (`crates/takt/src/case.rs:1361-1366@1ded28f`), while a validator observes at its subject's current revision (`crates/takt/src/run.rs:3442-3445@1ded28f`) — cited
-- **Files:** `crates/takt/tests/improvement_protocols.rs:78-103@1ded28f`: `open` sets every artifact to `<artifact>-1` (`:91-94`) and writes `independence` by hand (`:98-101`), which the second Check removes; its module doc says no validator exists for these actions (`:7-8`) — cited
-- **Files:** `crates/takt-cli/src/main.rs`: every validator is built in `validators_of` and `Forged::register` (`crates/takt-cli/src/main.rs:541-555,712-724@1ded28f`; `:631,804@2d10b7f`; `:554-569@76be9ed`) and picked only by admissible action (`crates/takt/src/run.rs:131-146,3415-3425@1ded28f`) — cited
-- **Also likely:** a merge validator about `candidate`: `PrMerged` performs only `repository.merge` about `implementation` (`crates/takt/src/validator.rs:1316-1331@1ded28f`, `ACTION` at `crates/takt/src/validator.rs:1326@76be9ed`), and after wave 12 no action that may produce `merge_observation` is offered to the harness (`crates/takt/src/run.rs:662-672@76be9ed`), so without one no step takes `candidate.merge` or `candidate.merge_judge_surface` (`protocols/self-improvement/1.yaml:149-176@1ded28f`) — inferred
-- **Also likely:** `crates/takt/src/run.rs` or `crates/takt/src/case.rs` gives the case its revisions and its independence: today the loop moves only `implementation` (`crates/takt/src/run.rs:2783,4287@1ded28f`); the baseline could come from the promotion store's latest record (`crates/takt/src/promotion.rs:488-494@2d10b7f`) and be opened as story:loop-scorecard opens `loop_baseline` (`crates/takt/src/case.rs:1884-1897@2052a61`, `crates/takt-cli/src/main.rs:416-430,513-517@2052a61`); independence could be declared for each validator's `name()`, the producer of its records (`crates/takt/src/validator.rs:46-47@1ded28f`), since a validator is no agent run — inferred
-- **Also likely:** turn 1's hand-written records (`.engineering/cases/turn-1-scenario-help/`@1ded28f, "written by hand by a recorder program": `docs/runs/2026-10-18-improvement-turn-1/README.md:5-6@1ded28f`) and their writers: `evidence/0001-e1.json` by `finding.file` (`notes.md:3`); `evidence/0002-e2.json` by `scenario.reproduce` and `evidence/0003-e3.json` by `scenario.verify` (`scripts/check-finding` at the baseline and at the candidate, `notes.md:4-5`); `evidence/0004-e4.json` by `scorecard.compare` (`notes.md:7-11`); `evidence/0005-e5.json` by a candidate-merge validator (`notes.md:14`); `evidence/0006-e6.json` by `binary.promote` (`notes.md:15`); `case.yaml:4-12` (artifact revisions) and `case.yaml:15-17` (`independence`) by the kernel, no validator; `story.yaml:1` by `CaseDir::set_story` (`crates/takt/src/case.rs:1600@1ded28f`); `authority.yaml:1-10` stays a grant and `decisions/` stays Canon's evaluation (`crates/takt/src/case.rs:1786@1ded28f`) — inferred
-- **Also likely:** the validators read what exists and edit none of it: `scripts/check-finding` (one result line, `scripts/check-finding:59-66@1ded28f`), `Scorecard::load` and `Scorecard::against` (`crates/takt/src/scorecard.rs:613,640@2d10b7f`) with the baseline's scorecard copy in the promotion store (`crates/takt/src/promotion.rs:109-111@2d10b7f`), and `promotion::records` and `promotion::baseline` (`crates/takt/src/promotion.rs:273,490@2d10b7f`) — inferred
-- **Documents:** none edited; `protocols/self-improvement/1.yaml` is read, and no Acceptance or Check line requires changing it — cited
-- **Confidence:** medium — every dependency's code now exists (`scripts/check-finding` and `crates/takt/src/scorecard.rs` on main, `crates/takt/src/promotion.rs` at 2d10b7f) and the files above are read, but how revisions and independence enter the case, and where `scorecard.compare` gets the candidate's scorecard, are design choices the tree does not make (the planner's decisions below make them)
-- **Would collide with:** `BUILT_IN`, a fixed-length array (`[BuiltIn; 6]` at `crates/takt/src/validator.rs:1628@76be9ed`, `[BuiltIn; 9]` with story:loop-scorecard's rows at `crates/takt/src/validator.rs:1624@2052a61`), and `PrMerged`; `validators_of` in `crates/takt-cli/src/main.rs` (story:loop-scorecard pushes its three validators at `crates/takt-cli/src/main.rs:593-595@2052a61`) and the case-opening block of `run` there (`crates/takt-cli/src/main.rs:416-430,513-517@2052a61`); `CaseDir::open` and the code around `set_revision` in `crates/takt/src/case.rs` (story:loop-scorecard extracts `opening_base` from `open`, `crates/takt/src/case.rs:54-76@2052a61`, and adds `open_loop_baseline` above `set_revision`, `crates/takt/src/case.rs:1884-1900@2052a61`); `Shape` and the validator loop in `crates/takt/src/run.rs` (`crates/takt/src/run.rs:161-191,4002-4140@76be9ed`); the module doc of `crates/takt/tests/improvement_protocols.rs:7-10@2052a61`; story:loop-scorecard's row reader (`crates/takt/src/loop_scorecard.rs:1-16,39@2052a61`); and story:judge-guard's `PrMerged`, `AuthorityDecision` and `prepare_grant`. No case independence is written by wave 12 or by story:loop-scorecard (`git grep -i independen` over `crates/takt/src` and `crates/takt-cli/src` is empty at 76be9ed and 2052a61) — cited
-- **Safety fact:** the L1 actions and the kinds `finding_record`, `scenario_result`, `scorecard_result` and `promotion_record` appear in no protocol file but `protocols/self-improvement/1.yaml` (`git grep` over `protocols/` at 1ded28f and 76be9ed), and a validator is due only when its action is admissible (`crates/takt/src/run.rs:131-146@1ded28f`), so the new validators change nothing for `story.delivery/1` or `loop.improvement/1` cases; `software.change/1` comes from an external crate and was not read — step 2, unproven
+- **Primary surface:** `crates/takt/src/improvement.rs`, new (D7): one validator type per action — `finding.file`, `scenario.reproduce`, `scenario.verify`, `scorecard.compare`, `candidate.merge`, `candidate.merge_judge_surface`, `binary.promote` — placed as `LoopMeasure`, `LoopDefinitionCheck`, `LoopCompare` are in `crates/takt/src/loop_scorecard.rs:1226,1420,1627` — cited
+- **Files:** `crates/takt/src/validator.rs`: `BUILT_IN`, `[BuiltIn; 9]` (1829-1880), one row per new type; the row is what keeps the harness off the new kinds (`crates/takt/src/run.rs:472-490,667-677`); `ended_by` (415-429), the deadline rule a `check-finding` child needs, is private — cited
+- **Files:** `crates/takt/src/case.rs`: a turn-opening method beside `open_loop_baseline` (1916-1929) that sets `baseline`, `candidate`, `finding` and `promotion` (open leaves them at `r0`, 1589-1599), calls `set_story` (1810) and writes `independence` into `case.yaml` (`git grep -i independen` over `crates/*/src` is empty); a protocol constant beside `LOOP_PROTOCOL`/`LOOP_BASELINE` (43-48) — cited
+- **Files:** `crates/takt-cli/src/main.rs`: the `run` arm takes the turn's opening values out of `--input` before the undeclared-input refusal, as it does `loop_baseline` (677-691; refusal 692-710), and opens them after the case (774-778); `validators_of` pushes the new validators (838-858) — cited
+- **Files:** `crates/takt/tests/improvement_protocols.rs` (its module doc says no `self.improvement/1` validator exists, 7-10; `open` writes `independence` by hand, 80-105) and `crates/takt/tests/pr_opens_when_done.rs:513-573` (every `impl Validator for` under `src/` needs a `BUILT_IN` row and one instance, 572) — cited
+- **Also likely:** `crates/takt/src/lib.rs:17-24` (`pub mod improvement;`) and an end-to-end test `crates/takt/tests/self_improvement.rs` (`takt run` to `accepted` and to `declined`) — inferred
+- **Documents:** none edited; `protocols/self-improvement/1.yaml` is read, its actions (124-196) need no change on the minimal path — cited
+- **Reuse:** `scripts/file-finding --predicate` (243-251), `scripts/check-finding <finding> <revision>` (5-6, 76-89), `promotion::promote` dry run (`WouldWrite`/`WouldRefuse`, `promotion.rs:274-289,2030`) and real run (`Promoted`/`Regression`/`BuildFailed`), `promotion::baseline` (818-824), `CaseDir::grants(action)` (`case.rs:1890-1914`), the `loop_baseline` opening pattern (`case.rs:80-168,1916-1929`; `main.rs:677-691,774-778`) — cited
+- **Confidence:** medium
+- **Would collide with:** `BUILT_IN` and `pr_opens_when_done.rs:540-572` (every unit adding a validator); in `main.rs` the `run` opening block (677-778) and `validators_of` (838-858); in `case.rs` the code around `open_loop_baseline`/`set_revision` (1916-1940). story:judge-guard edits other hunks of `case.rs`, `main.rs` and `validator.rs` (`case.rs:488-1022`, `main.rs:274-286,468-490,1015-1027,1509-1520`, `PrMerged`), so the two are disjoint by hunk and collide by file; this story follows judge-guard on lane A
+- **Safety fact:** the new actions and the kinds `finding_record`, `scenario_result`, `scorecard_result` and `promotion_record` appear in no protocol and no `crates/*/src` file but `protocols/self-improvement/1.yaml`, and a validator is due only when its exact action is admissible (`run.rs:149-157`), so the new validators change nothing for `story.delivery/1` or `loop.improvement/1` cases — level 2, unproven
 
-Not established: (1) the Context's `case.rs:481-530` is stale, `CaseDir::open` is at `crates/takt/src/case.rs:1330-1468@1ded28f`; (2) no agent-run identity at any of the three revisions (`crates/takt/src/events.rs:67-77@1ded28f`); (3) answered: a judge-surface grant is recordable on an improvement case, checked at the revision of the capability's `grant_subject` (`crates/takt/src/case.rs:1685-1704@1ded28f`), and turn 1 holds one (`.engineering/cases/turn-1-scenario-help/authority.yaml:1-5@1ded28f`); (4) answered: the dependencies exist; (5) partly answered: `scripts/check-finding` writes only under its cache (`scripts/check-finding:54-57@1ded28f`) but reads the finding from the working tree (`:143-146`) and is itself a tree file; under wave 12 a child of up to 900 s also wants `observe_within` (`crates/takt/src/validator.rs:71-84@76be9ed`); (6) answered: validators are registered unconditionally and chosen by action (`crates/takt/src/protocol.rs:62-69@1ded28f`).
+## Planner's decisions at scoping (2026-10-19, for release 0.2.0)
 
-Typed entries: `crates/takt/src/validator.rs`, `crates/takt/src/case.rs`, `crates/takt/tests/improvement_protocols.rs`, `crates/takt-cli/src/main.rs` (cited); `crates/takt/src/run.rs`, `crates/takt/src/improvement.rs` (inferred).
+- S1 (the merge): the two merge validators observe, they do not merge. `candidate.merge` and `candidate.merge_judge_surface` record `merged` when the case holds the grant its protocol requires for the candidate revision (`CaseDir::grants`) and the candidate is an ancestor of the mainline's tip as the forge reports it (judge-guard's D7 method); the merge itself happens in the candidate's own delivery case under judge-guard's guard. One type per action, sharing one function. Turns 1-3 recorded e5 the same way, by hand.
+- S2 (`candidate.deliver`): delivery happens outside the case (D1); the candidate revision is given at open. No `run.rs` change.
+- S3 (the finding): the turn opens with `--intent` and the inputs `finding=<story id>` and `candidate=<full sha>`, taken out of `--input` as `loop_baseline` is; `story.yaml` names the finding (`set_story`); the `finding` artifact is the case's `base_commit`; `baseline` is the latest promoted revision (`promotion::baseline`).
+- S4 (the candidate's scorecard): read from a fixed location, `$XDG_STATE_HOME/takt/scorecards/scorecard-<candidate>.json` (default `~/.local/state/takt/scorecards/`), written beforehand with `takt scorecard --save`; a missing file leaves `scorecard.compare` waiting, naming the path.
+- S5 (`surface`): computed at open from `.engineering/judge-allow.yaml` at the base (judge-guard) over `base..candidate`; an operator-given `surface` that disagrees is refused naming the first judge-surface path.
+- S6 (the judge): `scenario.reproduce`, `scenario.verify` and `scorecard.compare` run with the installed promoted binary as the judge, never the candidate's; the candidate binary only runs inside `check-finding`'s confined run step (story:check-finding-run-step-confined).
 
 ## Ordering
 

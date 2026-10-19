@@ -1724,8 +1724,8 @@ fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<String, C
 }
 
 impl Checkpoint {
-    /// Takes the checkpoint of `tree`, guarding `HEAD` and its branch, every replace ref, and
-    /// every other branch and tag of the repository but one another worktree has checked out.
+    /// Takes the checkpoint of `tree`, guarding `HEAD` and its branch and every other ref of the
+    /// repository, replace refs and notes among them, but a branch another worktree checked out.
     pub fn take(tree: &Path) -> Result<Self> {
         Self::take_guarding(tree, &[])
     }
