@@ -120,6 +120,8 @@ fn run_made_with(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Optio
                 api_ms: None,
                 turns: None,
                 started_at: None,
+                transcript: None,
+                transcript_refused: None,
             },
         ),
         (

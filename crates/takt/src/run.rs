@@ -204,13 +204,15 @@ fn short(revision: &str) -> &str {
 
 /// Who took a step, with what its event records of it: a validator, and the revision it
 /// observed when it observed; or the harness, the tokens it reported, their components and
-/// what it reported about the call besides them.
+/// what it reported about the call besides them, and the path of the transcript takt kept or
+/// why it kept none.
 enum SteppedBy<'r> {
     Validator(Option<&'r str>),
     Harness(
         Option<u64>,
         Option<crate::events::TokenUsage>,
         Option<crate::harness::CallReport>,
+        Option<std::result::Result<String, String>>,
     ),
 }
 
@@ -6075,6 +6077,16 @@ pub fn default_set_aside() -> Option<PathBuf> {
         .map(|dir| dir.join("takt").join("set-aside"))
 }
 
+/// Where `takt run` keeps each harness step's transcript ([`Run::transcripts_in`]), outside
+/// every repository and every case directory: `$XDG_STATE_HOME/takt/transcripts`
+/// (`~/.local/state/takt/transcripts` without it). None when neither is set.
+#[must_use]
+pub fn default_transcripts() -> Option<PathBuf> {
+    crate::promotion::state_dir()
+        .ok()
+        .map(|dir| dir.join("takt").join("transcripts"))
+}
+
 /// The subject of the commit that records a take on the case's branch: `takt: take <story>`.
 #[must_use]
 pub fn take_subject(story: &str) -> String {
@@ -6258,6 +6270,11 @@ pub struct Run<'a> {
     /// opens, unless [`Run::set_aside_in`] gives another; none when nothing names one, and then
     /// no harness step is taken. A validator's observation moves nothing aside.
     set_aside: Option<PathBuf>,
+    /// Where each harness step's transcript is kept ([`crate::harness::keep_transcript`]), with
+    /// the repository's key there ([`crate::harness::repo_key`]): none until
+    /// [`Run::transcripts_in`] gives one (`takt run` gives [`default_transcripts`]), and then no
+    /// transcript is kept.
+    transcripts: Option<(PathBuf, String)>,
     /// The planning store a story's run records its test result and its move in; none until
     /// [`Run::record_on`] gives one, and only a story's run writes to it.
     store: Option<&'a dyn Frontier>,
@@ -6376,6 +6393,7 @@ impl<'a> Run<'a> {
             poll: Self::POLL,
             binary: None,
             set_aside,
+            transcripts: None,
             store: None,
             started: Instant::now(),
             outside: Outside::read(tree, &outside_dirs)?,
@@ -6416,6 +6434,25 @@ impl<'a> Run<'a> {
     /// else the error, and the run keeps the directory it had.
     pub fn set_aside_in(&mut self, dir: PathBuf) -> Result<()> {
         self.set_aside = Some(crate::git::set_aside_root(&dir, &self.tree)?);
+        Ok(())
+    }
+
+    /// Where each harness step's transcript is kept; none until [`Run::transcripts_in`].
+    #[must_use]
+    pub fn transcripts(&self) -> Option<&Path> {
+        self.transcripts.as_ref().map(|(root, _)| root.as_path())
+    }
+
+    /// Keeps each harness step's transcript under `dir`, in the tree's own segment
+    /// ([`crate::harness::keep_transcript`], [`crate::harness::repo_key`]), once `dir` is
+    /// accepted as a set-aside root is ([`crate::git::set_aside_root`]): absolute, outside the
+    /// tree, and makeable, every link on the way resolved now; else the error, and the run
+    /// keeps what it had.
+    pub fn transcripts_in(&mut self, dir: PathBuf) -> Result<()> {
+        let root = crate::git::set_aside_root(&dir, &self.tree)
+            .with_context(|| format!("the transcripts directory {}", dir.display()))?;
+        let key = crate::harness::repo_key(&self.tree)?;
+        self.transcripts = Some((root, key));
         Ok(())
     }
 
@@ -6465,6 +6502,7 @@ impl<'a> Run<'a> {
             poll: Self::POLL,
             binary: None,
             set_aside,
+            transcripts: None,
             store: None,
             started: Instant::now(),
             outside: Outside::read(tree, &outside_dirs)?,
@@ -7229,9 +7267,16 @@ impl<'a> Run<'a> {
         action: &str,
         summary: &str,
     ) -> Result<()> {
-        let (by, tokens, usage, revision, call) = match by {
-            SteppedBy::Validator(revision) => ("validator", None, None, revision, None),
-            SteppedBy::Harness(tokens, usage, call) => ("harness", tokens, usage, None, call),
+        let (by, tokens, usage, revision, call, kept) = match by {
+            SteppedBy::Validator(revision) => ("validator", None, None, revision, None, None),
+            SteppedBy::Harness(tokens, usage, call, kept) => {
+                ("harness", tokens, usage, None, call, kept)
+            }
+        };
+        let (transcript, transcript_refused) = match kept {
+            Some(Ok(path)) => (Some(path), None),
+            Some(Err(why)) => (None, Some(why)),
+            None => (None, None),
         };
         let call = call.unwrap_or_default();
         events.emit(
@@ -7250,6 +7295,8 @@ impl<'a> Run<'a> {
                 api_ms: call.api_ms,
                 turns: call.turns,
                 started_at: call.started_at,
+                transcript,
+                transcript_refused,
             },
         )
     }
@@ -7262,6 +7309,9 @@ impl<'a> Run<'a> {
             .iter()
             .map(|(k, v)| format!("{k}={v}"))
             .collect();
+        // This run's number in the case, which names its step transcripts' directory: one
+        // more than the `opened` lines the case's record holds before this run writes its own.
+        let run_number = crate::harness::run_number(events.path())?;
         events.emit(
             self.steps,
             &Event::Opened {
@@ -7922,6 +7972,40 @@ impl<'a> Run<'a> {
                 self.harness.step(&context)
             }));
             let returned = Instant::now();
+            // The step's transcript is kept now, before any way out of the step below, the
+            // panic's and the errors' too: under the transcripts directory, outside the tree
+            // and every case directory ([`Run::transcripts_in`]), so no snapshot of the step
+            // reads it and no put-back takes it along. The step's line names it, or why none
+            // was kept: a file at its path is never overwritten, and the run goes on. A way out
+            // below that writes no step line (the harness failed, the hour budget ended it,
+            // what it left could not be killed or read) names it in the error or refusal line
+            // instead (`note`) and on the run's output (`told`); a record names it relative to
+            // the transcripts directory, the output whole.
+            let kept_transcript = crate::harness::keep_step_transcript(
+                self.harness,
+                self.transcripts
+                    .as_ref()
+                    .map(|(root, key)| (root.as_path(), key.as_str())),
+                &self.case.id,
+                run_number,
+                self.steps,
+            );
+            let transcript = kept_transcript
+                .as_ref()
+                .map(crate::harness::KeptTranscript::recorded);
+            let note = kept_transcript
+                .as_ref()
+                .map(crate::harness::KeptTranscript::note)
+                .unwrap_or_default();
+            let told = kept_transcript
+                .as_ref()
+                .map(crate::harness::KeptTranscript::told);
+            let tell = |out: &mut dyn Write| -> std::io::Result<()> {
+                match &told {
+                    Some(told) => writeln!(out, "{told}"),
+                    None => Ok(()),
+                }
+            };
             // What the step left running (a writer in a process group of its own) is killed
             // before anything it did is looked at, so nothing lands after the step is judged.
             let swept = crate::forge::sweep_left();
@@ -7959,19 +8043,21 @@ impl<'a> Run<'a> {
                             self.steps
                         ),
                     }
+                    let _ = tell(out);
                     std::panic::resume_unwind(panic);
                 }
             };
             // A step whose leftovers could not all be killed is not judged: it is discarded
             // whole and the run ends on the error.
             if let Err(error) = swept {
+                let _ = tell(out);
                 return Err(match undo() {
                     Ok(moved) => error.context(format!(
-                        "step {}: what the step left running could not be killed; everything it changed was discarded{moved}",
+                        "step {}: what the step left running could not be killed; everything it changed was discarded{moved}{note}",
                         self.steps
                     )),
                     Err(undo) => error.context(format!(
-                        "step {}: what the step left running could not be killed, and its change could not be discarded: {undo:#}",
+                        "step {}: what the step left running could not be killed, and its change could not be discarded: {undo:#}{note}",
                         self.steps
                     )),
                 });
@@ -7994,13 +8080,14 @@ impl<'a> Run<'a> {
             let (touched, surface_touched) = match seen {
                 Ok(seen) => seen,
                 Err(error) => {
+                    let _ = tell(out);
                     return Err(match undo() {
                         Ok(moved) => error.context(format!(
-                            "step {}: what the step left could not be read; everything it changed was discarded{moved}",
+                            "step {}: what the step left could not be read; everything it changed was discarded{moved}{note}",
                             self.steps
                         )),
                         Err(undo) => error.context(format!(
-                            "step {}: what the step left could not be read, and its change could not be discarded: {undo:#}",
+                            "step {}: what the step left could not be read, and its change could not be discarded: {undo:#}{note}",
                             self.steps
                         )),
                     });
@@ -8034,13 +8121,13 @@ impl<'a> Run<'a> {
                     Ok(moved) => moved,
                     Err(undo) => {
                         return Err(anyhow::anyhow!(
-                            "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}{not_put_back}",
+                            "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}{not_put_back}{note}",
                             self.steps
                         ));
                     }
                 };
                 let why = format!(
-                    "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}{not_put_back}{moved}",
+                    "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}{not_put_back}{moved}{note}",
                     self.steps
                 );
                 // Written after the cases directory was put back, which would take a line
@@ -8052,6 +8139,7 @@ impl<'a> Run<'a> {
                             report.tokens,
                             self.harness.last_usage(),
                             self.harness.last_call(),
+                            transcript.clone(),
                         ),
                         self.harness.name(),
                         &report.action,
@@ -8060,18 +8148,20 @@ impl<'a> Run<'a> {
                 }
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "{why}")?;
+                tell(out)?;
                 return Ok(Stop::Hours(h));
             }
             let report = match stepped {
                 Ok(report) => report,
                 Err(error) => {
+                    let _ = tell(out);
                     return Err(match undo() {
                         Ok(moved) => error.context(format!(
-                            "step {}: the harness failed; everything the step changed was discarded{moved}",
+                            "step {}: the harness failed; everything the step changed was discarded{moved}{note}",
                             self.steps
                         )),
                         Err(undo) => error.context(format!(
-                            "step {}: the harness failed, and the step's change could not be discarded: {undo:#}",
+                            "step {}: the harness failed, and the step's change could not be discarded: {undo:#}{note}",
                             self.steps
                         )),
                     });
@@ -8086,7 +8176,12 @@ impl<'a> Run<'a> {
             let record_step = |run: &Self| {
                 run.stepped(
                     events,
-                    SteppedBy::Harness(report.tokens, harness.last_usage(), harness.last_call()),
+                    SteppedBy::Harness(
+                        report.tokens,
+                        harness.last_usage(),
+                        harness.last_call(),
+                        transcript.clone(),
+                    ),
                     harness.name(),
                     &report.action,
                     &report.summary,

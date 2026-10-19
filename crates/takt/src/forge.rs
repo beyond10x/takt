@@ -16,8 +16,8 @@
 //! Every child process takt starts, the forge's and the others' (the test command, the
 //! harness, `aep`), goes through [`run_child`]: no standard input, its own process group,
 //! killed once it outlives its [`Limits`], what it started killed with it when it ends, and
-//! only a bounded tail of what it prints kept. Its environment holds no credential but the ones
-//! its adapter reads
+//! only a bounded tail of what it prints kept (and a bounded head, for a harness step's
+//! transcript). Its environment holds no credential but the ones its adapter reads
 //! ([`without_credentials`]): the forge keeps the GitHub ones the bot route's programs read.
 
 use std::cell::RefCell;
@@ -407,7 +407,39 @@ pub struct Finished {
     pub stderr: Vec<u8>,
     /// Whether standard output was longer than the limit and its beginning dropped.
     pub stdout_cut: bool,
+    /// The first bytes of standard output, at most the head [`run_child_keeping_head`] was
+    /// asked to keep; empty from [`run_child`]. They may overlap `stdout` when the whole was
+    /// shorter than the two together.
+    pub stdout_head: Vec<u8>,
+    /// How many bytes standard output carried in all.
+    pub stdout_len: u64,
 }
+
+/// The error [`run_child`] answers for a child it killed at its timeout, its text naming the
+/// program and the timeout, with what the child printed until then: what had arrived once its
+/// process group was killed, within [`GRACE`], else nothing.
+#[derive(Debug)]
+pub struct TimedOut {
+    /// The program's file name.
+    pub program: String,
+    /// The timeout it outlived.
+    pub timeout: Duration,
+    /// What it printed, `code` none.
+    pub output: Finished,
+}
+
+impl fmt::Display for TimedOut {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} timed out after {:.1} s and was killed",
+            self.program,
+            self.timeout.as_secs_f64()
+        )
+    }
+}
+
+impl std::error::Error for TimedOut {}
 
 impl Finished {
     /// Whether the process exited 0.
@@ -750,14 +782,30 @@ pub fn refused_namespaces(error: anyhow::Error) -> anyhow::Error {
     error
 }
 
-/// Reads `stream` to its end on a thread of its own, keeping its last `limit` bytes; answers
-/// on the channel with them and whether anything was dropped.
+/// What [`tail`] kept of a stream.
+struct Taken {
+    /// Its first bytes, at most the head asked for.
+    head: Vec<u8>,
+    /// Its last bytes, at most the limit.
+    tail: Vec<u8>,
+    /// Whether the last bytes are not all of it.
+    cut: bool,
+    /// How many bytes it carried.
+    len: u64,
+}
+
+/// Reads `stream` to its end on a thread of its own, keeping its first `head` bytes and its
+/// last `limit` bytes; answers on the channel with them, whether anything was dropped from the
+/// last ones, and how many bytes it carried.
 fn tail(
     stream: Option<impl std::io::Read + Send + 'static>,
+    head: usize,
     limit: usize,
-) -> mpsc::Receiver<(Vec<u8>, bool)> {
+) -> mpsc::Receiver<Taken> {
     let (send, receive) = mpsc::channel();
     std::thread::spawn(move || {
+        let mut first = Vec::new();
+        let mut len = 0_u64;
         let mut kept = Vec::new();
         let mut cut = false;
         if let Some(mut stream) = stream {
@@ -766,6 +814,9 @@ fn tail(
                 if n == 0 {
                     break;
                 }
+                len += n as u64;
+                let take = head.saturating_sub(first.len()).min(n);
+                first.extend_from_slice(&buffer[..take]);
                 kept.extend_from_slice(&buffer[..n]);
                 if kept.len() > limit.saturating_mul(2).max(8192) {
                     let drop = kept.len() - limit;
@@ -779,7 +830,12 @@ fn tail(
             kept.drain(..drop);
             cut = true;
         }
-        let _ = send.send((kept, cut));
+        let _ = send.send(Taken {
+            head: first,
+            tail: kept,
+            cut,
+            len,
+        });
     });
     receive
 }
@@ -930,13 +986,24 @@ pub fn sweep_left() -> Result<()> {
 
 /// Runs `command` held to `limits`: standard input empty, standard output and error read into
 /// a bounded tail each, in a process group of its own. Past its timeout it is killed with its
-/// group and the answer is an error naming the program and the timeout. Once it has ended, what
+/// group and the answer is an error naming the program and the timeout, a [`TimedOut`] holding
+/// what it printed until then. Once it has ended, what
 /// it started is killed with it before this returns: its process group, and on Linux every
 /// process it started and orphaned that takt adopted as their subreaper, however it left the
 /// group (a session of its own included). Not killed: one that left the group into takt's own
 /// group and dropped the call's mark from its environment; on other systems, one that left the
 /// group at all. An error too when its output stays held open after that.
 pub fn run_child(command: &mut Command, limits: Limits) -> Result<Finished> {
+    run_child_keeping_head(command, limits, 0)
+}
+
+/// [`run_child`], keeping besides the tail of standard output its first `head` bytes
+/// ([`Finished::stdout_head`]).
+pub fn run_child_keeping_head(
+    command: &mut Command,
+    limits: Limits,
+    head: usize,
+) -> Result<Finished> {
     static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let mark = format!(
         "{}-{}",
@@ -983,8 +1050,8 @@ pub fn run_child(command: &mut Command, limits: Limits) -> Result<Finished> {
             }
         }
     };
-    let stdout = tail(child.stdout.take(), limits.output);
-    let stderr = tail(child.stderr.take(), limits.output);
+    let stdout = tail(child.stdout.take(), head, limits.output);
+    let stderr = tail(child.stderr.take(), 0, limits.output);
     let started = Instant::now();
     let mut pause = Duration::from_millis(5);
     let status = loop {
@@ -1014,26 +1081,51 @@ pub fn run_child(command: &mut Command, limits: Limits) -> Result<Finished> {
         swept
     };
     let Some(status) = status else {
-        bail!(
-            "{program} timed out after {:.1} s and was killed",
-            limits.timeout.as_secs_f64()
-        );
+        // What it printed until it was killed goes with the error, as far as it arrives
+        // within the grace.
+        let until = Instant::now() + GRACE;
+        let mut taken = [&stdout, &stderr].map(|stream| {
+            stream
+                .recv_timeout(until.saturating_duration_since(Instant::now()))
+                .ok()
+        });
+        let stderr = taken[1].take().map(|taken| taken.tail).unwrap_or_default();
+        let stdout = taken[0].take().unwrap_or(Taken {
+            head: Vec::new(),
+            tail: Vec::new(),
+            cut: false,
+            len: 0,
+        });
+        return Err(anyhow::Error::new(TimedOut {
+            program,
+            timeout: limits.timeout,
+            output: Finished {
+                code: None,
+                stdout: stdout.tail,
+                stderr,
+                stdout_cut: stdout.cut,
+                stdout_head: stdout.head,
+                stdout_len: stdout.len,
+            },
+        }));
     };
     swept.with_context(|| format!("{program} ended"))?;
-    let read = |stream: &mpsc::Receiver<(Vec<u8>, bool)>| {
+    let read = |stream: &mpsc::Receiver<Taken>| {
         stream.recv_timeout(GRACE).map_err(|_| {
             anyhow!(
                 "{program} ended, but a process it started outside its process group still holds its output open"
             )
         })
     };
-    let (stdout, stdout_cut) = read(&stdout)?;
-    let (stderr, _) = read(&stderr)?;
+    let stdout = read(&stdout)?;
+    let stderr = read(&stderr)?;
     Ok(Finished {
         code: status.code(),
-        stdout,
-        stderr,
-        stdout_cut,
+        stdout: stdout.tail,
+        stderr: stderr.tail,
+        stdout_cut: stdout.cut,
+        stdout_head: stdout.head,
+        stdout_len: stdout.len,
     })
 }
 

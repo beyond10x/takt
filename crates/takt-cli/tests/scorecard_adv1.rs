@@ -90,6 +90,8 @@ fn scenario_one_with_its_grant(repo: &Path, case: &str) {
         api_ms: None,
         turns: None,
         started_at: None,
+        transcript: None,
+        transcript_refused: None,
     };
     for (n, event) in [
         (0, opened()),

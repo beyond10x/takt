@@ -1273,6 +1273,9 @@ fn finish(
         writeln!(out, "{line}")?;
     }
     run.binary = Some(REVISION.to_owned());
+    if let Some(transcripts) = takt::run::default_transcripts() {
+        run.transcripts_in(transcripts)?;
+    }
     run.take_default_gate();
     run.stop_when_unperformable();
     run.stop_when_disk_below(
