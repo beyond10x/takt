@@ -163,7 +163,7 @@ impl Harness for Fails {
 /// This case runs under a 10 s budget of its own, so the gate's preparation has room under load
 /// before its command starts; the command still sleeps past it.
 #[test]
-fn a_gate_command_that_outlives_the_hour_budget_runs_the_run_past_it() {
+fn a_gate_command_that_outlives_the_hour_budget_is_held_to_the_hour_budget() {
     let _serial = serial();
     let scripts = directory("gate-scripts");
     let pids = scripts.join("pids");
