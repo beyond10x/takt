@@ -676,3 +676,124 @@ fn against_applies_the_trials_to_the_saved_side_and_to_new_scenarios() {
         "{text}{stderr}"
     );
 }
+
+/// `--against <saved>` with this repository's runs; the exit code, stdout and stderr.
+fn against(repo: &Path, saved: &Path) -> (i32, String, String) {
+    takt(&[
+        "scorecard",
+        "--repo",
+        &repo.display().to_string(),
+        "--against",
+        &saved.display().to_string(),
+    ])
+}
+
+/// `takt scorecard --save` of `repo` under [`REVISION`] in a directory of its own; the file.
+fn saved(repo: &Path, saves: &Path) -> PathBuf {
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &repo.display().to_string(),
+        "--save",
+        &saves.display().to_string(),
+        "--revision",
+        REVISION,
+    ]);
+    assert_eq!(code, 0, "{text}{stderr}");
+    saves.join(format!("scorecard-{REVISION}.json"))
+}
+
+/// Five accepted cases of `scenario`, trials `from` to `from + 4`, at 500 tokens each.
+fn five_accepted(scenario: u32, from: usize) -> Vec<(String, u64, &'static str)> {
+    (from..from + 5)
+        .map(|n| {
+            (
+                format!("scenario-{scenario}-trial-{n}"),
+                500,
+                "Completed (accepted)",
+            )
+        })
+        .collect()
+}
+
+/// A committed repository holding `runs`, owned.
+fn repository_of(name: &str, runs: &[(String, u64, &'static str)]) -> Scratch {
+    let runs: Vec<(&str, u64, &str)> = runs
+        .iter()
+        .map(|(case, tokens, stop)| (case.as_str(), *tokens, *stop))
+        .collect();
+    repository(name, &runs)
+}
+
+/// One repository of scenario 1 only and one of scenarios 1 and 2, five accepted cases each.
+fn one_and_both(name: &str) -> (Scratch, Scratch) {
+    let one = repository_of(&format!("{name}-one"), &five_accepted(1, 1));
+    let mut both = five_accepted(1, 6);
+    both.extend(five_accepted(2, 6));
+    (one, repository_of(&format!("{name}-both"), &both))
+}
+
+/// story:the-judge-requires-the-whole-corpus: `--against` with no scenario case on either side
+/// is no corpus: exit 1, saying there is no scenario case, never `not worse`.
+#[test]
+fn against_refuses_empty_against_empty() {
+    let empty = repository("corpus-empty", &[]);
+    let saves = scratch("corpus-empty-saves");
+    let nothing = saved(&empty, &saves);
+    let (code, text, stderr) = against(&empty, &nothing);
+    assert_eq!(code, 1, "empty against empty: {text}{stderr}");
+    assert!(stderr.contains("no scenario case"), "{stderr}");
+}
+
+/// story:the-judge-requires-the-whole-corpus: a scenario only this side has, with the rule's five
+/// cases, is refused with exit 1 naming it, printed `not in the saved scorecard`; never `no
+/// baseline`, never a verdict.
+#[test]
+fn against_refuses_a_scenario_only_this_side_has() {
+    let (one, both) = one_and_both("corpus-this-side");
+    let saves = scratch("corpus-this-side-saves");
+    let only_one = saved(&one, &saves);
+    let (code, text, stderr) = against(&both, &only_one);
+    assert_eq!(code, 1, "a scenario only this side has: {text}{stderr}");
+    assert!(
+        text.contains("scenario 2  not in the saved scorecard"),
+        "{text}"
+    );
+    assert!(
+        stderr.contains("scenario 2") && stderr.contains("not in the saved scorecard"),
+        "{stderr}"
+    );
+    assert!(!text.contains("no baseline"), "{text}");
+    assert!(
+        !text.contains("scenario 2  outcomes by rank"),
+        "no verdict: {text}"
+    );
+}
+
+/// story:the-judge-requires-the-whole-corpus: a scenario only the saved side has, with the rule's
+/// five cases there, is refused with exit 1 naming it.
+#[test]
+fn against_refuses_a_scenario_only_the_saved_side_has() {
+    let (one, both) = one_and_both("corpus-saved-side");
+    let saves = scratch("corpus-saved-side-saves");
+    let with_two = saved(&both, &saves);
+    let (code, text, stderr) = against(&one, &with_two);
+    assert_eq!(
+        code, 1,
+        "a scenario only the saved side has: {text}{stderr}"
+    );
+    assert!(
+        text.contains("scenario 2  too few cases (0 of 5)") && stderr.contains("scenario 2"),
+        "{text}{stderr}"
+    );
+}
+
+/// story:the-judge-requires-the-whole-corpus: `takt scorecard --help` names both new refusals.
+#[test]
+fn help_names_the_corpus_refusals() {
+    let (code, help, stderr) = takt(&["scorecard", "--help"]);
+    assert_eq!(code, 0, "{stderr}");
+    for refusal in ["no scenario case", "not in the saved scorecard"] {
+        assert!(help.contains(refusal), "{refusal} in {help}");
+    }
+}

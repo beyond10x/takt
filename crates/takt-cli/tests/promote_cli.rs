@@ -2617,6 +2617,179 @@ fn a_candidate_scenario_with_fewer_cases_than_the_trials_is_refused() {
     assert_eq!(world.records(), baseline_files(), "nothing recorded");
 }
 
+/// The scorecard of no case at all, saved under `revision` in a directory of its own named by
+/// `label`; the file.
+fn empty_card(world: &World, label: &str, revision: &str) -> PathBuf {
+    let cases = world.outer.join(format!("cases-{label}"));
+    fs::create_dir_all(&cases).expect("a directory");
+    World::save(
+        &cases,
+        &world.outer.join(format!("saves-{label}")),
+        revision,
+    )
+}
+
+/// story:the-judge-requires-the-whole-corpus: a promotion of a candidate with no scenario case
+/// against a baseline with none is refused with exit 1 saying there is no scenario case,
+/// `--dry-run` too; nothing is recorded or installed.
+#[test]
+fn empty_against_empty_is_refused() {
+    let world = World::new("corpus-empty", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline_of(&empty_card(&world, "empty-baseline", BASELINE_REVISION));
+    let empty = empty_card(&world, "empty-candidate", &world.revision);
+    for extra in [&["--dry-run"][..], &[]] {
+        let (code, out, err) = world.promote(&empty, extra);
+        assert_eq!(code, 1, "empty against empty {extra:?}: {out}{err}");
+        assert!(err.contains("no scenario case"), "{err}");
+    }
+    world.assert_untouched();
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// story:the-judge-requires-the-whole-corpus: a scenario only the candidate has, with the rule's
+/// five cases, is refused with exit 1 naming it, `--dry-run` too, and gets no verdict; nothing is
+/// recorded or installed.
+#[test]
+fn a_scenario_only_the_candidate_has_is_refused_naming_it() {
+    let world = World::new("corpus-candidate-only", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let cases = world.outer.join("cases-two");
+    two_scenarios(&cases, 11, APPROVAL, APPROVAL, &world.revision);
+    let two = World::save(&cases, &world.outer.join("saves-two"), &world.revision);
+    for extra in [&["--dry-run"][..], &[]] {
+        let (code, out, err) = world.promote(&two, extra);
+        assert_eq!(
+            code, 1,
+            "a scenario only the candidate has {extra:?}: {out}{err}"
+        );
+        assert!(
+            err.contains("scenario 2") && err.contains("not in the saved scorecard"),
+            "{err}"
+        );
+        assert!(!out.contains("verdict:"), "{out}");
+    }
+    world.assert_untouched();
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// story:the-judge-requires-the-whole-corpus: a scenario only the baseline has, with the rule's
+/// five cases there, is refused with exit 1 naming it, `--dry-run` too; nothing is recorded or
+/// installed.
+#[test]
+fn a_scenario_only_the_baseline_has_is_refused_naming_it() {
+    let world = World::new("corpus-baseline-only", BASELINE_TOKENS, FIVE_APPROVALS);
+    let cases = world.outer.join("cases-two-baseline");
+    two_scenarios(&cases, 1, APPROVAL, APPROVAL, BASELINE_REVISION);
+    world.record_baseline_of(&World::save(
+        &cases,
+        &world.outer.join("saves-two-baseline"),
+        BASELINE_REVISION,
+    ));
+    let one = world.candidate_card("one", BASELINE_TOKENS, FIVE_APPROVALS);
+    for extra in [&["--dry-run"][..], &[]] {
+        let (code, out, err) = world.promote(&one, extra);
+        assert_eq!(
+            code, 1,
+            "a scenario only the baseline has {extra:?}: {out}{err}"
+        );
+        assert!(err.contains("scenario 2"), "{err}");
+    }
+    world.assert_untouched();
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// story:the-judge-requires-the-whole-corpus: `takt promote --help` names the corpus refusals and
+/// how a scenario joins.
+#[test]
+fn help_names_the_corpus_refusals() {
+    let (code, help, _) = takt(&["promote", "--help"], &[]);
+    assert_eq!(code, 0);
+    for refusal in [
+        "no scenario case",
+        "not in the saved scorecard",
+        "a scenario it adds whole",
+    ] {
+        assert!(help.contains(refusal), "{refusal} in {help}");
+    }
+}
+
+/// story:the-judge-requires-the-whole-corpus: a new scenario joins the corpus only through
+/// `--rebaseline`, with a scorecard of the baseline revision holding the stored cases exactly and
+/// every case of the new scenario, under the same metric definitions; the record chains, and a
+/// candidate with both scenarios, refused before it, is then judged on both.
+#[test]
+fn a_rebaseline_adds_a_scenario_and_a_candidate_is_judged_on_it() {
+    let world = World::new("rebaseline-joins", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let candidate_cases = world.outer.join("cases-candidate");
+    two_scenarios(&candidate_cases, 11, APPROVAL, APPROVAL, &world.revision);
+    let candidate = World::save(
+        &candidate_cases,
+        &world.outer.join("saves-candidate"),
+        &world.revision,
+    );
+    let (code, out, err) = world.promote(&candidate, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("scenario 2"), "{err}");
+    let cases = world.outer.join("cases-joined");
+    two_scenarios(&cases, 1, APPROVAL, APPROVAL, BASELINE_REVISION);
+    let joined = World::save(&cases, &world.outer.join("saves-joined"), BASELINE_REVISION);
+    let (code, out, err) = rebaseline(&world, &joined);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("adds scenario 2"), "{out}");
+    let records = world.records();
+    assert_eq!(records.len(), 4, "{records:?}");
+    let name = records
+        .iter()
+        .find(|name| name.contains(".rebaseline-") && !name.ends_with(".scorecard.json"))
+        .expect("the rebaseline record");
+    let record = world.record(name);
+    for line in [
+        "\"kind\": \"rebaseline\"".to_owned(),
+        format!("\"replaces_sha256\": \"{}\"", sha256(&world.baseline)),
+        format!("\"scorecard_sha256\": \"{}\"", sha256(&joined)),
+    ] {
+        assert!(record.contains(&line), "{line} in {record}");
+    }
+    world.assert_untouched();
+    let (code, out, err) = world.promote(&candidate, &["--dry-run"]);
+    assert_eq!(code, 0, "{out}{err}");
+    for scenario in ["1", "2"] {
+        assert!(
+            out.contains(&format!(
+                "scenario {scenario}  outcomes by rank held  tokens held  not worse"
+            )),
+            "scenario {scenario} in {out}"
+        );
+    }
+}
+
+/// story:the-judge-requires-the-whole-corpus: `--rebaseline` adds whole scenarios and nothing
+/// else, so a scorecard adding a case to a scenario the baseline has, beside a new scenario, is
+/// refused naming the case, nothing written.
+#[test]
+fn a_rebaseline_adding_a_case_to_a_stored_scenario_is_refused_naming_it() {
+    let world = World::new("rebaseline-extra-case", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let cases = world.outer.join("cases-extra");
+    two_scenarios(&cases, 1, APPROVAL, APPROVAL, BASELINE_REVISION);
+    run(
+        &cases,
+        "scenario-1-trial-6",
+        1,
+        ERROR,
+        Some(BASELINE_REVISION),
+    );
+    let extra = World::save(&cases, &world.outer.join("saves-extra"), BASELINE_REVISION);
+    let (code, out, err) = rebaseline(&world, &extra);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("case scenario-1-trial-6 ") && err.contains("scenario 1"),
+        "{err}"
+    );
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
 /// story:promotion-refusal-is-not-final, correction 1: `--rejudge` judges new runs only, so a
 /// scorecard sharing a case with a scorecard the revision was refused on is refused naming the
 /// case, whatever its digest; one of new cases only is judged.

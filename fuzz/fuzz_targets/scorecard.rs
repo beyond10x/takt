@@ -94,16 +94,25 @@ fuzz_target!(|data: &[u8]| {
     }
     let short = saved.is_empty() || candidate.is_empty();
     let (saved, candidate) = (card(&saved, margin), card(&candidate, margin));
-    // Fewer cases on a side than the rule's one trial gives no verdict, and says so; with no
-    // case on the saved side there is no scenario to judge and nothing is worse.
+    // A side with no case gives no verdict, and says so: fewer cases than the rule's one trial
+    // on this side, a scenario the saved side lacks, or no scenario case on either side.
     if short {
         let mut out = Vec::new();
         match candidate.against(&saved, &mut out) {
-            Err(error) => assert!(error.to_string().contains("too few cases"), "{error:#}"),
-            Ok(worse) => assert!(
-                saved.rows.is_empty() && worse == 0,
-                "a side with no case gave a verdict: {worse}"
-            ),
+            Err(error) => {
+                let error = error.to_string();
+                assert!(
+                    [
+                        "too few cases",
+                        "not in the saved scorecard",
+                        "no scenario case"
+                    ]
+                    .iter()
+                    .any(|refusal| error.contains(refusal)),
+                    "{error}"
+                );
+            }
+            Ok(worse) => panic!("a side with no case gave a verdict: {worse}"),
         }
         return;
     }

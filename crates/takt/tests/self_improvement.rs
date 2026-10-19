@@ -371,6 +371,96 @@ fn scorecard_compare_judges_the_saved_scorecard_against_the_baselines_copy() {
     }
 }
 
+/// `card` with its rows of scenario 1 trials `trials` only, then, for each trial of `added`, a
+/// copy of its first row as a case of scenario 2.
+fn reshaped(mut card: Scorecard, trials: usize, added: usize) -> Scorecard {
+    let first = card.rows[0].clone();
+    card.rows.truncate(trials);
+    card.rows.extend((1..=added).map(|n| Row {
+        case: format!("scenario-2-trial-{n}"),
+        scenario: Some("2".to_owned()),
+        ..first.clone()
+    }));
+    card
+}
+
+/// story:the-judge-requires-the-whole-corpus: `scorecard.compare` with a baseline copy of
+/// `baseline` (scenario 1 cases, scenario 2 cases) and a candidate scorecard of `candidate`
+/// records nothing, never `no_regression`, and does not wait; the summary holds `named`.
+fn compare_records_nothing(
+    name: &str,
+    baseline: (usize, usize),
+    candidate: (usize, usize),
+    named: &str,
+) {
+    let turn = turn(name, &finding("docs/runs/trial-1.md"));
+    promoted(
+        &turn.state,
+        &turn.baseline,
+        &turn.tree,
+        &reshaped(
+            scorecard(&turn.baseline, "accepted", &turn.baseline),
+            baseline.0,
+            baseline.1,
+        ),
+    );
+    saved(
+        &turn,
+        &reshaped(
+            scorecard(&turn.candidate, "accepted", &turn.candidate),
+            candidate.0,
+            candidate.1,
+        ),
+    );
+    let validator = ScorecardCompare::in_state(&turn.state);
+    let (observed, waiting) = validator
+        .observe_waiting(&turn.tree, &turn.candidate, 1)
+        .expect("observes");
+    assert!(
+        observed.records.is_empty(),
+        "{name}: {:?}: {}",
+        observed
+            .records
+            .iter()
+            .map(|record| record.result.clone())
+            .collect::<Vec<_>>(),
+        observed.summary
+    );
+    assert!(!waiting, "{name}: {}", observed.summary);
+    assert!(
+        observed.summary.contains(named) && observed.summary.contains("nothing recorded"),
+        "{name}: {named} in {}",
+        observed.summary
+    );
+}
+
+/// story:the-judge-requires-the-whole-corpus: no scenario case on either side is no corpus.
+#[test]
+fn scorecard_compare_records_nothing_for_empty_against_empty() {
+    compare_records_nothing("corpus-empty", (0, 0), (0, 0), "no scenario case");
+}
+
+/// story:the-judge-requires-the-whole-corpus: a scenario only the candidate has, with the rule's
+/// five cases, is not in the baseline's corpus.
+#[test]
+fn scorecard_compare_records_nothing_for_a_scenario_only_the_candidate_has() {
+    compare_records_nothing("corpus-candidate-only", (5, 0), (5, 5), "scenario 2");
+}
+
+/// story:the-judge-requires-the-whole-corpus: a scenario only the baseline has, with the rule's
+/// five cases, is missing from the candidate.
+#[test]
+fn scorecard_compare_records_nothing_for_a_scenario_only_the_baseline_has() {
+    compare_records_nothing("corpus-baseline-only", (5, 5), (5, 0), "scenario 2");
+}
+
+/// story:the-judge-requires-the-whole-corpus: a scenario with fewer candidate cases than the
+/// rule's trials gets no verdict.
+#[test]
+fn scorecard_compare_records_nothing_for_fewer_cases_than_the_trials() {
+    compare_records_nothing("corpus-too-few", (5, 0), (3, 0), "scenario 1");
+}
+
 /// A saved scorecard whose runs were made with another binary than the candidate's, or that is
 /// named by another revision, is judged by nothing: no record, and no wait.
 #[test]

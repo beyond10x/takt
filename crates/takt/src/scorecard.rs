@@ -985,8 +985,12 @@ impl Scorecard {
     /// cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), and
     /// any scenario with fewer on the candidate's side, none included (`too few cases (<n> of
     /// <trials>)`), gets no verdict, and once every scenario is printed the comparison is an
-    /// error naming each such scenario, as a promotion refuses one. A case a run of which disagrees with its held-out check is named so beside its
-    /// outcome. The number of scenarios marked worse.
+    /// error naming each such scenario, as a promotion refuses one. The corpus is every scenario
+    /// either side has: a scenario the saved scorecard lacks (`not in the saved scorecard`) gets
+    /// no verdict and the comparison is an error naming it, as is one this side lacks (none of
+    /// its cases, too few); with no scenario case on either side there is no corpus, and the
+    /// comparison is an error before any scenario. A case a run of which disagrees with its
+    /// held-out check is named so beside its outcome. The number of scenarios marked worse.
     pub fn against(&self, saved: &Scorecard, out: &mut dyn Write) -> Result<usize> {
         let version = |card: &Scorecard, metric: &str| {
             card.metrics
@@ -1016,8 +1020,14 @@ impl Scorecard {
             .chain(&baselines)
             .filter_map(|case| case.scenario.as_deref())
             .collect();
+        if scenarios.is_empty() {
+            bail!(
+                "no scenario case on either side, so there is no corpus to compare; a comparison covers every scenario either side has and judges nothing on none"
+            );
+        }
         let mut worse = 0;
         let mut too_few: Vec<String> = Vec::new();
+        let mut unsaved: Vec<String> = Vec::new();
         for scenario in scenarios {
             let of = |cases: &[Case]| -> Vec<Case> {
                 cases
@@ -1069,7 +1079,8 @@ impl Scorecard {
                 continue;
             }
             if baseline.is_empty() {
-                writeln!(out, "scenario {scenario}  no baseline")?;
+                writeln!(out, "scenario {scenario}  not in the saved scorecard")?;
+                unsaved.push(format!("scenario {scenario}"));
                 continue;
             }
             let median = |cases: &[Case], metric: &str| {
@@ -1173,11 +1184,21 @@ impl Scorecard {
         for case in candidates.iter().filter(|case| case.scenario.is_none()) {
             writeln!(out, "{}  no scenario  not compared", case.case)?;
         }
+        let mut refused: Vec<String> = Vec::new();
         if !too_few.is_empty() {
-            bail!(
+            refused.push(format!(
                 "too few cases for a verdict: {}; the rule needs {trials} cases a scenario on each side, so run the short side again before comparing",
                 too_few.join(", ")
-            );
+            ));
+        }
+        if !unsaved.is_empty() {
+            refused.push(format!(
+                "not in the saved scorecard: {}; a comparison covers every scenario either side has, and a promotion's baseline gains a scenario only through `takt promote --rebaseline`",
+                unsaved.join(", ")
+            ));
+        }
+        if !refused.is_empty() {
+            bail!("{}", refused.join("; "));
         }
         Ok(worse)
     }
