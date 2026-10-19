@@ -48,7 +48,7 @@ On a `self.improvement/1` case at the merge gate, `grant` of `repository.merge.j
 
 ## Landed (wave 10)
 
-Read from `git diff --stat 93bd7c3^1 93bd7c3` (the unit's merge into the wave branch) at the close of wave 10 (wave branch head 8858b49). The grant's subject is read from the protocol's precondition evidence; a grant naming no subject, or more than one, is refused. Granted by the owner. Low reviewer findings carried by story:judge-guard.
+Read from `git diff --stat 93bd7c3^1 93bd7c3` (the unit's merge into the wave branch) at the close of wave 10 (wave branch head c34246a). The grant's subject is read from the protocol's precondition evidence; a grant naming no subject, or more than one, is refused. Granted by the owner. Low reviewer findings carried by story:judge-guard.
 
 - `crates/takt/src/case.rs`
 - `crates/takt/src/frontier.rs`

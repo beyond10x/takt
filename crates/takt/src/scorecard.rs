@@ -2,7 +2,11 @@
 //! tokens, refusals, `NoProgress` and errors, and wall time, read from the case's run record
 //! (`events.jsonl`, [`crate::events`]) and from nothing else. A number a candidate could plant
 //! in its tree (a `task_spend` file, an evidence record) is never read. A case without a record
-//! is listed as such, never guessed.
+//! is listed as such, never guessed. The binary a case's runs were made with is read from a
+//! [`BINARY_FILE`] beside the record when the operator wrote one: its sha256 and a note, a
+//! statement marked as the operator's, never a figure; a promotion checks it against the binary
+//! it hashes. A file that does not read leaves its case's runs stating no binary and lists the
+//! case with the reason; it never stops the scorecard.
 //!
 //! A run is the span from one `opened` line to its `stop`, or to the next `opened` or the end
 //! of the record when it has none (a run that ended on an error); a `skipped` line is no
@@ -10,14 +14,17 @@
 //! completed with, else its last run's (a completed case is final); its other figures are its
 //! runs' summed, at most `u64::MAX` and flagged when a sum stopped there.
 //! Saved, the scorecard is `scorecard-<revision>.json`, the revision of takt under test, with
-//! every run's figures and the version of each metric's definition. Compared with a saved one,
-//! a scenario is worse when, for some outcome rank, the share of its cases at that rank or
-//! better is below the saved share, or when the saved scorecard has the scenario and the
-//! candidate has no run of it. Tokens are
-//! printed per scenario and side as n, minimum, median and maximum over cases with the
-//! difference of the medians, and never make a scenario worse. A metric whose definition
-//! changed between the two is printed with both figures; outcomes are compared under the
-//! current definition whatever the saved one's version.
+//! every run's figures and the binary it states, the version of each metric's definition and
+//! the rule it is compared under ([`Rule`]: the trials a scenario needs and the margin of
+//! cases). Compared with a saved
+//! one, a scenario is worse when, for some outcome rank, the candidate's cases at that rank or
+//! better fall short of the saved share of its own n by more than the margin (at equal n: more
+//! than `margin` cases fewer), when its median of tokens exceeds the saved maximum, or when the
+//! saved scorecard has the scenario and the candidate has no run of it. Tokens are printed per
+//! scenario and side as n, minimum, median and maximum over cases with the difference of the
+//! medians. A metric whose definition changed between the two is printed with both figures and
+//! does not make a scenario worse; outcomes are compared under the current definition whatever
+//! the saved one's version. The rule applied is printed with every comparison.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -31,6 +38,12 @@ use crate::events::{EVENTS_FILE, Events};
 
 /// The saved scorecard's format.
 pub const FORMAT: &str = "takt-scorecard/1";
+
+/// The operator's statement of the binary a case's runs were made with, in the case directory
+/// beside its record: the first line `<path>\t<sha256>`, the path as the operator wrote it
+/// (`~` and all; only the digest is read, 64 lower-case hex digits), every further line the
+/// operator's note. Written for a binary whose `--version` names no revision.
+pub const BINARY_FILE: &str = "binary.txt";
 
 /// Each metric with the version of its definition. A changed definition takes the next
 /// version, so a comparison with a scorecard saved under the previous one prints both figures.
@@ -81,6 +94,68 @@ pub struct Row {
     /// A sum stopped at `u64::MAX`: the figure is at least what it shows.
     #[serde(default)]
     pub saturated: bool,
+    /// The binary the run was made with, as stated beside its record ([`BINARY_FILE`]); none
+    /// when nothing states it.
+    #[serde(default)]
+    pub binary: Option<RunBinary>,
+}
+
+/// Who stated a run's binary: the operator, in a [`BINARY_FILE`] beside the run's record, for
+/// a binary whose `--version` names no revision; or the run's record itself, which no record
+/// does today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatedBy {
+    Operator,
+    Record,
+}
+
+/// The binary a run was made with, as stated rather than measured: its sha256, lower-case hex,
+/// who stated it, and the operator's note, every line of the [`BINARY_FILE`] after the first,
+/// verbatim, empty without one. `takt promote --baseline-only --binary-sha256` checks the
+/// digest against the binary it hashes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunBinary {
+    pub sha256: String,
+    pub stated_by: StatedBy,
+    pub note: String,
+}
+
+/// Whether `text` is a sha256 as takt writes one: 64 lower-case hex digits.
+#[must_use]
+pub fn is_sha256(text: &str) -> bool {
+    text.len() == 64
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The binary a case's runs were made with, as the [`BINARY_FILE`] in its directory `dir`
+/// states it; none without the file. A file that does not read, or whose first line is no
+/// `<path>\t<sha256>`, is the reason, starting with [`BINARY_FILE`]: its case's runs state no
+/// binary, and the case is listed with the reason, never the repository refused.
+fn stated_binary(dir: &Path) -> std::result::Result<Option<RunBinary>, String> {
+    let path = dir.join(BINARY_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{BINARY_FILE} does not read: {error}")),
+    };
+    let (first, note) = text.split_once('\n').unwrap_or((text.as_str(), ""));
+    let first = first.trim_end_matches('\r');
+    let Some((_, sha256)) = first
+        .rsplit_once('\t')
+        .filter(|(binary, sha256)| !binary.is_empty() && is_sha256(sha256))
+    else {
+        return Err(format!(
+            "{BINARY_FILE} states no binary: the first line is `<path>\\t<sha256>`, the sha256 64 lower-case hex digits; got {first:?}"
+        ));
+    };
+    Ok(Some(RunBinary {
+        sha256: sha256.to_owned(),
+        stated_by: StatedBy::Operator,
+        note: note.to_owned(),
+    }))
 }
 
 /// One case's figures: its outcome, the best a run of it completed with, else its last run's;
@@ -156,6 +231,28 @@ impl Case {
     }
 }
 
+/// The rule a comparison applies, recorded with the scorecard so that a saved file says what
+/// it was judged under and a change to the rule is a change to a judge surface
+/// (design:recursive-self-improvement § Scorecard, decided 2026-10-18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rule {
+    /// The cases a scenario needs on the candidate's side for a promotion to read it; fewer is
+    /// a refusal, not a verdict.
+    pub trials: u32,
+    /// The cases a scenario may fall short by at any outcome rank before it is worse: one
+    /// flaky case passes, two cases worse at a rank fail.
+    pub margin: u32,
+}
+
+impl Default for Rule {
+    fn default() -> Self {
+        Self {
+            trials: 5,
+            margin: 1,
+        }
+    }
+}
+
 /// The scorecard of a repository's runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Scorecard {
@@ -167,10 +264,19 @@ pub struct Scorecard {
     pub named_by: Option<Named>,
     /// The version of each metric's definition the figures were taken under.
     pub metrics: BTreeMap<String, u32>,
+    /// The rule a comparison with this scorecard applies; a file saved before the rule had
+    /// fields reads with the default.
+    #[serde(default)]
+    pub rule: Rule,
     /// One row a run, in case order, each case's runs in the order they ran.
     pub rows: Vec<Row>,
-    /// The cases that have no record.
+    /// The cases that have no record; and each case with runs whose [`BINARY_FILE`] does not
+    /// read, its reason in `unstated`.
     pub no_record: Vec<String>,
+    /// Each case listed in `no_record` for a [`BINARY_FILE`] that does not read, with the
+    /// reason; its runs count and state no binary. Empty on a file saved before it had the field.
+    #[serde(default)]
+    pub unstated: BTreeMap<String, String>,
 }
 
 /// The scenario of a case id `scenario-<id>-trial-<n>`, `<n>` digits; none for any other id.
@@ -224,7 +330,7 @@ const RANKS: [(u8, &str); 4] = [
 
 /// An event line's instant as nanoseconds since the epoch: `YYYY-MM-DDTHH:MM:SS[.f...]Z`,
 /// whole seconds as a run wrote them before instants had a fraction.
-fn instant(at: &str) -> Option<i128> {
+pub(crate) fn instant(at: &str) -> Option<i128> {
     let at = at.strip_suffix('Z')?;
     let (whole, fraction) = at.split_once('.').unwrap_or((at, ""));
     let bytes = whole.as_bytes();
@@ -275,16 +381,23 @@ struct Span {
     stop: Option<String>,
 }
 
+/// A run's outcome from its stop: a `Completed` stop's outcome (`accepted`), else the stop's
+/// kind (`ApprovalRequired`, `NoProgress`, ...); `error` for a run that ended on an error
+/// without a stop, `unfinished` for one with neither.
+pub(crate) fn outcome_of(stop: Option<&str>, errors: u64) -> String {
+    match stop {
+        Some(stop) => match stop.strip_prefix("Completed (") {
+            Some(rest) => rest.strip_suffix(')').unwrap_or(rest).to_owned(),
+            None => stop.split([' ', '(']).next().unwrap_or(stop).to_owned(),
+        },
+        None if errors > 0 => "error".to_owned(),
+        None => "unfinished".to_owned(),
+    }
+}
+
 impl Span {
     fn row(self, case: &str) -> Row {
-        let outcome = match &self.stop {
-            Some(stop) => match stop.strip_prefix("Completed (") {
-                Some(rest) => rest.strip_suffix(')').unwrap_or(rest).to_owned(),
-                None => stop.split([' ', '(']).next().unwrap_or(stop).to_owned(),
-            },
-            None if self.errors > 0 => "error".to_owned(),
-            None => "unfinished".to_owned(),
-        };
+        let outcome = outcome_of(self.stop.as_deref(), self.errors);
         let (wall_ms, too_long) = match (self.first, self.last) {
             (Some(first), Some(last)) => u64::try_from((last - first).max(0) / 1_000_000)
                 .map_or((u64::MAX, true), |ms| (ms, false)),
@@ -301,6 +414,7 @@ impl Span {
             errors: self.errors,
             wall_ms,
             saturated: self.saturated || too_long,
+            binary: None,
         }
     }
 }
@@ -405,7 +519,10 @@ fn is_revision(revision: &str) -> bool {
 
 impl Scorecard {
     /// The scorecard of the runs recorded under `repo`'s cases directory, cases in name order;
-    /// none when the directory is absent. A record that does not read is an error naming it.
+    /// none when the directory is absent. A record that does not read is an error naming it;
+    /// each run of a case carries the binary its [`BINARY_FILE`] states, and a file that does
+    /// not read leaves that case's runs stating none and lists the case in `no_record`, the
+    /// reason in `unstated`, every other case read as without it.
     pub fn read(repo: &Path) -> Result<Self> {
         let cases = repo.join(CASES_DIR);
         let mut names: Vec<String> = Vec::new();
@@ -432,19 +549,32 @@ impl Scorecard {
                 .iter()
                 .map(|(metric, version)| ((*metric).to_owned(), *version))
                 .collect(),
+            rule: Rule::default(),
             rows: Vec::new(),
             no_record: Vec::new(),
+            unstated: BTreeMap::new(),
         };
         for name in names {
             let dir = cases.join(&name);
-            let rows = if dir.join(EVENTS_FILE).is_file() {
+            let mut rows = if dir.join(EVENTS_FILE).is_file() {
                 runs(&name, &Events::new(&dir).read()?)
             } else {
                 Vec::new()
             };
+            let (binary, unstated) = match stated_binary(&dir) {
+                Ok(binary) => (binary, None),
+                Err(reason) => (None, Some(reason)),
+            };
+            for row in &mut rows {
+                row.binary = binary.clone();
+            }
             if rows.is_empty() {
                 card.no_record.push(name);
             } else {
+                if let Some(reason) = unstated {
+                    card.no_record.push(name.clone());
+                    card.unstated.insert(name, reason);
+                }
                 card.rows.extend(rows);
             }
         }
@@ -468,7 +598,8 @@ impl Scorecard {
     }
 
     /// Prints the definitions' versions, then a row a case, its runs listed under it as
-    /// `<case>#<n>`, then each case with no record.
+    /// `<case>#<n>`, then each case with no record, and each case whose [`BINARY_FILE`] does
+    /// not read with the reason.
     pub fn print(&self, out: &mut dyn Write) -> std::io::Result<()> {
         let definitions: Vec<String> = self
             .metrics
@@ -539,7 +670,10 @@ impl Scorecard {
             writeln!(out, "{}", cells.join("  ").trim_end())?;
         }
         for case in &self.no_record {
-            writeln!(out, "{case}  no record")?;
+            match self.unstated.get(case) {
+                Some(reason) => writeln!(out, "{case}  {reason}; its runs state no binary")?,
+                None => writeln!(out, "{case}  no record")?,
+            }
         }
         Ok(())
     }
@@ -596,15 +730,18 @@ impl Scorecard {
         Ok(card)
     }
 
-    /// Compares this scorecard with `saved`, scenario by scenario, over cases: each case and
-    /// its outcome; each side's n and the minimum, median and maximum of tokens, and the
-    /// difference of the medians; both figures of every metric whose definition's version
-    /// differs; each outcome rank at which the candidate falls short, with both shares; then the
-    /// verdict: worse when, for some rank, the share of the candidate's cases at that rank or
-    /// better is below the saved share, under the current definition, or when the saved
-    /// scorecard has the scenario and the candidate has no run of it (`no run`). A scorecard is
-    /// never worse than itself, and one case lowered with none raised always is. The number of
-    /// scenarios marked worse.
+    /// Compares this scorecard with `saved`, scenario by scenario, over cases, under this
+    /// scorecard's [`Rule`], printed first: each case and its outcome; each side's n and the
+    /// minimum, median and maximum of tokens, and the difference of the medians; both figures
+    /// of every metric whose definition's version differs; each outcome rank at which the
+    /// candidate falls short, with both counts; then the verdict. A scenario is worse when, for
+    /// some rank, the candidate's cases at that rank or better fall short of the saved share of
+    /// the candidate's n by more than the margin (at equal n: by more than `margin` cases),
+    /// under the current definition; when its median of tokens exceeds the saved maximum, the
+    /// token definition unchanged; or when the saved scorecard has the scenario and the
+    /// candidate has no run of it (`no run`). A scorecard is never worse than itself; one case
+    /// lowered is within a margin of one, two cases lowered in one scenario never are. The
+    /// number of scenarios marked worse.
     pub fn against(&self, saved: &Scorecard, out: &mut dyn Write) -> Result<usize> {
         let version = |card: &Scorecard, metric: &str| {
             card.metrics
@@ -621,6 +758,12 @@ impl Scorecard {
                 Some(Named::Head) => "HEAD of a repository",
                 None => "unnamed",
             }
+        )?;
+        let Rule { trials, margin } = self.rule;
+        writeln!(
+            out,
+            "rule  trials {trials} a scenario  margin {margin} case{}  tokens worse when the median exceeds the saved maximum",
+            if margin == 1 { "" } else { "s" }
         )?;
         let (candidates, baselines) = (self.cases(), saved.cases());
         let scenarios: BTreeSet<&str> = candidates
@@ -671,6 +814,7 @@ impl Scorecard {
             }
             let (saved_tokens, tokens) =
                 (median(&baseline, "tokens"), median(&candidate, "tokens"));
+            let mut over_tokens = false;
             if changed("tokens") {
                 writeln!(
                     out,
@@ -688,6 +832,16 @@ impl Scorecard {
                     if difference >= 0 { "+" } else { "" },
                     half(difference)
                 )?;
+                let saved_max = baseline.iter().map(|case| case.tokens).max().unwrap_or(0);
+                // The median is held doubled; so is the maximum for the comparison.
+                if tokens > 2 * i128::from(saved_max) {
+                    over_tokens = true;
+                    writeln!(
+                        out,
+                        "scenario {scenario}  median tokens {} exceeds the saved maximum {saved_max}",
+                        half(tokens)
+                    )?;
+                }
             }
             for (metric, _) in METRICS {
                 if metric != "tokens" && changed(metric) {
@@ -710,23 +864,32 @@ impl Scorecard {
             let (n, saved_n) = (candidate.len() as u64, baseline.len() as u64);
             let mut short = false;
             for (at, covers) in RANKS {
-                let (share, saved_share) = (at_least(&candidate, at), at_least(&baseline, at));
-                if u128::from(share) * u128::from(saved_n) < u128::from(saved_share) * u128::from(n)
+                let (count, saved_count) = (at_least(&candidate, at), at_least(&baseline, at));
+                // Short by more than the margin, the saved share scaled to the candidate's n
+                // and cross-multiplied so nothing is rounded: saved_count/saved_n * n exceeds
+                // count + margin.
+                if u128::from(saved_count) * u128::from(n)
+                    > (u128::from(count) + u128::from(margin)) * u128::from(saved_n)
                 {
                     short = true;
                     writeln!(
                         out,
-                        "scenario {scenario}  rank {at} or better ({covers}): candidate {share}/{n} against saved {saved_share}/{saved_n}"
+                        "scenario {scenario}  rank {at} or better ({covers}): candidate {count}/{n} against saved {saved_count}/{saved_n}, short by more than {margin}"
                     )?;
                 }
             }
-            let verdict = if short {
+            let verdict = if short || over_tokens {
                 worse += 1;
                 "worse"
             } else {
                 "not worse"
             };
-            writeln!(out, "scenario {scenario}  outcomes by rank  {verdict}")?;
+            writeln!(
+                out,
+                "scenario {scenario}  outcomes by rank {}  tokens {}  {verdict}",
+                if short { "short" } else { "held" },
+                if over_tokens { "over" } else { "held" }
+            )?;
         }
         for case in candidates.iter().filter(|case| case.scenario.is_none()) {
             writeln!(out, "{}  no scenario  not compared", case.case)?;

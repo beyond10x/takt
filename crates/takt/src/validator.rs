@@ -146,8 +146,8 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
     // A link is never followed: one the base or the revision holds on the surface, or on the
     // way to a script, is named, and nothing is recorded while it is there.
     for commit in [at.as_str(), revision] {
-        let listed = crate::git::run(tree, &["ls-tree", "-r", "-z", "--full-tree", commit])?;
-        for entry in listed.split('\0') {
+        let listed = crate::git::bytes(tree, &["ls-tree", "-r", "-z", "--full-tree", commit])?;
+        for entry in nul_fields(&listed, "ls-tree", true)? {
             let Some((meta, path)) = entry.split_once('\t') else {
                 continue;
             };
@@ -159,7 +159,8 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
             }
         }
     }
-    let diff = crate::git::run(
+    // Paths, read byte for byte: the first path's leading white space is part of it.
+    let diff = crate::git::bytes(
         tree,
         &[
             "diff-tree",
@@ -172,7 +173,7 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
             "--",
         ],
     )?;
-    for path in diff.split('\0').filter(|path| !path.is_empty()) {
+    for path in nul_fields(&diff, "diff-tree", false)? {
         // While a line of the test command's script fails closed every program is on the
         // surface: one the base held is as much one as the tree's now.
         // In a directory on `PATH` an entry the base held executable is a program a lookup
@@ -351,6 +352,33 @@ fn program_at(tree: &Path, at: &str, path: &str) -> Result<bool> {
     }
 }
 
+/// The NUL-terminated fields of `listed`, what `git <command> -z` printed, each decoded as
+/// UTF-8. A field that is not UTF-8 is never decoded to a stand-in, which could read as another
+/// path: it is the error, naming the path with its bytes escaped (after the first tab when
+/// `after_tab`, as `ls-tree` prints the mode, type and object before it).
+fn nul_fields<'a>(listed: &'a [u8], command: &str, after_tab: bool) -> Result<Vec<&'a str>> {
+    listed
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .map(|field| {
+            std::str::from_utf8(field).map_err(|_| {
+                let path = if after_tab {
+                    field
+                        .splitn(2, |byte| *byte == b'\t')
+                        .last()
+                        .unwrap_or(field)
+                } else {
+                    field
+                };
+                anyhow!(
+                    "git {command} named a path that is not UTF-8: {}",
+                    path.escape_ascii()
+                )
+            })
+        })
+        .collect()
+}
+
 /// An observation that recorded nothing, its summary `summary`.
 fn nothing_recorded(summary: String) -> Observation {
     Observation {
@@ -362,7 +390,8 @@ fn nothing_recorded(summary: String) -> Observation {
 
 /// `tests.run`: runs the test command without a shell; exit 0 is `pass`, anything else `fail`.
 /// The command is code from the tree: it gets no credential, no standard input, a timeout past
-/// which it is killed with what it started, and only a bounded tail of its output is kept.
+/// which it is killed with what it started, and only a bounded summary of its output is kept
+/// ([`summarise_tests`]).
 /// What decides it besides the code under test is on the run's judge surface, which no step
 /// changes: the cargo configuration, the toolchain, build scripts and the command's own script
 /// ([`crate::run::JudgeSurface`]). In a case, nothing is run and no record written while the
@@ -406,6 +435,103 @@ impl TestsRun {
         self.limits = limits;
         self
     }
+}
+
+/// What the test command's output says about its tests, for the step's summary. With one or
+/// more `test result:` lines (cargo's, one per test binary and doc-test run): passed, failed and
+/// ignored summed over every one, the number of such lines, and, when any failed, the failed
+/// tests by name from the `test <name> ... FAILED` lines in output order; so a workspace run
+/// whose last block is an empty doc-test run is not read as `0 passed`, and a block that failed
+/// is not hidden by a later one that passed. Without one: the first non-empty line beside the
+/// last four when the output has more than five, so a summary a command prints first is kept,
+/// else every non-empty line; lines joined by ` | `.
+fn summarise_tests(printed: &str, success: bool) -> String {
+    let lines: Vec<&str> = printed.lines().collect();
+    let kept: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let (mut passed, mut failed, mut ignored, mut results) = (0u64, 0u64, 0u64, 0usize);
+    for line in &lines {
+        let Some(rest) = line.trim_start().strip_prefix("test result:") else {
+            continue;
+        };
+        results += 1;
+        for part in rest.split(';') {
+            let mut words = part.split_whitespace();
+            let Some(count) = words.by_ref().find_map(|word| word.parse::<u64>().ok()) else {
+                continue;
+            };
+            // Saturating: a count a test command prints is not trusted to fit, and a sum that
+            // wraps would read a failure as none.
+            match words.next() {
+                Some("passed") => passed = passed.saturating_add(count),
+                Some("failed") => failed = failed.saturating_add(count),
+                Some("ignored") => ignored = ignored.saturating_add(count),
+                _ => {}
+            }
+        }
+    }
+    if results > 0 {
+        let plural = if results == 1 { "" } else { "s" };
+        let mut summary = format!(
+            "{passed} passed, {failed} failed, {ignored} ignored over {results} result line{plural}"
+        );
+        if failed > 0 {
+            // `test <name> ... FAILED` lines, or, under `cargo test --quiet`, which prints none,
+            // the names listed under the last `failures:` heading, one indented a line.
+            let mut names: Vec<&str> = lines
+                .iter()
+                .filter_map(|line| {
+                    line.trim()
+                        .strip_prefix("test ")?
+                        .strip_suffix(" ... FAILED")
+                })
+                .collect();
+            if names.is_empty()
+                && let Some(heading) = lines.iter().rposition(|line| line.trim() == "failures:")
+            {
+                names = lines[heading + 1..]
+                    .iter()
+                    .take_while(|line| line.starts_with("    ") || line.trim().is_empty())
+                    .map(|line| line.trim())
+                    .filter(|line| !line.is_empty())
+                    .collect();
+            }
+            if !names.is_empty() {
+                summary.push_str("; failed: ");
+                summary.push_str(&names.join(", "));
+            }
+        }
+        // A failure the result lines do not show (a binary killed by a signal, a runner whose
+        // `test result:` line carries no counts): the last line says what the counts cannot.
+        if !success
+            && failed == 0
+            && let Some(last) = kept.last()
+        {
+            summary.push_str(" | ");
+            summary.push_str(last.trim());
+        }
+        return summary;
+    }
+    if kept.len() <= 5 {
+        return kept.join(" | ");
+    }
+    let mut shown = vec![kept[0], "…"];
+    shown.extend_from_slice(&kept[kept.len() - 4..]);
+    shown.join(" | ")
+}
+
+/// `text` within `limit` characters: the whole of it, or its first `limit - 1` characters and
+/// `…`, so a cut summary says it was cut.
+fn bounded(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_owned();
+    }
+    let mut cut: String = text.chars().take(limit.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
 }
 
 impl Validator for TestsRun {
@@ -510,17 +636,9 @@ impl TestsRun {
             .with_context(|| format!("run {}", self.command.join(" ")))?;
         drop(home);
         let result = if output.success() { "pass" } else { "fail" };
-        let tail =
+        let printed =
             String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
-        let tail: String = tail
-            .lines()
-            .rev()
-            .take(5)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join(" | ");
+        let tail = summarise_tests(&printed, output.success());
         let record = Record::new(
             format!("test-result-{seq}"),
             self.kind(),
@@ -533,7 +651,7 @@ impl TestsRun {
             summary: format!(
                 "the test command exited {}: {result}; {}",
                 output.code.map_or("signal".to_owned(), |c| c.to_string()),
-                tail.chars().take(300).collect::<String>()
+                bounded(&tail, 300)
             ),
             records: vec![record],
             artifact: None,
@@ -976,7 +1094,10 @@ fn above(revision: &str, head: &str) -> String {
 /// base with the pull request; anything else would not be what the claim is about, and nothing
 /// is pushed. A number the case directory carries is trusted only once the forge reports the pull
 /// request's head as the case's branch at the head pushed, else no record is written. A case
-/// with no base is refused before anything is pushed. The title is the intent's first line,
+/// with no base is refused before anything is pushed. Before a pull request is opened, a case
+/// whose base branch (`refs/heads/<base>`, never a tag of its name) is not there, or whose
+/// branch has no commit beyond it but the take, pushes nothing and writes no record, the
+/// summary saying why. The title is the intent's first line,
 /// the body the intent and the claims that hold; the forge passes both through `scan-text`
 /// before they leave the machine.
 pub struct PrOpen {
@@ -1164,6 +1285,34 @@ impl Validator for PrOpen {
         // the story's status, not the work. Nothing is pushed and no record written; a commit
         // moves the revision and makes `pr.open` due again.
         if let Next::Open(request) = &next {
+            // The base is the branch, `refs/heads/<base>`, never a tag or a remote ref of its
+            // name; with the branch gone there is nothing to count against, and nothing to open
+            // a pull request against, as for a case with no commit beyond its base.
+            let Some(base_tip) = crate::git::run(
+                tree,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "--end-of-options",
+                    &format!("refs/heads/{}^{{commit}}", request.base),
+                ],
+            )
+            .ok()
+            .filter(|tip| !tip.is_empty()) else {
+                return Ok((
+                    Observation {
+                        summary: format!(
+                            "{name} at {}: the base branch {} is not there; nothing pushed, no pull request; the claim stays unknown",
+                            short(revision),
+                            request.base
+                        ),
+                        records: Vec::new(),
+                        artifact: None,
+                    },
+                    false,
+                ));
+            };
             let ahead = crate::git::run(
                 tree,
                 &[
@@ -1172,7 +1321,7 @@ impl Validator for PrOpen {
                     "--invert-grep",
                     "--extended-regexp",
                     "--grep=^takt: take [^ ]+$",
-                    &format!("{}..{revision}", request.base),
+                    &format!("{base_tip}..{revision}"),
                 ],
             )?;
             if ahead.trim() == "0" {
@@ -1843,10 +1992,13 @@ pub fn is_built_in_kind(kind: &str) -> bool {
 /// one `change_record`: `ahead` when merging the revision into the tip, now, of the base branch
 /// `branch.yaml` names (`git merge-tree`, nothing checked out) would change that tip's tree
 /// outside `.engineering/`, `none` when it would not: the same content landed on the base by
-/// another commit, with or without more beside it, is no change to publish. When the base
-/// branch is not there, the revision's tree is compared with the commit pinned when the case
-/// opened instead; a case with neither writes no record. It reads git only, with no code from
-/// configuration: nothing is run from the tree and nothing leaves the machine.
+/// another commit, with or without more beside it, is no change to publish; a merge that
+/// conflicts at any path outside `.engineering/` is `ahead`, whatever tree git writes for it,
+/// and the summary names the conflicted paths. When the base branch is not there, the revision's tree is
+/// compared with the commit pinned when the case opened instead; a case with neither writes no
+/// record. It reads git only, with no code from configuration: nothing is run from the tree and
+/// nothing leaves the machine, so it compares with the local base branch as it stands, and a
+/// forge's base that moved without a fetch is not seen.
 #[derive(Debug, Clone, Default)]
 pub struct ChangeRead;
 
@@ -1893,21 +2045,54 @@ impl Validator for ChangeRead {
             .map(|tip| (name, tip))
         });
         let (differs, summary) = if let Some((name, tip)) = tip {
+            // A merge that conflicts at any path outside `.engineering/` is `ahead`, by the paths
+            // merge-tree names: the tree it writes may keep the base's side (a file the case
+            // deleted that the base changed, a binary file both changed), and there is a change
+            // to publish all the same. A conflict only inside `.engineering/` is no change
+            // outside it; the summary names the conflicted paths either way.
             let merged = crate::git::merged_tree(tree, &tip, revision)?;
-            let differs = crate::git::trees_differ_outside(tree, &tip, &merged, ".engineering")?;
-            (
-                differs,
-                format!(
-                    "merging {} into {name} at {}, its tip now, {} its tree outside .engineering/",
-                    short(revision),
-                    short(&tip),
-                    if differs {
-                        "changes"
-                    } else {
-                        "leaves as it is"
-                    }
-                ),
-            )
+            let outside: Vec<&str> = merged
+                .conflicted
+                .iter()
+                .map(String::as_str)
+                .filter(|path| *path != ".engineering" && !path.starts_with(".engineering/"))
+                .collect();
+            let head = format!(
+                "merging {} into {name} at {}, its tip now,",
+                short(revision),
+                short(&tip)
+            );
+            if outside.is_empty() {
+                let differs =
+                    crate::git::trees_differ_outside(tree, &tip, &merged.tree, ".engineering")?;
+                let conflicts = if merged.conflicted.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " conflicts only inside .engineering/ at {} and",
+                        merged.conflicted.join(", ")
+                    )
+                };
+                (
+                    differs,
+                    format!(
+                        "{head}{conflicts} {} its tree outside .engineering/",
+                        if differs {
+                            "changes"
+                        } else {
+                            "leaves as it is"
+                        }
+                    ),
+                )
+            } else {
+                (
+                    true,
+                    format!(
+                        "{head} conflicts outside .engineering/ at {}, a change to publish",
+                        outside.join(", ")
+                    ),
+                )
+            }
         } else if let Some((shown, base)) = pinned {
             let differs = crate::git::trees_differ_outside(tree, &base, revision, ".engineering")?;
             (

@@ -123,10 +123,15 @@ fn short(revision: &str) -> &str {
 }
 
 /// Who took a step, with what its event records of it: a validator, and the revision it
-/// observed when it observed; or the harness, the tokens it reported and their components.
+/// observed when it observed; or the harness, the tokens it reported, their components and
+/// what it reported about the call besides them.
 enum SteppedBy<'r> {
     Validator(Option<&'r str>),
-    Harness(Option<u64>, Option<crate::events::TokenUsage>),
+    Harness(
+        Option<u64>,
+        Option<crate::events::TokenUsage>,
+        Option<crate::harness::CallReport>,
+    ),
 }
 
 /// What [`Run::record_before`] found before a step: no grant authorises it, so nothing was
@@ -5355,7 +5360,7 @@ fn surface_refusal(action: &str, touched: &[String]) -> String {
     let mut parts = Vec::new();
     if !store.is_empty() {
         parts.push(format!(
-            "wrote into the planning store, which only takt writes once a case is accepted: {}",
+            "wrote into the planning store, which only takt writes, each write its own commit (the take when a case opens, a grant's record, the story's test result and its move to implemented): {}",
             join(&store)
         ));
     }
@@ -5442,8 +5447,10 @@ fn on_a_case_branch(tree: &Path) -> Result<bool> {
 
 /// Puts the tree on the base of the case whose branch it is on, so that the store is read as
 /// the base has it, never as a case's branch, which carries a model's commits, has it. A tree
-/// on any other branch, or detached, stays where it is. Refused when the case's base is not
-/// known, or when the tree has uncommitted work, which the checkout would carry along.
+/// on any other branch, or detached, stays where it is. Refused when the branch names no case
+/// ([`crate::case::check_id`], checked before the name is joined to a path), when the case's
+/// base is not known, or when the tree has uncommitted work, which the checkout would carry
+/// along.
 fn to_base(tree: &Path) -> Result<()> {
     let Some(branch) = crate::git::current_branch(tree)? else {
         return Ok(());
@@ -5451,6 +5458,9 @@ fn to_base(tree: &Path) -> Result<()> {
     let Some(case) = branch.strip_prefix(crate::case::BRANCH_PREFIX) else {
         return Ok(());
     };
+    // The name is joined to the cases directory only as a case id: `takt/x/y` names no case.
+    crate::case::check_id(case)
+        .with_context(|| format!("the branch {} names no case", crate::case::shown(&branch)))?;
     let Some(base) = crate::case::Branch::read(&tree.join(CASES_DIR).join(case))
         .ok()
         .and_then(|recorded| recorded.base)
@@ -5725,7 +5735,9 @@ impl<'a> Run<'a> {
     /// implementation revision is that commit, the one its validators observe. A refusal
     /// removes the case just opened, is printed on `out` verbatim, and the next candidate is
     /// tried; a take or its commit that fails removes it too and is the error. A candidate a
-    /// case already records is not taken again: it is skipped with a line on `out`. `None`,
+    /// case already records is not taken again, and one whose minted case id the case id rule
+    /// refuses ([`crate::case::check_id`]) is not opened: each is skipped with a line on `out`
+    /// naming it. `None`,
     /// with no case opened, when nothing else is ready, such a skipped case included.
     pub fn take_next(
         tree: &Path,
@@ -5747,13 +5759,19 @@ impl<'a> Run<'a> {
             }
             let story = frontier.show(tree, &id)?;
             let title = story.title.clone();
-            let mut run = Self::open_unit(
-                tree,
-                options.clone(),
-                Unit::Story(story),
-                harness,
-                validators,
-            )?;
+            // The case id takt mints from the story's name can fail the case id rule (a name
+            // long enough takes it past the limit): that story is skipped, named, and the next
+            // tried. An id the operator gave is theirs, and its refusal stays the error.
+            let mut options = options.clone();
+            if options.case_id.is_none() {
+                let minted = story.case_id(&crate::now());
+                if let Err(refusal) = crate::case::check_id(&minted) {
+                    writeln!(out, "frontier: {id} not taken: {refusal:#}")?;
+                    continue;
+                }
+                options.case_id = Some(minted);
+            }
+            let mut run = Self::open_unit(tree, options, Unit::Story(story), harness, validators)?;
             let taken = match frontier.take(tree, &id) {
                 Ok(taken) => taken,
                 Err(error) => return Err(Self::discarded(run, error)),
@@ -6282,7 +6300,9 @@ impl<'a> Run<'a> {
     }
 
     /// Records a step: by a validator, with the revision it observed, or by the harness, with
-    /// the tokens it reported and their components; which one, the action, what it reported.
+    /// the tokens it reported, their components and what it reported about the call (the
+    /// model, cost, duration, API time, turns and start, each only when stated); which one,
+    /// the action, what it reported.
     fn stepped(
         &self,
         events: &Events,
@@ -6291,10 +6311,11 @@ impl<'a> Run<'a> {
         action: &str,
         summary: &str,
     ) -> Result<()> {
-        let (by, tokens, usage, revision) = match by {
-            SteppedBy::Validator(revision) => ("validator", None, None, revision),
-            SteppedBy::Harness(tokens, usage) => ("harness", tokens, usage, None),
+        let (by, tokens, usage, revision, call) = match by {
+            SteppedBy::Validator(revision) => ("validator", None, None, revision, None),
+            SteppedBy::Harness(tokens, usage, call) => ("harness", tokens, usage, None, call),
         };
+        let call = call.unwrap_or_default();
         events.emit(
             self.steps,
             &Event::Step {
@@ -6305,6 +6326,12 @@ impl<'a> Run<'a> {
                 tokens,
                 usage,
                 revision: revision.map(str::to_owned),
+                model: call.model,
+                cost_usd: call.cost_usd,
+                duration_ms: call.duration_ms,
+                api_ms: call.api_ms,
+                turns: call.turns,
+                started_at: call.started_at,
             },
         )
     }
@@ -6835,7 +6862,12 @@ impl<'a> Run<'a> {
             // else under `.engineering/` but the cases (the project file that says where the
             // store is kept, the gates and the assertions project file among it), whose
             // artifacts and evidence the store's lifecycle moves a story on and which only
-            // takt's own writes change once a case is accepted ([`Run::record_on`]); and what
+            // takt's own writes change, each its own commit on the case's branch: the take when
+            // the case opens ([`Run::take_next`]); and, riding above the implementation revision
+            // to the base with the pull request ([`crate::case::approvals_only`]), a grant's
+            // record (`takt approve`) and the story's `test_result` and move to `implemented`,
+            // written before the step the case's grant authorises or, without one, once the
+            // case is accepted ([`Run::record_on`]); and what
             // decides the validators, which a step that changed it would decide its own
             // verdict with: the cargo configuration, the toolchain, build scripts, the CI
             // workflows, pytest's configuration, the test command's own script and its build
@@ -7017,7 +7049,11 @@ impl<'a> Run<'a> {
                 if let Ok(report) = &stepped {
                     self.stepped(
                         events,
-                        SteppedBy::Harness(report.tokens, self.harness.last_usage()),
+                        SteppedBy::Harness(
+                            report.tokens,
+                            self.harness.last_usage(),
+                            self.harness.last_call(),
+                        ),
                         self.harness.name(),
                         &report.action,
                         &format!("discarded at the run's end: {}", report.summary),
@@ -7051,7 +7087,7 @@ impl<'a> Run<'a> {
             let record_step = |run: &Self| {
                 run.stepped(
                     events,
-                    SteppedBy::Harness(report.tokens, harness.last_usage()),
+                    SteppedBy::Harness(report.tokens, harness.last_usage(), harness.last_call()),
                     harness.name(),
                     &report.action,
                     &report.summary,

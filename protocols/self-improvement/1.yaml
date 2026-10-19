@@ -4,7 +4,7 @@ protocol:
   id: self.improvement
   revision: 1
   description: >-
-    One improvement turn on takt: a finding that names a machine-checkable predicate on a scenario
+    One improvement turn on takt: a finding that names a machine-checkable predicate on a scenario or on a repository at a seed
     is reproduced on the promoted baseline, a candidate fix is delivered and merged under the
     authority its surface needs, the finding is verified gone on the candidate by another run than
     the one that delivered it, the scorecard shows no regression against the baseline, and the
@@ -44,7 +44,7 @@ evidence_kinds:
       that exists; its result is filed or malformed
   scenario_result:
     description: >-
-      the finding's predicate run on its scenario with a takt built from a revision; its result is
+      the finding's predicate run on its scenario, or on its repository at its seed, with a takt built from a revision; its result is
       reproduced or not_reproduced
   merge_observation:
     description: the candidate revision merged into the mainline; its result is merged
@@ -126,7 +126,7 @@ actions:
     may_produce:
       - evidence: finding_record
   scenario.reproduce:
-    description: run the finding's predicate on its scenario with a takt built from the baseline
+    description: run the finding's predicate on its scenario or repository with a takt built from the baseline
     effect: read
     precondition:
       claim: finding.cited
@@ -140,7 +140,7 @@ actions:
     precondition:
       claim: scenario.reproduced_before
   scenario.verify:
-    description: run the finding's predicate on its scenario with a takt built from the candidate
+    description: run the finding's predicate on its scenario or repository with a takt built from the candidate
     effect: read
     precondition:
       claim: scenario.reproduced_before

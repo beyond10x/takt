@@ -12,6 +12,7 @@ relations:
 - serves: vision:safe-agentic-coding
 - depends_on: story:scorecard-reader
 - depends_on: story:harness-journey-timeline
+- depends_on: story:run-trace-and-report
 scope:
 - confidence: inferred
   path: crates/takt/src/harness.rs

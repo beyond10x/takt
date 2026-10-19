@@ -19,17 +19,32 @@
 #   source: docs/runs/trial-1.md
 #   ```
 #
-#   scenario  the scenario's id, as `.engineering/scenarios.conf` of the scenario repository
-#             declares it (letters, digits, `-` and `_`)
-#   command   one shell line, run by `scripts/check-finding` in a fresh checkout of the scenario's
-#             seed with `$TAKT` the takt binary under test and `$SCENARIO` the checkout
-#   exit      the exit status the command gives while the defect is present, 0 to 255 but 124
-#             and 137, which `scripts/check-finding` reads as its timeout
-#   output    a fixed string its standard output or standard error then holds
-#   source    the run record or review that produced the finding, a path relative to the
-#             repository that exists
+#   scenario    the scenario's id, as `.engineering/scenarios.conf` of the scenario repository
+#               declares it (letters, digits, `-` and `_`)
+#   repository  instead of a scenario: the repository the defect was seen on, an `https://` URL
+#               and nothing else (a predicate is committed to a public repository, and a path is
+#               one machine's), cloned by `scripts/check-finding` at `seed`; a local checkout
+#               stands in for the URL only through that script's `--checkout` option. A filed
+#               repository names a public host: a dotted DNS name (labels of letters, digits and
+#               `-`, at least one dot, no trailing dot, not `localhost` or a name under it) or a
+#               dotted-decimal IPv4 address (four decimal octets, 0 to 255, no leading zero, no
+#               hex, no shorthand) outside the zero, loopback, private, link-local and shared
+#               ranges; no IPv6 literal. The check is a lint on the URL's text, not a boundary
+#   seed        with `repository`: the commit the task starts from, a commit id of 7 to 64 hex
+#               digits
+#   test        with `repository`, optional: the task's test command, handed to the command as
+#               `$TEST`
+#   command     one shell line, run by `scripts/check-finding` in a fresh checkout of the
+#               scenario's seed, or of `repository` at `seed`, with `$TAKT` the takt binary
+#               under test and `$SCENARIO` the checkout
+#   exit        the exit status the command gives while the defect is present, 0 to 255 but 124
+#               and 137, which `scripts/check-finding` reads as its timeout
+#   output      a fixed string its standard output or standard error then holds
+#   source      the run record or review that produced the finding, a path relative to the
+#               repository that exists
 #
-# `exit`, `output` or both; the predicate holds when every one given does.
+# `scenario` or `repository`, one of the two; `exit`, `output` or both; the predicate holds when
+# every one given does.
 #
 # Standard output is one line, the result of the `finding_record` evidence kind
 # (protocols/self-improvement/1.yaml): `filed` (exit 0) or `malformed` (exit 2). Everything else
@@ -90,8 +105,8 @@ read_predicate() {
         value=${value#"${value%%[![:space:]]*}"}
         value=${value%"${value##*[![:space:]]}"}
         case $key in
-        scenario | command | exit | output | source) ;;
-        *) malformed "the expected_before block gives \`$key\`, which nothing reads; it gives scenario, command, exit, output and source" ;;
+        scenario | repository | seed | test | command | exit | output | source) ;;
+        *) malformed "the expected_before block gives \`$key\`, which nothing reads; it gives scenario or repository, seed and test, command, exit, output and source" ;;
         esac
         [[ -v PREDICATE[$key] ]] && malformed "the expected_before block gives \`$key\` twice"
         [[ -n $value ]] || malformed "the expected_before block gives \`$key\` no value"
@@ -101,11 +116,71 @@ read_predicate() {
     ((blocks == 1)) || malformed "the body holds $blocks expected_before blocks; a finding has one predicate"
     ((!inside)) || malformed "the expected_before block is never closed"
     local name
-    for name in scenario command source; do
+    for name in command source; do
         [[ -v PREDICATE[$name] ]] || malformed "the expected_before block gives no \`$name\`"
     done
-    [[ ${PREDICATE[scenario]} =~ ^[A-Za-z0-9_-]+$ ]] ||
-        malformed "scenario \`${PREDICATE[scenario]}\`: a scenario id is letters, digits, \`-\` and \`_\`"
+    # One form: a scenario the scenario repository declares, or a repository and a seed the
+    # predicate names itself.
+    if [[ -v PREDICATE[scenario] && -v PREDICATE[repository] ]]; then
+        malformed "the expected_before block gives both \`scenario\` and \`repository\`; a predicate runs on one of them"
+    elif [[ -v PREDICATE[scenario] ]]; then
+        [[ ${PREDICATE[scenario]} =~ ^[A-Za-z0-9_-]+$ ]] ||
+            malformed "scenario \`${PREDICATE[scenario]}\`: a scenario id is letters, digits, \`-\` and \`_\`"
+        for name in seed test; do
+            [[ -v PREDICATE[$name] ]] &&
+                malformed "the expected_before block gives \`$name\` with a scenario; \`$name\` goes with \`repository\`, whose seed the scenario repository declares"
+        done
+    elif [[ -v PREDICATE[repository] ]]; then
+        case ${PREDICATE[repository]} in
+        https://*@*) malformed "repository \`${PREDICATE[repository]}\`: a repository URL carries no user or credential; the check clones with none" ;;
+        https://?*) ;;
+        *) malformed "repository \`${PREDICATE[repository]}\`: a repository is an \`https://\` URL, which the check clones with no credential of its own and which holds on every machine; a local checkout stands in for it through check-finding's \`--checkout <url>=<path>\`" ;;
+        esac
+        # The host, between `https://` and the next `/`, less a port. A filed repository names
+        # a public host: a dotted DNS name (labels of letters, digits and `-`, at least one dot,
+        # no trailing dot, not `localhost` or a name under it) or a dotted-decimal IPv4 address
+        # (four decimal octets, 0 to 255, no leading zero, no hex, no shorthand) outside the
+        # zero, loopback, private, link-local and shared ranges; no IPv6 literal. A host whose
+        # last label is a number is read as an address, as a browser reads it, so no hex, octal
+        # or shorthand spelling of a loopback passes as a name. This is a lint on the URL's
+        # text, not a boundary: the predicate's own command reaches whatever it names.
+        local host=${PREDICATE[repository]#https://} why= last
+        local octet='(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])'
+        host=${host%%/*}
+        case $host in
+        *[?#\\]*) why="a host holds no \`?\`, \`#\` or \`\\\`" ;;
+        \[*) why="an IPv6 literal is no host every machine reaches by that text" ;;
+        *) host=${host%%:*} ;;
+        esac
+        last=${host##*.}
+        if [[ -n $why ]]; then
+            :
+        elif [[ -z $host ]]; then
+            why="the URL names no host"
+        elif [[ $host == *. ]]; then
+            why="a host ends in no dot"
+        elif [[ ${host,,} == localhost || ${host,,} == *.localhost ]]; then
+            why="\`localhost\` and the names under it are one machine's"
+        elif [[ ${last,,} =~ ^(0x[0-9a-f]*|[0-9]+)$ ]]; then
+            if [[ ! $host =~ ^$octet(\.$octet){3}$ ]]; then
+                why="an address is dotted decimal: four octets, 0 to 255, no leading zero, no hex, no shorthand"
+            else
+                case $host in
+                0.* | 10.* | 127.* | 169.254.* | 192.168.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].* | 100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*)
+                    why="the zero, loopback, private, link-local and shared address ranges are one machine's or one network's" ;;
+                esac
+            fi
+        elif [[ ! $host =~ ^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ ]]; then
+            why="a name is labels of letters, digits and \`-\`, with at least one dot"
+        fi
+        [[ -z $why ]] ||
+            malformed "repository \`${PREDICATE[repository]}\`: its host \`$host\` names no public repository ($why); a repository is one every machine reaches, a local checkout standing in for it through check-finding's \`--checkout <url>=<path>\`"
+        [[ -v PREDICATE[seed] ]] || malformed "the expected_before block gives \`repository\` but no \`seed\`: the commit the task starts from"
+        [[ ${PREDICATE[seed]} =~ ^[0-9a-f]{7,64}$ ]] ||
+            malformed "seed \`${PREDICATE[seed]}\`: a seed is a commit id, 7 to 64 hex digits, so the check starts from the same tree every time"
+    else
+        malformed "the expected_before block gives neither \`scenario\` nor \`repository\`: nothing to run the command on"
+    fi
     [[ -v PREDICATE[exit] || -v PREDICATE[output] ]] ||
         malformed "the expected_before block gives neither \`exit\` nor \`output\`: nothing to check the command against"
     if [[ -v PREDICATE[exit] ]]; then
@@ -144,7 +219,7 @@ if [[ -n $predicate_only ]]; then
     [[ -f $predicate_only && -r $predicate_only ]] || usage "--predicate $predicate_only: no readable file"
     read_body "$predicate_only" || usage "--predicate $predicate_only: unreadable"
     read_predicate "$BODY"
-    for name in scenario command exit output source; do
+    for name in scenario repository seed test command exit output source; do
         [[ -v PREDICATE[$name] ]] && printf '%s\t%s\n' "$name" "${PREDICATE[$name]}"
     done
     exit 0

@@ -1023,8 +1023,8 @@ fn each_wait_on_the_forge_is_a_line_and_the_waiting_stop_is_the_last() {
 }
 
 /// A judgement step that edits a story's file in the planning store by hand, here moving it
-/// to `implemented`, is refused and put back: only takt writes the store, once a case is
-/// accepted.
+/// to `implemented`, is refused and put back: only takt writes the store, each write its own
+/// commit.
 struct EditsTheStore;
 
 impl Harness for EditsTheStore {

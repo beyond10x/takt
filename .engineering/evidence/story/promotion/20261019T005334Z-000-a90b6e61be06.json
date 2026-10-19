@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T00:53:34Z",
+  "actor": "human:timo",
+  "artifact": "story:promotion",
+  "kind": "story",
+  "revision": 11,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check at bdba932 (df9681a merged with main a388adf): 76 binaries, 669 passed, 0 failed; reviewer approve at df9681a: 669 passed, citations 482/482",
+    "reference": "fe93286"
+  }
+}

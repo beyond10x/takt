@@ -83,7 +83,7 @@ fn git_creates_branch(tree: &Path, id: &str) -> bool {
 /// Measured with ASCII and with a two-byte letter (126 x `ü`, 252 bytes, 126 characters), so a
 /// fix that counts characters instead of bytes stays red.
 #[test]
-fn check_id_accepts_an_id_too_long_for_git_to_lock_its_branch_ref() {
+fn check_id_refuses_an_id_too_long_for_git_to_lock_its_branch_ref() {
     let tree = repository("long");
     let mut missed = Vec::new();
     for id in ["a".repeat(251), "a".repeat(255), "\u{fc}".repeat(126)] {
@@ -120,7 +120,7 @@ fn check_id_accepts_an_id_too_long_for_git_to_lock_its_branch_ref() {
 /// character is named with a backslash git and the operator never typed (`it\'s~`), while the
 /// same message's `takt/<id>` shows it raw.
 #[test]
-fn check_id_refusal_names_an_id_with_a_quote_as_a_different_id() {
+fn check_id_refusal_names_an_id_with_a_quote_as_it_was_typed() {
     for id in ["it's~", "a\"b~"] {
         let refusal = format!("{:#}", check_id(id).expect_err(id));
         assert!(
@@ -136,7 +136,7 @@ fn check_id_refusal_names_an_id_with_a_quote_as_a_different_id() {
 /// one, so one of them is refused. The doc also says the check does not normalise: `café`
 /// composed (NFC) and decomposed (NFD) both pass, as two ids.
 #[test]
-fn check_id_accepts_two_ids_that_display_as_one() {
+fn check_id_refuses_one_of_two_ids_that_display_as_one() {
     let mut both = Vec::new();
     let (a, b) = ("ab", "a\u{34f}b");
     if check_id(a).is_ok() && check_id(b).is_ok() {
