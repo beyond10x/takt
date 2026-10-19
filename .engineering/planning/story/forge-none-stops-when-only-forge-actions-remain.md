@@ -2,13 +2,16 @@
 format: aep.planning-md/3
 id: story:forge-none-stops-when-only-forge-actions-remain
 kind: story
-status: draft
+status: active
 title: Under --forge none a case stops by name when only forge actions remain
 summary: 'trial 2: ~29k tokens a scenario run, one resume loop of 615k'
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T15:58:58Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-19T15:58:58Z", actor: "human:timo", revision: 3}
 ---
 # Story: forge-none-stops-when-only-forge-actions-remain
 
