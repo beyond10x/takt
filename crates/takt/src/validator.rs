@@ -472,6 +472,7 @@ impl TestsRun {
                 .min(deadline.saturating_duration_since(std::time::Instant::now()));
         }
         let output = crate::forge::run_child(&mut command, limits)
+            .map_err(crate::forge::refused_namespaces)
             .with_context(|| format!("run {}", self.command.join(" ")))?;
         let result = if output.success() { "pass" } else { "fail" };
         let printed =

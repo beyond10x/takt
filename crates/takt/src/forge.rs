@@ -628,7 +628,7 @@ mod session {
         let uid_map = format!("{uid} {uid} 1\n").into_bytes();
         let gid_map = format!("{gid} {gid} 1\n").into_bytes();
         let hidden = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
-        let child = move || -> std::io::Result<()> {
+        let steps = move || -> std::io::Result<()> {
             // SAFETY: each call below is a system call given integers or NUL-terminated
             // strings that live as long as the closure; none allocates, so each is safe
             // between fork and exec.
@@ -665,11 +665,39 @@ mod session {
             }
             Ok(())
         };
+        // Whichever step the host refuses, and with whatever error, the spawn fails with
+        // `EPERM`, which [`super::refused_namespaces`] names; building the error allocates
+        // nothing.
+        let child = move || steps().map_err(|_| std::io::Error::from_raw_os_error(libc::EPERM));
         // SAFETY: the closure runs between fork and exec and makes system calls only.
         unsafe {
             command.pre_exec(child);
         }
     }
+}
+
+/// What a test command that cannot run in the user and mount namespace [`without_login`]
+/// starts it in is told.
+#[cfg(target_os = "linux")]
+pub const NAMESPACES_REFUSED: &str = "the test command runs in a user and a mount namespace of its own, where no login of the user's is in reach, and this host refuses unprivileged user namespaces (as with `kernel.apparmor_restrict_unprivileged_userns = 1` or `kernel.unprivileged_userns_clone = 0`); allow them, or run takt where they are allowed";
+
+/// `error`, from starting a command [`without_login`] confined, with the cause named when it
+/// is the refusal of its namespaces: on Linux an `EPERM` (`PermissionDenied`), which every
+/// refused namespace step fails with, gets [`NAMESPACES_REFUSED`] as its context. Any other
+/// error, and an `EACCES` (`PermissionDenied` too: a program that is not executable), is
+/// returned as it was.
+#[must_use]
+pub fn refused_namespaces(error: anyhow::Error) -> anyhow::Error {
+    #[cfg(target_os = "linux")]
+    if error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|cause| {
+            cause.kind() == std::io::ErrorKind::PermissionDenied
+                && cause.raw_os_error() == Some(libc::EPERM)
+        })
+    }) {
+        return error.context(NAMESPACES_REFUSED);
+    }
+    error
 }
 
 /// Reads `stream` to its end on a thread of its own, keeping its last `limit` bytes; answers
