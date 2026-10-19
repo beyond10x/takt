@@ -2,13 +2,19 @@
 format: aep.planning-md/3
 id: story:promotion-refusal-is-not-final
 kind: story
-status: draft
+status: active
 title: A refused promotion can be judged again on new runs, and a new scenario cannot wedge the store
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-ae680d5-adversarial
-revision: 1
+scope:
+- confidence: cited
+  path: crates/takt/src/promotion.rs
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T02:52:54Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-19T02:52:54Z", actor: "human:timo", revision: 3}
 ---
 ## Outcome
 

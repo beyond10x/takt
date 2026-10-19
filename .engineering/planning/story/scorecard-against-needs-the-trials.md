@@ -2,13 +2,19 @@
 format: aep.planning-md/3
 id: story:scorecard-against-needs-the-trials
 kind: story
-status: draft
+status: active
 title: takt scorecard --against gives no verdict on fewer cases than the rule's trials
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-fe93286-areas
-revision: 1
+scope:
+- confidence: cited
+  path: crates/takt/src/scorecard.rs
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T02:52:53Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-19T02:52:54Z", actor: "human:timo", revision: 3}
 ---
 ## Outcome
 

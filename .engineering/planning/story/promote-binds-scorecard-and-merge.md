@@ -2,13 +2,21 @@
 format: aep.planning-md/3
 id: story:promote-binds-scorecard-and-merge
 kind: story
-status: draft
+status: active
 title: takt promote installs only a merged revision, judged on runs of that revision's binary
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-fe93286-areas
-revision: 1
+scope:
+- confidence: cited
+  path: crates/takt/src/promotion.rs
+- confidence: cited
+  path: crates/takt/src/scorecard.rs
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T02:52:53Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-19T02:52:53Z", actor: "human:timo", revision: 3}
 ---
 ## Outcome
 

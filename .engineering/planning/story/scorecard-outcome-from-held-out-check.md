@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scorecard-outcome-from-held-out-check
 kind: story
-status: draft
+status: active
 title: A run's outcome in the scorecard comes from the held-out check, not from the candidate's own record
 tags:
 - priority:high
@@ -10,7 +10,13 @@ relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-ae680d5-adversarial
-revision: 2
+scope:
+- confidence: cited
+  path: crates/takt/src/scorecard.rs
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T02:52:54Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-19T02:52:54Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 
