@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:main-history-names-no-private-repository
 kind: story
-status: active
+status: implemented
 title: Local main's history names no private repository or home path before its first push
 tags:
 - priority:high
@@ -10,10 +10,11 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - informed_by: story:docs-site-with-sidebar
-revision: 4
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T01:43:34Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-19T01:43:34Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-19T04:22:06Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 
@@ -40,4 +41,4 @@ Timing, decided by the planner: at the close of wave 12, after its merge into `m
 
 ## Acceptance
 
-On the rewritten `main`, `git log -p --all | grep -c -i -E 'beyond10x/[b]ench\b|/home/[a-z]+'` prints 0; `python3 -I scripts/check-citations --require-digests` and `aep plan artifact validate` pass; every 7-to-40-hex token in `.engineering/` that named a commit before the rewrite names a commit after it; `task check` passes at the rewritten tip; the pre-rewrite bundle restores the old history.
+On the rewritten `main`, `git log -p --all | grep -i -E 'beyond10x/[b]ench\b|/home/[a-z]+' | grep -v -c '/home/[s]omeone/'` prints 0 (the excluded path is a test fixture's made-up one, not a home directory); `python3 -I scripts/check-citations --require-digests` and `aep plan artifact validate` pass; every 7-to-40-hex token in `.engineering/` that named a commit before the rewrite names a commit after it; `task check` passes at the rewritten tip; the pre-rewrite bundle restores the old history.

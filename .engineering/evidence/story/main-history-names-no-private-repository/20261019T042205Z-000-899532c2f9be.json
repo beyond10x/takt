@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T04:22:05Z",
+  "actor": "human:timo",
+  "artifact": "story:main-history-names-no-private-repository",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check on rewritten main 1918e4a: 814 passed, 0 failed, 6 ignored (a timing case red under load average 53, green alone and on the full rerun); citations 578/578; aep validate valid; acceptance grep over git log -p --all prints 0; 559 cited shas mapped, 0 ambiguous; origin/main fe98972 unchanged",
+    "reference": "1918e4a"
+  }
+}
