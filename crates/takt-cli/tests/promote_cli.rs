@@ -1238,8 +1238,35 @@ fn a_candidate_within_the_rule_is_installed_and_recorded() {
         WITHIN_TOKENS,
         [APPROVAL, APPROVAL, APPROVAL, APPROVAL, ERROR],
     );
+    let replaced = fs::read(world.installed()).expect("the binary before it");
+    let replaced_digest = sha256(&world.installed());
     let (code, out, err) = world.promote(&card, &[]);
     assert_eq!(code, 0, "{out}{err}");
+    // The binary it replaced is kept by its digest under the state directory, for a turn
+    // that judges the promotion to finish with (story:self-improvement-protocol).
+    let kept = world
+        .store
+        .parent()
+        .expect("the state's takt directory")
+        .join("judges")
+        .join(&replaced_digest);
+    assert_eq!(
+        fs::read(&kept).ok(),
+        Some(replaced),
+        "{}: {out}{err}",
+        kept.display()
+    );
+    assert!(
+        fs::metadata(&kept)
+            .is_ok_and(
+                |meta| std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o111 != 0
+            ),
+        "the kept binary runs"
+    );
+    assert!(
+        out.contains(&kept.display().to_string()),
+        "the kept binary is named: {out}"
+    );
     assert!(
         out.contains("rule  trials 5 a scenario  margin 1 case"),
         "the rule applied is printed: {out}"
@@ -1374,6 +1401,41 @@ fn two_revisions_promoted_one_after_the_other_both_hold_and_chain() {
         format!("takt 0.1.0 ({second})"),
         "nothing is installed by the refusal"
     );
+}
+
+/// A link planted where `takt promote` keeps the binary it replaces, to a file holding that
+/// binary's bytes (which a link could later point elsewhere), is not kept: it is replaced by a
+/// regular file of its own.
+#[test]
+fn a_link_planted_where_the_replaced_binary_is_kept_is_replaced() {
+    let world = World::new("kept-link", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card(
+        "within",
+        WITHIN_TOKENS,
+        [APPROVAL, APPROVAL, APPROVAL, APPROVAL, ERROR],
+    );
+    let replaced = fs::read(world.installed()).expect("the binary before it");
+    let digest = sha256(&world.installed());
+    let judges = world
+        .store
+        .parent()
+        .expect("the state's takt directory")
+        .join("judges");
+    fs::create_dir_all(&judges).expect("the judges directory");
+    let elsewhere = world
+        .root
+        .parent()
+        .expect("a parent")
+        .join("elsewhere-takt");
+    fs::write(&elsewhere, &replaced).expect("a file elsewhere");
+    std::os::unix::fs::symlink(&elsewhere, judges.join(&digest)).expect("the link");
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    let kept = judges.join(&digest);
+    let meta = fs::symlink_metadata(&kept).expect("kept");
+    assert!(meta.file_type().is_file(), "{}: {out}{err}", kept.display());
+    assert_eq!(fs::read(&kept).ok(), Some(replaced));
 }
 
 /// Two cases worse at a rank, or a median of tokens over the baseline's maximum, refuse the

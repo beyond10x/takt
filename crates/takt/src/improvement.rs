@@ -1,9 +1,11 @@
 //! The validators of an improvement turn, a `self.improvement/1` case
 //! (`protocols/self-improvement/1.yaml`, design:recursive-self-improvement § The loops as
 //! protocols): [`FindingFile`] (`finding.file`), [`ScenarioReproduce`] (`scenario.reproduce`),
-//! [`ScenarioVerify`] (`scenario.verify`) and [`ScorecardCompare`] (`scorecard.compare`). A turn
-//! opens with its finding, its candidate and the promoted baseline
-//! ([`crate::case::CaseDir::open_turn`]), which declares each of them independent of the run
+//! [`ScenarioVerify`] (`scenario.verify`), [`ScorecardCompare`] (`scorecard.compare`),
+//! [`CandidateMerged`] (`candidate.merge` and `candidate.merge_judge_surface`) and
+//! [`BinaryPromote`] (`binary.promote`). A turn opens with its finding, its candidate, the
+//! promoted baseline and its judge surface ([`crate::case::turn_opening`],
+//! [`crate::case::CaseDir::open_turn`]), which declares each of them independent of the run
 //! that delivered the candidate ([`PRODUCERS`]): a validator is no agent run.
 //!
 //! These validators run in the takt that drives the case, the installed promoted binary, which
@@ -11,22 +13,25 @@
 //! scripts they run (`scripts/check-finding`, and `scripts/file-finding` it calls) are read at the
 //! turn's baseline, the promoted revision, checked against their ids, and run from a directory
 //! of their own, never from the tree a step edits nor from the commit the case forks from, which
-//! the operator's `HEAD` decides; a candidate that changes them, or the finding, does not open a
-//! turn ([`crate::case::turn_opening`]). The candidate is delivered outside the case and given at
-//! open.
+//! the operator's `HEAD` decides; a candidate that changes them does not open a turn
+//! ([`crate::case::turn_opening`]). The finding is read on the mainline ([`Mainline`]), at the
+//! commit the case forks from, and checked out there for the check. The candidate is delivered
+//! outside the case and given at open.
 //!
-//! Not here yet: the merge validators (`candidate.merge`, `candidate.merge_judge_surface`), the
-//! judge-surface input computed at open, and `binary.promote`; until they are, no turn reaches
-//! `accepted` on validators' records.
+//! The merge and the promotion are observed, never made: the candidate is merged in its own
+//! delivery case, or by the owner, and promoted by `takt promote`; the turn records each once the
+//! case holds its grant and the mainline holds the candidate, or the promotion store's latest
+//! record installs it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
 use crate::evidence::Record;
-use crate::forge::Limits;
+use crate::forge::{Forge, Limits};
 use crate::promotion::Kind;
 use crate::scorecard::{Rule, Scorecard};
 use crate::validator::{Artifact, Observation, Validator};
@@ -55,8 +60,9 @@ pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 1] = [
     // The script of story:check-finding-run-step-confined (its last commit f2a20e9), its build's
     // checkout a repository made with no template, by a git under a cleared environment, that
     // fetches the revision through git's transport, every object hashed and checked
-    // (story:self-improvement-protocol, part 1).
-    "0dd150f221a686d90a28b1e1b654750d3378a54e353c31be78f150247ee30278",
+    // (story:self-improvement-protocol, part 1), and no replace ref of a repository it reads
+    // honoured (part 2).
+    "7878f0f27ad4618280967d4674de65a3ae86fe4b54a5a2b28fde02b7ef36a2cf",
 ];
 
 /// The file under a turn's `artifacts/` holding the sha256 of the takt `scripts/check-finding`
@@ -72,11 +78,14 @@ pub const INDEPENDENT_ON: &str = "different_agent_run";
 
 /// The producers of a turn's records, each declared independent on [`INDEPENDENT_ON`] when the
 /// turn opens.
-pub const PRODUCERS: [&str; 4] = [
+pub const PRODUCERS: [&str; 7] = [
     FindingFile::NAME,
     ScenarioReproduce::NAME,
     ScenarioVerify::NAME,
     ScorecardCompare::NAME,
+    CandidateMerged::NAME,
+    CandidateMerged::JUDGE_SURFACE_NAME,
+    BinaryPromote::NAME,
 ];
 
 /// What the turn validators that run the finding scripts are given: the cache directory
@@ -185,13 +194,15 @@ fn held_to(
     }
 }
 
-/// The turn the tree's case is: the finding its `story.yaml` names and its `baseline`
-/// revision, the promoted one the finding scripts are read at, never the commit the case forks
-/// from (which the operator's `HEAD` decides, the candidate's included); or what to say when it
-/// has either not.
+/// The turn the tree's case is: the finding its `story.yaml` names, its `baseline` revision,
+/// the promoted one the finding scripts are read at, never the commit the case forks from
+/// (which the operator's `HEAD` decides, the candidate's included), and its `finding`
+/// revision, the commit the case forks from, where the finding is read; or what to say when it
+/// has one not.
 struct Turn {
     finding: String,
     baseline: String,
+    filed: String,
 }
 
 fn turn_of(tree: &Path) -> Result<std::result::Result<Turn, String>> {
@@ -207,7 +218,16 @@ fn turn_of(tree: &Path) -> Result<std::result::Result<Turn, String>> {
             "the case names no baseline revision to read the finding scripts at".to_owned(),
         ));
     };
-    Ok(Ok(Turn { finding, baseline }))
+    let Some(filed) = case_revision(&dir, "finding")? else {
+        return Ok(Err(
+            "the case names no finding revision to read the finding at".to_owned(),
+        ));
+    };
+    Ok(Ok(Turn {
+        finding,
+        baseline,
+        filed,
+    }))
 }
 
 /// The finding's file in the planning store, for `story:<key>`, the key lower-case letters and
@@ -298,25 +318,30 @@ impl Scripts {
             .join(Path::new(path).file_name().unwrap_or(path.as_ref()))
     }
 
-    /// A detached checkout of `baseline` beside the scripts, outside the case's tree, so
-    /// `check-finding` reads the finding as the baseline holds it, never from the case tree's
-    /// working copy (which `git status` may not show whole: an index entry marked skip-worktree).
-    /// It is a repository of its own that fetches `baseline` and `revision` by their ids from
-    /// `tree`'s through git's transport, never a local copy of the object files: every object is
-    /// hashed as it is received and checked (`transfer.fsckObjects`), so one overwritten in the
-    /// case repository's store (which no step's guard covers) is an error naming it, and nothing
-    /// is checked on other content than the commits hold. The finding's file there is checked
-    /// against its bytes at `baseline`, read with every object checked; one that differs is what
-    /// to say. It holds a branch at `baseline` and one at `revision`, the revision checked, so a
-    /// script that clones the checkout rather than fetching by id reaches both.
+    /// A detached checkout of `filed`, the turn's finding revision, beside the scripts, outside
+    /// the case's tree, so `check-finding` reads the finding as that commit of the mainline holds
+    /// it, never from the case tree's working copy (which `git status` may not show whole: an
+    /// index entry marked skip-worktree). It is a repository of its own that fetches `filed`,
+    /// `baseline` and `revision` by their ids from `tree`'s through git's transport, never a
+    /// local copy of the object files: every object is hashed as it is received and checked
+    /// (`transfer.fsckObjects`), so one overwritten in the case repository's store (which no
+    /// step's guard covers) is an error naming it, and nothing is checked on other content than
+    /// the commits hold. The finding's file there is checked against its bytes at `filed`, read
+    /// with every object checked; one that differs is what to say. It holds a branch at
+    /// `baseline` and one at `revision`, the revision checked, so a script that clones the
+    /// checkout rather than fetching by id reaches both.
     fn checkout(
         &self,
         tree: &Path,
-        baseline: &str,
+        turn: &Turn,
         revision: &str,
-        finding: &str,
         deadline: Option<std::time::Instant>,
     ) -> Result<std::result::Result<PathBuf, String>> {
+        let (baseline, filed, finding) = (
+            turn.baseline.as_str(),
+            turn.filed.as_str(),
+            turn.finding.as_str(),
+        );
         let repo = self.dir.join("baseline");
         let source = std::path::absolute(tree)
             .with_context(|| format!("make {} absolute", tree.display()))?;
@@ -337,18 +362,20 @@ impl Scripts {
                 "--no-tags",
                 "--",
                 source,
+                filed,
                 baseline,
                 revision,
             ],
         )
         .with_context(|| {
             format!(
-                "fetch {} and {} from the case repository, every object hashed and checked; the turn is not judged on objects that do not hash to their ids",
+                "fetch {}, {} and {} from the case repository, every object hashed and checked; the turn is not judged on objects that do not hash to their ids",
+                short(filed),
                 short(baseline),
                 short(revision)
             )
         })?;
-        crate::git::run(&repo, &["checkout", "--quiet", "--detach", baseline])?;
+        crate::git::run(&repo, &["checkout", "--quiet", "--detach", filed])?;
         for (branch, at) in [("turn-baseline", baseline), ("turn-checked", revision)] {
             crate::git::run(&repo, &["update-ref", &format!("refs/heads/{branch}"), at])?;
         }
@@ -357,12 +384,12 @@ impl Scripts {
                 "the finding {finding} is no story of the store"
             )));
         };
-        let held = crate::loop_scorecard::verified_file_within(tree, baseline, &path, deadline)?;
+        let held = crate::loop_scorecard::verified_file_within(tree, filed, &path, deadline)?;
         let checked_out = std::fs::read(repo.join(&path)).ok();
         if held.is_none() || checked_out != held {
             return Ok(Err(format!(
-                "the checkout of the baseline {} does not hold {path} as the baseline does",
-                short(baseline)
+                "the checkout of the finding's revision {} does not hold {path} as that commit does",
+                short(filed)
             )));
         }
         Ok(Ok(repo))
@@ -653,7 +680,7 @@ fn check_finding(
         Ok(scripts) => scripts,
         Err(why) => return Ok(nothing(format!("{action}: {why}; nothing recorded"))),
     };
-    let repo = match scripts.checkout(tree, &turn.baseline, revision, &turn.finding, deadline)? {
+    let repo = match scripts.checkout(tree, &turn, revision, deadline)? {
         Ok(repo) => repo,
         Err(why) => return Ok(nothing(format!("{action}: {why}; nothing recorded"))),
     };
@@ -849,20 +876,7 @@ impl ScorecardCompare {
 
     /// The state directory: the one given, else the one the promotion store lies in.
     pub fn state(&self) -> Result<PathBuf> {
-        if let Some(state) = &self.state {
-            return Ok(state.clone());
-        }
-        let store = crate::promotion::store()?;
-        store
-            .ancestors()
-            .nth(Path::new(crate::promotion::STORE).components().count())
-            .map(Path::to_path_buf)
-            .ok_or_else(|| {
-                anyhow!(
-                    "the promotion store {} has no state directory",
-                    store.display()
-                )
-            })
+        state_dir(self.state.as_deref())
     }
 
     /// Where the saved scorecard of `revision` is read.
@@ -983,6 +997,25 @@ impl ScorecardCompare {
     }
 }
 
+/// The state directory: `given`, else the one the promotion store lies in (`$XDG_STATE_HOME`,
+/// `~/.local/state` without it).
+fn state_dir(given: Option<&Path>) -> Result<PathBuf> {
+    if let Some(state) = given {
+        return Ok(state.to_path_buf());
+    }
+    let store = crate::promotion::store()?;
+    store
+        .ancestors()
+        .nth(Path::new(crate::promotion::STORE).components().count())
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            anyhow!(
+                "the promotion store {} has no state directory",
+                store.display()
+            )
+        })
+}
+
 /// The revision of `artifact` in the case at `dir`, as its `case.yaml` holds it.
 fn case_revision(dir: &Path, artifact: &str) -> Result<Option<String>> {
     let path = dir.join("case.yaml");
@@ -1052,6 +1085,597 @@ impl Validator for ScorecardCompare {
 
     fn subject(&self) -> &str {
         "candidate"
+    }
+
+    fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        self.observe_waiting(tree, revision, seq)
+            .map(|(observation, _)| observation)
+    }
+
+    fn observe_waiting(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+    ) -> Result<(Observation, bool)> {
+        self.observe_by(tree, revision, seq)
+    }
+
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        let observed = self.observe_by(tree, revision, seq);
+        let waiting = matches!(&observed, Ok((_, true)));
+        let observed = held_to(deadline, Self::ACTION, observed.map(|(o, _)| o))?;
+        Ok((observed, waiting))
+    }
+}
+
+/// Where a turn reads the mainline, the branch [`crate::promotion::MAINLINE`] (`main`) a merged
+/// candidate is in: its tip as the forge reports it ([`Forge::target_tip`]), or, with no forge,
+/// as the case's own repository holds it. Under `--forge none` the operator's local `main` is
+/// trusted, as everything else under no forge is: whoever moves it decides what is merged.
+#[derive(Clone)]
+pub enum Mainline {
+    /// The forge's `main`, read through [`Forge::target_tip`] when the turn reads it.
+    Forge(Rc<dyn Forge>),
+    /// The case repository's `refs/heads/main`.
+    Local,
+}
+
+impl std::fmt::Debug for Mainline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Mainline({})", self.forge())
+    }
+}
+
+impl Mainline {
+    /// The forge's name, or `none` for the local `main`.
+    #[must_use]
+    pub fn forge(&self) -> String {
+        match self {
+            Self::Forge(forge) => forge.name().to_owned(),
+            Self::Local => "none".to_owned(),
+        }
+    }
+
+    /// The commit `main` is at now, an object id `tree`'s repository holds.
+    pub fn tip(&self, tree: &Path) -> Result<String> {
+        let main = crate::promotion::MAINLINE;
+        let tip = match self {
+            Self::Forge(forge) => forge.target_tip(tree, main).with_context(|| {
+                format!(
+                    "read the tip of {main}, the mainline, through the forge {}",
+                    forge.name()
+                )
+            })?,
+            Self::Local => crate::git::run(
+                tree,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "--end-of-options",
+                    &format!("refs/heads/{main}^{{commit}}"),
+                ],
+            )
+            .with_context(|| {
+                format!(
+                    "read {main}, the mainline with no forge, in {}",
+                    tree.display()
+                )
+            })?,
+        };
+        if !crate::forge::is_object_id(&tip) {
+            bail!(
+                "{main}, the mainline (forge {}), is at `{}`, which is no object id",
+                self.forge(),
+                tip.escape_debug()
+            );
+        }
+        Ok(tip)
+    }
+
+    /// Whether the mainline at `tip` holds `revision` (it is `tip` or an ancestor of it), read
+    /// from a copy of both made through git's transport, every object hashed as it arrives; the
+    /// inner error when they do not arrive as their ids.
+    pub fn holds(
+        tree: &Path,
+        tip: &str,
+        revision: &str,
+    ) -> Result<std::result::Result<bool, String>> {
+        let mirror = match crate::git::Mirror::of(tree, &[tip, revision])? {
+            Ok(mirror) => mirror,
+            Err(why) => return Ok(Err(why)),
+        };
+        Ok(Ok(mirror
+            .output(&[
+                "merge-base",
+                "--is-ancestor",
+                "--end-of-options",
+                revision,
+                tip,
+            ])?
+            .status
+            .success()))
+    }
+}
+
+/// The judge surfaces the candidate's change touches, in the order they are found: every path
+/// that [`crate::validator::JUDGE_ALLOW`] at `baseline` does not admit, that is one of
+/// [`crate::validator::OWNER_ONLY`], or whose new mode is no regular file's, changed from
+/// `baseline` to `candidate` (the trees' difference, which promoting the candidate installs, so
+/// a candidate branched before a judge change that would roll it back is judge) or from any point
+/// where `candidate` meets `baseline` (`git merge-base --all`) to `candidate` (the candidate's
+/// own change, which a baseline holding the same change would hide). Read from a copy of both
+/// made through git's transport, every object hashed as it arrives. An allow-list that does not
+/// read admits nothing; a candidate with no history in common with the baseline, or commits that
+/// do not arrive as their ids, are an error.
+pub fn judge_surfaces(tree: &Path, baseline: &str, candidate: &str) -> Result<Vec<String>> {
+    let mirror = match crate::git::Mirror::of(tree, &[baseline, candidate])? {
+        Ok(mirror) => mirror,
+        Err(why) => bail!(
+            "the baseline {} and the candidate {} do not arrive from this repository as their ids, every object hashed again ({why})",
+            short(baseline),
+            short(candidate)
+        ),
+    };
+    let globs = crate::validator::allow_list_at(&mirror, baseline)?.unwrap_or_default();
+    let meets: Vec<String> = mirror
+        .run(&[
+            "merge-base",
+            "--all",
+            "--end-of-options",
+            baseline,
+            candidate,
+        ])
+        .unwrap_or_default()
+        .lines()
+        .filter(|meet| crate::forge::is_object_id(meet))
+        .map(str::to_owned)
+        .collect();
+    if meets.is_empty() {
+        bail!(
+            "the candidate {} has no history in common with the baseline {}, so its change is not known",
+            short(candidate),
+            short(baseline)
+        );
+    }
+    let mut surfaces: Vec<String> = Vec::new();
+    for from in std::iter::once(baseline).chain(meets.iter().map(String::as_str)) {
+        let diff = mirror.bytes(&[
+            "diff-tree",
+            "-r",
+            "-z",
+            "--no-renames",
+            "--raw",
+            from,
+            candidate,
+            "--",
+        ])?;
+        for (mode, path) in crate::validator::raw_changes(&diff)? {
+            let judge = !crate::validator::NAMED_BY_PATH.contains(&mode)
+                || crate::validator::OWNER_ONLY.contains(&path)
+                || !globs.iter().any(|glob| crate::run::glob_admits(glob, path));
+            if judge && !surfaces.iter().any(|known| known == path) {
+                surfaces.push(path.to_owned());
+            }
+        }
+    }
+    Ok(surfaces)
+}
+
+/// Why the case at `dir`'s grant of [`crate::validator::JUDGE_SURFACE_CAPABILITY`] does not
+/// authorise merging the candidate `revision`, a judge-surface change, by story:judge-guard's
+/// rule ([`crate::validator::approver_refusal`]): the owner's grant does, an agent role's only
+/// under an unrevoked delegation in [`crate::validator::DELEGATIONS`] at the mainline's `tip`,
+/// read from a copy made through git's transport, and never for a change to a file of
+/// [`crate::validator::OWNER_ONLY`]; or none when it does.
+fn judge_surface_refusal(
+    dir: &Path,
+    tree: &Path,
+    tip: &str,
+    revision: &str,
+) -> Result<Option<String>> {
+    let capability = crate::validator::JUDGE_SURFACE_CAPABILITY;
+    let authority = crate::case::Authority::read(dir)?.unwrap_or_default();
+    let approver = authority
+        .decision(capability)
+        .map_or("", |decision| decision.approver.as_str());
+    let Some(baseline) = case_revision(dir, "baseline")? else {
+        return Ok(Some(
+            "the case names no baseline revision to judge the candidate's change against"
+                .to_owned(),
+        ));
+    };
+    let surfaces = judge_surfaces(tree, &baseline, revision)?;
+    let owner_only: Vec<&str> = surfaces
+        .iter()
+        .map(String::as_str)
+        .filter(|path| crate::validator::OWNER_ONLY.contains(path))
+        .collect();
+    let mirror = match crate::git::Mirror::of(tree, &[tip])? {
+        Ok(mirror) => mirror,
+        Err(why) => {
+            return Ok(Some(format!(
+                "the mainline's tip {} does not arrive from this repository as its id ({why})",
+                short(tip)
+            )));
+        }
+    };
+    crate::validator::approver_refusal(
+        &mirror,
+        tip,
+        crate::promotion::MAINLINE,
+        approver,
+        &owner_only,
+    )
+}
+
+/// `candidate.merge` and `candidate.merge_judge_surface`, one type for both: observes, never
+/// merges. Writes one `merge_observation` about `candidate`, `merged`, when the case holds the
+/// grant its protocol requires for the action at the candidate revision
+/// ([`crate::case::holds_grant`]) and the mainline's tip ([`Mainline::tip`]) is the candidate or
+/// descends from it; the mainline it read (the forge, `none` for the local `main`) and the tip
+/// are retained beside the record as `merge-observation-<seq>.txt`. While the mainline does not
+/// hold the candidate it records nothing and waits, naming the tip; without the grant it records
+/// nothing. `candidate.merge_judge_surface` holds its grant to story:judge-guard's rule besides
+/// ([`judge_surface_refusal`]): the owner's, or an agent role's under an unrevoked delegation on
+/// record at the mainline's tip; any other grant records nothing. The merge itself happens in
+/// the candidate's own delivery case, under the judge guard, or by the owner.
+#[derive(Clone)]
+pub struct CandidateMerged {
+    action: &'static str,
+    name: &'static str,
+    mainline: Mainline,
+}
+
+impl std::fmt::Debug for CandidateMerged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CandidateMerged")
+            .field("action", &self.action)
+            .field("mainline", &self.mainline)
+            .finish()
+    }
+}
+
+impl CandidateMerged {
+    /// The action of a candidate that touches no judge surface.
+    pub const ACTION: &str = "candidate.merge";
+    /// The action of a candidate that touches a judge surface.
+    pub const JUDGE_SURFACE_ACTION: &str = "candidate.merge_judge_surface";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "merge_observation";
+    /// The producer of `candidate.merge`'s records.
+    pub const NAME: &str = "takt.candidate-merge";
+    /// The producer of `candidate.merge_judge_surface`'s records.
+    pub const JUDGE_SURFACE_NAME: &str = "takt.candidate-merge-judge-surface";
+
+    /// `candidate.merge`, reading `mainline`.
+    #[must_use]
+    pub fn new(mainline: Mainline) -> Self {
+        Self {
+            action: Self::ACTION,
+            name: Self::NAME,
+            mainline,
+        }
+    }
+
+    /// `candidate.merge_judge_surface`, reading `mainline`.
+    #[must_use]
+    pub fn judge_surface(mainline: Mainline) -> Self {
+        Self {
+            action: Self::JUDGE_SURFACE_ACTION,
+            name: Self::JUDGE_SURFACE_NAME,
+            mainline,
+        }
+    }
+
+    fn observe_by(&self, tree: &Path, revision: &str, seq: usize) -> Result<(Observation, bool)> {
+        let dir = crate::case::current(tree)?;
+        if !crate::case::holds_grant(&dir, self.action)? {
+            return Ok((
+                nothing(format!(
+                    "{} is not granted at the candidate {}; nothing recorded",
+                    self.action,
+                    short(revision)
+                )),
+                false,
+            ));
+        }
+        let main = crate::promotion::MAINLINE;
+        let forge = self.mainline.forge();
+        let tip = self.mainline.tip(tree)?;
+        if self.action == Self::JUDGE_SURFACE_ACTION
+            && let Some(why) = judge_surface_refusal(&dir, tree, &tip, revision)?
+        {
+            return Ok((
+                nothing(format!(
+                    "{} at {} is granted, but {why}; nothing recorded",
+                    self.action,
+                    short(revision)
+                )),
+                false,
+            ));
+        }
+        let holds = match Mainline::holds(tree, &tip, revision)? {
+            Ok(holds) => holds,
+            Err(why) => {
+                return Ok((
+                    nothing(format!(
+                        "{main} at {} and the candidate {} do not arrive from this repository as their ids, every object hashed again ({why}); nothing recorded",
+                        short(&tip),
+                        short(revision)
+                    )),
+                    false,
+                ));
+            }
+        };
+        if !holds {
+            return Ok((
+                nothing(format!(
+                    "{main} (forge: {forge}) is at {}, which does not hold the candidate {}; waiting for its merge",
+                    short(&tip),
+                    short(revision)
+                )),
+                true,
+            ));
+        }
+        let artifact = format!("merge-observation-{seq}.txt");
+        Ok((
+            Observation {
+                summary: format!(
+                    "{main} (forge: {forge}) at {} holds the candidate {}: merged; retained as {artifact}",
+                    short(&tip),
+                    short(revision)
+                ),
+                records: vec![Record::new(
+                    format!("merge-observation-{seq}"),
+                    Self::KIND,
+                    Some("merged".to_owned()),
+                    "candidate",
+                    revision,
+                    self.name,
+                )],
+                artifact: Some(Artifact {
+                    name: artifact,
+                    bytes: format!(
+                        "forge: {forge}\nmainline: {main}\ntip: {tip}\ncandidate: {revision}\naction: {}\n",
+                        self.action
+                    )
+                    .into_bytes(),
+                }),
+            },
+            false,
+        ))
+    }
+}
+
+impl Validator for CandidateMerged {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn action(&self) -> &str {
+        self.action
+    }
+
+    fn kind(&self) -> &str {
+        Self::KIND
+    }
+
+    fn subject(&self) -> &str {
+        "candidate"
+    }
+
+    fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        self.observe_waiting(tree, revision, seq)
+            .map(|(observation, _)| observation)
+    }
+
+    fn observe_waiting(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+    ) -> Result<(Observation, bool)> {
+        self.observe_by(tree, revision, seq)
+    }
+
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        let observed = self.observe_by(tree, revision, seq);
+        let waiting = matches!(&observed, Ok((_, true)));
+        let observed = held_to(deadline, self.action, observed.map(|(o, _)| o))?;
+        Ok((observed, waiting))
+    }
+}
+
+/// `binary.promote`: observes, never promotes. Writes one `promotion_record` about `promotion`
+/// (the candidate's revision, as the turn opens it), `promoted`, when the case holds the
+/// protocol's grant for the action at that revision and the promotion store's latest record that
+/// is no refusal ([`crate::promotion::baseline`]) is a promotion (no baseline, no rebaseline)
+/// of that revision whose `binary_sha256` is the sha256 of the binary installed now at
+/// `<install root>/bin/takt`: `takt promote` installed the binary built from it. While the
+/// latest record is another, or names another binary than the one installed, it records nothing
+/// and waits, naming why; without the grant it records nothing.
+#[derive(Debug, Clone)]
+pub struct BinaryPromote {
+    /// The state directory; none, and it is the one the promotion store lies in, read when the
+    /// validator observes, so no other case needs one.
+    pub state: Option<PathBuf>,
+    /// The install root `takt promote` installs into; none, and it is the one the turn recorded
+    /// when it opened ([`crate::case::install_root_of`]), else
+    /// [`crate::promotion::install_root`], read when the validator observes.
+    pub install_root: Option<PathBuf>,
+}
+
+impl BinaryPromote {
+    /// The action it performs.
+    pub const ACTION: &str = "binary.promote";
+    /// The evidence kind it writes.
+    pub const KIND: &str = "promotion_record";
+    /// Its name, the producer of its records.
+    pub const NAME: &str = "takt.binary-promote";
+
+    /// Reading the state directory `state`.
+    #[must_use]
+    pub fn in_state(state: &Path) -> Self {
+        Self {
+            state: Some(state.to_path_buf()),
+            install_root: None,
+        }
+    }
+
+    /// Reading the installed binary under the install root `root`.
+    #[must_use]
+    pub fn with_install_root(mut self, root: &Path) -> Self {
+        self.install_root = Some(root.to_path_buf());
+        self
+    }
+
+    /// Reading the state directory the promotion store lies in and the install root
+    /// `takt promote` installs into, when it observes.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            state: None,
+            install_root: None,
+        }
+    }
+
+    /// Why the store's latest record, `latest`, does not show `revision` promoted and
+    /// installed now, or none when it does.
+    fn unpromoted(
+        latest: Option<&crate::promotion::Promotion>,
+        revision: &str,
+        installed: &Path,
+    ) -> Result<Option<String>> {
+        let Some(record) = latest.filter(|record| record.revision == revision) else {
+            return Ok(Some(format!(
+                "its latest record installs {}, not {}",
+                latest.map_or("nothing", |record| short(&record.revision)),
+                short(revision)
+            )));
+        };
+        if record.kind != Kind::Promotion {
+            return Ok(Some(format!(
+                "its latest record of {} is a {:?} record, which installs no binary",
+                short(revision),
+                record.kind
+            )));
+        }
+        let Some(recorded) = record.binary_sha256.as_deref() else {
+            return Ok(Some(format!(
+                "its promotion of {} names no binary's sha256",
+                short(revision)
+            )));
+        };
+        let digest = match std::fs::read(installed) {
+            Ok(bytes) => {
+                use sha2::{Digest as _, Sha256};
+                format!("{:x}", Sha256::digest(&bytes))
+            }
+            Err(error) => {
+                return Ok(Some(format!(
+                    "no binary is installed at {} ({error})",
+                    installed.display()
+                )));
+            }
+        };
+        if digest != recorded {
+            return Ok(Some(format!(
+                "{} hashes to {digest}, not to {recorded}, the binary its promotion of {} installed",
+                installed.display(),
+                short(revision)
+            )));
+        }
+        Ok(None)
+    }
+
+    fn observe_by(&self, tree: &Path, revision: &str, seq: usize) -> Result<(Observation, bool)> {
+        let dir = crate::case::current(tree)?;
+        if !crate::case::holds_grant(&dir, Self::ACTION)? {
+            return Ok((
+                nothing(format!(
+                    "{} is not granted at {}; nothing recorded",
+                    Self::ACTION,
+                    short(revision)
+                )),
+                false,
+            ));
+        }
+        let store = state_dir(self.state.as_deref())?.join(crate::promotion::STORE);
+        let latest = crate::promotion::baseline(&store, &crate::now())
+            .with_context(|| format!("read the promotion store {}", store.display()))?;
+        // The install root given, else the one the turn recorded when it opened, else the one
+        // `takt promote` takes from the environment.
+        let root = match &self.install_root {
+            Some(root) => root.clone(),
+            None => match crate::case::install_root_of(&dir)? {
+                Some(root) => root,
+                None => crate::promotion::install_root()?,
+            },
+        };
+        let installed = root.join("bin/takt");
+        match Self::unpromoted(latest.as_ref(), revision, &installed)? {
+            None => Ok((
+                Observation {
+                    summary: format!(
+                        "the promotion store {}'s latest record installs {}, the binary installed now at {}: promoted",
+                        store.display(),
+                        short(revision),
+                        installed.display()
+                    ),
+                    records: vec![Record::new(
+                        format!("promotion-record-{seq}"),
+                        Self::KIND,
+                        Some("promoted".to_owned()),
+                        "promotion",
+                        revision,
+                        Self::NAME,
+                    )],
+                    artifact: None,
+                },
+                false,
+            )),
+            Some(why) => Ok((
+                nothing(format!(
+                    "the promotion store {}, the installed binary read at {}: {why}; promote {} with `takt promote` into that install root; waiting",
+                    store.display(),
+                    installed.display(),
+                    short(revision)
+                )),
+                true,
+            )),
+        }
+    }
+}
+
+impl Validator for BinaryPromote {
+    fn name(&self) -> &str {
+        Self::NAME
+    }
+
+    fn action(&self) -> &str {
+        Self::ACTION
+    }
+
+    fn kind(&self) -> &str {
+        Self::KIND
+    }
+
+    fn subject(&self) -> &str {
+        "promotion"
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {

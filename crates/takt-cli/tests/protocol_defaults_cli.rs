@@ -722,6 +722,141 @@ fn run_help_describes_the_forge_default_as_the_code_chooses_it() {
     );
 }
 
+/// A protocol whose one approval-required action is not `repository.merge`: `work.more` is the
+/// harness's, `ship.blocked` is blocked for good by the case's input, and `ship` needs `ship.it`.
+const GATED_ELSEWHERE: &str = "format: protocol/1
+
+protocol:
+  id: gated.elsewhere
+  revision: 1
+  description: >-
+    A change shipped under a grant of its own.
+
+case:
+  inputs:
+    lane:
+      description: which way the change ships
+      values: [plain, special]
+
+artifacts:
+  implementation:
+    description: a revision of the code
+
+evidence_kinds:
+  shipped:
+    description: the change shipped
+  worked:
+    description: more work was done
+
+claims:
+  worked.on:
+    description: work was done on the implementation
+    true_when:
+      evidence:
+        kind: worked
+        subject: implementation
+  ship.done:
+    description: the change shipped
+    true_when:
+      evidence:
+        kind: shipped
+        result: done
+        subject: implementation
+
+actions:
+  work.more:
+    description: do more work
+    effect: write
+    may_produce:
+      - evidence: worked
+  ship.blocked:
+    description: ship the special way
+    effect: write
+    precondition:
+      all:
+        - claim: worked.on
+          is: unknown
+        - input: lane
+          in: [special]
+    requires:
+      - capability: ship.special
+    may_produce:
+      - evidence: shipped
+  ship:
+    description: ship the change
+    effect: write
+    precondition:
+      claim: worked.on
+      is: unknown
+    requires:
+      - capability: ship.it
+    may_produce:
+      - evidence: shipped
+
+outcomes:
+  accepted:
+    description: shipped
+    requires:
+      claim: ship.done
+";
+
+/// With no `--gate`, the gate is the protocol's first action that requires a capability and that
+/// the case's inputs do not block for good, never `repository.merge` by name: offered `work.more`
+/// while `ship` waits for its grant, the no-op harness requests `ship`, the gate, and the run
+/// stops `ApprovalRequired`.
+#[test]
+fn without_a_gate_the_first_capability_gated_action_is_the_gate() {
+    let (_outer, repo) = repository(None, "gate-default");
+    fs::write(repo.join("gated.yaml"), GATED_ELSEWHERE).expect("the protocol");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "protocol"]);
+    let path = repo.to_str().expect("utf-8");
+    let protocol = repo.join("gated.yaml");
+    let (code, out, err) = takt(&[
+        "run",
+        "--repo",
+        path,
+        "--intent",
+        "ship the change",
+        "--case-id",
+        "gated",
+        "--protocol",
+        protocol.to_str().expect("utf-8"),
+        "--input",
+        "lane=plain",
+        "--harness",
+        "none",
+        "--forge",
+        "none",
+        "--test-cmd",
+        "true",
+        "--iterations",
+        "2",
+    ]);
+    assert_eq!(code, 4, "stdout {out} stderr {err}");
+    assert!(out.contains("step 1: ship (none)"), "{out}");
+    assert!(out.contains("stopped: ApprovalRequired"), "{out}");
+}
+
+/// `takt protocols` lists the embedded `self.improvement/1`, and `--protocol self.improvement/1`
+/// names it without a file: an improvement turn needs no protocol file in the repository.
+#[test]
+fn protocols_lists_the_embedded_self_improvement() {
+    let (code, out, err) = takt(&["protocols"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.lines().any(|line| line == "self.improvement/1"),
+        "{out}"
+    );
+    let embedded = takt::LoadedProtocol::builtin("self.improvement/1").expect("embedded");
+    let file = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../protocols/self-improvement/1.yaml"
+    ))
+    .expect("the protocol file");
+    assert_eq!(embedded.yaml, file);
+}
+
 /// `takt protocols` lists the embedded `story.delivery/1` beside Canon's built-ins.
 #[test]
 fn protocols_lists_the_embedded_story_delivery() {

@@ -8,8 +8,9 @@
 //! turn's carry the names of the turn validators that write them
 //! (`crates/takt/src/improvement.rs`, driven in `tests/self_improvement.rs` and by `takt run` in
 //! `crates/takt-cli/tests/self_improvement_cli.rs`), and the turn opens through the kernel's
-//! opening method, which declares those validators independent; the merge and promotion
-//! validators come with story:judge-guard, and their records here are the delivering run's. The
+//! opening method, which declares those validators independent; the merge and promotion records
+//! here carry the delivering run's name, which no independence is declared for, since neither
+//! claim asks for one. The
 //! `loop.improvement/1` actions have theirs (`crates/takt/src/loop_scorecard.rs`, driven in
 //! `tests/loop_scorecard.rs`).
 
@@ -107,6 +108,10 @@ fn open(tree: &Path, protocol: &str, id: &str, inputs: &[(&str, &str)]) -> CaseD
             finding: "story:a-finding".to_owned(),
             candidate: "candidate-1".to_owned(),
             baseline: "baseline-1".to_owned(),
+            surface: "non_judge".to_owned(),
+            title: "A finding".to_owned(),
+            judge_sha256: "0".repeat(64),
+            install_root: None,
         })
         .expect("the turn opens");
         return case;
@@ -218,9 +223,11 @@ fn a_verified_fix_without_regression_is_accepted_once_promoted() {
         "{}",
         d.json
     );
+    // The candidate is delivered outside the turn and given at open (S2): no action of the
+    // protocol delivers it, so none is offered once the finding reproduces.
     assert_eq!(
         status(&d.actions, "candidate.deliver"),
-        "admissible",
+        "absent",
         "{}",
         d.json
     );

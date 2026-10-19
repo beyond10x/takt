@@ -972,6 +972,101 @@ fn a_refused_judgement_step_is_in_the_record_after_the_case_is_put_back() {
     assert!(lines[0].get("story").is_none());
 }
 
+/// A protocol whose one judgement action writes, about an artifact that is no `implementation`.
+const NO_IMPLEMENTATION: &str = "format: protocol/1
+
+protocol:
+  id: no.implementation
+  revision: 1
+  description: >-
+    A report written by a judgement step; the case declares no implementation artifact.
+
+artifacts:
+  report:
+    description: a report
+
+evidence_kinds:
+  report_result:
+    description: whether the report reads
+
+claims:
+  report.reads:
+    description: the report reads
+    true_when:
+      evidence:
+        kind: report_result
+        result: reads
+        subject: report
+
+actions:
+  report.write:
+    description: write the report
+    effect: write
+
+outcomes:
+  accepted:
+    description: the report reads
+    requires:
+      claim: report.reads
+";
+
+/// A harness that writes `report.txt` and reports `report.write` with 4321 tokens.
+struct Reporter;
+
+impl Harness for Reporter {
+    fn name(&self) -> &str {
+        "reporter"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
+        fs::write(context.tree.join("report.txt"), "the report\n")?;
+        Ok(StepReport {
+            action: "report.write".to_owned(),
+            summary: "wrote the report".to_owned(),
+            tokens: Some(4321),
+        })
+    }
+}
+
+/// A step whose change is committed in a case that declares no `implementation` artifact ends
+/// the run with an error, and the step's line, with the tokens the harness spent, is in
+/// `events.jsonl` all the same: the tokens a step spent are recorded whatever ends it.
+#[test]
+fn a_step_that_ends_the_run_with_an_error_keeps_its_tokens() {
+    let repo = repository("no-implementation");
+    let protocol = repo.join("no-implementation.yaml");
+    fs::write(&protocol, NO_IMPLEMENTATION).expect("the protocol");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "protocol"]);
+    let validators: Vec<Box<dyn Validator>> = Vec::new();
+    let mut run = Run::open(
+        &repo,
+        RunOptions {
+            protocol: protocol.to_str().expect("utf-8").to_owned(),
+            intent: "write the report".to_owned(),
+            inputs: Vec::new(),
+            iterations: Some(2),
+            hours: None,
+            tokens: None,
+            case_id: Some("no-implementation".to_owned()),
+            gate: None,
+        },
+        &Reporter,
+        &validators,
+    )
+    .expect("the case opens");
+    let mut out = Vec::new();
+    let ended = run.run(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(ended.is_err(), "{ended:?}\n{text}");
+    let lines = events(&run.case.dir);
+    let steps = of(&lines, "step");
+    assert_eq!(steps.len(), 1, "{lines:?}\n{text}");
+    assert_eq!(steps[0]["by"], "harness");
+    assert_eq!(steps[0]["action"], "report.write");
+    assert_eq!(steps[0]["tokens"], 4321);
+}
+
 /// A run whose checks stay pending records each wait and stops `Waiting`.
 #[test]
 fn each_wait_on_the_forge_is_a_line_and_the_waiting_stop_is_the_last() {

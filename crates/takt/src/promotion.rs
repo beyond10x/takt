@@ -2159,16 +2159,56 @@ fn stage(
     })
 }
 
+/// Where `takt promote` keeps a binary it replaced, by its sha256, beside the store `store`:
+/// `<state>/takt/judges/<sha256>`. An improvement turn that judged the promotion records its
+/// judge's sha256 when it opens and finishes only under that binary
+/// ([`crate::case::turn_judge_refusal`]), which the install has just replaced.
+#[must_use]
+pub fn kept_binary(store: &Path, sha256: &str) -> PathBuf {
+    store.parent().unwrap_or(store).join("judges").join(sha256)
+}
+
+/// Copies the binary `before` to [`kept_binary`] under `store`, executable, written beside its
+/// place and renamed into it; a regular file already kept there by that digest is kept as it
+/// is, and anything else there (a link above all) is replaced. Its path.
+fn keep_replaced(before: &Path, store: &Path) -> Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let digest = sha256_of(before)?;
+    let kept = kept_binary(store, &digest);
+    // Kept already only as a regular file of its own, never through a link: a link planted there
+    // could be pointed elsewhere after this check. Anything else is replaced by the rename below.
+    if std::fs::symlink_metadata(&kept).is_ok_and(|meta| meta.file_type().is_file())
+        && sha256_of(&kept).is_ok_and(|at| at == digest)
+    {
+        return Ok(kept);
+    }
+    let dir = kept
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no directory", kept.display()))?;
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    let temporary = dir.join(format!(".{digest}.{}", std::process::id()));
+    std::fs::copy(before, &temporary)
+        .with_context(|| format!("copy {} to {}", before.display(), temporary.display()))?;
+    std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o755))
+        .with_context(|| format!("make {} executable", temporary.display()))?;
+    std::fs::rename(&temporary, &kept)
+        .with_context(|| format!("move {} to {}", temporary.display(), kept.display()))?;
+    Ok(kept)
+}
+
 /// Moves the staged binary into `installed` in one rename, keeping the binary before it as a
 /// hard link beside it until the one in place, run confined, names `revision` and hashes to the
 /// staged digest; on any failure after the move the binary before it is back in place, or none,
-/// as before.
+/// as before. Once the binary is in place, the one it replaced is kept under the store `store`
+/// by its digest ([`kept_binary`]): the answer is its path, or why it was not kept (which
+/// undoes nothing), or none when nothing was installed before.
 fn install(
     confinement: &Confinement,
     staged: &Staged,
     installed: &Path,
     revision: &str,
-) -> Result<()> {
+    store: &Path,
+) -> Result<Option<std::result::Result<PathBuf, String>>> {
     let bin = installed
         .parent()
         .ok_or_else(|| anyhow!("{} has no directory", installed.display()))?;
@@ -2214,10 +2254,12 @@ fn install(
     });
     match checked {
         Ok(()) => {
-            if had {
-                let _ = std::fs::remove_file(&before);
+            if !had {
+                return Ok(None);
             }
-            Ok(())
+            let kept = keep_replaced(&before, store).map_err(|error| format!("{error:#}"));
+            let _ = std::fs::remove_file(&before);
+            Ok(Some(kept))
         }
         Err(error) => {
             let restored = if had {
@@ -2507,15 +2549,18 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     record.binary = Some(installed.clone());
     record.binary_sha256 = Some(staged.digest.clone());
     let path = write(store, &record, &text)?;
-    if let Err(error) = install(confinement, &staged, &installed, &revision) {
-        return Err(match unwrite(store, &record, existing.last()) {
-            Ok(()) => with_note(error, "nothing recorded"),
-            Err(removal) => with_note(
-                error,
-                &format!("and removing the record failed: {removal:#}"),
-            ),
-        });
-    }
+    let kept = match install(confinement, &staged, &installed, &revision, store) {
+        Ok(kept) => kept,
+        Err(error) => {
+            return Err(match unwrite(store, &record, existing.last()) {
+                Ok(()) => with_note(error, "nothing recorded"),
+                Err(removal) => with_note(
+                    error,
+                    &format!("and removing the record failed: {removal:#}"),
+                ),
+            });
+        }
+    };
     writeln!(
         out,
         "promoted: {} at {revision}, sha256 {}; recorded: {}",
@@ -2523,6 +2568,15 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         staged.digest,
         path.display()
     )?;
+    match kept {
+        Some(Ok(kept)) => writeln!(
+            out,
+            "kept: the binary it replaced at {}, for a turn that judged this promotion to finish under",
+            kept.display()
+        )?,
+        Some(Err(why)) => writeln!(out, "not kept: the binary it replaced ({why})")?,
+        None => {}
+    }
     Ok(Outcome::Promoted(record))
 }
 

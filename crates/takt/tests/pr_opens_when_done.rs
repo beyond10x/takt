@@ -530,11 +530,14 @@ fn the_built_in_list_is_every_built_in_validator_with_its_own_action_and_kind() 
         }
     }
     implemented.sort();
+    // A type that serves more than one action has one entry per action, each checked below
+    // against an instance made for that action.
     let mut listed: Vec<String> = takt::validator::BUILT_IN
         .iter()
         .map(|built_in| built_in.validator.to_owned())
         .collect();
     listed.sort();
+    listed.dedup();
     assert_eq!(implemented, listed);
 
     let forge: Rc<dyn Forge> = Rc::new(Memory::default());
@@ -581,12 +584,32 @@ fn the_built_in_list_is_every_built_in_validator_with_its_own_action_and_kind() 
                 "/srv/state",
             ))),
         ),
+        (
+            "CandidateMerged",
+            Box::new(takt::improvement::CandidateMerged::new(
+                takt::improvement::Mainline::Local,
+            )),
+        ),
+        (
+            "CandidateMerged",
+            Box::new(takt::improvement::CandidateMerged::judge_surface(
+                takt::improvement::Mainline::Local,
+            )),
+        ),
+        (
+            "BinaryPromote",
+            Box::new(takt::improvement::BinaryPromote::in_state(Path::new(
+                "/srv/state",
+            ))),
+        ),
     ];
+    let mut matched = std::collections::BTreeSet::new();
     for (name, instance) in &instances {
+        matched.insert((*name, instance.action().to_owned()));
         let built_in = takt::validator::BUILT_IN
             .iter()
-            .find(|built_in| built_in.validator == *name)
-            .unwrap_or_else(|| panic!("{name} is not listed"));
+            .find(|built_in| built_in.validator == *name && built_in.action == instance.action())
+            .unwrap_or_else(|| panic!("{name} is not listed for {}", instance.action()));
         assert_eq!(
             (built_in.action, built_in.kind),
             (instance.action(), instance.kind()),
@@ -594,6 +617,11 @@ fn the_built_in_list_is_every_built_in_validator_with_its_own_action_and_kind() 
         );
     }
     assert_eq!(instances.len(), takt::validator::BUILT_IN.len());
+    assert_eq!(
+        matched.len(),
+        takt::validator::BUILT_IN.len(),
+        "{matched:?}"
+    );
 }
 
 /// Keeps every offer it is given and answers with an edit that changes nothing.

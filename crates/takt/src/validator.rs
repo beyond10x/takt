@@ -1755,11 +1755,11 @@ pub const OWNER_ONLY: [&str; 2] = [JUDGE_ALLOW, DELEGATIONS];
 /// surface: a regular file, plain or executable, or none (the path deleted). Any other, a
 /// symbolic link (`120000`) or a submodule's commit (`160000`) above all, is a judge surface
 /// whatever its name: what it points at is not the text its name stands for.
-const NAMED_BY_PATH: [&str; 3] = ["100644", "100755", "000000"];
+pub(crate) const NAMED_BY_PATH: [&str; 3] = ["100644", "100755", "000000"];
 
 /// Each change of `git diff-tree -r -z --raw` output `raw` as its new mode and its path; an
 /// error when a field does not read, a path that is not UTF-8 among them.
-fn raw_changes(raw: &[u8]) -> Result<Vec<(&str, &str)>> {
+pub(crate) fn raw_changes(raw: &[u8]) -> Result<Vec<(&str, &str)>> {
     let mut fields = raw
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty());
@@ -1847,7 +1847,10 @@ fn record_at<T: serde::de::DeserializeOwned>(
 /// The globs of [`JUDGE_ALLOW`] at `at`: none when the commit has no such file; the error when
 /// it does not read or holds a glob that is not relative to the tree, and the caller then admits
 /// nothing.
-fn allow_list_at(mirror: &Mirror, at: &str) -> Result<std::result::Result<Vec<String>, String>> {
+pub(crate) fn allow_list_at(
+    mirror: &Mirror,
+    at: &str,
+) -> Result<std::result::Result<Vec<String>, String>> {
     let Some(read) = record_at::<AllowList>(mirror, at, JUDGE_ALLOW)? else {
         return Ok(Ok(Vec::new()));
     };
@@ -1874,7 +1877,7 @@ fn allow_list_at(mirror: &Mirror, at: &str) -> Result<std::result::Result<Vec<St
 /// The body of a story's file in the planning store, everything below its frontmatter: the
 /// bytes after the line `---` that closes the `---` line the file opens with; `None` for a
 /// file that opens with no frontmatter or never closes it.
-fn story_body(text: &[u8]) -> Option<&[u8]> {
+pub(crate) fn story_body(text: &[u8]) -> Option<&[u8]> {
     let rest = text.strip_prefix(b"---\n")?;
     let mut offset = 0;
     for line in rest.split_inclusive(|byte| *byte == b'\n') {
@@ -2209,44 +2212,64 @@ impl PrMerged {
                 short(&tip)
             )
         };
-        let typed = crate::case::is_approver(approver);
-        if typed && approver.starts_with("human:") {
-            return Ok(None);
-        }
-        // D5: an approver that is neither the owner nor an agent role the store writes as
-        // (untyped, or takt's own actor) grants nothing here, whatever a delegation names.
-        if !(typed && approver.starts_with("agent:")) {
-            return Ok(Some(format!(
-                "{touches}; the approver `{}` is neither the owner (human:<id>) nor an agent role (agent:<role>), and grants nothing there",
-                approver.escape_debug()
-            )));
-        }
-        if !owner_only.is_empty() {
-            return Ok(Some(format!(
-                "{touches}; a change to {} merges under the owner's grant (human:<id>) alone, never under a delegation, and {approver} is not the owner",
-                owner_only.join(" or ")
-            )));
-        }
-        let delegated = match record_at::<DelegationRecord>(&mirror, &tip, DELEGATIONS)? {
-            None => Err(format!("{DELEGATIONS} is not there")),
-            Some(Err(why)) => Err(format!("{why}; it delegates nothing")),
-            Some(Ok(record)) => Ok(record
-                .delegations
-                .iter()
-                .any(|delegation| delegation.admits(approver))),
-        };
-        Ok(match delegated {
-            Ok(true) => None,
-            Ok(false) => Some(format!(
-                "{touches}; {approver} is not the owner, and {DELEGATIONS} at {base} {} records no unrevoked delegation of {JUDGE_SURFACE_CAPABILITY} to {approver}",
-                short(&tip)
-            )),
-            Err(why) => Some(format!(
-                "{touches}; {approver} is not the owner, and no delegation of {JUDGE_SURFACE_CAPABILITY} to it is on record at {base} {} ({why})",
-                short(&tip)
-            )),
-        })
+        Ok(
+            approver_refusal(&mirror, &tip, base, approver, &owner_only)?
+                .map(|why| format!("{touches}; {why}")),
+        )
     }
+}
+
+/// Why `approver`'s grant does not authorise a merge into `base` at `tip` that changes a judge
+/// surface, or none when it does: the owner's grant (`human:<id>`) does; an agent role's
+/// (`agent:<role>`) does only when no file of [`OWNER_ONLY`] is among `owner_only` (the changed
+/// ones) and [`DELEGATIONS`] at `tip`, read from `mirror`, records an unrevoked delegation of
+/// [`JUDGE_SURFACE_CAPABILITY`] to that role; any other approver grants nothing (D5). The rule
+/// of story:judge-guard, for `repository.merge` and for an improvement turn's
+/// `candidate.merge_judge_surface` alike.
+pub(crate) fn approver_refusal(
+    mirror: &Mirror,
+    tip: &str,
+    base: &str,
+    approver: &str,
+    owner_only: &[&str],
+) -> Result<Option<String>> {
+    let typed = crate::case::is_approver(approver);
+    if typed && approver.starts_with("human:") {
+        return Ok(None);
+    }
+    // D5: an approver that is neither the owner nor an agent role the store writes as
+    // (untyped, or takt's own actor) grants nothing here, whatever a delegation names.
+    if !(typed && approver.starts_with("agent:")) {
+        return Ok(Some(format!(
+            "the approver `{}` is neither the owner (human:<id>) nor an agent role (agent:<role>), and grants nothing there",
+            approver.escape_debug()
+        )));
+    }
+    if !owner_only.is_empty() {
+        return Ok(Some(format!(
+            "a change to {} merges under the owner's grant (human:<id>) alone, never under a delegation, and {approver} is not the owner",
+            owner_only.join(" or ")
+        )));
+    }
+    let delegated = match record_at::<DelegationRecord>(mirror, tip, DELEGATIONS)? {
+        None => Err(format!("{DELEGATIONS} is not there")),
+        Some(Err(why)) => Err(format!("{why}; it delegates nothing")),
+        Some(Ok(record)) => Ok(record
+            .delegations
+            .iter()
+            .any(|delegation| delegation.admits(approver))),
+    };
+    Ok(match delegated {
+        Ok(true) => None,
+        Ok(false) => Some(format!(
+            "{approver} is not the owner, and {DELEGATIONS} at {base} {} records no unrevoked delegation of {JUDGE_SURFACE_CAPABILITY} to {approver}",
+            short(tip)
+        )),
+        Err(why) => Some(format!(
+            "{approver} is not the owner, and no delegation of {JUDGE_SURFACE_CAPABILITY} to it is on record at {base} {} ({why})",
+            short(tip)
+        )),
+    })
 }
 
 impl std::fmt::Debug for PrMerged {
@@ -2598,7 +2621,7 @@ pub struct BuiltIn {
 /// observation, never a choice the step choice records (`crate::run`): a protocol in which an
 /// action no built-in validator performs may produce one with `effect: read` is refused, and so
 /// is one where an outcome or an obligation holds on choice records alone.
-pub const BUILT_IN: [BuiltIn; 13] = [
+pub const BUILT_IN: [BuiltIn; 16] = [
     BuiltIn {
         validator: "TestsRun",
         action: TestsRun::ACTION,
@@ -2663,6 +2686,22 @@ pub const BUILT_IN: [BuiltIn; 13] = [
         validator: "ScorecardCompare",
         action: crate::improvement::ScorecardCompare::ACTION,
         kind: crate::improvement::ScorecardCompare::KIND,
+    },
+    // One type, two actions: one entry each.
+    BuiltIn {
+        validator: "CandidateMerged",
+        action: crate::improvement::CandidateMerged::ACTION,
+        kind: crate::improvement::CandidateMerged::KIND,
+    },
+    BuiltIn {
+        validator: "CandidateMerged",
+        action: crate::improvement::CandidateMerged::JUDGE_SURFACE_ACTION,
+        kind: crate::improvement::CandidateMerged::KIND,
+    },
+    BuiltIn {
+        validator: "BinaryPromote",
+        action: crate::improvement::BinaryPromote::ACTION,
+        kind: crate::improvement::BinaryPromote::KIND,
     },
 ];
 

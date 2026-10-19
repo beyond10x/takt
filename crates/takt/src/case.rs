@@ -604,7 +604,8 @@ pub struct Approval {
     /// The case the capability was granted to.
     pub case: String,
     /// The story the case was opened for; none for a case opened on an intent, which has
-    /// nothing in the store to record on.
+    /// nothing in the store to record on, and for an improvement turn, whose grant is the
+    /// case's alone.
     pub story: Option<String>,
     /// The capability granted.
     pub capability: String,
@@ -838,6 +839,32 @@ fn revision_of(case_dir: &Path, artifact: &str) -> Result<Option<String>> {
         .map(str::to_owned))
 }
 
+/// Whether the case at `case_dir` holds a grant for `action`, read from its own files, so a
+/// validator observing while a run holds the case can ask: its `protocol.yaml` has the action
+/// require at least one capability, and its `authority.yaml` grants each at the case's current
+/// revision (`case.yaml`) of the artifact that capability's action is about. What
+/// [`CaseDir::grants`] answers from the case in memory.
+pub fn holds_grant(case_dir: &Path, action: &str) -> Result<bool> {
+    let (_, actions) = required_capabilities(case_dir)?;
+    let Some(capabilities) = actions.get(action) else {
+        return Ok(false);
+    };
+    let protocol = LoadedProtocol::from_file(&case_dir.join("protocol.yaml"))?;
+    let authority = Authority::read(case_dir)?.unwrap_or_default();
+    for capability in capabilities {
+        let Ok(subject) = protocol.grant_subject(capability) else {
+            return Ok(false);
+        };
+        let Some(revision) = revision_of(case_dir, &subject)? else {
+            return Ok(false);
+        };
+        if !authority.grants_at(capability, &revision) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// A grant checked and ready to be written, the case held until it is written or dropped: what
 /// `takt approve` records on the story before the grant lands, so a record the store refuses
 /// leaves nothing written and the same approval can be given again.
@@ -914,7 +941,13 @@ pub fn prepare_grant(
     // and an intent's alike. A story's grant is recorded in the store as its approver, and its
     // record rides to the base only with the approver as its actor; and the merge of a
     // judge-surface change reads the kind to decide whose grant it is.
-    let story = story_of(&dir)?;
+    // An improvement turn's `story.yaml` names the finding it verifies, a story it does not
+    // deliver: its grant is the case's alone, recorded nowhere in the planning store.
+    let story = if required_capabilities(&dir)?.0 == TURN_PROTOCOL {
+        None
+    } else {
+        story_of(&dir)?
+    };
     if !is_approver(approver) {
         bail!(
             "the approver `{}` is not an actor the planning store records as granting; say who grants {capability} as human:<name> or agent:<role>, not takt's own {}",
@@ -1990,14 +2023,45 @@ impl CaseDir {
     }
 
     /// Opens an improvement turn, before any step: `finding` at the commit the case's branch
-    /// forked from (its `base_commit`), `baseline` and `promotion` at the promoted baseline (the
-    /// installed binary's revision when the turn opens), `candidate` at the candidate given,
+    /// forked from (its `base_commit`), `baseline` at the promoted baseline (the installed
+    /// binary's revision when the turn opens), `candidate` at the candidate given, `promotion` at
+    /// the candidate too (the revision `binary.promote` observes installed),
     /// `story.yaml` naming the finding, and `independence` in `case.yaml` declaring each turn
     /// validator ([`crate::improvement::PRODUCERS`]) independent on
     /// [`crate::improvement::INDEPENDENT_ON`]: a validator is no agent run, so its record is
     /// another run's than the one that delivered the candidate. Nothing else declares
-    /// independence.
+    /// independence. The sha256 of the binary that judges the turn goes into [`JUDGE_FILE`], and
+    /// the install root given, an existing directory named canonically, into
+    /// [`INSTALL_ROOT_FILE`]; any other root is refused before anything is written.
     pub fn open_turn(&mut self, opening: &TurnOpening) -> Result<()> {
+        // The install root is checked before anything is written: an existing directory named
+        // canonically, an absolute UTF-8 path on one line, so no `..` or link recorded could
+        // later lead elsewhere.
+        let install_root = match &opening.install_root {
+            None => None,
+            Some(root) => {
+                let canonical = std::fs::canonicalize(root)
+                    .with_context(|| format!("the install root {}", root.display()))?;
+                if canonical != *root || !canonical.is_dir() {
+                    bail!(
+                        "the install root {} is no directory named canonically ({}); a turn records the directory itself",
+                        root.display(),
+                        canonical.display()
+                    );
+                }
+                Some(
+                    root.to_str()
+                        .filter(|root| root.starts_with('/') && !root.contains('\n'))
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "the install root {} is no absolute UTF-8 path on one line",
+                                root.display()
+                            )
+                        })?
+                        .to_owned(),
+                )
+            }
+        };
         let Some(base) = Branch::read(&self.dir)?.base_commit else {
             bail!(
                 "the turn {} pins no base commit, which its finding artifact is",
@@ -2008,7 +2072,7 @@ impl CaseDir {
             ("finding", base.as_str()),
             ("baseline", opening.baseline.as_str()),
             ("candidate", opening.candidate.as_str()),
-            ("promotion", opening.baseline.as_str()),
+            ("promotion", opening.candidate.as_str()),
         ] {
             let entry = self
                 .doc
@@ -2026,6 +2090,14 @@ impl CaseDir {
         }
         self.doc["independence"] = independence.into();
         self.write()?;
+        let judge = self.dir.join(JUDGE_FILE);
+        std::fs::write(&judge, format!("{}\n", opening.judge_sha256))
+            .with_context(|| format!("write {}", judge.display()))?;
+        if let Some(root) = &install_root {
+            let path = self.dir.join(INSTALL_ROOT_FILE);
+            std::fs::write(&path, format!("{root}\n"))
+                .with_context(|| format!("write {}", path.display()))?;
+        }
         self.set_story(&opening.finding)
     }
 
@@ -2159,7 +2231,8 @@ pub const TURN_CANDIDATE: &str = "candidate";
 
 /// What an improvement turn opens with, each checked by [`turn_opening`] before anything is
 /// written: the finding it verifies (`story:<key>`), the candidate revision delivered outside
-/// the case, and the baseline, the revision of the latest promotion record.
+/// the case, the baseline, the revision of the latest promotion record, the judge surface the
+/// candidate's change touches or not, and the finding's title.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnOpening {
     /// The finding, `story:<key>`.
@@ -2168,6 +2241,78 @@ pub struct TurnOpening {
     pub candidate: String,
     /// The baseline, the latest promoted revision.
     pub baseline: String,
+    /// The case input `surface`: `judge` when the candidate's change touches a judge surface
+    /// ([`crate::improvement::judge_surfaces`]), else `non_judge`.
+    pub surface: String,
+    /// The finding's title, the turn's intent when none is given: its frontmatter's `title`,
+    /// else its first `# ` heading, else the finding's id.
+    pub title: String,
+    /// The sha256 of the binary that judges the turn, the promoted one that opens it: every
+    /// later run of the turn is refused unless it is that binary ([`turn_judge_refusal`]).
+    pub judge_sha256: String,
+    /// The install root `takt promote` installs into, which `binary.promote` reads the
+    /// installed binary under, recorded at open ([`INSTALL_ROOT_FILE`]); none, and it is read
+    /// from the environment when the validator observes.
+    pub install_root: Option<PathBuf>,
+}
+
+/// The file of an improvement turn's case that holds the install root it was opened with, an
+/// absolute path, on one line.
+pub const INSTALL_ROOT_FILE: &str = "install-root";
+
+/// The install root the turn at `case_dir` was opened with ([`INSTALL_ROOT_FILE`]); none when it
+/// recorded none.
+pub fn install_root_of(case_dir: &Path) -> Result<Option<PathBuf>> {
+    let path = case_dir.join(INSTALL_ROOT_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let root = PathBuf::from(text.trim_end_matches('\n'));
+            if !root.is_absolute() {
+                bail!(
+                    "{} names {}, which is no absolute path",
+                    path.display(),
+                    root.display()
+                );
+            }
+            Ok(Some(root))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
+}
+
+/// The case input a turn's judge surface is, `surface`.
+pub const TURN_SURFACE: &str = "surface";
+
+/// The title of the finding `finding` whose file holds `text`: its frontmatter's `title`, else
+/// its first `# ` heading (a leading `Story: ` dropped), else `finding` itself.
+fn finding_title(finding: &str, text: &[u8]) -> String {
+    let text = String::from_utf8_lossy(text);
+    if let Some(front) = front_matter(&text)
+        && let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&front)
+        && let Some(title) = doc["title"]
+            .as_str()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+    {
+        return title.to_owned();
+    }
+    text.lines()
+        .find_map(|line| line.strip_prefix("# "))
+        .map(|heading| {
+            heading
+                .trim()
+                .trim_start_matches("Story: ")
+                .trim()
+                .to_owned()
+        })
+        .filter(|heading| !heading.is_empty())
+        .unwrap_or_else(|| finding.to_owned())
+}
+
+/// A story file's body, below its frontmatter, or the whole text when it has none.
+fn finding_body(text: Option<&[u8]>) -> Option<&[u8]> {
+    text.map(|text| crate::validator::story_body(text).unwrap_or(text))
 }
 
 /// Whether `value` is a full commit id: 40 or 64 lower-case hexadecimal digits.
@@ -2188,19 +2333,28 @@ pub struct Judge<'a> {
     pub binary: &'a Path,
 }
 
-/// What a turn on `tree` opens with, from `--input finding=<story id>` and `--input
-/// candidate=<full commit id>` and the promotion store `store`: the finding a story the planning
-/// store holds at the commit the case forks from (`.engineering/planning/story/<key>.md`), the
-/// candidate a full commit id of a commit `tree` holds, and the baseline the revision of the
+/// What a turn on `tree` opens with, from `--input finding=<story id>`, `--input
+/// candidate=<full commit id>` and, when given, `--input surface=<judge|non_judge>`, the
+/// promotion store `store` and the mainline `mainline`: the finding a story the planning store
+/// holds at the commit the case forks from (`.engineering/planning/story/<key>.md`), the
+/// candidate a full commit id of a commit `tree` holds, the baseline the revision of the
 /// store's latest record that is no refusal ([`crate::promotion::baseline`]), a commit `tree`
-/// holds. A missing or wrong value, or a store with no such record, is refused, naming why,
-/// before anything is written. The candidate is delivered outside the case, so it is given here.
+/// holds, and the judge surface computed from the candidate's change against the baseline
+/// ([`crate::improvement::judge_surfaces`]). A missing or wrong value, a store with no such
+/// record, or a given `surface` that is not the computed one (naming the first judge-surface
+/// path) is refused, naming why, before anything is written. The candidate is delivered outside
+/// the case, so it is given here.
 ///
 /// What judges the turn is never the candidate's, nor the tree's: the finding scripts are read
 /// at the baseline ([`crate::improvement`]), and a candidate whose tree differs from the
-/// baseline's at the finding's file, `scripts/check-finding` or `scripts/file-finding` is
-/// refused, naming the path, as is a commit the case forks from that holds another text of the
-/// finding than the baseline. The turn is refused too unless `judge` is the promoted binary: its
+/// baseline's at `scripts/check-finding` or `scripts/file-finding` is refused, naming the path.
+/// The finding is read on the mainline: when the commit the case forks from is `mainline`'s tip
+/// or an ancestor of it ([`crate::improvement::Mainline`]; the local `main` with no forge, which
+/// the operator is trusted with), the finding is read there and its file is no part of the
+/// candidate's comparison, so a finding filed after the last promotion opens a turn. Else the
+/// finding's body (below its frontmatter, which a delivery's take changes) must be the
+/// baseline's, at the commit the case forks from and in the candidate, or the turn is refused
+/// naming its file. The turn is refused too unless `judge` is the promoted binary: its
 /// sha256 is the record's `binary_sha256` whenever the record has one, and its revision is the
 /// promoted one unless the operator stated the record; and unless the baseline's
 /// `scripts/check-finding` is a reviewed confined one
@@ -2209,8 +2363,10 @@ pub fn turn_opening(
     tree: &Path,
     finding: Option<&str>,
     candidate: Option<&str>,
+    surface: Option<&str>,
     store: &Path,
     judge: &Judge<'_>,
+    mainline: &crate::improvement::Mainline,
 ) -> Result<TurnOpening> {
     let Some(finding) = finding else {
         bail!(
@@ -2283,10 +2439,8 @@ pub fn turn_opening(
     }
     let short = |revision: &str| revision[..8.min(revision.len())].to_owned();
     // What judges the candidate is never the candidate's: the scripts are read at the baseline,
-    // and the finding where the case forks from, so a candidate that changes either, or a fork
-    // that holds another finding, is no turn.
+    // so a candidate that changes either is no turn.
     for judged in [
-        path.as_str(),
         crate::improvement::CHECK_FINDING,
         crate::improvement::FILE_FINDING,
     ] {
@@ -2297,28 +2451,55 @@ pub fn turn_opening(
             );
         }
     }
-    if filed != history.file(&baseline, &path)? {
-        bail!(
-            "--input {TURN_FINDING}={finding}: {path} at {}, where the case forks from, is not the one the baseline {} holds; the turn's finding is the one filed at the baseline; nothing was written",
-            short(&at),
-            short(&baseline)
-        );
+    // The finding is read on the mainline, where the case forks from, and checked out there for
+    // the check: what the candidate holds at its path judges nothing. Off the mainline (or with
+    // no tip to read), the finding's body must be the baseline's, where the case forks from and
+    // in the candidate alike.
+    let on_mainline = match mainline.tip(tree) {
+        Ok(tip) => matches!(
+            crate::improvement::Mainline::holds(tree, &tip, &at)?,
+            Ok(true)
+        ),
+        Err(_) => false,
+    };
+    if !on_mainline {
+        let at_baseline = history.file(&baseline, &path)?;
+        if finding_body(history.file(candidate, &path)?.as_deref())
+            != finding_body(at_baseline.as_deref())
+        {
+            bail!(
+                "--input {TURN_CANDIDATE}={candidate}: the candidate changes the body of {path} against the baseline {}, and the case forks from {}, no commit of {} (forge: {}); what judges a turn is never the candidate's, so the turn is not opened; nothing was written",
+                short(&baseline),
+                short(&at),
+                crate::promotion::MAINLINE,
+                mainline.forge()
+            );
+        }
+        if finding_body(filed.as_deref()) != finding_body(at_baseline.as_deref()) {
+            bail!(
+                "--input {TURN_FINDING}={finding}: {path} at {}, where the case forks from, no commit of {} (forge: {}), does not hold the body the baseline {} holds; the turn's finding is read on the mainline or is the one filed at the baseline; nothing was written",
+                short(&at),
+                crate::promotion::MAINLINE,
+                mainline.forge(),
+                short(&baseline)
+            );
+        }
     }
     // The binary that judges is the promoted one: of the digest the record holds, whenever it
     // holds one, and of its revision unless the operator stated the record (a binary that names
     // no revision).
-    if promoted.revision_stated_by.is_some() || promoted.binary_sha256.is_some() {
-        let bytes = std::fs::read(judge.binary)
-            .with_context(|| format!("read this binary, {}", judge.binary.display()))?;
-        let digest = format!("{:x}", Sha256::digest(&bytes));
-        if promoted.binary_sha256.as_deref() != Some(digest.as_str()) {
-            bail!(
-                "{TURN_PROTOCOL}: this binary {} hashes to sha256 {digest}, not to {}, the sha256 the record of the promoted binary of {} holds; a turn is judged by the promoted binary only; nothing was written",
-                judge.binary.display(),
-                promoted.binary_sha256.as_deref().unwrap_or("none"),
-                short(&baseline)
-            );
-        }
+    let bytes = std::fs::read(judge.binary)
+        .with_context(|| format!("read this binary, {}", judge.binary.display()))?;
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    if (promoted.revision_stated_by.is_some() || promoted.binary_sha256.is_some())
+        && promoted.binary_sha256.as_deref() != Some(digest.as_str())
+    {
+        bail!(
+            "{TURN_PROTOCOL}: this binary {} hashes to sha256 {digest}, not to {}, the sha256 the record of the promoted binary of {} holds; a turn is judged by the promoted binary only; nothing was written",
+            judge.binary.display(),
+            promoted.binary_sha256.as_deref().unwrap_or("none"),
+            short(&baseline)
+        );
     }
     if promoted.revision_stated_by.is_none() && judge.revision != baseline {
         bail!(
@@ -2344,9 +2525,100 @@ pub fn turn_opening(
             crate::improvement::CONFINED_CHECK_FINDING_SHA256S.join(", ")
         );
     }
+    // The judge surface is the candidate's change's, computed here; a given one that says
+    // otherwise is refused, naming the first path that decides it.
+    let surfaces = crate::improvement::judge_surfaces(tree, &baseline, candidate)
+        .with_context(|| format!("--input {TURN_CANDIDATE}={candidate}; nothing was written"))?;
+    let computed = if surfaces.is_empty() {
+        "non_judge"
+    } else {
+        "judge"
+    };
+    if let Some(given) = surface
+        && given != computed
+    {
+        match surfaces.first() {
+            Some(first) => bail!(
+                "--input {TURN_SURFACE}={given}: the candidate's change touches the judge surface {first}, a path {} at the baseline {} does not admit, so the turn's surface is judge; nothing was written",
+                crate::validator::JUDGE_ALLOW,
+                short(&baseline)
+            ),
+            None => bail!(
+                "--input {TURN_SURFACE}={given}: the candidate's change touches no judge surface, every path admitted by {} at the baseline {}, so the turn's surface is non_judge; nothing was written",
+                crate::validator::JUDGE_ALLOW,
+                short(&baseline)
+            ),
+        }
+    }
     Ok(TurnOpening {
         finding: finding.to_owned(),
         candidate: candidate.to_owned(),
         baseline,
+        surface: computed.to_owned(),
+        title: finding_title(finding, filed.as_deref().unwrap_or_default()),
+        judge_sha256: digest,
+        install_root: None,
     })
+}
+
+/// Why a case may not run on `protocol`, or none: an improvement turn (`self.improvement/1`)
+/// runs on the document this binary embeds and on no other of that id, so no file can add an
+/// action the harness would be offered inside a turn, nor take one away. Any other protocol is
+/// not refused here.
+pub fn turn_protocol_refusal(protocol: &LoadedProtocol) -> Result<Option<String>> {
+    if protocol.id != TURN_PROTOCOL {
+        return Ok(None);
+    }
+    let embedded = LoadedProtocol::builtin(TURN_PROTOCOL)?;
+    if protocol.yaml == embedded.yaml {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{TURN_PROTOCOL}: a turn runs on the protocol this binary embeds (`--protocol {TURN_PROTOCOL}`) and on no other document of that id; this one differs from it; nothing was run"
+    )))
+}
+
+/// The file of an improvement turn's case that holds the sha256 of the binary that judges it,
+/// written when the turn opens ([`CaseDir::open_turn`]).
+pub const JUDGE_FILE: &str = "judge.sha256";
+
+/// Why a run of the case at `case_dir` by the binary `binary` (`/proc/self/exe`, the running
+/// one) is refused before any step, or none: a case of any protocol but an improvement turn's is
+/// never refused here; a turn is run only by the binary whose sha256 it recorded when it opened
+/// ([`JUDGE_FILE`]), so a resume by another binary, the candidate's that `takt promote` just
+/// installed among them, judges nothing. `takt promote` keeps the binary it replaces by its
+/// digest ([`crate::promotion::kept_binary`]), and the refusal names where.
+pub fn turn_judge_refusal(case_dir: &Path, binary: &Path) -> Result<Option<String>> {
+    if required_capabilities(case_dir)?.0 != TURN_PROTOCOL {
+        return Ok(None);
+    }
+    let path = case_dir.join(JUDGE_FILE);
+    let Ok(recorded) = std::fs::read_to_string(&path) else {
+        return Ok(Some(format!(
+            "{TURN_PROTOCOL}: the turn records no binary that judges it ({} is not there), so no binary may run it; open the turn again",
+            path.display()
+        )));
+    };
+    let recorded = recorded.trim();
+    let bytes =
+        std::fs::read(binary).with_context(|| format!("read this binary, {}", binary.display()))?;
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    if digest == recorded {
+        return Ok(None);
+    }
+    let kept = crate::promotion::store()
+        .map(|store| crate::promotion::kept_binary(&store, recorded))
+        .map_or_else(
+            |_| String::new(),
+            |kept| {
+                format!(
+                    "; `takt promote` keeps a binary it replaces at {}: check that `sha256sum {}` prints {recorded} before you run it",
+                    kept.display(),
+                    kept.display()
+                )
+            },
+        );
+    Ok(Some(format!(
+        "{TURN_PROTOCOL}: this binary hashes to sha256 {digest}, not to {recorded}, the binary that judges the turn since it opened; a turn is judged by one binary only, so run it with that one{kept}; nothing was run"
+    )))
 }

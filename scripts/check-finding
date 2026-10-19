@@ -115,6 +115,9 @@ set -euo pipefail
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
     GIT_COMMON_DIR GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT GIT_GRAFT_FILE GIT_SHALLOW_FILE \
     GIT_REPLACE_REF_BASE GIT_NAMESPACE GIT_TEMPLATE_DIR
+# Nor does a replace ref of a repository it reads (`refs/replace/`, which a scenario checkout
+# can hold): every git here reads the objects the ids name, as takt's own git does.
+export GIT_NO_REPLACE_OBJECTS=1
 
 say() { printf 'check-finding: %s\n' "$*" >&2; }
 usage() {

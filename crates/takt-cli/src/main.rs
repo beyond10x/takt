@@ -39,7 +39,9 @@ enum Commands {
     Run(Box<RunArgs>),
     /// Grant a case a capability: write the grant into the case's authority.yaml and record the
     /// approval on the case's story in the planning store, that record committed on the case's
-    /// branch, on which the tree must be, clean. The next run resumes the case.
+    /// branch, on which the tree must be, clean. An intent's case and an improvement turn
+    /// (`self.improvement/1`) get the grant alone: nothing in the store, no commit, no store
+    /// needed. The next run resumes the case.
     Approve(ApproveArgs),
     /// List the built-in protocols.
     Protocols,
@@ -296,7 +298,8 @@ struct RunArgs {
     /// story being worked is resumed: one whose take is committed on its case's branch, or, from
     /// a tree not on a case's branch, one the planning store lists active; from a tree on a
     /// case's branch, a case the store lists active is resumed by a run from the base. Else the
-    /// next ready story is the unit and the store records it taken.
+    /// next ready story is the unit and the store records it taken. A `self.improvement/1` turn
+    /// opened without it takes its finding's title as its intent.
     #[arg(long)]
     intent: Option<String>,
     /// The case to resume, by id, instead of opening one; not with --intent.
@@ -316,6 +319,13 @@ struct RunArgs {
     /// input. A `self.improvement/1` turn requires `finding=<story id>`, a finding the planning
     /// store holds, and `candidate=<full commit id>`, the candidate delivered outside the case;
     /// its baseline is the promotion store's latest promoted revision. Neither is a case input.
+    /// Its case input `surface` is computed from the candidate's change against the baseline's
+    /// `.engineering/judge-allow.yaml`; given, it must be the computed one. Its finding is read on
+    /// the mainline, `main` as the forge reports it, or the local `main` under `--forge none`,
+    /// which the operator is trusted with. The turn records the sha256 of the binary that opens
+    /// it, the promoted one, and every resume is refused before any step unless it is run by that
+    /// binary: once `takt promote` has installed the candidate, finish the turn with the binary it
+    /// replaced, which it keeps at `$XDG_STATE_HOME/takt/judges/<sha256>` and names.
     #[arg(long = "input", value_name = "NAME=VALUE")]
     inputs: Vec<String>,
     /// The case id; generated when absent.
@@ -325,6 +335,14 @@ struct RunArgs {
     /// scenario in, handed to `scripts/check-finding --scenarios`; not read by any other case.
     #[arg(long)]
     scenarios: Option<PathBuf>,
+    /// The install root a `self.improvement/1` turn opened by this run reads the promoted
+    /// binary under (`<root>/bin/takt`, where `takt promote --install-root` installs it),
+    /// recorded in the case, canonical, so every resume reads the same one. Not given,
+    /// `CARGO_INSTALL_ROOT`, else `CARGO_HOME`, else `~/.cargo`, as `takt promote` takes it. A
+    /// root that does not exist opens no turn. Refused for a resumed case, which keeps the one it
+    /// was opened with; not read by any other case.
+    #[arg(long)]
+    install_root: Option<PathBuf>,
     #[command(flatten)]
     looping: LoopArgs,
 }
@@ -350,9 +368,12 @@ struct LoopArgs {
     /// The harness's model, when it takes one.
     #[arg(long)]
     model: Option<String>,
-    /// The approval gate the harness may request to end the run.
-    #[arg(long, default_value = "repository.merge")]
-    gate: String,
+    /// The approval gate the harness may request to end the run. Not given, the case's
+    /// protocol's first action that requires a capability and that the case's inputs do not
+    /// block for good: `repository.merge` for a delivery or a software change,
+    /// `candidate.merge` or `candidate.merge_judge_surface` for an improvement turn.
+    #[arg(long)]
+    gate: Option<String>,
     /// The gates document, relative to the repository; given, it must be a file, and the gate
     /// validator runs it. Not given, `.engineering/gates.yaml` when that is a file.
     #[arg(long)]
@@ -499,7 +520,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 }
                 None => writeln!(
                     out,
-                    "recorded: nothing; the case was opened on an intent, not a story"
+                    "recorded: nothing in the planning store; the case delivers no story (it was opened on an intent, or is an improvement turn)"
                 )?,
             }
             Ok(EXIT_DONE)
@@ -637,6 +658,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 inputs,
                 case_id,
                 scenarios,
+                install_root,
                 looping,
             } = *args;
             looping.check()?;
@@ -672,7 +694,11 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // tree out onto the case's branch and records its head, so every refusal of what was
             // given for it comes first. A resumed case keeps the protocol and the inputs it was
             // opened with: a `--protocol` that names another, or any `--input`, is refused.
-            let resuming = case_to_resume(&repo, case.as_deref(), intent.is_some(), out)?;
+            // A turn opens a case whether or not an intent is given: with none, its finding's
+            // title is the intent, and no case of the planning store is resumed for it.
+            let opens_turn = case.is_none() && opens_on.id == takt::case::TURN_PROTOCOL;
+            let resuming =
+                case_to_resume(&repo, case.as_deref(), intent.is_some() || opens_turn, out)?;
             let given_for_resume = given.as_ref().zip(protocol.as_deref());
             let first_input = inputs.first().map(|(name, _)| name.clone());
             if let Some(resuming) = &resuming {
@@ -682,6 +708,25 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     given_for_resume,
                     first_input.as_deref(),
                 )?;
+                if install_root.is_some() {
+                    return Err(anyhow!(
+                        "--install-root is given for the case {}, which keeps the install root it was opened with; nothing was resumed",
+                        resuming.id
+                    ));
+                }
+                // A turn runs on the embedded protocol alone, and only by the binary that judges
+                // it, recorded when it opened: both checked before the case is resumed, so no
+                // step is taken otherwise.
+                if let Some(why) = takt::case::turn_protocol_refusal(&resuming.protocol)? {
+                    return Err(anyhow!(why));
+                }
+                takt::case::check_id(&resuming.id)?;
+                if let Some(why) = takt::case::turn_judge_refusal(
+                    &repo.join(takt::case::CASES_DIR).join(&resuming.id),
+                    Path::new(RUNNING_BINARY),
+                )? {
+                    return Err(anyhow!(why));
+                }
             }
             // A loop case opens with its baseline: `--input loop_baseline=<full commit id>`, no
             // case input of the protocol, is taken out of the inputs and checked here, so a
@@ -698,36 +743,77 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 } else {
                     None
                 };
+            // The forge, read before the turn, whose mainline it reads: the forge's `main`, or the
+            // local `main` with none.
+            let forge = forge_of(&repo, looping.forge.as_deref())?;
+            let mainline = forge.forge.clone().map_or(
+                takt::improvement::Mainline::Local,
+                takt::improvement::Mainline::Forge,
+            );
             // An improvement turn opens with its finding and its candidate, `--input
             // finding=<story id>` and `--input candidate=<full commit id>`, no case inputs of the
             // protocol, taken out of the inputs and checked here with the promoted baseline, so
-            // a missing or wrong one is refused before anything is written.
-            let turn =
-                if case.is_none() && resuming.is_none() && opens_on.id == takt::case::TURN_PROTOCOL
-                {
-                    let mut taken = |name: &str| {
-                        inputs
-                            .iter()
-                            .position(|(given, _)| given == name)
-                            .map(|at| inputs.remove(at).1)
-                    };
-                    let finding = taken(takt::case::TURN_FINDING);
-                    let candidate = taken(takt::case::TURN_CANDIDATE);
-                    // The binary that judges the turn is this one, which must be the promoted.
-                    let binary = std::env::current_exe().context("this binary's path")?;
-                    Some(takt::case::turn_opening(
-                        &repo,
-                        finding.as_deref(),
-                        candidate.as_deref(),
-                        &takt::promotion::store()?,
-                        &takt::case::Judge {
-                            revision: REVISION,
-                            binary: &binary,
-                        },
-                    )?)
-                } else {
-                    None
+            // a missing or wrong one is refused before anything is written; its `surface`, given
+            // or not, is computed, and put back as the case input the computation says.
+            let turn = if case.is_none()
+                && resuming.is_none()
+                && opens_on.id == takt::case::TURN_PROTOCOL
+            {
+                if let Some(why) = takt::case::turn_protocol_refusal(&opens_on)? {
+                    return Err(anyhow!(why));
+                }
+                let mut taken = |name: &str| {
+                    inputs
+                        .iter()
+                        .position(|(given, _)| given == name)
+                        .map(|at| inputs.remove(at).1)
                 };
+                let finding = taken(takt::case::TURN_FINDING);
+                let candidate = taken(takt::case::TURN_CANDIDATE);
+                let surface = taken(takt::case::TURN_SURFACE);
+                // The binary that judges the turn is this one, which must be the promoted:
+                // read as it runs, whatever its path holds by now.
+                let binary = PathBuf::from(RUNNING_BINARY);
+                let mut opened = takt::case::turn_opening(
+                    &repo,
+                    finding.as_deref(),
+                    candidate.as_deref(),
+                    surface.as_deref(),
+                    &takt::promotion::store()?,
+                    &takt::case::Judge {
+                        revision: REVISION,
+                        binary: &binary,
+                    },
+                    &mainline,
+                )?;
+                inputs.push((takt::case::TURN_SURFACE.to_owned(), opened.surface.clone()));
+                // Recorded canonical, the directory itself: no `..` and no link left on the
+                // way, which could later lead elsewhere. A root that is not there opens no
+                // turn.
+                let root = match &install_root {
+                    Some(root) => root.clone(),
+                    None => takt::promotion::install_root()?,
+                };
+                opened.install_root = Some(match std::fs::canonicalize(&root) {
+                    Ok(root) if root.is_dir() => root,
+                    Ok(_) => {
+                        return Err(anyhow!(
+                            "the install root {} is no directory; a turn opens on the install root `takt promote` installs into; nothing was written",
+                            root.display()
+                        ));
+                    }
+                    Err(error) => {
+                        return Err(anyhow!(
+                            "the install root {} is not there ({error}); a turn opens on the install root `takt promote` installs into, which must exist; nothing was written",
+                            root.display()
+                        ));
+                    }
+                });
+                Some(opened)
+            } else {
+                None
+            };
+            let intent = intent.or_else(|| turn.as_ref().map(|turn| turn.title.clone()));
             // A case keeps only the inputs its protocol declares: one it does not declare would
             // be dropped without a word, so a case to be opened refuses it before anything is.
             if case.is_none()
@@ -764,8 +850,14 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             let harness = harness_of(&looping)?;
             let harness = harness.as_ref();
             let mut validators = validators_of(&repo, &looping, scenarios)?;
-            let forge = forge_of(&repo, looping.forge.as_deref())?;
             forge.register(&mut validators);
+            // An improvement turn's merge validators read the mainline, with a forge or without.
+            validators.push(Box::new(takt::improvement::CandidateMerged::new(
+                mainline.clone(),
+            )));
+            validators.push(Box::new(takt::improvement::CandidateMerged::judge_surface(
+                mainline,
+            )));
             let forge_line = forge.line;
             let store = Aep::default();
             // The unit: the case to resume, the intent given, or else the open case of an
@@ -859,7 +951,7 @@ impl LoopArgs {
             hours: self.hours,
             tokens: self.tokens,
             case_id,
-            gate: Some(self.gate.clone()),
+            gate: self.gate.clone(),
         }
     }
 }
@@ -878,8 +970,8 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
 
 /// The validators that need no forge: the test command, `change.read`, the gate when a gates
 /// document is given or at its default path in `repo`, with the project file likewise, and
-/// the loop scorecard's three, and an improvement turn's four, `scenarios` the scenario
-/// repository's checkout its scenario checks are given.
+/// the loop scorecard's three, and an improvement turn's five but its merge validators,
+/// `scenarios` the scenario repository's checkout its scenario checks are given.
 fn validators_of(
     repo: &Path,
     looping: &LoopArgs,
@@ -904,7 +996,8 @@ fn validators_of(
     validators.push(Box::new(takt::loop_scorecard::LoopDefinitionCheck));
     validators.push(Box::new(takt::loop_scorecard::LoopCompare));
     // An improvement turn's validators: due only in a `self.improvement/1` case, whose
-    // protocol alone has their actions. The merge and promotion validators are not here yet.
+    // protocol alone has their actions. Its merge validators read the mainline, the forge's or
+    // the local `main`, and are registered beside the forge's.
     let checking = takt::improvement::Checking::from_env().with_scenarios(scenarios);
     validators.push(Box::new(takt::improvement::FindingFile(checking.clone())));
     validators.push(Box::new(takt::improvement::ScenarioReproduce(
@@ -912,6 +1005,7 @@ fn validators_of(
     )));
     validators.push(Box::new(takt::improvement::ScenarioVerify(checking)));
     validators.push(Box::new(takt::improvement::ScorecardCompare::from_env()));
+    validators.push(Box::new(takt::improvement::BinaryPromote::from_env()));
     Ok(validators)
 }
 
@@ -1139,6 +1233,7 @@ fn finish(run: &mut Run<'_>, forge_line: Option<&str>, out: &mut dyn Write) -> R
         writeln!(out, "{line}")?;
     }
     run.binary = Some(REVISION.to_owned());
+    run.take_default_gate();
     let stop = match run.run(out) {
         Ok(stop) => stop,
         Err(error) => {
@@ -1521,6 +1616,10 @@ fn take_story<'a>(
     writeln!(out, "frontier: took {id}: {title}")?;
     Ok(run)
 }
+
+/// The running binary as the kernel holds it, whatever file its path names by now: what a turn's
+/// judge is read and checked from.
+const RUNNING_BINARY: &str = "/proc/self/exe";
 
 /// The protocol a store story opens on when `--protocol` is not given.
 const STORY_DELIVERY: &str = "story.delivery/1";

@@ -2959,6 +2959,80 @@ fn a_poisoned_object_of_the_revision_fails_the_build_naming_it() {
     }
 }
 
+/// A replace ref planted in the scenario repository's checkout swaps the declaring commit's
+/// `.engineering/scenarios.conf` for one that gives scenario 1 a forged seed. The check reads the
+/// objects the commits name, never a replacement (`GIT_NO_REPLACE_OBJECTS`): the scenario runs
+/// at its declared seed, and the defect still reproduces.
+#[test]
+fn a_replace_ref_in_the_scenario_checkout_forges_no_seed() {
+    let world = world("replaced-seed");
+    let filed = file(
+        &world.takt,
+        "default-protocol",
+        &body(Some(&predicate())),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let conf = git_out(
+        &world.scenarios,
+        &["rev-parse", "main:.engineering/scenarios.conf"],
+    );
+    let forged_path = world.outer.0.join("forged.conf");
+    fs::write(
+        &forged_path,
+        format!(
+            "[scenario \"1\"]\n\tstory = story:ready-one\n\tseed = {}\n",
+            "1".repeat(40)
+        ),
+    )
+    .expect("the forged declaration");
+    let forged = git_out(
+        &world.scenarios,
+        &[
+            "hash-object",
+            "-w",
+            "--",
+            forged_path.to_str().expect("UTF-8"),
+        ],
+    );
+    git(&world.scenarios, &["replace", &conf, &forged]);
+    let output = world.check("story:default-protocol", &world.defect, &[]);
+    assert!(output.status.success(), "{}", shown(&output));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&output)
+    );
+}
+
+/// The build's git runs with its environment replaced (`env -i`): a `GIT_TRACE` of the caller,
+/// which no `unset` names, reaches no git that makes, fetches or checks out the build's
+/// checkout, so nothing of the caller's environment decides what the build's git does.
+#[test]
+fn the_builds_git_runs_with_none_of_the_callers_environment() {
+    let world = world("build-env");
+    let filed = file(
+        &world.takt,
+        "default-protocol",
+        &body(Some(&predicate())),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let trace = world.outer.0.join("git-trace.log");
+    let output = world.check(
+        "story:default-protocol",
+        &world.defect,
+        &[("GIT_TRACE", trace.to_str().expect("UTF-8"))],
+    );
+    assert!(output.status.success(), "{}", shown(&output));
+    let traced = fs::read_to_string(&trace).unwrap_or_default();
+    assert!(
+        !traced.contains(".work-"),
+        "the build's git read the caller's GIT_TRACE:\n{traced}"
+    );
+}
+
 /// The reviewer's RV-R: the caller's environment names an object directory
 /// (`GIT_ALTERNATE_OBJECT_DIRECTORIES` or `GIT_OBJECT_DIRECTORY`, which a hook's environment
 /// under quarantine carries) holding this repository's store, in which the fixed revision's
