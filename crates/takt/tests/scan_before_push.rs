@@ -129,8 +129,8 @@ struct Line {
     scanned: Vec<String>,
 }
 
-/// `b10x-gates` and `gh`: `scan-text` refuses a file holding [`FORBIDDEN`] with the policy's
-/// own words (the file, the line and the rule), `bot -- push` passes and keeps the commit it
+/// `b10x-gates` and `gh`: `scan-text` refuses a file holding [`FORBIDDEN`], or `also_forbidden`
+/// when set, with the policy's own words (the file, the line and the rule), `bot -- push` passes and keeps the commit it
 /// pushed, or fails with `push_refusal` on stderr when that is set, `api` answers pull request
 /// #7, `gh pr view` reports it open with the head last pushed for the case's branch.
 #[derive(Default)]
@@ -138,6 +138,7 @@ struct Gates {
     lines: RefCell<Vec<Line>>,
     pushed: RefCell<Option<(String, String)>>,
     push_refusal: Option<String>,
+    also_forbidden: Option<String>,
 }
 
 impl Gates {
@@ -184,7 +185,13 @@ impl Runner for Gates {
                     }
                     let text = fs::read_to_string(word)
                         .unwrap_or_else(|error| panic!("scan-text names {word}: {error}"));
-                    if let Some(at) = text.lines().position(|l| l.contains(FORBIDDEN)) {
+                    if let Some(at) = text.lines().position(|l| {
+                        l.contains(FORBIDDEN)
+                            || self
+                                .also_forbidden
+                                .as_deref()
+                                .is_some_and(|also| l.contains(also))
+                    }) {
                         refusal.get_or_insert(format!(
                             "{word} breaks 1 private rule(s): line {} literal-7; private details remain local",
                             at + 1
@@ -1569,5 +1576,58 @@ fn a_head_that_is_not_a_commit_is_refused() {
             .iter()
             .any(|line| line.argv.starts_with("b10x-gates bot -- push ")),
         "{lines:#?}"
+    );
+}
+
+/// A literal the policy forbids holds a `/`: the push publishes it as part of a path,
+/// `acme/secret-repo/notes.md`, while no one tree entry holds it. The scan reads every path a
+/// commit's tree holds in full from the root, as gates' own unit, `filename:<path>`, and the
+/// literal is refused.
+#[test]
+fn a_path_the_policy_forbids_is_read_in_full() {
+    let tree = scratch("full-path");
+    git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+    fs::create_dir_all(tree.join("acme/secret-repo")).expect("a directory");
+    commit(
+        &tree,
+        "acme/secret-repo/notes.md",
+        "clean\n",
+        "implementation.edit: clean",
+    );
+    let head = git(&tree, &["rev-parse", "HEAD"]);
+    let gates = Rc::new(Gates {
+        also_forbidden: Some("acme/secret-repo".to_owned()),
+        ..Gates::default()
+    });
+    let answer = bot(&gates)
+        .scan_outgoing(
+            &tree,
+            &tree.join(".engineering/scan"),
+            &Outgoing {
+                branch: "takt/case",
+                base: "main",
+                head: &head,
+                request: None,
+            },
+        )
+        .map_err(|error| format!("{error:#}"));
+    let scanned: Vec<String> = gates
+        .lines()
+        .iter()
+        .flat_map(|line| line.scanned.clone())
+        .collect();
+    let error = answer.expect_err(&format!(
+        "the scan passed a path holding the literal; it read:\n{}",
+        scanned.join("\n=====\n")
+    ));
+    assert!(
+        error.contains("would publish did not pass scan-text"),
+        "{error}"
+    );
+    assert!(
+        scanned
+            .iter()
+            .any(|text| text.contains("filename:acme/secret-repo/notes.md\n")),
+        "{scanned:#?}"
     );
 }

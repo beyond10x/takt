@@ -5,8 +5,9 @@
 //! go through `gh`, and before any of it leaves the machine `b10x-gates scan-text` reads what a
 //! push would publish (the object set it sends: every object of the head the remote's tracking
 //! ref of the case's base does not hold, or every object of the head without one; each commit
-//! object raw, every header and the message, every name in every tree object, a gitlink's and
-//! an empty tree's included, every blob whole, `git replace` notwithstanding; a head that is not
+//! object raw, every header and the message, every name in every tree object and every path in
+//! full from each commit's root (`filename:<path>`), a gitlink's and an empty tree's included,
+//! every blob whole, `git replace` notwithstanding; a head that is not
 //! a commit refused) and a pull request's title and body. A validator turns what the forge
 //! reports into evidence; the forge itself writes no record.
 //!
@@ -18,7 +19,7 @@
 //! ([`without_credentials`]): the forge keeps the GitHub ones the bot route's programs read.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -841,8 +842,8 @@ impl BotRoute {
     /// committer, encoding, signature, any other) and the message, bytes never converted.
     pub const MESSAGES: &str = "push.messages.txt";
     /// The file under the directory `scan_outgoing` is given that holds every tree object a push
-    /// would send, entry by entry (mode, name, id), and every blob it would send, whole
-    /// ([`outgoing_text`]).
+    /// would send, entry by entry (mode, name, id), every path its commits' trees hold in full
+    /// from the root (`filename:<path>`), and every blob it would send, whole ([`outgoing_text`]).
     pub const FILES: &str = "push.files.txt";
     /// The most bytes of messages and files one scan before a push is given by default.
     pub const SCAN_LIMIT: usize = 32 << 20;
@@ -1232,12 +1233,11 @@ fn published_commits(
     })
 }
 
-/// The entries of the raw tree object `bytes`, each `<mode> <name>\0<id>`, as lines of text:
-/// `<mode> <name> <id>`, the name as the tree holds it. `hash` is the length of an id in bytes,
-/// 20 for SHA-1 and 32 for SHA-256. What does not parse is kept as it is, so nothing in the
-/// object goes unscanned.
-fn tree_entries(bytes: &[u8], hash: usize) -> String {
-    let mut text = String::new();
+/// The entries of the raw tree object `bytes`, each `<mode> <name>\0<id>`: the mode, the name
+/// as the tree holds it and the id in hex, then what does not parse after them, kept as it is.
+/// `hash` is the length of an id in bytes, 20 for SHA-1 and 32 for SHA-256.
+fn parse_tree(bytes: &[u8], hash: usize) -> (Vec<(String, String, String)>, &[u8]) {
+    let mut entries = Vec::new();
     let mut rest = bytes;
     while !rest.is_empty() {
         let Some(space) = rest.iter().position(|b| *b == b' ') else {
@@ -1257,12 +1257,24 @@ fn tree_entries(bytes: &[u8], hash: usize) -> String {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        text.push_str(&format!(
-            "{} {} {id}\n",
-            String::from_utf8_lossy(&rest[..space]),
-            String::from_utf8_lossy(&rest[space + 1..nul])
+        entries.push((
+            String::from_utf8_lossy(&rest[..space]).into_owned(),
+            String::from_utf8_lossy(&rest[space + 1..nul]).into_owned(),
+            id,
         ));
         rest = &rest[nul + 1 + hash..];
+    }
+    (entries, rest)
+}
+
+/// The entries of the raw tree object `bytes` as lines of text, `<mode> <name> <id>`
+/// ([`parse_tree`]); what does not parse is kept as it is, so nothing in the object goes
+/// unscanned.
+fn tree_entries(bytes: &[u8], hash: usize) -> String {
+    let (entries, rest) = parse_tree(bytes, hash);
+    let mut text = String::new();
+    for (mode, name, id) in entries {
+        text.push_str(&format!("{mode} {name} {id}\n"));
     }
     if !rest.is_empty() {
         text.push_str(&String::from_utf8_lossy(rest));
@@ -1271,14 +1283,75 @@ fn tree_entries(bytes: &[u8], hash: usize) -> String {
     text
 }
 
+/// The bytes [`crate::git::read_objects`] counts for `object`: its header line and its bytes.
+fn read_size(object: &crate::git::Object) -> usize {
+    object.id.len() + object.kind.len() + 24 + object.bytes.len()
+}
+
+/// Every path the trees `roots` hold, each in full from its root as a push publishes it (the
+/// unit gates scans a path in, `filename:<path>`): every entry, whatever its mode, an empty
+/// tree's and a gitlink's included, through every subtree. The trees come from `trees` (the
+/// object set read already) or are read through one `git cat-file --batch` per level of the walk
+/// ([`crate::git::read_objects`]), counted off `left`; `None` once that passes it. A subtree met
+/// again at the same path is walked once.
+fn full_paths(
+    tree: &Path,
+    trees: &mut BTreeMap<String, Vec<u8>>,
+    roots: Vec<String>,
+    left: &mut usize,
+) -> Result<Option<BTreeSet<String>>> {
+    let mut paths = BTreeSet::new();
+    let mut walked: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut level: Vec<(String, String)> =
+        roots.into_iter().map(|id| (String::new(), id)).collect();
+    while !level.is_empty() {
+        let missing: Vec<String> = level
+            .iter()
+            .map(|(_, id)| id.clone())
+            .filter(|id| !trees.contains_key(id))
+            .collect::<BTreeSet<String>>()
+            .into_iter()
+            .collect();
+        if !missing.is_empty() {
+            let Some(read) = crate::git::read_objects(tree, &missing, *left)? else {
+                return Ok(None);
+            };
+            for object in read {
+                *left = left.saturating_sub(read_size(&object));
+                trees.insert(object.id, object.bytes);
+            }
+        }
+        let mut next = Vec::new();
+        for (prefix, id) in level {
+            if !walked.insert((prefix.clone(), id.clone())) {
+                continue;
+            }
+            let Some(bytes) = trees.get(&id) else {
+                continue;
+            };
+            let (entries, _) = parse_tree(bytes, id.len() / 2);
+            for (mode, name, entry) in entries {
+                let path = format!("{prefix}{name}");
+                if mode == "40000" {
+                    next.push((format!("{path}/"), entry));
+                }
+                paths.insert(path);
+            }
+        }
+        level = next;
+    }
+    Ok(Some(paths))
+}
+
 /// What pushing `head` would publish, read in at most `limit` bytes: the object set the push
 /// sends, `git rev-list --objects` over [`published_commits`], every object read raw through
 /// one `git cat-file --batch` ([`crate::git::read_objects`]). Every commit object as the push
 /// sends it, bytes as they are (every header, the encoding's and a signature's included, then
-/// the message, never converted); every tree object's entry names, whatever an entry's mode (a
-/// gitlink's, an empty tree's); every blob's whole content, raw (no text conversion, no filter).
-/// `None` once git prints more than `limit` bytes for all of it, read no further. The words for
-/// the commits.
+/// the message, never converted); every tree object's entries, whatever an entry's mode (a
+/// gitlink's, an empty tree's); every path each commit's tree holds, in full from its root, as
+/// `filename:<path>` ([`full_paths`]); every blob's whole content, raw (no text conversion, no
+/// filter). `None` once git prints more than `limit` bytes for all of it, read no further. The
+/// words for the commits.
 fn outgoing_text(
     tree: &Path,
     remote: &str,
@@ -1304,12 +1377,23 @@ fn outgoing_text(
     };
     let mut messages = String::new();
     let mut files = String::new();
+    let mut trees: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut roots = Vec::new();
     for object in objects {
+        left = left.saturating_sub(read_size(&object));
         let id = &object.id;
         match object.kind.as_str() {
             "commit" => {
                 messages.push_str(&format!("commit {id}\n"));
-                messages.push_str(&String::from_utf8_lossy(&object.bytes));
+                let text = String::from_utf8_lossy(&object.bytes);
+                if let Some(root) = text
+                    .lines()
+                    .next()
+                    .and_then(|line| line.strip_prefix("tree "))
+                {
+                    roots.push(root.trim().to_owned());
+                }
+                messages.push_str(&text);
                 if !messages.ends_with('\n') {
                     messages.push('\n');
                 }
@@ -1317,6 +1401,7 @@ fn outgoing_text(
             "tree" => {
                 files.push_str(&format!("tree {id}\n"));
                 files.push_str(&tree_entries(&object.bytes, id.len() / 2));
+                trees.insert(id.clone(), object.bytes);
             }
             kind => {
                 files.push_str(&format!("{kind} {id}\n"));
@@ -1326,6 +1411,12 @@ fn outgoing_text(
                 }
             }
         }
+    }
+    let Some(paths) = full_paths(tree, &mut trees, roots, &mut left)? else {
+        return Ok((None, words));
+    };
+    for path in paths {
+        files.push_str(&format!("filename:{path}\n"));
     }
     Ok((Some((messages, files)), words))
 }
@@ -1374,7 +1465,7 @@ impl Forge for BotRoute {
     /// the pull request, when one is opened (the JSON request and the title and body as
     /// published), and the objects the push sends that [`Self::remote`] does not hold
     /// ([`published_commits`], [`outgoing_text`]): every commit object raw ([`Self::MESSAGES`]),
-    /// every tree's entry names and every blob ([`Self::FILES`]), all written under `dir`. A
+    /// every tree's entry names, every path in full and every blob ([`Self::FILES`]), all written under `dir`. A
     /// head that is not a commit is refused first ([`head_is_a_commit`]). Once git prints more than
     /// [`Self::scan_limit`] bytes for them, it is read no further and the push is refused,
     /// nothing written or scanned.
