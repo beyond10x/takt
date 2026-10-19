@@ -1,0 +1,3 @@
+{"action": "tests.write", "summary": "a"}
+text
+{"action": "repository.inspect"}

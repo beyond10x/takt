@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T06:41:32Z",
+  "actor": "human:timo",
+  "artifact": "story:property-and-fuzz-tests",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task fuzz",
+    "reference": "wave/2026-10-19-w13 after 4e1aa08: task fuzz exit 0, each target 61 s, no crash: events 219698 runs, harness_reply 3124858, case_id 1798359, scorecard 273904; the review's crash input and a second one found are in fuzz/corpus/scorecard"
+  }
+}

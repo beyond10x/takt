@@ -61,10 +61,12 @@ fn takt(args: &[&str]) -> (i32, String, String) {
 }
 
 /// Scenario 1 as documented: a first run that stops `ApprovalRequired (repository.merge)`, a
-/// grant, and a resumed run that ends `accepted`; both in the one case's record.
+/// grant, and a resumed run that ends `accepted`; both in the one case's record, the held-out
+/// check passed beside it.
 fn scenario_one_with_its_grant(repo: &Path, case: &str) {
     let dir = repo.join(CASES_DIR).join(case);
     fs::create_dir_all(&dir).expect("a case directory");
+    fs::write(dir.join(takt::scorecard::HELD_OUT_FILE), "PASS\n").expect("the held-out result");
     let events = Events::new(&dir);
     let opened = || Event::Opened {
         case: case.to_owned(),
@@ -114,8 +116,8 @@ fn scenario_one_with_its_grant(repo: &Path, case: &str) {
     }
 }
 
-/// `--save`, then `--against` the file just saved, on the same unchanged repository: nothing
-/// can be worse than itself, so the exit is 0, not 3.
+/// `--save`, then `--against` the file just saved, on the same unchanged repository of five
+/// cases, the rule's trials: nothing can be worse than itself, so the exit is 0, not 3.
 #[test]
 fn a_saved_scorecard_against_itself_exits_0() {
     let repo = scratch("self");
@@ -123,7 +125,9 @@ fn a_saved_scorecard_against_itself_exits_0() {
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "start"]);
-    scenario_one_with_its_grant(&repo, "scenario-1-trial-1");
+    for n in 1..=5 {
+        scenario_one_with_its_grant(&repo, &format!("scenario-1-trial-{n}"));
+    }
     let saves = scratch("self-saves");
     let repo_arg = repo.display().to_string();
     let saves_arg = saves.display().to_string();

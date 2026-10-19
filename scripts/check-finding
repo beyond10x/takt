@@ -26,9 +26,23 @@
 # from `--declared-on` with `git config --no-includes --blob`, as `takt scenario run` reads it;
 # or a `repository` (an `https://` URL) with the `seed` the task starts from and, optionally,
 # the task's `test` command. The revision is checked out into a build directory
-# of its own under the cache (a clone sharing this repository's objects, so a commit no branch
-# holds builds too) and built with `cargo build --locked`, its target directory inside that
-# build directory whatever CARGO_TARGET_DIR says; the binary is kept per revision beside a
+# of its own under the cache (a clone of this repository holding its own copy of the objects,
+# so a commit no branch holds builds too) and built with `cargo build --locked --offline`,
+# confined in bubblewrap (`bwrap`, on PATH) as `takt promote` builds a candidate
+# (crates/takt/src/promotion.rs): the environment cleared but for HOME, TMPDIR, PATH, LANG,
+# TERM when set, CARGO_HOME and RUSTC; an empty HOME and /tmp of its own; its own process and
+# network namespaces; the system directories and the toolchain read-only, the toolchain
+# rustup's default (`default_toolchain` in `$RUSTUP_HOME/settings.toml`, `~/.rustup` without
+# it), its own `cargo` and `rustc` called, never a proxy on PATH; a scratch CARGO_HOME with the
+# caller's registry and git caches (`$CARGO_HOME`, `~/.cargo` without it) read-only under it;
+# and the checkout, the target directory and that CARGO_HOME, all three inside the build
+# directory, the only paths it can write. So a revision's `build.rs`, proc macros and
+# `.cargo/config.toml` read nothing of the caller's environment or home and write nothing
+# outside the build directory, another revision's kept binary among it; without bubblewrap the
+# check builds nothing. The target is the host's (`--config build.target=<host>`, over the
+# revision's configuration), and the binary kept is the one cargo reports building (the
+# `executable` of its JSON message for the `takt` bin), never a file the revision commits where
+# a build would put it. The binary is kept per revision beside a
 # `revision` file naming the commit it was built from, and the build directory removed. A build
 # is made in a checkout, never from an export, so the binary's `--version` and its runs' `opened`
 # records name the revision; a kept binary with no `revision` file beside it predates that and is
@@ -45,9 +59,12 @@
 # and, when the predicate gives one, `$TEST` the task's test command. Its environment holds only
 # PATH, LANG, TAKT, SCENARIO, TEST and HOME, and HOME is a fresh directory of the check's own,
 # never the caller's, so no credential of the caller reaches it, neither from the environment
-# nor from a file a tool reads under HOME (git's credential store, a CLI's login). Its one link
-# out is `.cache/aep/protocol-sources`, the caller's cache of the public protocol sources `aep`
-# reads, so `aep` needs no network there. The command still runs as the caller's user: this is
+# nor from a file a tool reads under HOME (git's credential store, a CLI's login). The command
+# runs under bubblewrap with the whole filesystem bound as it is and, over it, the caller's
+# cache of the public protocol sources `aep` reads bound read-only at the home's
+# `.cache/aep/protocol-sources`, so `aep` needs no network there and a write through it fails;
+# bubblewrap adds no other isolation (network, processes and every other path as before), and
+# without it no predicate runs. The command still runs as the caller's user: this is
 # no sandbox against a path it names outright. The script's own git reads and writes name their
 # repository by path, so a `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE` of the caller (a
 # hook's environment) is unset before any of them.
@@ -58,12 +75,18 @@
 #
 # Standard output is one line, the result of the `scenario_result` evidence kind
 # (protocols/self-improvement/1.yaml): `reproduced` when every expectation the predicate gives
-# held (the exit status, the fixed string in standard output or standard error), else
-# `not_reproduced`; both exit 0. A check that cannot run its predicate (no such finding, a
-# predicate that does not parse, a revision that names no commit, a scenario not declared, a
-# build that fails, a command past CHECK_FINDING_TIMEOUT seconds, 900 by default) prints nothing
-# on standard output and exits 1; a usage error, a CHECK_FINDING_TIMEOUT that is no whole number
-# of seconds among them, exits 64.
+# held (the exit status, the fixed string in standard output or standard error) and the command
+# ended with a status the predicate names (its `exit`, else its `healthy_exit`); else
+# `not_reproduced` when the command ended with the predicate's `healthy_exit` (0 when it names
+# none), the one status that says the command ran to the scenario and the defect is gone; else
+# `error`, the status named on standard error and in the record: a crash, a command that never
+# started, a flag rejected, or any status the predicate does not name as the healthy one. An
+# `error` verifies nothing. All three exit 0. A check that cannot run its predicate (no such
+# finding, a predicate that does not parse, a revision that names no commit, a scenario not
+# declared, no bubblewrap or no toolchain for a build, a build that fails, a bubblewrap that
+# did not run the command to its end, its error named on standard error, a command past
+# CHECK_FINDING_TIMEOUT seconds, 900 by default) prints nothing on standard output and exits 1;
+# a usage error, a CHECK_FINDING_TIMEOUT that is no whole number of seconds among them, exits 64.
 set -euo pipefail
 
 # The repositories this script reads and writes are the ones it names by path; a GIT_DIR,
@@ -217,24 +240,117 @@ for url in "${!checkouts[@]}"; do
         usage "--checkout $url=${checkouts[$url]}: the predicate names ${repository:-no repository}, not $url"
 done
 
-# takt, built from the revision in a checkout of its own, once per revision. The checkout is a
-# clone sharing this repository's objects, so a revision no branch holds still builds, and a
-# checkout rather than an export, so the build script reads the revision into the binary. A
-# kept binary without the `revision` file beside it was built from an export, and is replaced.
+# The toolchain a build calls, as `takt promote` resolves it (crates/takt/src/promotion.rs,
+# `Confinement::toolchain`): rustup's home (RUSTUP_HOME, else ~/.rustup), the
+# `default_toolchain` its settings.toml names, and that toolchain's directory under
+# `toolchains/`, by its name or the one directory named by it and a target triple; its
+# `bin/cargo` and `bin/rustc` executable and its `lib/rustlib` there. Never one PATH, a
+# `rust-toolchain.toml` of the revision or RUSTUP_TOOLCHAIN picks. Prints the directory, or
+# says what is missing and fails.
+toolchain_dir() {
+    local rustup_home=${RUSTUP_HOME:-} settings name line dir found=()
+    [[ $rustup_home == /* ]] || rustup_home=$HOME/.rustup
+    settings=$rustup_home/settings.toml
+    [[ -r $settings ]] ||
+        fail "read $settings, rustup's settings, which name the toolchain the build calls; the build finds no toolchain on PATH"
+    name=
+    while IFS= read -r line; do
+        [[ $line =~ ^[[:space:]]*default_toolchain[[:space:]]*=[[:space:]]*\"?([^\"[:space:]]*)\"?[[:space:]]*$ ]] || continue
+        name=${BASH_REMATCH[1]}
+        [[ -n $name ]] && break
+    done <"$settings"
+    [[ -n $name ]] || fail "$settings names no default_toolchain; the build calls rustup's default toolchain and finds none on PATH"
+    [[ $name != */* && $name != .* ]] || fail "$settings: default_toolchain $name is no toolchain name"
+    if [[ -d $rustup_home/toolchains/$name ]]; then
+        dir=$rustup_home/toolchains/$name
+    else
+        for dir in "$rustup_home/toolchains/$name"-*; do
+            [[ -d $dir ]] && found+=("$dir")
+        done
+        ((${#found[@]} == 1)) ||
+            fail "rustup's default toolchain $name ($settings) matches ${#found[@]} directories under $rustup_home/toolchains, not one"
+        dir=${found[0]}
+    fi
+    [[ -x $dir/bin/cargo && -x $dir/bin/rustc && -d $dir/lib/rustlib ]] ||
+        fail "the toolchain $dir (rustup's default, $settings) has no executable bin/cargo and bin/rustc, or no lib/rustlib"
+    printf '%s\n' "$dir"
+}
+
+# takt, built from the revision in a checkout of its own, once per revision, confined in
+# bubblewrap. The checkout is a clone of this repository with its own copy of the objects (no
+# hardlink and no alternate into this repository, which the build cannot see), so a revision no
+# branch holds still builds and the build's git reads the checkout alone; and a checkout rather
+# than an export, so the build script reads the revision into the binary. A kept binary without
+# the `revision` file beside it was built from an export, and is replaced.
+# Never unconfined: without bubblewrap nothing is built and no predicate runs.
+bwrap=$(command -v bwrap) ||
+    fail "bubblewrap (\`bwrap\`) is not on PATH; check-finding builds the revision confined in it and runs the predicate under it, never without, so install bubblewrap first"
 takt=$root/builds/$sha/takt
 if [[ ! -x $takt || ! -f $root/builds/$sha/revision ]]; then
+    # Without the toolchain nothing is built.
+    toolchain=$(toolchain_dir) || exit 1
+    cached=${CARGO_HOME:-}
+    [[ $cached == /* ]] || cached=$HOME/.cargo
     work=$(mktemp -d "$root/builds/$sha.work-XXXXXX")
     trap 'rm -rf -- "$work"' EXIT
-    git clone --quiet --shared --no-checkout -- "$repo" "$work" >&2 ||
+    mkdir -p "$work/target" "$work/cargo-home"
+    git clone --quiet --no-checkout --no-hardlinks --dissociate -- "$repo" "$work/src" >&2 ||
         fail "clone $repo for the build"
-    git -C "$work" checkout --quiet --detach "$sha" >&2 ||
+    git -C "$work/src" checkout --quiet --detach "$sha" >&2 ||
         fail "check out $sha from $repo"
-    say "building takt at ${sha:0:12} in $work"
-    (cd "$work" && env -u CARGO_TARGET_DIR -u CARGO_BUILD_TARGET_DIR \
-        cargo build --locked -p b10x-takt-cli --bin takt --target-dir "$work/target") >&2 ||
-        fail "takt does not build at ${sha:0:12}"
+    # The sandbox of `takt promote`'s build (crates/takt/src/promotion.rs, `Confinement`): the
+    # system directories and /etc read-only, its own /proc, /dev, /tmp and HOME, the toolchain
+    # read-only at /toolchain, and the checkout, the target directory and a scratch CARGO_HOME,
+    # the caller's caches read-only under it, the only paths bound writable.
+    sandbox=("$bwrap" --unshare-pid --unshare-net --die-with-parent --clearenv
+        --setenv HOME /build-home --setenv TMPDIR /tmp
+        --setenv PATH /toolchain/bin:/usr/bin:/bin --setenv LANG "${LANG:-C.UTF-8}"
+        --setenv CARGO_HOME /cargo-home --setenv RUSTC /toolchain/bin/rustc)
+    [[ -z ${TERM:-} ]] || sandbox+=(--setenv TERM "$TERM")
+    sandbox+=(--ro-bind /usr /usr)
+    for dir in /lib /lib64 /bin /sbin; do
+        if [[ -L $dir ]]; then
+            sandbox+=(--symlink "$(readlink -- "$dir")" "$dir")
+        elif [[ -d $dir ]]; then
+            sandbox+=(--ro-bind "$dir" "$dir")
+        fi
+    done
+    sandbox+=(--ro-bind /etc /etc --proc /proc --dev /dev --tmpfs /tmp --tmpfs /build-home
+        --ro-bind "$toolchain" /toolchain
+        --bind "$work/src" /work --bind "$work/target" /target
+        --bind "$work/cargo-home" /cargo-home)
+    for dir in registry/cache registry/index git/db git/checkouts; do
+        if [[ -d $cached/$dir ]]; then
+            sandbox+=(--ro-bind "$cached/$dir" "/cargo-home/$dir")
+        fi
+    done
+    # The target is the host's whatever the revision's `.cargo/config.toml` says (`--config` on
+    # the command line wins over every configuration file; the environment, CARGO_BUILD_TARGET
+    # among it, is cleared), and the binary kept is the one cargo reports building: the
+    # `executable` of the `compiler-artifact` message for the `takt` bin of b10x-takt-cli,
+    # under /target, never a file the revision commits where a build would put it.
+    host=$(env -i "$toolchain/bin/rustc" -vV 2>/dev/null | sed -n 's/^host: //p') && [[ -n $host ]] ||
+        fail "$toolchain/bin/rustc -vV names no host"
+    [[ $host =~ ^[A-Za-z0-9_.-]+$ ]] || fail "$toolchain/bin/rustc names the host \`$host\`, no target triple"
+    say "building takt at ${sha:0:12} in $work for $host, confined in bwrap"
+    "${sandbox[@]}" --chdir /work -- /toolchain/bin/cargo build --locked --offline \
+        --config "build.target=\"$host\"" --message-format=json \
+        -p b10x-takt-cli --bin takt --target-dir /target </dev/null >"$work/messages" ||
+        fail "takt does not build at ${sha:0:12}, confined in bwrap"
+    built=()
+    while IFS= read -r line; do
+        [[ $line == '{"reason":"compiler-artifact",'* ]] || continue
+        [[ $line == *'"target":{"kind":["bin"],'*'"name":"takt",'* ]] || continue
+        [[ $line =~ \"package_id\":\"[^\"]*b10x-takt-cli[@#\ ] ]] || continue
+        [[ $line =~ \"executable\":\"(/target/[A-Za-z0-9_./-]+/takt)\" ]] || continue
+        [[ /${BASH_REMATCH[1]}/ != */../* ]] && built+=("${BASH_REMATCH[1]}")
+    done <"$work/messages"
+    ((${#built[@]} == 1)) ||
+        fail "cargo reported ${#built[@]} takt binaries under /target at ${sha:0:12}, not one"
+    [[ -f $work/target/${built[0]#/target/} && ! -L $work/target/${built[0]#/target/} ]] ||
+        fail "cargo reported ${built[0]}, which the build directory does not hold as a file"
     mkdir -p "$root/builds/$sha"
-    cp "$work/target/debug/takt" "$takt.$$"
+    cp "$work/target/${built[0]#/target/}" "$takt.$$"
     mv -f "$takt.$$" "$takt"
     printf '%s\n' "$sha" >"$root/builds/$sha/revision.$$"
     mv -f "$root/builds/$sha/revision.$$" "$root/builds/$sha/revision"
@@ -248,7 +364,16 @@ mkdir -p "$home/.cache/aep"
 sources=${XDG_CACHE_HOME:-}
 [[ $sources == /* ]] || sources=$HOME/.cache
 sources=$sources/aep/protocol-sources
-[[ -d $sources ]] && ln -s -- "$sources" "$home/.cache/aep/protocol-sources"
+# Neither a link nor a copy: the command runs under bubblewrap with the caller's protocol
+# sources bound read-only at `.cache/aep/protocol-sources` of this home, so a write through
+# them fails and the caller's cache stays as it was. The directory is the mount point; on the
+# host it stays empty.
+bound=$home/.cache/aep/protocol-sources
+binds=()
+if [[ -d $sources ]]; then
+    mkdir -p "$bound"
+    binds=(--ro-bind "$sources" "$bound")
+fi
 
 # The starting state: a clone of the scenario repository, or of the predicate's repository, on
 # `trial/0` at the seed, with no remote, so nothing the predicate does reaches the repository
@@ -283,19 +408,50 @@ clone_git -C "$clone" config user.email check-finding@example.invalid
 say "$finding: $where, takt at ${sha:0:12}: $command"
 environment=(PATH="$PATH" HOME="$home" LANG="${LANG:-C.UTF-8}" TAKT="$takt" SCENARIO="$clone")
 [[ -z $test_command ]] || environment+=(TEST="$test_command")
+# Under bubblewrap only for the bind: the whole filesystem bound as it is, devices included
+# (`--dev-bind / /`), then the protocol sources read-only over it; no namespace but the mount
+# namespace bwrap needs for that, so the command reaches the network, the processes and every
+# path it reached before, as the caller's user. `--die-with-parent`, so the command dies with
+# bwrap when `timeout` kills it. bwrap clears nothing of the environment `env -i` gives it.
+# Its status file names the command's pid as soon as bwrap forked, before its mount setup, so
+# that line proves nothing; the `exit-code` line it writes once the command ended does. Without
+# it, or with one that is not the status bwrap exited with, the exit is bwrap's own (a mount
+# setup that failed exits 1, the status a predicate may name), not the command's, and there is
+# no result.
 set +e
-(cd "$clone" && env -i "${environment[@]}" timeout --kill-after=10 "$limit" sh -c "$command") \
+(cd "$clone" && env -i "${environment[@]}" timeout --kill-after=10 "$limit" \
+    "$bwrap" --die-with-parent --json-status-fd 3 --dev-bind / / "${binds[@]}" --chdir "$clone" \
+    -- sh -c "$command" 3>"$run/bwrap-status") \
     >"$run/output" 2>&1 </dev/null
 status=$?
 set -e
 ((status != 124 && status != 137)) || fail "the command ran past $limit seconds"
-
-result=reproduced
-if [[ -v predicate[exit] ]] && ((status != 10#${predicate[exit]})); then
-    result=not_reproduced
+ended=$(sed -n 's/^{ *"exit-code": *\([0-9][0-9]*\) *}$/\1/p' "$run/bwrap-status" | tail -n 1)
+if [[ -z $ended ]] || ((10#$ended != status)); then
+    error=$({ grep '^bwrap: ' "$run/output" || true; } | tail -n 1)
+    fail "bubblewrap did not run the command to its end (exit $status${ended:+, the command ended $ended}): ${error:-bubblewrap printed no error}"
 fi
+
+# The result. `reproduced` needs every expectation the predicate gives and an exit it names:
+# its `exit`, or with none its `healthy_exit`. `not_reproduced` needs the healthy exit, the one
+# status that says the command ran to the scenario and the defect is gone; any other status (a
+# panic's 101, a rejected flag's 2, a command not found's 127, the defect's exit without its
+# output) is `error`, which verifies nothing.
+healthy=$((10#${predicate[healthy_exit]:-0}))
+named=$healthy
+[[ ! -v predicate[exit] ]] || named=$((10#${predicate[exit]}))
+held=1
+((status == named)) || held=0
 if [[ -v predicate[output] ]] && ! grep -qF -- "${predicate[output]}" "$run/output"; then
+    held=0
+fi
+if ((held)); then
+    result=reproduced
+elif ((status == healthy)); then
     result=not_reproduced
+else
+    result=error
+    say "exit $status, which the predicate names as neither the defect's with all its expectations (exit $named${predicate[output]+, output \`${predicate[output]}\`}) nor the healthy one (healthy_exit $healthy): the command did not show the defect, nor that it is gone"
 fi
 {
     printf 'finding: %s\nrevision: %s\n' "$finding" "$sha"
@@ -306,7 +462,7 @@ fi
         [[ -z $checkout ]] || printf 'checkout: %s\n' "$checkout"
         [[ -z $test_command ]] || printf 'test: %s\n' "$test_command"
     fi
-    printf 'seed: %s\nexit: %s\nresult: %s\n' "$seed" "$status" "$result"
+    printf 'seed: %s\nhealthy_exit: %s\nexit: %s\nresult: %s\n' "$seed" "$healthy" "$status" "$result"
 } >"$run/result"
 say "exit $status; $result"
 printf '%s\n' "$result"

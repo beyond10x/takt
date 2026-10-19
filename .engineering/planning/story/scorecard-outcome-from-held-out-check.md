@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scorecard-outcome-from-held-out-check
 kind: story
-status: active
+status: implemented
 title: A run's outcome in the scorecard comes from the held-out check, not from the candidate's own record
 tags:
 - priority:high
@@ -13,10 +13,11 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/scorecard.rs
-revision: 5
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T02:52:54Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-19T02:52:54Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-19T06:14:33Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 
@@ -34,3 +35,20 @@ From the adversarial review of main at bd20f7b on 2026-10-19: ten adversarial re
 ## Acceptance
 
 A candidate case whose `stop` says `Completed (accepted)` but whose held-out result says FAIL is scored as failed and named as a disagreement; a case with no held-out result is refused naming the case.
+
+## Landed (wave 13)
+
+Read from `git diff --name-only 69b4d35^1 69b4d35` (the unit's merge into the wave branch) at the close of wave 13 (wave branch head 16ff976). A scenario case's outcome reads its held-out result (held-out.txt, written by the runner); the outcome metric is version 2 and --rebaseline moves a baseline to it. Shared merge with story:promote-binds-scorecard-and-merge.
+
+- `crates/takt-cli/src/main.rs`
+- `crates/takt-cli/tests/promote_cli.rs`
+- `crates/takt-cli/tests/scorecard_adv1.rs`
+- `crates/takt-cli/tests/scorecard_cli.rs`
+- `crates/takt/src/promotion.rs`
+- `crates/takt/src/scorecard.rs`
+- `crates/takt/tests/scorecard.rs`
+- `crates/takt/tests/scorecard_adv1.rs`
+- `crates/takt/tests/scorecard_adv2.rs`
+- `crates/takt/tests/trace.rs`
+- `ess/domains/takt.citations.tsv`
+- `ess/domains/takt.yaml`

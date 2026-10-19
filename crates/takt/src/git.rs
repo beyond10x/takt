@@ -45,8 +45,10 @@ const NO_CONFIGURED_CODE: [&str; 18] = [
 ];
 
 /// The variables of the caller's environment that would point git elsewhere than the tree, or
-/// change how it reads a path or its configuration; none reaches a git takt runs.
-const REDIRECTING_ENV: [&str; 12] = [
+/// change how it reads a path, its configuration or its history (`GIT_TEST_COMMIT_GRAPH`
+/// writes a commit-graph after every commit, `GIT_GRAFT_FILE` gives commits the parents a file
+/// names, `GIT_SHALLOW_FILE` cuts the history where a file says); none reaches a git takt runs.
+const REDIRECTING_ENV: [&str; 15] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_COMMON_DIR",
@@ -59,6 +61,9 @@ const REDIRECTING_ENV: [&str; 12] = [
     "GIT_NOGLOB_PATHSPECS",
     "GIT_ICASE_PATHSPECS",
     "GIT_LITERAL_PATHSPECS",
+    "GIT_TEST_COMMIT_GRAPH",
+    "GIT_GRAFT_FILE",
+    "GIT_SHALLOW_FILE",
 ];
 
 /// Runs `git <args>` in `tree` with `input` on its standard input, with no code from
@@ -68,6 +73,191 @@ const REDIRECTING_ENV: [&str; 12] = [
 /// than find a repository further up; and for a tree without a `.git` git searches no further
 /// than the tree itself.
 fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
+    let mut child = command(tree, args)?
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        stdin
+            .write_all(input)
+            .with_context(|| format!("write to git {}", args.join(" ")))?;
+    }
+    child
+        .wait_with_output()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))
+}
+
+/// Runs `git <args>` in `tree` as [`run`] does, with nothing on its standard input, and answers
+/// its standard output as text (invalid UTF-8 replaced, nothing trimmed), or `None` as soon as it
+/// passes `limit` bytes: git is killed then and nothing more is read. Git reads no replacement
+/// object (`GIT_NO_REPLACE_OBJECTS`): what it shows is what the repository holds, as a push sends
+/// it. Exiting non-zero is an error naming what git said.
+pub fn run_bounded(tree: &Path, args: &[&str], limit: usize) -> Result<Option<String>> {
+    use std::io::Read as _;
+    let mut child = command(tree, args)?
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
+    let stderr = child.stderr.take().map(|mut stream| {
+        std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = stream.by_ref().take(64 << 10).read_to_end(&mut said);
+            let _ = std::io::copy(&mut stream, &mut std::io::sink());
+            said
+        })
+    });
+    let mut kept = Vec::new();
+    let mut over = false;
+    if let Some(stdout) = child.stdout.take() {
+        let read = stdout
+            .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
+            .read_to_end(&mut kept);
+        read.with_context(|| format!("read git {}", args.join(" ")))?;
+        over = kept.len() > limit;
+    }
+    if over {
+        let _ = child.kill();
+    }
+    let status = child
+        .wait()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
+    let said = stderr
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    if over {
+        return Ok(None);
+    }
+    if !status.success() {
+        bail!(
+            "git {} in {} exited {}: {}",
+            args.join(" "),
+            tree.display(),
+            status,
+            String::from_utf8_lossy(&said).trim()
+        );
+    }
+    Ok(Some(String::from_utf8_lossy(&kept).into_owned()))
+}
+
+/// One object [`read_objects`] read: its id, its type and its bytes as the repository holds
+/// them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Object {
+    /// The object's id.
+    pub id: String,
+    /// Its type: `commit`, `tree`, `blob` or `tag`.
+    pub kind: String,
+    /// Its bytes, raw.
+    pub bytes: Vec<u8>,
+}
+
+/// Reads the objects `ids` in `tree` through one `git cat-file --batch`, raw and without
+/// replacement objects (`GIT_NO_REPLACE_OBJECTS`), in the order given; `None` as soon as what
+/// git prints for them passes `limit` bytes: git is killed then and nothing more is read. An id
+/// git does not hold, or a git that exits non-zero, is an error.
+pub fn read_objects(tree: &Path, ids: &[String], limit: usize) -> Result<Option<Vec<Object>>> {
+    use std::io::{BufRead as _, BufReader, Read as _};
+    let mut child = command(tree, &["cat-file", "--batch"])?
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("run git cat-file --batch in {}", tree.display()))?;
+    let mut input: Vec<u8> = Vec::new();
+    for id in ids {
+        input.extend_from_slice(id.as_bytes());
+        input.push(b'\n');
+    }
+    let writer = child.stdin.take().map(|mut stdin| {
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        })
+    });
+    let stderr = child.stderr.take().map(|mut stream| {
+        std::thread::spawn(move || {
+            let mut said = Vec::new();
+            let _ = stream.by_ref().take(64 << 10).read_to_end(&mut said);
+            let _ = std::io::copy(&mut stream, &mut std::io::sink());
+            said
+        })
+    });
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("git cat-file --batch gave no output stream"))?;
+    let mut out = BufReader::new(stdout);
+    let answer = (|| -> Result<Option<Vec<Object>>> {
+        let mut objects = Vec::with_capacity(ids.len());
+        let mut total = 0usize;
+        for id in ids {
+            let mut header = Vec::new();
+            out.read_until(b'\n', &mut header)
+                .context("read git cat-file --batch")?;
+            let header = String::from_utf8_lossy(&header).trim_end().to_owned();
+            let fields: Vec<&str> = header.split(' ').collect();
+            let [found, kind, size] = fields[..] else {
+                bail!("git cat-file --batch answered {header:?} for {id}");
+            };
+            let size: usize = size
+                .parse()
+                .with_context(|| format!("git cat-file --batch answered {header:?}"))?;
+            total = total.saturating_add(header.len() + 1).saturating_add(size);
+            if total > limit {
+                return Ok(None);
+            }
+            let mut bytes = vec![0; size];
+            out.read_exact(&mut bytes)
+                .context("read git cat-file --batch")?;
+            let mut end = [0_u8; 1];
+            out.read_exact(&mut end)
+                .context("read git cat-file --batch")?;
+            objects.push(Object {
+                id: found.to_owned(),
+                kind: kind.to_owned(),
+                bytes,
+            });
+        }
+        Ok(Some(objects))
+    })();
+    drop(out);
+    if !matches!(answer, Ok(Some(_))) {
+        let _ = child.kill();
+    }
+    let status = child
+        .wait()
+        .with_context(|| format!("run git cat-file --batch in {}", tree.display()))?;
+    if let Some(writer) = writer {
+        let _ = writer.join();
+    }
+    let said = stderr
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    let objects = answer?;
+    if objects.is_some() && !status.success() {
+        bail!(
+            "git cat-file --batch in {} exited {}: {}",
+            tree.display(),
+            status,
+            String::from_utf8_lossy(&said).trim()
+        );
+    }
+    Ok(objects)
+}
+
+/// The `git <args>` [`output`] and [`run_bounded`] run in `tree`, set up as every git takt runs
+/// is: pinned to the tree, with no code from configuration and no credential or redirecting
+/// variable in its environment.
+fn command(tree: &Path, args: &[&str]) -> Result<Command> {
     let tree =
         std::path::absolute(tree).with_context(|| format!("make {} absolute", tree.display()))?;
     let tree = tree.as_path();
@@ -87,27 +277,21 @@ fn output(tree: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
     if let Some(parent) = tree.parent() {
         command.env("GIT_CEILING_DIRECTORIES", parent);
     }
-    let mut child = command
+    // A replace ref (`refs/replace/<object>`) would make every read of an object return
+    // another's content: no git takt runs honours one.
+    command.env("GIT_NO_REPLACE_OBJECTS", "1");
+    // Nor does one fetch an object a partial clone lacks from its promisor remote: that fetch
+    // would run the repository's own `remote.<name>.uploadpack` through a shell, and outlive the
+    // git that started it. An object not in the repository is missing.
+    command.env("GIT_NO_LAZY_FETCH", "1");
+    // Nor a commit-graph, a cache of the history a step can forge (a parent re-pointed, its
+    // checksum fixed): every ancestry and history takt reads comes from the commits themselves.
+    command
         .args(NO_CONFIGURED_CODE)
+        .args(["-c", "core.commitGraph=false"])
         .args(args)
-        .current_dir(tree)
-        .stdin(if input.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
-    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
-        stdin
-            .write_all(input)
-            .with_context(|| format!("write to git {}", args.join(" ")))?;
-    }
-    child
-        .wait_with_output()
-        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))
+        .current_dir(tree);
+    Ok(command)
 }
 
 /// Runs `git <args>` in `tree`, `input` on its standard input; answers its standard output as
@@ -146,6 +330,412 @@ pub fn bytes(tree: &Path, args: &[&str]) -> Result<Vec<u8>> {
 /// nothing trimmed, nothing decoded.
 pub fn blob(tree: &Path, object: &str) -> Result<Vec<u8>> {
     raw(tree, &["cat-file", "blob", object], None)
+}
+
+/// The bytes of the object `id` (a full object id) of `kind` (`commit`, `tree`, `blob`),
+/// checked as [`ObjectReader::read`] checks every object; an object of another kind, or none,
+/// is an error.
+pub fn verified_object(tree: &Path, kind: &str, id: &str) -> Result<Vec<u8>> {
+    let mut reader = ObjectReader::open(tree)?;
+    match reader.read(id)? {
+        Some((found, bytes)) if found == kind => Ok(bytes),
+        Some((found, _)) => bail!("the object {id} is a {found}, not a {kind}"),
+        None => bail!("the repository holds no object {id}"),
+    }
+}
+
+/// What a commit's header says, read by git's own rule ([`parse_commit`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitHeader {
+    /// Its tree.
+    pub tree: String,
+    /// Its parents, in order.
+    pub parents: Vec<String>,
+    /// Its committer time, in seconds since the epoch; none when the header names none that
+    /// reads.
+    pub committer_time: Option<i64>,
+}
+
+/// The header of the commit `id` from its `bytes`, by git's rule: the first line is
+/// `tree <id>`, and the parents are the `parent <id>` lines directly after it, each line exact
+/// (no carriage return stripped); a `parent` line further down the header is no parent, as git
+/// takes none. A first line that is no tree, or a `parent` line there that is no object id of
+/// `hex` digits, is an error naming the commit.
+pub fn parse_commit(id: &str, bytes: &[u8], hex: usize) -> Result<CommitHeader> {
+    let header_end = bytes
+        .windows(2)
+        .position(|pair| pair == b"\n\n")
+        .unwrap_or(bytes.len());
+    let mut lines = bytes[..header_end].split(|b| *b == b'\n').peekable();
+    let is_id = |text: &[u8]| {
+        text.len() == hex
+            && text
+                .iter()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
+    };
+    let tree = lines
+        .next()
+        .and_then(|line| line.strip_prefix(b"tree "))
+        .filter(|tree| is_id(tree))
+        .ok_or_else(|| anyhow!("the commit {id} does not begin with its tree"))?;
+    let tree = String::from_utf8_lossy(tree).into_owned();
+    let mut parents = Vec::new();
+    while let Some(parent) = lines.peek().and_then(|line| line.strip_prefix(b"parent ")) {
+        if !is_id(parent) {
+            bail!("the commit {id} names a parent that is no object id");
+        }
+        parents.push(String::from_utf8_lossy(parent).into_owned());
+        lines.next();
+    }
+    let committer_time = lines
+        .find_map(|line| line.strip_prefix(b"committer "))
+        .and_then(|line| {
+            let text = String::from_utf8_lossy(line);
+            let mut words = text.rsplit(' ');
+            let _zone = words.next()?;
+            words.next()?.parse::<i64>().ok()
+        });
+    Ok(CommitHeader {
+        tree,
+        parents,
+        committer_time,
+    })
+}
+
+/// The repository's object format, from its `extensions.objectFormat`: `sha1` or `sha256`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectFormat {
+    /// SHA-1, 40 hexadecimal digits.
+    Sha1,
+    /// SHA-256, 64 hexadecimal digits.
+    Sha256,
+}
+
+impl ObjectFormat {
+    /// The object format of the repository at `tree`, as git reports it.
+    pub fn of(tree: &Path) -> Result<Self> {
+        match run(tree, &["rev-parse", "--show-object-format"])?.as_str() {
+            "sha1" => Ok(Self::Sha1),
+            "sha256" => Ok(Self::Sha256),
+            other => bail!("the repository's object format {other} is not one takt reads"),
+        }
+    }
+
+    /// The id of an object of `kind` holding `bytes`: the hash of `<kind> <len>\0<bytes>`, in
+    /// lower-case hexadecimal. SHA-1 is computed with collision detection (SHA-1DC, as git
+    /// computes it): bytes made to collide are an error, never an id.
+    pub fn id(self, kind: &str, bytes: &[u8]) -> Result<String> {
+        use sha2::Digest as _;
+        let header = format!("{kind} {}\0", bytes.len());
+        let digest: Vec<u8> = match self {
+            Self::Sha1 => {
+                let mut hasher = sha1_checked::Sha1::new();
+                hasher.update(header.as_bytes());
+                hasher.update(bytes);
+                match hasher.try_finalize() {
+                    sha1_checked::CollisionResult::Ok(hash) => hash.to_vec(),
+                    _ => bail!("the {kind}'s bytes are made to collide under SHA-1"),
+                }
+            }
+            Self::Sha256 => {
+                let mut hasher = sha2::Sha256::new();
+                hasher.update(header.as_bytes());
+                hasher.update(bytes);
+                hasher.finalize().to_vec()
+            }
+        };
+        Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+    }
+}
+
+/// The largest blob [`ObjectReader`] reads, in bytes: the cap on the loop's metric definitions,
+/// the only blob takt reads through it. A blob git reports larger is refused before any of it
+/// is read.
+pub const MAX_BLOB: u64 = 256 << 10;
+
+/// The largest commit or tree [`ObjectReader`] reads, in bytes; one git reports larger is
+/// refused before any of it is read.
+pub const MAX_COMMIT_OR_TREE: u64 = 1 << 20;
+
+/// How long one read of [`ObjectReader`] may take: past it, `git cat-file` is killed and the
+/// read is an error naming the object.
+pub const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// What the watchdog of an [`ObjectReader`] is told: the instant the read in progress must end
+/// by, whether it fired, and whether the reader is gone.
+#[derive(Default)]
+struct Watch {
+    deadline: Option<std::time::Instant>,
+    fired: bool,
+    stop: bool,
+}
+
+/// The watchdog of an [`ObjectReader`]: one thread that kills `git cat-file` when a read runs
+/// past its deadline, so no read blocks for longer than [`READ_DEADLINE`] whatever git does.
+struct Watchdog {
+    watch: std::sync::Arc<(std::sync::Mutex<Watch>, std::sync::Condvar)>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Watchdog {
+    /// A watchdog over the process `pid`, which its owner keeps unwaited for while the watchdog
+    /// lives, so the id names no other process.
+    fn over(pid: u32) -> Self {
+        let watch = std::sync::Arc::new((
+            std::sync::Mutex::new(Watch::default()),
+            std::sync::Condvar::new(),
+        ));
+        let shared = std::sync::Arc::clone(&watch);
+        let thread = std::thread::spawn(move || {
+            let (lock, wake) = &*shared;
+            let Ok(mut watch) = lock.lock() else {
+                return;
+            };
+            loop {
+                if watch.stop {
+                    return;
+                }
+                let now = std::time::Instant::now();
+                watch = match watch.deadline {
+                    Some(deadline) if now >= deadline => {
+                        kill(pid);
+                        watch.fired = true;
+                        watch.deadline = None;
+                        continue;
+                    }
+                    Some(deadline) => match wake.wait_timeout(watch, deadline - now) {
+                        Ok((watch, _)) => watch,
+                        Err(_) => return,
+                    },
+                    None => match wake.wait(watch) {
+                        Ok(watch) => watch,
+                        Err(_) => return,
+                    },
+                };
+            }
+        });
+        Self {
+            watch,
+            thread: Some(thread),
+        }
+    }
+
+    /// Arms the deadline of a read beginning now: `until`.
+    fn arm(&self, until: std::time::Instant) {
+        let (lock, wake) = &*self.watch;
+        if let Ok(mut watch) = lock.lock() {
+            watch.deadline = Some(until);
+            watch.fired = false;
+        }
+        wake.notify_one();
+    }
+
+    /// Disarms the deadline; whether it fired during the read.
+    fn disarm(&self) -> bool {
+        let (lock, wake) = &*self.watch;
+        let fired = lock.lock().is_ok_and(|mut watch| {
+            watch.deadline = None;
+            watch.fired
+        });
+        wake.notify_one();
+        fired
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        let (lock, wake) = &*self.watch;
+        if let Ok(mut watch) = lock.lock() {
+            watch.stop = true;
+        }
+        wake.notify_one();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Kills the reader's `git cat-file`, `pid`. It starts no process of its own: no git takt runs
+/// fetches lazily (`GIT_NO_LAZY_FETCH`), so nothing else is left to kill. It stays in takt's
+/// own process group: one of its own would be taken by the forge's sweep of what a child left
+/// behind ([`crate::forge::sweep_left`]) for a leftover and killed under a live reader.
+fn kill(pid: u32) {
+    #[cfg(unix)]
+    if let Ok(pid) = libc::pid_t::try_from(pid) {
+        // SAFETY: `kill` takes a process id and a signal; the process is the reader's own
+        // child, not yet waited for, so the id names no other.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
+}
+
+/// Objects read through one `git cat-file --batch`, each checked in this process: git does not
+/// check a loose object's bytes against the id it is stored under, so the id is computed again
+/// from the kind and the bytes read, in the repository's object format, and an object whose
+/// bytes hash to another id is an error naming it. Every read is bounded: an object of a kind
+/// other than commit, tree or blob, or one git reports larger than its cap ([`MAX_BLOB`],
+/// [`MAX_COMMIT_OR_TREE`]), is refused before any of it is read, and a read that takes longer
+/// than [`READ_DEADLINE`] (a header that overstates the body, a git that stalls) kills the
+/// process and is an error naming the object; a reader
+/// opened until an instant ([`Self::open_until`], the run's deadline) ends each read at the
+/// earlier of the two. After any error the reader reads nothing more. One process reads any
+/// number of objects; it is killed and waited for when the reader is dropped.
+pub struct ObjectReader {
+    child: std::process::Child,
+    stdin: Option<std::process::ChildStdin>,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+    format: ObjectFormat,
+    watchdog: Option<Watchdog>,
+    until: Option<std::time::Instant>,
+}
+
+impl ObjectReader {
+    /// A reader of the objects of the repository at `tree`, each read held to
+    /// [`READ_DEADLINE`].
+    pub fn open(tree: &Path) -> Result<Self> {
+        Self::open_until(tree, None)
+    }
+
+    /// A reader as [`Self::open`] opens one, each read also ending by `until` (the run's
+    /// deadline) when that comes first.
+    pub fn open_until(tree: &Path, until: Option<std::time::Instant>) -> Result<Self> {
+        let format = ObjectFormat::of(tree)?;
+        let mut child = command(tree, &["cat-file", "--batch"])?
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("run git cat-file --batch in {}", tree.display()))?;
+        let stdin = child.stdin.take();
+        let stdout = child
+            .stdout
+            .take()
+            .map(std::io::BufReader::new)
+            .ok_or_else(|| anyhow!("git cat-file --batch has no standard output"))?;
+        let watchdog = Some(Watchdog::over(child.id()));
+        Ok(Self {
+            child,
+            stdin,
+            stdout,
+            format,
+            watchdog,
+            until,
+        })
+    }
+
+    /// The kind and the bytes of the object `id` (a full object id), checked; none when the
+    /// repository holds no such object. An object whose bytes do not hash to `id` is an error
+    /// naming it, and so is one over its cap, a read past [`READ_DEADLINE`], and a reply git
+    /// does not document.
+    pub fn read(&mut self, id: &str) -> Result<Option<(String, Vec<u8>)>> {
+        let hex = id.len() == 40 || id.len() == 64;
+        if !hex
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            bail!("{id} is no full object id");
+        }
+        let own = std::time::Instant::now() + READ_DEADLINE;
+        let until = self.until.map_or(own, |until| until.min(own));
+        if let Some(watchdog) = &self.watchdog {
+            watchdog.arm(until);
+        }
+        let read = self.read_bounded(id);
+        let fired = self.watchdog.as_ref().is_some_and(Watchdog::disarm);
+        let read = if fired {
+            Err(if until < own {
+                anyhow!(
+                    "reading the object {id} did not end by the run's deadline; git cat-file was stopped and nothing was read from it"
+                )
+            } else {
+                anyhow!(
+                    "reading the object {id} took longer than {} s; git cat-file was stopped and nothing was read from it",
+                    READ_DEADLINE.as_secs()
+                )
+            })
+        } else {
+            read
+        };
+        if read.is_err() {
+            // The stream may be anywhere in an object: nothing more is read from it.
+            self.stdin = None;
+            kill(self.child.id());
+        }
+        read
+    }
+
+    /// [`Self::read`] once its deadline is armed.
+    fn read_bounded(&mut self, id: &str) -> Result<Option<(String, Vec<u8>)>> {
+        use std::io::{BufRead as _, Read as _};
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow!("git cat-file --batch was stopped after an earlier error"))?;
+        stdin
+            .write_all(format!("{id}\n").as_bytes())
+            .and_then(|()| stdin.flush())
+            .context("write to git cat-file --batch")?;
+        let mut header = String::new();
+        (&mut self.stdout)
+            .take(256)
+            .read_line(&mut header)
+            .with_context(|| format!("read the header of the object {id}"))?;
+        let fields: Vec<&str> = header.trim_end_matches('\n').split(' ').collect();
+        match fields.as_slice() {
+            [named, "missing"] if *named == id => Ok(None),
+            [named, kind, size] if *named == id => {
+                let size: u64 = size.parse().with_context(|| {
+                    format!("the object {id}: git cat-file --batch replied {header:?}")
+                })?;
+                let cap = match *kind {
+                    "blob" => MAX_BLOB,
+                    "commit" | "tree" => MAX_COMMIT_OR_TREE,
+                    other => bail!("the object {id} is a {other}, which takt does not read"),
+                };
+                if size > cap {
+                    bail!(
+                        "the {kind} {id} is {size} bytes, above the {cap} bytes takt reads of a {kind}; nothing was read from it"
+                    );
+                }
+                let with_newline = size
+                    .checked_add(1)
+                    .and_then(|length| usize::try_from(length).ok())
+                    .ok_or_else(|| anyhow!("the {kind} {id} is {size} bytes, too many to read"))?;
+                let mut bytes = vec![0; with_newline];
+                self.stdout
+                    .read_exact(&mut bytes)
+                    .with_context(|| format!("read the {kind} {id}"))?;
+                bytes.truncate(with_newline - 1);
+                let computed = self
+                    .format
+                    .id(kind, &bytes)
+                    .with_context(|| format!("the {kind} {id}"))?;
+                if computed != id {
+                    bail!(
+                        "the {kind} {id} reads as bytes whose id is {computed}: the object store holds other bytes under its id; nothing was read from it"
+                    );
+                }
+                Ok(Some(((*kind).to_owned(), bytes)))
+            }
+            _ => bail!("the object {id}: git cat-file --batch replied {header:?}"),
+        }
+    }
+}
+
+impl Drop for ObjectReader {
+    fn drop(&mut self) {
+        // The watchdog stops first; then git is killed (it reads, it writes nothing elsewhere)
+        // and waited for, so no process is left, even one blocked writing a body nobody reads.
+        self.watchdog = None;
+        drop(self.stdin.take());
+        kill(self.child.id());
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 /// The commit `HEAD` names.
@@ -441,7 +1031,8 @@ fn pathspec(paths: &[String]) -> Vec<u8> {
 /// `message`, and nothing else: whatever else the index holds stays staged and uncommitted.
 /// With no path the commit is empty. The paths are literal, never patterns, and are passed on
 /// standard input, so no count or name of them is too many for a command line. Answers the
-/// new `HEAD`.
+/// new `HEAD`. A nested repository among `paths`, which git would record as a gitlink `HEAD`
+/// does not have, is refused and nothing committed ([`new_gitlinks`]).
 pub fn commit_paths(tree: &Path, paths: &[String], message: &str) -> Result<String> {
     let mut commit: Vec<&str> = Vec::from(IDENTITY);
     commit.extend(["commit", "-q", "--only", "-m", message]);
@@ -454,12 +1045,58 @@ pub fn commit_paths(tree: &Path, paths: &[String], message: &str) -> Result<Stri
         let mut add = vec!["--literal-pathspecs", "add", "-A"];
         add.extend(from_input);
         raw(tree, &add, Some(&list))?;
+        let gitlinks = new_gitlinks(tree, paths)?;
+        if !gitlinks.is_empty() {
+            bail!(
+                "not committed: {} would be recorded as a gitlink, a nested repository's commit, which HEAD does not have",
+                gitlinks.join(", ")
+            );
+        }
         let mut literal = vec!["--literal-pathspecs"];
         literal.extend(commit);
         literal.extend(from_input);
         raw(tree, &literal, Some(&list))?;
     }
     head(tree)
+}
+
+/// The paths among `paths`, or under one of them, that the index holds as a gitlink (mode
+/// `160000`) where `HEAD` holds none: a nested repository `add` recorded. None when there is no
+/// `HEAD` to compare with.
+fn new_gitlinks(tree: &Path, paths: &[String]) -> Result<Vec<String>> {
+    if resolve(tree, "HEAD")?.is_none() {
+        return Ok(Vec::new());
+    }
+    let listed = raw(
+        tree,
+        &[
+            "diff-index",
+            "--cached",
+            "--raw",
+            "--no-renames",
+            "-z",
+            "HEAD",
+        ],
+        None,
+    )?;
+    let listed = String::from_utf8_lossy(&listed);
+    let mut tokens = listed.split('\0');
+    let mut found = Vec::new();
+    while let Some(meta) = tokens.next() {
+        let Some(path) = tokens.next() else { break };
+        let fields: Vec<&str> = meta.trim_start_matches(':').split_whitespace().collect();
+        let (Some(old), Some(new)) = (fields.first(), fields.get(1)) else {
+            continue;
+        };
+        let given = paths.iter().any(|given| {
+            let given = given.trim_end_matches('/');
+            path == given || path.starts_with(&format!("{given}/"))
+        });
+        if *new == "160000" && *old != "160000" && given {
+            found.push(path.to_owned());
+        }
+    }
+    Ok(found)
 }
 
 /// Discards every uncommitted change but what is under the cases directory: the index and the
@@ -692,10 +1329,24 @@ fn make_link(target: &Path, at: &Path) -> Result<()> {
     )
 }
 
-/// The directories under a git directory whose files git runs or reads as configuration: the
-/// hooks, and `info/` (attributes, exclude, sparse-checkout). Every other file there (git's
-/// own state, other tools' files and locks, an editor's entries) is not the step's concern.
-const GUARDED_DIRS: [&str; 2] = ["hooks", "info"];
+/// The entries of a git directory whose files git runs, reads as configuration, or reads to
+/// find the repository's objects and history: the hooks, `info/` (attributes, exclude,
+/// sparse-checkout), a linked worktree's `commondir` and `gitdir` (where its common git
+/// directory is), `shallow` (which commits have no parents), `objects/info/alternates` (other
+/// object directories read as this one's) and the commit-graph, single or split
+/// (`objects/info/commit-graph`, `objects/info/commit-graphs/`), a cache of the history. Every
+/// other file there (git's own state, other tools' files and locks, an editor's entries) is not
+/// the step's concern.
+const GUARDED_ENTRIES: [&str; 8] = [
+    "hooks",
+    "info",
+    "commondir",
+    "gitdir",
+    "shallow",
+    "objects/info/alternates",
+    "objects/info/commit-graph",
+    "objects/info/commit-graphs",
+];
 
 /// The configuration files of a git directory, guarded by the keys in them that run code or
 /// change what git does ([`is_guarded_key`]).
@@ -716,10 +1367,10 @@ fn siblings(dir: &Path, own: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// The guarded directories of the git directory `dir`, relative to it: its hooks and `info/`,
-/// and each sibling worktree's `info/` (its sparse-checkout).
+/// The guarded entries of the git directory `dir`, relative to it ([`GUARDED_ENTRIES`]), and
+/// each sibling worktree's `info/` (its sparse-checkout).
 fn guarded_roots(dir: &Path, own: &Path) -> Vec<PathBuf> {
-    GUARDED_DIRS
+    GUARDED_ENTRIES
         .iter()
         .map(PathBuf::from)
         .chain(
@@ -748,14 +1399,15 @@ fn config_files(dir: &Path, own: &Path) -> Vec<PathBuf> {
 /// lower case), runs code or changes what git does: `core.*`, `filter.*`, `diff.*`,
 /// `merge.*`, `alias.*`, `include.*`, `includeIf.*`, `credential.*`, `remote.<name>.*`,
 /// `url.*`, `gpg.*`, `sequence.*`, `pager.*`, `trailer.*`, `difftool.*`, `mergetool.*`,
-/// `submodule.*`, `extensions.*`. Any other key (`branch.<name>.vscode-merge-base`, a tool's
+/// `submodule.*`, `extensions.*`; and what changes what a push sends, where it goes or how a
+/// commit records its message: `push.*`, `http.*`, `i18n.*`. Any other key (`branch.<name>.vscode-merge-base`, a tool's
 /// own section) is not.
 fn is_guarded_key(key: &str) -> bool {
     let section = key.split('.').next().unwrap_or_default();
     match section {
         "core" | "filter" | "diff" | "merge" | "alias" | "include" | "includeif" | "credential"
         | "url" | "gpg" | "sequence" | "pager" | "trailer" | "difftool" | "mergetool"
-        | "submodule" | "extensions" => true,
+        | "submodule" | "extensions" | "push" | "http" | "i18n" => true,
         "remote" => key.split('.').count() >= 3,
         _ => false,
     }
@@ -901,7 +1553,7 @@ fn unlock(dir: &Path, roots: &[PathBuf]) -> BTreeMap<PathBuf, u32> {
     modes
 }
 
-/// The guarded part of one git directory: its hooks and `info/` (and its sibling worktrees'
+/// The guarded part of one git directory: its [`GUARDED_ENTRIES`] (and its sibling worktrees'
 /// `info/`) file by file with every directory's mode, and its configuration files (and its
 /// sibling worktrees' `config.worktree`).
 #[derive(Debug, Clone)]
@@ -945,13 +1597,15 @@ pub struct GitDirPutBack {
 
 /// The tree as it was before a judgement step or a validator's observation: what its change is
 /// measured against and what a refused or failed one is put back to. `HEAD` and its branch,
-/// and every other branch and tag of the repository (the case's base, a sibling case's branch)
-/// but one checked out in another worktree, which is that session's ([`unguarded_refs`]), the
-/// case's base and its own branch excepted ([`Checkpoint::take_guarding`]); the index's entries
+/// and every other ref of the repository (the case's base, a sibling case's branch, a tag, a
+/// remote-tracking ref) but a branch checked out in another worktree, which is that session's
+/// ([`unguarded_refs`]), the case's base and its own branch excepted
+/// ([`Checkpoint::take_guarding`]); the index's entries
 /// and the index file itself; every uncommitted path outside the cases directory with what was
 /// at it (a validator's run may leave one); the ignored paths with what is at each a file git
-/// names; and what git runs or
-/// reads as configuration in the git directories: the hooks, `info/`, the configuration's keys.
+/// names; and what git runs, reads as configuration, or reads to find the objects and the
+/// history in the git directories: the hooks, `info/`, the configuration's keys, `commondir`,
+/// `gitdir`, `shallow`, `objects/info/alternates` and the commit-graph.
 #[derive(Debug, Clone)]
 pub struct Checkpoint {
     head: String,
@@ -1034,17 +1688,15 @@ fn unguarded_refs(tree: &Path, branch: Option<&str>, kept: &[String]) -> Result<
     Ok(refs)
 }
 
-/// The refs a checkpoint guards beside `HEAD`: every branch and tag of the repository, each with
-/// the object it names, but those `unguarded` names ([`unguarded_refs`]).
+/// The refs a checkpoint guards beside `HEAD`: every ref of the repository, branches, tags and
+/// remote-tracking refs (what the scan before a push reads as what a remote holds) and any other
+/// (`refs/notes/`, `refs/replace/`, a ref named like another, which git's lookup of a short
+/// name would find), each with the object it names, but those `unguarded` names
+/// ([`unguarded_refs`]).
 fn guarded_refs(tree: &Path, unguarded: &BTreeSet<String>) -> Result<BTreeMap<String, String>> {
     let listed = raw(
         tree,
-        &[
-            "for-each-ref",
-            "--format=%(objectname) %(refname)",
-            "refs/heads/",
-            "refs/tags/",
-        ],
+        &["for-each-ref", "--format=%(objectname) %(refname)"],
         None,
     )?;
     let listed = String::from_utf8(listed).map_err(|_| anyhow!("git named a ref not in UTF-8"))?;
@@ -1072,8 +1724,8 @@ fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<String, C
 }
 
 impl Checkpoint {
-    /// Takes the checkpoint of `tree`, guarding `HEAD` and its branch and every other branch and
-    /// tag of the repository but one another worktree has checked out.
+    /// Takes the checkpoint of `tree`, guarding `HEAD` and its branch and every other ref of the
+    /// repository, replace refs and notes among them, but a branch another worktree checked out.
     pub fn take(tree: &Path) -> Result<Self> {
         Self::take_guarding(tree, &[])
     }

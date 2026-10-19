@@ -1,0 +1,23 @@
+format: takt-loop-metrics/1
+metrics:
+  turns:
+    version: 1
+    definition: the improvement turns recorded, one a self.improvement case under .engineering/cases
+  accepted_share:
+    version: 1
+    definition: the rows whose verdict is accepted over all rows, open turns included
+    target:
+      at_least: 0.8
+  promoted_share:
+    version: 1
+    definition: the promoted rows over all rows, open turns included
+    target:
+      at_least: 0.8
+  median_tokens_per_accepted_turn:
+    version: 1
+    definition: the median of the tokens of the accepted rows that have a run record
+  finding_to_verified:
+    version: 1
+    definition: the median, over the rows with both, of verified_at minus filed_at, in seconds
+    target:
+      at_most: 86400

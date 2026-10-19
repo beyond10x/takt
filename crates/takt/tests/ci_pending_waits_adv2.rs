@@ -28,6 +28,17 @@ struct RefusingMerge {
 }
 
 impl Runner for RefusingMerge {
+    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
+    /// dropped.
+    fn run_env(
+        &self,
+        tree: &std::path::Path,
+        argv: &[String],
+        _: &[(&str, &str)],
+    ) -> anyhow::Result<takt::forge::Exit> {
+        self.run(tree, argv)
+    }
+
     fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         let merge = argv.first().map(String::as_str) == Some("b10x-gates")
             && argv.iter().any(|arg| arg == "PUT");

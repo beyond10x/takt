@@ -84,10 +84,14 @@ fn run(case: &str, outcome: &str) -> Vec<Event> {
     vec![opened(case), judged(100), last]
 }
 
-/// Writes `runs` to the case `case`'s record under `repo` through `takt::events`.
+/// Writes `runs` to the case `case`'s record under `repo` through `takt::events`, and for a
+/// scenario case a held-out result that passed beside it.
 fn record(repo: &Path, case: &str, runs: &[Vec<Event>]) {
     let dir = repo.join(CASES_DIR).join(case);
     fs::create_dir_all(&dir).expect("a case directory");
+    if takt::scorecard::scenario_of(case).is_some() {
+        fs::write(dir.join(takt::scorecard::HELD_OUT_FILE), "PASS\n").expect("the held-out result");
+    }
     let events = Events::new(&dir);
     for run in runs {
         let mut step = 0;
@@ -113,16 +117,19 @@ fn trials(name: &str, outcomes: &[&str]) -> Scratch {
 const ACCEPTED: &str = "Completed (accepted)";
 const NO_PROGRESS: &str = "NoProgress";
 
-/// `candidate` compared with `saved`, saved first as `takt scorecard --save` saves it.
+/// `candidate` compared with `saved`, saved first as `takt scorecard --save` saves it, under a
+/// rule of one trial: these cases are about the ranks and the margin at any n, and five trials
+/// are story:scorecard-against-needs-the-trials'.
 fn compare(candidate: &Path, saved: &Path, name: &str) -> (usize, String) {
     let saves = scratch(&format!("{name}-saves"));
     let file = Scorecard::read(saved)
         .expect("the saved side reads")
         .save(&saves, "abcdef1234567", Named::Build)
         .expect("saved");
+    let mut card = Scorecard::read(candidate).expect("the candidate reads");
+    card.rule.trials = 1;
     let mut out = Vec::new();
-    let worse = Scorecard::read(candidate)
-        .expect("the candidate reads")
+    let worse = card
         .against(&Scorecard::load(&file).expect("loads"), &mut out)
         .expect("the comparison prints");
     (worse, String::from_utf8(out).expect("utf-8"))
@@ -306,6 +313,9 @@ fn row(case: &str, outcome: &str) -> Row {
         wall_ms: 1000,
         saturated: false,
         binary: None,
+        stop: outcome.to_owned(),
+        held_out: None,
+        opened_binary: None,
     }
 }
 
@@ -323,6 +333,9 @@ fn self_is_never_worse_and_two_lowered_cases_always_are() {
     let mut missed: Vec<String> = Vec::new();
     for trial in 0..200 {
         let mut card = base.clone();
+        // One to six cases a scenario: compared under a rule of one trial, since the property
+        // is the margin's at any n, and five trials are story:scorecard-against-needs-the-trials'.
+        card.rule.trials = 1;
         for scenario in 1..=1 + rng.next(3) {
             for case in 1..=1 + rng.next(6) {
                 let id = format!("scenario-{scenario}-trial-{case}");

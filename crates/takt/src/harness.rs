@@ -212,7 +212,9 @@ impl ClaudeCode {
         text
     }
 
-    fn parse(result: &str) -> Result<(String, String)> {
+    /// The action and summary of a reply, read from its last line that opens a JSON object naming
+    /// `action`; no such line, or one that does not parse or names no string action, is an error.
+    pub fn parse(result: &str) -> Result<(String, String)> {
         for line in result.lines().rev() {
             let line = line.trim();
             if line.starts_with('{') && line.contains("\"action\"") {

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:check-finding-positive-control
 kind: story
-status: active
+status: implemented
 title: check-finding says not_reproduced only when the command reached the scenario
 tags:
 - priority:high
@@ -17,10 +17,11 @@ scope:
   path: scripts/check-finding
 - confidence: inferred
   path: scripts/file-finding
-revision: 6
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T01:21:29Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-19T01:21:29Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-19T06:14:33Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 
@@ -39,3 +40,17 @@ From the review of main at 9cc158b on 2026-10-19: ten independent reviewers, one
 ## Acceptance
 
 With a predicate `exit: 3` and its output string, a candidate command that exits 101 printing a panic gives `error` naming 101; one that exits 0 without the string gives `not_reproduced`; one that exits 3 with it gives `reproduced`.
+
+## Landed (wave 13)
+
+Read from `git diff --name-only 161b73f^1 161b73f` (the unit's merge into the wave branch) at the close of wave 13 (wave branch head 16ff976). A predicate may name healthy_exit; not_reproduced only on it, error for any status the predicate does not name. Shared merge with story:check-finding-builds-confined.
+
+- `.agents/planner-agent.md`
+- `.agents/reviewer-agent.md`
+- `crates/takt-cli/tests/finding_scripts.rs`
+- `crates/takt-cli/tests/finding_scripts_adv1.rs`
+- `ess/domains/takt.citations.tsv`
+- `ess/domains/takt.yaml`
+- `protocols/self-improvement/1.yaml`
+- `scripts/check-finding`
+- `scripts/file-finding`

@@ -551,6 +551,12 @@ fn the_built_in_list_is_every_built_in_validator_with_its_own_action_and_kind() 
         ("CiRead", Box::new(CiRead::new(forge.clone()))),
         ("PrMerged", Box::new(takt::validator::PrMerged::new(forge))),
         ("ChangeRead", Box::new(ChangeRead)),
+        ("LoopMeasure", Box::new(takt::loop_scorecard::LoopMeasure)),
+        (
+            "LoopDefinitionCheck",
+            Box::new(takt::loop_scorecard::LoopDefinitionCheck),
+        ),
+        ("LoopCompare", Box::new(takt::loop_scorecard::LoopCompare)),
     ];
     for (name, instance) in &instances {
         let built_in = takt::validator::BUILT_IN

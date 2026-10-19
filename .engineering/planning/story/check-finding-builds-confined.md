@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:check-finding-builds-confined
 kind: story
-status: active
+status: implemented
 title: check-finding builds the revision it checks without the operator's home or environment
 tags:
 - priority:high
@@ -17,10 +17,11 @@ scope:
   path: scripts/check-finding
 - confidence: inferred
   path: scripts/file-finding
-revision: 6
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T01:21:29Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-19T01:21:29Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-19T06:14:32Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 
@@ -38,3 +39,17 @@ From the review of main at 9cc158b on 2026-10-19: ten independent reviewers, one
 ## Acceptance
 
 A fixture revision whose `build.rs` writes `$HOME/canary` and copies its environment to a file inside the build directory leaves no `$HOME/canary`, and the copied environment holds no variable outside the allow-list; a build that writes into another revision's `builds/` directory fails.
+
+## Landed (wave 13)
+
+Read from `git diff --name-only 161b73f^1 161b73f` (the unit's merge into the wave branch) at the close of wave 13 (wave branch head 16ff976). check-finding builds the revision under check and runs the predicate in bubblewrap, the protocol sources bound read-only; a bwrap that did not run the command to its end gives no result. Shared merge with story:check-finding-positive-control. Wave 13 E1.
+
+- `.agents/planner-agent.md`
+- `.agents/reviewer-agent.md`
+- `crates/takt-cli/tests/finding_scripts.rs`
+- `crates/takt-cli/tests/finding_scripts_adv1.rs`
+- `ess/domains/takt.citations.tsv`
+- `ess/domains/takt.yaml`
+- `protocols/self-improvement/1.yaml`
+- `scripts/check-finding`
+- `scripts/file-finding`

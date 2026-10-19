@@ -19,11 +19,14 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
+sha1-checked = { workspace = true }
 sha2 = { workspace = true }
 time = { workspace = true }
+unsafe-libyaml = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"
 
 [dev-dependencies]
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 serde_json = { workspace = true }

@@ -77,10 +77,14 @@ fn stop(stop: &str, steps: u64, tokens: u64) -> Event {
     }
 }
 
-/// Writes `runs` to the case `case`'s record under `repo` through `takt::events`.
+/// Writes `runs` to the case `case`'s record under `repo` through `takt::events`, and for a
+/// scenario case a held-out result that passed beside it.
 fn record(repo: &Path, case: &str, runs: &[Vec<Event>]) -> PathBuf {
     let dir = repo.join(CASES_DIR).join(case);
     fs::create_dir_all(&dir).expect("a case directory");
+    if takt::scorecard::scenario_of(case).is_some() {
+        fs::write(dir.join(takt::scorecard::HELD_OUT_FILE), "PASS\n").expect("the held-out result");
+    }
     let events = Events::new(&dir);
     for run in runs {
         let mut step = 0;
@@ -94,7 +98,12 @@ fn record(repo: &Path, case: &str, runs: &[Vec<Event>]) -> PathBuf {
     dir
 }
 
+/// `card` compared with the scorecard saved at `saved`, under a rule of one trial: these cases
+/// are about the ranks, the definitions and the wall time on fewer than five cases, and five
+/// trials are story:scorecard-against-needs-the-trials'.
 fn against(card: &Scorecard, saved: &Path) -> (usize, String) {
+    let mut card = card.clone();
+    card.rule.trials = 1;
     let mut out = Vec::new();
     let worse = card
         .against(
@@ -215,11 +224,26 @@ fn a_baseline_scenario_the_candidate_never_ran_is_not_passed_silently() {
     let candidate = scratch("missing-candidate");
     fs::create_dir_all(candidate.join(CASES_DIR).join("scenario-1-trial-2"))
         .expect("a case directory without a record");
-    let card = Scorecard::read(&candidate).expect("the scorecard reads");
-    let (worse, text) = against(&card, &saved);
+    let mut card = Scorecard::read(&candidate).expect("the scorecard reads");
+    // Under a rule of one trial, as `against` compares; no case is fewer than one, so the
+    // comparison gives no verdict and refuses, as a promotion does (review N7).
+    card.rule.trials = 1;
+    let mut out = Vec::new();
+    let compared = card.against(
+        &Scorecard::load(&saved).expect("the saved scorecard reads"),
+        &mut out,
+    );
+    let text = String::from_utf8(out).expect("utf-8");
+    let error = format!(
+        "{:#}",
+        compared.expect_err(&format!(
+            "scenario 1 has a saved run and no candidate run, and the comparison is clean:\n{text}"
+        ))
+    );
+    assert!(error.contains("scenario 1 (0 of 1)"), "{error}");
     assert!(
-        worse > 0,
-        "scenario 1 has a saved run and no candidate run, and the comparison is clean:\n{text}"
+        text.contains("scenario 1  too few cases (0 of 1)"),
+        "{text}"
     );
 }
 

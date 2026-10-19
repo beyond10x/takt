@@ -6,7 +6,15 @@
 //! [`BINARY_FILE`] beside the record when the operator wrote one: its sha256 and a note, a
 //! statement marked as the operator's, never a figure; a promotion checks it against the binary
 //! it hashes. A file that does not read leaves its case's runs stating no binary and lists the
-//! case with the reason; it never stops the scorecard.
+//! case with the reason; it never stops the scorecard. Each run also carries the revision its
+//! own `opened` line names (`binary`), which a promotion checks against the revision promoted.
+//!
+//! A scenario run's outcome comes from the held-out check, never from the run's own record: the
+//! runner writes the check's result in a [`HELD_OUT_FILE`] beside the case's record, and a
+//! scenario case with runs and none, or one that does not read, refuses the scorecard naming the
+//! case. A result that is no pass scores every run of the case `failed`; a pass leaves the
+//! outcome the run's stop gives. The run's own stop is kept beside the outcome, and a run whose
+//! stop claims a completion while the held-out check failed is named as a disagreement.
 //!
 //! A run is the span from one `opened` line to its `stop`, or to the next `opened` or the end
 //! of the record when it has none (a run that ended on an error); a `skipped` line is no
@@ -19,8 +27,8 @@
 //! cases). Compared with a saved
 //! one, a scenario is worse when, for some outcome rank, the candidate's cases at that rank or
 //! better fall short of the saved share of its own n by more than the margin (at equal n: more
-//! than `margin` cases fewer), when its median of tokens exceeds the saved maximum, or when the
-//! saved scorecard has the scenario and the candidate has no run of it. Tokens are printed per
+//! than `margin` cases fewer), or when its median of tokens exceeds the saved maximum; a side
+//! with fewer cases than the rule's trials, none included, gets no verdict. Tokens are printed per
 //! scenario and side as n, minimum, median and maximum over cases with the difference of the
 //! medians. A metric whose definition changed between the two is printed with both figures and
 //! does not make a scenario worse; outcomes are compared under the current definition whatever
@@ -39,6 +47,16 @@ use crate::events::{EVENTS_FILE, Events};
 /// The saved scorecard's format.
 pub const FORMAT: &str = "takt-scorecard/1";
 
+/// The held-out check's result for a scenario case, in the case directory beside its record,
+/// written by the runner after the run and never by the takt binary under judgement: the first
+/// line the check's verdict as it printed it, `PASS` for a pass and any other text (`FAIL:
+/// <reason>`, `no pull request`) for a failure, that line kept verbatim; every further line a
+/// note, not read.
+pub const HELD_OUT_FILE: &str = "held-out.txt";
+
+/// The outcome of a scenario run whose held-out check did not pass, whatever its stop said.
+pub const FAILED: &str = "failed";
+
 /// The operator's statement of the binary a case's runs were made with, in the case directory
 /// beside its record: the first line `<path>\t<sha256>`, the path as the operator wrote it
 /// (`~` and all; only the digest is read, 64 lower-case hex digits), every further line the
@@ -48,7 +66,7 @@ pub const BINARY_FILE: &str = "binary.txt";
 /// Each metric with the version of its definition. A changed definition takes the next
 /// version, so a comparison with a scorecard saved under the previous one prints both figures.
 pub const METRICS: [(&str, u32); 7] = [
-    ("outcome", 1),
+    ("outcome", 2),
     ("steps", 1),
     ("tokens", 1),
     ("refusals", 1),
@@ -75,10 +93,18 @@ pub struct Row {
     pub case: String,
     /// The scenario, from a case id `scenario-<id>-trial-<n>`; none for any other id.
     pub scenario: Option<String>,
-    /// The stop: a `Completed` stop's outcome (`accepted`), else the stop's kind
-    /// (`ApprovalRequired`, `NoProgress`, ...); `error` for a run that ended on an error,
-    /// `unfinished` for one with neither.
+    /// The outcome: for a scenario run, [`FAILED`] when its held-out check did not pass, else
+    /// its `stop`; for any other run, its `stop`.
     pub outcome: String,
+    /// The run's own stop: a `Completed` stop's outcome (`accepted`), else the stop's kind
+    /// (`ApprovalRequired`, `NoProgress`, ...); `error` for a run that ended on an error,
+    /// `unfinished` for one with neither. Empty on a file saved before it had the field.
+    #[serde(default)]
+    pub stop: String,
+    /// The held-out check's result for the run's case ([`HELD_OUT_FILE`]), on every run of a
+    /// scenario case; none on any other run, and on a file saved before it had the field.
+    #[serde(default)]
+    pub held_out: Option<HeldOut>,
     /// The highest step number of the run's lines: the steps it took.
     pub steps: u64,
     /// The sum of the tokens the harness reported on the run's `step` lines.
@@ -98,6 +124,48 @@ pub struct Row {
     /// when nothing states it.
     #[serde(default)]
     pub binary: Option<RunBinary>,
+    /// The revision the run's binary was built from, as its `opened` line names it (`binary`,
+    /// what `takt --version` prints: `<sha>`, `<sha>-dirty` or `unknown revision`); none when
+    /// the line names none.
+    #[serde(default)]
+    pub opened_binary: Option<String>,
+}
+
+impl Row {
+    /// Whether the run's own stop claims a completion while its held-out check did not pass.
+    #[must_use]
+    pub fn disagrees(&self) -> bool {
+        self.held_out.as_ref().is_some_and(|held| !held.passed) && is_completed(&self.stop)
+    }
+}
+
+/// The held-out check's result for a scenario case, as the runner wrote it beside the record
+/// ([`HELD_OUT_FILE`]): whether it passed, and its first line verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldOut {
+    pub passed: bool,
+    pub result: String,
+}
+
+/// The held-out check's result in the case directory `dir`; none without the file. A file that
+/// does not read, or whose first line is empty, is the reason, starting with [`HELD_OUT_FILE`].
+fn held_out(dir: &Path) -> std::result::Result<Option<HeldOut>, String> {
+    let path = dir.join(HELD_OUT_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{HELD_OUT_FILE} does not read: {error}")),
+    };
+    let result = text.lines().next().unwrap_or("").trim_end_matches('\r');
+    if result.trim().is_empty() {
+        return Err(format!(
+            "{HELD_OUT_FILE} states no result: its first line is the held-out check's verdict, `PASS` or the failure"
+        ));
+    }
+    Ok(Some(HeldOut {
+        passed: result == "PASS",
+        result: result.to_owned(),
+    }))
 }
 
 /// Who stated a run's binary: the operator, in a [`BINARY_FILE`] beside the run's record, for
@@ -288,21 +356,22 @@ pub fn scenario_of(case: &str) -> Option<&str> {
 
 /// An outcome's rank, higher better: `accepted`; an approval or a wait (`ApprovalRequired`,
 /// `Waiting`); a budget stop (`Iterations`, `Hours`, `Tokens`); `NoProgress`, and with it every
-/// other stop (`NothingAdmissible`, `StepRefused`, another outcome); an error, or no stop.
+/// other stop (`NothingAdmissible`, `StepRefused`, another outcome); an error, no stop, or a
+/// held-out check that did not pass ([`FAILED`]).
 #[must_use]
 pub fn rank(outcome: &str) -> u8 {
     match outcome {
         "accepted" => 4,
         "ApprovalRequired" | "Waiting" => 3,
         "Iterations" | "Hours" | "Tokens" => 2,
-        "error" | "unfinished" => 0,
+        "error" | "unfinished" | FAILED => 0,
         _ => 1,
     }
 }
 
-/// The outcomes that are no completion: a stop's kind, an error, no stop. Any other outcome
-/// is one a `Completed` stop named.
-const NOT_COMPLETED: [&str; 10] = [
+/// The outcomes that are no completion: a stop's kind, an error, no stop, a held-out check
+/// that did not pass. Any other outcome is one a `Completed` stop named.
+const NOT_COMPLETED: [&str; 11] = [
     "ApprovalRequired",
     "Waiting",
     "Iterations",
@@ -313,6 +382,7 @@ const NOT_COMPLETED: [&str; 10] = [
     "NoProgress",
     "error",
     "unfinished",
+    FAILED,
 ];
 
 /// Whether `outcome` is one a `Completed` stop named: the case completed with it.
@@ -379,6 +449,7 @@ struct Span {
     errors: u64,
     saturated: bool,
     stop: Option<String>,
+    binary: Option<String>,
 }
 
 /// A run's outcome from its stop: a `Completed` stop's outcome (`accepted`), else the stop's
@@ -407,7 +478,9 @@ impl Span {
             case: case.to_owned(),
             scenario: scenario_of(case).map(str::to_owned),
             no_progress: u64::from(outcome == "NoProgress"),
+            stop: outcome.clone(),
             outcome,
+            held_out: None,
             steps: self.steps,
             tokens: self.tokens,
             refusals: self.refusals,
@@ -415,6 +488,7 @@ impl Span {
             wall_ms,
             saturated: self.saturated || too_long,
             binary: None,
+            opened_binary: self.binary,
         }
     }
 }
@@ -432,6 +506,9 @@ fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
         let Some(span) = open.as_mut() else {
             continue;
         };
+        if line["event"] == "opened" {
+            span.binary = line["binary"].as_str().map(str::to_owned);
+        }
         if span.stop.is_some() || line["event"] == "skipped" {
             continue;
         }
@@ -517,12 +594,25 @@ fn is_revision(revision: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// What a run whose own stop and held-out check disagree says on each side; none for a run
+/// that has no disagreement.
+fn disagreement(run: &Row) -> Option<String> {
+    let held = run.held_out.as_ref().filter(|_| run.disagrees())?;
+    Some(format!(
+        "its own stop says {}, the held-out check says {}; scored {}",
+        run.stop, held.result, run.outcome
+    ))
+}
+
 impl Scorecard {
     /// The scorecard of the runs recorded under `repo`'s cases directory, cases in name order;
     /// none when the directory is absent. A record that does not read is an error naming it;
     /// each run of a case carries the binary its [`BINARY_FILE`] states, and a file that does
     /// not read leaves that case's runs stating none and lists the case in `no_record`, the
-    /// reason in `unstated`, every other case read as without it.
+    /// reason in `unstated`, every other case read as without it. Each run of a scenario case
+    /// carries the held-out result its [`HELD_OUT_FILE`] states, and takes its outcome from it;
+    /// a scenario case with runs and no such file, or one that does not read, is an error
+    /// naming the case.
     pub fn read(repo: &Path) -> Result<Self> {
         let cases = repo.join(CASES_DIR);
         let mut names: Vec<String> = Vec::new();
@@ -568,6 +658,25 @@ impl Scorecard {
             for row in &mut rows {
                 row.binary = binary.clone();
             }
+            if !rows.is_empty() && scenario_of(&name).is_some() {
+                let held = match held_out(&dir) {
+                    Ok(Some(held)) => held,
+                    Ok(None) => bail!(
+                        "{name}: a scenario case with no held-out result ({} is missing); its runs' outcome comes from the held-out check the runner writes beside the record, never from the runs' own stop, so the scorecard is not read",
+                        dir.join(HELD_OUT_FILE).display()
+                    ),
+                    Err(reason) => bail!(
+                        "{name}: {reason} ({}); its runs' outcome comes from the held-out check, so the scorecard is not read",
+                        dir.join(HELD_OUT_FILE).display()
+                    ),
+                };
+                for row in &mut rows {
+                    if !held.passed {
+                        FAILED.clone_into(&mut row.outcome);
+                    }
+                    row.held_out = Some(held.clone());
+                }
+            }
             if rows.is_empty() {
                 card.no_record.push(name);
             } else {
@@ -598,8 +707,9 @@ impl Scorecard {
     }
 
     /// Prints the definitions' versions, then a row a case, its runs listed under it as
-    /// `<case>#<n>`, then each case with no record, and each case whose [`BINARY_FILE`] does
-    /// not read with the reason.
+    /// `<case>#<n>`, each with its own stop and the held-out result beside the outcome, then
+    /// each run whose stop and held-out check disagree, each case with no record, and each case
+    /// whose [`BINARY_FILE`] does not read with the reason.
     pub fn print(&self, out: &mut dyn Write) -> std::io::Result<()> {
         let definitions: Vec<String> = self
             .metrics
@@ -619,6 +729,8 @@ impl Scorecard {
                 "case",
                 "scenario",
                 "outcome",
+                "stop",
+                "held_out",
                 "steps",
                 "tokens",
                 "refusals",
@@ -630,13 +742,19 @@ impl Scorecard {
             .map(str::to_owned)
             .to_vec(),
         ];
-        let line = |label: String, case: &Case| {
+        let line = |label: String, case: &Case, run: Option<&Row>| {
             let mut cells = vec![
                 label,
                 case.scenario.clone().unwrap_or_else(|| "-".to_owned()),
+                figure(case, "outcome"),
+                run.map_or_else(|| "-".to_owned(), |run| run.stop.clone()),
+                match run.and_then(|run| run.held_out.as_ref()) {
+                    Some(held) if held.passed => "pass".to_owned(),
+                    Some(_) => "fail".to_owned(),
+                    None => "-".to_owned(),
+                },
             ];
             for metric in [
-                "outcome",
                 "steps",
                 "tokens",
                 "refusals",
@@ -649,12 +767,17 @@ impl Scorecard {
             cells.push(if case.saturated { "saturated" } else { "-" }.to_owned());
             cells
         };
+        let mut disagreements = Vec::new();
         for case in &cases {
-            table.push(line(case.case.clone(), case));
+            table.push(line(case.case.clone(), case, None));
             let runs = self.rows.iter().filter(|row| row.case == case.case);
             for (n, run) in runs.enumerate() {
+                let label = format!("{}#{}", case.case, n + 1);
                 if let Some(single) = Case::of(&[run]) {
-                    table.push(line(format!("  {}#{}", case.case, n + 1), &single));
+                    table.push(line(format!("  {label}"), &single, Some(run)));
+                }
+                if let Some(text) = disagreement(run) {
+                    disagreements.push(format!("disagreement  {label}  {text}"));
                 }
             }
         }
@@ -668,6 +791,9 @@ impl Scorecard {
                 .map(|(cell, width)| format!("{cell:<width$}"))
                 .collect();
             writeln!(out, "{}", cells.join("  ").trim_end())?;
+        }
+        for line in disagreements {
+            writeln!(out, "{line}")?;
         }
         for case in &self.no_record {
             match self.unstated.get(case) {
@@ -714,7 +840,10 @@ impl Scorecard {
         Ok(path)
     }
 
-    /// A saved scorecard; one that does not read, or of another format, is an error naming it.
+    /// A saved scorecard; one that does not read, or of another format, is an error naming it,
+    /// and so is one with a run whose scenario is not the one its case id names
+    /// ([`scenario_of`]), or whose outcome is not what its held-out result makes it ([`FAILED`]
+    /// unless it passed, else its stop).
     pub fn load(path: &Path) -> Result<Self> {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
@@ -727,6 +856,51 @@ impl Scorecard {
                 card.format
             );
         }
+        let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
+        for row in &card.rows {
+            let n = counted.entry(row.case.as_str()).or_insert(0);
+            *n += 1;
+            if row.scenario.as_deref() != scenario_of(&row.case) {
+                bail!(
+                    "{}: run {}#{n} gives the scenario {}, but its case id names {}; a scenario is read from the case id, so the scorecard is not read",
+                    path.display(),
+                    row.case,
+                    row.scenario.as_deref().unwrap_or("none"),
+                    scenario_of(&row.case).unwrap_or("none")
+                );
+            }
+            let Some(held) = &row.held_out else {
+                continue;
+            };
+            if held.passed != (held.result == "PASS") {
+                bail!(
+                    "{}: run {}#{n} has the held-out result {:?}, which {}, but the file says passed {}; whether a run passed is read from its result, so the scorecard is not read",
+                    path.display(),
+                    row.case,
+                    held.result,
+                    if held.result == "PASS" {
+                        "passed"
+                    } else {
+                        "did not pass"
+                    },
+                    held.passed
+                );
+            }
+            let expected = if held.passed {
+                row.stop.as_str()
+            } else {
+                FAILED
+            };
+            if row.outcome != expected {
+                bail!(
+                    "{}: run {}#{n} gives the outcome {}, but its held-out result {:?} makes it {expected:?}; a saved scorecard whose outcomes disagree with their held-out results is not read",
+                    path.display(),
+                    row.case,
+                    row.outcome,
+                    held.result
+                );
+            }
+        }
         Ok(card)
     }
 
@@ -738,10 +912,14 @@ impl Scorecard {
     /// some rank, the candidate's cases at that rank or better fall short of the saved share of
     /// the candidate's n by more than the margin (at equal n: by more than `margin` cases),
     /// under the current definition; when its median of tokens exceeds the saved maximum, the
-    /// token definition unchanged; or when the saved scorecard has the scenario and the
-    /// candidate has no run of it (`no run`). A scorecard is never worse than itself; one case
+    /// token definition unchanged. A scorecard is never worse than itself; one case
     /// lowered is within a margin of one, two cases lowered in one scenario never are. The
-    /// number of scenarios marked worse.
+    /// trials apply as a promotion applies them: a scenario the saved scorecard has with fewer
+    /// cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), and
+    /// any scenario with fewer on the candidate's side, none included (`too few cases (<n> of
+    /// <trials>)`), gets no verdict, and once every scenario is printed the comparison is an
+    /// error naming each such scenario, as a promotion refuses one. A case a run of which disagrees with its held-out check is named so beside its
+    /// outcome. The number of scenarios marked worse.
     pub fn against(&self, saved: &Scorecard, out: &mut dyn Write) -> Result<usize> {
         let version = |card: &Scorecard, metric: &str| {
             card.metrics
@@ -772,6 +950,7 @@ impl Scorecard {
             .filter_map(|case| case.scenario.as_deref())
             .collect();
         let mut worse = 0;
+        let mut too_few: Vec<String> = Vec::new();
         for scenario in scenarios {
             let of = |cases: &[Case]| -> Vec<Case> {
                 cases
@@ -782,15 +961,48 @@ impl Scorecard {
             };
             let (candidate, baseline) = (of(&candidates), of(&baselines));
             for case in &candidate {
-                writeln!(out, "{}  scenario {scenario}  {}", case.case, case.outcome)?;
+                let disagrees = self
+                    .rows
+                    .iter()
+                    .filter(|row| row.case == case.case)
+                    .find_map(disagreement);
+                match disagrees {
+                    Some(text) => writeln!(
+                        out,
+                        "{}  scenario {scenario}  {}  disagreement: {text}",
+                        case.case, case.outcome
+                    )?,
+                    None => writeln!(out, "{}  scenario {scenario}  {}", case.case, case.outcome)?,
+                }
+            }
+            // A rule of no trials still needs one case a side: there is no verdict on none.
+            let needed = usize::try_from(trials).unwrap_or(usize::MAX).max(1);
+            if !baseline.is_empty() && baseline.len() < needed {
+                writeln!(
+                    out,
+                    "scenario {scenario}  too few cases on the saved side ({} of {trials})",
+                    baseline.len()
+                )?;
+                too_few.push(format!(
+                    "scenario {scenario} (the saved side, {} of {trials})",
+                    baseline.len()
+                ));
+                continue;
+            }
+            if candidate.len() < needed {
+                writeln!(
+                    out,
+                    "scenario {scenario}  too few cases ({} of {trials})",
+                    candidate.len()
+                )?;
+                too_few.push(format!(
+                    "scenario {scenario} ({} of {trials})",
+                    candidate.len()
+                ));
+                continue;
             }
             if baseline.is_empty() {
                 writeln!(out, "scenario {scenario}  no baseline")?;
-                continue;
-            }
-            if candidate.is_empty() {
-                worse += 1;
-                writeln!(out, "scenario {scenario}  no run  worse")?;
                 continue;
             }
             let median = |cases: &[Case], metric: &str| {
@@ -893,6 +1105,12 @@ impl Scorecard {
         }
         for case in candidates.iter().filter(|case| case.scenario.is_none()) {
             writeln!(out, "{}  no scenario  not compared", case.case)?;
+        }
+        if !too_few.is_empty() {
+            bail!(
+                "too few cases for a verdict: {}; the rule needs {trials} cases a scenario on each side, so run the short side again before comparing",
+                too_few.join(", ")
+            );
         }
         Ok(worse)
     }
