@@ -379,10 +379,14 @@ types:
   # `unperformable`, 3 every other stop, 5 an error once the case is open, 1 a refusal before
   # the run. The scorecard counts every stop's kind but `completed`'s as no completion, read
   # from one list of the kinds kept beside the stops, for a stop line that does not say itself
-  # (takt.work.RunStopped `completed`). It ranks `unperformable` with the budget stops, where
-  # the same run ranked before the rule named its stop: a rule that only names the stop moves no
-  # comparison against an older baseline, which below them would read as worse and above them
-  # would flatter the candidate.
+  # (takt.work.RunStopped `completed`). It ranks `unperformable` and `disk_low` with the budget
+  # stops, the planner's ruling for a stop that only names why the run could not go on: a run
+  # that used to end on its budget ranks where it did, so naming its stop moves no comparison
+  # against an older baseline, which below them would read as worse and above them would flatter
+  # the candidate. A `--forge none` run that used to stop `no_progress` (rank 1) now ranks one
+  # higher (`unperformable`, 2) against an older baseline; real promotions measure with the
+  # GitHub forge, where `unperformable` does not fire, so the lift affects only `--forge none`
+  # trial comparisons.
   # read from: crates/takt/src/run.rs:52-71
   # read from: crates/takt/src/run.rs:7354
   # read from: crates/takt/src/run.rs:7781-7785
@@ -404,7 +408,7 @@ types:
   # read from: crates/takt/src/run.rs:809-816
   # read from: crates/takt-cli/src/main.rs:1293
   # read from: crates/takt-cli/src/main.rs:465
-  # read from: crates/takt/src/scorecard.rs:395-408
+  # read from: crates/takt/src/scorecard.rs:401-414
   # read from: crates/takt-cli/src/main.rs:1261
   # read from: crates/takt/src/run.rs:6719-6725
   # read from: crates/takt/src/run.rs:7688-7698
@@ -421,7 +425,7 @@ types:
   # read from: crates/takt-cli/src/main.rs:461
   # read from: crates/takt-cli/src/main.rs:1262-1264
   # read from: crates/takt-cli/src/main.rs:1294
-  # read from: crates/takt/src/scorecard.rs:377-389
+  # read from: crates/takt/src/scorecard.rs:377-395
   - name: takt.work.Stop
     kind: union
     tag: kind
@@ -982,7 +986,7 @@ types:
   # A saved scorecard's id: the revision of takt under test that names its file,
   # `scorecard-<revision>.json`, a commit id; a file there already is not overwritten.
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
-  # read from: crates/takt/src/scorecard.rs:870-906
+  # read from: crates/takt/src/scorecard.rs:876-912
   # Decided 2026-10-19 (story:scorecard-save-checks-binary): a save, by any caller, is named by
   # the full commit id, 40 lower-case hex digits, checked before anything else; and it is refused
   # naming the run and both revisions, writing nothing, unless every run's `opened` line names the
@@ -990,10 +994,10 @@ types:
   # mix is refused. A line names no revision when it has no `binary`, says `unknown revision` or
   # is empty: one predicate and one mix rule the save, a stated baseline (`takt promote
   # --binary-sha256`) and a trace's revision share; the planner's ruling of 2026-10-19.
-  # read from: crates/takt/src/scorecard.rs:908-938
+  # read from: crates/takt/src/scorecard.rs:914-944
   # read from: .engineering/planning/story/scorecard-save-checks-binary.md (§ Acceptance)
-  # read from: crates/takt/src/scorecard.rs:637-668
-  # read from: crates/takt/src/scorecard.rs:619-625
+  # read from: crates/takt/src/scorecard.rs:643-674
+  # read from: crates/takt/src/scorecard.rs:625-631
   - name: takt.work.ScorecardId
     kind: newtype
     of: String
@@ -1035,7 +1039,7 @@ types:
   # run of a case whose directory holds a `binary.txt`; absent otherwise.
   # read from: crates/takt/src/scorecard.rs:89-138
   # read from: crates/takt/src/scorecard.rs:370-375
-  # read from: crates/takt/src/scorecard.rs:523-569
+  # read from: crates/takt/src/scorecard.rs:529-575
   # Decided 2026-10-19 (story:scorecard-outcome-from-held-out-check): a scenario run's outcome
   # comes from the held-out check the runner wrote beside its record (takt.work.HeldOut), never
   # from the run's own record. Every run of a scenario case carries the case's result; one that
@@ -1054,7 +1058,7 @@ types:
   # outcome is its stop is a completion by that word when it is there, else by the stops this
   # binary knows.
   # read from: crates/takt/src/scorecard.rs:140-188
-  # read from: crates/takt/src/scorecard.rs:671-753
+  # read from: crates/takt/src/scorecard.rs:677-759
   # read from: .engineering/planning/story/scorecard-outcome-from-held-out-check.md (§ Outcome)
   - name: takt.work.ScorecardRow
     kind: struct
@@ -1106,7 +1110,7 @@ types:
   # `scenario` is not the one its case id names, the scenario being derived from the case id.
   # read from: crates/takt/src/scorecard.rs:50-58
   # read from: crates/takt/src/scorecard.rs:162-189
-  # read from: crates/takt/src/scorecard.rs:940-1002
+  # read from: crates/takt/src/scorecard.rs:946-1008
   - name: takt.work.HeldOut
     kind: struct
     fields:
@@ -1138,7 +1142,7 @@ types:
   # read from: crates/takt/src/scorecard.rs:60-64
   # read from: crates/takt/src/scorecard.rs:201-210
   # read from: crates/takt/src/scorecard.rs:221-247
-  # read from: crates/takt/src/scorecard.rs:671-753
+  # read from: crates/takt/src/scorecard.rs:677-759
   - name: takt.work.RunBinary
     kind: struct
     fields:
@@ -1193,7 +1197,7 @@ types:
   # integer and flagged; 1 when its outcome is `NoProgress`. Derived from the runs, never saved
   # apart from them.
   # read from: crates/takt/src/scorecard.rs:249-320
-  # read from: crates/takt/src/scorecard.rs:756-770
+  # read from: crates/takt/src/scorecard.rs:762-776
   - name: takt.work.ScorecardCase
     kind: struct
     fields:
@@ -1549,11 +1553,11 @@ types:
   # on the saved side (<n> of <trials>)` or `too few cases (<n> of <trials>)`, and the
   # comparison ends in a refusal naming each such scenario.
   # read from: .engineering/planning/design/recursive-self-improvement.md:130-138
-  # read from: crates/takt/src/scorecard.rs:1004-1020
-  # read from: crates/takt/src/scorecard.rs:1126-1150
-  # read from: crates/takt/src/scorecard.rs:1173-1201
-  # read from: crates/takt/src/scorecard.rs:1076-1100
-  # read from: crates/takt/src/scorecard.rs:1206-1211
+  # read from: crates/takt/src/scorecard.rs:1010-1026
+  # read from: crates/takt/src/scorecard.rs:1132-1156
+  # read from: crates/takt/src/scorecard.rs:1179-1207
+  # read from: crates/takt/src/scorecard.rs:1082-1106
+  # read from: crates/takt/src/scorecard.rs:1212-1217
   - name: takt.work.Comparison
     kind: enum
     variants: [no_regression, regression]
@@ -2474,6 +2478,16 @@ entities:
       # read from: crates/takt-cli/src/main.rs:1201-1222
       - name: forge
         type: takt.work.ForgeName
+      # The least free space a step needs, in GiB, on the file system of the tree and, when
+      # `CARGO_TARGET_DIR` is set, of the one holding that directory: what `--min-free-gib` sets,
+      # 10 by default, 0 turns the check off. Under it the run stops `disk_low`
+      # (takt.work.Stop) before the step. The CLI gives every run one; the library's default is
+      # 0, which reads nothing, until `Run::stop_when_disk_below` gives one in bytes.
+      # read from: crates/takt-cli/src/main.rs:393-400
+      # read from: crates/takt-cli/src/main.rs:1263
+      # read from: crates/takt/src/run.rs:6276-6278
+      - name: min_free_gib
+        type: Integer
       # The instant a case id is minted from, as `now()` writes one (`YYYY-MM-DDTHH:MM:SSZ`):
       # set when `--case-id` gives none and the run opens a case, `takt-<instant>` for an intent
       # and `story-<name>-<instant>` for a story; a run given its case id, or one that resumes a
@@ -3281,7 +3295,7 @@ entities:
   # read from: crates/takt/src/scorecard.rs:1-35
   # read from: crates/takt/src/scorecard.rs:47-76
   # read from: crates/takt/src/scorecard.rs:344-367
-  # read from: crates/takt/src/scorecard.rs:1004-1212
+  # read from: crates/takt/src/scorecard.rs:1010-1218
   - name: takt.work.Scorecard
     naming:
       summary: >-

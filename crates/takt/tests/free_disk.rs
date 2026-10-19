@@ -392,6 +392,18 @@ fn the_default_reader_reads_the_file_system_holding_the_path() {
     assert_eq!(later.device, free.device);
 }
 
+/// `DiskLow` ranks with the budget stops and `Unperformable`, the planner's ruling for a stop
+/// that only names why the run could not go on: above `NoProgress`, below a wait.
+#[test]
+fn a_disk_low_stop_ranks_with_the_budget_stops() {
+    use takt::scorecard::rank;
+    assert_eq!(rank("DiskLow"), 2);
+    assert_eq!(rank("DiskLow"), rank("Iterations"));
+    assert_eq!(rank("DiskLow"), rank("Unperformable"));
+    assert!(rank("DiskLow") > rank("NoProgress"));
+    assert!(rank("DiskLow") < rank("Waiting"));
+}
+
 /// The scorecard counts a `DiskLow` run as no completion.
 #[test]
 fn a_disk_low_stop_is_no_completion() {

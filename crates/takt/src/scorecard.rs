@@ -375,18 +375,24 @@ pub fn scenario_of(case: &str) -> Option<&str> {
 }
 
 /// An outcome's rank, higher better: `accepted`; an approval or a wait (`ApprovalRequired`,
-/// `Waiting`); a budget stop (`Iterations`, `Hours`, `Tokens`) and `Unperformable`; `NoProgress`,
-/// and with it every other stop (`NothingAdmissible`, `StepRefused`, another outcome); an error,
-/// no stop, or a held-out check that did not pass ([`FAILED`]). `Unperformable` ranks with the
-/// budget stops, where the same run ranked before the rule named its stop: a rule that only
-/// names the stop moves no comparison against an older baseline, which below them would read
-/// as worse and above them would flatter the candidate.
+/// `Waiting`); a budget stop (`Iterations`, `Hours`, `Tokens`), `Unperformable` and `DiskLow`;
+/// `NoProgress`, and with it every other stop (`NothingAdmissible`, `StepRefused`, another
+/// outcome); an error, no stop, or a held-out check that did not pass ([`FAILED`]).
+///
+/// The planner's ruling: a stop that only names why the run could not go on ranks with the
+/// budget stops, `Unperformable` and `DiskLow` both. A run that used to end on its budget ranks
+/// where it did, so naming its stop moves no comparison against an older baseline, which below
+/// the budget stops would read as worse and above them would flatter the candidate. Not every
+/// such run ranked there: a `--forge none` run that used to stop `NoProgress` (rank 1) now ranks
+/// one higher (`Unperformable`, 2) against an older baseline. Real promotions measure with the
+/// GitHub forge, where `Unperformable` does not fire, so that lift affects only `--forge none`
+/// trial comparisons.
 #[must_use]
 pub fn rank(outcome: &str) -> u8 {
     match outcome {
         "accepted" => 4,
         "ApprovalRequired" | "Waiting" => 3,
-        "Iterations" | "Hours" | "Tokens" | "Unperformable" => 2,
+        "Iterations" | "Hours" | "Tokens" | "Unperformable" | "DiskLow" => 2,
         "error" | "unfinished" | FAILED => 0,
         _ => 1,
     }
@@ -419,7 +425,7 @@ fn is_completed(outcome: &str) -> bool {
 const RANKS: [(u8, &str); 4] = [
     (4, "accepted"),
     (3, "ApprovalRequired or Waiting"),
-    (2, "a budget stop or Unperformable"),
+    (2, "a budget stop, Unperformable or DiskLow"),
     (1, "NoProgress or another stop"),
 ];
 

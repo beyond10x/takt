@@ -764,4 +764,7 @@ takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|10	run.stop_wh
 takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|11	Stop::DiskLow { .. } => EXIT_STOPPED,	sha256:257b9d4f6bec8719a069e8a1c87b905e9d9a69cfb9e634a1fa83a6b4ed73b121
 takt.work.DiskLow|- name: takt.work.DiskLow|crates/takt/src/run.rs|1	/// The file system holding the case's tree && min_bytes: u64,	sha256:9a8627aa299f328f3616c4538c866c2b5af8b62560fa7c0188dcb914a1c24fd1
 takt.work.DiskLow|- name: takt.work.DiskLow|crates/takt/src/run.rs|2	let bytes = u64::from(stat.f_bavail).saturating_mul(u64::from(stat.f_frsize));	sha256:c7a52d45bc4e26e82b0c1b9e070600c763b439178600347b59ce64df29210177
-takt.work.Stop|- name: takt.work.Stop|crates/takt/src/scorecard.rs|2	/// An outcome's rank, higher better && "Iterations" | "Hours" | "Tokens" | "Unperformable" => 2,	sha256:9f6a9f43acb7f97423501cbda9d8228a52fb40648832fc49fccb7fff682f605c
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/scorecard.rs|2	/// An outcome's rank, higher better && "Iterations" | "Hours" | "Tokens" | "Unperformable" | "DiskLow" => 2,	sha256:743433a965ce43ac81fd001e6f128eacf85ac7a0449a5aec4777a1a7c8ff9565
+takt.work.Run|- name: min_free_gib|crates/takt-cli/src/main.rs|1	/// The least free space, in GiB && min_free_gib: u64,	sha256:342ea4c71ff094c0f7b9e275ed729f7ff9d81fd6d6edcacbcc08518ca42f4986
+takt.work.Run|- name: min_free_gib|crates/takt-cli/src/main.rs|2	looping.min_free_gib.saturating_mul(1 << 30),	sha256:7b816499f96c462145061f1ef95c6b82a665cbf5fdfee1096af92c70eeaa238f
+takt.work.Run|- name: min_free_gib|crates/takt/src/run.rs|1	/// The least free space, in bytes, a step needs && min_free: u64,	sha256:3a02c491586e2d0dd59694bb2739bb26297646338ab8374adc44cdd91926f661
