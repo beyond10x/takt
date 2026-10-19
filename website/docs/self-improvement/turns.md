@@ -42,8 +42,8 @@ The run record and the case files:
 
 ## Turn 2: candidate runs only
 
-The finding is `story:case-id-is-a-valid-branch-name`. Its candidate ran 5 times at 8d49743 and,
-after review, 5 times at 834205f, against 5 baseline runs at a0b8576 ([Runs](./runs.mdx)). The turn
+The finding is `story:case-id-is-a-valid-branch-name`. Its candidate ran 5 times at d74da0c and,
+after review, 5 times at 98719c3, against 5 baseline runs at a0b8576 ([Runs](./runs.mdx)). The turn
 itself is not recorded: `improvement-turns.jsonl` has no line for it.
 
 Sources: `docs/metrics/improvement-turns.jsonl`, `docs/runs/2026-10-18-improvement-turn-1/README.md`,

@@ -48,11 +48,12 @@ default toolchain and the registry cache visible), installs the binary, records 
 under `~/.local/state/takt/promotions/`, where the latest record is the next baseline, and moves
 the binary into place. One promotion a UTC day, one at a time under the store's lock.
 
-bubblewrap is Linux only: on macOS `takt promote` refuses with exit 1.
+bubblewrap is Linux only, so on macOS a promotion refuses with exit 1 before it judges;
+`--dry-run` and `--baseline-only`, which build nothing, still run.
 
 ## Against the first turn's figures
 
-Turn 2's candidate 834205f had a median of 122,465 tokens over 5 runs; the baseline a0b8576's
+Turn 2's candidate 98719c3 had a median of 122,465 tokens over 5 runs; the baseline a0b8576's
 maximum was 138,160. Under the token rule above it is not worse. This is a reading of the rows in
 `scenario-runs.jsonl`, not a scorecard record: `improvement-turns.jsonl` holds no line for turn 2.
 

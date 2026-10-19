@@ -50,8 +50,8 @@ cargo install --locked --path crates/takt-cli
 
 :::warning[macOS]
 
-bubblewrap is Linux only. On macOS there is no confinement, and `takt promote` refuses with
-exit 1. A run on macOS also kills only what a child process left in its own process group; on
+bubblewrap is Linux only, so on macOS a promotion refuses with exit 1 before it judges;
+`--dry-run` and `--baseline-only`, which build nothing, still run. A run on macOS also kills only what a child process left in its own process group; on
 Linux takt adopts and kills what the child orphaned outside it as well. No command sandboxes the
 harness or the test command on either system yet.
 
