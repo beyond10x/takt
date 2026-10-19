@@ -157,13 +157,11 @@ impl Harness for Fails {
     }
 }
 
-/// The gate's command runs under the gate validator's own executor, held to the project file's
-/// `timeout_seconds` (here 40 s) and never to what is left of the hour budget: `GateRun` does
-/// not override `observe_within` (validator.rs:502), so the default at validator.rs:74-83
-/// drops `time_left`. The commit says validator steps are held to the deadline too, and the
-/// prose (takt.yaml, the validator) names only the test command as held and the forge's
-/// programs as exempt; `gate.run` is neither. The CLI registers it whenever
-/// `.engineering/gates.yaml` is a file (main.rs:544-552).
+/// A gate command that sleeps past the hour budget is held to it: `GateRun` overrides
+/// `observe_within` and gives each command the smaller of the project file's `timeout_seconds`
+/// (here 40 s) and what is left of the run, so the run ends within the budget and the grace.
+/// This case runs under a 10 s budget of its own, so the gate's preparation has room under load
+/// before its command starts; the command still sleeps past it.
 #[test]
 fn a_gate_command_that_outlives_the_hour_budget_runs_the_run_past_it() {
     let _serial = serial();
@@ -189,10 +187,13 @@ fn a_gate_command_that_outlives_the_hour_budget_runs_the_run_past_it() {
     );
     let validators: Vec<Box<dyn Validator>> =
         vec![Box::new(GateRun::new(".engineering/gates.yaml"))];
+    let hours = 10.0 / 3600.0;
+    let budget = Duration::from_secs_f64(hours * 3600.0);
     let mut options = options("adv2-gate");
     options.protocol = GATE_ONLY.to_owned();
     options.inputs = Vec::new();
     options.gate = None;
+    options.hours = Some(hours);
     let started = Instant::now();
     let mut run = Run::open(&tree, options, &Fails, &validators).expect("opens");
     let mut out = Vec::new();
@@ -205,9 +206,8 @@ fn a_gate_command_that_outlives_the_hour_budget_runs_the_run_past_it() {
         "the premise: the gate ran its command\n{stop:?}\n{text}"
     );
     assert!(
-        elapsed < budget() + GRACE,
-        "the run took {elapsed:?} under a {:?} hour budget, stopping on {stop:?}\n{text}",
-        budget()
+        elapsed < budget + GRACE,
+        "the run took {elapsed:?} under a {budget:?} hour budget, stopping on {stop:?}\n{text}"
     );
 }
 

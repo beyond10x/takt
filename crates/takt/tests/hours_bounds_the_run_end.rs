@@ -161,7 +161,8 @@ impl Harness for Fails {
     }
 }
 
-/// A gate of three commands that each sleep 25 s, under a 3 s hour budget: every command is
+/// A gate of three commands that each sleep 25 s, under a 10 s hour budget (room for the gate's
+/// preparation under load before any command starts): every command is
 /// held to what was left when the gate started collecting, so the gate runs past the run's end
 /// by up to twice that, and is caught when it returns. The run stops on the hour budget, and
 /// nothing is recorded.
@@ -194,7 +195,7 @@ fn a_gate_of_three_commands_past_the_hour_budget_stops_on_hours_and_records_noth
             ),
         ],
     );
-    let hours = 3.0 / 3600.0;
+    let hours = 10.0 / 3600.0;
     let validators: Vec<Box<dyn Validator>> =
         vec![Box::new(GateRun::new(".engineering/gates.yaml"))];
     let mut options = options("gate-hours");
