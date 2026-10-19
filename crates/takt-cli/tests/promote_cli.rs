@@ -2026,15 +2026,66 @@ fn a_binary_that_changes_once_installed_is_rolled_back() {
     );
 }
 
-/// Two promotions started together run one at a time (probe N12): either the other refuses
-/// naming the store's lock or the moved baseline, or both promote one after the other; the
-/// records form one chain from the baseline, the head names the last, and each promotion's
-/// installed binary is the one its record names.
+/// What a held candidate's `build.rs` does first: marks its clone `building`, then waits for
+/// the test to put `go` beside it (a minute at most, so a test that never does cannot hang).
+const HOLD: &str = r#"
+fn hold() {
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
+    let root = std::path::Path::new(&dir).join("../..");
+    let _ = std::fs::write(root.join("building"), "");
+    for _ in 0..600 {
+        if root.join("go").exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+"#;
+
+/// The clones under `world`'s build directory whose held `build.rs` has marked them `building`.
+fn building(world: &World) -> Vec<PathBuf> {
+    fs::read_dir(world.outer.join("cache/takt/promote"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path().join("source"))
+                .filter(|source| source.join("building").exists())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Polls `done` every 20 ms for a minute; panics naming `what` when it never holds.
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    for _ in 0..3000 {
+        if done() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("waited a minute for {what}");
+}
+
+/// Two promotions at once run one at a time (probe N12): the store's lock is held from the
+/// reading through the build, the record and the install. The first candidate's `build.rs`
+/// holds its build until the test releases it; the second promotion starts only once that
+/// build has begun, and the first is released only once the second has exited or begun a
+/// build of its own. The second refuses naming the store's lock; the records form one chain
+/// from the baseline, the head names the last, and the installed binary is the one its record
+/// names.
 #[test]
 fn two_promotions_at_once_run_one_at_a_time_and_chain() {
     let world = World::new("two-at-once", BASELINE_TOKENS, FIVE_APPROVALS);
     world.record_baseline();
-    let card = world.candidate_card("one", BASELINE_TOKENS, FIVE_APPROVALS);
+    write(
+        &world.repo.join("crates/takt-cli/build.rs"),
+        &format!(
+            "{}{HOLD}",
+            TAKT_BUILD.replacen("fn main() {\n", "fn main() {\n    hold();\n", 1)
+        ),
+    );
+    let held = world.commit("hold");
+    let card = world.passing_card("one", &held);
     let second = world.outer.join("candidate-two");
     git(
         &world.outer,
@@ -2063,7 +2114,18 @@ fn two_promotions_at_once_run_one_at_a_time_and_chain() {
             .expect("takt starts")
     };
     let first = spawn(&world.repo, &card);
-    let second_run = spawn(&second, &other_card);
+    wait_until("the first build to begin", || !building(&world).is_empty());
+    let mut second_run = spawn(&second, &other_card);
+    wait_until("the second promotion to exit or begin a build", || {
+        second_run
+            .try_wait()
+            .expect("the second's status")
+            .is_some()
+            || building(&world).len() > 1
+    });
+    for source in building(&world) {
+        write(&source.join("go"), "");
+    }
     let outputs: Vec<(i32, String, String)> = [first, second_run]
         .into_iter()
         .map(|child| {
@@ -2075,22 +2137,15 @@ fn two_promotions_at_once_run_one_at_a_time_and_chain() {
             )
         })
         .collect();
-    for (code, out, err) in &outputs {
-        if *code != 0 {
-            assert_eq!(*code, 1, "{out}{err}");
-            assert!(
-                err.contains("holds the store lock")
-                    || err.contains("the latest baseline or promotion recorded is"),
-                "a refusal names the store's lock or the moved baseline: {err}"
-            );
-        }
-    }
-    let promoted: Vec<&String> = outputs
-        .iter()
-        .filter(|(code, _, _)| *code == 0)
-        .map(|(_, out, _)| out)
-        .collect();
-    assert!(!promoted.is_empty(), "one promotes at least: {outputs:?}");
+    let (code, out, err) = &outputs[0];
+    assert_eq!(*code, 0, "the first promotes: {out}{err}");
+    let (code, out, err) = &outputs[1];
+    assert_eq!(*code, 1, "the second is refused: {out}{err}");
+    assert!(
+        err.contains("holds the store lock"),
+        "the second's refusal names the store's lock: {err}"
+    );
+    let promoted = [&outputs[0].1];
     // The records form one chain from the baseline: each names the digest of the one before
     // it, and every record in the store is on it.
     let names: Vec<String> = world
