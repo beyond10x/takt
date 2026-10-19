@@ -458,19 +458,41 @@ fn a_side_commit_a_forged_commit_makes_an_ancestor_of_the_base_is_refused() {
         .expect("a parent")
         .to_owned();
     let forged = format!("{}\n", real.replace(&parent, &side));
+    // Plain git must read the forged object, so nothing may stand in for it: no commit-graph
+    // (which keeps C1's true parent), no automatic gc or maintenance that could pack it.
+    git(&repo, &["config", "gc.auto", "0"]);
+    git(&repo, &["config", "maintenance.auto", "false"]);
+    git(&repo, &["config", "core.commitGraph", "false"]);
+    let info = repo.join(".git/objects/info");
+    for graph in [info.join("commit-graph"), info.join("commit-graphs")] {
+        if graph.is_dir() {
+            fs::remove_dir_all(&graph).expect("the commit-graph chain is removed");
+        } else if graph.exists() {
+            fs::remove_file(&graph).expect("the commit-graph is removed");
+        }
+    }
     let object = repo.join(".git/objects").join(&c1[..2]).join(&c1[2..]);
     fs::remove_file(&object).expect("the loose commit is removed");
     let mut raw = format!("commit {}\0", forged.len()).into_bytes();
     raw.extend_from_slice(forged.as_bytes());
     fs::write(&object, zlib_stored(&raw)).expect("the forged commit is written");
     let plain = Command::new("git")
-        .args(["merge-base", "--is-ancestor", &side, "main"])
+        .args([
+            "-c",
+            "core.commitGraph=false",
+            "merge-base",
+            "--is-ancestor",
+            &side,
+            "main",
+        ])
         .current_dir(&*repo)
-        .status()
+        .output()
         .expect("git runs");
     assert!(
-        plain.success(),
-        "plain git takes the side commit for a commit of main"
+        plain.status.success(),
+        "plain git takes the side commit for a commit of main ({}): {}",
+        git(&repo, &["version"]),
+        String::from_utf8_lossy(&plain.stderr)
     );
     let (code, out, err) = run(&repo, Some(&side));
     assert_eq!(code, 1, "{out}\n{err}");
