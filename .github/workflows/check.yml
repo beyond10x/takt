@@ -70,8 +70,33 @@ jobs:
           tar -xzf "$asset"
           echo "$RUNNER_TEMP/ess-$ESS_VERSION-x86_64-unknown-linux-gnu" >> "$GITHUB_PATH"
 
+      - name: Install aep
+        env:
+          AEP_VERSION: "0.74.0"
+          AEP_SHA256: 50b38744290954a345f2c91ee3f22019c36bdc3353c71929db5ec4a638c6f23a
+        run: |
+          set -euo pipefail
+          asset="aep-$AEP_VERSION-x86_64-unknown-linux-gnu.tar.gz"
+          release="https://github.com/beyond10x/aep/releases/download/$AEP_VERSION"
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --output "$asset" "$release/$asset"
+          curl --fail --silent --show-error --location --output AEP-SHA256SUMS "$release/SHA256SUMS"
+          grep -Fx "$AEP_SHA256  $asset" AEP-SHA256SUMS
+          grep -F "  $asset" AEP-SHA256SUMS | sha256sum --check --strict
+          tar -xzf "$asset"
+          echo "$RUNNER_TEMP/aep-$AEP_VERSION-x86_64-unknown-linux-gnu" >> "$GITHUB_PATH"
+
+      - name: Fill aep's protocol cache
+        run: aep plan artifact validate
+
       - name: Install bubblewrap
-        run: sudo apt-get update -qq && sudo apt-get install -y bubblewrap
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y bubblewrap
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --unshare-net --dev-bind / / true
 
       - name: task check
         run: task check
