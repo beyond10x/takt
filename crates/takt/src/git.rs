@@ -2099,7 +2099,7 @@ pub fn trees_differ_outside(tree: &Path, from: &str, to: &str, outside: &str) ->
         ".",
         exclude.as_str(),
     ];
-    let output = output(tree, &args, None)?;
+    let output = isolated_output(tree, &args)?;
     match output.status.code() {
         Some(0) => Ok(false),
         Some(1) => Ok(true),
@@ -2111,6 +2111,111 @@ pub fn trees_differ_outside(tree: &Path, from: &str, to: &str, outside: &str) ->
             String::from_utf8_lossy(&output.stderr).trim()
         ),
     }
+}
+
+/// A bare repository made for one git command and removed when dropped: no work tree, no
+/// configuration but what `git init` writes, no `info/attributes` and no hook (`--template=`
+/// copies nothing), `HEAD` on a branch with no commit, so no attributes come from a tree. Its
+/// objects are the repository's own (`GIT_OBJECT_DIRECTORY`), so what it reads is what the
+/// repository holds and what it writes (a merge's tree) the repository holds after.
+struct Isolated {
+    dir: PathBuf,
+}
+
+impl Drop for Isolated {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Runs `git <args>` for the repository of `tree` in an [`Isolated`] bare repository, with no
+/// code and no attributes from any configuration: no system or global configuration
+/// (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL=/dev/null`, `HOME` and `XDG_CONFIG_HOME` an empty
+/// directory), no system or global attributes file (`GIT_ATTR_NOSYSTEM`,
+/// `core.attributesFile=/dev/null`), none from the work tree, `$GIT_DIR/info/attributes` or
+/// a committed `.gitattributes` (the repository is bare and its `HEAD` unborn), and so no merge
+/// driver, which only an attribute names and only configuration defines; besides
+/// [`NO_CONFIGURED_CODE`]. Needs git 2.32 for `GIT_CONFIG_GLOBAL` (`--path-format` is 2.31,
+/// `--object-format` 2.29). It holds no ref, so every revision `args` names is an object id.
+/// Answers what it printed, whatever its exit status.
+fn isolated_output(tree: &Path, args: &[&str]) -> Result<Output> {
+    static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let objects = PathBuf::from(run(
+        tree,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?)
+    .join("objects");
+    let format = run(tree, &["rev-parse", "--show-object-format"])?;
+    let dir = std::env::temp_dir().join(format!(
+        "takt-git-{}-{}",
+        std::process::id(),
+        MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&dir)
+        .with_context(|| format!("make the isolated repository {}", dir.display()))?;
+    let isolated = Isolated { dir };
+    let repository = isolated.dir.join("repository");
+    let home = isolated.dir.join("home");
+    std::fs::create_dir(&home).with_context(|| format!("make {}", home.display()))?;
+    let git = |extra: &[(&str, &Path)], args: &[&str]| -> Result<Output> {
+        let mut command = Command::new("git");
+        crate::forge::without_credentials(&mut command, |_| false);
+        for name in REDIRECTING_ENV {
+            command.env_remove(name);
+        }
+        command
+            .env_remove("GIT_ATTR_SOURCE")
+            .env_remove("GIT_CEILING_DIRECTORIES")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_ATTR_NOSYSTEM", "1")
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &home)
+            .env("GIT_NO_REPLACE_OBJECTS", "1")
+            .env("GIT_NO_LAZY_FETCH", "1");
+        for (name, value) in extra {
+            command.env(name, value);
+        }
+        command
+            .args(NO_CONFIGURED_CODE)
+            .args([
+                "-c",
+                "core.attributesFile=/dev/null",
+                "-c",
+                "core.commitGraph=false",
+            ])
+            .args(args)
+            .current_dir(&isolated.dir)
+            .stdin(Stdio::null())
+            .output()
+            .with_context(|| format!("run git {} isolated", args.join(" ")))
+    };
+    let made = git(
+        &[],
+        &[
+            "init",
+            "--quiet",
+            "--bare",
+            "--template=",
+            &format!("--object-format={format}"),
+            "repository",
+        ],
+    )?;
+    if !made.status.success() {
+        bail!(
+            "git init of the isolated repository {} exited {}: {}",
+            repository.display(),
+            made.status,
+            String::from_utf8_lossy(&made.stderr).trim()
+        );
+    }
+    git(
+        &[
+            ("GIT_DIR", repository.as_path()),
+            ("GIT_OBJECT_DIRECTORY", objects.as_path()),
+        ],
+        args,
+    )
 }
 
 /// What merging a revision into a base would leave ([`merged_tree`]).
@@ -2141,7 +2246,7 @@ pub fn merged_tree(tree: &Path, base: &str, revision: &str) -> Result<Merged> {
         base,
         revision,
     ];
-    let output = output(tree, &args, None)?;
+    let output = isolated_output(tree, &args)?;
     match output.status.code() {
         Some(code @ (0 | 1)) => {
             let mut fields = output

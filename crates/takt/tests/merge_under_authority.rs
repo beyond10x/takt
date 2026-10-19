@@ -479,7 +479,7 @@ fn without_a_grant_the_run_stops_at_the_gate_and_the_resumed_run_merges_under_it
     );
     assert_eq!(
         &memory.calls.borrow()[asked..],
-        ["view #1", "merge #1", "view #1"],
+        ["view #1", "view #1", "merge #1", "view #1"],
         "{text}"
     );
     assert_eq!(
@@ -2505,6 +2505,7 @@ fn adv2_a_case_resumed_at_a_new_commit_re_establishes_its_claims_before_the_merg
             "view #1",
             "view #1",
             "checks #1",
+            "view #1",
             "view #1",
             "merge #1",
             "view #1"

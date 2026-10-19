@@ -1677,6 +1677,26 @@ fn blob_at(tree: &Path, at: &str, path: &str) -> Result<Option<Vec<u8>>> {
     crate::git::blob(tree, &spec).map(Some)
 }
 
+/// The story the case at `dir` was opened for and its file in the planning store
+/// (`.engineering/planning/story/<name>.md`); `None` for a case with no story, or a story whose
+/// name is no plain file name.
+fn story_file(dir: &Path) -> Result<Option<(String, String)>> {
+    let Some(story) = crate::case::story_of(dir)? else {
+        return Ok(None);
+    };
+    let Some(name) = story.strip_prefix("story:").filter(|name| {
+        !name.is_empty()
+            && !name.starts_with('.')
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+    }) else {
+        return Ok(None);
+    };
+    let path = format!(".engineering/planning/story/{name}.md");
+    Ok(Some((story, path)))
+}
+
 impl PrMerged {
     /// The story file of the case at `dir` whose change the guard does not count, `None` when
     /// none is exempt. The case's story is taken by a commit takt makes on the case's branch
@@ -1684,9 +1704,11 @@ impl PrMerged {
     /// frontmatter in the planning store, a judge surface; that one path is exempt in the change
     /// the merge makes only when (i) a commit between the case's base commit `at` and
     /// `revision` has `at` as its one parent, exactly that message, and exactly that one path
-    /// changed, to a regular file; and (ii) the file's body below its frontmatter
+    /// changed, to a regular file; (ii) the file's body below its frontmatter
     /// ([`story_body`]) is byte-equal at the target's tip `tip` and in the merge's tree
-    /// `merged`. Any other path in the planning store stays guarded.
+    /// `merged`; and (iii) the file in `merged` is byte-equal to the file at that take commit
+    /// (R6), so no change after the take rides on it. Any other path in the planning store
+    /// stays guarded.
     fn exempt_take(
         tree: &Path,
         dir: &Path,
@@ -1695,25 +1717,15 @@ impl PrMerged {
         tip: &str,
         merged: &str,
     ) -> Result<Option<String>> {
-        let Some(story) = crate::case::story_of(dir)? else {
+        let Some((story, path)) = story_file(dir)? else {
             return Ok(None);
         };
-        let Some(name) = story.strip_prefix("story:").filter(|name| {
-            !name.is_empty()
-                && !name.starts_with('.')
-                && name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
-        }) else {
-            return Ok(None);
-        };
-        let path = format!(".engineering/planning/story/{name}.md");
         let message = format!("{}\n", crate::run::take_subject(&story));
         let listed = crate::git::run(
             tree,
             &["rev-list", "--end-of-options", &format!("{at}..{revision}")],
         )?;
-        let mut taken = false;
+        let mut taken = None;
         for id in listed.lines().filter(|id| crate::forge::is_object_id(id)) {
             let bytes = crate::git::verified_object(tree, "commit", id)?;
             let header = crate::git::parse_commit(id, &bytes, id.len())?;
@@ -1741,18 +1753,25 @@ impl PrMerged {
                 && *changed == path
                 && *mode == "100644"
             {
-                taken = true;
+                taken = Some(id);
                 break;
             }
         }
-        if !taken {
-            return Ok(None);
-        }
-        let (Some(at_tip), Some(at_merge)) =
-            (blob_at(tree, tip, &path)?, blob_at(tree, merged, &path)?)
-        else {
+        let Some(taken) = taken else {
             return Ok(None);
         };
+        let (Some(at_take), Some(at_tip), Some(at_merge)) = (
+            blob_at(tree, taken, &path)?,
+            blob_at(tree, tip, &path)?,
+            blob_at(tree, merged, &path)?,
+        ) else {
+            return Ok(None);
+        };
+        // R6: the merge leaves the file exactly as the take wrote it; any later change to it,
+        // in its frontmatter as in its body, is judged like any other path.
+        if at_merge != at_take {
+            return Ok(None);
+        }
         Ok(match (story_body(&at_tip), story_body(&at_merge)) {
             (Some(before), Some(after)) if before == after => Some(path),
             _ => None,
@@ -1768,8 +1787,12 @@ impl PrMerged {
     /// `git merge-tree --write-tree` makes of the tip and the granted revision
     /// ([`crate::git::merged_tree`], git 2.38 or later), so a revert of the target's own change
     /// hidden by a merge of the target, or by an older base, is a change like any other; a
-    /// merge that conflicts is refused. What lies above the granted revision is takt's riders
-    /// alone, which [`carries`] holds the head to. A path in that change that [`JUDGE_ALLOW`]
+    /// merge that conflicts is refused. Every change the candidate made from where it meets the
+    /// target (each `git merge-base --all` of the tip and the revision) is judged besides (R4),
+    /// so no merge driver or attribute can hide one; and a story's file that holds a carriage
+    /// return at the tip or in the merge is refused (R5). What lies above the granted revision
+    /// is takt's riders alone, which [`carries`] holds the head to. A path in that change that
+    /// [`JUDGE_ALLOW`]
     /// at the tip does not admit, or whose new mode is no regular file's ([`NAMED_BY_PATH`]),
     /// is a judge surface, but the story file takt's own take changes ([`Self::exempt_take`]).
     /// A change to one merges under the owner's grant (`human:`), or under an agent role's
@@ -1852,39 +1875,71 @@ impl PrMerged {
                 merged.conflicted.join(", ")
             )));
         }
+        // R5: takt's take never writes a carriage return into a story's file, and a reader of
+        // its frontmatter fence that does not fold one reads another body than the store does.
+        if let Some((_, path)) = story_file(dir)? {
+            for (at, name) in [(tip.as_str(), base), (merged.tree.as_str(), "the merge")] {
+                if blob_at(tree, at, &path)?.is_some_and(|text| text.contains(&b'\r')) {
+                    return Ok(Some(format!(
+                        "the story's file {path} holds a carriage return at {name}, which takt's take never writes"
+                    )));
+                }
+            }
+        }
         let (globs, unread) = match allow_list_at(tree, &tip)? {
             Ok(globs) => (globs, String::new()),
             Err(why) => (Vec::new(), format!(" ({why}; it admits nothing)")),
         };
-        let diff = crate::git::bytes(
+        // R4: what the merge does to the target, and every change the candidate made from
+        // where it meets the target, so no merge result (a driver, an attribute) hides one.
+        let mut ranges = vec![(tip.clone(), merged.tree.clone())];
+        for meet in crate::git::run(
             tree,
-            &[
-                "diff-tree",
-                "-r",
-                "-z",
-                "--no-renames",
-                "--raw",
-                &tip,
-                &merged.tree,
-                "--",
-            ],
-        )?;
-        let changes = raw_changes(&diff)?;
+            &["merge-base", "--all", "--end-of-options", &tip, revision],
+        )?
+        .lines()
+        .filter(|meet| crate::forge::is_object_id(meet))
+        {
+            ranges.push((meet.to_owned(), revision.to_owned()));
+        }
+        let mut changes: Vec<(String, String)> = Vec::new();
+        for (from, to) in &ranges {
+            let diff = crate::git::bytes(
+                tree,
+                &[
+                    "diff-tree",
+                    "-r",
+                    "-z",
+                    "--no-renames",
+                    "--raw",
+                    from,
+                    to,
+                    "--",
+                ],
+            )?;
+            for (mode, path) in raw_changes(&diff)? {
+                let change = (mode.to_owned(), path.to_owned());
+                if !changes.contains(&change) {
+                    changes.push(change);
+                }
+            }
+        }
         let exempt = Self::exempt_take(tree, dir, &at, revision, &tip, &merged.tree)?;
-        let surfaces: Vec<&str> = changes
-            .iter()
-            .filter(|(mode, path)| {
-                !NAMED_BY_PATH.contains(mode)
-                    || (exempt.as_deref() != Some(*path)
-                        && !globs.iter().any(|glob| crate::run::glob_admits(glob, path)))
-            })
-            .map(|(_, path)| *path)
-            .collect();
-        let owner_only: Vec<&str> = changes
-            .iter()
-            .map(|(_, path)| *path)
-            .filter(|path| OWNER_ONLY.contains(path))
-            .collect();
+        let mut surfaces: Vec<&str> = Vec::new();
+        let mut owner_only: Vec<&str> = Vec::new();
+        for (mode, path) in &changes {
+            let path = path.as_str();
+            if (!NAMED_BY_PATH.contains(&mode.as_str())
+                || (exempt.as_deref() != Some(path)
+                    && !globs.iter().any(|glob| crate::run::glob_admits(glob, path))))
+                && !surfaces.contains(&path)
+            {
+                surfaces.push(path);
+            }
+            if OWNER_ONLY.contains(&path) && !owner_only.contains(&path) {
+                owner_only.push(path);
+            }
+        }
         if surfaces.is_empty() && owner_only.is_empty() {
             return Ok(None);
         }
@@ -2082,8 +2137,10 @@ impl Validator for PrMerged {
                 let approver = authority
                     .decision(self.action())
                     .map_or("", |decision| decision.approver.as_str());
+                // The base judged: the merge goes into it or nowhere (R7).
+                let target = view.base.clone();
                 if let Some(refusal) =
-                    self.judge_guard(tree, &dir, &branch, &view.base, revision, approver)?
+                    self.judge_guard(tree, &dir, &branch, &target, revision, approver)?
                 {
                     return Ok((
                         nothing(format!(
@@ -2171,6 +2228,22 @@ impl Validator for PrMerged {
                             checks == Checks::Pending,
                         ));
                     }
+                }
+                // R7: the pull request read again right before the merge; a base the forge
+                // moved it to after the guard judged its target merges nothing.
+                let last = self.forge.pull_request(tree, number).with_context(|| {
+                    format!(
+                        "read pull request #{number} through the forge {forge} before the merge"
+                    )
+                })?;
+                if last.base != target {
+                    return Ok((
+                        nothing(format!(
+                            "the forge {forge} reports pull request #{number}'s base as {} right before the merge, not {target}, the target the judge guard judged; nothing merged, the claim stays unknown",
+                            last.base.escape_debug()
+                        )),
+                        false,
+                    ));
                 }
                 // A read of the checks can answer for another head than the one merged (a
                 // forge whose checks lag the push): the forge then refuses the merge for its

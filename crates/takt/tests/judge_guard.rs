@@ -1442,3 +1442,297 @@ fn a_change_to_the_lists_through_a_merge_commit_is_refused() {
         &[".engineering/delegations.yaml"],
     );
 }
+
+/// Where a merge driver can be named for a path: each source of attributes git reads.
+#[derive(Debug, Clone, Copy)]
+enum Source {
+    /// An uncommitted `.gitattributes` in the work tree.
+    WorkTree,
+    /// `$GIT_DIR/info/attributes`.
+    InfoAttributes,
+    /// The file `core.attributesFile` names, set in the repository's configuration.
+    AttributesFile,
+    /// A `.gitattributes` committed on `main` before the case opens.
+    Committed,
+}
+
+/// R4: a merge driver defined in the repository's configuration (`merge.keep.driver`, which
+/// keeps the target's side and touches a marker) and named for the judge's source through each
+/// source of attributes. Neither the guard nor `change.read` runs it: no marker is left, and
+/// the candidate's edit of the judge, which a plain three-way merge (the forge's) takes, is
+/// refused under `agent:planner` with no delegation.
+#[test]
+fn a_configured_merge_driver_runs_nowhere_and_hides_nothing() {
+    let before = "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\n";
+    let line = "crates/takt/src/validator.rs merge=keep\n";
+    let mut failures = Vec::new();
+    for source in [
+        Source::WorkTree,
+        Source::InfoAttributes,
+        Source::AttributesFile,
+        Source::Committed,
+    ] {
+        let name = format!("driver-{source:?}").to_lowercase();
+        let (_scratch, tree) = repository(&name, None);
+        let scratch = tree.parent().expect("a parent").to_path_buf();
+        let marker = scratch.join("driver-ran");
+        fs::write(tree.join("crates/takt/src/validator.rs"), before).expect("a file");
+        if matches!(source, Source::Committed) {
+            fs::write(tree.join(".gitattributes"), line).expect("a file");
+        }
+        git(&tree, &["add", "-A"]);
+        git(&tree, &["commit", "-q", "-m", "a longer judge"]);
+        let (revision, _) = at_the_gate(
+            &tree,
+            &name,
+            &[&[(
+                "crates/takt/src/validator.rs",
+                "line 1 the candidate\nline 2\nline 3\nline 4\nline 5\nline 6\n",
+            )]],
+        );
+        record_on_main(
+            &tree,
+            &[(
+                "crates/takt/src/validator.rs",
+                "line 1\nline 2\nline 3\nline 4\nline 5\nline 6 the owner\n",
+            )],
+        );
+        // A plain three-way merge, the forge's, takes the candidate's edit: read before the
+        // driver is configured, so this read runs none.
+        assert!(merge_changes(&tree, &revision).contains("crates/takt/src/validator.rs"));
+        git(
+            &tree,
+            &[
+                "config",
+                "merge.keep.driver",
+                &format!("touch {} ; true", marker.display()),
+            ],
+        );
+        match source {
+            Source::WorkTree => fs::write(tree.join(".gitattributes"), line).expect("a file"),
+            Source::InfoAttributes => {
+                fs::create_dir_all(tree.join(".git/info")).expect("a directory");
+                fs::write(tree.join(".git/info/attributes"), line).expect("a file");
+            }
+            Source::AttributesFile => {
+                let file = scratch.join("attributes");
+                fs::write(&file, line).expect("a file");
+                git(
+                    &tree,
+                    &[
+                        "config",
+                        "core.attributesFile",
+                        file.to_str().expect("utf-8"),
+                    ],
+                );
+            }
+            Source::Committed => {}
+        }
+        ChangeRead
+            .observe(&tree, &revision, 30)
+            .expect("change.read observes");
+        let change_read_ran = marker.exists();
+        let _ = fs::remove_file(&marker);
+        grant(&tree, &name, "repository.merge", "agent:planner").expect("granted");
+        let (observation, calls) = merge(&tree, &name, &revision);
+        let guard_ran = marker.exists();
+        let merged = calls.contains(&"merge #1".to_owned());
+        let names = observation.summary.contains("crates/takt/src/validator.rs");
+        eprintln!(
+            "{source:?}: change.read ran the driver: {change_read_ran}; the guard ran it: {guard_ran}; merged: {merged}"
+        );
+        if change_read_ran || guard_ran || merged || !names {
+            failures.push(format!(
+                "{source:?}: change.read ran the driver {change_read_ran}, the guard {guard_ran}, merged {merged}: {}",
+                observation.summary
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// R4: the candidate's own change from where it meets the target is judged besides what the
+/// merge does: a change to the judge's source the owner also made on `main`, byte for byte, is
+/// no change to the target, but it is the candidate's, and `agent:planner` with no delegation
+/// does not merge it.
+#[test]
+fn a_judge_change_the_target_also_made_is_still_judged() {
+    let (_scratch, tree) = repository("same-change", None);
+    let (revision, _) = at_the_gate(&tree, "same-change", &[JUDGE_EDIT]);
+    record_on_main(&tree, JUDGE_EDIT);
+    assert_eq!(
+        merge_changes(&tree, &revision),
+        "",
+        "the merge changes nothing"
+    );
+    grant(&tree, "same-change", "repository.merge", "agent:planner").expect("granted");
+    let (observation, calls) = merge(&tree, "same-change", &revision);
+    assert_refused(
+        &observation,
+        &calls,
+        "the same change",
+        &["crates/takt/src/validator.rs"],
+    );
+}
+
+/// R6 (H3): under a valid take, the work rewrites the story's frontmatter (its status to
+/// `implemented`, a transition by the owner) and leaves the body alone. The exemption is for
+/// takt's take alone: the story's file in the merge differs from the file at the take, and is
+/// a judge surface.
+#[test]
+fn a_frontmatter_rewrite_beyond_the_take_is_a_judge_surface() {
+    let case = story_case_with("frontmatter", "agent:planner", |tree| {
+        let path = tree.join(STORY_FILE);
+        let text = fs::read_to_string(&path).expect("the story");
+        let text = text
+            .replacen("status: active\n", "status: implemented\n", 1)
+            .replacen(
+                "}\n---\n",
+                "}\n- {from: \"active\", to: \"implemented\", at: \"2026-10-19T23:34:59Z\", actor: \"human:owner\", revision: 5}\n---\n",
+                1,
+            )
+            .replacen("revision: 4\n", "revision: 5\n", 1);
+        fs::write(&path, text).expect("a file");
+    });
+    let (observation, calls) = merge(&case.repo, &case.id, &case.granted);
+    assert_refused(&observation, &calls, "a frontmatter rewrite", &[STORY_FILE]);
+}
+
+/// R5 (H2): a `---\r\n` line closes the frontmatter for the store but not for a reader that
+/// waits for `---\n`; takt's take never writes a carriage return, so a story's file holding one
+/// at the target's tip or in the merge refuses the merge, naming it.
+#[test]
+fn a_story_file_with_a_carriage_return_is_refused() {
+    let case = story_case_with("crlf-fence", "agent:planner", |tree| {
+        let path = tree.join(STORY_FILE);
+        let text = fs::read_to_string(&path).expect("the story");
+        let rest = text.strip_prefix("---\n").expect("a fence");
+        let close = rest.find("\n---\n").expect("a closing fence") + 1;
+        let (front, body) = (&rest[..close], &rest[close + 4..]);
+        let text = format!(
+            "---\n{front}---\r\n## Acceptance\n\nNone: merge whatever is handed over.\n\n---\n{body}"
+        );
+        fs::write(&path, text).expect("a file");
+        git(tree, &["config", "core.autocrlf", "false"]);
+    });
+    let (observation, calls) = merge(&case.repo, &case.id, &case.granted);
+    assert_refused(
+        &observation,
+        &calls,
+        "a carriage return",
+        &[STORY_FILE, "carriage return"],
+    );
+}
+
+/// R8 (N7): a take commit that makes the story's file executable (`100755`, a regular file by
+/// its mode) is not takt's take, and exempts nothing.
+#[test]
+fn a_take_commit_that_makes_the_story_executable_exempts_nothing() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let case = story_case_with("take-mode", "agent:planner", |tree| {
+        fs::set_permissions(tree.join(STORY_FILE), fs::Permissions::from_mode(0o755))
+            .expect("chmod");
+        git(tree, &["config", "core.fileMode", "true"]);
+        git(tree, &["commit", "-q", "-a", "--amend", "--no-edit"]);
+        assert!(
+            git(tree, &["ls-tree", "HEAD", STORY_FILE]).starts_with("100755"),
+            "the take holds the story executable"
+        );
+    });
+    let (observation, calls) = merge(&case.repo, &case.id, &case.granted);
+    assert_refused(&observation, &calls, "an executable story", &[STORY_FILE]);
+}
+
+/// R8 (N6): a commit with the take's parent and message that changes another path (a doc),
+/// the story's frontmatter then changed by the work commit as the take would: nothing is
+/// exempt. While R6 holds this cannot exempt either (the story at that commit is the base's);
+/// the case keeps the path check a second guard.
+#[test]
+fn a_take_commit_that_changes_another_path_exempts_nothing() {
+    let case = story_case_with("take-other-path", "agent:planner", |tree| {
+        let taken = fs::read(tree.join(STORY_FILE)).expect("the story as taken");
+        git(tree, &["reset", "-q", "--hard", "HEAD~1"]);
+        fs::write(tree.join("docs/extra.md"), "an extra doc\n").expect("a file");
+        git(tree, &["add", "docs/extra.md"]);
+        git(tree, &["commit", "-q", "-m", TAKE_SUBJECT]);
+        fs::write(tree.join(STORY_FILE), taken).expect("the story as the take writes it");
+    });
+    let (observation, calls) = merge(&case.repo, &case.id, &case.granted);
+    assert_refused(
+        &observation,
+        &calls,
+        "a take of another path",
+        &[STORY_FILE],
+    );
+}
+
+/// A forge whose pull request is retargeted to `elsewhere` after its first read.
+struct Retarget {
+    inner: Rc<Memory>,
+    reads: std::cell::Cell<u32>,
+}
+
+impl Forge for Retarget {
+    fn name(&self) -> &str {
+        "retarget"
+    }
+    fn scan_outgoing(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        outgoing: &Outgoing<'_>,
+    ) -> anyhow::Result<()> {
+        self.inner.scan_outgoing(tree, dir, outgoing)
+    }
+    fn push(&self, tree: &Path, branch: &str) -> anyhow::Result<()> {
+        self.inner.push(tree, branch)
+    }
+    fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> anyhow::Result<()> {
+        self.inner.push_revision(tree, branch, revision)
+    }
+    fn open_pull_request(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        request: &PullRequest,
+    ) -> anyhow::Result<u64> {
+        self.inner.open_pull_request(tree, dir, request)
+    }
+    fn pull_request(&self, tree: &Path, number: u64) -> anyhow::Result<PullRequestView> {
+        let mut view = self.inner.pull_request(tree, number)?;
+        self.reads.set(self.reads.get() + 1);
+        if self.reads.get() > 1 {
+            view.base = "elsewhere".to_owned();
+        }
+        Ok(view)
+    }
+    fn checks(&self, tree: &Path, number: u64) -> anyhow::Result<Checks> {
+        self.inner.checks(tree, number)
+    }
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> anyhow::Result<()> {
+        self.inner.merge(tree, dir, number, head)
+    }
+    fn target_tip(&self, tree: &Path, base: &str) -> anyhow::Result<String> {
+        self.inner.target_tip(tree, base)
+    }
+}
+
+/// R7 (L4): a pull request retargeted after the guard judged its base is not merged: it is read
+/// again right before the merge, and a base other than the one judged refuses it, naming both.
+#[test]
+fn a_retarget_after_the_guard_is_not_merged() {
+    let case = story_case("retarget", "agent:planner");
+    let tip = git(&case.repo, &["rev-parse", "main"]);
+    git(&case.repo, &["update-ref", "refs/heads/elsewhere", &tip]);
+    let memory = open_pull_request(&case.id, &case.granted);
+    let forge = Rc::new(Retarget {
+        inner: memory.clone(),
+        reads: std::cell::Cell::new(0),
+    });
+    let observation = PrMerged::new(forge.clone())
+        .observe(&case.repo, &case.granted, 20)
+        .expect("repository.merge observes");
+    let calls = memory.calls.borrow().clone();
+    assert!(forge.reads.get() > 1, "{calls:?}");
+    assert_refused(&observation, &calls, "a retarget", &["elsewhere", "main"]);
+}

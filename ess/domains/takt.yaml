@@ -1557,7 +1557,7 @@ types:
   # grants nothing at a judge-surface merge and reads as before on any other merge.
   # read from: .engineering/planning/story/judge-guard.md:144
   # read from: crates/takt/src/case.rs:918-920
-  # read from: crates/takt/src/validator.rs:1913-1919
+  # read from: crates/takt/src/validator.rs:1968-1974
   - name: takt.work.Approver
     kind: union
     tag: kind
@@ -2021,7 +2021,7 @@ entities:
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/authority.rs:7-21
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/mod.rs:359-365
       # read from: crates/takt/src/case.rs:2029-2030
-      # read from: crates/takt/src/validator.rs:2058
+      # read from: crates/takt/src/validator.rs:2113
       - name: authority
         type: Map<takt.work.CapabilityId, takt.work.Grant>
       # read from: crates/takt/src/case.rs:1540-1541
@@ -2460,7 +2460,7 @@ entities:
   # read from: crates/takt/src/run.rs:2282-2293
   # read from: crates/takt/src/run.rs:170-186
   # read from: crates/takt/src/run.rs:4981-5050
-  # read from: crates/takt/src/validator.rs:2279-2330
+  # read from: crates/takt/src/validator.rs:2352-2403
   # read from: crates/takt/src/run.rs:112-118
   # read from: crates/takt/src/run.rs:667-676
   # read from: crates/takt/src/run.rs:3172-3174
@@ -2696,25 +2696,25 @@ entities:
   # read from: crates/takt/src/validator.rs:466-474
   # read from: crates/takt/src/forge.rs:653-671
   # read from: crates/takt/src/validator.rs:1161
-  # read from: crates/takt/src/validator.rs:2058
+  # read from: crates/takt/src/validator.rs:2113
   # read from: docs/design/takt.md:47-49
   # read from: docs/design/takt.md:64-65
   # read from: crates/takt/src/forge.rs:792-816
   # read from: crates/takt/src/validator.rs:126-137
-  # read from: crates/takt/src/validator.rs:2344-2358
+  # read from: crates/takt/src/validator.rs:2417-2431
   # read from: crates/takt/src/git.rs:2085-2089
-  # read from: crates/takt/src/validator.rs:2386-2469
-  # read from: crates/takt/src/git.rs:2127-2134
+  # read from: crates/takt/src/validator.rs:2459-2542
+  # read from: crates/takt/src/git.rs:2232-2239
   # read from: crates/takt/src/validator.rs:401-409
   # read from: crates/takt/src/run.rs:4256-4279
   # read from: crates/takt/src/validator.rs:413-429
   # read from: crates/takt/src/validator.rs:670-678
   # read from: crates/takt/src/validator.rs:791-796
   # read from: crates/takt/src/validator.rs:1195-1207
-  # read from: crates/takt/src/validator.rs:2116-2134
+  # read from: crates/takt/src/validator.rs:2173-2191
   # read from: crates/takt/src/validator.rs:194-219
   # read from: crates/takt/src/validator.rs:142
-  # read from: crates/takt/src/validator.rs:2316-2328
+  # read from: crates/takt/src/validator.rs:2389-2401
   - name: takt.work.EvidenceProducer
     naming:
       summary: >-
@@ -3312,7 +3312,7 @@ entities:
   # Decided by the planner (story:judge-guard, D3, D7): both files are read at the merge target's
   # tip as the forge reports it; a forge that cannot report it merges nothing.
   # read from: crates/takt/src/validator.rs:1523-1525
-  # read from: crates/takt/src/validator.rs:1931-1937
+  # read from: crates/takt/src/validator.rs:1986-1992
   # read from: crates/takt/src/forge.rs:345-348
   - name: takt.work.DelegationRecord
     naming:
@@ -3347,17 +3347,30 @@ entities:
   # `takt: take <story>` and that one path, and the story's body below its frontmatter is the
   # same at the tip and in the merge; every other path in the planning store stays guarded.
   # Decided by the planner (story:judge-guard, R1-R3, 2026-10-19).
+  # Every change the candidate made from where it meets the target (each merge base of the tip
+  # and the revision) is judged besides, and the merge and `change.read`'s comparison run in a
+  # bare repository made for the one command, sharing the repository's objects, with no system
+  # or global configuration, no attributes from any source and so no merge driver (git 2.32 or
+  # later for that; 2.38 for `merge-tree --write-tree`). A story's file holding a carriage return
+  # at the tip or in the merge is refused; the take's exemption holds only while the file in the
+  # merge is byte for byte the file at the take commit; and the pull request is read again right
+  # before the merge, a base other than the one judged merging nothing.
+  # Decided by the planner (story:judge-guard, R4-R7, 2026-10-19).
   # read from: .engineering/planning/design/recursive-self-improvement.md:109-110
   # read from: .engineering/planning/story/judge-guard.md:86
   # read from: .engineering/planning/story/judge-guard.md:121
   # read from: .engineering/judge-allow.yaml
   # read from: crates/takt/src/validator.rs:1519-1521
   # read from: crates/takt/src/run.rs:1942-1950
-  # read from: crates/takt/src/validator.rs:1767-1771
-  # read from: crates/takt/src/validator.rs:1795
-  # read from: crates/takt/src/validator.rs:1847
-  # read from: crates/takt/src/validator.rs:1690
-  # read from: crates/takt/src/git.rs:2132-2133
+  # read from: crates/takt/src/validator.rs:1786-1790
+  # read from: crates/takt/src/validator.rs:1818
+  # read from: crates/takt/src/validator.rs:1870
+  # read from: crates/takt/src/validator.rs:1712
+  # read from: crates/takt/src/git.rs:2237-2238
+  # read from: crates/takt/src/validator.rs:1772
+  # read from: crates/takt/src/validator.rs:1884
+  # read from: crates/takt/src/validator.rs:2239
+  # read from: crates/takt/src/git.rs:2141
   - name: takt.work.JudgeAllowList
     naming:
       summary: >-

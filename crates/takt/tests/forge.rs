@@ -615,7 +615,7 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
     git(&tree, &["branch", "takt/c1"]);
     let c1 = git(&tree, &["rev-parse", "takt/c1"]);
     let recording = Rc::new(Recording::new(
-        r#"{"mergedAt":null,"state":"OPEN","headRefName":"takt/c1","headRefOid":"abc123","baseRefName":"main"}"#,
+        r#"{"mergedAt":null,"state":"OPEN","headRefName":"takt/c1","headRefOid":"abc123","baseRefName":"trunk"}"#,
         r#"[{"bucket":"pass"},{"bucket":"skipping"}]"#,
     ));
     struct Shared(Rc<Recording>);
@@ -659,7 +659,7 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
                 branch: "takt/c1".to_owned(),
                 sha: "abc123".to_owned(),
             },
-            base: "main".to_owned(),
+            base: "trunk".to_owned(),
         }
     );
     assert_eq!(forge.checks(&tree, number).expect("reads"), Checks::Pass);
