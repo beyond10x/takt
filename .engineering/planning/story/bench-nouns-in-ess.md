@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:bench-nouns-in-ess
 kind: story
-status: active
+status: implemented
 title: takt's ESS model names the benchmark nouns, aligned with the benchmark instrument's entities
 summary: BenchTask, BenchRun, BenchArm and the export link to the instrument's run entity declared before code
 relations:
@@ -13,10 +13,11 @@ scope:
   path: ess/domains/takt.citations.tsv
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 8
+revision: 11
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T20:13:47Z", actor: "human:timo", revision: 5}
 - {from: "proposed", to: "active", at: "2026-10-18T20:13:47Z", actor: "human:timo", revision: 6}
+- {from: "active", to: "implemented", at: "2026-10-19T04:04:07Z", actor: "human:timo", revision: 10, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: bench-nouns-in-ess
 
@@ -42,3 +43,10 @@ On takt at main, holds; after the change, fails:
 ## Acceptance
 
 `ess specify validate --path ess` passes with BenchTask, BenchRun and BenchArm declared, and `python3 -I scripts/check-citations --require-digests` exits 0 over their `read from:` lines; each relation to an entity of the instrument is a `relations:` entry or carries an `UNMAPPED:` comment beside the entity.
+
+## Landed (wave 12)
+
+Read from `git diff --name-only 21030e8^1 21030e8` (the unit's merge into the wave branch) at the close of wave 12 (wave branch head 8d7c194). BenchTask, BenchRun and BenchArm declared in ESS, each relation to a bench entity named or UNMAPPED. Merged before its grant in error; reviewed and granted after. The benchmark instrument is named without its repository since 3c8746a.
+
+- `ess/domains/takt.citations.tsv`
+- `ess/domains/takt.yaml`

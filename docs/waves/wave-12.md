@@ -1,6 +1,6 @@
 # Wave 12: improvement turns 2 and 3, the loop scorecard, one pull request per handed-over change, scan before push
 
-Skill: `aep:implementing` 0.23.1, wave mode. Stage: **running**. Approval: the planner role named these units (the wave 12 queue, the RSI order, and the carry-over of the efficiency unit from wave 11); each judge-surface merge needs the planner's grant of its exact commit, on a reviewer verdict. Mode: interactive, three implementors in parallel.
+Skill: `aep:implementing` 0.23.1, wave mode. Stage: **closed**. Approval: the planner role named these units (the wave 12 queue, the RSI order, and the carry-over of the efficiency unit from wave 11); each judge-surface merge needs the planner's grant of its exact commit, on a reviewer verdict. Mode: interactive, three implementors in parallel.
 
 ## Units
 
@@ -45,3 +45,4 @@ One opening commit (this page, the stories to `active`), each unit's commits on 
 - 2026-10-18: bench-nouns-in-ess merged at 21030e8 without a grant, in error: ess/ is a judge surface under AGENTS.md (every path but docs/**, README.md, CHANGELOG.md). The planner's reviewer reviews it after the merge; a needs-revision verdict lands as its own unit before the wave closes.
 - 2026-10-19: the planner's close rule: wave 12 closes with the units merged so far (case-id, bench-nouns, the three wave 11 carry-overs, hours) and the follow-ups. loop-scorecard, scan-before-push and improvement turn 4 (script imports, started on this branch) move to wave 13 and merge there on their grants.
 - 2026-10-19: 5990815 and 3c8746a name the benchmark instrument in `ess/` without its repository; 5e6f115, 9dea7ba and a931f5d give the hour-budget premises their own budgets, so they hold under load.
+- 2026-10-19: closed. main merged in at 3352534 (8d7c194 passes the call report on the step discarded at the run's end, which the merge left with two of three fields); `task check` at 8d7c194 exit 0, 814 passed, 0 failed, 6 ignored, citations 578 of 578; a timing case of `hours_bounds_a_harness_step_adv1` failed once under a load average of 87 and passed alone, 5 of 5. Seven review-results recorded, Landed sections written, and case-id-is-a-valid-branch-name, bench-nouns-in-ess, pr-opens-when-change-is-done, no-model-step-for-approval, no-inspect-for-stateless-harness, hours-bounds-a-harness-step and wave11-review-follow-ups moved to implemented.
