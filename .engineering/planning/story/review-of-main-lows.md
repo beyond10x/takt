@@ -8,7 +8,7 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-fe93286-areas
-revision: 4
+revision: 5
 ---
 ## Outcome
 
@@ -69,3 +69,26 @@ Each item above has a commit with a test that fails before it, or a line in this
 - note `crates/takt/src/promotion.rs:1380`: a malformed `binary.txt` is refused as "no binary.txt beside its record"; the reason in `card.unstated` is unused.
 - note `crates/takt/src/scorecard.rs:575`: an unstated case is in both `no_record` and `rows` of a saved scorecard.
 - note `crates/takt/src/scorecard.rs:135`: a run's agent can plant a well-formed `binary.txt` under `.engineering/cases/` (`run.rs:357`).
+
+## From the adversarial review of main at ae680d5 (2026-10-19, fact-checked)
+
+Confirmed, low (review-result:main-ae680d5-adversarial):
+- A7.4 `forge.rs:1131`: a `skipping` check counts as pass; only skipped checks give `ci_result pass` (reach needs the repository's own workflow to skip).
+- A1.2 `trace.rs:1254-1259` with `main.rs:379`: `report --trace` prints a header's `format` raw in its error.
+- A1.4, A1.5 `trace.rs:1127`, `:1235`: `--steps` follows links; `--steps` and `--trace` are read whole with no size or regular-file check.
+- A1.7 `report.rs:235`: takt time clamps to 0 instead of unknown when measured exceeds wall.
+- A1.8 `trace.rs:911-928`: `merge_steps` is O(calls x lines).
+- A8.1 `run.rs:4286-4298`: a NUL or a 128 KiB summary makes the commit spawn fail and the run end on Err with no refusal.
+- A8.2 `trace.rs:785`: a refused `repository.merge` is labelled "approval-only call".
+- A8.3 `run.rs:4258`, `:4266`: a newline in a changed path forges a line on `out`.
+- A9.3 `scripts/check-citations:69-71`: `_read from:`, `xread from:` and homoglyphs are neither flagged nor counted.
+- A9.7 `scripts/check-citations:171`, `:329-333`: a repository symlink is followed outside and its lines printed.
+- A10.1 `validator.rs:1517`, `:1446`: a PR merged outside takt is recorded merged accurately, but the approval, test_result and move commits stay on the case branch.
+- A10.4 `run.rs:3084`: the move to implemented is tried after a refused test_result write.
+- A10.5 `validator.rs:378-392`: the test_result record names no test command.
+- A10.6 `case.rs:1733-1743`: `has_evidence` ignores the result, so a flaky fail is never re-run at that revision.
+- A4.1 `case.rs:1102-1114`: `approvals_only` does not require each grant's approval record to reach the base (operator-only).
+- A4.2 `frontier.rs:394-405`: approve commits the record before writing the grant; a failed write needs a new approval (fails closed).
+- A6.3 `promotion.rs:531-552`: promotion's `git()` bypasses `git::command`'s environment scrub (operator environment only).
+- A3.7 `scorecard.rs:481`: `no_record` is never read by promotion; a trial without a record drops out of n silently.
+- A2.4 `promotion.rs:832-846`: bubblewrap passes inherited file descriptors into the confined build (operator-opened fds only).
