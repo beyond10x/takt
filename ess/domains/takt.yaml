@@ -912,7 +912,7 @@ types:
   # needs on the candidate's side (`trials`, 5) and the cases it may fall short by at any outcome
   # rank before it is worse (`margin`, 1). Decided 2026-10-18 (design:recursive-self-improvement
   # § Scorecard); a file saved before the rule had fields reads with the default.
-  # read from: .engineering/planning/design/recursive-self-improvement.md:130-138
+  # read from: .engineering/planning/design/recursive-self-improvement.md:136-144
   # read from: crates/takt/src/scorecard.rs:302-319
   # read from: crates/takt/src/scorecard.rs:335-338
   - name: takt.work.ScorecardRule
@@ -1139,7 +1139,7 @@ types:
   # hand, has no run record and no story record, so no tokens, wall time, finding or filing.
   # read from: .engineering/planning/story/loop-scorecard.md:34-37
   # read from: .engineering/planning/story/loop-scorecard.md:54-56
-  # read from: .engineering/planning/design/recursive-self-improvement.md:185-187
+  # read from: .engineering/planning/design/recursive-self-improvement.md:191-193
   # read from: crates/takt/src/scorecard.rs:89-126
   # read from: crates/takt/src/loop_scorecard.rs:52-82
   # read from: crates/takt/src/loop_scorecard.rs:923-1050
@@ -1450,7 +1450,7 @@ types:
   # fewer on the candidate's side, none included, gets neither; it is printed as `too few cases
   # on the saved side (<n> of <trials>)` or `too few cases (<n> of <trials>)`, and the
   # comparison ends in a refusal naming each such scenario.
-  # read from: .engineering/planning/design/recursive-self-improvement.md:130-138
+  # read from: .engineering/planning/design/recursive-self-improvement.md:136-144
   # read from: crates/takt/src/scorecard.rs:974-990
   # read from: crates/takt/src/scorecard.rs:1096-1120
   # read from: crates/takt/src/scorecard.rs:1143-1171
@@ -1532,7 +1532,7 @@ types:
   # not judged again until it changes (the design's "no re-run of an unchanged candidate").
   # Decided 2026-10-18.
   # read from: .engineering/planning/story/promotion.md:95
-  # read from: .engineering/planning/design/recursive-self-improvement.md:130-138
+  # read from: .engineering/planning/design/recursive-self-improvement.md:136-144
   # read from: crates/takt/src/promotion.rs:129-139
   # Decided 2026-10-19 (story:promotion-refusal-is-not-final): a refusal is final no longer. The
   # operator judges a refused candidate again with `--rejudge` on a scorecard of new runs, none
@@ -3343,7 +3343,7 @@ entities:
   # read from: .engineering/planning/story/promotion.md:90
   # The rule's parameters, trials and margin, are recorded with the scorecard
   # (takt.work.ScorecardRule) and copied into the record that read it.
-  # read from: .engineering/planning/design/recursive-self-improvement.md:132-138
+  # read from: .engineering/planning/design/recursive-self-improvement.md:138-144
   # read from: crates/takt/src/promotion.rs:143-203
   # Decided 2026-10-19 (story:promote-binds-scorecard-and-merge,
   # story:promotion-refusal-is-not-final): a promotion installs a merged revision only, an
