@@ -1282,7 +1282,7 @@ entities:
       # any other protocol. Declared ahead of the code (story:self-improvement-protocol), decided
       # 2026-10-18.
       # read from: protocols/self-improvement/1.yaml:28-32
-      # read from: .engineering/planning/story/self-improvement-protocol.md:52
+      # read from: .engineering/planning/story/self-improvement-protocol.md:54
       - name: finding
         type: Optional<takt.work.FindingKey>
     relations:
@@ -1307,7 +1307,7 @@ entities:
       # `finding` artifact is the finding the turn verifies. Decided 2026-10-18: an improvement
       # case references exactly one finding, and a finding may have many cases (a retried or
       # re-opened turn); many-to-one, the case side references.
-      # read from: .engineering/planning/story/self-improvement-protocol.md:50-52
+      # read from: .engineering/planning/story/self-improvement-protocol.md:52-54
       # read from: protocols/self-improvement/1.yaml:28-32
       - name: finding
         kind: references
