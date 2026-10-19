@@ -13,7 +13,7 @@ scope:
   path: crates/takt/src/promotion.rs
 - confidence: cited
   path: crates/takt/src/scorecard.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T02:52:53Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T02:52:53Z", actor: "human:timo", revision: 3}
@@ -21,7 +21,7 @@ transitions:
 ---
 ## Outcome
 
-`takt promote` refuses a revision that is not an ancestor of the mainline tip, and refuses a scorecard whose rows do not each name the binary digest of the revision being promoted (from the run record's `opened.binary`), naming the first row that does not; `--baseline-only` holds to the same row check.
+`takt promote` refuses a revision that is not an ancestor of the mainline tip, and refuses a scorecard whose rows do not each name the revision being promoted as the revision of the binary they ran (from the run record's `opened` line; binding the binary's sha256 is story:scorecard-binds-binary-digest), naming the first row that does not; `--baseline-only` holds to the same row check.
 
 ## Context
 
@@ -30,11 +30,11 @@ From the review of main at 9cc158b on 2026-10-19: ten independent reviewers, one
 ## Scope
 
 - `crates/takt/src/promotion.rs`: the ancestry and row checks (cited)
-- `crates/takt/src/scorecard.rs`: rows carry the binary digest (cited)
+- `crates/takt/src/scorecard.rs`: rows carry the revision their binary names (cited)
 
 ## Acceptance
 
-`takt promote` on a clean branch tip that is not an ancestor of `main` exits non-zero naming `main`; on a merged revision with a scorecard whose runs name another binary digest it exits non-zero naming the row; with matching rows it proceeds as today.
+`takt promote` on a clean branch tip that is not an ancestor of `main` exits non-zero naming `main`; on a merged revision with a scorecard whose runs name another revision it exits non-zero naming the row; with matching rows it proceeds as today.
 
 ## Landed (wave 13)
 
