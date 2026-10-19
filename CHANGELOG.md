@@ -6,6 +6,17 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-10-19
+
+The first published release of the 0.2 line; its changes are those listed under 0.2.0.
+
+- 0.2.0 was tagged but not published: its release gate failed on one test,
+  `finding_scripts.rs:1695`, which expected bash's "No such file or directory", while `/bin/sh`
+  on the CI runner is dash, which prints "Directory nonexistent". Every write the test attempts
+  was still refused; only the wording differed
+  (<https://github.com/beyond10x/takt/actions/runs/39266647600>).
+- The test accepts either wording (<https://github.com/beyond10x/takt/pull/1>).
+
 ## [0.2.0] — 2026-10-19
 
 ### Improvement turns
