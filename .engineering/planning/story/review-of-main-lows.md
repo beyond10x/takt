@@ -8,7 +8,7 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-fe93286-areas
-revision: 3
+revision: 4
 ---
 ## Outcome
 
@@ -62,3 +62,10 @@ Each item above has a commit with a test that fails before it, or a line in this
 - warning `crates/takt/src/forge.rs:1020@2e099b8`: when the remote's base has moved past `refs/remotes/origin/<base>`, every push is refused, the merge push included, though the dry-run fetch has already downloaded the remote base's commit. Decision: exclude what is reachable from the fetched remote sha instead of refusing.
 - note `forge.rs:1422-1444`: a byte-order mark is looked for at byte 0 only; a mid-file or odd-offset UTF-16 literal passes (same reader as the documented no-mark limit).
 - note `forge.rs:973-987`: a force-pushed remote base fails closed with gates' generic refusal, not the two shas.
+
+## From the review of baseline-for-a-pre-revision-binary at 69ffa2b (2026-10-19, granted)
+
+- note `crates/takt-cli/src/main.rs:122@69ffa2b`: `takt promote --help`'s exit-1 text omits the stated-record digest check and the refusal of runs not stated by the operator.
+- note `crates/takt/src/promotion.rs:1380`: a malformed `binary.txt` is refused as "no binary.txt beside its record"; the reason in `card.unstated` is unused.
+- note `crates/takt/src/scorecard.rs:575`: an unstated case is in both `no_record` and `rows` of a saved scorecard.
+- note `crates/takt/src/scorecard.rs:135`: a run's agent can plant a well-formed `binary.txt` under `.engineering/cases/` (`run.rs:357`).

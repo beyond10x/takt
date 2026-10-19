@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:baseline-for-a-pre-revision-binary
 kind: story
-status: active
+status: implemented
 title: A baseline record names a binary that predates the revision in --version by its sha256
 relations:
 - decomposes: epic:recursive-self-improvement
@@ -15,10 +15,11 @@ scope:
   path: crates/takt-cli/tests/promote_cli.rs
 - confidence: cited
   path: crates/takt/src/promotion.rs
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T00:48:31Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-19T00:48:31Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-19T02:42:29Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 
