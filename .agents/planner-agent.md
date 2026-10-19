@@ -184,6 +184,8 @@ goes to standard error.
    ```expected_before
    scenario: 1
    command: "$TAKT" run --repo . --harness none --forge none --iterations 1 --test-cmd true
+   exit: 3
+   healthy_exit: 3
    output: on software.change/1
    source: docs/runs/<record>.md
    ```
@@ -195,9 +197,10 @@ goes to standard error.
    | `repository` | instead of `scenario`: the repository the defect was seen on, an `https://` URL and never a path (the predicate is committed to a public repository and must hold on every machine), which `check-finding` clones without `--scenarios`; a local checkout stands in for the URL only through `check-finding --checkout <url>=<path>` at check time |
    | `seed` | with `repository`: the commit the task starts from, a commit id |
    | `test` | with `repository`, optional: the task's test command, handed to the command as `$TEST` |
-   | `command` | one shell line, run in a fresh clone of the scenario's seed, or of `repository` at `seed`, with `$TAKT` the binary under test and `$SCENARIO` the clone, in a fresh HOME of the check's own; no credential of the caller's environment or home reaches it |
+   | `command` | one shell line, run in a fresh clone of the scenario's seed, or of `repository` at `seed`, with `$TAKT` the binary under test and `$SCENARIO` the clone, in a fresh HOME of the check's own; no credential of the caller's environment reaches it, but the command can still read the caller's home, as every other path, by its real path. It runs `$TAKT`, or `file-finding` refuses it as `malformed`: a command that never runs it gives the same result at every revision |
    | `exit` | the exit status while the defect is present, 0 to 255 but 124 and 137, which `check-finding` reads as its timeout and `file-finding` refuses as `malformed` |
-   | `output` | a fixed string the command's standard output or standard error then holds |
+   | `healthy_exit` | optional: the exit status the command gives once the defect is gone, 0 when not given; `check-finding` says `not_reproduced` only for this status. An `exit` equal to it needs `output`, or `file-finding` refuses the predicate as `malformed` |
+   | `output` | a fixed string the command's standard output or standard error then holds, at least 8 characters |
    | `source` | the run record or review that produced the finding, a path in this repository |
 
    `scenario` or `repository`, one of the two; `exit`, `output` or both; the predicate holds when
@@ -210,14 +213,18 @@ goes to standard error.
    defect goes into that artifact's body (`aep plan artifact body`), never into a second finding.
 4. **Reproduce.** The reviewer runs `scripts/check-finding --scenarios <scratch checkout> <id>
    <revision>` at the promoted revision; until story:promotion records one, at the revision the
-   run was taken with. It builds takt from that revision and prints `reproduced` or
-   `not_reproduced`; when it exits non-zero it printed no result. `not_reproduced` here means the
-   predicate does not catch the defect: correct the body and have it checked again before
-   announcing it.
+   run was taken with. It builds takt from that revision, confined in bubblewrap, and prints
+   `reproduced`, `not_reproduced` or `error`; when it exits non-zero it printed no result.
+   `not_reproduced` here means the predicate does not catch the defect: correct the body and
+   have it checked again before announcing it. `error` means the command ended with a status the
+   predicate names neither as the defect's nor as `healthy_exit` (a crash, a flag rejected, a
+   command not found; standard error names the status), or with the defect's `exit` but without
+   its `output`: correct the command or the `healthy_exit` and have it checked again.
 5. **Announce.** `[FINDING takt] <ids>`, the ids `reproduced` held for.
 6. **Verify** (loop step 5): the reviewer runs the same `scripts/check-finding` at the candidate's
    revision. The fix is verified when the promoted revision gives `reproduced` and the candidate
-   `not_reproduced`.
+   `not_reproduced`, and only then. `error` at either revision, or no result, verifies nothing:
+   the fix stays unverified and no `[VERIFIED takt]` is sent.
 
 ## Messages
 
