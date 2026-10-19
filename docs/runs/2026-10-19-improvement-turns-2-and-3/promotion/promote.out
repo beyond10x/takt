@@ -1,0 +1,18 @@
+candidate 44f96a48de6b0a89db6801fd1d85372896e98781 against baseline a0b8576fe56aca1304e412eb62e5622762de198a
+against a0b8576fe56aca1304e412eb62e5622762de198a (the revision of takt under test)
+rule  trials 5 a scenario  margin 1 case  tokens worse when the median exceeds the saved maximum
+scenario-1-trial-71  scenario 1  ApprovalRequired
+scenario-1-trial-72  scenario 1  ApprovalRequired
+scenario-1-trial-73  scenario 1  ApprovalRequired
+scenario-1-trial-74  scenario 1  ApprovalRequired
+scenario-1-trial-75  scenario 1  ApprovalRequired
+scenario 1  saved      n 5  tokens min 107205 median 122361 max 138160
+scenario 1  candidate  n 5  tokens min 121495 median 121952 max 122058
+scenario 1  median tokens -409
+scenario 1  outcomes by rank held  tokens held  not worse
+verdict: no scenario worse than the baseline
+cloning 44f96a48de6b0a89db6801fd1d85372896e98781 into ~/.cache/takt/promote/44f96a48de6b0a89db6801fd1d85372896e98781-2790279/source
+cargo build --locked --offline --release -p b10x-takt-cli --bin takt --target-dir /target (confined in bwrap)
+cargo install --locked --offline --force --path /work/crates/takt-cli --root /install --target-dir /target (confined in bwrap)
+promoted: ~/.cargo/bin/takt at 44f96a48de6b0a89db6801fd1d85372896e98781, sha256 0146e9dcfcfbff0be5c5e7ff27ccb7824ad13bf935864dc5fbeb968649b5c269; recorded: ~/.local/state/takt/promotions/44f96a48de6b0a89db6801fd1d85372896e98781.json
+exit=0

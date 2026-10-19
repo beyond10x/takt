@@ -8,7 +8,7 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-fe93286-areas
-revision: 5
+revision: 6
 ---
 ## Outcome
 
@@ -92,3 +92,20 @@ Confirmed, low (review-result:main-ae680d5-adversarial):
 - A6.3 `promotion.rs:531-552`: promotion's `git()` bypasses `git::command`'s environment scrub (operator environment only).
 - A3.7 `scorecard.rs:481`: `no_record` is never read by promotion; a trial without a record drops out of n silently.
 - A2.4 `promotion.rs:832-846`: bubblewrap passes inherited file descriptors into the confined build (operator-opened fds only).
+
+## From the release night of 0.1.0 (2026-10-19): grant reviews, fact-checked lows
+
+- `crates/takt-cli/build.rs:244` (follow-ups c1 review, W1): `--ignore-submodules=all` reads a submodule at another commit as clean; `=dirty` also keeps its filter from running and still reports it; no test distinguishes them.
+- `ess/domains/takt.yaml:467` (follow-ups c1, N1): the `-dirty` text omits the submodule exclusion `build.rs:213-214` documents.
+- `crates/takt/src/git.rs:1511` (follow-ups c1, N2): a conflict at a non-UTF-8 path now errors in `change.read`; the ESS states that limit only for `tests.run` and `ci.read`.
+- `crates/takt/src/run.rs:4628-4632` (wave-12 close review, W1): no test pins that a step discarded at the run's end carries its call report; the `Late` double in `hours_bounds_the_run_end.rs:308` has no `last_call`.
+- `ess/domains/takt.yaml:1414` (wave-12 close, N3): `BenchTaskId` cites a draft story's title line, weaker than the old citation; the claim still holds through `benchmark-integration.md:37`.
+- `scripts/check-finding:438-444` (E1 review, #7): a command that exits 0 but prints the defect's output reads `not_reproduced`.
+- `crates/takt/src/promotion.rs:670-679` (E2 c3 review, W1): a v1 baseline with a real held-out failure can never be judged against again (re-score refused, v1 not compared, `--baseline-only` refused); no real store is in that state.
+- `crates/takt/tests/properties.rs:253` (propfuzz review, N2): no property for an ended unreadable line that no `skipped` line names.
+- `crates/takt/tests/properties.rs:396` (propfuzz, N3): median-within-bounds cannot catch an unsorted median; ignoring the margin is killed only by the scorecard tests.
+- `fuzz/Cargo.toml:17-18` (propfuzz, N6): `fuzz/` is its own workspace and `task check` never builds it, so an API change breaks the targets unseen.
+- `.github/workflows/check.yml:89-90` (CI fix review): the cache fill `aep plan artifact validate` also gates store validity on every pull request and the release gate.
+- `crates/takt/src/validator.rs:296-330` (colour fix review): `summarise_tests` would hide failed test names behind escape codes if a test command passes `-- --color always`; the counts still parse.
+- `.github/workflows/check.yml:99` (CI fix 2 review): the bwrap smoke test covers less than takt's sandbox (`--unshare-pid`, `--proc`, `--dev`, `--tmpfs`); it fails first at loopback, which is what it guards today.
+- `docs/site/publish-protocols.sh` (site review): still pushes `gh-pages`, while the site now deploys from `main`.

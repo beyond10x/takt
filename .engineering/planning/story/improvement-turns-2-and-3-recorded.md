@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:improvement-turns-2-and-3-recorded
 kind: story
-status: draft
+status: implemented
 title: Improvement turns 2 and 3 are recorded as accepted cases
 relations:
 - decomposes: epic:recursive-self-improvement
@@ -11,7 +11,11 @@ relations:
 - depends_on: story:promotion
 - serves: vision:safe-agentic-coding
 - depends_on: story:baseline-for-a-pre-revision-binary
-revision: 2
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T06:04:51Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
+- {from: "proposed", to: "active", at: "2026-10-19T06:04:52Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
+- {from: "active", to: "implemented", at: "2026-10-19T06:04:52Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 
@@ -26,8 +30,8 @@ Owner: the planner, recording in phase R0 with the turn-1 recorder, as turn 1 wa
 
 ## Scope
 
-- `.engineering/cases/turn-2-case-id/`, `.engineering/cases/turn-3-<key>/` (new, copied from the recorder's case tree)
-- `docs/runs/2026-10-18-improvement-turns-2-3.md`, `docs/metrics/improvement-turns.jsonl` (the doc-writer)
+- `.engineering/cases/turn-2-case-id/`, `.engineering/cases/turn-3-hours/` (new, copied byte for byte from the recorder's case tree)
+- `docs/runs/2026-10-19-improvement-turns-2-and-3/`, `docs/metrics/improvement-turns.jsonl` (the doc-writer)
 
 ## Acceptance
 

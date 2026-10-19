@@ -1,0 +1,10 @@
+{
+  "format": "canon-evidence/1",
+  "id": "e3",
+  "kind": "scenario_result",
+  "result": "not_reproduced",
+  "subject": "candidate",
+  "subject_revision": "cfbf7e4",
+  "observed_at": "2026-10-18T23:32:28Z",
+  "producer": "planner-run"
+}
