@@ -8,7 +8,7 @@ relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:recursive-self-improvement
 - informed_by: review-result:main-fe93286-areas
-revision: 2
+revision: 3
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T01:44:34Z", actor: "human:timo", revision: 2}
 ---
@@ -54,3 +54,25 @@ Adopt B for grant reviews when its recall of high and blocker findings is at lea
 ## Limits
 
 No builds in either arm, so runtime probes (the reviewers' strongest evidence this session) are out of the comparison. Seven units is small; the result says which arm to try next, not a law.
+
+## Pilot results (2026-10-19)
+
+## Pilot results (2026-10-19)
+
+Two units, one run per arm, same model as the grant reviewer, no builds. Ground truth in the planner's scratch file; tokens from sub-agent usage.
+
+| unit (sha) | known defects | arm A: found | A tokens | arm B: found | B tokens (B1+B2) | B / A tokens |
+|---|---|---|---|---|---|---|
+| scan-before-push (792cd2e) | 1 medium, in the diff | 0 of 1 | 131,898 | 0 of 1 | 286,136 | 2.17 |
+| loop-scorecard (f43b0f7) | 2 high + 1 low, outside the diff | 1 of 3 (the low) | 134,734 | 3 of 3 | 310,745 | 2.31 |
+| total | 4 | 1 of 4 (0 of 2 high) | 266,632 | 3 of 4 (2 of 2 high) | 596,881 | 2.24 |
+
+New defects not in the ground truth, later sent to the developer:
+- A on 792cd2e: a stale tracking ref hides commits from the scan (confirmed by the grant reviewer as a known limit); `scan-text` ignores the policy's exceptions (confirmed).
+- B on 792cd2e: UTF-16 files carry a forbidden literal past `scan-text` (verified with b10x-gates 0.1.21).
+- A on f43b0f7, and B independently: `filed_at` forgeable through a planted loose commit (replayed by both); A also measured `git log` at 482 MB RSS on a 486 KB plant.
+- B on f43b0f7: YAML alias expansion unbounded (inferred); `compute()` arm change passes the definition check; shallow-clone walk error (replayed).
+
+Stage 2 refuted 2 of stage 1's 7 findings on 792cd2e and confirmed 10 of 10 on f43b0f7, so arm B's surviving findings carry a second reading. Arm A's findings had none.
+
+Reading against the decision rule: B's high recall is higher (2 of 2 against 0 of 2) but its tokens are 2.24 times A's, above both thresholds (1.2 for grant reviews, 1.5 for the second-pass use), so the rule adopts nothing yet. Two units and one run per arm cannot carry that decision. Next run: the remaining 5 units with 2 runs per arm, and a third arm C, the grant review A followed by stage 2 given A's findings, which tests whether B's gain comes from the diff-first reading or from the second reading.
