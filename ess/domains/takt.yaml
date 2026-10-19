@@ -293,7 +293,7 @@ types:
   # read from: crates/takt/src/case.rs:1592-1594
   # read from: crates/takt/src/case.rs:1665
   # read from: crates/takt/src/run.rs:3369
-  # read from: crates/takt/src/run.rs:5072
+  # read from: crates/takt/src/run.rs:5082
   # read from: crates/takt/src/case.rs:1754-1758
   # read from: crates/takt/src/case.rs:1282-1284
   # read from: crates/takt/src/evidence.rs:14
@@ -360,7 +360,7 @@ types:
   # read from: crates/takt/src/run.rs:52-71
   # read from: crates/takt/src/run.rs:4002
   # read from: crates/takt/src/run.rs:4396-4400
-  # read from: crates/takt/src/run.rs:4947
+  # read from: crates/takt/src/run.rs:4957
   # read from: crates/takt/src/run.rs:4066
   # read from: crates/takt/src/run.rs:4221
   # read from: crates/takt/src/run.rs:4346-4347
@@ -584,8 +584,8 @@ types:
   # What a judgement step changed: the paths committed and the implementation revision they were
   # committed as; no path and no revision when it changed no file.
   # read from: crates/takt/src/events.rs:116-122
-  # read from: crates/takt/src/run.rs:5042-5048
-  # read from: crates/takt/src/run.rs:5073-5080
+  # read from: crates/takt/src/run.rs:5052-5058
+  # read from: crates/takt/src/run.rs:5083-5090
   - name: takt.work.RunEffect
     kind: struct
     fields:
@@ -2130,7 +2130,7 @@ entities:
   # the run is given; the steps taken, the tokens spent and the stop are what it records.
   # read from: crates/takt/src/run.rs:1-5
   # read from: crates/takt/src/run.rs:3091-3116
-  # read from: crates/takt/src/run.rs:3919-5072
+  # read from: crates/takt/src/run.rs:3919-5082
   # A run holds its case for its whole duration: `run.lock`, holding the instant it took hold, is
   # created with `create_new` at start, so of two that try at once exactly one holds, and removed
   # at every stop, on error and on a panic, the panic recorded first. A resume holds the case
@@ -2442,11 +2442,11 @@ entities:
   # read from: crates/takt/src/run.rs:4083-4091
   # read from: crates/takt/src/run.rs:4221
   # read from: crates/takt/src/run.rs:4425-4436
-  # read from: crates/takt/src/run.rs:4874-4916
-  # read from: crates/takt/src/run.rs:4931-4947
-  # read from: crates/takt/src/run.rs:4949-4959
+  # read from: crates/takt/src/run.rs:4874-4926
+  # read from: crates/takt/src/run.rs:4941-4957
+  # read from: crates/takt/src/run.rs:4959-4969
   # read from: crates/takt/src/run.rs:4647
-  # read from: crates/takt/src/run.rs:5057-5072
+  # read from: crates/takt/src/run.rs:5067-5082
   # read from: crates/takt/src/harness.rs:16-71
   # read from: crates/takt/src/run.rs:4505-4508
   # read from: crates/takt/src/run.rs:4439-4497
@@ -2456,7 +2456,7 @@ entities:
   # read from: crates/takt/src/run.rs:1894-1897
   # read from: crates/takt/src/run.rs:2271-2282
   # read from: crates/takt/src/run.rs:170-186
-  # read from: crates/takt/src/run.rs:4970-5039
+  # read from: crates/takt/src/run.rs:4980-5049
   # read from: crates/takt/src/validator.rs:1829-1880
   # read from: crates/takt/src/run.rs:112-118
   # read from: crates/takt/src/run.rs:667-676
@@ -2488,6 +2488,13 @@ entities:
   # read from: crates/takt/src/git.rs:1691-1701
   # read from: crates/takt/src/forge.rs:748-757
   # read from: crates/takt/src/git.rs:1332-1349
+  # git names an ignored directory as one entry; the checkpoint takes every path below it too,
+  # a link as the link and anything else by its kind, size, mode, times and inode, never opened,
+  # so a step that adds, rewrites or removes a file inside one (`__pycache__/`, `target/`) has
+  # touched an ignored path. When the change is discarded, what it added there is removed, and so
+  # is a file there it rewrote, of which nothing was kept to put back.
+  # read from: crates/takt/src/git.rs:1715-1735
+  # read from: crates/takt/src/git.rs:2134-2143
   - name: takt.work.Step
     naming:
       summary: >-
@@ -2518,7 +2525,7 @@ entities:
       # read from: crates/takt/src/harness.rs:21-25
       # read from: crates/takt/src/harness.rs:43-45
       # read from: crates/takt/src/run.rs:4407
-      # read from: crates/takt/src/run.rs:4950
+      # read from: crates/takt/src/run.rs:4960
       - name: action
         type: takt.work.ActionId
       # The validator that performed a deterministic step; absent on a judgement step, which the
@@ -2577,7 +2584,7 @@ entities:
       # The commit a judgement step's change was committed as, exactly the paths it changed, which
       # `implementation` now names; absent when nothing changed, the step was refused, or the step
       # was deterministic.
-      # read from: crates/takt/src/run.rs:5057-5072
+      # read from: crates/takt/src/run.rs:5067-5082
       # read from: crates/takt/src/git.rs:1036
       - name: committed
         type: Optional<takt.work.Revision>
@@ -2699,9 +2706,9 @@ entities:
   # read from: crates/takt/src/forge.rs:767-791
   # read from: crates/takt/src/validator.rs:126-137
   # read from: crates/takt/src/validator.rs:1894-1908
-  # read from: crates/takt/src/git.rs:2085-2089
+  # read from: crates/takt/src/git.rs:2173-2177
   # read from: crates/takt/src/validator.rs:1936-2019
-  # read from: crates/takt/src/git.rs:2127-2133
+  # read from: crates/takt/src/git.rs:2215-2221
   # read from: crates/takt/src/validator.rs:401-409
   # read from: crates/takt/src/run.rs:4245-4268
   # read from: crates/takt/src/validator.rs:413-429

@@ -1603,7 +1603,7 @@ pub struct GitDirPutBack {
 /// ([`Checkpoint::take_guarding`]); the index's entries
 /// and the index file itself; every uncommitted path outside the cases directory with what was
 /// at it (a validator's run may leave one); the ignored paths with what is at each a file git
-/// names; and what git runs, reads as configuration, or reads to find the objects and the
+/// names, and below each ignored directory every path by its kind and stamp; and what git runs, reads as configuration, or reads to find the objects and the
 /// history in the git directories: the hooks, `info/`, the configuration's keys, `commondir`,
 /// `gitdir`, `shallow`, `objects/info/alternates` and the commit-graph.
 #[derive(Debug, Clone)]
@@ -1636,14 +1636,14 @@ pub struct StepChange {
     pub head: Option<String>,
     /// The guarded refs the step moved, made or deleted, each with how.
     pub refs: Vec<String>,
-    /// Ignored paths the step created.
+    /// Ignored paths the step created, inside an ignored directory that was there before it too.
     pub ignored_added: Vec<String>,
-    /// Ignored files git names that the step rewrote.
+    /// Ignored files git names, and paths inside an ignored directory, that the step rewrote.
     pub ignored_changed: Vec<String>,
-    /// Ignored paths the step removed.
+    /// Ignored paths the step removed, inside an ignored directory too.
     pub ignored_removed: Vec<String>,
     /// Those of the rewritten or removed ignored paths of which nothing was kept to put back (a
-    /// whole ignored directory, a file too large to keep or unreadable).
+    /// whole ignored directory, a path inside one, a file too large to keep or unreadable).
     pub ignored_lost: Vec<String>,
 }
 
@@ -1713,14 +1713,82 @@ fn guarded_refs(tree: &Path, unguarded: &BTreeSet<String>) -> Result<BTreeMap<St
 }
 
 /// What is at each ignored path of `entries`: the content of a file git names, a directory as
-/// itself.
+/// itself and, since git names an ignored directory as one entry, every path below it as well
+/// ([`below`]).
 fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<String, Content>> {
-    ignored(entries)
-        .into_iter()
-        .map(|path| {
-            Content::of(&tree.join(path.trim_end_matches('/'))).map(|content| (path, content))
-        })
-        .collect()
+    let mut found = BTreeMap::new();
+    for path in ignored(entries) {
+        let content = Content::of(&tree.join(path.trim_end_matches('/')))?;
+        if content == Content::Dir {
+            below(tree, &path, &mut found)?;
+        }
+        found.insert(path, content);
+    }
+    Ok(found)
+}
+
+/// Each path below the ignored directory `dir` (relative to the tree, ending in `/`) outside the
+/// cases directory, into `found`: a directory as itself, its path ending in `/`, and what is in
+/// it in turn; a link as the link, never followed; anything else by its kind and [`Stamp`],
+/// never opened, so that a large `target/` costs one `lstat` a path and nothing of it is kept to
+/// put back. A directory that cannot be listed is compared by its stamp alone.
+fn below(tree: &Path, dir: &str, found: &mut BTreeMap<String, Content>) -> Result<()> {
+    let full = tree.join(dir.trim_end_matches('/'));
+    let listed = match std::fs::read_dir(&full) {
+        Ok(listed) => listed,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let meta = std::fs::symlink_metadata(&full)
+                .with_context(|| format!("read {}", full.display()))?;
+            found.insert(
+                dir.to_owned(),
+                Content::Opaque {
+                    what: "a directory that cannot be listed",
+                    stamp: Stamp::of(&meta),
+                },
+            );
+            return Ok(());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).with_context(|| format!("list {}", full.display())),
+    };
+    for entry in listed {
+        let entry = entry.with_context(|| format!("list {}", full.display()))?;
+        let path = format!("{dir}{}", entry.file_name().to_string_lossy());
+        if is_under_cases(&path) {
+            continue;
+        }
+        let meta = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| format!("read {}", entry.path().display()));
+            }
+        };
+        let kind = meta.file_type();
+        if kind.is_dir() {
+            let path = format!("{path}/");
+            below(tree, &path, found)?;
+            found.entry(path).or_insert(Content::Dir);
+        } else if kind.is_symlink() {
+            let target = std::fs::read_link(entry.path())
+                .with_context(|| format!("read {}", entry.path().display()))?;
+            found.insert(path, Content::Link(target));
+        } else {
+            let what = if kind.is_file() {
+                "a file in an ignored directory"
+            } else {
+                "not a file (a FIFO, a socket or a device)"
+            };
+            found.insert(
+                path,
+                Content::Opaque {
+                    what,
+                    stamp: Stamp::of(&meta),
+                },
+            );
+        }
+    }
+    Ok(())
 }
 
 impl Checkpoint {
@@ -2015,11 +2083,11 @@ impl Checkpoint {
     /// reads as configuration first (a path it could not put back was reported by
     /// [`Self::put_back_git_dir`] and is not again here); then `HEAD`, its branch and the
     /// guarded refs; the tracked files and the index to `HEAD`; untracked files and the ignored
-    /// paths the step created removed; ignored files git names written again as they were; the
-    /// paths uncommitted before written again as they were; the index file as it was. The cases
-    /// directory is not touched here (it is the kernel's, put back by the run). Of an ignored
-    /// directory, a file too large to keep or one that could not be read nothing is kept to put
-    /// back. Checked afterwards: a tree that still differs is an error, not a refusal.
+    /// paths the step created removed, inside an ignored directory too; ignored files git names
+    /// written again as they were; the paths uncommitted before written again as they were; the
+    /// index file as it was. The cases directory is not touched here (it is the kernel's, put
+    /// back by the run). Of an ignored directory, a file inside one, a file too large to keep or
+    /// one that could not be read nothing is kept to put back. Checked afterwards: a tree that still differs is an error, not a refusal.
     pub fn restore(&self, tree: &Path) -> Result<()> {
         let _ = self.put_back_git_dir(tree);
         match &self.branch {
@@ -2052,8 +2120,8 @@ impl Checkpoint {
         let keep = format!("{CASES_DIR}/");
         run(tree, &["reset", "-q", "--hard", &self.head])?;
         run(tree, &["clean", "-fdq", "-e", &keep])?;
-        let now = ignored(&status(tree, true)?);
-        for path in &now {
+        let now = ignored_contents(tree, &status(tree, true)?)?;
+        for path in now.keys() {
             if !self.ignored.contains_key(path) {
                 Content::Absent.put_back(&tree.join(path.trim_end_matches('/')))?;
             }
@@ -2061,6 +2129,18 @@ impl Checkpoint {
         for (path, content) in &self.ignored {
             if content.can_be_put_back() && *content != Content::Dir {
                 content.put_back(&tree.join(path.trim_end_matches('/')))?;
+            }
+        }
+        // A file inside an ignored directory the step rewrote: nothing of it was kept to put
+        // back, and what the step wrote there (a build's output, a cache the next test run
+        // reads) goes; whatever made it makes it again.
+        for (path, content) in &now {
+            if !path.ends_with('/')
+                && self.ignored.get(path).is_some_and(|before| {
+                    !before.can_be_put_back() && before != content && self.is_inside_dir(path)
+                })
+            {
+                Content::Absent.put_back(&tree.join(path))?;
             }
         }
         for (path, content) in &self.dirty {
@@ -2079,6 +2159,14 @@ impl Checkpoint {
             bail!("the tree could not be put back as it was before the step: {left:?}");
         }
         Ok(())
+    }
+
+    /// Whether the ignored path `path` lies inside an ignored directory of this checkpoint,
+    /// rather than being one git names by itself.
+    fn is_inside_dir(&self, path: &str) -> bool {
+        path.trim_end_matches('/')
+            .match_indices('/')
+            .any(|(at, _)| self.ignored.get(&path[..=at]) == Some(&Content::Dir))
     }
 }
 

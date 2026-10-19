@@ -4892,15 +4892,25 @@ impl<'a> Run<'a> {
                 || !change.ignored_changed.is_empty()
                 || !change.ignored_removed.is_empty()
             {
+                // A build inside an ignored directory changes thousands of paths; the first of
+                // each list are named, the rest counted.
+                let named = |paths: &[String]| {
+                    const SHOWN: usize = 20;
+                    let mut named = paths[..paths.len().min(SHOWN)].join(", ");
+                    if paths.len() > SHOWN {
+                        named.push_str(&format!(" and {} more", paths.len() - SHOWN));
+                    }
+                    named
+                };
                 let mut what = Vec::new();
                 if !change.ignored_added.is_empty() {
-                    what.push(format!("wrote {}", change.ignored_added.join(", ")));
+                    what.push(format!("wrote {}", named(&change.ignored_added)));
                 }
                 if !change.ignored_changed.is_empty() {
-                    what.push(format!("rewrote {}", change.ignored_changed.join(", ")));
+                    what.push(format!("rewrote {}", named(&change.ignored_changed)));
                 }
                 if !change.ignored_removed.is_empty() {
-                    what.push(format!("removed {}", change.ignored_removed.join(", ")));
+                    what.push(format!("removed {}", named(&change.ignored_removed)));
                 }
                 let mut why = format!(
                     "{action} {} ignored by git, which no commit would carry",
@@ -4909,7 +4919,7 @@ impl<'a> Run<'a> {
                 if !change.ignored_lost.is_empty() {
                     why.push_str(&format!(
                         "; nothing was kept to put back of {}",
-                        change.ignored_lost.join(", ")
+                        named(&change.ignored_lost)
                     ));
                 }
                 Some(why)
