@@ -92,7 +92,21 @@ fuzz_target!(|data: &[u8]| {
             candidate.push((outcome, tokens));
         }
     }
+    let short = saved.is_empty() || candidate.is_empty();
     let (saved, candidate) = (card(&saved, margin), card(&candidate, margin));
+    // Fewer cases on a side than the rule's one trial gives no verdict, and says so; with no
+    // case on the saved side there is no scenario to judge and nothing is worse.
+    if short {
+        let mut out = Vec::new();
+        match candidate.against(&saved, &mut out) {
+            Err(error) => assert!(error.to_string().contains("too few cases"), "{error:#}"),
+            Ok(worse) => assert!(
+                saved.rows.is_empty() && worse == 0,
+                "a side with no case gave a verdict: {worse}"
+            ),
+        }
+        return;
+    }
     let (worse, printed) = against(&candidate, &saved);
     for line in printed.lines().filter(|line| line.contains(" tokens min ")) {
         let words: Vec<&str> = line.split_whitespace().collect();
