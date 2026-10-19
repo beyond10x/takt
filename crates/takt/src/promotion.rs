@@ -1209,10 +1209,14 @@ fn known_metrics(card: &Scorecard, shown: &Path) -> Result<()> {
 
 /// The binary at `installed` names `latest.revision`, the latest baseline or promotion in the
 /// store: a candidate is compared with the revision that is installed, so a record removed from
-/// the end of the store, or a binary replaced by hand, is a refusal naming both. A binary whose
-/// `--version` names no revision is checked by its sha256 against the record's
-/// `binary_sha256` when the record carries one (a baseline the operator stated), a mismatch
-/// refused naming both digests; without one it is refused as a binary naming no revision.
+/// the end of the store, or a binary replaced by hand, is a refusal naming both. A record whose
+/// revision the operator stated (`revision_stated_by`) is checked by its `binary_sha256` alone,
+/// whatever the binary prints, since a printed revision is what a replacement can copy: a
+/// mismatch is refused naming both digests, and such a record without a digest is refused
+/// naming it. Any other record is checked by the revision the binary names; a binary whose
+/// `--version` names none is checked by its sha256 against the record's `binary_sha256` when
+/// the record carries one, a mismatch refused naming both digests, and without one refused as
+/// a binary naming no revision.
 fn installed_names_latest(installed: &Path, store: &Path, latest: &Promotion) -> Result<()> {
     let path = record_path(store, &latest.revision, latest.kind);
     if !installed.exists() {
@@ -1224,6 +1228,26 @@ fn installed_names_latest(installed: &Path, store: &Path, latest: &Promotion) ->
         );
     }
     let line = printed_line(installed)?;
+    if latest.revision_stated_by.is_some() {
+        let Some(recorded) = latest.binary_sha256.as_deref() else {
+            bail!(
+                "the latest baseline or promotion recorded, {} ({}), states its revision but names no binary digest to check {} by; nothing is judged until it does",
+                latest.revision,
+                path.display(),
+                installed.display()
+            );
+        };
+        let digest = sha256_of(installed)?;
+        if digest != recorded {
+            bail!(
+                "{} prints {line:?} and hashes to {digest}, but the latest baseline or promotion recorded is {} ({}), its revision stated by the operator, whose binary hashes to {recorded}; a record is missing or the binary was replaced, and nothing is judged until they agree",
+                installed.display(),
+                latest.revision,
+                path.display()
+            );
+        }
+        return Ok(());
+    }
     let printed = match (parse_version(&line), latest.binary_sha256.as_deref()) {
         (Some(printed), _) => printed,
         (None, Some(recorded)) => {
@@ -1339,9 +1363,11 @@ fn installed_hashes_to(installed: &Path, revision: &str, stated: &str) -> Result
     Ok(())
 }
 
-/// Every run of `card` states the binary at `stated` (a [`BINARY_FILE`] beside its record): a
-/// run that states none, or another digest, is a refusal naming it, so the scorecard recorded
-/// is the stated binary's. The runs with their statements, for the record.
+/// Every run of `card` states the binary at `stated` (a [`BINARY_FILE`] beside its record), by
+/// the operator: a run that states none, states it by anything but the operator, or states
+/// another digest, is a refusal naming it, so the scorecard recorded is the stated binary's and
+/// every statement the record copies is the operator's. The runs with their statements, for
+/// the record.
 fn runs_stating(card: &Scorecard, stated: &str, shown: &Path) -> Result<Vec<RecordedRun>> {
     let mut runs = Vec::new();
     let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
@@ -1353,6 +1379,11 @@ fn runs_stating(card: &Scorecard, stated: &str, shown: &Path) -> Result<Vec<Reco
             None => bail!(
                 "{}: run {run} states no binary (no {BINARY_FILE} beside its record); with --binary-sha256 every run states the binary measured, so nothing is recorded",
                 shown.display()
+            ),
+            Some(binary) if binary.stated_by != StatedBy::Operator => bail!(
+                "{}: run {run} states its binary by the {}, not by the operator; with --binary-sha256 every run's binary is the operator's statement in a {BINARY_FILE} beside its record, so nothing is recorded",
+                shown.display(),
+                stated_by_name(binary.stated_by)
             ),
             Some(binary) if binary.sha256 != stated => bail!(
                 "{}: run {run} states the binary {}, not the stated {stated}; the scorecard is not the stated binary's, so nothing is recorded",
@@ -1366,6 +1397,14 @@ fn runs_stating(card: &Scorecard, stated: &str, shown: &Path) -> Result<Vec<Reco
         }
     }
     Ok(runs)
+}
+
+/// Who stated a binary, as a refusal names it.
+fn stated_by_name(by: StatedBy) -> &'static str {
+    match by {
+        StatedBy::Operator => "operator",
+        StatedBy::Record => "record",
+    }
 }
 
 /// The instant a record written now carries: the clock read again, after the build, which must

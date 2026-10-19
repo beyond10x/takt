@@ -775,7 +775,7 @@ types:
   # A saved scorecard's id: the revision of takt under test that names its file,
   # `scorecard-<revision>.json`, a commit id; a file there already is not overwritten.
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
-  # read from: crates/takt/src/scorecard.rs:655-689
+  # read from: crates/takt/src/scorecard.rs:674-708
   - name: takt.work.ScorecardId
     kind: newtype
     of: String
@@ -786,8 +786,8 @@ types:
   # rank before it is worse (`margin`, 1). Decided 2026-10-18 (design:recursive-self-improvement
   # § Scorecard); a file saved before the rule had fields reads with the default.
   # read from: .engineering/planning/design/recursive-self-improvement.md:130-138
-  # read from: crates/takt/src/scorecard.rs:233-250
-  # read from: crates/takt/src/scorecard.rs:266-269
+  # read from: crates/takt/src/scorecard.rs:234-251
+  # read from: crates/takt/src/scorecard.rs:267-270
   - name: takt.work.ScorecardRule
     kind: struct
     fields:
@@ -799,7 +799,7 @@ types:
   # What named a saved scorecard: the revision of takt under test, as the operator gave it
   # (`takt scorecard --save --revision`), or `HEAD` of a repository, as a caller of the library
   # gave it; `takt scorecard` never names a file by a repository's `HEAD`.
-  # read from: crates/takt/src/scorecard.rs:59-68
+  # read from: crates/takt/src/scorecard.rs:60-69
   - name: takt.work.ScorecardNaming
     kind: enum
     variants: [build, head]
@@ -814,9 +814,9 @@ types:
   # the record; a `skipped` line is no instant of any run.
   # The binary the run was made with, as stated beside its record (takt.work.RunBinary), on each
   # run of a case whose directory holds a `binary.txt`; absent otherwise.
-  # read from: crates/takt/src/scorecard.rs:70-100
-  # read from: crates/takt/src/scorecard.rs:276-281
-  # read from: crates/takt/src/scorecard.rs:409-450
+  # read from: crates/takt/src/scorecard.rs:71-101
+  # read from: crates/takt/src/scorecard.rs:282-287
+  # read from: crates/takt/src/scorecard.rs:415-456
   - name: takt.work.ScorecardRow
     kind: struct
     fields:
@@ -847,7 +847,7 @@ types:
   # in a `binary.txt` beside the run's record or by `takt promote --revision`, for a binary whose
   # `--version` names no revision; or the run's record itself, which no record does today. A
   # statement is marked as such wherever it is copied, so a reader tells it from a measurement.
-  # read from: crates/takt/src/scorecard.rs:102-110
+  # read from: crates/takt/src/scorecard.rs:103-111
   - name: takt.work.StatedBy
     kind: enum
     variants: [operator, record]
@@ -856,15 +856,17 @@ types:
   # who stated it; and the operator's note. The operator writes
   # `.engineering/cases/<case>/binary.txt` beside the run's record, its first line
   # `<path>\t<sha256>` (the path as written, `~` and all; only the digest is read) and every
-  # further line the note, copied verbatim; a file without a note is accepted, and one whose
-  # first line is no `<path>\t<sha256>` does not read, naming the file. `takt scorecard` reads it
+  # further line the note, copied verbatim; a file without a note is accepted, and one that does
+  # not read or whose first line is no `<path>\t<sha256>` leaves its case's runs stating no
+  # binary and lists the case in the scorecard's `no_record`, the reason in its `unstated`,
+  # every other case read as without it, never the scorecard refused. `takt scorecard` reads it
   # onto each run of the case and saves it with the row, never a figure from it; `takt promote
   # --baseline-only --binary-sha256` checks each run's digest against the binary it hashes.
-  # read from: crates/takt/src/scorecard.rs:1-26
-  # read from: crates/takt/src/scorecard.rs:41-45
-  # read from: crates/takt/src/scorecard.rs:112-121
-  # read from: crates/takt/src/scorecard.rs:132-158
-  # read from: crates/takt/src/scorecard.rs:508-560
+  # read from: crates/takt/src/scorecard.rs:1-27
+  # read from: crates/takt/src/scorecard.rs:42-46
+  # read from: crates/takt/src/scorecard.rs:113-122
+  # read from: crates/takt/src/scorecard.rs:133-159
+  # read from: crates/takt/src/scorecard.rs:514-574
   - name: takt.work.RunBinary
     kind: struct
     fields:
@@ -892,8 +894,8 @@ types:
   # its runs' steps, tokens, refusals, errors and wall times summed, a sum stopping at the largest
   # integer and flagged; 1 when its outcome is `NoProgress`. Derived from the runs, never saved
   # apart from them.
-  # read from: crates/takt/src/scorecard.rs:160-231
-  # read from: crates/takt/src/scorecard.rs:562-576
+  # read from: crates/takt/src/scorecard.rs:161-232
+  # read from: crates/takt/src/scorecard.rs:577-591
   - name: takt.work.ScorecardCase
     kind: struct
     fields:
@@ -931,7 +933,7 @@ types:
   # read from: .engineering/planning/story/loop-scorecard.md:30-33
   # read from: .engineering/planning/story/loop-scorecard.md:48-50
   # read from: .engineering/planning/design/recursive-self-improvement.md:185-187
-  # read from: crates/takt/src/scorecard.rs:70-100
+  # read from: crates/takt/src/scorecard.rs:71-101
   - name: takt.work.LoopScorecardRow
     kind: struct
     fields:
@@ -992,9 +994,9 @@ types:
   # against itself; one case lowered is within a margin of one, two cases lowered in one scenario
   # never are. Decided 2026-10-18 (story:promotion).
   # read from: .engineering/planning/design/recursive-self-improvement.md:130-138
-  # read from: crates/takt/src/scorecard.rs:707-719
-  # read from: crates/takt/src/scorecard.rs:791-815
-  # read from: crates/takt/src/scorecard.rs:838-866
+  # read from: crates/takt/src/scorecard.rs:726-738
+  # read from: crates/takt/src/scorecard.rs:810-834
+  # read from: crates/takt/src/scorecard.rs:857-885
   - name: takt.work.Comparison
     kind: enum
     variants: [no_regression, regression]
@@ -2036,10 +2038,10 @@ entities:
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
   # read from: .engineering/planning/story/scorecard-reader.md
   # read from: .engineering/planning/story/scorecard-reader.md:50-52
-  # read from: crates/takt/src/scorecard.rs:1-26
-  # read from: crates/takt/src/scorecard.rs:38-57
-  # read from: crates/takt/src/scorecard.rs:255-274
-  # read from: crates/takt/src/scorecard.rs:707-872
+  # read from: crates/takt/src/scorecard.rs:1-27
+  # read from: crates/takt/src/scorecard.rs:39-58
+  # read from: crates/takt/src/scorecard.rs:256-279
+  # read from: crates/takt/src/scorecard.rs:726-891
   - name: takt.work.Scorecard
     naming:
       summary: >-
@@ -2068,7 +2070,14 @@ entities:
         summary: One a run, in case order, each case's runs in the order they ran.
       - name: no_record
         type: List<takt.work.CaseId>
-        summary: The cases with no record, listed and never guessed.
+        summary: >-
+          The cases with no record, listed and never guessed; and each case with runs whose
+          `binary.txt` does not read, its reason in `unstated`.
+      - name: unstated
+        type: Map<takt.work.CaseId, String>
+        summary: >-
+          Each case listed in `no_record` for a `binary.txt` that does not read, with the
+          reason; its runs count and state no binary. Empty on a file saved before the field.
       - name: rule
         type: takt.work.ScorecardRule
         summary: >-
@@ -2113,8 +2122,8 @@ entities:
   # read from: .engineering/planning/story/promotion.md:141
   # read from: crates/takt/src/promotion.rs:518-524
   # read from: crates/takt/src/promotion.rs:1044-1154
-  # read from: crates/takt/src/promotion.rs:1387-1585
-  # read from: crates/takt/src/promotion.rs:1591-1826
+  # read from: crates/takt/src/promotion.rs:1426-1624
+  # read from: crates/takt/src/promotion.rs:1630-1865
   # Where it is kept, decided 2026-10-18: one JSON file per promotion at
   # `$XDG_STATE_HOME/takt/promotions/<revision>.json` (`~/.local/state/takt/promotions/` without
   # `XDG_STATE_HOME`; a refusal as `<revision>.refused.json`; the scorecard a baseline or a
@@ -2159,19 +2168,26 @@ entities:
   # name. With both, before anything is written: the installed binary must name no revision (one
   # whose `--version` names a revision is recorded by it, and the flags are refused) and hash to
   # `<hex>`, a mismatch refused naming both digests; and every run of the scorecard must state
-  # `<hex>` (takt.work.RunBinary, from its `binary.txt`), a run that states none or another
-  # refused naming the run, so the scorecard recorded is the stated binary's. The record then
+  # `<hex>` (takt.work.RunBinary, from its `binary.txt`), stated by the operator, a run that
+  # states none, states it by anything but the operator (a saved row's `stated_by: record`) or
+  # states another digest refused naming the run, so the scorecard recorded is the stated
+  # binary's and every statement the record copies is the operator's. The record then
   # holds the revision, marked `revision_stated_by: operator`, the installed binary's path and
   # digest, and each run with its statement and note (takt.work.RecordedRun); `--revision` alone
   # asks the binary to name itself as without it. The next candidate's check of the installed
-  # binary then reads the digest: a binary whose `--version` names no revision passes when it
-  # hashes to the latest record's `binary_sha256`, and is refused naming both digests when it
-  # does not, or naming the record when it carries none; a binary that names a revision is
-  # checked by it as before. The chain, the lock and the fail-closed reads are untouched.
-  # read from: crates/takt/src/promotion.rs:1278-1313
-  # read from: crates/takt/src/promotion.rs:1315-1340
-  # read from: crates/takt/src/promotion.rs:1342-1369
-  # read from: crates/takt/src/promotion.rs:1210-1257
+  # binary then reads the digest: when the latest record's revision is stated
+  # (`revision_stated_by`), the installed binary passes when it hashes to the record's
+  # `binary_sha256` and is refused naming both digests when it does not, whatever its
+  # `--version` prints, so a replacement printing the stated revision is refused, and such a
+  # record without a digest is refused naming it. Against any other record a binary whose
+  # `--version` names no revision passes when it hashes to the record's `binary_sha256`, and is
+  # refused naming both digests when it does not, or naming the record when it carries none; a
+  # binary that names a revision is checked by it as before. The chain, the lock and the
+  # fail-closed reads are untouched.
+  # read from: crates/takt/src/promotion.rs:1302-1337
+  # read from: crates/takt/src/promotion.rs:1339-1364
+  # read from: crates/takt/src/promotion.rs:1366-1400
+  # read from: crates/takt/src/promotion.rs:1210-1281
   # One scorecard backs at most one promotion, decided 2026-10-18: one-to-one, the promotion
   # referencing its scorecard. A relation entry carries no bound on the scorecard's side, so the
   # bound is stated here.

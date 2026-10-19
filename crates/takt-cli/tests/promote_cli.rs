@@ -972,6 +972,84 @@ fn a_candidate_against_a_stated_baseline_checks_the_installed_binary_by_digest()
     assert_eq!(world.records(), recorded);
 }
 
+/// With `--binary-sha256`, a run of the saved scorecard whose statement is not the operator's
+/// (`"stated_by": "record"`) is refused naming the run, whichever rows say it, so no stated
+/// baseline carries a statement the operator did not make; nothing is written.
+#[test]
+fn a_run_stated_by_other_than_the_operator_is_refused_naming_it() {
+    let world = World::new("stated-by", BASELINE_TOKENS, FIVE_APPROVALS);
+    let digest = world.install_pre_revision();
+    let flags = [
+        "--baseline-only",
+        "--revision",
+        world.revision.as_str(),
+        "--binary-sha256",
+        digest.as_str(),
+    ];
+    let operator = "\"stated_by\": \"operator\"";
+    for (label, rows, named) in [
+        ("third", vec![2], "scenario-1-trial-13#1"),
+        ("all", vec![0, 1, 2, 3, 4], "scenario-1-trial-11#1"),
+    ] {
+        let card = world.stated_card(label, [Some((digest.as_str(), "")); 5]);
+        let text = fs::read_to_string(&card).expect("the saved scorecard");
+        let at: Vec<usize> = text.match_indices(operator).map(|(at, _)| at).collect();
+        assert_eq!(at.len(), 5, "{text}");
+        let mut edited = text.clone();
+        for row in rows.iter().rev() {
+            edited.replace_range(
+                at[*row]..at[*row] + operator.len(),
+                "\"stated_by\": \"record\"",
+            );
+        }
+        fs::write(&card, &edited).expect("the edited scorecard");
+        let (code, out, err) = world.promote(&card, &flags);
+        assert_eq!(code, 1, "{label}: {out}{err}");
+        assert!(
+            err.contains(&format!("run {named} states its binary by the record")),
+            "{label}: {err}"
+        );
+        assert_eq!(world.records(), Vec::<String>::new(), "{label}");
+    }
+}
+
+/// A binary replaced by one that prints the stated baseline's revision under another digest is
+/// refused by digest, naming both digests: a stated baseline is checked by its `binary_sha256`
+/// whatever the installed binary prints; nothing is written.
+#[test]
+fn a_replaced_binary_printing_the_stated_revision_is_refused_by_digest() {
+    let world = World::new("stated-replaced", BASELINE_TOKENS, FIVE_APPROVALS);
+    let digest = world.install_pre_revision();
+    let card = world.stated_card("stated", [Some((digest.as_str(), "")); 5]);
+    let (code, out, err) = world.promote(
+        &card,
+        &[
+            "--baseline-only",
+            "--revision",
+            world.revision.as_str(),
+            "--binary-sha256",
+            digest.as_str(),
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    let recorded = world.records();
+    write(&world.repo.join("f.txt"), "f\n");
+    let next = world.commit("f");
+    let next_card = world.passing_card("next", &next);
+    world.install_stand_in(&world.revision);
+    let replaced = sha256(&world.installed());
+    assert_ne!(replaced, digest);
+    let (code, out, err) = world.promote(&next_card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains(&format!("hashes to {replaced}"))
+            && err.contains(&format!("whose binary hashes to {digest}"))
+            && err.contains("the binary was replaced"),
+        "{err}"
+    );
+    assert_eq!(world.records(), recorded, "nothing is written");
+}
+
 /// A candidate within the rule (one case worse, tokens within the maximum) is built, installed
 /// and recorded; the record's revision is the one the installed binary prints, and it carries
 /// the baseline record's digest.

@@ -5,7 +5,8 @@
 //! is listed as such, never guessed. The binary a case's runs were made with is read from a
 //! [`BINARY_FILE`] beside the record when the operator wrote one: its sha256 and a note, a
 //! statement marked as the operator's, never a figure; a promotion checks it against the binary
-//! it hashes.
+//! it hashes. A file that does not read leaves its case's runs stating no binary and lists the
+//! case with the reason; it never stops the scorecard.
 //!
 //! A run is the span from one `opened` line to its `stop`, or to the next `opened` or the end
 //! of the record when it has none (a run that ended on an error); a `skipped` line is no
@@ -130,14 +131,15 @@ pub fn is_sha256(text: &str) -> bool {
 }
 
 /// The binary a case's runs were made with, as the [`BINARY_FILE`] in its directory `dir`
-/// states it; none without the file. A file whose first line is no `<path>\t<sha256>` is an
-/// error naming it, never a run that states nothing.
-fn stated_binary(dir: &Path) -> Result<Option<RunBinary>> {
+/// states it; none without the file. A file that does not read, or whose first line is no
+/// `<path>\t<sha256>`, is the reason, starting with [`BINARY_FILE`]: its case's runs state no
+/// binary, and the case is listed with the reason, never the repository refused.
+fn stated_binary(dir: &Path) -> std::result::Result<Option<RunBinary>, String> {
     let path = dir.join(BINARY_FILE);
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+        Err(error) => return Err(format!("{BINARY_FILE} does not read: {error}")),
     };
     let (first, note) = text.split_once('\n').unwrap_or((text.as_str(), ""));
     let first = first.trim_end_matches('\r');
@@ -145,10 +147,9 @@ fn stated_binary(dir: &Path) -> Result<Option<RunBinary>> {
         .rsplit_once('\t')
         .filter(|(binary, sha256)| !binary.is_empty() && is_sha256(sha256))
     else {
-        bail!(
-            "{}: the first line is `<path>\\t<sha256>`, the sha256 64 lower-case hex digits; got {first:?}",
-            path.display()
-        );
+        return Err(format!(
+            "{BINARY_FILE} states no binary: the first line is `<path>\\t<sha256>`, the sha256 64 lower-case hex digits; got {first:?}"
+        ));
     };
     Ok(Some(RunBinary {
         sha256: sha256.to_owned(),
@@ -269,8 +270,13 @@ pub struct Scorecard {
     pub rule: Rule,
     /// One row a run, in case order, each case's runs in the order they ran.
     pub rows: Vec<Row>,
-    /// The cases that have no record.
+    /// The cases that have no record; and each case with runs whose [`BINARY_FILE`] does not
+    /// read, its reason in `unstated`.
     pub no_record: Vec<String>,
+    /// Each case listed in `no_record` for a [`BINARY_FILE`] that does not read, with the
+    /// reason; its runs count and state no binary. Empty on a file saved before it had the field.
+    #[serde(default)]
+    pub unstated: BTreeMap<String, String>,
 }
 
 /// The scenario of a case id `scenario-<id>-trial-<n>`, `<n>` digits; none for any other id.
@@ -506,9 +512,10 @@ fn is_revision(revision: &str) -> bool {
 
 impl Scorecard {
     /// The scorecard of the runs recorded under `repo`'s cases directory, cases in name order;
-    /// none when the directory is absent. A record that does not read is an error naming it,
-    /// and so is a [`BINARY_FILE`] beside one that does not read; each run of a case carries
-    /// the binary its file states.
+    /// none when the directory is absent. A record that does not read is an error naming it;
+    /// each run of a case carries the binary its [`BINARY_FILE`] states, and a file that does
+    /// not read leaves that case's runs stating none and lists the case in `no_record`, the
+    /// reason in `unstated`, every other case read as without it.
     pub fn read(repo: &Path) -> Result<Self> {
         let cases = repo.join(CASES_DIR);
         let mut names: Vec<String> = Vec::new();
@@ -538,6 +545,7 @@ impl Scorecard {
             rule: Rule::default(),
             rows: Vec::new(),
             no_record: Vec::new(),
+            unstated: BTreeMap::new(),
         };
         for name in names {
             let dir = cases.join(&name);
@@ -546,13 +554,20 @@ impl Scorecard {
             } else {
                 Vec::new()
             };
-            let binary = stated_binary(&dir)?;
+            let (binary, unstated) = match stated_binary(&dir) {
+                Ok(binary) => (binary, None),
+                Err(reason) => (None, Some(reason)),
+            };
             for row in &mut rows {
                 row.binary = binary.clone();
             }
             if rows.is_empty() {
                 card.no_record.push(name);
             } else {
+                if let Some(reason) = unstated {
+                    card.no_record.push(name.clone());
+                    card.unstated.insert(name, reason);
+                }
                 card.rows.extend(rows);
             }
         }
@@ -576,7 +591,8 @@ impl Scorecard {
     }
 
     /// Prints the definitions' versions, then a row a case, its runs listed under it as
-    /// `<case>#<n>`, then each case with no record.
+    /// `<case>#<n>`, then each case with no record, and each case whose [`BINARY_FILE`] does
+    /// not read with the reason.
     pub fn print(&self, out: &mut dyn Write) -> std::io::Result<()> {
         let definitions: Vec<String> = self
             .metrics
@@ -647,7 +663,10 @@ impl Scorecard {
             writeln!(out, "{}", cells.join("  ").trim_end())?;
         }
         for case in &self.no_record {
-            writeln!(out, "{case}  no record")?;
+            match self.unstated.get(case) {
+                Some(reason) => writeln!(out, "{case}  {reason}; its runs state no binary")?,
+                None => writeln!(out, "{case}  no record")?,
+            }
         }
         Ok(())
     }

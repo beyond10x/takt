@@ -507,18 +507,86 @@ fn a_binary_txt_beside_the_record_states_the_runs_binary() {
         Some((DIGEST, "")),
         "a statement without a note"
     );
+}
+
+/// A `binary.txt` that does not read, in one case, leaves that case's runs stating no binary and
+/// lists the case in `no_record` with the reason, printed; its runs still count, and every other
+/// case reads as without it: one case's statement never stops the scorecard of the repository.
+#[test]
+fn a_malformed_binary_txt_leaves_its_case_unstated_and_listed_with_the_reason() {
+    const DIGEST: &str = "4b6581217395fc7b8faee5a7484ae4e3131c13ac286d546ae3f148c459eb2f2e";
+    let repo = scratch("binary-txt-malformed");
+    let mut dirs = Vec::new();
+    for case in ["scenario-3-trial-1", "scenario-3-trial-2"] {
+        dirs.push(record(
+            &repo,
+            case,
+            &[vec![
+                opened(case),
+                judged(usage(5, 6, 7, 8)),
+                stop("Completed (accepted)", 1, 26),
+            ]],
+        ));
+    }
+    fs::write(
+        dirs[1].join(BINARY_FILE),
+        format!("/srv/takt/bin/takt\t{DIGEST}\nthe other case\n"),
+    )
+    .expect("the other statement");
     for malformed in [
-        format!("{DIGEST}\n"),
-        "~/.cargo/bin/takt\tnot-a-digest\n".to_owned(),
-        format!("~/.cargo/bin/takt {DIGEST}\n"),
+        format!("{DIGEST}\n").into_bytes(),
+        b"~/.cargo/bin/takt\tnot-a-digest\n".to_vec(),
+        format!("~/.cargo/bin/takt {DIGEST}\n").into_bytes(),
+        vec![0xff, 0xfe, b'\t', b'\n'],
     ] {
-        fs::write(stated.join(BINARY_FILE), &malformed).expect("the statement");
-        let error = Scorecard::read(&repo).expect_err("a malformed statement does not read");
-        let text = format!("{error:#}");
-        assert!(
-            text.contains("scenario-3-trial-1") && text.contains(BINARY_FILE),
-            "{malformed:?}: {text}"
+        fs::write(dirs[0].join(BINARY_FILE), &malformed).expect("the statement");
+        let card = Scorecard::read(&repo).expect("one case's statement never stops the scorecard");
+        assert_eq!(card.rows.len(), 2, "{malformed:?}: {card:?}");
+        assert_eq!(card.rows[0].case, "scenario-3-trial-1");
+        assert_eq!(
+            card.rows[0].binary, None,
+            "{malformed:?}: {:?}",
+            card.rows[0]
         );
+        assert_eq!(
+            card.rows[1]
+                .binary
+                .as_ref()
+                .map(|binary| binary.sha256.as_str()),
+            Some(DIGEST),
+            "the other case is unaffected: {:?}",
+            card.rows[1]
+        );
+        assert_eq!(card.no_record, ["scenario-3-trial-1"], "{malformed:?}");
+        assert_eq!(
+            card.unstated.keys().collect::<Vec<_>>(),
+            ["scenario-3-trial-1"],
+            "{malformed:?}"
+        );
+        let reason = &card.unstated["scenario-3-trial-1"];
+        assert!(
+            reason.starts_with(&format!("{BINARY_FILE} ")) && reason.len() > 30,
+            "{malformed:?}: {reason}"
+        );
+        let mut out = Vec::new();
+        card.print(&mut out).expect("prints");
+        let out = String::from_utf8(out).expect("utf-8");
+        assert!(
+            out.contains(&format!("scenario-3-trial-1  {reason}")),
+            "{out}"
+        );
+        assert!(!out.contains("scenario-3-trial-1  no record"), "{out}");
+        let saves = scratch("binary-txt-malformed-saves");
+        let path = card
+            .clone()
+            .save(
+                &saves,
+                "5555555555555555555555555555555555555555",
+                Named::Build,
+            )
+            .expect("saved");
+        let loaded = Scorecard::load(&path).expect("reads");
+        assert_eq!(loaded.unstated, card.unstated, "the reason is saved");
     }
 }
 
