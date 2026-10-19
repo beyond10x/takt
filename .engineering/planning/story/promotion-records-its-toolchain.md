@@ -13,7 +13,7 @@ scope:
   path: crates/takt-cli/tests/promote_cli.rs
 - confidence: cited
   path: crates/takt/src/promotion.rs
-revision: 4
+revision: 5
 ---
 ## Outcome
 
@@ -40,3 +40,7 @@ With a scratch `RUSTUP_HOME` whose default differs from the previous record's to
 ## From the review of main at fe93286 (2026-10-19)
 
 Two more crash windows (finding P1.5): a kill between `publish(copy)` and `publish(record)` (`crates/takt/src/promotion.rs:644-645@fe93286`) leaves an orphan copy that `records()` refuses (`:376-379`); a kill after the record is written (`:1636`) and before `install` finishes (`:1637`) leaves a record whose binary was never installed, refused at `:1188-1195`. Acceptance, added: after `kill -9` in either window the next promotion proceeds.
+
+## Also (2026-10-19)
+
+`installed_names_latest` checks `binary_sha256` only for a stated baseline (story:baseline-for-a-pre-revision-binary, decision 2). Acceptance, added: when the latest record carries `binary_sha256`, the installed binary's digest is checked whatever its `--version` prints; a replaced binary printing the recorded revision under another digest is refused naming both digests.
