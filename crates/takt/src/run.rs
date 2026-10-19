@@ -97,12 +97,26 @@ pub enum Stop {
         /// What the run lacks to perform it: the forge, the gates document.
         performer: String,
     },
+    /// The file system holding the case's tree, or the one holding the build directory, has
+    /// less free space than the run was given as the least a step needs: read before every step
+    /// the run offers or runs, never at open, and the run stops before the step instead of
+    /// failing in it for want of space. The case stays open. Only a run given a threshold stops
+    /// so ([`Run::stop_when_disk_below`]): the CLI gives one for every run, `--min-free-gib`; the
+    /// library's default reads nothing.
+    DiskLow {
+        /// The path whose file system was read: the tree, or the build directory.
+        path: PathBuf,
+        /// The bytes free there for a writer that is not root.
+        free_bytes: u64,
+        /// The threshold: the least free space a step needs, in bytes.
+        min_bytes: u64,
+    },
 }
 
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
 /// and fails to compile when one is added without its name here.
-pub const STOP_KINDS: [&str; 9] = [
+pub const STOP_KINDS: [&str; 10] = [
     "ApprovalRequired",
     "NothingAdmissible",
     "Iterations",
@@ -112,7 +126,16 @@ pub const STOP_KINDS: [&str; 9] = [
     "NoProgress",
     "Waiting",
     "Unperformable",
+    "DiskLow",
 ];
+
+/// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
+fn bytes_shown(bytes: u64) -> String {
+    format!(
+        "{bytes} bytes ({:.2} GiB)",
+        bytes as f64 / f64::from(1_u32 << 30)
+    )
+}
 
 impl std::fmt::Display for Stop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -142,6 +165,17 @@ impl std::fmt::Display for Stop {
             Stop::Unperformable { claim, performer } => write!(
                 f,
                 "Unperformable ({claim}; nothing performs it without {performer})"
+            ),
+            Stop::DiskLow {
+                path,
+                free_bytes,
+                min_bytes,
+            } => write!(
+                f,
+                "DiskLow ({}: {} free, under {})",
+                path.display(),
+                bytes_shown(*free_bytes),
+                bytes_shown(*min_bytes)
             ),
         }
     }
@@ -6132,6 +6166,68 @@ fn to_base(tree: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The free space of a file system as a run reads it before a step
+/// ([`Run::stop_when_disk_below`]): the device the file system is, by which the run compares
+/// each file system once, and the bytes free on it for a writer that is not root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FreeSpace {
+    /// The file system's device, as `stat` gives it for a path on it.
+    pub device: u64,
+    /// The bytes free for a writer that is not root: `statvfs`'s `f_bavail * f_frsize`.
+    pub bytes: u64,
+}
+
+/// What a run reads a path's free space with: [`free_space`] unless
+/// [`Run::read_free_space_with`] gives another.
+type FreeSpaceReader = Box<dyn Fn(&Path) -> std::io::Result<FreeSpace>>;
+
+/// The free space of the file system holding `path`, the reader a run uses unless given another:
+/// the device `stat` gives and `statvfs`'s `f_bavail * f_frsize`. A path that does not exist yet
+/// (a build directory not made) is read at its nearest ancestor that does.
+pub fn free_space(path: &Path) -> std::io::Result<FreeSpace> {
+    let mut at = path;
+    let metadata = loop {
+        match std::fs::metadata(at) {
+            Ok(metadata) => break metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => match at.parent() {
+                Some(parent) if !parent.as_os_str().is_empty() => at = parent,
+                _ => return Err(error),
+            },
+            Err(error) => return Err(error),
+        }
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::os::unix::fs::MetadataExt as _;
+        let name = std::ffi::CString::new(at.as_os_str().as_bytes())
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+        let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+        // SAFETY: `name` is a valid NUL-terminated string that outlives the call, and `stat` a
+        // buffer of the type `statvfs` fills.
+        if unsafe { libc::statvfs(name.as_ptr(), stat.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `statvfs` returned 0, so it filled `stat`.
+        let stat = unsafe { stat.assume_init() };
+        // The field types are `u64` on 64-bit Linux and narrower on some other targets.
+        #[allow(clippy::useless_conversion)]
+        let bytes = u64::from(stat.f_bavail).saturating_mul(u64::from(stat.f_frsize));
+        Ok(FreeSpace {
+            device: metadata.dev(),
+            bytes,
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "free space is read with statvfs, which this platform does not have",
+        ))
+    }
+}
+
 /// A run over one case. Its stop [`Stop::Unperformable`] is off by default in the library: a
 /// library caller opts in with [`Run::stop_when_unperformable`], and the CLI turns it on for
 /// every run in its `finish`, so the library's default is not the product's behaviour.
@@ -6177,6 +6273,16 @@ pub struct Run<'a> {
     modules: Modules,
     /// Whether the run stops [`Stop::Unperformable`]; off until [`Run::stop_when_unperformable`].
     stops_unperformable: bool,
+    /// The least free space, in bytes, a step needs on the file system of the tree and of the
+    /// build directory; 0 reads nothing, and is the default until [`Run::stop_when_disk_below`].
+    min_free: u64,
+    /// The build directory whose file system is read beside the tree's; none until
+    /// [`Run::stop_when_disk_below`] names one.
+    build_dir: Option<PathBuf>,
+    /// What free space is read with ([`FreeSpaceReader`]).
+    read_free: FreeSpaceReader,
+    /// Whether a free-space read that failed was said: once a run.
+    free_unread_said: bool,
 }
 
 impl<'a> Run<'a> {
@@ -6276,6 +6382,10 @@ impl<'a> Run<'a> {
             options,
             modules,
             stops_unperformable: false,
+            min_free: 0,
+            build_dir: None,
+            read_free: Box::new(free_space),
+            free_unread_said: false,
         })
     }
 
@@ -6361,6 +6471,10 @@ impl<'a> Run<'a> {
             options,
             modules,
             stops_unperformable: false,
+            min_free: 0,
+            build_dir: None,
+            read_free: Box::new(free_space),
+            free_unread_said: false,
         })
     }
 
@@ -6608,6 +6722,61 @@ impl<'a> Run<'a> {
     /// caller opts in here, and without this call a run offers the harness its step as before.
     pub fn stop_when_unperformable(&mut self) {
         self.stops_unperformable = true;
+    }
+
+    /// Stops the run [`Stop::DiskLow`] before a step (a harness step, a deterministic step, the
+    /// test command, a gate) when the file system holding the case's tree, or the one holding
+    /// `build_dir` (relative, the tree's), has fewer than `min_bytes` free; each file system is
+    /// compared once. `0` turns the check off, as without this call, and nothing is read. The CLI
+    /// calls it for every run with `--min-free-gib` and `CARGO_TARGET_DIR`.
+    pub fn stop_when_disk_below(&mut self, min_bytes: u64, build_dir: Option<PathBuf>) {
+        self.min_free = min_bytes;
+        self.build_dir = build_dir;
+    }
+
+    /// Reads free space with `reader` instead of [`free_space`]: a test's free space, which no
+    /// disk has to be filled for. The reader owns what it captures (`'static`), so a run keeps
+    /// no borrow alive longer than without one.
+    pub fn read_free_space_with(
+        &mut self,
+        reader: impl Fn(&Path) -> std::io::Result<FreeSpace> + 'static,
+    ) {
+        self.read_free = Box::new(reader);
+    }
+
+    /// The [`Stop::DiskLow`] for the first file system under the threshold, the tree's then the
+    /// build directory's, each read once; none with no threshold or when each has room. A read
+    /// that fails stops nothing: the run goes on unchecked there, and the first such failure of
+    /// the run is printed to `out`.
+    fn disk_low(&mut self, out: &mut dyn Write) -> Result<Option<Stop>> {
+        if self.min_free == 0 {
+            return Ok(None);
+        }
+        let build_dir = self.build_dir.as_ref().map(|dir| self.tree.join(dir));
+        let mut read: BTreeSet<u64> = BTreeSet::new();
+        for path in std::iter::once(self.tree.clone()).chain(build_dir) {
+            match (self.read_free)(&path) {
+                Ok(free) => {
+                    if read.insert(free.device) && free.bytes < self.min_free {
+                        return Ok(Some(Stop::DiskLow {
+                            path,
+                            free_bytes: free.bytes,
+                            min_bytes: self.min_free,
+                        }));
+                    }
+                }
+                Err(error) if !self.free_unread_said => {
+                    self.free_unread_said = true;
+                    writeln!(
+                        out,
+                        "  free space: {} could not be read, so it is not checked: {error}",
+                        path.display()
+                    )?;
+                }
+                Err(_) => {}
+            }
+        }
+        Ok(None)
     }
 
     /// How long the run waits on the forge before it observes again: [`Run::poll`], cut to
@@ -7194,6 +7363,12 @@ impl<'a> Run<'a> {
                 } else {
                     waiting(&awaited, Some(stop))
                 });
+            }
+            // Before any step is offered or run: a file system under the threshold stops the
+            // run here rather than a step failing in it for want of space
+            // ([`Run::stop_when_disk_below`]).
+            if let Some(stop) = self.disk_low(out)? {
+                return Ok(stop);
             }
             let admissible = decision.admissible();
             // The judgement actions: the admissible ones no validator owns, but none whose evidence

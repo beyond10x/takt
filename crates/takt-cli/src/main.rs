@@ -390,6 +390,14 @@ struct LoopArgs {
     /// github.com, the host the bot route serves, else `none`.
     #[arg(long)]
     forge: Option<String>,
+    /// The least free space, in GiB, a step needs on the file system of the repository's tree
+    /// and, when `CARGO_TARGET_DIR` is set, of the one holding that directory, each read before
+    /// every step (a harness step, the test command, a gate, any deterministic step); under it
+    /// the run stops `DiskLow` naming the path, its free space and this threshold, exit 3,
+    /// before the step instead of failing in it. `0` turns the check off. A free space that
+    /// cannot be read stops nothing and is said once.
+    #[arg(long, value_name = "GIB", default_value_t = 10)]
+    min_free_gib: u64,
 }
 
 /// A harness that performs nothing. Asked while an approval is pending, it requests the gate
@@ -431,7 +439,8 @@ impl Harness for NoHarness {
 const EXIT_DONE: u8 = 0;
 /// Exit 1: refused before the run, the reason on stderr (`main`).
 const EXIT_REFUSED: u8 = 1;
-/// Exit 3: the run stopped on a budget or with nothing more it may do.
+/// Exit 3: the run stopped on a budget, with nothing more it may do, or with too little free
+/// disk for a step.
 const EXIT_STOPPED: u8 = 3;
 /// Exit 4: the run stopped for an approval; `takt approve` is the next step.
 const EXIT_APPROVAL: u8 = 4;
@@ -449,7 +458,7 @@ const EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
   1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress
+  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress; or DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and the next run resumes it
@@ -461,7 +470,7 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate)
   1  refused before the run (an argument, the repository, the scenario, its seed, its story not ready there, its trial base or its case); the reason on stderr, no step run
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress
+  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress; or DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
@@ -488,7 +497,7 @@ fn main() -> ExitCode {
 /// | 0 | `Completed`; the frontier had nothing ready; `approve` and `protocols` done |
 /// | 1 | refused before the run, the reason on stderr, no step run |
 /// | 2 | the arguments do not parse (clap) |
-/// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress` |
+/// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress`, `DiskLow` |
 /// | 4 | `ApprovalRequired`: `takt approve` is the next step |
 /// | 5 | `stopped: error:`, the run ended on an error once its case was open: a forge that refused, a validator or the harness that failed |
 /// | 6 | `Waiting`: the run waited on the forge until its budget ended, or waits on something local and stopped at once; the next run resumes the case |
@@ -922,7 +931,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // A story's case that terminates accepted records its test result and its move
             // in the store; an intent's run has no story and writes nothing there.
             run.record_on(&store);
-            finish(&mut run, forge_line.as_deref(), out)
+            finish(&mut run, forge_line.as_deref(), &looping, out)
         }
     }
 }
@@ -1235,14 +1244,27 @@ fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
 /// [`REVISION`] to record; the exit code. An error the loop ends on once the case is open, a
 /// forge that refused the pull request among them, is a stop like any other: one line on
 /// stdout, its own code. Every run the CLI makes stops `Unperformable` when no step can move
-/// its case ([`Run::stop_when_unperformable`], off in the library until a caller turns it on).
-fn finish(run: &mut Run<'_>, forge_line: Option<&str>, out: &mut dyn Write) -> Result<u8> {
+/// its case ([`Run::stop_when_unperformable`], off in the library until a caller turns it on),
+/// and `DiskLow` before a step when the tree's or `CARGO_TARGET_DIR`'s file system has less
+/// free than `--min-free-gib` ([`Run::stop_when_disk_below`]).
+fn finish(
+    run: &mut Run<'_>,
+    forge_line: Option<&str>,
+    looping: &LoopArgs,
+    out: &mut dyn Write,
+) -> Result<u8> {
     if let Some(line) = forge_line {
         writeln!(out, "{line}")?;
     }
     run.binary = Some(REVISION.to_owned());
     run.take_default_gate();
     run.stop_when_unperformable();
+    run.stop_when_disk_below(
+        looping.min_free_gib.saturating_mul(1 << 30),
+        std::env::var_os("CARGO_TARGET_DIR")
+            .filter(|dir| !dir.is_empty())
+            .map(PathBuf::from),
+    );
     let stop = match run.run(out) {
         Ok(stop) => stop,
         Err(error) => {
@@ -1269,6 +1291,7 @@ fn finish(run: &mut Run<'_>, forge_line: Option<&str>, out: &mut dyn Write) -> R
         Stop::ApprovalRequired(_) => EXIT_APPROVAL,
         Stop::Waiting { .. } => EXIT_WAITING,
         Stop::Unperformable { .. } => EXIT_UNPERFORMABLE,
+        Stop::DiskLow { .. } => EXIT_STOPPED,
         _ => EXIT_STOPPED,
     })
 }
@@ -1538,7 +1561,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     // As `takt run`: a case that terminates accepted records its test result and its move in
     // the store, on the case's branch.
     run.record_on(&store);
-    finish(&mut run, forge.line.as_deref(), out)
+    finish(&mut run, forge.line.as_deref(), &looping, out)
 }
 
 /// Why `story`, `proposed`, is not ready among `all`, as [`takt::frontier::is_ready`] reads it:

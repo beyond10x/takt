@@ -23,6 +23,7 @@ fn kind(stop: &Stop) -> Option<&'static str> {
         Stop::NoProgress => Some(STOP_KINDS[6]),
         Stop::Waiting { .. } => Some(STOP_KINDS[7]),
         Stop::Unperformable { .. } => Some(STOP_KINDS[8]),
+        Stop::DiskLow { .. } => Some(STOP_KINDS[9]),
     }
 }
 
@@ -45,6 +46,11 @@ fn every_stop() -> Vec<Stop> {
         Stop::Unperformable {
             claim: "pr.opened".to_owned(),
             performer: "the forge".to_owned(),
+        },
+        Stop::DiskLow {
+            path: "/srv/tree".into(),
+            free_bytes: 64 << 20,
+            min_bytes: 10 << 30,
         },
     ]
 }

@@ -815,6 +815,9 @@ impl Builder {
                     // The run lacks a performer (the forge, the gates document): takt's stop,
                     // not a person's wait, which only a grant ends.
                     "Unperformable" => (Actor::Takt, Intent::Coordinate, Kind::Other),
+                    // A file system under the threshold before a step: takt's stop, which a
+                    // later run on a disk with room resumes.
+                    "DiskLow" => (Actor::Takt, Intent::Coordinate, Kind::Other),
                     _ => (Actor::Takt, Intent::Coordinate, Kind::Other),
                 };
                 let index = self.push(step, actor, intent, kind, at, at);

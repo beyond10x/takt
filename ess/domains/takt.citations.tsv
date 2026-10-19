@@ -82,8 +82,8 @@ takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|4	return Ok(Stop::A
 takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|5	"{} would observe {} with uncommitted changes: {}",	sha256:f12749f7f7a10326ad42590228cbca9734ea1d484ba3f9ca3feaa667f8977efd
 takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|6	"{} wrote what its validator does not: {}",	sha256:1b24f3ee137e0097a24be0167316dfe5eee0d7059b265ff0c20a0b8ceccf1466
 takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|7	last_idle = && (offered.is_empty()	sha256:107d569789b9337b43bd2f0a685342bfd6595db48afd9ced16ee04d6c2da941c
-takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|1	Stop::Completed(_) => EXIT_DONE, && _ => EXIT_STOPPED,	sha256:86aa082333813c254f7408fa647e4ee66317c9b35615da1544f9a5f9e9b41e34
-takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|2	const EXIT_CODES: &str = "Exit codes: && 5  stopped: error:	sha256:f027f5b61c1181478a1a9e1a0335bf5cc9fe6e78dfd22782989bad7de437c6c8
+takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|1	Stop::Completed(_) => EXIT_DONE, && _ => EXIT_STOPPED,	sha256:9d2a30e9636f2c03bd7a8ecbdd62f6cc16fa095a781786767bd08f762ca0c73f
+takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|2	const EXIT_CODES: &str = "Exit codes: && 5  stopped: error:	sha256:d020d92a8743a94e243d984c9d04378b63d255be487dd374cf23478daf8af2ab
 takt.work.WorkflowPath|- name: takt.work.WorkflowPath|docs/design/takt.md|1	[--workflow <file>]	sha256:b18fb1d45000542224bb674ea5766abdc95d050645769a113e29db12d2bf49e6
 takt.work.WorkflowPath|- name: takt.work.WorkflowPath|docs/design/takt.md|2	| M3 workflows |	sha256:c9752da8e9b55529f1df8ffa0d72d8e2b8c58aa08ad805748031e5fff7da77ec
 takt.work.ProtocolBlock|- name: takt.work.ProtocolBlock|docs/design/takt.md|1	| `protocol` | id, revision, inputs |	sha256:c81e2386919de812d348ae66e39b1fc2149afca3f0c896688b7a87c72c6c5277
@@ -183,7 +183,7 @@ takt.work.Story|- name: approvals|crates/takt/src/frontier.rs|1	.record_approval
 takt.work.Story|- name: open_case|.engineering/planning/decision-blocker/approval-grant-and-case-resume.md|2	A story has at most one open case.	sha256:8aa3b1b04d9e92d3128ed92881c85af12175f209f108603ce71eba804e0a41c3
 takt.work.Run|- name: takt.work.Run|crates/takt/src/run.rs|1	//! The loop: evaluate, frontier, one step && //! merge is then a deterministic step like any other.	sha256:3505b8befc341da8ab256031726f12ab49c29c0dfea9fc160bd762379eab316d
 takt.work.Run|- name: takt.work.Run|crates/takt/src/run.rs|2	pub struct Run<'a> { && options: RunOptions,	sha256:386dae4f4963641083533ff90a14e685050f5664fefea7c8c5f057e56d1c4abd
-takt.work.Run|- name: takt.work.Run|crates/takt/src/run.rs|3	fn run_held(&mut self, events: &Events, out: &mut dyn Write) -> Result<Stop> { && self.case.set_revision("implementation", &head)?;	sha256:a2686b3613da14d609c9eca217ab75b6471d1d0cbec49ef4c782267de1d15352
+takt.work.Run|- name: takt.work.Run|crates/takt/src/run.rs|3	fn run_held(&mut self, events: &Events, out: &mut dyn Write) -> Result<Stop> { && self.case.set_revision("implementation", &head)?;	sha256:5556436c2f102659fdc6de6275c5029112a1f9091800773ddc6d122acf428ede
 takt.work.Run|- name: takt.work.Run|crates/takt/src/case.rs|1	pub const LOCK_FILE: &str = "run.lock";	sha256:4f7dbd12538daacf7ef920553c6899338e5020dc92198612068b7b714a3125bd
 takt.work.Run|- name: takt.work.Run|crates/takt/src/case.rs|2	fn take_hold(case_dir: &Path, id: &str) -> Result<()> { && .create_new(true)	sha256:1867de51522eadf73030c613d682d972100b70744dc17dda9d0d3ee8501a8c93
 takt.work.Run|- name: takt.work.Run|crates/takt/src/case.rs|3	let _held = Held::take(&dir, id)?;	sha256:a3e464ead9e50f24dca6e8fd67cc72f616361e254340fc168c2db6de622ce4cd
@@ -753,3 +753,14 @@ takt.work.Stop|- name: takt.work.Stop|crates/takt/src/improvement.rs|2	/// With 
 takt.work.Stop|- name: takt.work.Stop|crates/takt/src/improvement.rs|3	/// It waits on the promotion store && true	sha256:7a097234bab45548d90162899bb774130f49af097fac57ae91ab494eca1556a7
 takt.work.Waiting|- name: takt.work.Waiting|crates/takt/src/run.rs|2	let all_local = && };	sha256:275f3f791c96a1000316e2253ef5ba1151f1212e17d24cb7b371051e0a5ee079
 takt.work.RunWait|- name: takt.work.RunWait|crates/takt/src/run.rs|2	let pause = self.pause().filter(|_| !all_local(&awaited)); && return Ok(waiting(&awaited, None));	sha256:1e42f6a577354227dd97f55ef1a8a50c442efbd297c6d1b746b974dc5fa3fb43
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|18	/// The file system holding the case's tree && min_bytes: u64,	sha256:9a8627aa299f328f3616c4538c866c2b5af8b62560fa7c0188dcb914a1c24fd1
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|19	"DiskLow",	sha256:1773a9141d4ed6830a9c77e662618ea7aea5d10c788b0ee70ed3921ca11588df
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|20	/// Stops the run [`Stop::DiskLow`] before a step && self.build_dir = build_dir;	sha256:faec6f9998cf23ea405865d80b468a2954c079a3878602729608adaaea7a115c
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|21	/// The [`Stop::DiskLow`] for the first file system && Ok(None)	sha256:20641ff8fd408c2b38cf5e0f5c469f811e6a32b369a07bfe8a6314eab9230f97
+takt.work.Stop|- name: takt.work.Stop|crates/takt/src/run.rs|22	// Before any step is offered or run && return Ok(stop);	sha256:ad76730d62d129df0428ce03ca7ecff354733de056f28d67950cae9813a1b1f3
+takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|8	/// The least free space, in GiB && min_free_gib: u64,	sha256:342ea4c71ff094c0f7b9e275ed729f7ff9d81fd6d6edcacbcc08518ca42f4986
+takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|9	3  stopped: a budget && or DiskLow (	sha256:9f94d67efbaba68ba42fe3a6a6fcf84d59260f84f26cf3f3c02de101475996f2
+takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|10	run.stop_when_disk_below( && CARGO_TARGET_DIR	sha256:ce702e907d9fa086572447d0e0bcca367cc450da895420a529f902d25088735d
+takt.work.Stop|- name: takt.work.Stop|crates/takt-cli/src/main.rs|11	Stop::DiskLow { .. } => EXIT_STOPPED,	sha256:257b9d4f6bec8719a069e8a1c87b905e9d9a69cfb9e634a1fa83a6b4ed73b121
+takt.work.DiskLow|- name: takt.work.DiskLow|crates/takt/src/run.rs|1	/// The file system holding the case's tree && min_bytes: u64,	sha256:9a8627aa299f328f3616c4538c866c2b5af8b62560fa7c0188dcb914a1c24fd1
+takt.work.DiskLow|- name: takt.work.DiskLow|crates/takt/src/run.rs|2	let bytes = u64::from(stat.f_bavail).saturating_mul(u64::from(stat.f_frsize));	sha256:c7a52d45bc4e26e82b0c1b9e070600c763b439178600347b59ce64df29210177
