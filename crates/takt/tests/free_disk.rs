@@ -392,6 +392,418 @@ fn the_default_reader_reads_the_file_system_holding_the_path() {
     assert_eq!(later.device, free.device);
 }
 
+/// A gates document whose one assertion is true in a repository with a manifest.
+const GATES: &str = "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: manifest\n    \
+                     text: The repository has its manifest.\n    assertions:\n      \
+                     - 'fs.file.exists(\"Cargo.toml\")'\n";
+
+/// A committed scratch repository with a manifest and a gates document.
+fn gated(name: &str) -> Scratch {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("free-disk-{}-{name}", std::process::id()));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
+    }
+    fs::create_dir_all(dir.join(".engineering")).expect("scratch dir");
+    fs::write(dir.join("Cargo.toml"), "[package]\nname = \"scratch\"\n").expect("a file");
+    fs::write(dir.join(".engineering/gates.yaml"), GATES).expect("a file");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-q", "-m", "start"]);
+    Scratch(dir)
+}
+
+/// Edits `work.txt` once, then hands the change over when offered, and requests the gate when
+/// one is pending; counts its calls.
+#[derive(Default)]
+struct Editing {
+    calls: Cell<usize>,
+}
+
+impl Harness for Editing {
+    fn name(&self) -> &str {
+        "editing"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> anyhow::Result<StepReport> {
+        self.calls.set(self.calls.get() + 1);
+        if let Some(gate) = context.approvals.first() {
+            return Ok(StepReport {
+                action: gate.clone(),
+                summary: "approval".to_owned(),
+                tokens: Some(1),
+            });
+        }
+        let work = context.tree.join("work.txt");
+        if work.exists() && context.offered.iter().any(|a| a == "change.handover") {
+            return Ok(StepReport {
+                action: "change.handover".to_owned(),
+                summary: "handover".to_owned(),
+                tokens: Some(1),
+            });
+        }
+        fs::write(&work, format!("edit {}\n", self.calls.get())).expect("an edit");
+        Ok(StepReport {
+            action: "implementation.edit".to_owned(),
+            summary: "edit".to_owned(),
+            tokens: Some(1),
+        })
+    }
+}
+
+/// The delivery's validators with its gates document, and the forge's three when given one.
+fn delivery_validators(forge: Option<Rc<dyn takt::Forge>>) -> Vec<Box<dyn Validator>> {
+    let mut validators: Vec<Box<dyn Validator>> = vec![
+        Box::new(TestsRun::new("true").expect("a command")),
+        Box::new(ChangeRead),
+        Box::new(takt::validator::GateRun::new(".engineering/gates.yaml")),
+    ];
+    if let Some(forge) = forge {
+        validators.push(Box::new(takt::validator::PrOpen::new(forge.clone())));
+        validators.push(Box::new(takt::validator::CiRead::new(forge.clone())));
+        validators.push(Box::new(takt::validator::PrMerged::new(forge)));
+    }
+    validators
+}
+
+/// Opens the case `name` with no approval gate given and runs it to its first stop, as the CLI
+/// does (`stop_when_unperformable`), the disk not checked.
+fn first_run(tree: &Path, name: &str, validators: &[Box<dyn Validator>], harness: &dyn Harness) {
+    let mut options = options(name);
+    options.iterations = Some(12);
+    options.gate = None;
+    let mut run = Run::open(tree, options, harness, validators).expect("the case opens");
+    run.stop_when_unperformable();
+    run.run(&mut Vec::new())
+        .expect("the run stops without an error");
+}
+
+/// Resumes the case `name` as the CLI does, with the disk under the threshold when `low`: its
+/// stop as printed and its output.
+fn resumed(
+    tree: &Path,
+    name: &str,
+    validators: &[Box<dyn Validator>],
+    harness: &dyn Harness,
+    low: bool,
+) -> (String, String) {
+    let mut options = options(name);
+    options.iterations = Some(12);
+    options.gate = None;
+    let mut run = Run::resume(tree, options, name, harness, validators).expect("the case resumes");
+    run.stop_when_unperformable();
+    if low {
+        run.stop_when_disk_below(10 * GIB, None);
+        run.read_free_space_with(|_| {
+            Ok(FreeSpace {
+                device: 1,
+                bytes: GIB,
+            })
+        });
+    }
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).expect("the run stops without an error");
+    (stop.to_string(), String::from_utf8(out).expect("utf-8"))
+}
+
+/// A case only a grant can move stops for the grant on a low disk too: no step would follow,
+/// so free space is not what stops it (exit 4, not 3), and the harness is not called.
+#[test]
+fn a_case_only_a_grant_moves_stops_approval_required_on_a_low_disk() {
+    let tree = gated("grant");
+    let forge: Rc<dyn takt::Forge> = Rc::new(takt::forge::Memory {
+        checks: takt::forge::Checks::Pass,
+        ..takt::forge::Memory::default()
+    });
+    let validators = delivery_validators(Some(forge));
+    let harness = Editing::default();
+    first_run(&tree, "grant", &validators, &harness);
+    let (fine, text) = resumed(&tree, "grant", &validators, &harness, false);
+    assert!(
+        fine.starts_with("ApprovalRequired ("),
+        "the premise: {fine}\n{text}"
+    );
+    let calls = harness.calls.get();
+    let (low, text) = resumed(&tree, "grant", &validators, &harness, true);
+    assert_eq!(low, fine, "{text}");
+    assert_eq!(harness.calls.get(), calls, "{text}");
+}
+
+/// A `--forge none` case at "ahead" stops `Unperformable` on a low disk too: no step would
+/// follow (exit 7, not 3).
+#[test]
+fn a_forge_none_case_at_ahead_stops_unperformable_on_a_low_disk() {
+    let tree = gated("ahead");
+    let validators = delivery_validators(None);
+    let harness = Editing::default();
+    first_run(&tree, "ahead", &validators, &harness);
+    let (fine, text) = resumed(&tree, "ahead", &validators, &harness, false);
+    assert_eq!(
+        fine, "Unperformable (pr.opened; nothing performs it without the forge)",
+        "the premise: {text}"
+    );
+    let (low, text) = resumed(&tree, "ahead", &validators, &harness, true);
+    assert_eq!(low, fine, "{text}");
+}
+
+/// Writes the scenario trial `case` under `repo`: one run per stop line, each with whether it
+/// is a completion, and the held-out check's first line.
+fn trial(repo: &Path, case: &str, stops: &[(&str, bool)], held: &str) {
+    let dir = repo.join(".engineering/cases").join(case);
+    fs::create_dir_all(&dir).expect("a case directory");
+    let mut text = String::new();
+    for (n, (stop, completed)) in stops.iter().enumerate() {
+        let at = format!("2026-10-19T10:0{n}:00.000000Z");
+        text.push_str(&format!(
+            "{{\"at\":\"{at}\",\"step\":0,\"event\":\"opened\",\"case\":\"{case}\",\"protocol\":\"story.delivery/1\",\"inputs\":[]}}\n"
+        ));
+        text.push_str(&format!(
+            "{{\"at\":\"{at}\",\"step\":1,\"event\":\"stop\",\"stop\":\"{stop}\",\"steps\":1,\"tokens\":10,\"completed\":{completed}}}\n"
+        ));
+    }
+    fs::write(dir.join("events.jsonl"), text).expect("the record");
+    fs::write(dir.join("held-out.txt"), format!("{held}\n")).expect("the held-out result");
+}
+
+/// A stop line a `DiskLow` run writes.
+const DISK_LOW: &str =
+    "DiskLow (/srv/tree: 1073741824 bytes (1.00 GiB) free, under 10737418240 bytes (10.00 GiB))";
+
+/// Scenario `s` with two trials: the first accepted, the second accepted unless `low`, which
+/// stopped `DiskLow` with its held-out check failed.
+fn card(name: &str, low: bool) -> (Scratch, takt::scorecard::Scorecard) {
+    let repo = scratch(name);
+    trial(
+        &repo,
+        "scenario-s-trial-0",
+        &[("Completed (accepted)", true)],
+        "PASS",
+    );
+    if low {
+        trial(
+            &repo,
+            "scenario-s-trial-1",
+            &[(DISK_LOW, false)],
+            "FAIL: no pull request",
+        );
+    } else {
+        trial(
+            &repo,
+            "scenario-s-trial-1",
+            &[("Completed (accepted)", true)],
+            "PASS",
+        );
+    }
+    let mut card = takt::scorecard::Scorecard::read(&repo).expect("the scorecard reads");
+    card.rule = takt::scorecard::Rule {
+        trials: 2,
+        margin: 0,
+    };
+    (repo, card)
+}
+
+/// `candidate` against `saved`: `worse <n>`, or `no verdict: <the error>`, and the printed text.
+fn verdict(
+    candidate: &takt::scorecard::Scorecard,
+    saved: &takt::scorecard::Scorecard,
+) -> (String, String) {
+    let mut out = Vec::new();
+    let verdict = match candidate.against(saved, &mut out) {
+        Ok(worse) => format!("worse {worse}"),
+        Err(error) => format!("no verdict: {error:#}"),
+    };
+    (verdict, String::from_utf8(out).expect("utf-8"))
+}
+
+/// The planner's ruling: a `DiskLow` trial on the candidate's side gives its scenario no verdict,
+/// whatever the count, naming the trial; it is no worse rank and no case dropped either.
+#[test]
+fn a_disk_low_trial_on_the_candidate_side_gives_no_verdict_naming_it() {
+    let (_saved_repo, saved) = card("saved-fine", false);
+    let (_repo, candidate) = card("candidate-low", true);
+    let low = candidate
+        .cases()
+        .into_iter()
+        .find(|case| case.case == "scenario-s-trial-1")
+        .expect("the trial is listed");
+    assert_eq!(low.scenario.as_deref(), Some("s"), "{low:?}");
+    let (verdict, text) = verdict(&candidate, &saved);
+    assert!(
+        text.contains(
+            "scenario s  no verdict: DiskLow trials (the candidate's scenario-s-trial-1)"
+        ),
+        "{text}"
+    );
+    assert!(verdict.starts_with("no verdict: "), "{verdict}");
+    assert!(
+        verdict.contains("scenario s (the candidate's scenario-s-trial-1)")
+            && verdict.contains("not topped up"),
+        "{verdict}"
+    );
+}
+
+/// The same on the saved side: a baseline with a `DiskLow` trial judges nothing in that
+/// scenario.
+#[test]
+fn a_disk_low_trial_on_the_saved_side_gives_no_verdict_naming_it() {
+    let (_saved_repo, saved) = card("saved-low", true);
+    let (_repo, candidate) = card("candidate-fine", false);
+    let (verdict, text) = verdict(&candidate, &saved);
+    assert!(
+        text.contains(
+            "scenario s  no verdict: DiskLow trials (the saved side's scenario-s-trial-1)"
+        ),
+        "{text}"
+    );
+    assert!(verdict.starts_with("no verdict: "), "{verdict}");
+}
+
+/// A run of scenario `s`'s trial `n` that stopped `stop`, its held-out check passed or not.
+fn trial_row(n: usize, stop: &str, passed: bool) -> Row {
+    Row {
+        case: format!("scenario-s-trial-{n}"),
+        scenario: Some("s".to_owned()),
+        outcome: if passed {
+            stop.to_owned()
+        } else {
+            takt::scorecard::FAILED.to_owned()
+        },
+        stop: stop.to_owned(),
+        held_out: Some(HeldOut {
+            passed,
+            result: if passed { "PASS" } else { "FAIL: x" }.to_owned(),
+        }),
+        steps: 1,
+        tokens: 100,
+        refusals: 0,
+        no_progress: 0,
+        errors: 0,
+        wall_ms: 0,
+        saturated: false,
+        binary: None,
+        opened_binary: None,
+        completed: Some(stop == "accepted"),
+    }
+}
+
+/// A scorecard of `rows` under a rule of three trials and a margin of 0.
+fn rows_card(rows: Vec<Row>) -> takt::scorecard::Scorecard {
+    takt::scorecard::Scorecard {
+        format: takt::scorecard::FORMAT.to_owned(),
+        revision: None,
+        named_by: None,
+        metrics: takt::scorecard::METRICS
+            .iter()
+            .map(|(metric, version)| ((*metric).to_owned(), *version))
+            .collect(),
+        rule: takt::scorecard::Rule {
+            trials: 3,
+            margin: 0,
+        },
+        rows,
+        no_record: Vec::new(),
+        unstated: std::collections::BTreeMap::new(),
+    }
+}
+
+/// Five accepted trials, the baseline every case below is judged against.
+fn five_accepted() -> takt::scorecard::Scorecard {
+    rows_card((0..5).map(|n| trial_row(n, "accepted", true)).collect())
+}
+
+/// A case any run of which stopped `DiskLow` is a `DiskLow` trial, though a later run completed
+/// it: the case's runs, not its last, say whether the machine ended one of them.
+#[test]
+fn a_trial_with_any_disk_low_run_is_a_disk_low_trial_though_completed_later() {
+    let saved = five_accepted();
+    let mut rows: Vec<Row> = (0..3).map(|n| trial_row(n, "accepted", true)).collect();
+    rows.push(trial_row(3, "DiskLow", false));
+    rows.push(trial_row(3, "accepted", true));
+    let (verdict, text) = verdict(&rows_card(rows), &saved);
+    assert!(verdict.starts_with("no verdict: "), "{verdict}\n{text}");
+    assert!(
+        verdict.contains("the candidate's scenario-s-trial-3"),
+        "{verdict}"
+    );
+}
+
+/// Surplus trials: five, two of which failed. Honestly stopped they are worse; stopped
+/// `DiskLow`, the scenario gets no verdict naming both, never the verdict of the three good ones.
+#[test]
+fn surplus_trials_stopping_disk_low_give_no_verdict_rather_than_drop_failures() {
+    let saved = five_accepted();
+    let honest = rows_card(
+        (0..5)
+            .map(|n| match n {
+                0..3 => trial_row(n, "accepted", true),
+                _ => trial_row(n, "NoProgress", false),
+            })
+            .collect(),
+    );
+    assert_eq!(verdict(&honest, &saved).0, "worse 1", "the premise");
+    let dropped = rows_card(
+        (0..5)
+            .map(|n| match n {
+                0..3 => trial_row(n, "accepted", true),
+                _ => trial_row(n, "DiskLow", false),
+            })
+            .collect(),
+    );
+    let (verdict, text) = verdict(&dropped, &saved);
+    assert!(verdict.starts_with("no verdict: "), "{verdict}\n{text}");
+    assert!(
+        verdict.contains("the candidate's scenario-s-trial-3, scenario-s-trial-4"),
+        "{verdict}"
+    );
+}
+
+/// Exactly the rule's trials, one stopped `DiskLow`: no verdict; topping the set up with more
+/// good trials does not clear it.
+#[test]
+fn a_disk_low_trial_is_not_cleared_by_topping_up() {
+    let saved = five_accepted();
+    let mut rows: Vec<Row> = (0..3)
+        .map(|n| match n {
+            0..2 => trial_row(n, "accepted", true),
+            _ => trial_row(n, "DiskLow", false),
+        })
+        .collect();
+    let (exact, text) = verdict(&rows_card(rows.clone()), &saved);
+    assert!(exact.starts_with("no verdict: "), "{exact}\n{text}");
+    assert!(!exact.contains("too few cases"), "{exact}");
+    rows.extend((3..5).map(|n| trial_row(n, "accepted", true)));
+    let (topped, text) = verdict(&rows_card(rows), &saved);
+    assert!(topped.starts_with("no verdict: "), "{topped}\n{text}");
+    assert!(
+        topped.contains("the candidate's scenario-s-trial-2"),
+        "{topped}"
+    );
+}
+
+/// A failed trial counted, then resumed into a `DiskLow` stop: the case stays in its scenario
+/// and the scenario gets no verdict; the resume does not launder the failure.
+#[test]
+fn a_resume_that_stops_disk_low_does_not_drop_a_counted_failure() {
+    let saved = five_accepted();
+    let mut rows: Vec<Row> = (0..3).map(|n| trial_row(n, "accepted", true)).collect();
+    rows.push(trial_row(3, "NoProgress", false));
+    rows.push(trial_row(3, "DiskLow", false));
+    rows.push(trial_row(4, "accepted", true));
+    let candidate = rows_card(rows);
+    let resumed = candidate
+        .cases()
+        .into_iter()
+        .find(|case| case.case == "scenario-s-trial-3")
+        .expect("the trial is listed");
+    assert_eq!(resumed.scenario.as_deref(), Some("s"), "{resumed:?}");
+    let (verdict, text) = verdict(&candidate, &saved);
+    assert!(verdict.starts_with("no verdict: "), "{verdict}\n{text}");
+    assert!(
+        verdict.contains("the candidate's scenario-s-trial-3"),
+        "{verdict}"
+    );
+}
+
 /// The scorecard counts a `DiskLow` run as no completion.
 #[test]
 fn a_disk_low_stop_is_no_completion() {

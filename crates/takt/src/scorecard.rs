@@ -28,7 +28,9 @@
 //! one, a scenario is worse when, for some outcome rank, the candidate's cases at that rank or
 //! better fall short of the saved share of its own n by more than the margin (at equal n: more
 //! than `margin` cases fewer), or when its median of tokens exceeds the saved maximum; a side
-//! with fewer cases than the rule's trials, none included, gets no verdict. Tokens are printed per
+//! with fewer cases than the rule's trials, none included, gets no verdict, and so does a
+//! scenario with a `DiskLow` trial on either side, whatever the count ([`DISK_LOW`]). Tokens are
+//! printed per
 //! scenario and side as n, minimum, median and maximum over cases with the difference of the
 //! medians. A metric whose definition changed between the two is printed with both figures and
 //! does not make a scenario worse; outcomes are compared under the current definition whatever
@@ -56,6 +58,14 @@ pub const HELD_OUT_FILE: &str = "held-out.txt";
 
 /// The outcome of a scenario run whose held-out check did not pass, whatever its stop said.
 pub const FAILED: &str = "failed";
+
+/// The stop of a run that stopped before a step for want of free disk
+/// ([`crate::Stop::DiskLow`]). A case any run of which stopped so is a `DiskLow` trial, whatever
+/// its other runs did, so a resume cannot launder an earlier failure; disk fullness measures the
+/// machine, not takt, and a scenario with such a trial on either side gets no verdict, whatever
+/// its count, until a fresh set without one is saved: topping it up does not clear it
+/// ([`Scorecard::disk_low`], [`Scorecard::against`]; the planner's ruling).
+pub const DISK_LOW: &str = "DiskLow";
 
 /// The operator's statement of the binary a case's runs were made with, in the case directory
 /// beside its record: the first line `<path>\t<sha256>`, the path as the operator wrote it
@@ -254,7 +264,8 @@ fn stated_binary(dir: &Path) -> std::result::Result<Option<RunBinary>, String> {
 pub struct Case {
     /// The case.
     pub case: String,
-    /// Its scenario, as [`Row::scenario`].
+    /// Its scenario, as [`Row::scenario`]. A `DiskLow` trial keeps its scenario, which then gets
+    /// no verdict ([`DISK_LOW`]).
     pub scenario: Option<String>,
     /// The best outcome a run of it completed with, else its last run's.
     pub outcome: String,
@@ -375,12 +386,19 @@ pub fn scenario_of(case: &str) -> Option<&str> {
 }
 
 /// An outcome's rank, higher better: `accepted`; an approval or a wait (`ApprovalRequired`,
-/// `Waiting`); a budget stop (`Iterations`, `Hours`, `Tokens`) and `Unperformable`; `NoProgress`,
-/// and with it every other stop (`NothingAdmissible`, `StepRefused`, another outcome); an error,
-/// no stop, or a held-out check that did not pass ([`FAILED`]). `Unperformable` ranks with the
-/// budget stops, where the same run ranked before the rule named its stop: a rule that only
-/// names the stop moves no comparison against an older baseline, which below them would read
-/// as worse and above them would flatter the candidate.
+/// `Waiting`); a budget stop (`Iterations`, `Hours`, `Tokens`) and `Unperformable`;
+/// `NoProgress`, and with it every other stop (`NothingAdmissible`, `StepRefused`, another
+/// outcome); an error, no stop, or a held-out check that did not pass ([`FAILED`]).
+///
+/// The planner's ruling: `Unperformable`, a stop that only names why the run could not go on,
+/// ranks with the budget stops. A run that used to end on its budget ranks where it did, so
+/// naming its stop moves no comparison against an older baseline, which below the budget stops
+/// would read as worse and above them would flatter the candidate. Not every such run ranked
+/// there: a `--forge none` run that used to stop `NoProgress` (rank 1) now ranks one higher
+/// (`Unperformable`, 2) against an older baseline. Real promotions measure with the GitHub forge
+/// and a gates document, where `Unperformable` does not fire, so that lift affects only
+/// `--forge none` trial comparisons. `DiskLow` takes no rank in a comparison: a scenario with a
+/// `DiskLow` trial on either side gets no verdict ([`DISK_LOW`]).
 #[must_use]
 pub fn rank(outcome: &str) -> u8 {
     match outcome {
@@ -753,6 +771,21 @@ impl Scorecard {
         Ok(card)
     }
 
+    /// Each scenario's `DiskLow` trials: the cases of it any run of which stopped `DiskLow`
+    /// ([`DISK_LOW`]), by case id; a scenario with none is not listed.
+    #[must_use]
+    pub fn disk_low(&self) -> BTreeMap<String, BTreeSet<String>> {
+        let mut low: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for row in self.rows.iter().filter(|row| row.stop == DISK_LOW) {
+            if let Some(scenario) = &row.scenario {
+                low.entry(scenario.clone())
+                    .or_default()
+                    .insert(row.case.clone());
+            }
+        }
+        low
+    }
+
     /// One [`Case`] a case with a record, in case order.
     #[must_use]
     pub fn cases(&self) -> Vec<Case> {
@@ -1015,7 +1048,10 @@ impl Scorecard {
     /// cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), and
     /// any scenario with fewer on the candidate's side, none included (`too few cases (<n> of
     /// <trials>)`), gets no verdict, and once every scenario is printed the comparison is an
-    /// error naming each such scenario, as a promotion refuses one. A case a run of which disagrees with its held-out check is named so beside its
+    /// error naming each such scenario, as a promotion refuses one. A scenario with a `DiskLow`
+    /// trial on either side ([`Scorecard::disk_low`]) gets no verdict whatever its count, printed
+    /// `no verdict: DiskLow trials (...)` naming them, and the error names them too: the
+    /// scenario is run again as a fresh set without them, not topped up. A case a run of which disagrees with its held-out check is named so beside its
     /// outcome. The number of scenarios marked worse.
     pub fn against(&self, saved: &Scorecard, out: &mut dyn Write) -> Result<usize> {
         let version = |card: &Scorecard, metric: &str| {
@@ -1048,6 +1084,8 @@ impl Scorecard {
             .collect();
         let mut worse = 0;
         let mut too_few: Vec<String> = Vec::new();
+        let (low, saved_low) = (self.disk_low(), saved.disk_low());
+        let mut disk_low: Vec<String> = Vec::new();
         for scenario in scenarios {
             let of = |cases: &[Case]| -> Vec<Case> {
                 cases
@@ -1071,6 +1109,35 @@ impl Scorecard {
                     )?,
                     None => writeln!(out, "{}  scenario {scenario}  {}", case.case, case.outcome)?,
                 }
+            }
+            // A `DiskLow` trial on either side measured the machine, not takt: no verdict,
+            // whatever the count, and no top-up clears it (the planner's ruling).
+            let named: Vec<String> = [
+                ("the candidate's", low.get(scenario)),
+                ("the saved side's", saved_low.get(scenario)),
+            ]
+            .into_iter()
+            .filter_map(|(side, cases)| {
+                cases.map(|cases| {
+                    format!(
+                        "{side} {}",
+                        cases
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })
+            })
+            .collect();
+            if !named.is_empty() {
+                writeln!(
+                    out,
+                    "scenario {scenario}  no verdict: DiskLow trials ({})",
+                    named.join("; ")
+                )?;
+                disk_low.push(format!("scenario {scenario} ({})", named.join("; ")));
+                continue;
             }
             // A rule of no trials still needs one case a side: there is no verdict on none.
             let needed = usize::try_from(trials).unwrap_or(usize::MAX).max(1);
@@ -1203,11 +1270,21 @@ impl Scorecard {
         for case in candidates.iter().filter(|case| case.scenario.is_none()) {
             writeln!(out, "{}  no scenario  not compared", case.case)?;
         }
+        let mut refusals: Vec<String> = Vec::new();
         if !too_few.is_empty() {
-            bail!(
+            refusals.push(format!(
                 "too few cases for a verdict: {}; the rule needs {trials} cases a scenario on each side, so run the short side again before comparing",
                 too_few.join(", ")
-            );
+            ));
+        }
+        if !disk_low.is_empty() {
+            refusals.push(format!(
+                "a DiskLow trial gives its scenario no verdict: {}; disk fullness measures the machine, not takt, so run each such scenario again as a fresh set without them, not topped up",
+                disk_low.join(", ")
+            ));
+        }
+        if !refusals.is_empty() {
+            bail!("{}", refusals.join("; "));
         }
         Ok(worse)
     }

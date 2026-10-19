@@ -2778,8 +2778,17 @@ pub fn rebaseline(request: &Rebaseline<'_>, out: &mut dyn Write) -> Result<Outco
 /// Every scenario the baseline has holds at least the rule's trials on the baseline's own side,
 /// and every scenario either side has holds at least the rule's trials on the candidate's side,
 /// so a candidate never becomes a baseline with a scenario that judges nothing; fewer is a
-/// refusal, not a verdict.
+/// refusal, not a verdict. A scenario with a `DiskLow` trial on either side is refused whatever
+/// its count ([`crate::scorecard::DISK_LOW`]), so no such set becomes a baseline or a candidate.
 fn enough_trials(card: &Scorecard, base_card: &Scorecard, shown: &Path) -> Result<()> {
+    for (side, of) in [("baseline", base_card), ("candidate", card)] {
+        if let Some((scenario, cases)) = of.disk_low().into_iter().next() {
+            bail!(
+                "scenario {scenario}: the {side} has DiskLow trials ({}), which measure the machine, not takt; run the scenario again as a fresh set without them, not topped up",
+                cases.into_iter().collect::<Vec<_>>().join(", ")
+            );
+        }
+    }
     let trials = usize::try_from(card.rule.trials).unwrap_or(usize::MAX);
     let count = |card: &Scorecard, scenario: &str| {
         card.cases()
