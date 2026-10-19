@@ -4176,6 +4176,17 @@ pub fn judge_list_at(
         .and_then(|text| parse_judge_list(&text)))
 }
 
+/// Whether `path`, relative to the tree as git names it, is matched whole by the path glob
+/// `glob` ([`parse_judge_list`]'s dialect: `*` and `?` within a part, `**` across parts), byte
+/// for byte and case and all: an allow-list's match, which admits nothing a fold would add and
+/// nothing under a path it names but does not match.
+#[must_use]
+pub fn glob_admits(glob: &str, path: &str) -> bool {
+    let glob: Vec<&str> = glob.split('/').collect();
+    let path: Vec<&str> = path.split('/').collect();
+    glob_matches(&glob, &path)
+}
+
 /// Whether the part `name` matches the glob part `glob`: `*` any run of characters, `?` one.
 fn part_matches(glob: &[char], name: &[char]) -> bool {
     match glob.split_first() {

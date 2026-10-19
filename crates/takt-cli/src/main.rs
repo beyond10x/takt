@@ -282,7 +282,7 @@ struct ApproveArgs {
     case: String,
     /// The capability granted, `repository.merge` for the merge.
     capability: String,
-    /// Who grants it.
+    /// Who grants it: `human:<id>` for a person, `agent:<role>` for an agent role.
     #[arg(long)]
     by: String,
 }

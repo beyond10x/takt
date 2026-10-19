@@ -136,9 +136,14 @@ impl Harness for OperatorApprovesSibling {
 
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
         if self.granted.borrow().is_none() {
-            let answer = grant(context.tree, &self.sibling, "repository.merge", "operator")
-                .map(|approval| approval.revision)
-                .map_err(|error| format!("{error:#}"));
+            let answer = grant(
+                context.tree,
+                &self.sibling,
+                "repository.merge",
+                "human:operator",
+            )
+            .map(|approval| approval.revision)
+            .map_err(|error| format!("{error:#}"));
             *self.granted.borrow_mut() = Some(answer);
         }
         Ok(StepReport {
