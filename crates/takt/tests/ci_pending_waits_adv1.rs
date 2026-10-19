@@ -221,6 +221,10 @@ impl AlwaysPending {
 }
 
 impl Forge for AlwaysPending {
+    fn target_tip(&self, tree: &Path, base: &str) -> anyhow::Result<String> {
+        self.memory.target_tip(tree, base)
+    }
+
     /// Scans nothing: the double publishes nothing off the machine.
     fn scan_outgoing(
         &self,

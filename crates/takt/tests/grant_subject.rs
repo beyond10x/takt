@@ -279,7 +279,7 @@ fn a_software_change_rollback_is_refused_a_grant_naming_the_action() {
         d.json
     );
 
-    let error = grant(&tree, "rollback", "release.rollback", "operator")
+    let error = grant(&tree, "rollback", "release.rollback", "human:operator")
         .expect_err("release.rollback has no precondition, so no artifact to bind to");
     let message = format!("{error:#}");
     assert!(
@@ -309,7 +309,7 @@ fn a_story_delivery_case_is_granted_at_its_implementation_revision() {
         d.json
     );
 
-    let approval = grant(&tree, "delivery", "repository.merge", "operator").expect("granted");
+    let approval = grant(&tree, "delivery", "repository.merge", "human:operator").expect("granted");
     assert_eq!(approval.revision, "implementation-1");
     let d = case.evaluate(1).expect("evaluates");
     assert_eq!(action(&d, "repository.merge"), "admissible", "{}", d.json);
@@ -345,7 +345,7 @@ fn an_action_about_no_single_artifact_is_refused_a_grant_naming_it() {
     assert_eq!(action(&d, "free.merge"), "approval-required", "{}", d.json);
 
     for (capability, named) in [("pair.merge", "pair.merge"), ("free.merge", "free.merge")] {
-        let error = grant(&tree, "unbound", capability, "operator")
+        let error = grant(&tree, "unbound", capability, "human:operator")
             .expect_err("no single artifact to bind the grant to");
         let message = format!("{error:#}");
         assert!(

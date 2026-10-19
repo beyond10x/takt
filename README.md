@@ -55,7 +55,7 @@ One open-source binary, Apache-2.0. Site: <https://beyond10x.github.io/takt/>.
 >
 > Caveats: one toy scenario and small n, so these are first results, not a benchmark. In the third
 > round no arm pinned a model and takt's moved to another one, so that round's takt cost can't be
-> compared. One improvement turn has been accepted, and its records were written by hand. Every
+> compared. Three improvement turns have been accepted, their records written by hand. Every
 > figure, with its source: [`docs/metrics/`](docs/metrics/README.md).
 
 ## Status
@@ -70,8 +70,8 @@ command (the confinement seam is not built); and improvement turns are still rec
 |---|---|
 | M1 one step validated | done 2026-10-18 (`docs/runs/2026-10-18-m1-scratch.md`) |
 | M2 a story end to end | built: the planning-store frontier, the story protocol, the gate validator, the pull request and CI through the bot route, the merge under a recorded grant, waits on pending checks (wave 08), the run recorded on the story (wave 09), those records reaching the base with the merge (wave 11). Not yet proven: no recorded run has taken a story from ready to merged with the grant as the only manual step |
-| unattended scenario 1 | next: accepted with one invocation plus one grant, daily for a week. Of 27 runs at 0a776d2 and later (T-1..9, T-11..28; not counted: T-fetchfail-1..3, refused at the trial fetch, and T-10, a runner race), 23 reached the merge approval in one invocation, 14 of the 15 after round 3 (`docs/metrics/`). Wave 12 merged the fixes for the three wastes those runs show (a second CI, a model step only for the approval, an inspect step before `NoProgress`); no scenario run has measured them yet |
-| self-improvement | phase R0: the first improvement turn was accepted on 2026-10-18 from records written by hand (`docs/runs/2026-10-18-improvement-turn-1/`). Built: the scorecard reader (`takt scorecard`, wave 10), the binary naming its revision (wave 11), promotion (`takt promote`), the run trace and report (`takt trace`, `takt report`). Wave 12 merged the fixes of improvement turns 2 and 3; `improvement-turns.jsonl` records neither turn yet. Not built: the judge guard and validators for `self.improvement/1`, in that order |
+| unattended scenario 1 | next: accepted with one invocation plus one grant, daily for a week. Of 27 runs at 0a776d2 and later (T-1..9, T-11..28; not counted: T-fetchfail-1..3, refused at the trial fetch, and T-10, a runner race), 23 reached the merge approval in one invocation, 14 of the 15 after round 3 (`docs/metrics/`). Wave 12 merged the fixes for the three wastes those runs show (a second CI, a model step only for the approval, an inspect step before `NoProgress`) |
+| self-improvement | phase R0: three improvement turns were accepted on 2026-10-18 and 2026-10-19 from records written by hand (`docs/metrics/improvement-turns.jsonl`). Built: the scorecard reader (`takt scorecard`, wave 10), the binary naming its revision (wave 11), promotion (`takt promote`), the run trace and report (`takt trace`, `takt report`). Wave 12 merged the fixes of improvement turns 2 and 3. Not built: the judge guard and validators for `self.improvement/1`, in that order |
 | M3 to M5 | workflows as `workflow/1` files, a second harness and the confinement seam, a week of daily runs: not built |
 | continuous runs | a run that plans its next stories and works a wave with parallel workers: designed, not built |
 
@@ -83,7 +83,7 @@ their figures are in `docs/metrics/`.
 ```
 takt run --repo <path> --intent "make the failing test pass" --iterations 1
 takt run --repo <path> --hours 1
-takt approve --repo <path> <case> repository.merge --by <who>
+takt approve --repo <path> <case> repository.merge --by human:<id>
 takt scenario run --repo <path> <id> --hours 1
 takt protocols
 takt scorecard --repo <path> [--against <scorecard.json>]
@@ -92,53 +92,16 @@ takt report --case <case dir> | --trace <file>
 takt promote --repo <takt checkout> --scorecard <file> [--dry-run]
 ```
 
-The first form opens a case on `software.change/1`. The second resumes the open case of a story
-being worked, or else takes the next ready story from the repository's planning store and opens
-its case on `story.delivery/1`, which is embedded in the binary: tests, gate, pull request, CI and
-merge as claims about the implementation revision, `accepted` once the pull request is merged. A
-case opens only on a clean tree. `--protocol` takes a built-in id or a `protocol/1` file, read
-from the directory you run `takt` in. Bounds: `--iterations`, `--hours`, `--tokens`. The tests are
-`--test-cmd` (default `cargo test --quiet`); `.engineering/gates.yaml`, when the repository has
-one, adds the gate. `takt run --help` lists every default and the exit codes:
-
-| exit code | the run |
-|---|---|
-| 0 | completed, or nothing was ready |
-| 1 | refused before any step; the reason is on stderr |
-| 2 | the arguments do not parse |
-| 3 | stopped on a budget, with nothing admissible, on a refused step, or with no progress |
-| 4 | waits for an approval (`takt approve`); the next run resumes the case |
-| 5 | stopped on an error once its case was open; the case stays open |
-| 6 | waited on the forge (pending checks or a pull-request head behind the push) until the budget ended; the next run resumes the case |
-
-`takt scenario run` replays a declared scenario: `.engineering/scenarios.conf` on `main` names
-its story and seed commit. The run fetches the remote's `trial/*` branches, cuts the next free
-`trial/<n>` from the seed, pushes it (it must not exist yet), and runs the story on it, so its pull
-request targets `trial/<n>`. A trial branch is deleted afterwards with `b10x-gates bot
---repository <owner>/<repo> -- delete-branch trial/<n>`, which the bot route admits only while the
-branch's tip is merged into the default branch.
+What each command does:
+[Run a story](https://beyond10x.github.io/takt/docs/guides/run-a-story),
+[Scenario run](https://beyond10x.github.io/takt/docs/guides/scenario-run),
+[CLI reference](https://beyond10x.github.io/takt/docs/reference/cli),
+[Exit codes](https://beyond10x.github.io/takt/docs/reference/exit-codes).
 
 ## Install
 
-From a release, with no Rust toolchain: each version tag publishes `takt-<version>-<target>.tar.gz`
-for `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` and `aarch64-apple-darwin`, with a
-`SHA256SUMS` file, at <https://github.com/beyond10x/takt/releases>.
-
-```
-version=0.1.0 target=x86_64-unknown-linux-gnu
-release=https://github.com/beyond10x/takt/releases/download/$version
-curl -fsSLO "$release/takt-$version-$target.tar.gz"
-curl -fsSLO "$release/SHA256SUMS"
-sha256sum --check --ignore-missing SHA256SUMS
-tar -xzf "takt-$version-$target.tar.gz"
-"takt-$version-$target/takt" --version
-```
-
-On macOS, where `sha256sum` may be missing, check the archive with
-`grep " takt-$version-$target.tar.gz\$" SHA256SUMS | shasum -a 256 --check`.
-`takt --version` prints the version and the commit the binary was built from.
-
-From source:
+Prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64), with checksums:
+[Install a release](https://beyond10x.github.io/takt/docs/getting-started#install-a-release). From source:
 
 ```
 cargo install --locked --path crates/takt-cli
@@ -147,20 +110,14 @@ takt --version
 
 ## Requirements
 
-- a harness: Claude Code (`claude` on the `PATH`), or `--harness none` to run validators only
-- for story runs, `aep` on the `PATH` and its planning store in the repository
-  (`.engineering/project.yaml`) with ready stories
-- for pull requests, an `origin` on github.com and `b10x-gates` and `gh` on the `PATH`; another
-  host gets no forge, and `--forge none` runs without one; the forge's gates policy comes from
-  `B10X_GATES_POLICY`
-- for `takt promote`, bubblewrap (`bwrap`) on the `PATH` and rustup's default toolchain: the
-  candidate is built and run inside bubblewrap. bubblewrap is Linux only, so on macOS a promotion
-  refuses with exit 1 before it judges; `--dry-run` and `--baseline-only`, which build nothing,
-  still run
+A harness, `aep` for story runs, `b10x-gates` and `gh` for pull requests, bubblewrap for
+`takt promote`: [What it needs](https://beyond10x.github.io/takt/docs/getting-started#what-it-needs).
 
-On macOS a run kills what a child process started in the child's process group only; on Linux takt
-also adopts and kills what the child orphaned outside it. No command sandboxes the harness or the
-test command on either system yet (`story:confinement-seam`).
+bubblewrap is Linux only, so on macOS a promotion refuses with exit 1 before it judges;
+`--dry-run` and `--baseline-only`, which build nothing, still run. On macOS a run kills what a
+child process started in the child's process group only; on Linux takt also adopts and kills
+what the child orphaned outside it. No command sandboxes the harness or the test command on
+either system yet (`story:confinement-seam`).
 
 Built on [Canon](https://github.com/beyond10x/canon) and
 [Engineering protocols](https://github.com/beyond10x/engineering-protocols). Licence: Apache-2.0.

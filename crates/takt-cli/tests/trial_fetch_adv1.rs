@@ -235,7 +235,7 @@ case "$2" in
   view)
     head=$(cat "$state/pr-$3.head")
     oid=$(tr -d '\n' < "$state/pushed-$(printf '%s' "$head" | tr / _)")
-    printf '{{"state":"OPEN","mergedAt":null,"headRefName":"%s","headRefOid":"%s"}}' "$head" "$oid"
+    printf '{{"state":"OPEN","mergedAt":null,"headRefName":"%s","headRefOid":"%s","baseRefName":"main"}}' "$head" "$oid"
     exit 0 ;;
   checks) printf '[{{"bucket":"pass"}}]'; exit 0 ;;
 esac

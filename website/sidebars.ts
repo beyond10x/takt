@@ -25,7 +25,6 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'guides/run-a-story',
-        'guides/approve-and-resume',
         'guides/scenario-run',
         'guides/variety-run',
         'guides/read-a-run-report',
@@ -40,7 +39,6 @@ const sidebars: SidebarsConfig = {
         'self-improvement/scorecard',
         'self-improvement/turns',
         'self-improvement/runs',
-        'self-improvement/timeline',
         'self-improvement/methodology',
       ],
     },

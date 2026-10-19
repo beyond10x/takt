@@ -8,7 +8,7 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-fe93286-areas
-revision: 6
+revision: 7
 ---
 ## Outcome
 
@@ -109,3 +109,11 @@ Confirmed, low (review-result:main-ae680d5-adversarial):
 - `crates/takt/src/validator.rs:296-330` (colour fix review): `summarise_tests` would hide failed test names behind escape codes if a test command passes `-- --color always`; the counts still parse.
 - `.github/workflows/check.yml:99` (CI fix 2 review): the bwrap smoke test covers less than takt's sandbox (`--unshare-pid`, `--proc`, `--dev`, `--tmpfs`); it fails first at loopback, which is what it guards today.
 - `docs/site/publish-protocols.sh` (site review): still pushes `gh-pages`, while the site now deploys from `main`.
+
+## Later lows (2026-10-19, wave 13 and 14 reviews)
+
+- `crates/takt/src/loop_scorecard.rs:34` (loop-scorecard review at 17431f3, info): `FIGURES_CODE` names only `loop_scorecard.rs`; a candidate changing a figure's input computed in `events.rs`, `case.rs` or `git::parse_commit` changes the loop's figures without marking any definition changed. Fixed when a change to the token reading in `events.rs` marks the token-based definitions changed.
+- `crates/takt/src/events.rs:335` (torn-character review at 090c241): unreadable lines in a run that ends in an unended last line are skipped together, so a bad middle line can drop unnamed (`A\n\xc3\n{"x` reads as `[A]`); only the last of a run of bad lines must be named. The repair rule is unchanged since 27417e1.
+- `crates/takt/tests/run_record_torn.rs:216` (torn-character review): the acceptance's `takt scorecard` exit is checked through the library, not the CLI; the reviewer ran the CLI by hand (exit 0).
+- `fuzz/fuzz_targets/scorecard.rs:95-109` (wave-13 close review): the short-side branch does not check which side was short.
+- `crates/takt/src/promotion.rs:78` `MAINLINE = "main"`, `crates/takt-cli/src/main.rs:268` (`--declared-on` defaults to `main`), `scripts/check-finding:109` (`declared_on=main`): a repository whose mainline is not `main` is unsupported (CI fix 4 review).

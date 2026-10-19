@@ -8,7 +8,7 @@ summary: Three levels (work, takt, the loop), four agent roles, a pinned judge, 
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 11
+revision: 13
 ---
 # Design: recursive self-improvement of takt
 
@@ -119,7 +119,7 @@ file the candidate could plant. Each scenario is compared against the promoted r
 for that scenario.
 
 Promotion defaults, changeable by the owner: no scenario's outcome worse; the median of tokens at
-most the baseline plus 10 %; at most one promotion a day. A metric's definition is a judge
+most the baseline plus 10 %; no daily cap: the owner removed the one-promotion-a-day default on 2026-10-19 so improvement trials run back to back (story:promotion-without-daily-cap), and a cap may return after 1.0. A metric's definition is a judge
 surface; for one cycle after a change the previous definition's numbers are printed beside the
 new ones, so a metric cannot be redefined to look better.
 
@@ -134,7 +134,7 @@ Decided 2026-10-18 by the planner, under the owner's standing grant, before stor
 - Trials: promotion runs the candidate n=5 times per scenario; the baseline's runs are the ones saved with the promoted revision's scorecard, at least 5.
 - Tokens: the candidate is worse on tokens for a scenario when its median exceeds the baseline's maximum. The rule tolerates the spread one unchanged harness shows (106,003 to 167,249 on scenario 1) and still catches a shift of the whole distribution. Tokens are counted per case, every case; known waste is removed by fixing it, not by excluding it from the count.
 - Flaky outcomes: dominance keeps its ranks, with a margin of one case per scenario: the candidate is worse at a rank when its count of cases at that rank or better is more than one below the baseline's. At n=5 a single flaky case passes, two cases worse at any rank fail.
-- No re-run: a candidate that fails is not run again until it changes, so a promotion cannot be reached by re-rolling.
+- Re-judging: a refused revision is judged again only through `takt promote --rejudge`, on new runs; a scorecard sharing a case with one the revision was refused on is refused, so re-scoring the same runs cannot reverse a refusal (ruled 2026-10-19 at story:promote-binds-scorecard-and-merge; how often a revision may be re-judged is story:rejudge-is-bounded).
 - The rule's parameters (n, the margin) are fields of the Scorecard record, so `takt scorecard --against` prints the rule it applied and a later change to the rule is a change to a judge surface.
 
 ## What earns each claim

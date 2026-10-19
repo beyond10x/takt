@@ -666,13 +666,14 @@ const ACTOR_KINDS: [&str; 3] = ["human", "agent", "service"];
 /// The kinds of actor that may grant a story's capability: a person or an agent role.
 const APPROVER_KINDS: [&str; 2] = ["human", "agent"];
 
-/// Whether `approver` may grant a story's capability: `human:<name>` or `agent:<role>`, an
+/// Whether `approver` may grant a case's capability: `human:<name>` or `agent:<role>`, an
 /// actor the store writes ([`is_store_actor`]). The store writes an approval's record as its
 /// approver ([`crate::frontier::Aep`] sets `AEP_ACTOR`); `system` and `service:<name>` are the
 /// store's and tools' own actors, not who grants, and takt's own actor
 /// ([`crate::frontier::ACTOR`]), which writes the story's `test_result` and move, never grants
 /// its own merge.
-fn is_approver(approver: &str) -> bool {
+#[must_use]
+pub fn is_approver(approver: &str) -> bool {
     approver != crate::frontier::ACTOR
         && is_store_actor(approver)
         && approver
@@ -875,8 +876,8 @@ pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<
 /// for it, writing nothing. The case is held first (`run.lock`, taken atomically), so a grant
 /// never lands while a run holds the case, and no run starts until the grant is written or
 /// dropped. Refused: an id that is not a case id ([`check_id`]), a case that does not exist, a
-/// case another holds, a capability that is not an identifier, an empty approver, for a story's
-/// case an approver that is not `human:<name>` or `agent:<role>` as the store writes them, a
+/// case another holds, a capability that is not an identifier, an empty approver, an approver
+/// that is not `human:<name>` or `agent:<role>` as the store writes them ([`is_approver`]), a
 /// capability no action of the case's protocol requires (a grant nothing asks for is a typo, told at the
 /// command line rather than by a run that stops at the gate again), a capability whose actions
 /// are about no single artifact ([`LoadedProtocol::grant_subject`]), a case that is not at the
@@ -909,11 +910,12 @@ pub fn prepare_grant(
     if approver.trim().is_empty() {
         bail!("the approver is empty; say who grants {capability}");
     }
-    // A story's grant is recorded in the store as its approver, and its record rides to the
-    // base only with the approver as its actor: the approver is a person or an agent role the
-    // store writes as.
+    // Every grant is typed: a person or an agent role the store writes as, for a story's case
+    // and an intent's alike. A story's grant is recorded in the store as its approver, and its
+    // record rides to the base only with the approver as its actor; and the merge of a
+    // judge-surface change reads the kind to decide whose grant it is.
     let story = story_of(&dir)?;
-    if story.is_some() && !is_approver(approver) {
+    if !is_approver(approver) {
         bail!(
             "the approver `{}` is not an actor the planning store records as granting; say who grants {capability} as human:<name> or agent:<role>, not takt's own {}",
             approver.escape_debug(),

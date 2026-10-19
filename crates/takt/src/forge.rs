@@ -255,14 +255,27 @@ pub struct Head {
     pub sha: String,
 }
 
-/// What the forge reports about a pull request: its state and its head. A validator checks
-/// the head against the case's branch and revision before it trusts a number.
+/// What the forge reports about a pull request: its state, its head and its base. A validator
+/// checks the head against the case's branch and revision before it trusts a number; the
+/// base is the branch a merge goes into, whatever the case's own records name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullRequestView {
     /// The state.
     pub state: PullRequestState,
     /// The head.
     pub head: Head,
+    /// The base branch, the merge's target, as the forge holds it.
+    pub base: String,
+}
+
+/// Whether `text` is a full object id as git writes one: 40 (SHA-1) or 64 (SHA-256) lowercase
+/// hexadecimal digits, never a name or an expression git would resolve.
+#[must_use]
+pub fn is_object_id(text: &str) -> bool {
+    matches!(text.len(), 40 | 64)
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// What an `origin` URL names: the host and the `<owner>/<repo>` on it.
@@ -329,6 +342,18 @@ pub trait Forge {
     /// came back, when it keeps anything. What the merge made of the pull request is read back
     /// through [`Self::pull_request`]; the merge itself answers nothing a validator records.
     fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()>;
+    /// The commit the branch `base`, a merge's target, is at as the repository reports it when
+    /// the merge is decided: where `repository.merge` reads the judge allow-list and the
+    /// delegation record from, never the case's tree. Refused by default, so an adapter that
+    /// cannot say merges nothing: without the target's tip every path is a judge surface. An
+    /// adapter that answers leaves the commit it names held by the tree's repository.
+    fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
+        let _ = tree;
+        bail!(
+            "the forge {} cannot report the tip of {base}, the merge target; nothing is merged through it",
+            self.name()
+        )
+    }
 }
 
 /// What a program the adapter ran answered.
@@ -1024,6 +1049,28 @@ impl BotRoute {
         }
     }
 
+    /// The line that fetches the commit `object` and what it reaches through the bot route into
+    /// no ref: the object id alone as the refspec, so no branch, tag or tracking ref moves, and
+    /// no `FETCH_HEAD` (`--no-write-fetch-head`), no tag and no submodule, the options last as
+    /// on a push. `object` is an id the repository reported, never a name git would resolve.
+    #[must_use]
+    pub fn fetch_object_argv(&self, object: &str) -> Vec<String> {
+        let url = self.push_url();
+        [
+            "b10x-gates",
+            "bot",
+            "--",
+            "fetch",
+            &url,
+            object,
+            "--no-write-fetch-head",
+            "--no-tags",
+            "--recurse-submodules=no",
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    }
+
     /// The options every `b10x-gates` line that reads the policy carries, the scan and the API
     /// writes alike: `--repository`, and `--policy` when the policy file is known.
     fn scope(&self) -> Vec<String> {
@@ -1110,7 +1157,7 @@ impl BotRoute {
             "view".to_owned(),
             number.to_string(),
             "--json".to_owned(),
-            "state,mergedAt,headRefName,headRefOid".to_owned(),
+            "state,mergedAt,headRefName,headRefOid,baseRefName".to_owned(),
             "--repo".to_owned(),
             self.repository.clone(),
         ]
@@ -1676,6 +1723,7 @@ impl Forge for BotRoute {
                 branch: field("headRefName")?,
                 sha: field("headRefOid")?,
             },
+            base: field("baseRefName")?,
         })
     }
 
@@ -1742,6 +1790,39 @@ impl Forge for BotRoute {
             );
         }
         Ok(())
+    }
+
+    /// The repository's own `base`, read through the bot route's dry-run fetch
+    /// ([`Self::remote_base`]), then its commit fetched into no ref
+    /// ([`Self::fetch_object_argv`]): a tip newer than anything the tree's repository holds is
+    /// then held, so the allow-list and the delegation record at it can be read, and no ref a
+    /// step or the tree sees has moved. A repository with no such branch, an answer that is no
+    /// object id, or a fetch that fails is the error.
+    fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
+        let tip = self.remote_base(tree, base)?.ok_or_else(|| {
+            anyhow!(
+                "the repository {} has no branch {base} to merge into",
+                self.repository
+            )
+        })?;
+        if !is_object_id(&tip) {
+            bail!(
+                "the repository {} reports {base} at `{}`, which is no object id",
+                self.repository,
+                tip.escape_debug()
+            );
+        }
+        let argv = self.fetch_object_argv(&tip);
+        let exit = self.runner.run_env(tree, &argv, &Self::PUSH_ENV)?;
+        if !exit.success() {
+            return Err(Failed {
+                line: argv.join(" "),
+                code: exit.code,
+                stderr: exit.stderr.trim().to_owned(),
+            }
+            .into());
+        }
+        Ok(tip)
     }
 }
 
@@ -1892,7 +1973,8 @@ impl Forge for Memory {
         } else {
             self.state
         };
-        Ok(PullRequestView { state, head })
+        let base = self.opened.borrow()[index].base.clone();
+        Ok(PullRequestView { state, head, base })
     }
 
     fn checks(&self, _: &Path, number: u64) -> Result<Checks> {
@@ -1914,5 +1996,28 @@ impl Forge for Memory {
         }
         self.merged.borrow_mut().push(number);
         Ok(())
+    }
+
+    /// The tree's own `refs/heads/<base>`: the double's repository is the tree. Not logged, so
+    /// the calls read as the forge's writes and reads of the pull request.
+    ///
+    /// A test double, never a production forge: D3 of story:judge-guard forbids reading the
+    /// merge target's tip from a local branch at merge time, because a step's test command can
+    /// move it. The double may, because it stands for a repository the test itself owns: the
+    /// test moves `refs/heads/<base>` as the owner's merge on the forge would, and no step runs
+    /// between that move and this read. The CLI never builds a `Memory`; `--forge none`
+    /// registers no merge validator at all.
+    fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
+        crate::git::run(
+            tree,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &format!("refs/heads/{base}^{{commit}}"),
+            ],
+        )
+        .with_context(|| format!("the double's {base} is not a branch of the tree"))
     }
 }

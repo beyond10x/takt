@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:test-command-reaches-no-forge-login
 kind: story
-status: draft
+status: active
 title: The test command runs with no forge login, keyring or session bus reachable
 tags:
 - priority:high
@@ -10,7 +10,15 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-fe93286-areas
-revision: 2
+scope:
+- confidence: inferred
+  path: crates/takt/src/forge.rs
+- confidence: cited
+  path: crates/takt/src/validator.rs
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T07:39:18Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-19T07:39:18Z", actor: "human:timo", revision: 6}
 ---
 ## Outcome
 
