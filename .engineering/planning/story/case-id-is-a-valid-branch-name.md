@@ -27,7 +27,7 @@ transitions:
 
 ## Context
 
-Split out of story:cli-small-fixes, item (c), found by an independent code review of 2026-10-18 (`check_id`, `crates/takt/src/case.rs`), and reproduced by the planner on takt at main 9922f12 on scenario 1's seed: `takt run --repo <seed> --case-id 'a~b' --intent probe --harness none --forge none --iterations 1 --test-cmd ./check.sh` exits 1 with `takt: git checkout -q -b takt/a~b … exited exit status: 128: fatal: 'takt/a~b' is not a valid branch name`. It is the finding of the second recorded improvement turn: checkable offline by `scripts/check-finding`.
+Split out of story:cli-small-fixes, item (c), found by an independent code review of 2026-10-18 (`check_id`, `crates/takt/src/case.rs`), and reproduced by the planner on takt at main 333d369 on scenario 1's seed: `takt run --repo <seed> --case-id 'a~b' --intent probe --harness none --forge none --iterations 1 --test-cmd ./check.sh` exits 1 with `takt: git checkout -q -b takt/a~b … exited exit status: 128: fatal: 'takt/a~b' is not a valid branch name`. It is the finding of the second recorded improvement turn: checkable offline by `scripts/check-finding`.
 
 ```expected_before
 scenario: 1
@@ -43,11 +43,11 @@ source: .engineering/planning/story/cli-small-fixes.md
 
 ## Acceptance
 
-`takt run --case-id 'a~b'` (and `foo.`, `a..b`, `a@{b`, a trailing `.lock`) exits 1 with a takt message naming the id and why git refuses it, creating no case directory and no branch; `scripts/check-finding` on this finding prints `reproduced` at 9922f12 and `not_reproduced` at the fix.
+`takt run --case-id 'a~b'` (and `foo.`, `a..b`, `a@{b`, a trailing `.lock`) exits 1 with a takt message naming the id and why git refuses it, creating no case directory and no branch; `scripts/check-finding` on this finding prints `reproduced` at 333d369 and `not_reproduced` at the fix.
 
 ## Landed (wave 12)
 
-Read from `git diff --name-only 93f2f9e^1 93f2f9e` (the unit's merge into the wave branch) at the close of wave 12 (wave branch head 8d7c194). A case id git refuses as a branch name is refused by takt's own check before anything is written, naming the rule. Improvement turn 2.
+Read from `git diff --name-only 0cb62c0^1 0cb62c0` (the unit's merge into the wave branch) at the close of wave 12 (wave branch head 63a9d02). A case id git refuses as a branch name is refused by takt's own check before anything is written, naming the rule. Improvement turn 2.
 
 - `crates/takt-cli/src/main.rs`
 - `crates/takt-cli/tests/case_id_branch_name_cli.rs`

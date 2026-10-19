@@ -43,4 +43,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-With a `claude` double first on PATH that writes its argument list to a file, `docs/bench/run-free-arm.sh claude-code-isolated <fixture task> <out>` starts `claude` with the four arguments of `ClaudeCode::ISOLATION` (`crates/takt/src/harness.rs:110-115`), where at d17bc32 `docs/bench/run-free-arm.sh` does not exist.
+With a `claude` double first on PATH that writes its argument list to a file, `docs/bench/run-free-arm.sh claude-code-isolated <fixture task> <out>` starts `claude` with the four arguments of `ClaudeCode::ISOLATION` (`crates/takt/src/harness.rs:110-115`), where at fb3c3bc `docs/bench/run-free-arm.sh` does not exist.

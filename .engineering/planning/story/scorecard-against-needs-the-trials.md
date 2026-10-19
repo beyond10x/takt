@@ -22,7 +22,7 @@ transitions:
 
 ## Context
 
-From the review of main at fe93286 on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), finding T3, partly confirmed: `against()` prints the rule's trials (`scorecard.rs:657-662@fe93286`) but never enforces them; with margin 1 any single-case candidate passes the outcome check (1 errored case against 5/5 accepted: not worse, exit 0, `main.rs:393`). Promotion is protected by `enough_trials` (`promotion.rs:1656-1690`). The reviewer's own one-trial measurements read this verdict.
+From the review of main at 9cc158b on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), finding T3, partly confirmed: `against()` prints the rule's trials (`scorecard.rs:657-662@9cc158b`) but never enforces them; with margin 1 any single-case candidate passes the outcome check (1 errored case against 5/5 accepted: not worse, exit 0, `main.rs:393`). Promotion is protected by `enough_trials` (`promotion.rs:1656-1690`). The reviewer's own one-trial measurements read this verdict.
 
 ## Scope
 

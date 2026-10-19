@@ -15,7 +15,7 @@ A test run cannot be recorded as `pass` because the code under test ended the te
 
 ## Context
 
-From the developer's check of story:step-guard-sees-test-script-imports (turn 4, 2026-10-18): with `unittest.py`, `sitecustomize.py` and `usercustomize.py` guarded, a step can still make the test command exit 0 while a test fails: code under test that calls `os._exit(0)` on import ends the interpreter before unittest reports (python 3.14). No path guard can close it, since the code under test is the change itself. `tests.run` takes its result from the exit status alone (`crates/takt/src/validator.rs`, `result` from `output.success()`); story:test-summary-keeps-the-totals (merged at 4cd2dd4) made the summary text faithful but does not change the result.
+From the developer's check of story:step-guard-sees-test-script-imports (turn 4, 2026-10-18): with `unittest.py`, `sitecustomize.py` and `usercustomize.py` guarded, a step can still make the test command exit 0 while a test fails: code under test that calls `os._exit(0)` on import ends the interpreter before unittest reports (python 3.14). No path guard can close it, since the code under test is the change itself. `tests.run` takes its result from the exit status alone (`crates/takt/src/validator.rs`, `result` from `output.success()`); story:test-summary-keeps-the-totals (merged at 5ac726f) made the summary text faithful but does not change the result.
 
 ## Scope
 

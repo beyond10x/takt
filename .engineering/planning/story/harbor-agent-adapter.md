@@ -50,4 +50,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-With a `claude` double first on PATH, `docs/bench/harbor/run-takt.sh <task dir> <logs>` (the command the adapter runs inside a task container) on the fixture task `docs/bench/harbor/fixtures/hello/` (an `instruction.md`, no git repository, no tests) leaves `<logs>/case/events.jsonl` ending in a `stop` event whose `stop` is `Completed (completed)`, where at d17bc32 `docs/bench/harbor/run-takt.sh` does not exist.
+With a `claude` double first on PATH, `docs/bench/harbor/run-takt.sh <task dir> <logs>` (the command the adapter runs inside a task container) on the fixture task `docs/bench/harbor/fixtures/hello/` (an `instruction.md`, no git repository, no tests) leaves `<logs>/case/events.jsonl` ending in a `stop` event whose `stop` is `Completed (completed)`, where at fb3c3bc `docs/bench/harbor/run-takt.sh` does not exist.

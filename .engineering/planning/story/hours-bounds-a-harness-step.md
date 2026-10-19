@@ -25,7 +25,7 @@ transitions:
 
 ## Context
 
-Split out of story:cli-small-fixes, item 1, found by an independent code review of 2026-10-18: `--hours` is checked between steps only (`crates/takt/src/run.rs:621-625`), and a harness step keeps its own 30-minute timeout (`crates/takt/src/harness.rs:73`). Reproduced by the planner on takt at main 9922f12 on scenario 1's seed, with a `claude` on `PATH` that sleeps 20 s: under `--hours 0.001` (3.6 s) the run took 21 s, stopping on step 2 with "the harness failed". It is the finding of the third recorded improvement turn: checkable offline by `scripts/check-finding`.
+Split out of story:cli-small-fixes, item 1, found by an independent code review of 2026-10-18: `--hours` is checked between steps only (`crates/takt/src/run.rs:621-625`), and a harness step keeps its own 30-minute timeout (`crates/takt/src/harness.rs:73`). Reproduced by the planner on takt at main 333d369 on scenario 1's seed, with a `claude` on `PATH` that sleeps 20 s: under `--hours 0.001` (3.6 s) the run took 21 s, stopping on step 2 with "the harness failed". It is the finding of the third recorded improvement turn: checkable offline by `scripts/check-finding`.
 
 ```expected_before
 scenario: 1
@@ -42,11 +42,11 @@ source: .engineering/planning/story/cli-small-fixes.md
 
 ## Acceptance
 
-With a harness that sleeps 20 s and `--hours 0.001`, `takt run` stops within the budget plus a fixed grace of at most 10 s, kills the harness child and discards its step's changes; `scripts/check-finding` on this finding prints `reproduced` at 9922f12 and `not_reproduced` at the fix.
+With a harness that sleeps 20 s and `--hours 0.001`, `takt run` stops within the budget plus a fixed grace of at most 10 s, kills the harness child and discards its step's changes; `scripts/check-finding` on this finding prints `reproduced` at 333d369 and `not_reproduced` at the fix.
 
 ## Landed (wave 12)
 
-Read from `git diff --name-only 3b0b748^1 3b0b748` (the unit's merge into the wave branch) at the close of wave 12 (wave branch head 8d7c194). The hour budget bounds a harness step, the test command and the gate's commands; a step or observation returning at or after the run's end is discarded and the run stops on hours. Improvement turn 3. Test premises got room under load at 5e6f115, 9dea7ba and a931f5d.
+Read from `git diff --name-only 76be9ed^1 76be9ed` (the unit's merge into the wave branch) at the close of wave 12 (wave branch head 63a9d02). The hour budget bounds a harness step, the test command and the gate's commands; a step or observation returning at or after the run's end is discarded and the run stops on hours. Improvement turn 3. Test premises got room under load at 5a292e7, dadc264 and 8bb1d6f.
 
 - `crates/takt-cli/tests/hours_bounds_a_harness_step_cli.rs`
 - `crates/takt/src/harness.rs`

@@ -29,7 +29,7 @@ Both external benchmarks run each task in its own container (design:benchmark-in
 
 In a container the login is a file, not a variable. The `claude` harness removes every `CLAUDE_CODE_*` variable from the child (`crates/takt/src/harness.rs:215-219`), so a token passed that way would never reach the harness. The harness reads its login under `$HOME/.claude/`, and the runners mount that file read-only (story:harbor-agent-adapter, story:swe-bench-mini-runner). Running the container needs Docker, so it is not part of the acceptance.
 
-A search for the token that finds nothing proves nothing. It finds nothing before the work too, and when nothing ran. So the check plants a canary as the login and uses a double that echoes it back. Today takt writes a step's reply into `events.jsonl` as the step's `summary` (`crates/takt/src/events.rs:88-92`), so at d17bc32 the canary is found.
+A search for the token that finds nothing proves nothing. It finds nothing before the work too, and when nothing ran. So the check plants a canary as the login and uses a double that echoes it back. Today takt writes a step's reply into `events.jsonl` as the step's `summary` (`crates/takt/src/events.rs:88-92`), so at fb3c3bc the canary is found.
 
 The old Expected before, the static musl build that no Taskfile or release target produces (`.github/workflows/release.yml:78-80` builds only gnu targets), moves to story:takt-static-binary.
 
@@ -47,4 +47,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-With `HOME` set to a fixture home whose `.claude/.credentials.json` holds the canary `takt-canary-7f3a`, and a `claude` double first on PATH that copies that file's content into its reply's summary, `takt run` exits 0 with the double's step line in `events.jsonl`, and `grep -rF takt-canary-7f3a <case dir> <takt's captured stdout and stderr>` exits 1 after `takt run --harness claude --forge none` on the fixture task of story:bench-task-protocol, where at d17bc32 it exits 0 on the case's `events.jsonl`.
+With `HOME` set to a fixture home whose `.claude/.credentials.json` holds the canary `takt-canary-7f3a`, and a `claude` double first on PATH that copies that file's content into its reply's summary, `takt run` exits 0 with the double's step line in `events.jsonl`, and `grep -rF takt-canary-7f3a <case dir> <takt's captured stdout and stderr>` exits 1 after `takt run --harness claude --forge none` on the fixture task of story:bench-task-protocol, where at fb3c3bc it exits 0 on the case's `events.jsonl`.

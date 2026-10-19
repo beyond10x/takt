@@ -30,7 +30,7 @@ takt's parsers of untrusted input carry property tests (`proptest`, run by `carg
 
 ## Context
 
-Owner request of 2026-10-19 ("add proptest and cargo-fuzz"), after review-result:main-fe93286-areas: finding E8.1 (a torn multi-byte character makes `Events::read` fail the whole record, `crates/takt/src/events.rs:258@fe93286`) is the kind of defect a fuzz target over arbitrary bytes finds without a reviewer. The machine has `cargo-fuzz` 0.13.2 and a nightly toolchain; the workspace has neither `proptest` nor a `fuzz/` directory today.
+Owner request of 2026-10-19 ("add proptest and cargo-fuzz"), after review-result:main-fe93286-areas: finding E8.1 (a torn multi-byte character makes `Events::read` fail the whole record, `crates/takt/src/events.rs:258@9cc158b`) is the kind of defect a fuzz target over arbitrary bytes finds without a reviewer. The machine has `cargo-fuzz` 0.13.2 and a nightly toolchain; the workspace has neither `proptest` nor a `fuzz/` directory today.
 
 First targets, each an input takt reads from something it does not control:
 - `Events::read` (`crates/takt/src/events.rs`): any bytes after a valid record; any prefix of a valid record.

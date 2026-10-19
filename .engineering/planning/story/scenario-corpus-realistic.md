@@ -46,4 +46,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-`docs/metrics/scenarios/check-controls.sh <scratch checkout>` exits 0 printing `controls held: 6 of 6`, where at d17bc32 `docs/metrics/scenarios/` does not exist.
+`docs/metrics/scenarios/check-controls.sh <scratch checkout>` exits 0 printing `controls held: 6 of 6`, where at fb3c3bc `docs/metrics/scenarios/` does not exist.

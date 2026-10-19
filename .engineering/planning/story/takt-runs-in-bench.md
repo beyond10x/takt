@@ -36,4 +36,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-`docs/bench/check-instrument-import.sh <instrument checkout> <fixture case>` (it copies the checkout at the commit `docs/bench/instrument.pin` names, appends `takt export --bench` of the fixture case to the copy's seed file, imports it and runs the instrument's validator) exits 0 with the validator's last line `valid`, where at d17bc32 the script does not exist.
+`docs/bench/check-instrument-import.sh <instrument checkout> <fixture case>` (it copies the checkout at the commit `docs/bench/instrument.pin` names, appends `takt export --bench` of the fixture case to the copy's seed file, imports it and runs the instrument's validator) exits 0 with the validator's last line `valid`, where at fb3c3bc the script does not exist.

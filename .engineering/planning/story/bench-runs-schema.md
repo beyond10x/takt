@@ -56,4 +56,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-On the fixture `docs/metrics/fixtures/bench-runs-takt-mismatch.jsonl` (a takt-arm row with `tokens.sum` 900 whose `case_dir` names a committed fixture case with two `stop` events of 1000 and 500 tokens), `python3 -I docs/metrics/check-bench-runs.py docs/metrics/fixtures/bench-runs-takt-mismatch.jsonl` exits 1 printing `line 1: tokens.sum 900, the case's stop events sum 1500`, where at d17bc32 `docs/metrics/check-bench-runs.py` does not exist.
+On the fixture `docs/metrics/fixtures/bench-runs-takt-mismatch.jsonl` (a takt-arm row with `tokens.sum` 900 whose `case_dir` names a committed fixture case with two `stop` events of 1000 and 500 tokens), `python3 -I docs/metrics/check-bench-runs.py docs/metrics/fixtures/bench-runs-takt-mismatch.jsonl` exits 1 printing `line 1: tokens.sum 900, the case's stop events sum 1500`, where at fb3c3bc `docs/metrics/check-bench-runs.py` does not exist.

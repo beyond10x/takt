@@ -24,7 +24,7 @@ A takt built by `scripts/check-finding` prints its revision in `takt --version`,
 
 ## Context
 
-`check-finding` exports the tree with `git archive` (`scripts/check-finding:163`). With no `.git` there, `build.rs` reports `unknown revision`. So every promoted-versus-candidate verification run records `"binary":"unknown revision"`, and nothing ties its figures to a revision. Observed: my archive build of 3fe3f21 prints `takt 0.1.0 (unknown revision)`. The existing cached builds `~/.cache/takt/check-finding/builds/834205f…` and `8d49743…` print the same. A build from a checkout prints the sha. This predicate only reproduces under `check-finding`'s own build, which is where the defect is.
+`check-finding` exports the tree with `git archive` (`scripts/check-finding:163`). With no `.git` there, `build.rs` reports `unknown revision`. So every promoted-versus-candidate verification run records `"binary":"unknown revision"`, and nothing ties its figures to a revision. Observed: my archive build of 8378cb2 prints `takt 0.1.0 (unknown revision)`. The existing cached builds `~/.cache/takt/check-finding/builds/98719c3…` and `d74da0c…` print the same. A build from a checkout prints the sha. This predicate only reproduces under `check-finding`'s own build, which is where the defect is.
 
 ```expected_before
 scenario: 1

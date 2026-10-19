@@ -48,4 +48,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-With a `claude` double first on PATH whose first step writes `work.txt`, `docs/bench/swe-bench/run-takt.sh docs/bench/swe-bench/fixtures/instance.json <out>` on the fixture instance (a local repository, its `base_commit` and a `problem_statement`) appends to `<out>/predictions.jsonl` one line whose `model_patch` is the one-file diff that adds `work.txt`, where at d17bc32 `docs/bench/swe-bench/run-takt.sh` does not exist.
+With a `claude` double first on PATH whose first step writes `work.txt`, `docs/bench/swe-bench/run-takt.sh docs/bench/swe-bench/fixtures/instance.json <out>` on the fixture instance (a local repository, its `base_commit` and a `problem_statement`) appends to `<out>/predictions.jsonl` one line whose `model_patch` is the one-file diff that adds `work.txt`, where at fb3c3bc `docs/bench/swe-bench/run-takt.sh` does not exist.

@@ -18,7 +18,7 @@ Does a two-stage code review (stage 1 reads only the diff; stage 2 reads the ful
 
 ## Context
 
-Owner idea of 2026-10-19: "test regular code-review vs first review diff only, then full code". takt's grants rest on a reviewer verdict at the exact sha, and this session's reviews show both failure modes the stages could address: findings rooted outside the diff (the lazy fetch in a partial clone reached through `git cat-file`, loop-scorecard at f43b0f7; the interpreter takt queries versus the one the script runs, turn 4 at 0a29493) and findings inside the diff that a full-tree reading spent tokens before reaching (the path-component scan, scan-before-push at 792cd2e). `aep plan artifact review-value` reports 71 reviews and 345 findings but no cost (`unknown`), so no comparison exists today.
+Owner idea of 2026-10-19: "test regular code-review vs first review diff only, then full code". takt's grants rest on a reviewer verdict at the exact sha, and this session's reviews show both failure modes the stages could address: findings rooted outside the diff (the lazy fetch in a partial clone reached through `git cat-file`, loop-scorecard at 81dac81; the interpreter takt queries versus the one the script runs, turn 4 at b679eb4) and findings inside the diff that a full-tree reading spent tokens before reaching (the path-component scan, scan-before-push at 5c64be8). `aep plan artifact review-value` reports 71 reviews and 345 findings but no cost (`unknown`), so no comparison exists today.
 
 ## Arms
 
@@ -32,12 +32,12 @@ Units reviewed this session whose findings were later fixed with a test that fai
 
 | unit | sha | known findings (severity) |
 |---|---|---|
-| scan-before-push | 2df6d4e | N5 empty-tree entry names (medium), N4 head not a commit (medium) |
-| scan-before-push | 792cd2e | forbidden literal with `/` passes the per-component scan (medium) |
-| loop-scorecard | 76508b7 | H3 object header lying about its length hangs the reader (high), L5 `size + 1` overflow (low), L6 definitions not capped (low) |
-| loop-scorecard | f43b0f7 | lazy fetch outlives the deadline (high), lazy fetch runs `uploadpack` from repo config (high) |
-| step-guard-sees-test-script-imports | 0a29493 | interpreter query is takt's python, not the script's (blocker) |
-| run-trace-and-report | bd0d91f | report prints control characters (medium), trace header carries home paths (medium), unknown figures print 0 (medium) |
+| scan-before-push | 312af0c | N5 empty-tree entry names (medium), N4 head not a commit (medium) |
+| scan-before-push | 5c64be8 | forbidden literal with `/` passes the per-component scan (medium) |
+| loop-scorecard | 2052a61 | H3 object header lying about its length hangs the reader (high), L5 `size + 1` overflow (low), L6 definitions not capped (low) |
+| loop-scorecard | 81dac81 | lazy fetch outlives the deadline (high), lazy fetch runs `uploadpack` from repo config (high) |
+| step-guard-sees-test-script-imports | b679eb4 | interpreter query is takt's python, not the script's (blocker) |
+| run-trace-and-report | 0cfed3d | report prints control characters (medium), trace header carries home paths (medium), unknown figures print 0 (medium) |
 
 Plus planted defects: per unit, one mutant in a line the diff touches and one in code the diff calls but does not touch, each with a failing input, written by an agent that does not review.
 
@@ -63,16 +63,16 @@ Two units, one run per arm, same model as the grant reviewer, no builds. Ground 
 
 | unit (sha) | known defects | arm A: found | A tokens | arm B: found | B tokens (B1+B2) | B / A tokens |
 |---|---|---|---|---|---|---|
-| scan-before-push (792cd2e) | 1 medium, in the diff | 0 of 1 | 131,898 | 0 of 1 | 286,136 | 2.17 |
-| loop-scorecard (f43b0f7) | 2 high + 1 low, outside the diff | 1 of 3 (the low) | 134,734 | 3 of 3 | 310,745 | 2.31 |
+| scan-before-push (5c64be8) | 1 medium, in the diff | 0 of 1 | 131,898 | 0 of 1 | 286,136 | 2.17 |
+| loop-scorecard (81dac81) | 2 high + 1 low, outside the diff | 1 of 3 (the low) | 134,734 | 3 of 3 | 310,745 | 2.31 |
 | total | 4 | 1 of 4 (0 of 2 high) | 266,632 | 3 of 4 (2 of 2 high) | 596,881 | 2.24 |
 
 New defects not in the ground truth, later sent to the developer:
-- A on 792cd2e: a stale tracking ref hides commits from the scan (confirmed by the grant reviewer as a known limit); `scan-text` ignores the policy's exceptions (confirmed).
-- B on 792cd2e: UTF-16 files carry a forbidden literal past `scan-text` (verified with b10x-gates 0.1.21).
-- A on f43b0f7, and B independently: `filed_at` forgeable through a planted loose commit (replayed by both); A also measured `git log` at 482 MB RSS on a 486 KB plant.
-- B on f43b0f7: YAML alias expansion unbounded (inferred); `compute()` arm change passes the definition check; shallow-clone walk error (replayed).
+- A on 5c64be8: a stale tracking ref hides commits from the scan (confirmed by the grant reviewer as a known limit); `scan-text` ignores the policy's exceptions (confirmed).
+- B on 5c64be8: UTF-16 files carry a forbidden literal past `scan-text` (verified with b10x-gates 0.1.21).
+- A on 81dac81, and B independently: `filed_at` forgeable through a planted loose commit (replayed by both); A also measured `git log` at 482 MB RSS on a 486 KB plant.
+- B on 81dac81: YAML alias expansion unbounded (inferred); `compute()` arm change passes the definition check; shallow-clone walk error (replayed).
 
-Stage 2 refuted 2 of stage 1's 7 findings on 792cd2e and confirmed 10 of 10 on f43b0f7, so arm B's surviving findings carry a second reading. Arm A's findings had none.
+Stage 2 refuted 2 of stage 1's 7 findings on 5c64be8 and confirmed 10 of 10 on 81dac81, so arm B's surviving findings carry a second reading. Arm A's findings had none.
 
 Reading against the decision rule: B's high recall is higher (2 of 2 against 0 of 2) but its tokens are 2.24 times A's, above both thresholds (1.2 for grant reviews, 1.5 for the second-pass use), so the rule adopts nothing yet. Two units and one run per arm cannot carry that decision. Next run: the remaining 5 units with 2 runs per arm, and a third arm C, the grant review A followed by stage 2 given A's findings, which tests whether B's gain comes from the diff-first reading or from the second reading.

@@ -3,7 +3,7 @@ format: aep.planning-md/3
 id: story:review-of-main-lows
 kind: story
 status: draft
-title: Low findings from the review of main at fe93286
+title: Low findings from the review of main at 9cc158b
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
@@ -16,7 +16,7 @@ Each confirmed low finding below is fixed or recorded as accepted with a reason,
 
 ## Context
 
-From the review of main at fe93286 on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas). These held up under the fact-check at low severity (each needs the operator, an out-of-loop actor or a full disk):
+From the review of main at 9cc158b on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas). These held up under the fact-check at low severity (each needs the operator, an out-of-loop actor or a full disk):
 
 - T8 `scorecard.rs:591-608`: `save` creates then writes; a failed write leaves a truncated file that blocks re-save.
 - H3.5 `validator.rs:1213,1228`: checks read by pull request number, not sha; an outside push between the two calls records the new head's checks (the merge stays sha-pinned).
@@ -51,26 +51,26 @@ Covered elsewhere: F7.5/E8.6 (suffix credential list) by story:environment-allow
 
 Each item above has a commit with a test that fails before it, or a line in this story's body saying why it is accepted; `task check` passes.
 
-## From the review of run-report at df179c9 (2026-10-19)
+## From the review of run-report at 95aa293 (2026-10-19)
 
-- `crates/takt/src/report.rs:583-605@df179c9`: a `|` in a case id or run name adds a markdown table column; failing input `"case":"case|x"`.
+- `crates/takt/src/report.rs:583-605@95aa293`: a `|` in a case id or run name adds a markdown table column; failing input `"case":"case|x"`.
 - `crates/takt/src/trace.rs` (`escape`): only the current `$HOME` becomes `~`; a record made under another home keeps its home path (`HOME=/nonexistent takt report` printed 3 lines with a home path).
 - `crates/takt/src/trace.rs` (`escape`): Cf format characters such as U+202E are not escaped (inferred from `char::is_control`, not run).
 
-## From the review of scan-before-push at 2e099b8 (2026-10-19, granted)
+## From the review of scan-before-push at bc74652 (2026-10-19, granted)
 
-- warning `crates/takt/src/forge.rs:1020@2e099b8`: when the remote's base has moved past `refs/remotes/origin/<base>`, every push is refused, the merge push included, though the dry-run fetch has already downloaded the remote base's commit. Decision: exclude what is reachable from the fetched remote sha instead of refusing.
+- warning `crates/takt/src/forge.rs:1020@bc74652`: when the remote's base has moved past `refs/remotes/origin/<base>`, every push is refused, the merge push included, though the dry-run fetch has already downloaded the remote base's commit. Decision: exclude what is reachable from the fetched remote sha instead of refusing.
 - note `forge.rs:1422-1444`: a byte-order mark is looked for at byte 0 only; a mid-file or odd-offset UTF-16 literal passes (same reader as the documented no-mark limit).
 - note `forge.rs:973-987`: a force-pushed remote base fails closed with gates' generic refusal, not the two shas.
 
-## From the review of baseline-for-a-pre-revision-binary at 69ffa2b (2026-10-19, granted)
+## From the review of baseline-for-a-pre-revision-binary at a27d02b (2026-10-19, granted)
 
-- note `crates/takt-cli/src/main.rs:122@69ffa2b`: `takt promote --help`'s exit-1 text omits the stated-record digest check and the refusal of runs not stated by the operator.
+- note `crates/takt-cli/src/main.rs:122@a27d02b`: `takt promote --help`'s exit-1 text omits the stated-record digest check and the refusal of runs not stated by the operator.
 - note `crates/takt/src/promotion.rs:1380`: a malformed `binary.txt` is refused as "no binary.txt beside its record"; the reason in `card.unstated` is unused.
 - note `crates/takt/src/scorecard.rs:575`: an unstated case is in both `no_record` and `rows` of a saved scorecard.
 - note `crates/takt/src/scorecard.rs:135`: a run's agent can plant a well-formed `binary.txt` under `.engineering/cases/` (`run.rs:357`).
 
-## From the adversarial review of main at ae680d5 (2026-10-19, fact-checked)
+## From the adversarial review of main at bd20f7b (2026-10-19, fact-checked)
 
 Confirmed, low (review-result:main-ae680d5-adversarial):
 - A7.4 `forge.rs:1131`: a `skipping` check counts as pass; only skipped checks give `ci_result pass` (reach needs the repository's own workflow to skip).

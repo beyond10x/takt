@@ -51,7 +51,7 @@ In a fresh SSH clone with the user's agent loaded, `takt scenario run` fetches t
 
 ## Landed (wave 10)
 
-Read from `git diff --stat e9a6deb^1 e9a6deb` (the unit's merge into the wave branch) at the close of wave 10 (wave branch head 8858b49). The trial fetch runs with GIT_ALLOW_PROTOCOL=https only; forge children run with no askpass, no terminal prompt and ssh BatchMode, under a 30 s bound. The push side is story:scan-before-push.
+Read from `git diff --stat e9a6deb^1 e9a6deb` (the unit's merge into the wave branch) at the close of wave 10 (wave branch head c34246a). The trial fetch runs with GIT_ALLOW_PROTOCOL=https only; forge children run with no askpass, no terminal prompt and ssh BatchMode, under a 30 s bound. The push side is story:scan-before-push.
 
 - `crates/takt-cli/src/main.rs`
 - `crates/takt-cli/tests/scenario_run.rs`

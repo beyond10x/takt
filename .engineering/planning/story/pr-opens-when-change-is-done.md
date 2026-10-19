@@ -56,7 +56,7 @@ The evidence rule in `AGENTS.md` § Rules gains its one exception (decided 2026-
 
 ## Landed (wave 12)
 
-Read from `git diff --name-only 4ae2ea1^1 4ae2ea1` (the unit's merge into the wave branch) at the close of wave 12 (wave branch head 8d7c194). pr.open once per handed-over change: change.handover is a choice record, change.read records ahead or none, and pr.open waits on ahead. Shared merge with story:no-model-step-for-approval and story:no-inspect-for-stateless-harness.
+Read from `git diff --name-only 7e9b2ef^1 7e9b2ef` (the unit's merge into the wave branch) at the close of wave 12 (wave branch head 63a9d02). pr.open once per handed-over change: change.handover is a choice record, change.read records ahead or none, and pr.open waits on ahead. Shared merge with story:no-model-step-for-approval and story:no-inspect-for-stateless-harness.
 
 - `crates/takt-cli/src/main.rs`
 - `crates/takt-cli/tests/merge_cli.rs`

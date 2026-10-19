@@ -16,7 +16,7 @@ Before merging, `repository.merge` reads the pull request's base branch and refu
 
 ## Context
 
-From the review of main at fe93286 on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), finding C4.5, confirmed: the pull request view has no base field (`forge.rs:253-258@fe93286`, `view_argv` at `:963`), `validator.rs:960-969` repairs only the branch name, and `base` in `branch.yaml` is read unchecked. A pull request retargeted on the forge merges into the other branch and is recorded merged. story:judge-guard D4 checks `base_commit` ancestry at the merge, not the pull request's base.
+From the review of main at 9cc158b on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), finding C4.5, confirmed: the pull request view has no base field (`forge.rs:253-258@9cc158b`, `view_argv` at `:963`), `validator.rs:960-969` repairs only the branch name, and `base` in `branch.yaml` is read unchecked. A pull request retargeted on the forge merges into the other branch and is recorded merged. story:judge-guard D4 checks `base_commit` ancestry at the merge, not the pull request's base.
 
 ## Scope
 

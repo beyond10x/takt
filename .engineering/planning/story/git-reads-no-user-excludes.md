@@ -16,7 +16,7 @@ Every git call takt makes runs with `core.excludesFile` set to an empty value (a
 
 ## Context
 
-From the adversarial review of main at ae680d5 on 2026-10-19: ten adversarial reviewers, each finding fact-checked against the code by a second reviewer (review-result:main-ae680d5-adversarial), finding A5.3, partly confirmed (medium). `NO_CONFIGURED_CODE` (`crates/takt/src/git.rs:26-44@ae680d5`) does not override `core.excludesFile`, `HOME` is passed through, and `Outside` omits git config. Replay: a global ignore entry `pkg/mod/` hides a shadow package (`git status -uall` prints nothing, import gives the shadow). From a harness step the hidden path appears as an ignored addition and is refused; from a test command the excludes file and the shadow survive, and the next `tests.run` passes the `uncommitted` check (`run.rs:3463`) while importing the shadow (inferred end to end).
+From the adversarial review of main at bd20f7b on 2026-10-19: ten adversarial reviewers, each finding fact-checked against the code by a second reviewer (review-result:main-ae680d5-adversarial), finding A5.3, partly confirmed (medium). `NO_CONFIGURED_CODE` (`crates/takt/src/git.rs:26-44@bd20f7b`) does not override `core.excludesFile`, `HOME` is passed through, and `Outside` omits git config. Replay: a global ignore entry `pkg/mod/` hides a shadow package (`git status -uall` prints nothing, import gives the shadow). From a harness step the hidden path appears as an ignored addition and is refused; from a test command the excludes file and the shadow survive, and the next `tests.run` passes the `uncommitted` check (`run.rs:3463`) while importing the shadow (inferred end to end).
 
 ## Scope
 

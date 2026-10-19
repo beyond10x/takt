@@ -14,7 +14,7 @@ revision: 1
 
 ## Context
 
-From the planner's operator-path variety round on takt at a29d8c7 (2026-10-19), scenario 1 at seed 865eaa8 with no origin and a fake harness. `takt cases` and `takt status` exit 2 ("unrecognized subcommand"); the only listing is `takt scorecard`, which shows no case's open or pending state. An operator who left a case waiting on an approval has to read `events.jsonl` by hand to find it.
+From the planner's operator-path variety round on takt at 12cffde (2026-10-19), scenario 1 at seed 865eaa8 with no origin and a fake harness. `takt cases` and `takt status` exit 2 ("unrecognized subcommand"); the only listing is `takt scorecard`, which shows no case's open or pending state. An operator who left a case waiting on an approval has to read `events.jsonl` by hand to find it.
 
 ## Scope
 

@@ -46,7 +46,7 @@ On takt at main, holds; after the change, fails:
 
 ## Landed (wave 12)
 
-Read from `git diff --name-only 21030e8^1 21030e8` (the unit's merge into the wave branch) at the close of wave 12 (wave branch head 8d7c194). BenchTask, BenchRun and BenchArm declared in ESS, each relation to a bench entity named or UNMAPPED. Merged before its grant in error; reviewed and granted after. The benchmark instrument is named without its repository since 3c8746a.
+Read from `git diff --name-only 6447eab^1 6447eab` (the unit's merge into the wave branch) at the close of wave 12 (wave branch head 63a9d02). BenchTask, BenchRun and BenchArm declared in ESS, each relation to a bench entity named or UNMAPPED. Merged before its grant in error; reviewed and granted after. The benchmark instrument is named without its repository since 7518a71.
 
 - `ess/domains/takt.citations.tsv`
 - `ess/domains/takt.yaml`

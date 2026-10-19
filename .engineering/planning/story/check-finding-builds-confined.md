@@ -28,7 +28,7 @@ transitions:
 
 ## Context
 
-From the review of main at fe93286 on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), finding S9.2, confirmed: `scripts/check-finding:233-234@fe93286` runs `cargo build` with the caller's whole environment and real HOME, so a candidate's `build.rs`, proc macros and `.cargo/config.toml` run unconfined; only the clone (`:265-269`) and the predicate (`:287`) get `env -i` and a fresh HOME. Inferred, not run: a candidate `build.rs` could overwrite `builds/<promoted-sha>/takt` (`:224-225`). story:self-improvement-protocol's D8 confines the validators' calls; this story confines the script itself, which reviewers run by hand today.
+From the review of main at 9cc158b on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), finding S9.2, confirmed: `scripts/check-finding:233-234@9cc158b` runs `cargo build` with the caller's whole environment and real HOME, so a candidate's `build.rs`, proc macros and `.cargo/config.toml` run unconfined; only the clone (`:265-269`) and the predicate (`:287`) get `env -i` and a fresh HOME. Inferred, not run: a candidate `build.rs` could overwrite `builds/<promoted-sha>/takt` (`:224-225`). story:self-improvement-protocol's D8 confines the validators' calls; this story confines the script itself, which reviewers run by hand today.
 
 ## Scope
 

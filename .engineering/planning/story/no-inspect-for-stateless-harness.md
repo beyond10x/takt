@@ -54,7 +54,7 @@ With a stateless fake harness on a fresh story case, the prompt either does not 
 
 ## Landed (wave 12)
 
-Read from `git diff --name-only 4ae2ea1^1 4ae2ea1` (the unit's merge into the wave branch) at the close of wave 12 (wave branch head 8d7c194). No read step for a stateless harness. Shared merge with story:pr-opens-when-change-is-done.
+Read from `git diff --name-only 7e9b2ef^1 7e9b2ef` (the unit's merge into the wave branch) at the close of wave 12 (wave branch head 63a9d02). No read step for a stateless harness. Shared merge with story:pr-opens-when-change-is-done.
 
 - `crates/takt-cli/src/main.rs`
 - `crates/takt-cli/tests/merge_cli.rs`

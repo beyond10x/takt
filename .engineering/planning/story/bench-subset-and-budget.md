@@ -47,4 +47,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-With a `claude` double first on PATH that reports `"total_cost_usd": 0.02` on every step and never makes the fixture's `check.sh` pass, `takt run --repo <fixture> --intent "make check.sh pass" --test-cmd "sh check.sh" --harness claude --forge none --iterations 20 --usd 0.03` on the fixture task of story:bench-task-protocol exits 3 with a stop line that begins `stopped: Usd (0.03)`, where at d17bc32 `--usd` does not parse and the command exits 2.
+With a `claude` double first on PATH that reports `"total_cost_usd": 0.02` on every step and never makes the fixture's `check.sh` pass, `takt run --repo <fixture> --intent "make check.sh pass" --test-cmd "sh check.sh" --harness claude --forge none --iterations 20 --usd 0.03` on the fixture task of story:bench-task-protocol exits 3 with a stop line that begins `stopped: Usd (0.03)`, where at fb3c3bc `--usd` does not parse and the command exits 2.

@@ -28,7 +28,7 @@ transitions:
 
 ## Context
 
-From the review of main at fe93286 on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), finding S9.1, confirmed by running the block: `scripts/check-finding:293-299@fe93286` returns `not_reproduced` for any exit other than the predicate's or any missing text, so a candidate that panics (exit 101) or rejects its flags (exit 2) reads as a fixed defect; the probe printed `status=101 result=not_reproduced`. An improvement turn's `scenario.passes_after` rests on this result, so a broken candidate can earn it.
+From the review of main at 9cc158b on 2026-10-19: ten independent reviewers, one per area, each finding then fact-checked by a second reviewer against the code (review-result:main-fe93286-areas), finding S9.1, confirmed by running the block: `scripts/check-finding:293-299@9cc158b` returns `not_reproduced` for any exit other than the predicate's or any missing text, so a candidate that panics (exit 101) or rejects its flags (exit 2) reads as a fixed defect; the probe printed `status=101 result=not_reproduced`. An improvement turn's `scenario.passes_after` rests on this result, so a broken candidate can earn it.
 
 ## Scope
 

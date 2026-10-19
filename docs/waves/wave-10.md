@@ -65,7 +65,7 @@ The opening store commit, each unit's commits, the merges into `wave/2026-10-18-
 - 2026-10-18: wave branch merged into step-cannot-forge-its-validators at 631f594 (563 passed, 2 ignored); [GRANT?] refused by the reviewer (an ancestor .cargo/config forging a pass; a per-repository judge-surface list; pytest conftest.py; two ignore reasons); correction 3 dispatched with the reviewer's route tests.
 - 2026-10-18: main merged into the wave branch at 00d4770 (ESS hardening, role profiles); five StepPerformer citations re-pointed to SteppedBy and accepted; task check exit 0, 518 passed.
 - 2026-10-18: step-cannot-forge-its-validators [GRANT?] refused twice by the reviewer; correction 3 (an ancestor cargo config, a per-repository list, pytest configuration) and correction 4 (`python -m` modules, pytest dotfiles and toml, links towards listed paths, the put-back through links, the process group) at 65795ea, verified by the coordinator (596 passed, 4 ignored); granted on the reviewer's approve and merged at 22ad614.
-- 2026-10-18: main (c408b42) merged into the wave branch at 8858b49; `task check` exit 0 at the wave head (443 of 443 citations; 596 passed, 0 failed, 4 ignored). The four stories carry a `Landed (wave 10)` section and a `test_result`, and are `implemented`.
+- 2026-10-18: main (6109dd8) merged into the wave branch at c34246a; `task check` exit 0 at the wave head (443 of 443 citations; 596 passed, 0 failed, 4 ignored). The four stories carry a `Landed (wave 10)` section and a `test_result`, and are `implemented`.
 
 ## Close
 

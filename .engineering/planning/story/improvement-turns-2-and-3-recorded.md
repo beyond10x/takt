@@ -20,8 +20,8 @@ Improvement turns 2 and 3 are recorded as `self.improvement/1` cases under `.eng
 ## Context
 
 Owner: the planner, recording in phase R0 with the turn-1 recorder, as turn 1 was (docs/runs/2026-10-18-improvement-turn-1/). The plan-reviewer audit of 2026-10-18 found that no artifact owned these records.
-- Turn 2: story:case-id-is-a-valid-branch-name. Case `turn-2-case-id` holds e1-e4 and the merge grant at 834205f (the planner's case tree); the candidate runs T-24..28 at 834205f against the baseline T-14..18 at a0b8576 gave no regression (median 122,465 against the baseline maximum 138,160). Merged into wave 12. Open: the merge into main and a promotion.
-- Turn 3: story:hours-bounds-a-harness-step. `scripts/check-finding` reproduced it at a0b8576 and did not at cfbf7e4, the revision its binary embeds; the candidate runs T-39..43 at cfbf7e4 reached rank 2 in 5 of 5, token median 122,151 against the baseline maximum 138,160: no regression. Granted at cfbf7e4 and merged into wave 12 at 3b0b748. Open: the case record (e1-e5 and the measurement), the merge into main and a promotion.
+- Turn 2: story:case-id-is-a-valid-branch-name. Case `turn-2-case-id` holds e1-e4 and the merge grant at 98719c3 (the planner's case tree); the candidate runs T-24..28 at 98719c3 against the baseline T-14..18 at a0b8576 gave no regression (median 122,465 against the baseline maximum 138,160). Merged into wave 12. Open: the merge into main and a promotion.
+- Turn 3: story:hours-bounds-a-harness-step. `scripts/check-finding` reproduced it at a0b8576 and did not at 9fb14cc, the revision its binary embeds; the candidate runs T-39..43 at 9fb14cc reached rank 2 in 5 of 5, token median 122,151 against the baseline maximum 138,160: no regression. Granted at 9fb14cc and merged into wave 12 at 76be9ed. Open: the case record (e1-e5 and the measurement), the merge into main and a promotion.
 - One promotion a UTC day (story:promotion): turns 2 and 3 share one promotion, the first after wave 12 reaches main, since a promotion of a revision holding both candidates serves both turns' `promoted` claim. Turn 1 was promoted 2026-10-18T16:02Z.
 
 ## Scope

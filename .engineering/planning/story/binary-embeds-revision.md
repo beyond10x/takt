@@ -48,7 +48,7 @@ A binary built at a commit prints `takt 0.1.0 (<sha>)`, and `(<sha>-dirty)` when
 
 ## Landed (wave 11)
 
-Read from `git diff --stat fc0ee65^1 fc0ee65` (the unit's merge into the wave branch) at the close of wave 11 (wave branch head 75e27e9). A build script reads the revision with git at build time (redirecting GIT_* removed, no configured code, attributes off): the sha, `-dirty` for a tracked change or an untracked file under `crates/` or `protocols/`, or `unknown revision`; `takt --version` prints it and the `opened` event records it as `binary`. Granted at 85c98bf and, for the wave merge, 3f07876. Low reviewer findings carried by story:wave11-review-follow-ups.
+Read from `git diff --stat 7263d3b^1 7263d3b` (the unit's merge into the wave branch) at the close of wave 11 (wave branch head 4bdc0c5). A build script reads the revision with git at build time (redirecting GIT_* removed, no configured code, attributes off): the sha, `-dirty` for a tracked change or an untracked file under `crates/` or `protocols/`, or `unknown revision`; `takt --version` prints it and the `opened` event records it as `binary`. Granted at 85c98bf and, for the wave merge, 05370b9. Low reviewer findings carried by story:wave11-review-follow-ups.
 
 - `crates/takt-cli/build.rs`
 - `crates/takt-cli/src/main.rs`

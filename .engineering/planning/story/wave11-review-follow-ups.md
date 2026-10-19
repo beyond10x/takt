@@ -44,7 +44,7 @@ The adv2 test fails when the merge is refused for a reason other than the missin
 
 ## Landed (wave 12)
 
-Read from `git diff --name-only 2654394^1 2654394` (the unit's merge into the wave branch) at the close of wave 12 (wave branch head 8d7c194). The lows of the wave 11 and wave 12 grant reviews: build.rs runs no filter and counts a root .cargo, paths read byte for byte, pr.open counts from refs/heads/<base>, conflicts outside .engineering read ahead, long minted ids skipped, check_id before a branch name becomes a path, version_cli against the embedded revision.
+Read from `git diff --name-only 7297af6^1 7297af6` (the unit's merge into the wave branch) at the close of wave 12 (wave branch head 63a9d02). The lows of the wave 11 and wave 12 grant reviews: build.rs runs no filter and counts a root .cargo, paths read byte for byte, pr.open counts from refs/heads/<base>, conflicts outside .engineering read ahead, long minted ids skipped, check_id before a branch name becomes a path, version_cli against the embedded revision.
 
 - `crates/takt-cli/build.rs`
 - `crates/takt-cli/tests/case_id_branch_name_cli.rs`

@@ -47,4 +47,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-On a fixture pair built as `crates/takt-cli/tests/scorecard_cli.rs:78-136` builds its repositories (five cases `scenario-tb2-fixture-trial-<n>` on each side, 500 tokens a case; the baseline's cases stopped `Completed (completed)`, the candidate's `NoProgress`), `takt scorecard --repo <candidate> --against <the baseline's saved scorecard>` exits 3 with scenario `tb2-fixture` marked `worse`, where at d17bc32 it exits 0 because `rank` puts every completion outcome except `accepted` at the rank of `NoProgress` (`crates/takt/src/scorecard.rs:215-222`).
+On a fixture pair built as `crates/takt-cli/tests/scorecard_cli.rs:78-136` builds its repositories (five cases `scenario-tb2-fixture-trial-<n>` on each side, 500 tokens a case; the baseline's cases stopped `Completed (completed)`, the candidate's `NoProgress`), `takt scorecard --repo <candidate> --against <the baseline's saved scorecard>` exits 3 with scenario `tb2-fixture` marked `worse`, where at fb3c3bc it exits 0 because `rank` puts every completion outcome except `accepted` at the rank of `NoProgress` (`crates/takt/src/scorecard.rs:215-222`).

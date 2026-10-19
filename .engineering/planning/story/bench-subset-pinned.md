@@ -47,4 +47,4 @@ On takt at main, holds; after the change, fails:
 
 ## Acceptance
 
-`python3 -I docs/bench/draw-subset.py --check docs/bench/subsets/terminal-bench-2.yaml docs/bench/subsets/swe-bench-verified-mini.yaml` exits 0 when it re-draws each file's ten task ids from the task list and seed that file records and finds them equal to the ids recorded, where at d17bc32 neither file exists.
+`python3 -I docs/bench/draw-subset.py --check docs/bench/subsets/terminal-bench-2.yaml docs/bench/subsets/swe-bench-verified-mini.yaml` exits 0 when it re-draws each file's ten task ids from the task list and seed that file records and finds them equal to the ids recorded, where at fb3c3bc neither file exists.

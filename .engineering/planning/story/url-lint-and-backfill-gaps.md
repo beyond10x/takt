@@ -16,7 +16,7 @@ The repository-URL lint in `scripts/file-finding` refuses every IPv4 range IANA 
 
 ## Context
 
-From the reviewer's verdict "approve" on story:finding-on-any-repository at a33101e (2026-10-19), low findings, not blocking. The lint is documented as a lint on the URL's text, not a boundary (`scripts/file-finding`, `ess/domains/takt.yaml`). Accepted today: 192.0.0.1, 198.18.0.1, 224.0.0.1, 240.0.0.1, 255.255.255.255; `ⓛⓞⓒⓐⓛⓗⓞⓢⓣ.ⓜⓔ` and `ｌocalhost.com` (refused by this machine's git, but a curl with IDN support maps the first to `localhost.me`); `example.com:abc` and `example.com:443:1`. The backfill in `.github/workflows/release.yml` is all-or-nothing since that unit, so a rerun of a complete, successful release exits 1.
+From the reviewer's verdict "approve" on story:finding-on-any-repository at 8a943e1 (2026-10-19), low findings, not blocking. The lint is documented as a lint on the URL's text, not a boundary (`scripts/file-finding`, `ess/domains/takt.yaml`). Accepted today: 192.0.0.1, 198.18.0.1, 224.0.0.1, 240.0.0.1, 255.255.255.255; `ⓛⓞⓒⓐⓛⓗⓞⓢⓣ.ⓜⓔ` and `ｌocalhost.com` (refused by this machine's git, but a curl with IDN support maps the first to `localhost.me`); `example.com:abc` and `example.com:443:1`. The backfill in `.github/workflows/release.yml` is all-or-nothing since that unit, so a rerun of a complete, successful release exits 1.
 
 ## Scope
 
