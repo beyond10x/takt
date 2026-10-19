@@ -11,7 +11,9 @@ import {journey, timeline} from '@site/src/generated/charts';
 All runs are from 2026-10-18 (UTC). Each is one line of
 [`docs/metrics/scenario-runs.jsonl`](https://github.com/beyond10x/takt/blob/main/docs/metrics/scenario-runs.jsonl),
 68 lines, naming the raw usage record it was read from. How the figures are read:
-[Methodology](./methodology.md).
+[Methodology](./methodology.md). The 30 scenario 1 runs of the self-improvement trials of
+2026-10-19 are not lines there. They stopped on `NoProgress` in an origin with no forge, not at
+the merge approval ([Turns](./turns.md)).
 
 ## Scenario 1
 
@@ -62,13 +64,20 @@ Caveats:
 ## Timeline
 
 takt's own runs of scenario 1 per takt revision: tokens on the left axis, wall time where known on
-the right, the waves that changed takt and the improvement turns as markers above the plot, and
-the free-running medians as reference lines. Drawn by `docs/metrics/timeline.py`.
+the right, the waves that changed takt, the improvement turns and dated events as markers above
+the plot, and the free-running medians as reference lines. Drawn by `docs/metrics/timeline.py`.
 
 <Chart svg={timeline} />
 
 What it shows:
 
+- **2026-10-19: the first turn accepted by validators** (dashed line, square, at the right edge).
+  In self-improvement trial 2, takt drove a `self.improvement/1` turn to `accepted` and promoted
+  its candidate, and a validator recorded every claim. Trials 3 and 4 did it again. All three ran
+  in scratch state under `--forge none` ([Turns](./turns.md)). The mark is the one line of
+  `docs/metrics/events.jsonl`. It stands after the last column because no run on this chart is
+  later. The operator's installed takt has not yet promoted a revision through a turn; when it
+  does, that will be the next line.
 - Before wave 08, three of the four trials that reached the merge approval needed one or two
   resumes; none was timed. From 0a776d2 on, takt reached the merge approval in one invocation in
   most runs.
@@ -129,4 +138,6 @@ approval in 13 steps against 18 at a0b8576, at a median of 121,952 tokens; the r
 why. They have no line in `scenario-runs.jsonl` yet ([run record](https://github.com/beyond10x/takt/blob/main/docs/runs/2026-10-19-improvement-turns-2-and-3/README.md)).
 
 Sources: `docs/metrics/scenario-runs.jsonl`, `docs/metrics/README.md`, `docs/metrics/journey.svg`,
-`docs/metrics/timeline.svg`, `docs/runs/2026-10-19-improvement-turns-2-and-3/README.md`.
+`docs/metrics/timeline.svg`, `docs/metrics/events.jsonl`,
+`docs/runs/2026-10-19-improvement-turns-2-and-3/README.md`,
+`docs/runs/2026-10-19-self-improvement-trials/README.md`.
