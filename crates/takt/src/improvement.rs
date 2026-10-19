@@ -44,17 +44,25 @@ pub const FILE_FINDING: &str = "scripts/file-finding";
 /// beforehand with `takt scorecard --save`.
 pub const SCORECARDS: &str = "takt/scorecards";
 
-/// The commit that confined `scripts/check-finding`'s run step (story:check-finding-run-step-
-/// confined): a turn opens only on a promoted baseline that descends from it, or that holds its
-/// script byte for byte ([`CONFINED_CHECK_FINDING_SHA256`]), since the baseline's script is the
-/// one the turn runs.
-pub const CONFINED_CHECK_FINDING_COMMIT: &str = "f2a20e9f4f0c85d869e24f9ad43f8178b6fdab48";
+/// The sha256 of every `scripts/check-finding` reviewed as confined (story:check-finding-run-
+/// step-confined): its run step has no network, no host socket, its own IPC and PID namespaces,
+/// the run directory read-only and the homes hidden. A turn opens only on a promoted baseline
+/// whose script hashes to one of them, since the baseline's script is the one the turn runs; the
+/// confinement lives in that script alone, so no commit's ancestry stands in for it. A change to
+/// the script adds its digest here once it is reviewed (`tests/self_improvement.rs` holds this
+/// tree's script to the list).
+pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 1] = [
+    // f2a20e9, the last commit of story:check-finding-run-step-confined: descriptors above 2
+    // closed before bubblewrap, over the confinement of 7c8d831 and 1c905c7.
+    "d87db09ee62e424e721bba54199927411ee523397c7b09c6bcc18080bc7def8e",
+];
 
-/// The sha256 of `scripts/check-finding` at [`CONFINED_CHECK_FINDING_COMMIT`]: a baseline
-/// holding exactly that script runs the confined step, whether or not its history reaches the
-/// commit (a shallow clone's does not).
-pub const CONFINED_CHECK_FINDING_SHA256: &str =
-    "d87db09ee62e424e721bba54199927411ee523397c7b09c6bcc18080bc7def8e";
+/// The file under a turn's `artifacts/` holding the sha256 of the takt `scripts/check-finding`
+/// built for `revision` during the turn, as [`check_finding`] read it after the build.
+#[must_use]
+pub fn build_record(revision: &str) -> String {
+    format!("takt-build-{revision}.sha256")
+}
 
 /// The independence dimension the kernel declares every turn validator on: a validator is no
 /// agent run, so it is another than the one that delivered the candidate.
@@ -264,6 +272,97 @@ impl Scripts {
         self.dir
             .join(Path::new(path).file_name().unwrap_or(path.as_ref()))
     }
+
+    /// A detached checkout of `baseline` beside the scripts, outside the case's tree: a clone of
+    /// `tree`'s repository borrowing its objects (`--shared`), so `check-finding` reads the finding
+    /// as the baseline holds it, never from the case tree's working copy (which `git status` may
+    /// not show whole: an index entry marked skip-worktree). The finding's file there is checked
+    /// against its bytes at `baseline`, read with every object checked; one that differs is what
+    /// to say. It holds a branch at `baseline` and one at `revision`, the revision checked:
+    /// `check-finding` builds from its own clone of the checkout, which takes what branches
+    /// reach.
+    fn checkout(
+        &self,
+        tree: &Path,
+        baseline: &str,
+        revision: &str,
+        finding: &str,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<std::result::Result<PathBuf, String>> {
+        let repo = self.dir.join("baseline");
+        let source = std::path::absolute(tree)
+            .with_context(|| format!("make {} absolute", tree.display()))?;
+        let source = source
+            .to_str()
+            .ok_or_else(|| anyhow!("the tree {} is no UTF-8 path", tree.display()))?;
+        crate::git::run(
+            &self.dir,
+            &[
+                "clone",
+                "--quiet",
+                "--shared",
+                "--no-checkout",
+                "--",
+                source,
+                "baseline",
+            ],
+        )?;
+        crate::git::run(&repo, &["checkout", "--quiet", "--detach", baseline])?;
+        for (branch, at) in [("turn-baseline", baseline), ("turn-checked", revision)] {
+            crate::git::run(&repo, &["update-ref", &format!("refs/heads/{branch}"), at])?;
+        }
+        let Some(path) = finding_path(finding) else {
+            return Ok(Err(format!(
+                "the finding {finding} is no story of the store"
+            )));
+        };
+        let held = crate::loop_scorecard::verified_file_within(tree, baseline, &path, deadline)?;
+        let checked_out = std::fs::read(repo.join(&path)).ok();
+        if held.is_none() || checked_out != held {
+            return Ok(Err(format!(
+                "the checkout of the baseline {} does not hold {path} as the baseline does",
+                short(baseline)
+            )));
+        }
+        Ok(Ok(repo))
+    }
+}
+
+/// The kept build of `revision` under `check-finding`'s cache, `builds/<revision>/takt`, and
+/// whether it may run: only a regular file whose sha256 is the one the turn recorded when it
+/// built it (`artifacts/`[`build_record`] under `case_dir`). Any other (none recorded, another
+/// digest, a link or a directory planted there) is removed with the `revision` file beside it,
+/// so `check-finding` builds the revision again. Answers the kept build's path.
+fn trusted_build(cache: &Path, case_dir: &Path, revision: &str) -> Result<PathBuf> {
+    let built = cache.join("takt/check-finding/builds").join(revision);
+    let binary = built.join("takt");
+    let recorded = std::fs::read_to_string(case_dir.join("artifacts").join(build_record(revision)))
+        .ok()
+        .map(|text| text.trim().to_owned());
+    let kept = match std::fs::symlink_metadata(&binary) {
+        Ok(metadata) if metadata.is_file() => Some(sha256_of(&binary)?),
+        Ok(_) => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(binary),
+        Err(error) => return Err(error).with_context(|| format!("read {}", binary.display())),
+    };
+    if kept.is_none() || kept != recorded {
+        for path in [&binary, &built.join("revision")] {
+            match std::fs::symlink_metadata(path) {
+                Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(path),
+                Ok(_) => std::fs::remove_file(path),
+                Err(_) => continue,
+            }
+            .with_context(|| format!("remove the untrusted build {}", path.display()))?;
+        }
+    }
+    Ok(binary)
+}
+
+/// The sha256 of the file at `path`, lower-case hex.
+fn sha256_of(path: &Path) -> Result<String> {
+    use sha2::{Digest as _, Sha256};
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
 
 impl Drop for Scripts {
@@ -479,8 +578,16 @@ fn check_finding(
         Ok(scripts) => scripts,
         Err(why) => return Ok(nothing(format!("{action}: {why}; nothing recorded"))),
     };
+    let repo = match scripts.checkout(tree, &turn.baseline, revision, &turn.finding, deadline)? {
+        Ok(repo) => repo,
+        Err(why) => return Ok(nothing(format!("{action}: {why}; nothing recorded"))),
+    };
+    // A kept build runs only while it is the one this turn built; else it is built again, and
+    // what was built is recorded in the case, which every step's guard puts back.
+    let case_dir = crate::case::current(tree)?;
+    let binary = trusted_build(&cache, &case_dir, revision)?;
     let mut command = Command::new(scripts.path(CHECK_FINDING));
-    command.arg("--repo").arg(tree);
+    command.arg("--repo").arg(&repo);
     if let Some(scenarios) = &checking.scenarios {
         command.arg("--scenarios").arg(scenarios);
     }
@@ -488,8 +595,15 @@ fn check_finding(
         .arg("--")
         .arg(&turn.finding)
         .arg(revision)
-        .current_dir(tree);
+        .current_dir(&repo);
     let output = run_script(&mut command, checking, &cache, deadline)?;
+    let built = match std::fs::symlink_metadata(&binary) {
+        Ok(metadata) if metadata.is_file() => Some(Artifact {
+            name: build_record(revision),
+            bytes: format!("{}\n", sha256_of(&binary)?).into_bytes(),
+        }),
+        _ => None,
+    };
     let shown = format!(
         "the finding {}'s predicate with takt at {} ({subject})",
         turn.finding,
@@ -498,13 +612,16 @@ fn check_finding(
     let printed = String::from_utf8_lossy(&output.stdout);
     let result = printed.trim();
     if !output.success() || !matches!(result, "reproduced" | "not_reproduced" | "error") {
-        return Ok(nothing(format!(
-            "{shown}: {CHECK_FINDING} gave no result (exit {}): {}; nothing recorded",
-            output
-                .code
-                .map_or("on a signal".to_owned(), |code| code.to_string()),
-            last_line(&output.stderr)
-        )));
+        return Ok(Observation {
+            artifact: built,
+            ..nothing(format!(
+                "{shown}: {CHECK_FINDING} gave no result (exit {}): {}; nothing recorded",
+                output
+                    .code
+                    .map_or("on a signal".to_owned(), |code| code.to_string()),
+                last_line(&output.stderr)
+            ))
+        });
     }
     Ok(Observation {
         summary: format!("{shown}: {result}; {}", last_line(&output.stderr)),
@@ -516,7 +633,7 @@ fn check_finding(
             revision,
             validator.name(),
         )],
-        artifact: None,
+        artifact: built,
     })
 }
 

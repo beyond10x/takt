@@ -2140,9 +2140,10 @@ pub struct Judge<'a> {
 /// baseline's at the finding's file, `scripts/check-finding` or `scripts/file-finding` is
 /// refused, naming the path, as is a commit the case forks from that holds another text of the
 /// finding than the baseline. The turn is refused too unless `judge` is the promoted binary: its
-/// revision is the latest promoted one, or, for a record the operator stated, its sha256 is the
-/// one stated; and unless the baseline runs the confined check
-/// ([`crate::improvement::CONFINED_CHECK_FINDING_COMMIT`]).
+/// sha256 is the record's `binary_sha256` whenever the record has one, and its revision is the
+/// promoted one unless the operator stated the record; and unless the baseline's
+/// `scripts/check-finding` is a reviewed confined one
+/// ([`crate::improvement::CONFINED_CHECK_FINDING_SHA256S`]).
 pub fn turn_opening(
     tree: &Path,
     finding: Option<&str>,
@@ -2242,46 +2243,44 @@ pub fn turn_opening(
             short(&baseline)
         );
     }
-    // The binary that judges is the promoted one.
-    match &promoted.revision_stated_by {
-        Some(_) => {
-            let bytes = std::fs::read(judge.binary)
-                .with_context(|| format!("read this binary, {}", judge.binary.display()))?;
-            let digest = format!("{:x}", Sha256::digest(&bytes));
-            if promoted.binary_sha256.as_deref() != Some(digest.as_str()) {
-                bail!(
-                    "{TURN_PROTOCOL}: this binary {} hashes to sha256 {digest}, not to {}, the sha256 the operator stated for the promoted binary of {}; a turn is judged by the promoted binary only; nothing was written",
-                    judge.binary.display(),
-                    promoted.binary_sha256.as_deref().unwrap_or("none"),
-                    short(&baseline)
-                );
-            }
-        }
-        None => {
-            if judge.revision != baseline {
-                bail!(
-                    "{TURN_PROTOCOL}: this binary was built from {}, not from {baseline}, the revision of the promoted binary ({}); a turn is judged by the promoted binary only; nothing was written",
-                    judge.revision,
-                    store.display()
-                );
-            }
+    // The binary that judges is the promoted one: of the digest the record holds, whenever it
+    // holds one, and of its revision unless the operator stated the record (a binary that names
+    // no revision).
+    if promoted.revision_stated_by.is_some() || promoted.binary_sha256.is_some() {
+        let bytes = std::fs::read(judge.binary)
+            .with_context(|| format!("read this binary, {}", judge.binary.display()))?;
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        if promoted.binary_sha256.as_deref() != Some(digest.as_str()) {
+            bail!(
+                "{TURN_PROTOCOL}: this binary {} hashes to sha256 {digest}, not to {}, the sha256 the record of the promoted binary of {} holds; a turn is judged by the promoted binary only; nothing was written",
+                judge.binary.display(),
+                promoted.binary_sha256.as_deref().unwrap_or("none"),
+                short(&baseline)
+            );
         }
     }
-    // The baseline runs the confined check: it descends from the commit that confined it, or
-    // holds that commit's script byte for byte.
-    let descends = history
-        .descends(crate::improvement::CONFINED_CHECK_FINDING_COMMIT, &baseline)?
-        == crate::loop_scorecard::Ancestry::Yes;
+    if promoted.revision_stated_by.is_none() && judge.revision != baseline {
+        bail!(
+            "{TURN_PROTOCOL}: this binary was built from {}, not from {baseline}, the revision of the promoted binary ({}); a turn is judged by the promoted binary only; nothing was written",
+            judge.revision,
+            store.display()
+        );
+    }
+    // The baseline runs a confined check: its script is one reviewed as confined, byte for byte.
+    // The confinement lives in the script alone, so the baseline's history says nothing of it.
     let script = history
         .file(&baseline, crate::improvement::CHECK_FINDING)?
         .map(|bytes| format!("{:x}", Sha256::digest(&bytes)));
-    if !descends && script.as_deref() != Some(crate::improvement::CONFINED_CHECK_FINDING_SHA256) {
+    if !script
+        .as_deref()
+        .is_some_and(|digest| crate::improvement::CONFINED_CHECK_FINDING_SHA256S.contains(&digest))
+    {
         bail!(
-            "{TURN_PROTOCOL}: the promoted baseline {} does not run the confined {}: it neither descends from {} nor holds that commit's script (sha256 {}); its run step would not be confined, so no turn opens on it until a revision holding the confinement is promoted; nothing was written",
+            "{TURN_PROTOCOL}: the promoted baseline {} does not run a confined {}: its sha256 {} is none of the reviewed confined scripts' ({}); its run step would not be confined, so no turn opens on it until a revision holding a reviewed script is promoted; nothing was written",
             short(&baseline),
             crate::improvement::CHECK_FINDING,
-            crate::improvement::CONFINED_CHECK_FINDING_COMMIT,
-            crate::improvement::CONFINED_CHECK_FINDING_SHA256
+            script.as_deref().unwrap_or("(no such file)"),
+            crate::improvement::CONFINED_CHECK_FINDING_SHA256S.join(", ")
         );
     }
     Ok(TurnOpening {

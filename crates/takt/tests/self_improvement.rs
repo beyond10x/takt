@@ -391,3 +391,18 @@ fn scorecard_compare_records_nothing_for_runs_of_another_binary() {
         observed.summary
     );
 }
+
+/// This tree's `scripts/check-finding` is a reviewed confined script: its sha256 is in
+/// `takt::improvement::CONFINED_CHECK_FINDING_SHA256S`, the list a promoted baseline's script is
+/// checked against. An edit to the script fails here until the list names its digest, so no
+/// baseline promoted from this tree is refused for a script nobody reviewed, and none runs one.
+#[test]
+fn this_trees_check_finding_is_a_reviewed_confined_script() {
+    let script = fs::read(Path::new(SCRIPTS).join("check-finding")).expect("the script");
+    let digest = format!("{:x}", Sha256::digest(&script));
+    assert!(
+        takt::improvement::CONFINED_CHECK_FINDING_SHA256S.contains(&digest.as_str()),
+        "scripts/check-finding hashes to {digest}, which the reviewed list {:?} does not name",
+        takt::improvement::CONFINED_CHECK_FINDING_SHA256S
+    );
+}

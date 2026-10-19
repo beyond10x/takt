@@ -5,13 +5,16 @@
 //! and every validator of the turn is declared independent in `case.yaml` by the kernel. The
 //! turn's validators then drive the case on their own records: `finding.file`, then
 //! `scenario.reproduce` at the baseline, then `scenario.verify` at the candidate, each through
-//! `scripts/check-finding` as the base holds it. A finding that never reproduced at the baseline
-//! ends `unreproducible`; a candidate that still reproduces it ends `declined`.
+//! `scripts/check-finding` as the baseline holds it, run on a checkout of the baseline. A finding
+//! that never reproduced at the baseline ends `unreproducible`; a candidate that still reproduces
+//! it ends `declined`.
 //!
-//! Every path the run reads or writes outside the repository is this test's own: the promotion
-//! store under `XDG_STATE_HOME`, `check-finding`'s cache under `XDG_CACHE_HOME`, in which each
-//! revision's build is a stand-in script, so nothing is compiled; the scenario repository is a
-//! local checkout.
+//! Each revision is a scratch takt, a cargo workspace with no dependency whose `takt probe`
+//! shows the defect or not, which `check-finding` builds itself, confined, in seconds; the
+//! baseline holds this tree's own `scripts/check-finding`, so the tests need nothing of this
+//! repository's history. Every path the run reads or writes outside the repository is this
+//! test's own: the promotion store under `XDG_STATE_HOME`, `check-finding`'s cache under
+//! `XDG_CACHE_HOME`; the scenario repository is a local checkout.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
@@ -94,7 +97,8 @@ struct World {
     cache: PathBuf,
 }
 
-/// The stand-in of a takt build that shows the defect, or that does not.
+/// A binary planted in `check-finding`'s cache in place of a build: a script that shows the
+/// defect, or that does not.
 fn build(defect: bool) -> String {
     if defect {
         format!("#!/bin/sh\necho '{DEFECT}'\nexit 1\n")
@@ -103,27 +107,19 @@ fn build(defect: bool) -> String {
     }
 }
 
-/// The confined `scripts/check-finding` a promoted baseline holds: the script at
-/// `takt::improvement::CONFINED_CHECK_FINDING_COMMIT` when this repository's object store has
-/// that commit, else this tree's own (a shallow checkout holds the commit's script in its tree
-/// once that commit is merged). Read through git, nothing written.
-fn confined_check_finding() -> String {
-    let output = Command::new("git")
-        .args([
-            "show",
-            &format!(
-                "{}:scripts/check-finding",
-                takt::improvement::CONFINED_CHECK_FINDING_COMMIT
-            ),
-        ])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("git runs");
-    if output.status.success() {
-        return String::from_utf8(output.stdout).expect("a UTF-8 script");
+/// The `main.rs` of a scratch takt revision: `probe` prints the defect and exits 1 when
+/// `defect`, else prints that all is well and exits 0. `check-finding` builds it with cargo,
+/// confined, in seconds: the workspace has no dependency.
+fn takt_main(defect: bool) -> String {
+    if defect {
+        format!("fn main() {{\n    println!(\"{DEFECT}\");\n    std::process::exit(1);\n}}\n")
+    } else {
+        "fn main() {\n    println!(\"all is well here\");\n}\n".to_owned()
     }
-    fs::read_to_string(Path::new(SCRIPTS).join("check-finding")).expect("the script")
 }
+
+/// The scratch takt's main source, relative to its repository.
+const TAKT_MAIN: &str = "crates/takt-cli/src/main.rs";
 
 /// The finding's file in the store.
 const FINDING_FILE: &str = ".engineering/planning/story/probe-shows-the-defect.md";
@@ -148,11 +144,12 @@ enum Head {
 
 /// The promotion store's baseline record: one the operator stated for the binary with this
 /// sha256 (the test binary's when none is given), or one that names the baseline's revision as
-/// the binary's own.
+/// the binary's own, with no digest or with the digest given.
 #[derive(Clone, PartialEq, Eq)]
 enum Promoted {
     Stated(Option<String>),
     Named,
+    NamedWith(String),
 }
 
 /// How a world differs from the plain one.
@@ -209,11 +206,7 @@ fn world_with(name: &str, setup: &Setup) -> World {
     }
     let repo = dir.join("takt");
     for script in ["check-finding", "file-finding"] {
-        let mut text = if script == "check-finding" {
-            confined_check_finding()
-        } else {
-            fs::read_to_string(Path::new(SCRIPTS).join(script)).expect("the script")
-        };
+        let mut text = fs::read_to_string(Path::new(SCRIPTS).join(script)).expect("the script");
         if setup.unconfined && script == "check-finding" {
             text.push_str("# an older check-finding than the confined one\n");
         }
@@ -223,6 +216,19 @@ fn world_with(name: &str, setup: &Setup) -> World {
         &repo.join("docs/runs/trial-1.md"),
         "# Trial 1\n\nThe probe showed the defect.\n",
     );
+    write(
+        &repo.join("Cargo.toml"),
+        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/*\"]\n",
+    );
+    write(
+        &repo.join("crates/takt-cli/Cargo.toml"),
+        "[package]\nname = \"b10x-takt-cli\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[bin]]\nname = \"takt\"\npath = \"src/main.rs\"\n",
+    );
+    write(
+        &repo.join("Cargo.lock"),
+        "# This file is automatically @generated by Cargo.\n# It is not intended for manual editing.\nversion = 4\n\n[[package]]\nname = \"b10x-takt-cli\"\nversion = \"0.1.0\"\n",
+    );
+    write(&repo.join(TAKT_MAIN), &takt_main(at_baseline));
     write(
         &repo.join(".engineering/planning/story/probe-shows-the-defect.md"),
         &format!(
@@ -235,6 +241,7 @@ fn world_with(name: &str, setup: &Setup) -> World {
     let baseline = git(&repo, &["rev-parse", "HEAD"]);
     git(&repo, &["checkout", "-q", "-b", "fix"]);
     write(&repo.join("fix.txt"), "the fix\n");
+    write(&repo.join(TAKT_MAIN), &takt_main(at_candidate));
     if let Some((path, text)) = setup.touches {
         executable(&repo.join(path), text);
     }
@@ -286,6 +293,9 @@ fn world_with(name: &str, setup: &Setup) -> World {
                 .unwrap_or_else(|| sha256(Path::new(env!("CARGO_BIN_EXE_takt"))))
         ),
         Promoted::Named => "\"binary\":null,\"binary_sha256\":null,".to_owned(),
+        Promoted::NamedWith(digest) => {
+            format!("\"binary\":null,\"binary_sha256\":\"{digest}\",")
+        }
     };
     write(
         &store.join(format!("{baseline}.json")),
@@ -295,11 +305,6 @@ fn world_with(name: &str, setup: &Setup) -> World {
     );
 
     let cache = dir.join("cache");
-    for (revision, defect) in [(&baseline, at_baseline), (&candidate, at_candidate)] {
-        let built = cache.join("takt/check-finding/builds").join(revision);
-        executable(&built.join("takt"), &build(defect));
-        write(&built.join("revision"), &format!("{revision}\n"));
-    }
     World {
         _scratch: Scratch(dir),
         repo,
@@ -761,6 +766,176 @@ fn a_turn_is_judged_only_by_the_promoted_binary() {
         "stated-other",
         &Setup {
             promoted: Promoted::Stated(Some("0".repeat(64))),
+            ..Setup::plain(true, false)
+        },
+    );
+    let ran = run(&world, &opening(&world));
+    refused(&world, &ran, "sha256");
+}
+
+/// `takt` run in `world` with `args` and the run's state, cache and scenario checkout; its exit
+/// code, standard output and standard error.
+fn takt_in(world: &World, args: &[&str]) -> (i32, String, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args(args)
+        .args([
+            "--repo",
+            world.repo.to_str().expect("utf-8"),
+            "--harness",
+            "none",
+            "--forge",
+            "none",
+            "--test-cmd",
+            "true",
+            "--scenarios",
+            world.scenarios.to_str().expect("utf-8"),
+        ])
+        .env("XDG_STATE_HOME", &world.state)
+        .env("XDG_CACHE_HOME", &world.cache)
+        .env_remove("B10X_GATES_POLICY")
+        .output()
+        .expect("takt runs");
+    (
+        output.status.code().expect("an exit code"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// A finding whose predicate says the defect is there only for the baseline's build: it names
+/// the revision's build directory, which holds the revision.
+fn rigged_finding(baseline: &str) -> String {
+    format!(
+        "# The probe shows the defect\n\nThe probe prints the defect.\n\n```expected_before\nscenario: 1\ncommand: case \"$TAKT\" in */{baseline}/*) \"$TAKT\" probe;; *) exit 0;; esac\nexit: 1\noutput: {DEFECT}\nsource: docs/runs/trial-1.md\n```\n"
+    )
+}
+
+/// The reviewer's RV-A2: the finding's file marked skip-worktree in the operator's index and
+/// rewritten in the working tree to a predicate that holds at the baseline only, which neither
+/// the open's clean-tree check nor the per-step check sees. `check-finding` runs on a checkout
+/// of the baseline that takt makes, so the predicate it runs is the one filed: both builds show
+/// the defect and the turn ends `declined`.
+#[test]
+fn a_finding_hidden_from_git_status_does_not_decide_the_check() {
+    let world = world("skip-worktree", true, true);
+    git(
+        &world.repo,
+        &["update-index", "--skip-worktree", FINDING_FILE],
+    );
+    fs::write(
+        world.repo.join(FINDING_FILE),
+        rigged_finding(&world.baseline),
+    )
+    .expect("the working tree's finding");
+    let (code, out, err) = run_with_gate(&world, &opening(&world), "candidate.merge");
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("Completed (declined)"), "{out}\n{err}");
+    assert_eq!(
+        shown(&records(&world.repo))[2],
+        row(
+            "scenario_result",
+            "candidate",
+            "reproduced",
+            "takt.scenario-verify"
+        ),
+        "{out}\n{err}"
+    );
+}
+
+/// Plants, as a kept build of `revision` in `check-finding`'s cache, a binary that does not show
+/// the defect.
+fn plant(world: &World, revision: &str) {
+    let built = world.cache.join("takt/check-finding/builds").join(revision);
+    executable(&built.join("takt"), &build(false));
+    write(&built.join("revision"), &format!("{revision}\n"));
+}
+
+/// The reviewer's RV-E: a binary planted as the candidate's kept build before the turn opens is
+/// not what `scenario.verify` runs: no build of the turn recorded it, so the candidate is built
+/// from its source, which still shows the defect.
+#[test]
+fn a_build_planted_before_the_turn_is_not_judged() {
+    let world = world("planted-before", true, true);
+    plant(&world, &world.candidate);
+    let (code, out, err) = run_with_gate(&world, &opening(&world), "candidate.merge");
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("Completed (declined)"), "{out}\n{err}");
+}
+
+/// A binary planted over a build the turn made and recorded, between that build and the next
+/// check of the same revision, is rebuilt: the turn recorded the build's sha256 in the case when
+/// `scenario.reproduce` built it, and `scenario.verify` (the candidate is the baseline here) runs
+/// the kept build only while it hashes to that record.
+#[test]
+fn a_build_planted_between_the_build_and_verify_is_rebuilt() {
+    let world = world("planted-between", true, true);
+    let inputs = [
+        "surface=non_judge".to_owned(),
+        format!("finding={FINDING}"),
+        format!("candidate={}", world.baseline),
+    ];
+    let mut opened: Vec<&str> = vec![
+        "run",
+        "--protocol",
+        PROTOCOL,
+        "--intent",
+        "the probe no longer shows the defect",
+        "--case-id",
+        "turn-1",
+        "--iterations",
+        "2",
+    ];
+    for input in &inputs {
+        opened.extend(["--input", input.as_str()]);
+    }
+    let (code, out, err) = takt_in(&world, &opened);
+    assert_eq!(code, 3, "{out}\n{err}");
+    assert_eq!(
+        shown(&records(&world.repo))[1],
+        row(
+            "scenario_result",
+            "baseline",
+            "reproduced",
+            "takt.scenario-reproduce"
+        ),
+        "{out}\n{err}"
+    );
+    plant(&world, &world.baseline);
+    let (code, out, err) = takt_in(
+        &world,
+        &[
+            "run",
+            "--case",
+            "turn-1",
+            "--gate",
+            "candidate.merge",
+            "--iterations",
+            "4",
+        ],
+    );
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("Completed (declined)"), "{out}\n{err}");
+    assert_eq!(
+        shown(&records(&world.repo))[2],
+        row(
+            "scenario_result",
+            "candidate",
+            "reproduced",
+            "takt.scenario-verify"
+        ),
+        "{out}\n{err}"
+    );
+}
+
+/// A promotion record that names its revision and carries the sha256 of the binary it installed
+/// is checked against both: a binary that hashes otherwise is refused, naming the sha256, before
+/// the revision is compared.
+#[test]
+fn a_record_with_another_binary_digest_is_refused() {
+    let world = world_with(
+        "named-digest",
+        &Setup {
+            promoted: Promoted::NamedWith("0".repeat(64)),
             ..Setup::plain(true, false)
         },
     );

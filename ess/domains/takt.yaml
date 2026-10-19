@@ -2069,7 +2069,7 @@ entities:
       # other protocol (story:self-improvement-protocol).
       # read from: protocols/self-improvement/1.yaml:24-26
       # read from: crates/takt/src/case.rs:1931-1968
-      # read from: crates/takt/src/improvement.rs:59-70
+      # read from: crates/takt/src/improvement.rs:67-78
       - name: independence
         type: Map<takt.work.ProducerName, List<String>>
     relations:
@@ -2232,9 +2232,9 @@ entities:
       # A turn is refused before anything is written when the candidate's tree differs from the
       # baseline's at the finding's file, `scripts/check-finding` or `scripts/file-finding`, or the
       # commit the case forks from holds another finding than the baseline; when the binary that
-      # runs is not the promoted one (built from the latest promoted revision, or, for a record
-      # the operator stated, of the stated sha256); and when the baseline neither descends from
-      # the commit that confined `scripts/check-finding`'s run step nor holds that commit's script.
+      # runs is not the promoted one (of the sha256 the record holds whenever it holds one, and
+      # built from the latest promoted revision unless the operator stated the record); and when
+      # the baseline's `scripts/check-finding` hashes to none of the reviewed confined scripts.
       # read from: crates/takt/src/run.rs:36-37
       # read from: crates/takt-cli/src/main.rs:752-756
       # read from: crates/takt-cli/src/main.rs:741
@@ -2242,8 +2242,8 @@ entities:
       # read from: crates/takt/src/run.rs:5964
       # read from: crates/takt-cli/src/main.rs:701-729
       # read from: crates/takt-cli/src/main.rs:818-822
-      # read from: crates/takt/src/case.rs:2223-2285
-      # read from: crates/takt/src/improvement.rs:47-57
+      # read from: crates/takt/src/case.rs:2224-2283
+      # read from: crates/takt/src/improvement.rs:47-58
       - name: inputs
         type: Map<takt.work.InputId, String>
       # The workflow the run follows, when one is given; not built, the kernel takes none yet.
@@ -2819,8 +2819,11 @@ entities:
   # a source that is a file there, else `malformed`, writing nothing to the store;
   # `takt.scenario-reproduce` (`scenario.reproduce`, about `baseline`) and
   # `takt.scenario-verify` (`scenario.verify`, about `candidate`), each `scenario_result` the
-  # line the baseline's `scripts/check-finding` prints for the finding at that revision, no record
-  # when it gives none; and `takt.scorecard-compare` (`scorecard.compare`, `scorecard_result`,
+  # line the baseline's `scripts/check-finding` prints for the finding at that revision, run on
+  # a checkout of the baseline outside the case's tree, no record when it gives none; a kept
+  # build of the revision runs only while its sha256 is the one the turn recorded under the
+  # case's `artifacts/` when it built it, else it is built again and recorded; and
+  # `takt.scorecard-compare` (`scorecard.compare`, `scorecard_result`,
   # about `candidate`), the candidate's saved scorecard at
   # `$XDG_STATE_HOME/takt/scorecards/scorecard-<candidate>.json` against the baseline's copy in
   # the promotion store under the promotion rule, waiting and naming the path while it is
@@ -2860,10 +2863,12 @@ entities:
   # read from: crates/takt/src/validator.rs:358-383
   # read from: crates/takt/src/validator.rs:150
   # read from: crates/takt/src/validator.rs:2036-2048
-  # read from: crates/takt/src/improvement.rs:307-315
-  # read from: crates/takt/src/improvement.rs:458-464
-  # read from: crates/takt/src/improvement.rs:622-632
+  # read from: crates/takt/src/improvement.rs:406-414
+  # read from: crates/takt/src/improvement.rs:557-563
+  # read from: crates/takt/src/improvement.rs:739-749
   # read from: crates/takt/src/validator.rs:2051-2069
+  # read from: crates/takt/src/improvement.rs:276-327
+  # read from: crates/takt/src/improvement.rs:331-358
   - name: takt.work.EvidenceProducer
     naming:
       summary: >-
