@@ -994,6 +994,53 @@ fn a_saved_scorecard_names_its_revision_and_definitions() {
     }
 }
 
+/// story:scorecard-save-checks-binary, decision D1: the check sits in [`Scorecard::save`], so a
+/// save by any caller, whatever names it, is refused for a run whose `opened` line names another
+/// revision, or names none beside one that names one, and writes nothing; runs that all name the
+/// revision, or all name none, save.
+#[test]
+fn a_save_by_any_caller_checks_each_runs_binary() {
+    const OWN: &str = "4444444444444444444444444444444444444444";
+    let repo = scratch("save-binary");
+    two_scenario_one_runs(&repo);
+    let base = Scorecard::read(&repo).expect("the scorecard reads");
+    assert_eq!(base.rows.len(), 3, "{:?}", base.rows);
+    let made = |binaries: [Option<&str>; 3]| {
+        let mut card = base.clone();
+        for (row, binary) in card.rows.iter_mut().zip(binaries) {
+            row.opened_binary = binary.map(str::to_owned);
+        }
+        card
+    };
+    for (n, (binaries, run)) in [
+        (
+            [Some(OWN), Some("unknown revision"), Some(OWN)],
+            "scenario-1-trial-2#1",
+        ),
+        ([Some(OWN), Some(OWN), None], "scenario-1-trial-2#2"),
+        ([None, Some(OWN), Some(OWN)], "scenario-1-trial-1#1"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for named in [Named::Build, Named::Head] {
+            let saves = scratch(&format!("save-binary-{n}-{named:?}"));
+            let refused = made(binaries)
+                .save(&saves, OWN, named)
+                .expect_err("a run of another binary is refused");
+            assert!(format!("{refused:#}").contains(run), "{refused:#}");
+            assert_eq!(fs::read_dir(&*saves).expect("the directory").count(), 0);
+        }
+    }
+    for binaries in [[Some(OWN); 3], [None; 3]] {
+        let saves = scratch("save-binary-own");
+        let path = made(binaries)
+            .save(&saves, OWN, Named::Head)
+            .expect("saved");
+        assert!(path.is_file());
+    }
+}
+
 /// Runs `git <args>` in `tree`; its trimmed standard output.
 fn git(tree: &Path, args: &[&str]) -> String {
     let output = Command::new("git")

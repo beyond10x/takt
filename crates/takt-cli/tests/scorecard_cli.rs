@@ -74,8 +74,14 @@ fn takt(args: &[&str]) -> (i32, String, String) {
 }
 
 /// One run of `case` in `repo`: a judgement step that reported `tokens` (all of them input),
-/// then `stop`; the held-out check beside the record passed.
+/// then `stop`; the held-out check beside the record passed. Its `opened` line names no binary.
 fn run(repo: &Path, case: &str, tokens: u64, stop: &str) {
+    run_made_with(repo, case, tokens, stop, None);
+}
+
+/// As [`run`], the `opened` line naming `binary`, as `takt --version` prints it (none: a binary
+/// that recorded no revision).
+fn run_made_with(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Option<&str>) {
     let dir = repo.join(CASES_DIR).join(case);
     fs::create_dir_all(&dir).expect("a case directory");
     fs::write(dir.join(takt::scorecard::HELD_OUT_FILE), "PASS\n").expect("the held-out result");
@@ -95,7 +101,7 @@ fn run(repo: &Path, case: &str, tokens: u64, stop: &str) {
                 story: None,
                 inputs: Vec::new(),
                 base: None,
-                binary: None,
+                binary: binary.map(str::to_owned),
             },
         ),
         (
@@ -330,6 +336,131 @@ fn a_second_save_under_the_same_revision_is_refused() {
     assert_eq!(code, 1, "{text}{stderr}");
     assert!(stderr.contains("exists"), "{stderr}");
     assert_eq!(fs::read_to_string(&path).expect("the saved file"), first);
+}
+
+/// The revision of a takt other than the one under test, as its `--version` prints it.
+const OTHER_BUILD: &str = "8378cb29aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+/// The revision a save below names, a full commit id: the finding's `0000000` as forty zeros.
+const ZEROS: &str = "0000000000000000000000000000000000000000";
+
+/// `takt scorecard --repo <repo> --save <saves> --revision <revision>`.
+fn save_under(repo: &Path, saves: &Path, revision: &str) -> (i32, String, String) {
+    takt(&[
+        "scorecard",
+        "--repo",
+        &repo.display().to_string(),
+        "--save",
+        &saves.display().to_string(),
+        "--revision",
+        revision,
+    ])
+}
+
+/// story:scorecard-save-checks-binary: a save under a revision another than the one a run's
+/// `opened` line names (another sha, `unknown revision`, `<sha>-dirty`, or the revision
+/// abbreviated) is refused, exit 1, naming that run and both revisions, and writes nothing.
+#[test]
+fn save_under_a_revision_other_than_a_runs_binary_is_refused_naming_the_run() {
+    let dirty = format!("{ZEROS}-dirty");
+    for (label, binary, revision) in [
+        ("other", OTHER_BUILD, ZEROS),
+        ("unknown", "unknown revision", ZEROS),
+        ("dirty", dirty.as_str(), ZEROS),
+        ("abbreviated", ZEROS, "0000000"),
+    ] {
+        let repo = repository(&format!("made-{label}"), &[]);
+        run_made_with(&repo, "scenario-1-trial-1", 5, "NoProgress", Some(ZEROS));
+        run_made_with(&repo, "scenario-1-trial-2", 5, "NoProgress", Some(binary));
+        let saves = scratch(&format!("made-{label}-saves"));
+        let (code, text, stderr) = save_under(&repo, &saves, revision);
+        assert_eq!(code, 1, "{label}: {text}{stderr}");
+        let named = if label == "abbreviated" {
+            "scenario-1-trial-1#1"
+        } else {
+            "scenario-1-trial-2#1"
+        };
+        assert!(
+            stderr.contains(named) && stderr.contains(binary) && stderr.contains(revision),
+            "{label}: the run and both revisions are named: {stderr}"
+        );
+        assert!(!text.contains("saved:"), "{label}: {text}");
+        assert_eq!(
+            fs::read_dir(&*saves).expect("the directory").count(),
+            0,
+            "{label}: nothing is written"
+        );
+    }
+
+    let repo = repository("made-finding", &[]);
+    run_made_with(
+        &repo,
+        "takt-20261019T120000Z",
+        5,
+        "NoProgress",
+        Some(OTHER_BUILD),
+    );
+    let saves = scratch("made-finding-saves");
+    let (code, text, stderr) = save_under(&repo, &saves, ZEROS);
+    assert_eq!(code, 1, "{text}{stderr}");
+    assert!(stderr.contains("takt-20261019T120000Z#1"), "{stderr}");
+    assert!(
+        !text.contains("named by the revision of takt under test"),
+        "{text}"
+    );
+}
+
+/// story:scorecard-save-checks-binary: a save under the revision every run's `opened` line
+/// names succeeds, and says it is named by the revision of takt under test.
+#[test]
+fn save_under_the_revision_every_run_was_made_with_succeeds() {
+    let repo = repository("made-own", &[]);
+    run_made_with(&repo, "scenario-1-trial-1", 5, "NoProgress", Some(ZEROS));
+    run_made_with(
+        &repo,
+        "scenario-1-trial-2",
+        7,
+        "Completed (accepted)",
+        Some(ZEROS),
+    );
+    let saves = scratch("made-own-saves");
+    let (code, text, stderr) = save_under(&repo, &saves, ZEROS);
+    assert_eq!(code, 0, "{text}{stderr}");
+    let saved = saves.join(format!("scorecard-{ZEROS}.json"));
+    assert!(saved.is_file(), "{text}");
+    assert!(
+        text.contains(&format!(
+            "saved: {}, named by the revision of takt under test",
+            saved.display()
+        )),
+        "{text}"
+    );
+}
+
+/// story:scorecard-save-checks-binary, decision D2: runs whose `opened` line names no revision
+/// (a binary built before `--version` named its revision) are saved only when no run names
+/// one; a mix is refused, exit 1, naming the run that names none.
+#[test]
+fn a_mix_of_runs_naming_a_revision_and_naming_none_is_refused() {
+    let repo = repository("made-mix", &[]);
+    run_made_with(&repo, "scenario-1-trial-1", 5, "NoProgress", Some(ZEROS));
+    run_made_with(&repo, "scenario-1-trial-2", 5, "NoProgress", None);
+    let saves = scratch("made-mix-saves");
+    let (code, text, stderr) = save_under(&repo, &saves, ZEROS);
+    assert_eq!(code, 1, "{text}{stderr}");
+    assert!(
+        stderr.contains("scenario-1-trial-2#1") && stderr.contains("no revision"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_dir(&*saves).expect("the directory").count(), 0);
+
+    let none = repository("made-none", &[]);
+    run_made_with(&none, "scenario-1-trial-1", 5, "NoProgress", None);
+    run_made_with(&none, "scenario-1-trial-2", 5, "NoProgress", None);
+    let saves = scratch("made-none-saves");
+    let (code, text, stderr) = save_under(&none, &saves, ZEROS);
+    assert_eq!(code, 0, "{text}{stderr}");
+    assert!(saves.join(format!("scorecard-{ZEROS}.json")).is_file());
 }
 
 /// A saved scorecard that does not read is refused, exit 1, the reason on stderr.

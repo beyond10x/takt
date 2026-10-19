@@ -806,13 +806,15 @@ impl Scorecard {
 
     /// Saves the scorecard as `<dir>/scorecard-<revision>.json`, named by `revision`, a commit
     /// id, which `named` says the source of; the path. A file there already is not
-    /// overwritten: the save is refused.
+    /// overwritten: the save is refused. So is a scorecard holding a run of another binary than
+    /// `revision`'s ([`Scorecard::made_with`]): nothing is written.
     pub fn save(mut self, dir: &Path, revision: &str, named: Named) -> Result<PathBuf> {
         if !is_revision(revision) {
             bail!(
                 "the revision {revision:?} cannot name a scorecard file: give a commit id, 7 to 64 lower-case hex digits"
             );
         }
+        self.made_with(revision)?;
         self.revision = Some(revision.to_owned());
         self.named_by = Some(named);
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
@@ -838,6 +840,35 @@ impl Scorecard {
         file.write_all(text.as_bytes())
             .with_context(|| format!("write {}", path.display()))?;
         Ok(path)
+    }
+
+    /// Every run was made with the binary of `revision`, the full commit id, as its `opened`
+    /// line names it, compared exactly (`<sha>-dirty`, `unknown revision` and an abbreviated id
+    /// are other binaries); or no run's line names a revision, as a binary built before
+    /// `--version` named its revision left them. The first run that is neither is the refusal,
+    /// named `<case>#<n>` with both revisions: a run that names another, or one that names none
+    /// beside a run that names one.
+    fn made_with(&self, revision: &str) -> Result<()> {
+        if self.rows.iter().all(|row| row.opened_binary.is_none()) {
+            return Ok(());
+        }
+        let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
+        for row in &self.rows {
+            let n = counted.entry(row.case.as_str()).or_insert(0);
+            *n += 1;
+            match row.opened_binary.as_deref() {
+                Some(binary) if binary == revision => {}
+                Some(binary) => bail!(
+                    "run {}#{n} was made with the binary of {binary}, not with the binary of {revision}; a scorecard is saved under the full revision every run's `opened` line names, so nothing is saved",
+                    row.case
+                ),
+                None => bail!(
+                    "run {}#{n} was made with a binary that recorded no revision, beside runs that name one; saved under {revision}, a scorecard's runs all name {revision} or all name none, so nothing is saved",
+                    row.case
+                ),
+            }
+        }
+        Ok(())
     }
 
     /// A saved scorecard; one that does not read, or of another format, is an error naming it,

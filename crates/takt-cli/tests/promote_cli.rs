@@ -408,6 +408,34 @@ impl World {
         saves.join(format!("scorecard-{revision}.json"))
     }
 
+    /// As [`World::save`] over runs under `cases` that name no revision, then each run's
+    /// `opened_binary` in the saved file set to `binaries[n]`, in row order: a scorecard of runs
+    /// of other binaries than `revision`'s, as a takt before story:scorecard-save-checks-binary
+    /// saved one or a hand edit leaves one, since `takt scorecard --save` refuses to. The file.
+    fn forged(cases: &Path, saves: &Path, revision: &str, binaries: &[Option<&str>]) -> PathBuf {
+        const NONE: &str = "\"opened_binary\": null";
+        let path = Self::save(cases, saves, revision);
+        let text = fs::read_to_string(&path).expect("the saved file");
+        let mut parts = text.split(NONE);
+        let mut forged = parts
+            .next()
+            .expect("the text before the first run")
+            .to_owned();
+        let mut runs = 0;
+        for part in parts {
+            let binary = binaries
+                .get(runs)
+                .copied()
+                .flatten()
+                .map_or_else(|| "null".to_owned(), |binary| format!("{binary:?}"));
+            forged.push_str(&format!("\"opened_binary\": {binary}{part}"));
+            runs += 1;
+        }
+        assert_eq!(runs, binaries.len(), "a binary a run: {text}");
+        fs::write(&path, forged).expect("the forged file");
+        path
+    }
+
     /// A scorecard of five scenario 1 cases with these tokens and stops, each run made with the
     /// binary of `revision`, saved under `revision` in a directory of its own named by `label`,
     /// since a saved scorecard is never overwritten.
@@ -440,7 +468,8 @@ impl World {
         self.card_of_trials(label, own, first, tokens, stops, [Some(own); 5])
     }
 
-    /// As [`World::card_made_by`], the cases trials `first` to `first + 4`.
+    /// As [`World::card_made_by`], the cases trials `first` to `first + 4`; a card holding a run
+    /// of another binary than `revision`'s is [`World::forged`], as the save refuses it.
     fn card_of_trials(
         &self,
         label: &str,
@@ -452,16 +481,22 @@ impl World {
     ) -> PathBuf {
         let cases = self.outer.join(format!("cases-{label}"));
         fs::create_dir_all(&cases).expect("a directory");
+        let own = binaries.iter().all(|binary| *binary == Some(revision));
         for (n, (tokens, stop)) in tokens.iter().zip(stops).enumerate() {
             run(
                 &cases,
                 &format!("scenario-1-trial-{}", n + first),
                 *tokens,
                 stop,
-                binaries[n],
+                binaries[n].filter(|_| own),
             );
         }
-        Self::save(&cases, &self.outer.join(format!("saves-{label}")), revision)
+        let saves = self.outer.join(format!("saves-{label}"));
+        if own {
+            Self::save(&cases, &saves, revision)
+        } else {
+            Self::forged(&cases, &saves, revision, &binaries)
+        }
     }
 
     /// The candidate's scorecard: five scenario 1 cases with these tokens and stops, saved
@@ -555,7 +590,8 @@ impl World {
     }
 
     /// As [`World::stated_card`], each run opened by the binary of `binary` (none: a binary
-    /// that recorded no revision, as one built before `--version` named its revision).
+    /// that recorded no revision, as one built before `--version` named its revision); a card
+    /// of another binary than the candidate revision's is [`World::forged`].
     fn stated_card_made_by(
         &self,
         label: &str,
@@ -564,9 +600,10 @@ impl World {
     ) -> PathBuf {
         let cases = self.outer.join(format!("cases-{label}"));
         fs::create_dir_all(&cases).expect("a directory");
+        let own = binary.is_none_or(|binary| binary == self.revision);
         for (n, (tokens, stop)) in BASELINE_TOKENS.iter().zip(FIVE_APPROVALS).enumerate() {
             let case = format!("scenario-1-trial-{}", n + 11);
-            run(&cases, &case, *tokens, stop, binary);
+            run(&cases, &case, *tokens, stop, binary.filter(|_| own));
             if let Some((digest, note)) = stated[n] {
                 write(
                     &cases.join(CASES_DIR).join(&case).join("binary.txt"),
@@ -574,11 +611,12 @@ impl World {
                 );
             }
         }
-        Self::save(
-            &cases,
-            &self.outer.join(format!("saves-{label}")),
-            &self.revision,
-        )
+        let saves = self.outer.join(format!("saves-{label}"));
+        if own {
+            Self::save(&cases, &saves, &self.revision)
+        } else {
+            Self::forged(&cases, &saves, &self.revision, &[binary; 5])
+        }
     }
 
     /// Records the baseline: `--baseline-only` over the baseline scorecard, with the checkout
@@ -1304,16 +1342,10 @@ fn a_scorecard_or_checkout_the_rule_cannot_trust_is_refused() {
     let (code, out, err) = world.promote(&other, &[]);
     assert_eq!(code, 1, "{out}{err}");
     assert!(err.contains("not at the scorecard's revision"), "{err}");
-    // A short revision.
+    // A short revision, over a run that names none, as the save takes one under any revision.
     let short_cases = world.outer.join("short-cases");
     fs::create_dir_all(&short_cases).expect("a directory");
-    run(
-        &short_cases,
-        "scenario-1-trial-1",
-        1,
-        APPROVAL,
-        Some(&world.revision),
-    );
+    run(&short_cases, "scenario-1-trial-1", 1, APPROVAL, None);
     let short = World::save(&short_cases, &world.saves, "abcdef0");
     let (code, out, err) = world.promote(&short, &[]);
     assert_eq!(code, 1, "{out}{err}");
@@ -2925,13 +2957,14 @@ fn a_rebaseline_of_rows_saved_without_opened_binary_is_accepted() {
             &format!("scenario-1-trial-{}", n + 1),
             *tokens,
             APPROVAL,
-            Some(&world.revision),
+            None,
         );
     }
-    let other = World::save(
+    let other = World::forged(
         &others,
         &world.outer.join("saves-others"),
         BASELINE_REVISION,
+        &[Some(world.revision.as_str()); 5],
     );
     let (code, out, err) = rebaseline(&world, &other);
     assert_eq!(code, 1, "{out}{err}");
