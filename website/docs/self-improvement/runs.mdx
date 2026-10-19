@@ -1,0 +1,113 @@
+---
+title: Runs
+description: Every recorded scenario and variety run, by arm and revision, with its source and its caveats.
+---
+
+import Chart from '@site/src/components/Chart';
+import {journey} from '@site/src/generated/charts';
+
+# Runs
+
+All runs are from 2026-10-18 (UTC). Each is one line of
+[`docs/metrics/scenario-runs.jsonl`](https://github.com/beyond10x/takt/blob/main/docs/metrics/scenario-runs.jsonl),
+68 lines, naming the raw usage record it was read from. A figure the source does not state is
+`null`, never 0. First results, not a benchmark.
+
+## Scenario 1
+
+One story, "remove a todo by its number", a 31-line change to a toy CLI. Finish line: a pull
+request open against its own trial branch with CI green; for takt, the stop at the merge approval.
+Held-out check: a script no agent saw. Tokens are input + output + cache read + cache write, as
+each harness reported them. Under each median, the lowest and the highest run.
+
+| arm | runs of | n | median wall time | median tokens | median cost | held-out check |
+|---|---|---|---|---|---|---|
+| Claude Code, isolated like takt's harness, with a shell | rounds 1 and 3 | 6 | 55.5 s (51 to 74) | 92,772 (79,006 to 106,367) | $0.14 | 6/6 pass |
+| takt at 0a776d2 | wave 08 | 3 | 133 s (127 to 137) | 122,438 (106,003 to 136,180) | $0.25 | 3/3 pass |
+| takt at 97623a6 | wave 09 | 3 | 132 s (130 to 165) | 142,454 (122,207 to 167,249) | $0.31 | 3/3 pass |
+| takt at 447423c | turn-1 candidate | 3 | 159 s (128 to 162) | 151,626 (105,753 to 167,613) | $0.32 | 3/3 pass |
+| takt at 56d1b70 [^r3] | round 3 | 3 | 142 s (140 to 148) | 138,580 (138,482 to 176,435) | $0.57 | 3/3 pass |
+| takt at a0b8576 | round 4, the promoted binary | 5 | 127 s (123 to 129) | 122,361 (107,205 to 138,160) | $0.25 | 5/5 pass |
+| takt at 8d49743 [^sup] | turn-2 candidate | 5 | 131 s (128 to 140) | 122,202 (106,005 to 152,895) | $0.25 | 5/5 pass |
+| takt at 834205f | turn-2 candidate after review | 5 | 135 s (126 to 158) | 122,465 (122,095 to 153,345) | $0.25 | 5/5 pass |
+| Claude Code, full configuration | round 1 | 3 | 65 s (64 to 71) | 581,024 (580,761 to 639,254) | $0.48 | 3/3 pass |
+| Claude Code, full configuration [^c3] | round 3 | 3 | 112 s (111 to 118) | 790,770 (500,640 to 855,069) | $1.38 | 3/3 pass |
+| Codex, full configuration [^codex] | rounds 1 and 3 | 6 | 86 s (76 to 101) | 599,555 (525,048 to 675,867) | not reported | 6/6 pass |
+
+[^r3]: Round 3 had no model pinned: two runs used claude-fable-5-1 for every call, the third for
+    its first call only. Its cost can't be compared with the other rows. From round 4 every Claude
+    arm ran on claude-opus-5-5.
+[^sup]: Superseded: review moved the turn-2 candidate to 834205f, which was run again.
+[^c3]: Model claude-fable-5-1, not pinned. Why it was slower and dearer is not checked; its model
+    and the plugin set both changed between the rounds.
+[^codex]: Codex is another vendor: it reports no cost, and its model was read from its
+    configuration, not from the run.
+
+**The result.** The isolated free agent was cheaper and faster. Against its six runs, takt at
+0a776d2 cost about 1.8x as much and took 2.4x the wall time; the promoted binary a0b8576 took 1.3x
+the tokens and 2.3x the time. Against Claude Code with its full configuration, takt used 4.7x
+fewer tokens, and nearly all of that gap is the isolation, not the protocol. The hypothesis
+"cheaper per accepted unit" is not supported on this scenario.
+
+Caveats:
+
+- One toy scenario. Every scenario 1 run with a result passed (45 of 45), so the held-out check
+  does not tell the arms apart.
+- Not counted: `T-10`, refused before its first step because a concurrent free-arm run had taken
+  its trial branch; `I-modefail-1..3`, refused at start by a runner configuration error;
+  `T-fetchfail-1..3`, takt at 0a776d2 without an https-origin workaround for a bug in its trial
+  fetch, fixed in wave 10.
+- `T-27` stopped on `NoProgress` after a `repository.inspect` step and needed one resume.
+- Token totals include cache reads, billed at about 1/20 of input. Cost is the API list price the
+  harness reports: notional.
+
+## Scenarios 2 to 6 and the variety runs
+
+Ten takt runs at a0b8576, one on each task, n = 1 each.
+
+| run | task | stop, exit | steps | resumes | tokens | cost | wall | held-out check |
+|---|---|---|---|---|---|---|---|---|
+| S2-1 | scenario 2: a feature over 3 files | ApprovalRequired, 4 | 17 | 0 | 149,076 | $0.38 | 157 s | pass |
+| S3-1 | scenario 3: a reported bug | ApprovalRequired, 4 | 10 | 0 | 78,140 | $0.16 | 93 s | pass |
+| S4-1 | scenario 4: a refactor plus an atomic save | ApprovalRequired, 4 | 18 | 0 | 194,391 | $0.30 | 157 s | pass |
+| S5-1 | scenario 5: a change a second gate must pass | NoProgress, 3 | 20 | 4 | 324,164 | $0.54 | 220 s | fail: no pull request |
+| S6-1 | scenario 6: a task the rules forbid | NoProgress, 3 | 17 | 4 | 167,776 | $0.22 | 166 s | pass: a refusal |
+| metaharness-1 | a module change plus a refactor | ApprovalRequired, 4 | 6 | 0 | 473,816 | | 224 s | pass: 6/6 |
+| worktree-1 | a CLI flag | ApprovalRequired, 4 | 6 | 0 | 935,443 | | 326 s | pass |
+| worktree-2 | a bug fix | ApprovalRequired, 4 | 6 | 0 | 1,631,823 | | 371 s | pass: 6/6 |
+| worktree-3 | a cache rule | ApprovalRequired, 4 | 7 | 1 | 689,874 | | 313 s | pass: 10/10 |
+| canon-1 | a new module | ApprovalRequired, 4 | 4 | 0 | 727,899 | | 371 s | fail: 31/32 |
+
+- Scenario 6 is inverted: its right result is a refusal, so S6-1's `pass` means takt opened no
+  pull request. takt can only report the refusal as `NoProgress`, the same stop as a stuck run
+  (`story:a-run-can-decline`).
+- S5-1 never reached the finish line: the model left `README.md` alone because the story's scope
+  leaves it out, so the second gate could not pass.
+- The variety runs ran with no `--model` and kept no usage per call: no cost, no model. They ran
+  `software.change/1` in Rust workspaces, so their tokens do not compare with scenario 1's.
+- canon-1's failure is the trial's: the failing test's rule is in the unit's module doc, and the
+  intent left it out.
+- `headstart-trial-1` ran worktree-3's unit again with the model pinned and the tests compiled
+  first: 6 steps, no resume, 592,698 tokens, $0.85, 242 s, held-out 10/10
+  ([run record](https://github.com/beyond10x/takt/blob/main/docs/runs/2026-10-18-trial-1-worktree.md)).
+
+## Every scenario 1 run, one lane each
+
+Drawn by `docs/metrics/journey.py` from the raw records each run names, in one vocabulary of
+operations. No token or cost figure is read from the journeys. Lanes marked "order only" have no
+times in their records.
+
+<Chart svg={journey} caption="Every recorded scenario 1 run, grouped by arm and then by takt revision. The chart keeps its size so its text stays readable; on a narrow screen, scroll it sideways." />
+
+What the lanes expose, as waste takt has filed against itself:
+
+Counted over the 31 takt lanes of scenario 1 that reached the merge approval (`journeys.jsonl`):
+
+| waste | seen in | story |
+|---|---|---|
+| a model step that only asks for the merge approval, about 30k tokens per run | 31 of 31 | `story:no-model-step-for-approval` |
+| a pull request opened at the seed, then CI run a second time after the tests | seed: 30 of 31; second CI: 27 of the 27 timed lanes | `story:pr-opens-when-change-is-done` |
+| `repository.inspect` offered to a harness with no memory between steps, then `NoProgress` and a resume | 7 of 31: three early trials, T-5, T-7, T-9 and T-27 | `story:no-inspect-for-stateless-harness` |
+| the trial-branch fetch hanging until its 300 s timeout | `T-fetchfail-1..3` | `story:trial-fetch-needs-no-user-ssh`, fixed in wave 10 |
+
+Sources: `docs/metrics/scenario-runs.jsonl`, `docs/metrics/README.md`, `docs/metrics/journey.svg`.

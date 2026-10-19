@@ -1,0 +1,111 @@
+{
+  "format": "b10x-product-landing/1",
+  "product": {
+    "name": "takt",
+    "mark": "Tk",
+    "eyebrow": "Agentic coding under a protocol · early",
+    "promise": [
+      "The model does the work.",
+      "A validator decides whether it counts."
+    ],
+    "lede": "Point takt at a repository and say \"work on this\". It takes an intent, or the next ready story from the planning store, opens a case on a protocol, and lets a harness such as Claude Code take one admissible step at a time. Each step's result is checked by a program, not by the model that made it. Canon decides what is permitted, what is owed and whether completion was earned.",
+    "actions": [
+      {"label": "Get started", "href": "/docs/getting-started", "kind": "primary"},
+      {"label": "Read the documentation", "href": "/docs/"},
+      {"label": "Measured results", "href": "/docs/self-improvement/runs"},
+      {"label": "What exists today", "href": "/docs/status"}
+    ],
+    "meta": "One Rust binary · Canon protocols · Claude Code harness · Apache-2.0",
+    "kpis": [
+      {"count": "shipped", "label": "stories implemented"},
+      {"count": "decided", "label": "stories in an open wave"}
+    ]
+  },
+  "sections": [
+    {
+      "kind": "features",
+      "eyebrow": "What you get",
+      "title": "Done is computed, not claimed.",
+      "lede": "A coding agent running free decides when it is done and says so in text. takt keeps the model's choice of how to do the work and takes away its say over whether the work counts.",
+      "items": [
+        {
+          "title": "Evidence bound to a revision",
+          "description": "Tests, gates and CI are read by validators, which write a record naming the commit they saw. Done is computed from those records. What the harness says is a trace.",
+          "status": "shipped",
+          "icon": "evidence",
+          "href": "/docs/concepts/evidence-and-the-judge"
+        },
+        {
+          "title": "Merges only under a grant",
+          "description": "A merge waits for a grant recorded for the exact revision (takt approve); without one it is refused.",
+          "status": "shipped",
+          "icon": "action",
+          "href": "/docs/guides/approve-and-resume"
+        },
+        {
+          "title": "A replayable case record",
+          "description": "Every case is files in the repository: each decision, step and evidence record, and events.jsonl with their times. A later run resumes from it.",
+          "status": "shipped",
+          "icon": "claim",
+          "href": "/docs/reference/events-jsonl"
+        },
+        {
+          "title": "Named stops",
+          "description": "Budgets for iterations, hours and tokens. Every run ends on a named stop with its own exit code, so a script or an orchestrator can drive it.",
+          "status": "shipped",
+          "icon": "outcome",
+          "href": "/docs/reference/exit-codes"
+        },
+        {
+          "title": "A measured self-improvement loop",
+          "description": "takt improves takt in turns. A fix counts when a check reproduced the defect before it and not after it. The first turn was recorded by hand; validators that drive a turn are not built.",
+          "status": "decided",
+          "icon": "obligation",
+          "href": "/docs/self-improvement/the-loop"
+        },
+        {
+          "title": "An operating-system sandbox for every child process",
+          "description": "The harness, the tests and the forge run as plain child processes today. The confinement seam is planned.",
+          "status": "planned",
+          "href": "/docs/status"
+        }
+      ]
+    },
+    {
+      "kind": "flow",
+      "eyebrow": "One run",
+      "title": "Evaluate, step, observe, record.",
+      "lede": "The loop is in the binary and the truth is Canon's. A run ends when an outcome is legitimate, an approval is needed, a budget is spent or nothing is admissible.",
+      "steps": [
+        {"label": "takt", "title": "Open", "description": "An intent or the next ready story opens a case on a protocol."},
+        {"label": "Canon", "title": "Evaluate", "description": "Claims, obligations and the admissible actions, over the evidence."},
+        {"label": "Harness", "title": "Step", "description": "One admissible action in the worktree; what it says is a trace."},
+        {"label": "Validator", "title": "Observe", "description": "Tests, gate, pull request, CI: a record bound to the revision."},
+        {"label": "Person", "title": "Grant", "description": "takt approve records the merge grant; the next run resumes."},
+        {"label": "takt", "title": "Stop", "description": "A named stop with its own exit code, recorded in events.jsonl."}
+      ]
+    },
+    {
+      "kind": "status",
+      "eyebrow": "Status",
+      "title": "Early. Here is exactly what exists.",
+      "lede": "Shipped means the story is implemented in the planning store. Decided means it is in an open wave. Generated from .engineering/planning at build time.",
+      "items": "data/status.json"
+    },
+    {
+      "kind": "related",
+      "eyebrow": "Related tools",
+      "title": "What takt is built on.",
+      "tools": [
+        {"id": "canon", "relation": "used-by", "via": "protocol/1"},
+        {"id": "els", "relation": "used-by", "via": "software.change/1"},
+        {"id": "ess", "relation": "specifies", "via": "ess/domains"},
+        {
+          "name": "AEP",
+          "description": "The planning store takt takes its next ready story from, and where a run records its evidence and moves the story.",
+          "href": "https://beyond10x.github.io/ecosystem/aep/"
+        }
+      ]
+    }
+  ]
+}

@@ -18,3 +18,15 @@ tasks:
     desc: Build the takt binary.
     cmds:
       - cargo build --locked -p b10x-takt-cli
+
+  site-build:
+    desc: Build the documentation site into website/build; its prebuild writes the status, the charts, the CLI reference and the protocol viewer from the records.
+    cmds:
+      - npm --prefix website ci
+      - npm --prefix website run build
+
+  site-check:
+    desc: Screenshot every page of the built site at 1440 and 390 px into website/.site-check with headless Chrome; fail on horizontal scroll, text under 11 px or intersecting chart labels.
+    cmds:
+      - task: site-build
+      - npm --prefix website run site-check

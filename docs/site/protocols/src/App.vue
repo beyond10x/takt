@@ -111,7 +111,7 @@ const groups = computed(() => {
 
 <template>
   <header class="site">
-    <div><a class="brand" href="../">takt</a><a href="../#measurements">Measurements</a><a href="./" aria-current="page">Protocols</a><a href="https://github.com/beyond10x/takt">GitHub</a></div>
+    <div><a class="brand" href="../">takt</a><a href="../docs">Docs</a><a href="../docs/self-improvement/runs">Measurements</a><a href="./" aria-current="page">Protocols</a><a href="https://github.com/beyond10x/takt">GitHub</a></div>
   </header>
   <main>
     <h1>Protocols</h1>
