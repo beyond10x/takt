@@ -20,7 +20,7 @@ use takt::evidence::Record;
 use takt::forge::{Checks, Forge, Memory};
 use takt::frontier::{Aep, Frontier, Story, Take, Written, approve};
 use takt::harness::{Harness, StepContext, StepReport};
-use takt::validator::{CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
+use takt::validator::{ChangeRead, CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
 /// The delivery protocol, relative to this crate.
@@ -185,7 +185,8 @@ impl Harness for NoHarness {
     }
 }
 
-/// A harness that requests the merge gate as soon as it is offered, changing nothing.
+/// A harness that requests the merge gate as soon as it is offered, and otherwise hands the
+/// change over (`change.handover`), changing nothing either way.
 struct Requester;
 
 impl Harness for Requester {
@@ -198,6 +199,14 @@ impl Harness for Requester {
             return Ok(StepReport {
                 action: "repository.merge".to_owned(),
                 summary: "the story holds; merge it".to_owned(),
+                tokens: Some(7),
+            });
+        }
+        // The work committed is complete: hand it over, changing nothing.
+        if context.offered.contains(&"change.handover".to_owned()) {
+            return Ok(StepReport {
+                action: "change.handover".to_owned(),
+                summary: "the story holds; hand it over".to_owned(),
                 tokens: Some(7),
             });
         }
@@ -276,6 +285,7 @@ fn delivery(forge: Rc<dyn Forge>) -> Vec<Box<dyn Validator>> {
         Box::new(PrOpen::new(forge.clone())),
         Box::new(CiRead::new(forge.clone())),
         Box::new(PrMerged::new(forge)),
+        Box::new(ChangeRead),
     ]
 }
 
@@ -634,13 +644,16 @@ fn with_a_forge_the_store_is_written_before_the_merge_and_rides_with_it() {
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), worked, "{text}");
     let gate = events(&dir);
     assert_eq!(of(&gate, "store_evidence").len(), 0);
-    let harness = of(&gate, "step")
+    // The one harness step hands the change over; once only the grant stands between the case
+    // and its outcome the run stops with no further harness step (story:no-model-step-for-approval).
+    let harness: Vec<&serde_json::Value> = of(&gate, "step")
         .into_iter()
-        .find(|line| line["by"] == "harness")
-        .cloned()
-        .expect("the harness step");
-    assert_eq!(harness["action"], "repository.merge");
-    assert_eq!(harness["tokens"], 7);
+        .filter(|line| line["by"] == "harness")
+        .collect();
+    assert_eq!(harness.len(), 1, "{gate:#?}");
+    assert_eq!(harness[0]["action"], "change.handover");
+    assert_eq!(harness[0]["tokens"], 7);
+    assert_eq!(of(&gate, "stop")[0]["tokens"], 7, "{gate:#?}");
 
     approve(&repo, &store, &id, "repository.merge", "human:operator")
         .expect("the approval is given");
@@ -985,7 +998,7 @@ fn each_wait_on_the_forge_is_a_line_and_the_waiting_stop_is_the_last() {
     drop(opened);
     fs::write(repo.join("check.txt"), "fixed\n").expect("a file");
     git(&repo, &["commit", "-q", "-am", "the work"]);
-    let mut run = Run::resume(&repo, options(DELIVERY, 6), &id, &Requester, &validators)
+    let mut run = Run::resume(&repo, options(DELIVERY, 7), &id, &Requester, &validators)
         .expect("the case resumes");
     run.poll = Duration::from_millis(5);
     run.record_on(&store);

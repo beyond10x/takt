@@ -23,12 +23,19 @@ pub struct StepContext<'a> {
     /// The actions that need an approval: choosing one requests it and ends the run; nothing is
     /// performed for it.
     pub approvals: &'a [String],
+    /// Of the offered actions, the ones that record a choice: taken with no file changed, takt
+    /// records that the harness took it (`change.handover`).
+    pub choices: &'a [String],
     /// The current decision: claims, obligations, the frontier.
     pub decision: &'a Decision,
     /// The protocol the case runs under.
     pub protocol: &'a LoadedProtocol,
     /// The step number.
     pub step: usize,
+    /// What is left of the run's hour budget, read just before the harness is called; `None`
+    /// for a run without one. A harness ends its step by then: a child it runs is held to the
+    /// smaller of what is still left when it starts and its own timeout, and killed past it.
+    pub time_left: Option<std::time::Duration>,
 }
 
 /// What a step reported.
@@ -52,6 +59,14 @@ pub trait Harness {
     /// default.
     fn last_usage(&self) -> Option<crate::events::TokenUsage> {
         None
+    }
+    /// Whether the harness keeps what it learned in one step for the next. A harness that does
+    /// not is never offered an action whose effect is `read` (`repository.inspect`) unless the
+    /// action records a choice (`change.handover`): what it read would be gone at the next
+    /// step, and a step that changes nothing and records nothing ends the run with
+    /// `NoProgress`. Not by default.
+    fn keeps_state(&self) -> bool {
+        false
     }
 }
 
@@ -86,17 +101,32 @@ impl Default for ClaudeCode {
     }
 }
 
-/// The meaning of each action the prompt explains.
-fn describe(action: &str) -> &'static str {
-    match action {
+/// The meaning of each action the prompt explains: the adapter's own words for the actions it
+/// knows, else the description the protocol declares for the action, on one line.
+fn describe(action: &str, protocol: &LoadedProtocol) -> String {
+    let known = match action {
         "repository.inspect" => "read files to understand the code; change nothing",
         "tests.write" => {
             "add or change test files only (paths under tests/ or test/, or named *_test.*, test_*.*, *.test.*, *.spec.*)"
         }
         "implementation.edit" => "change the implementation so the intent holds",
         "plan.edit" => "write or change the plan",
-        _ => "perform this protocol action",
+        _ => "",
+    };
+    if !known.is_empty() {
+        return known.to_owned();
     }
+    b10x_canon::model::parse(&protocol.yaml)
+        .ok()
+        .and_then(|model| {
+            model
+                .actions
+                .iter()
+                .find(|(id, _)| id.as_str() == action)
+                .and_then(|(_, declared)| declared.description.clone())
+        })
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_else(|| "perform this protocol action".to_owned())
 }
 
 impl ClaudeCode {
@@ -134,7 +164,10 @@ impl ClaudeCode {
         }
         text.push_str("\nYou may perform exactly ONE of these actions now, nothing else:\n");
         for action in context.offered {
-            text.push_str(&format!("- {action}: {}\n", describe(action)));
+            text.push_str(&format!(
+                "- {action}: {}\n",
+                describe(action, context.protocol)
+            ));
         }
         if !context.approvals.is_empty() {
             text.push_str(
@@ -183,8 +216,19 @@ impl Harness for ClaudeCode {
         self.reported.get()
     }
 
+    /// Each step is a `claude -p` of its own with `--no-session-persistence`: nothing it read
+    /// is there at the next step.
+    fn keeps_state(&self) -> bool {
+        false
+    }
+
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport> {
         self.reported.set(None);
+        // The instant the step must end by, taken as the call begins: the time spent below
+        // before the child starts comes out of it.
+        let deadline = context
+            .time_left
+            .and_then(|left| std::time::Instant::now().checked_add(left));
         let prompt = Self::prompt(context);
         let mut command = Command::new(&self.program);
         command
@@ -218,7 +262,13 @@ impl Harness for ClaudeCode {
             }
         }
         crate::forge::without_credentials(&mut command, |_| false);
-        let output = crate::forge::run_child(&mut command, self.limits)
+        let mut limits = self.limits;
+        if let Some(deadline) = deadline {
+            limits.timeout = limits
+                .timeout
+                .min(deadline.saturating_duration_since(std::time::Instant::now()));
+        }
+        let output = crate::forge::run_child(&mut command, limits)
             .with_context(|| format!("the harness {}", self.program))?;
         if !output.success() {
             bail!(

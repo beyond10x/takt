@@ -104,6 +104,12 @@ impl Harness for Gatekeeper {
         "gatekeeper"
     }
 
+    /// It answers `repository.inspect`, which only a harness that keeps state is offered
+    /// (story:no-inspect-for-stateless-harness).
+    fn keeps_state(&self) -> bool {
+        true
+    }
+
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
         if context.approvals.contains(&"repository.merge".to_owned()) {
             return Ok(StepReport {
@@ -279,6 +285,27 @@ fn work(repo: &Path, id: &str, content: &str) -> String {
     run.case
         .add_evidence(&record(2, "gate_result", &worked))
         .expect("written");
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("handover-{}", &worked[..8]),
+            "handover",
+            None,
+            "implementation",
+            &worked,
+            takt::run::CHOICE_PRODUCER,
+        ))
+        .expect("written");
+    // A change to publish at the revision, as `change.read` records it.
+    run.case
+        .add_evidence(&takt::evidence::Record::new(
+            format!("change-record-{}", &worked[..8]),
+            "change_record",
+            Some("ahead".to_owned()),
+            "implementation",
+            &worked,
+            "takt.change-read",
+        ))
+        .expect("written");
     worked
 }
 
@@ -411,7 +438,7 @@ fn an_hour_budget_cuts_the_wait_and_stops_waiting() {
     let (id, _) = worked_case(&repo);
     let forge = Rc::new(PendingFor::new(usize::MAX));
     let validators = validators(forge.clone());
-    let hours = 0.5 / 3600.0;
+    let hours = 3.0 / 3600.0;
     let mut run = Run::resume(
         &repo,
         options(None, Some(hours)),
