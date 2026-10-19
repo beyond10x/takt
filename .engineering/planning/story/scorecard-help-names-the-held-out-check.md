@@ -2,14 +2,19 @@
 format: aep.planning-md/3
 id: story:scorecard-help-names-the-held-out-check
 kind: story
-status: draft
+status: proposed
 title: takt scorecard --help says outcomes come from events.jsonl only; a scenario run's comes from the held-out check
 tags:
 - finding
 refs:
 - provider: finding
   reference: scorecard-help-names-the-held-out-check
-revision: 1
+relations:
+- serves: vision:safe-agentic-coding
+- decomposes: epic:recursive-self-improvement
+revision: 2
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T17:13:45Z", actor: "human:timo", revision: 2}
 ---
 # Story: scorecard-help-names-the-held-out-check
 
