@@ -191,6 +191,8 @@ fn the_scorecard_reads_a_record_cut_inside_a_character() {
     let repo = scratch("scorecard");
     let dir = repo.join(CASES_DIR).join("scenario-1-trial-1");
     fs::create_dir_all(&dir).expect("a case directory");
+    // A scenario case's outcome reads its held-out result, which the runner writes after the run.
+    fs::write(dir.join("held-out.txt"), "PASS\n").expect("a held-out result");
     let events = Events::new(&dir);
     let opened = Event::Opened {
         case: "scenario-1-trial-1".to_owned(),
