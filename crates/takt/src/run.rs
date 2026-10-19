@@ -6493,11 +6493,25 @@ impl<'a> Run<'a> {
     /// `refs/takt/candidates/<case id>` ([`CANDIDATE_REFS`]), so it is fetched by its id from the
     /// repository whatever protocol the fetch speaks. Neither the work tree, the index nor a
     /// branch is touched, and the same case on the same base gives the same commit. Refused,
-    /// with no ref written, when no identity is configured (takt makes no candidate as
-    /// [`crate::git::CommitIdentity::takt`]), when the case pins no base, holds a merge or no
-    /// code commit, and when a code commit does not apply on the base without what was left
-    /// out, naming it.
+    /// with no ref written and the one an earlier candidate of the case wrote deleted, so no
+    /// ref names a candidate the refusal says is none, when no identity is configured (takt
+    /// makes no candidate as [`crate::git::CommitIdentity::takt`]), when the case pins no base,
+    /// holds a merge or no code commit, and when replaying a code commit on the base's tip
+    /// conflicts, naming the base, its tip, the commit and the paths.
     pub fn candidate(&self) -> Result<String> {
+        self.make_candidate().map_err(|why| {
+            let named = format!("{CANDIDATE_REFS}{}", self.case.id);
+            match crate::git::run(&self.tree, &["update-ref", "-d", &named]) {
+                Ok(_) => why,
+                Err(stale) => why.context(format!(
+                    "{named} could not be deleted and may still name an earlier candidate: {stale:#}"
+                )),
+            }
+        })
+    }
+
+    /// [`Run::candidate`] but deleting the ref on a refusal.
+    fn make_candidate(&self) -> Result<String> {
         let branch = crate::case::Branch::read(&self.case.dir)?;
         let Some(pinned) = branch.base_commit else {
             bail!("the case {} pins no base commit", self.case.id);
@@ -6586,9 +6600,10 @@ impl<'a> Run<'a> {
                 Ok(candidate)
             }
             crate::git::Replayed::Conflict { commit, paths } => bail!(
-                "the code commit {commit} does not apply on {} at {} without the commits left out of the candidate (takt's take, record and approval commits): it conflicts at {}",
+                "replaying the case's code commits on {} at {} (the case pinned {}) conflicted: the code commit {commit} does not apply there; it conflicts at {}",
                 branch.base.as_deref().unwrap_or("the base"),
                 short(&onto),
+                short(&pinned),
                 paths.join(", ")
             ),
         }

@@ -3,7 +3,8 @@
 //! `pr.opened`, exit 7, printing `candidate: <full id>`: its code commits replayed on `main`'s
 //! tip, the take left out. A `self.improvement/1` turn opened on that id passes its opening
 //! checks with no operator step between. With no identity configured the stop and the exit stay,
-//! and the line names the setting instead of a candidate.
+//! and the line names the setting instead of a candidate. A resume that can no longer make one
+//! says so and leaves no ref naming the earlier candidate.
 //!
 //! The harness is a `claude` double on the program path; `b10x-gates` and `gh` are doubles that
 //! log each call and fail. The promotion store, the state and cache homes and the install root
@@ -278,6 +279,25 @@ impl World {
         ])
     }
 
+    /// The delivery's case `case` resumed under `--forge none`.
+    fn resume(&self, case: &str) -> (i32, String, String) {
+        self.takt(&[
+            "run",
+            "--repo",
+            self.repo.to_str().expect("utf-8"),
+            "--case",
+            case,
+            "--test-cmd",
+            "true",
+            "--forge",
+            "none",
+            "--iterations",
+            "20",
+            "--min-free-gib",
+            "0",
+        ])
+    }
+
     /// The calls the route's doubles logged.
     fn route_calls(&self) -> String {
         fs::read_to_string(&self.route).unwrap_or_default()
@@ -342,7 +362,12 @@ fn a_forge_none_delivery_hands_a_turn_its_candidate() {
 
     let (code, out, err) = world.turn("turn-1", &candidate);
     assert!(!err.contains("takt:"), "the turn was refused: {err}");
-    assert_ne!(code, 1, "stdout {out} stderr {err}");
+    assert!(
+        out.lines()
+            .any(|line| line.starts_with("stopped: Iterations (0); steps 0,")),
+        "stdout {out} stderr {err}"
+    );
+    assert_eq!(code, 3, "stdout {out} stderr {err}");
     let case = fs::read_to_string(world.repo.join(".engineering/cases/turn-1/case.yaml"))
         .unwrap_or_else(|_| panic!("no turn opened: stdout {out} stderr {err}"));
     assert!(case.contains(&candidate), "{case}");
@@ -391,6 +416,108 @@ fn the_candidate_is_named_by_a_ref_and_fetched_by_its_id() {
         ],
     );
     assert_eq!(git(&copy, &["cat-file", "-t", &candidate]), "commit");
+}
+
+/// A resume that cannot make a candidate, because `main` gained a commit its code commit does
+/// not apply on, stops as before, exit 7, and prints `candidate: none`: the line names the base,
+/// its tip and the commit that did not apply, without blaming the commits left out of the
+/// candidate, and `refs/takt/candidates/<case>` no longer names the earlier candidate on the
+/// old `main`.
+#[test]
+fn a_resume_that_cannot_make_a_candidate_removes_the_earlier_one() {
+    let world = world("withdrawn", true);
+    let (code, out, err) = world.deliver();
+    assert_eq!(code, 7, "stdout {out} stderr {err}");
+    let earlier =
+        candidate_of(&out).unwrap_or_else(|| panic!("no candidate: stdout {out} stderr {err}"));
+    let named = takt::git::refs(&world.repo, &["refs/takt/candidates/"]).expect("the refs read");
+    assert_eq!(named.len(), 1, "{named:?}");
+    let case = named[0]
+        .strip_prefix("refs/takt/candidates/")
+        .expect("a candidate ref")
+        .to_owned();
+    assert_eq!(git(&world.repo, &["rev-parse", &named[0]]), earlier);
+    let code_commits = git(
+        &world.repo,
+        &[
+            "rev-list",
+            "--branches",
+            "--not",
+            "refs/heads/main",
+            "--",
+            "work.txt",
+        ],
+    );
+
+    // `main` gains its own work.txt, which the case's code commit adds too.
+    let scratch = world.repo.parent().expect("a parent");
+    let other = scratch.join("other-work.txt");
+    write(&other, "other work\n");
+    let blob = git(
+        &world.repo,
+        &["hash-object", "-w", other.to_str().expect("utf-8")],
+    );
+    let index = scratch.join("main-moves.index");
+    let indexed = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .env("GIT_INDEX_FILE", &index)
+            .current_dir(&world.repo)
+            .output()
+            .expect("git runs");
+        assert!(output.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+    indexed(&["read-tree", "main"]);
+    indexed(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("100644,{blob},work.txt"),
+    ]);
+    let tree = indexed(&["write-tree"]);
+    let moved = git(
+        &world.repo,
+        &[
+            "commit-tree",
+            &tree,
+            "-p",
+            "main",
+            "-m",
+            "main moves: work.txt",
+        ],
+    );
+    git(&world.repo, &["update-ref", "refs/heads/main", &moved]);
+
+    let (code, out, err) = world.resume(&case);
+    assert!(
+        out.contains("stopped: Unperformable (pr.opened; nothing performs it without the forge)"),
+        "stdout {out} stderr {err}"
+    );
+    assert_eq!(code, 7, "stdout {out} stderr {err}");
+    assert_eq!(candidate_of(&out), None, "{out}");
+    assert!(
+        takt::git::refs(&world.repo, &["refs/takt/candidates/"])
+            .expect("the refs read")
+            .is_empty(),
+        "the earlier candidate {earlier} is still named: {out}"
+    );
+    let line = out
+        .lines()
+        .find(|line| line.starts_with("candidate: none"))
+        .unwrap_or_else(|| panic!("no refusal line: {out}"));
+    assert!(line.contains("main"), "the base unnamed: {line}");
+    assert!(line.contains(&moved[..7]), "the base's tip unnamed: {line}");
+    assert!(line.contains("work.txt"), "the path unnamed: {line}");
+    assert!(
+        code_commits.lines().any(|commit| line.contains(commit)),
+        "the commit that did not apply unnamed ({code_commits}): {line}"
+    );
+    assert!(
+        !line.contains("left out"),
+        "the refusal asserts a cause it does not know: {line}"
+    );
+    assert_eq!(world.route_calls(), "", "the route was called");
 }
 
 /// With no identity configured the delivery stops as before, exit 7, and prints no candidate:
