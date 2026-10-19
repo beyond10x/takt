@@ -872,14 +872,18 @@ fn put_back_file(at: &Path, bytes: &[u8], executable: bool) -> Result<()> {
 /// or the link made again; a path the step added stays removed, and an entry that was neither
 /// a file nor a link (a FIFO) cannot be made again and stays removed too. The paths go in
 /// order, so a link or file the step put in place of a directory is gone before anything is
-/// written below it.
+/// written below it. Something in `dir`'s own place (a link, as the link itself, or a file) is
+/// removed first and every path of `before` put back: nothing is ever put back through it.
 fn restore(dir: &Path, before: &BTreeMap<PathBuf, Entry>, changed: &[PathBuf]) -> Result<()> {
-    if std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_symlink()) {
-        bail!(
-            "the directory {} was replaced by a link; nothing is put back through it",
-            dir.display()
-        );
-    }
+    let all: Vec<PathBuf>;
+    let changed = match std::fs::symlink_metadata(dir) {
+        Ok(meta) if !meta.is_dir() => {
+            std::fs::remove_file(dir).with_context(|| format!("remove {}", dir.display()))?;
+            all = before.keys().cloned().collect();
+            &all
+        }
+        _ => changed,
+    };
     for path in changed {
         let full = dir.join(path);
         if let Ok(meta) = std::fs::symlink_metadata(&full) {
@@ -2977,22 +2981,63 @@ fn surface_refusal(action: &str, touched: &[String]) -> String {
     format!("{action} {}", parts.join("; and "))
 }
 
-/// Discards everything a judgement step did, back to `checkpoint`, and puts the cases directory
-/// back to `kept` once more: a reset can remove a case file the step had staged.
+/// Discards everything a judgement step did, back to `checkpoint`, then puts the cases directory
+/// back to `kept`, after the reset, which can remove a case file the step had staged, and
+/// whether or not the reset succeeded: neither part is skipped for the other's error, the
+/// reset's reported first.
 fn undo_step(
     tree: &Path,
     checkpoint: &crate::git::Checkpoint,
     cases: &Path,
     kept: &BTreeMap<PathBuf, Entry>,
 ) -> Result<()> {
-    checkpoint
+    let reset = checkpoint
         .restore(tree)
-        .context("discard the step's change")?;
-    let again = differing(kept, &snapshot(cases)?);
-    if !again.is_empty() {
-        restore(cases, kept, &again)?;
-    }
-    Ok(())
+        .context("discard the step's change");
+    let put_back = snapshot(cases).and_then(|now| {
+        let again = differing(kept, &now);
+        if again.is_empty() {
+            Ok(())
+        } else {
+            restore(cases, kept, &again)
+        }
+    });
+    reset.and(put_back)
+}
+
+/// The paths of the cases directory `cases` a step or an observation changed, as a refusal names
+/// them, under [`CASES_DIR`]: the directory itself first when something else stands in its
+/// place (a link, with where it leads), then each of `paths`, one that is a link now with where
+/// it leads. Read before the directory is put back.
+fn cases_named<'p>(cases: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -> Vec<String> {
+    let link = |at: &Path| {
+        std::fs::symlink_metadata(at)
+            .ok()
+            .filter(|meta| meta.file_type().is_symlink())
+            .map(|_| match std::fs::read_link(at) {
+                Ok(target) => format!(", replaced by a link to {}", target.display()),
+                Err(_) => ", replaced by a link".to_owned(),
+            })
+    };
+    let mut named = Vec::new();
+    let replaced = match std::fs::symlink_metadata(cases) {
+        Ok(meta) if !meta.is_dir() => {
+            named.push(format!(
+                "{CASES_DIR}{}",
+                link(cases).unwrap_or_else(|| ", replaced by a file".to_owned())
+            ));
+            true
+        }
+        _ => false,
+    };
+    named.extend(paths.into_iter().map(|path| {
+        let shown = Path::new(CASES_DIR).join(path).display().to_string();
+        match (!replaced).then(|| link(&cases.join(path))).flatten() {
+            Some(link) => format!("{shown}{link}"),
+            None => shown,
+        }
+    }));
+    named
 }
 
 /// The subject of the commit that records a take on the case's branch: `takt: take <story>`.
@@ -4170,11 +4215,8 @@ impl<'a> Run<'a> {
                         .collect(),
                     None => Vec::new(),
                 };
-                let mut foreign: Vec<String> = touched
-                    .iter()
-                    .filter(|path| !own.contains(path))
-                    .map(|path| Path::new(CASES_DIR).join(path).display().to_string())
-                    .collect();
+                let mut foreign =
+                    cases_named(&cases, touched.iter().filter(|path| !own.contains(path)));
                 let change = checkpoint.change(&self.tree)?;
                 let mut outside: Vec<String> = planted;
                 outside.extend(change.paths.iter().cloned());
@@ -4209,10 +4251,14 @@ impl<'a> Run<'a> {
                         .map(|path| path.display().to_string()),
                 );
                 if !foreign.is_empty() || !outside.is_empty() {
-                    restore(&cases, &kept, &touched)?;
-                    undo_step(&self.tree, &checkpoint, &cases, &kept)?;
-                    surface.put_back(&self.tree, &surface_kept)?;
-                    let left = outside_kept.put_back(&self.tree)?;
+                    // Every part is put back whatever another part's error: the reset first, then
+                    // the cases directory, the judge surface and what lies outside the tree.
+                    let undone = undo_step(&self.tree, &checkpoint, &cases, &kept);
+                    let surface_back = surface.put_back(&self.tree, &surface_kept);
+                    let left = outside_kept.put_back(&self.tree);
+                    undone?;
+                    surface_back?;
+                    let left = left?;
                     foreign.extend(outside);
                     foreign.extend(left.iter().map(|path| {
                         format!("not put back, its way crosses a link: {}", path.display())
@@ -4525,10 +4571,13 @@ impl<'a> Run<'a> {
             // not put back is named in the refusal below.
             let git_dir = checkpoint.put_back_git_dir(&self.tree);
             let tree = self.tree.clone();
+            // Every part is put back whatever another part's error: the reset first, then the
+            // cases directory, the judge surface and what lies outside the tree.
             let undo = || -> Result<()> {
-                undo_step(&tree, &checkpoint, &cases, &kept)?;
-                surface.put_back(&tree, &surface_kept)?;
-                outside_before.put_back(&tree).map(|_| ())
+                let undone = undo_step(&tree, &checkpoint, &cases, &kept);
+                let surface_back = surface.put_back(&tree, &surface_kept);
+                let outside_back = outside_before.put_back(&tree).map(|_| ());
+                undone.and(surface_back).and(outside_back)
             };
             let stepped = match stepped {
                 Ok(stepped) => stepped,
@@ -4586,9 +4635,9 @@ impl<'a> Run<'a> {
                     });
                 }
             };
-            if !touched.is_empty() {
-                restore(&cases, &kept, &touched)?;
-            }
+            // Named as the step left them; the cases directory is put back with the rest of the
+            // step's change by `undo`, after the reset, on every path below that discards it.
+            let touched_named = cases_named(&cases, &touched);
             // A step that returned when the hour budget ended, failed (killed by it) or not, is
             // discarded whole like any failed step, recorded as a refusal, and the run stops on
             // the budget. One that reported keeps its step line, with its tokens and their
@@ -4701,14 +4750,10 @@ impl<'a> Run<'a> {
             let changed = &change.paths;
             if !touched.is_empty() {
                 undo()?;
-                let paths: Vec<String> = touched
-                    .iter()
-                    .map(|p| Path::new(CASES_DIR).join(p).display().to_string())
-                    .collect();
                 let why = format!(
                     "{} wrote into the cases directory: {}",
                     report.action,
-                    paths.join(", ")
+                    touched_named.join(", ")
                 );
                 record_step(self)?;
                 self.refused(events, BY_TAKT, &why)?;
