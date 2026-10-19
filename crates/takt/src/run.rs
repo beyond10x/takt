@@ -5731,13 +5731,26 @@ struct Kept<'k> {
     outside_dirs: &'k OutsideDirs,
 }
 
+/// What discarding a step or an observation did besides putting the tree back: the files inside
+/// an ignored directory a harness step rewrote, moved out of the tree ([`crate::git::SetAside`];
+/// none for an observation), and the paths outside the tree left as they were, their way
+/// crossing a link.
+struct Undone {
+    aside: crate::git::SetAside,
+    left: Vec<PathBuf>,
+}
+
 /// Discards everything a judgement step or an observation did, in this order: the reset to the
 /// checkpoint; the judge surface put back, which removes a link the step put at `.engineering`
 /// as the link itself; the cases directory put back, after the reset, which can remove a case
 /// file the step had staged; and what lies outside the tree. Every part is attempted whatever
-/// another part's error, and the errors are joined in that order. Answers the paths outside the
-/// tree left as they were, their way crossing a link.
-fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Vec<PathBuf>> {
+/// another part's error, and the errors are joined in that order. Last, once every part put
+/// back what it holds, the files inside an ignored directory the step rewrote are moved aside
+/// ([`crate::git::Checkpoint::set_aside`]): their way runs through the tree, so they move only
+/// out of a tree put back whole; when any part failed, none is moved, and the error names them
+/// as not moved, with why. Answers what was set aside and the paths outside the tree left as
+/// they were, their way crossing a link.
+fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Undone> {
     let reset = kept
         .checkpoint
         .restore(tree)
@@ -5752,6 +5765,10 @@ fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Vec<PathBuf>> {
         }
     });
     let outside = kept.outside.put_back(tree, kept.outside_dirs);
+    let (due, reset) = match reset {
+        Ok(due) => (Some(due), Ok(())),
+        Err(error) => (None, Err(error)),
+    };
     let mut errors: Vec<String> = [reset, surface, cases]
         .into_iter()
         .filter_map(|part| part.err().map(|error| format!("{error:#}")))
@@ -5761,10 +5778,59 @@ fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Vec<PathBuf>> {
         Vec::new()
     });
     if errors.is_empty() {
-        Ok(left)
+        let due = due.unwrap_or_default();
+        // The way to the cases directory and to every case is read again first, as a run reads
+        // it before it writes there ([`crate::case::CaseDir::check_way`]): past a link or a part that
+        // is not a directory, nothing is moved out of the tree, and each file is named with why.
+        let aside = match cases_way(tree, kept.cases, kept.cases_kept) {
+            Ok(()) => kept.checkpoint.set_aside(tree, &due),
+            Err(way) => crate::git::SetAside::not_moved(
+                &due,
+                &format!("{way:#}; so nothing was moved out of the tree"),
+            ),
+        };
+        Ok(Undone { aside, left })
     } else {
-        bail!("{}", errors.join("; and "))
+        // The files that were due to move, or, when the reset itself failed, those the
+        // checkpoint sees rewritten now: none is moved out of a tree not put back whole.
+        let due = due.unwrap_or_else(|| {
+            kept.checkpoint
+                .change(tree)
+                .map(|change| change.ignored_set_aside)
+                .unwrap_or_default()
+        });
+        let aside = crate::git::SetAside::not_moved(
+            &due,
+            "the tree could not be put back whole, so nothing was moved out of it",
+        );
+        bail!("{}{}", errors.join("; and "), aside.named())
     }
+}
+
+/// That every part of the way from `tree` down to the cases directory `cases`, and down to each
+/// directory a file of `kept` lies in, is a real directory, none a link, each read with
+/// `symlink_metadata` and never followed; the error names the first that is not.
+fn cases_way(tree: &Path, cases: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<()> {
+    let mut dirs = BTreeSet::from([cases.to_path_buf()]);
+    for path in kept.keys() {
+        let mut at = path.parent();
+        while let Some(dir) = at.filter(|dir| !dir.as_os_str().is_empty()) {
+            dirs.insert(cases.join(dir));
+            at = dir.parent();
+        }
+    }
+    for dir in &dirs {
+        no_link_on_the_way(tree, dir)?;
+        let meta =
+            std::fs::symlink_metadata(dir).with_context(|| format!("read {}", dir.display()))?;
+        if !meta.is_dir() {
+            bail!(
+                "{} is not a directory",
+                dir.strip_prefix(tree).unwrap_or(dir).display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// The paths of the cases directory `cases` a step or an observation changed, as a refusal names
@@ -5800,6 +5866,38 @@ fn cases_named<'p>(cases: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -
         }
     }));
     named
+}
+
+/// How a refusal names ignored paths ([`crate::git::paths_named`]).
+fn ignored_named(paths: &[std::ffi::OsString]) -> String {
+    crate::git::paths_named(paths)
+}
+
+/// Why a harness step is refused before it is taken in a run with no set-aside root.
+const NO_SET_ASIDE: &str = "no set-aside directory: neither XDG_STATE_HOME nor HOME is set, so a harness step's rewrite of a file inside an ignored directory would have nowhere to go; no judgement step is taken";
+
+/// The set-aside root of a run on `tree` that is given none: [`default_set_aside`], checked
+/// ([`crate::git::set_aside_root`]): one that resolves but cannot be used (relative, inside
+/// the tree, through a link into it, a file in the way) is the error, and the run does not
+/// start. None when nothing names one (neither `XDG_STATE_HOME` nor `HOME` is set): the run
+/// opens, its observations and a run with no harness need none, and its first harness step is
+/// refused before it is taken ([`NO_SET_ASIDE`]).
+fn opening_set_aside(tree: &Path) -> Result<Option<PathBuf>> {
+    default_set_aside()
+        .map(|dir| crate::git::set_aside_root(&dir, tree).context("the run does not start"))
+        .transpose()
+}
+
+/// Where discarding a harness step moves the files inside an ignored directory it rewrote,
+/// outside every repository and every case directory: `$XDG_STATE_HOME/takt/set-aside`
+/// (`~/.local/state/takt/set-aside` without it), state and not cache, since what is moved
+/// there may be the operator's own file, kept until the operator removes it. None when
+/// neither is set.
+#[must_use]
+pub fn default_set_aside() -> Option<PathBuf> {
+    crate::promotion::state_dir()
+        .ok()
+        .map(|dir| dir.join("takt").join("set-aside"))
 }
 
 /// The subject of the commit that records a take on the case's branch: `takt: take <story>`.
@@ -5916,6 +6014,11 @@ pub struct Run<'a> {
     /// on the `opened` line; none unless the caller sets it, since this library does not know
     /// the build it is linked into.
     pub binary: Option<String>,
+    /// Where discarding a harness step moves the files inside an ignored directory it rewrote,
+    /// under the case's id and the step's number: [`default_set_aside`], checked when the run
+    /// opens, unless [`Run::set_aside_in`] gives another; none when nothing names one, and then
+    /// no harness step is taken. A validator's observation moves nothing aside.
+    set_aside: Option<PathBuf>,
     /// The planning store a story's run records its test result and its move in; none until
     /// [`Run::record_on`] gives one, and only a story's run writes to it.
     store: Option<&'a dyn Frontier>,
@@ -5974,6 +6077,8 @@ impl<'a> Run<'a> {
         // What the step choice will refuse is refused here, before a case directory or a
         // branch exists for it.
         Shape::of(&protocol, &options.inputs)?;
+        // Nor does a run start that a harness step's rewrite could not be moved out of.
+        let set_aside = opening_set_aside(tree)?;
         let id = options
             .case_id
             .clone()
@@ -6019,6 +6124,7 @@ impl<'a> Run<'a> {
             tokens: 0,
             poll: Self::POLL,
             binary: None,
+            set_aside,
             store: None,
             started: Instant::now(),
             outside: Outside::read(tree, &outside_dirs)?,
@@ -6038,6 +6144,21 @@ impl<'a> Run<'a> {
         self.store = Some(store);
     }
 
+    /// Where discarding a harness step moves the files inside an ignored directory it rewrote
+    /// ([`Run::set_aside_in`]); none when nothing names one.
+    #[must_use]
+    pub fn set_aside(&self) -> Option<&Path> {
+        self.set_aside.as_deref()
+    }
+
+    /// Moves what discarding a harness step sets aside to `dir` instead, once
+    /// [`crate::git::set_aside_root`] accepts it: absolute, outside the tree, and makeable;
+    /// else the error, and the run keeps the directory it had.
+    pub fn set_aside_in(&mut self, dir: PathBuf) -> Result<()> {
+        self.set_aside = Some(crate::git::set_aside_root(&dir, &self.tree)?);
+        Ok(())
+    }
+
     /// Prepares a run on the case `id` a run before this one opened under `tree`: the case's
     /// files as they are, its `authority.yaml` read into every evaluation, its intent and inputs
     /// the run's. The unit is the story the case records, or the intent it was opened on.
@@ -6050,6 +6171,7 @@ impl<'a> Run<'a> {
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
     ) -> Result<Self> {
+        let set_aside = opening_set_aside(tree)?;
         let case = CaseDir::resume(tree, id)?;
         let intent = case.intent()?;
         let unit = match case.story()? {
@@ -6082,6 +6204,7 @@ impl<'a> Run<'a> {
             tokens: 0,
             poll: Self::POLL,
             binary: None,
+            set_aside,
             store: None,
             started: Instant::now(),
             outside: Outside::read(tree, &outside_dirs)?,
@@ -6250,6 +6373,25 @@ impl<'a> Run<'a> {
                 dir.display()
             )),
         }
+    }
+
+    /// The checkpoint of the tree before the step being taken, the branches of
+    /// [`Self::kept_branches`] guarded; for a harness step (`harness`), what discarding it moves
+    /// aside going to `<set-aside>/<case id>/step-<n>` ([`Run::set_aside`]), made new when
+    /// something is moved: one that exists already, a run before this one under the same case
+    /// id and step, gets `-2`, `-3` and so on after it, never shared
+    /// ([`crate::git::Checkpoint::setting_aside_in`]). A validator's observation moves nothing
+    /// aside: what its command rewrote inside an ignored directory is its own build output, kept
+    /// in place as a pass keeps it.
+    fn checkpoint(&self, harness: bool) -> Result<crate::git::Checkpoint> {
+        let checkpoint = crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
+        let (Some(id), Some(root)) = (
+            self.case.dir.file_name().filter(|_| harness),
+            self.set_aside.clone(),
+        ) else {
+            return Ok(checkpoint);
+        };
+        Ok(checkpoint.setting_aside_in(root, id.to_owned(), format!("step-{}", self.steps)))
     }
 
     /// The branches a checkpoint guards even when another worktree has them checked out: the
@@ -6976,8 +7118,7 @@ impl<'a> Run<'a> {
                     writeln!(out, "  refused: {why}; nothing observed")?;
                     return Ok(Stop::StepRefused(why));
                 }
-                let checkpoint =
-                    crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
+                let checkpoint = self.checkpoint(false)?;
                 let cases = self.tree.join(CASES_DIR);
                 let kept = snapshot(&cases)?;
                 let globs = self.judge_list()?.unwrap_or_default();
@@ -7065,8 +7206,8 @@ impl<'a> Run<'a> {
                             .iter()
                             .chain(&change.ignored_changed)
                             .chain(&change.ignored_removed)
-                            .filter(|path| surface.contains(path))
-                            .cloned(),
+                            .filter(|path| surface.contains(&path.to_string_lossy()))
+                            .map(|path| crate::git::shown(path)),
                     )
                 {
                     if !outside.contains(&path) {
@@ -7075,7 +7216,7 @@ impl<'a> Run<'a> {
                 }
                 outside.extend(outside_moved.iter().map(|path| path.display().to_string()));
                 if !foreign.is_empty() || !outside.is_empty() {
-                    let left = undo_step(&self.tree, &kept_all)?;
+                    let left = undo_step(&self.tree, &kept_all)?.left;
                     foreign.extend(outside);
                     foreign.extend(left.iter().map(|path| {
                         format!("not put back (a program or import directory takt never writes, a link on its way, or a file too large to keep a copy of): {}", path.display())
@@ -7317,6 +7458,18 @@ impl<'a> Run<'a> {
             // rename), or that left anything there the snapshot sees differ (a FIFO, which git
             // does not list, a file in an ignored directory), is refused, and put back to the
             // snapshot taken here.
+            // A run with no set-aside root takes no judgement step: a rewrite of a file inside an
+            // ignored directory would have nowhere to go when the step is discarded.
+            if self.set_aside.is_none() {
+                let why = NO_SET_ASIDE.to_owned();
+                self.refused(events, BY_TAKT, &why)?;
+                writeln!(
+                    out,
+                    "step {}: refused before the harness: {why}",
+                    self.steps
+                )?;
+                return Ok(Stop::StepRefused(why));
+            }
             let runs = self.runs();
             // The repository's own list extends the surface, read at the case's base: a list
             // that does not parse takes no judgement step at all.
@@ -7371,8 +7524,7 @@ impl<'a> Run<'a> {
             // base, and a sibling case's branch, which a step could otherwise move under it; a
             // branch another worktree has checked out is that session's, but never the case's
             // base or its own branch.
-            let checkpoint =
-                crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
+            let checkpoint = self.checkpoint(true)?;
             // What is left of the hour budget is read last, just before the call, so the step
             // ends by the run's end and not by the time its preparation took after it.
             context.time_left = self.time_left();
@@ -7399,15 +7551,25 @@ impl<'a> Run<'a> {
                 outside: &outside_before,
                 outside_dirs: &outside_dirs,
             };
-            let undo = || -> Result<()> { undo_step(&tree, &kept_all).map(|_| ()) };
+            // Every way a harness step is discarded goes through here, and what it says of the
+            // files it set aside ([`crate::git::SetAside::named`]) is what every message about the
+            // discard carries.
+            let undo = || -> Result<String> {
+                undo_step(&tree, &kept_all).map(|undone| undone.aside.named())
+            };
             let stepped = match stepped {
                 Ok(stepped) => stepped,
                 Err(panic) => {
-                    if let Err(undo) = undo() {
-                        eprintln!(
+                    match undo() {
+                        Ok(moved) if !moved.is_empty() => eprintln!(
+                            "step {}: the harness panicked; its change was discarded{moved}",
+                            self.steps
+                        ),
+                        Ok(_) => {}
+                        Err(undo) => eprintln!(
                             "step {}: the harness panicked, and the step's change could not be discarded: {undo:#}",
                             self.steps
-                        );
+                        ),
                     }
                     std::panic::resume_unwind(panic);
                 }
@@ -7416,8 +7578,8 @@ impl<'a> Run<'a> {
             // whole and the run ends on the error.
             if let Err(error) = swept {
                 return Err(match undo() {
-                    Ok(()) => error.context(format!(
-                        "step {}: what the step left running could not be killed; everything it changed was discarded",
+                    Ok(moved) => error.context(format!(
+                        "step {}: what the step left running could not be killed; everything it changed was discarded{moved}",
                         self.steps
                     )),
                     Err(undo) => error.context(format!(
@@ -7445,8 +7607,8 @@ impl<'a> Run<'a> {
                 Ok(seen) => seen,
                 Err(error) => {
                     return Err(match undo() {
-                        Ok(()) => error.context(format!(
-                            "step {}: what the step left could not be read; everything it changed was discarded",
+                        Ok(moved) => error.context(format!(
+                            "step {}: what the step left could not be read; everything it changed was discarded{moved}",
                             self.steps
                         )),
                         Err(undo) => error.context(format!(
@@ -7480,14 +7642,17 @@ impl<'a> Run<'a> {
                 } else {
                     format!("; not put back: {}", git_dir.failed.join("; "))
                 };
-                if let Err(undo) = undo() {
-                    return Err(anyhow::anyhow!(
-                        "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}{not_put_back}",
-                        self.steps
-                    ));
-                }
+                let moved = match undo() {
+                    Ok(moved) => moved,
+                    Err(undo) => {
+                        return Err(anyhow::anyhow!(
+                            "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}{not_put_back}",
+                            self.steps
+                        ));
+                    }
+                };
                 let why = format!(
-                    "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}{not_put_back}",
+                    "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}{not_put_back}{moved}",
                     self.steps
                 );
                 // Written after the cases directory was put back, which would take a line
@@ -7513,8 +7678,8 @@ impl<'a> Run<'a> {
                 Ok(report) => report,
                 Err(error) => {
                     return Err(match undo() {
-                        Ok(()) => error.context(format!(
-                            "step {}: the harness failed; everything the step changed was discarded",
+                        Ok(moved) => error.context(format!(
+                            "step {}: the harness failed; everything the step changed was discarded{moved}",
                             self.steps
                         )),
                         Err(undo) => error.context(format!(
@@ -7550,33 +7715,34 @@ impl<'a> Run<'a> {
             )
             .and_then(|()| writeln!(out, "  said: {}", report.summary));
             if let Err(error) = told {
-                undo()?;
+                let moved = undo()?;
                 record_step(self)?;
                 return Err(anyhow::Error::new(error).context(format!(
-                    "step {}: {} could not be printed; the change was discarded",
+                    "step {}: {} could not be printed; the change was discarded{moved}",
                     self.steps, report.action
                 )));
             }
             let change = match checkpoint.change(&self.tree) {
                 Ok(change) => change,
                 Err(error) => {
-                    undo()?;
+                    let moved = undo()?;
                     record_step(self)?;
                     return Err(error.context(format!(
-                        "step {}: what {} changed could not be read; the change was discarded",
+                        "step {}: what {} changed could not be read; the change was discarded{moved}",
                         self.steps, report.action
                     )));
                 }
             };
             let changed = &change.paths;
             if !touched.is_empty() {
-                undo()?;
+                let moved = undo()?;
                 let why = format!(
                     "{} wrote into the cases directory: {}",
                     report.action,
                     touched_named.join(", ")
                 );
                 record_step(self)?;
+                let why = format!("{why}{moved}");
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(
                     out,
@@ -7585,10 +7751,11 @@ impl<'a> Run<'a> {
                 return Ok(Stop::StepRefused(why));
             }
             if !surface_touched.is_empty() {
-                undo()?;
+                let moved = undo()?;
                 let why = surface_refusal(&report.action, &surface_touched)
                     + &surface.modules_note(&surface_touched);
                 record_step(self)?;
+                let why = format!("{why}{moved}");
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(
                     out,
@@ -7654,16 +7821,16 @@ impl<'a> Run<'a> {
             let manifests = match manifests {
                 Ok(manifests) => manifests,
                 Err(error) => {
-                    undo()?;
+                    let moved = undo()?;
                     record_step(self)?;
                     return Err(error.context(format!(
-                        "step {}: the cargo manifests {} changed could not be read; the change was discarded",
+                        "step {}: the cargo manifests {} changed could not be read; the change was discarded{moved}",
                         self.steps, report.action
                     )));
                 }
             };
             if !manifests.is_empty() {
-                undo()?;
+                let moved = undo()?;
                 // Each entry starts with the path it is about: pytest's tables in a
                 // `pyproject.toml`, else cargo's manifests and what cargo reads.
                 let (pytest, cargo): (Vec<&String>, Vec<&String>) =
@@ -7694,6 +7861,7 @@ impl<'a> Run<'a> {
                 }
                 let why = format!("{} {}", report.action, parts.join("; and "));
                 record_step(self)?;
+                let why = format!("{why}{moved}");
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "  refused: {why}; the change was discarded")?;
                 return Ok(Stop::StepRefused(why));
@@ -7703,16 +7871,16 @@ impl<'a> Run<'a> {
             let outside_changed = match Outside::read(&self.tree, &self.outside_dirs) {
                 Ok(now) => outside_before.differing(&now),
                 Err(error) => {
-                    undo()?;
+                    let moved = undo()?;
                     record_step(self)?;
                     return Err(error.context(format!(
-                        "step {}: what cargo and rustup read outside the tree could not be read after {}; the change was discarded",
+                        "step {}: what cargo and rustup read outside the tree could not be read after {}; the change was discarded{moved}",
                         self.steps, report.action
                     )));
                 }
             };
             if !outside_changed.is_empty() {
-                undo()?;
+                let moved = undo()?;
                 // What is still not as it was is behind a link, never written through.
                 let left =
                     outside_before.differing(&Outside::read(&self.tree, &self.outside_dirs)?);
@@ -7728,6 +7896,7 @@ impl<'a> Run<'a> {
                     ));
                 }
                 record_step(self)?;
+                let why = format!("{why}{moved}");
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(
                     out,
@@ -7762,13 +7931,19 @@ impl<'a> Run<'a> {
             {
                 let mut what = Vec::new();
                 if !change.ignored_added.is_empty() {
-                    what.push(format!("wrote {}", change.ignored_added.join(", ")));
+                    what.push(format!("wrote {}", ignored_named(&change.ignored_added)));
                 }
                 if !change.ignored_changed.is_empty() {
-                    what.push(format!("rewrote {}", change.ignored_changed.join(", ")));
+                    what.push(format!(
+                        "rewrote {}",
+                        ignored_named(&change.ignored_changed)
+                    ));
                 }
                 if !change.ignored_removed.is_empty() {
-                    what.push(format!("removed {}", change.ignored_removed.join(", ")));
+                    what.push(format!(
+                        "removed {}",
+                        ignored_named(&change.ignored_removed)
+                    ));
                 }
                 let mut why = format!(
                     "{action} {} ignored by git, which no commit would carry",
@@ -7777,7 +7952,7 @@ impl<'a> Run<'a> {
                 if !change.ignored_lost.is_empty() {
                     why.push_str(&format!(
                         "; nothing was kept to put back of {}",
-                        change.ignored_lost.join(", ")
+                        ignored_named(&change.ignored_lost)
                     ));
                 }
                 Some(why)
@@ -7789,22 +7964,27 @@ impl<'a> Run<'a> {
             } else {
                 None
             };
+            // A path is the step's to name: each control character in it escaped, so no name
+            // shapes a line of the output.
+            let overreach = overreach.map(|why| crate::trace::escape(&why));
             if let Some(why) = overreach {
-                undo()?;
+                let moved = undo()?;
                 record_step(self)?;
+                let why = format!("{why}{moved}");
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "  refused: {why}; the change was discarded")?;
                 return Ok(Stop::StepRefused(why));
             }
             if approvals.contains(&report.action) {
                 if !changed.is_empty() {
-                    undo()?;
+                    let moved = undo()?;
                     let why = format!("{} requested with changes", report.action);
                     record_step(self)?;
+                    let why = format!("{why}{moved}");
                     self.refused(events, BY_TAKT, &why)?;
                     writeln!(
                         out,
-                        "  refused: {} was requested with {} changed path(s); the change was discarded",
+                        "  refused: {} was requested with {} changed path(s); the change was discarded{moved}",
                         report.action,
                         changed.len()
                     )?;
@@ -7829,8 +8009,9 @@ impl<'a> Run<'a> {
                 None
             };
             if let Some(why) = refusal {
-                undo()?;
+                let moved = undo()?;
                 record_step(self)?;
+                let why = format!("{why}{moved}");
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "  refused: {why}; the change was discarded")?;
                 return Ok(Stop::StepRefused(why));
@@ -7843,13 +8024,14 @@ impl<'a> Run<'a> {
             let choices = shape.choices_of(&report.action);
             if !choices.is_empty() {
                 if !changed.is_empty() {
-                    undo()?;
+                    let moved = undo()?;
                     let why = format!(
                         "{} records a choice and changed {} path(s)",
                         report.action,
                         changed.len()
                     );
                     record_step(self)?;
+                    let why = format!("{why}{moved}");
                     self.refused(events, BY_TAKT, &why)?;
                     writeln!(out, "  refused: {why}; the change was discarded")?;
                     return Ok(Stop::StepRefused(why));
@@ -7929,10 +8111,10 @@ impl<'a> Run<'a> {
             ) {
                 Ok(head) => head,
                 Err(error) => {
-                    undo()?;
+                    let moved = undo()?;
                     record_step(self)?;
                     return Err(error.context(format!(
-                        "step {}: the commit of {}'s change failed; the change was discarded",
+                        "step {}: the commit of {}'s change failed; the change was discarded{moved}",
                         self.steps, report.action
                     )));
                 }
