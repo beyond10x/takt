@@ -1,9 +1,9 @@
 //! story:promotion through the binary: `takt promote` installs a takt built from a revision only
 //! when its saved scorecard shows no scenario worse than the promoted baseline's under the
 //! scorecard's rule (a margin of one case at any outcome rank, the median of tokens within the
-//! baseline's maximum), one promotion a UTC day, and writes a record under
-//! `$XDG_STATE_HOME/takt/promotions/` naming the revision the installed `takt --version`
-//! prints; a worse candidate is refused, recorded and not judged again; `--baseline-only`
+//! baseline's maximum), and writes a record under `$XDG_STATE_HOME/takt/promotions/` naming
+//! the revision the installed `takt --version` prints, as many a day as hold, one at a time;
+//! a worse candidate is refused, recorded and not judged again; `--baseline-only`
 //! records the first baseline and installs nothing; `--dry-run` writes and installs nothing.
 //! The build runs confined in bubblewrap, so nothing the commit runs reads a setting outside
 //! it, reaches the store or outlives the build; the record is written before the binary moves
@@ -1311,12 +1311,95 @@ fn a_candidate_within_the_rule_is_installed_and_recorded() {
             .all(|entry| entry.file_name() == "takt"),
         "the binary before it is not kept beside the new one"
     );
-    // A second promotion the same UTC day is refused, naming the first.
+    // The same revision promoted again is refused: it is recorded already.
     let (code, out, err) = world.promote(&card, &[]);
     assert_eq!(code, 1, "{out}{err}");
     assert!(
-        err.contains("recorded already") || err.contains("this UTC day already"),
-        "the first promotion is named: {err}"
+        err.contains(&format!("{} is recorded already", world.revision)),
+        "the revision is named as recorded: {err}"
+    );
+}
+
+/// story:promotion-without-daily-cap: two promotions of different revisions, one right after
+/// the other, each judged against the baseline before it, both hold: nothing between them
+/// refuses on time; each is recorded after the one before it and the head names the second;
+/// the second revision promoted again is refused as recorded already.
+#[test]
+fn two_revisions_promoted_one_after_the_other_both_hold_and_chain() {
+    let world = World::new("successive", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let baseline_digest = sha256(&world.store.join(format!("{BASELINE_REVISION}.json")));
+    let card = world.candidate_card(
+        "first",
+        WITHIN_TOKENS,
+        [APPROVAL, APPROVAL, APPROVAL, APPROVAL, ERROR],
+    );
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(&format!(
+            "candidate {} against baseline {BASELINE_REVISION}",
+            world.revision
+        )),
+        "the recorded baseline is the first's: {out}"
+    );
+    let first_name = format!("{}.json", world.revision);
+    let first = world.record(&first_name);
+    for line in [
+        format!("\"against\": \"{BASELINE_REVISION}\""),
+        format!("\"previous_sha256\": \"{baseline_digest}\""),
+    ] {
+        assert!(first.contains(&line), "{line} in {first}");
+    }
+    let first_digest = sha256(&world.store.join(&first_name));
+    write(&world.repo.join("second.txt"), "second\n");
+    let second = world.commit("second");
+    let second_card = world.passing_card("second", &second);
+    let (code, out, err) = world.promote(&second_card, &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(&format!(
+            "candidate {second} against baseline {}",
+            world.revision
+        )),
+        "the first promotion is the baseline: {out}"
+    );
+    assert!(
+        out.contains("verdict: no scenario worse than the baseline"),
+        "{out}"
+    );
+    assert_eq!(
+        world.version(),
+        format!("takt 0.1.0 ({second})"),
+        "the installed binary names the second revision"
+    );
+    let second_name = format!("{second}.json");
+    let record = world.record(&second_name);
+    for line in [
+        "\"kind\": \"promotion\"".to_owned(),
+        format!("\"revision\": \"{second}\""),
+        format!("\"against\": \"{}\"", world.revision),
+        format!("\"previous_sha256\": \"{first_digest}\""),
+    ] {
+        assert!(record.contains(&line), "{line} in {record}");
+    }
+    assert_eq!(field(&record, "binary_sha256"), sha256(&world.installed()));
+    let text = fs::read_to_string(head(&world)).expect("the head");
+    assert!(
+        text.contains(&format!("\"{second_name}\""))
+            && text.contains(&sha256(&world.store.join(&second_name))),
+        "the head names the second promotion: {text}"
+    );
+    let (code, out, err) = world.promote(&second_card, &[]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains(&format!("{second} is recorded already")),
+        "the second revision is named as recorded: {err}"
+    );
+    assert_eq!(
+        world.version(),
+        format!("takt 0.1.0 ({second})"),
+        "nothing is installed by the refusal"
     );
 }
 
@@ -2005,13 +2088,66 @@ fn a_binary_that_changes_once_installed_is_rolled_back() {
     );
 }
 
-/// Two promotions started together record and install exactly one (probe N12): the other
-/// refuses naming the store's lock, or sees the first's record.
+/// What a held candidate's `build.rs` does first: marks its clone `building`, then waits for
+/// the test to put `go` beside it (a minute at most, so a test that never does cannot hang).
+const HOLD: &str = r#"
+fn hold() {
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
+    let root = std::path::Path::new(&dir).join("../..");
+    let _ = std::fs::write(root.join("building"), "");
+    for _ in 0..600 {
+        if root.join("go").exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+"#;
+
+/// The clones under `world`'s build directory whose held `build.rs` has marked them `building`.
+fn building(world: &World) -> Vec<PathBuf> {
+    fs::read_dir(world.outer.join("cache/takt/promote"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path().join("source"))
+                .filter(|source| source.join("building").exists())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Polls `done` every 20 ms for a minute; panics naming `what` when it never holds.
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    for _ in 0..3000 {
+        if done() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("waited a minute for {what}");
+}
+
+/// Two promotions at once run one at a time (probe N12): the store's lock is held from the
+/// reading through the build, the record and the install. The first candidate's `build.rs`
+/// holds its build until the test releases it; the second promotion starts only once that
+/// build has begun, and the first is released only once the second has exited or begun a
+/// build of its own. The second refuses naming the store's lock; the records form one chain
+/// from the baseline, the head names the last, and the installed binary is the one its record
+/// names.
 #[test]
-fn two_promotions_at_once_record_and_install_exactly_one() {
+fn two_promotions_at_once_run_one_at_a_time_and_chain() {
     let world = World::new("two-at-once", BASELINE_TOKENS, FIVE_APPROVALS);
     world.record_baseline();
-    let card = world.candidate_card("one", BASELINE_TOKENS, FIVE_APPROVALS);
+    write(
+        &world.repo.join("crates/takt-cli/build.rs"),
+        &format!(
+            "{}{HOLD}",
+            TAKT_BUILD.replacen("fn main() {\n", "fn main() {\n    hold();\n", 1)
+        ),
+    );
+    let held = world.commit("hold");
+    let card = world.passing_card("one", &held);
     let second = world.outer.join("candidate-two");
     git(
         &world.outer,
@@ -2040,7 +2176,18 @@ fn two_promotions_at_once_record_and_install_exactly_one() {
             .expect("takt starts")
     };
     let first = spawn(&world.repo, &card);
-    let second_run = spawn(&second, &other_card);
+    wait_until("the first build to begin", || !building(&world).is_empty());
+    let mut second_run = spawn(&second, &other_card);
+    wait_until("the second promotion to exit or begin a build", || {
+        second_run
+            .try_wait()
+            .expect("the second's status")
+            .is_some()
+            || building(&world).len() > 1
+    });
+    for source in building(&world) {
+        write(&source.join("go"), "");
+    }
     let outputs: Vec<(i32, String, String)> = [first, second_run]
         .into_iter()
         .map(|child| {
@@ -2052,38 +2199,65 @@ fn two_promotions_at_once_record_and_install_exactly_one() {
             )
         })
         .collect();
-    let promoted: Vec<&(i32, String, String)> =
-        outputs.iter().filter(|(code, _, _)| *code == 0).collect();
-    assert_eq!(promoted.len(), 1, "exactly one promotes: {outputs:?}");
-    let refused: Vec<&(i32, String, String)> =
-        outputs.iter().filter(|(code, _, _)| *code != 0).collect();
-    assert_eq!(refused.len(), 1, "{outputs:?}");
-    let (code, _, err) = refused[0];
-    assert_eq!(*code, 1, "{err}");
+    let (code, out, err) = &outputs[0];
+    assert_eq!(*code, 0, "the first promotes: {out}{err}");
+    let (code, out, err) = &outputs[1];
+    assert_eq!(*code, 1, "the second is refused: {out}{err}");
     assert!(
-        err.contains("holds the store lock")
-            || err.contains("this UTC day already")
-            || err.contains("recorded already"),
-        "{err}"
+        err.contains("holds the store lock"),
+        "the second's refusal names the store's lock: {err}"
     );
-    let records = world.records();
-    assert_eq!(records.len(), 4, "one promotion recorded: {records:?}");
-    let recorded = records
-        .iter()
-        .find(|name| {
-            name.ends_with(".json")
-                && !name.ends_with(".scorecard.json")
-                && !name.starts_with(BASELINE_REVISION)
-        })
-        .expect("the promotion's record");
-    let record = world.record(recorded);
-    let revision = field(&record, "revision");
+    let promoted = [&outputs[0].1];
+    // The records form one chain from the baseline: each names the digest of the one before
+    // it, and every record in the store is on it.
+    let names: Vec<String> = world
+        .records()
+        .into_iter()
+        .filter(|name| !name.ends_with(".scorecard.json"))
+        .collect();
+    let mut chain = vec![format!("{BASELINE_REVISION}.json")];
+    while let Some(next) = names.iter().find(|name| {
+        let previous = sha256(&world.store.join(chain.last().expect("a record")));
+        world
+            .record(name)
+            .contains(&format!("\"previous_sha256\": \"{previous}\""))
+    }) {
+        chain.push(next.clone());
+    }
+    let mut sorted = chain.clone();
+    sorted.sort();
+    assert_eq!(sorted, names, "every record is on one chain: {chain:?}");
+    assert_eq!(
+        chain.len(),
+        1 + promoted.len(),
+        "a record a promotion, nothing else: {chain:?} {outputs:?}"
+    );
+    // Each promotion's installed binary is the one its record names.
+    for out in &promoted {
+        let line = out
+            .lines()
+            .find_map(|line| line.strip_prefix("promoted: "))
+            .unwrap_or_else(|| panic!("a promoted line: {out}"));
+        let (_, rest) = line.split_once(" at ").expect("the revision");
+        let (revision, rest) = rest.split_once(", sha256 ").expect("the digest");
+        let (digest, path) = rest.split_once("; recorded: ").expect("the record");
+        let record = fs::read_to_string(path).expect("the promotion's record");
+        assert_eq!(field(&record, "revision"), revision, "{record}");
+        assert_eq!(field(&record, "binary_sha256"), digest, "{record}");
+    }
+    let last = chain.last().expect("the latest record");
+    let record = world.record(last);
     assert_eq!(
         world.version(),
-        format!("takt 0.1.0 ({revision})"),
-        "the installed binary is the recorded one"
+        format!("takt 0.1.0 ({})", field(&record, "revision")),
+        "the installed binary is the latest record's"
     );
     assert_eq!(field(&record, "binary_sha256"), sha256(&world.installed()));
+    let text = fs::read_to_string(head(&world)).expect("the head");
+    assert!(
+        text.contains(&format!("\"{last}\"")) && text.contains(&sha256(&world.store.join(last))),
+        "the head names the last record: {text}"
+    );
 }
 
 /// A record removed from the store is noticed (probe N13): the installed binary must name the

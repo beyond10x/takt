@@ -212,6 +212,47 @@ fn judged(tree: &Path, dir: &Path, revision: &str, runs: &[String]) -> Result<Ju
     })
 }
 
+/// The home directory this user's passwd entry names (`getpwuid_r`), when it is an absolute path:
+/// where a command's toolchain lives when takt itself has no absolute `HOME`.
+#[cfg(unix)]
+fn passwd_home() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut buffer = vec![0_u8; 16 * 1024];
+    loop {
+        // SAFETY: `passwd` is plain data, all zeroes a valid value before the call fills it.
+        let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut found: *mut libc::passwd = std::ptr::null_mut();
+        // SAFETY: the entry, the buffer and its length, and the result pointer all outlive the
+        // call, which writes the entry's strings into the buffer.
+        let code = unsafe {
+            libc::getpwuid_r(
+                libc::getuid(),
+                &raw mut entry,
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &raw mut found,
+            )
+        };
+        if code == libc::ERANGE && buffer.len() < 1 << 20 {
+            buffer.resize(buffer.len() * 2, 0);
+            continue;
+        }
+        if code != 0 || found.is_null() || entry.pw_dir.is_null() {
+            return None;
+        }
+        // SAFETY: a NUL-terminated string in the buffer, which outlives this read.
+        let dir = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) };
+        let dir = PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes()));
+        return dir.is_absolute().then_some(dir);
+    }
+}
+
+/// No passwd entry to read where there is no unix.
+#[cfg(not(unix))]
+fn passwd_home() -> Option<PathBuf> {
+    None
+}
+
 /// An empty home made for one run of a test command or a gate's commands, outside the tree,
 /// removed when dropped. The command runs with `HOME` there and `PYTHONNOUSERSITE=1`, so
 /// nothing a step wrote in the caller's home (Python's user site, its start-up files) runs
@@ -241,13 +282,16 @@ impl FreshHome {
 
     /// What the command runs with, given what it would inherit (`inherited`): `HOME` this
     /// directory, `PYTHONNOUSERSITE=1`, `PYTHONDONTWRITEBYTECODE=1`, and `CARGO_HOME` and
-    /// `RUSTUP_HOME`, when it would inherit none, the caller's (its own variable, or `.cargo` and
-    /// `.rustup` in its home).
+    /// `RUSTUP_HOME`, when it would inherit none, the caller's: its own variable when it is an
+    /// absolute path, else `.cargo` and `.rustup` in its home, which is `HOME` when that is an
+    /// absolute path and else the home this user's passwd entry names ([`passwd_home`]). A
+    /// relative one is never taken, so neither resolves from the command's directory, the tree;
+    /// with no home at all they stay unset.
     fn vars(&self, inherited: impl Fn(&str) -> bool) -> Vec<(&'static str, std::ffi::OsString)> {
         let caller_home = std::env::var_os("HOME")
-            .filter(|home| !home.is_empty())
             .map(PathBuf::from)
-            .or_else(std::env::home_dir);
+            .filter(|home| home.is_absolute())
+            .or_else(passwd_home);
         let mut vars = vec![
             ("HOME", self.0.clone().into_os_string()),
             ("PYTHONNOUSERSITE", "1".into()),
@@ -258,7 +302,7 @@ impl FreshHome {
                 continue;
             }
             let caller = std::env::var_os(name)
-                .filter(|value| !value.is_empty())
+                .filter(|value| Path::new(value).is_absolute())
                 .or_else(|| caller_home.as_ref().map(|home| home.join(under).into()));
             vars.extend(caller.map(|value| (name, value)));
         }
@@ -395,7 +439,7 @@ fn nothing_recorded(summary: String) -> Observation {
 /// `tests.run`: runs the test command without a shell; exit 0 is `pass`, anything else `fail`.
 /// The command is code from the tree: it gets no credential, no standard input, a timeout past
 /// which it is killed with what it started, and only a bounded summary of its output is kept
-/// ([`summarise_tests`]).
+/// ([`summarise_tests`]), and no login of the user's ([`crate::forge::without_login`]).
 /// What decides it besides the code under test is on the run's judge surface, which no step
 /// changes: the cargo configuration, the toolchain, build scripts and the command's own script
 /// ([`crate::run::JudgeSurface`]). In a case, nothing is run and no record written while the
@@ -630,6 +674,7 @@ impl TestsRun {
         crate::forge::without_credentials(&mut command, |_| false);
         let home = FreshHome::new()?;
         home.apply(&mut command);
+        crate::forge::without_login(&mut command, home.dir());
         let mut limits = self.limits;
         if let Some(deadline) = deadline {
             limits.timeout = limits
@@ -637,6 +682,7 @@ impl TestsRun {
                 .min(deadline.saturating_duration_since(std::time::Instant::now()));
         }
         let output = crate::forge::run_child(&mut command, limits)
+            .map_err(crate::forge::refused_namespaces)
             .with_context(|| format!("run {}", self.command.join(" ")))?;
         drop(home);
         let result = if output.success() { "pass" } else { "fail" };

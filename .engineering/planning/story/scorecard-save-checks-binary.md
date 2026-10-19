@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scorecard-save-checks-binary
 kind: story
-status: active
+status: implemented
 title: takt scorecard --save checks the runs' binary against --revision
 tags:
 - finding
@@ -27,10 +27,11 @@ scope:
   path: ess/domains/takt.citations.tsv
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T06:11:33Z", actor: "human:timo", revision: 5}
 - {from: "proposed", to: "active", at: "2026-10-19T06:11:33Z", actor: "human:timo", revision: 6}
+- {from: "active", to: "implemented", at: "2026-10-19T14:11:44Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 

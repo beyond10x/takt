@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:check-finding-run-step-confined
 kind: story
-status: active
+status: implemented
 title: check-finding runs the predicate with the host read-only
 tags:
 - priority:high
@@ -16,10 +16,11 @@ scope:
   path: ess/domains/takt.citations.tsv
 - confidence: cited
   path: scripts/check-finding
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T06:11:34Z", actor: "human:timo", revision: 6}
 - {from: "proposed", to: "active", at: "2026-10-19T06:11:34Z", actor: "human:timo", revision: 7}
+- {from: "active", to: "implemented", at: "2026-10-19T14:11:44Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 

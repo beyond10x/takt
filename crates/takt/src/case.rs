@@ -1555,6 +1555,29 @@ pub fn current(tree: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// Refuses the case `id` under `tree` when a link stands on the way to its directory:
+/// `.engineering`, the cases directory or the case's own directory. What a link points at could
+/// be anywhere, in the tree or out of it, and a run snapshots the cases directory without
+/// following one, so a case reached through a link would be read and written where no snapshot
+/// sees it. `what` says what the case is not: `opened`, `resumed`.
+fn refuse_link_on_the_way(tree: &Path, id: &str, what: &str) -> Result<()> {
+    let mut way = PathBuf::new();
+    for part in Path::new(CASES_DIR).join(id).components() {
+        way.push(part);
+        let at = tree.join(&way);
+        if std::fs::symlink_metadata(&at).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            let target = std::fs::read_link(&at)
+                .with_context(|| format!("read the link {}", at.display()))?;
+            bail!(
+                "the case {id} is not {what}: {} is a link to {}; a case is never read or written through a link",
+                way.display(),
+                target.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// One case's files.
 #[derive(Debug, Clone)]
 pub struct CaseDir {
@@ -1599,6 +1622,7 @@ impl CaseDir {
         inputs: &[(String, String)],
     ) -> Result<Self> {
         check_id(id)?;
+        refuse_link_on_the_way(tree, id, "opened")?;
         let dir = tree.join(CASES_DIR).join(id);
         if dir.exists() {
             return Err(anyhow!("the case {id} already exists at {}", dir.display()));
@@ -1757,6 +1781,7 @@ impl CaseDir {
     /// hold when it starts ([`CaseDir::hold`]).
     pub fn resume(tree: &Path, id: &str) -> Result<Self> {
         check_id(id)?;
+        refuse_link_on_the_way(tree, id, "resumed")?;
         let dir = tree.join(CASES_DIR).join(id);
         let snapshot = dir.join("case.yaml");
         if !snapshot.is_file() {
@@ -1810,6 +1835,40 @@ impl CaseDir {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error).with_context(|| format!("remove {}", path.display())),
         }
+    }
+
+    /// Checks that every part of the way from the tree down to the case's directory, the
+    /// directory itself included, is a real directory, each read with `symlink_metadata` and
+    /// never followed: a link on it (one a step left at `.engineering` when its undo failed)
+    /// would take a write, an append or a removal under the case wherever it points. A run
+    /// writes, appends to and removes nothing under the case directory, its event log and its
+    /// hold among them, until this holds ([`crate::Run::run`]).
+    pub fn check_way(&self) -> Result<()> {
+        let mut way = PathBuf::new();
+        for part in Path::new(CASES_DIR).join(&self.id).components() {
+            way.push(part);
+            let at = self.tree.join(&way);
+            let meta =
+                std::fs::symlink_metadata(&at).with_context(|| format!("read {}", at.display()))?;
+            if meta.file_type().is_symlink() {
+                let target = std::fs::read_link(&at)
+                    .with_context(|| format!("read the link {}", at.display()))?;
+                bail!(
+                    "{} is a link to {}; nothing under the case {} is written through it",
+                    way.display(),
+                    target.display(),
+                    self.id
+                );
+            }
+            if !meta.is_dir() {
+                bail!(
+                    "{} is not a directory; nothing under the case {} is written there",
+                    way.display(),
+                    self.id
+                );
+            }
+        }
+        Ok(())
     }
 
     /// The number of the latest evaluation written under the case, the highest `n` of its

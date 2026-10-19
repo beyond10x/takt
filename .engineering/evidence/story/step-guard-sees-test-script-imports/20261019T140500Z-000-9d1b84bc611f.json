@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T14:05:00Z",
+  "actor": "human:timo",
+  "artifact": "story:step-guard-sees-test-script-imports",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "improvement turn 4 merged into wave 14 (b767fb5); task check on release commit 3ed8573: 1197 passed, 0 failed, 6 ignored",
+    "reference": "3ed8573"
+  }
+}

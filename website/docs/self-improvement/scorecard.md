@@ -47,7 +47,7 @@ scorecard's rule. When no scenario is worse it builds a fresh clone of that revi
 bubblewrap (`cargo build --locked --offline`, the environment cleared, only the clone, rustup's
 default toolchain and the registry cache visible), installs the binary, records the promotion
 under `~/.local/state/takt/promotions/`, where the latest record is the next baseline, and moves
-the binary into place. One promotion a UTC day, one at a time under the store's lock.
+the binary into place. Promotions run one at a time under the store's lock.
 
 Linux only ([Getting started](../getting-started.md#what-it-needs)).
 

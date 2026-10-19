@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:step-guard-sees-test-script-imports
 kind: story
-status: draft
+status: implemented
 title: A step cannot shadow the test runner the test script loads
 tags:
 - finding
@@ -12,7 +12,12 @@ refs:
 relations:
 - informed_by: review-result:findings-hunt-3fe3f21
 - informed_by: story:step-cannot-forge-its-validators
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T14:11:50Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-19T14:11:50Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-19T14:11:51Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 

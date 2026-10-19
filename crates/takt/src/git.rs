@@ -8,6 +8,7 @@
 //! Paths are read from `git status --porcelain=v1 -z`, never from trimmed or quoted text.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::{OsStr, OsString};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -1606,9 +1607,11 @@ pub struct GitDirPutBack {
 /// ([`Checkpoint::take_guarding`]); the index's entries
 /// and the index file itself; every uncommitted path outside the cases directory with what was
 /// at it (a validator's run may leave one); the ignored paths with what is at each a file git
-/// names; and what git runs, reads as configuration, or reads to find the objects and the
-/// history in the git directories: the hooks, `info/`, the configuration's keys, `commondir`,
-/// `gitdir`, `shallow`, `objects/info/alternates` and the commit-graph.
+/// names, and below each ignored directory every path by its kind and stamp; and what git runs,
+/// reads as configuration, or reads to find the objects and the history in the git
+/// directories: the hooks, `info/`, the configuration's keys, `commondir`, `gitdir`, `shallow`,
+/// `objects/info/alternates` and the commit-graph. Beside them, where discarding the step moves
+/// what it rewrote inside an ignored directory ([`Checkpoint::setting_aside_in`]).
 #[derive(Debug, Clone)]
 pub struct Checkpoint {
     head: String,
@@ -1618,11 +1621,12 @@ pub struct Checkpoint {
     index: Vec<u8>,
     index_file: Option<(PathBuf, Vec<u8>)>,
     dirty: BTreeMap<String, Content>,
-    ignored: BTreeMap<String, Content>,
+    ignored: BTreeMap<OsString, Content>,
     dot_git: Content,
     head_file: (PathBuf, Content),
     index_lock: (PathBuf, bool),
     git_dirs: Vec<GitDir>,
+    aside: Option<Aside>,
 }
 
 /// What a judgement step did to the tree, against its [`Checkpoint`].
@@ -1639,15 +1643,20 @@ pub struct StepChange {
     pub head: Option<String>,
     /// The guarded refs the step moved, made or deleted, each with how.
     pub refs: Vec<String>,
-    /// Ignored paths the step created.
-    pub ignored_added: Vec<String>,
-    /// Ignored files git names that the step rewrote.
-    pub ignored_changed: Vec<String>,
-    /// Ignored paths the step removed.
-    pub ignored_removed: Vec<String>,
+    /// Ignored paths the step created, inside an ignored directory that was there before it too;
+    /// each path as the file system holds it ([`shown`] names it).
+    pub ignored_added: Vec<OsString>,
+    /// Ignored files git names, and paths inside an ignored directory, that the step rewrote.
+    pub ignored_changed: Vec<OsString>,
+    /// Ignored paths the step removed, inside an ignored directory too.
+    pub ignored_removed: Vec<OsString>,
     /// Those of the rewritten or removed ignored paths of which nothing was kept to put back (a
-    /// whole ignored directory, a file too large to keep or unreadable).
-    pub ignored_lost: Vec<String>,
+    /// whole ignored directory, a path inside one, a file too large to keep or unreadable).
+    pub ignored_lost: Vec<OsString>,
+    /// Those of the rewritten files inside an ignored directory that discarding the step moves
+    /// out of the tree, into [`Checkpoint::aside`] at the same relative path: nothing of them
+    /// was kept to put back, and nothing the operator had is deleted.
+    pub ignored_set_aside: Vec<OsString>,
 }
 
 /// The index's entries: mode, object, stage, the assume-unchanged and skip-worktree flags, path.
@@ -1716,14 +1725,484 @@ fn guarded_refs(tree: &Path, unguarded: &BTreeSet<String>) -> Result<BTreeMap<St
 }
 
 /// What is at each ignored path of `entries`: the content of a file git names, a directory as
-/// itself.
-fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<String, Content>> {
-    ignored(entries)
-        .into_iter()
-        .map(|path| {
-            Content::of(&tree.join(path.trim_end_matches('/'))).map(|content| (path, content))
-        })
-        .collect()
+/// itself and, since git names an ignored directory as one entry, every path below it as well
+/// ([`below`]). Each path is kept as the bytes the file system holds, a name that is not UTF-8
+/// among them, so that what is found is what is put back.
+fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<OsString, Content>> {
+    let mut found = BTreeMap::new();
+    for path in ignored(entries) {
+        let path = OsString::from(path);
+        let content = Content::of(&at(tree, &path))?;
+        if content == Content::Dir {
+            below(tree, &path, &mut found)?;
+        }
+        // A directory that cannot be listed was recorded as such by [`below`].
+        found.entry(path).or_insert(content);
+    }
+    Ok(found)
+}
+
+/// The full path of `path`, relative to `tree`, a directory's `/` at its end dropped.
+fn at(tree: &Path, path: &OsStr) -> PathBuf {
+    tree.join(Path::new(path).components().as_path())
+}
+
+/// Whether `path`, as an ignored path is kept, names a directory: it ends in `/`.
+fn names_dir(path: &OsStr) -> bool {
+    path.as_encoded_bytes().ends_with(b"/")
+}
+
+/// How a refusal names a path: as text where it is UTF-8, each `\` doubled and each byte that is
+/// not UTF-8 as `\x..`, so a name holding the text `\xff` and one holding the byte 0xff read
+/// apart; each control character escaped and the home directory as `~`
+/// ([`crate::trace::escape`]), so no name can shape a line of its own.
+#[must_use]
+pub fn shown(path: &OsStr) -> String {
+    let mut text = String::new();
+    for chunk in path.as_encoded_bytes().utf8_chunks() {
+        text.push_str(&chunk.valid().replace('\\', "\\\\"));
+        for byte in chunk.invalid() {
+            text.push_str(&format!("\\x{byte:02x}"));
+        }
+    }
+    crate::trace::escape(&text)
+}
+
+/// Each path below the ignored directory `dir` (relative to the tree, ending in `/`) outside the
+/// cases directory, into `found`: a directory as itself, its path ending in `/`, and what is in
+/// it in turn; a link as the link, never followed; anything else by its kind and [`Stamp`],
+/// never opened, so that a large `target/` costs one `lstat` a path and nothing of it is kept to
+/// put back. A directory that cannot be listed is compared by its stamp alone.
+fn below(tree: &Path, dir: &OsStr, found: &mut BTreeMap<OsString, Content>) -> Result<()> {
+    let full = at(tree, dir);
+    let listed = match std::fs::read_dir(&full) {
+        Ok(listed) => listed,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let meta = std::fs::symlink_metadata(&full)
+                .with_context(|| format!("read {}", full.display()))?;
+            found.insert(
+                dir.to_owned(),
+                Content::Opaque {
+                    what: "a directory that cannot be listed",
+                    stamp: Stamp::of(&meta),
+                },
+            );
+            return Ok(());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).with_context(|| format!("list {}", full.display())),
+    };
+    for entry in listed {
+        let entry = entry.with_context(|| format!("list {}", full.display()))?;
+        let mut path = dir.to_owned();
+        path.push(entry.file_name());
+        // The cases directory's name is ASCII: a name that is not UTF-8 is never under it.
+        if is_under_cases(&path.to_string_lossy()) {
+            continue;
+        }
+        let meta = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| format!("read {}", entry.path().display()));
+            }
+        };
+        let kind = meta.file_type();
+        if kind.is_dir() {
+            path.push("/");
+            below(tree, &path, found)?;
+            found.entry(path).or_insert(Content::Dir);
+        } else if kind.is_symlink() {
+            let target = std::fs::read_link(entry.path())
+                .with_context(|| format!("read {}", entry.path().display()))?;
+            found.insert(path, Content::Link(target));
+        } else {
+            let what = if kind.is_file() {
+                "a file in an ignored directory"
+            } else {
+                "not a file (a FIFO, a socket or a device)"
+            };
+            found.insert(
+                path,
+                Content::Opaque {
+                    what,
+                    stamp: Stamp::of(&meta),
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+/// What discarding a step did with the files it rewrote inside an ignored directory
+/// ([`Checkpoint::restore`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SetAside {
+    /// The directory they were moved to, made new for this step; none when there was nothing to
+    /// move or it could not be made.
+    pub dir: Option<PathBuf>,
+    /// The paths moved there, each at its own path relative to the tree under [`Self::dir`].
+    pub moved: Vec<OsString>,
+    /// The paths that could not be moved, each with why; they are as the step left them.
+    pub failed: Vec<(OsString, String)>,
+}
+
+/// How many paths a refusal names before it counts the rest; a build inside an ignored
+/// directory changes thousands.
+const NAMED_AT_MOST: usize = 20;
+
+/// How a refusal names paths: the first [`NAMED_AT_MOST`], each as [`shown`] names it, and how
+/// many more.
+#[must_use]
+pub fn paths_named(paths: &[OsString]) -> String {
+    let mut named = paths
+        .iter()
+        .take(NAMED_AT_MOST)
+        .map(|path| shown(path))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if paths.len() > NAMED_AT_MOST {
+        named.push_str(&format!(" and {} more", paths.len() - NAMED_AT_MOST));
+    }
+    named
+}
+
+impl SetAside {
+    /// Each of `paths` named as not moved, with `why`: what a discard says when it moves
+    /// nothing because the tree could not be put back whole.
+    #[must_use]
+    pub fn not_moved(paths: &[OsString], why: &str) -> Self {
+        Self {
+            failed: paths
+                .iter()
+                .map(|path| (path.clone(), why.to_owned()))
+                .collect(),
+            ..Self::default()
+        }
+    }
+
+    /// What every message about a discarded harness step adds for these files: where they went
+    /// and which they are, and which could not be moved and why, each path and each reason
+    /// escaped; nothing when there were none. The one place that says it, whichever way the
+    /// step was discarded, and the error a restore that could not finish ends on carries it too.
+    #[must_use]
+    pub fn named(&self) -> String {
+        let mut named = String::new();
+        if let Some(dir) = &self.dir
+            && !self.moved.is_empty()
+        {
+            named.push_str(&format!(
+                "; moved out of the tree, not deleted, into {}: {}",
+                shown(dir.as_os_str()),
+                paths_named(&self.moved)
+            ));
+        }
+        if !self.failed.is_empty() {
+            let mut failed = self
+                .failed
+                .iter()
+                .take(NAMED_AT_MOST)
+                .map(|(path, why)| format!("{} ({})", shown(path), crate::trace::escape(why)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if self.failed.len() > NAMED_AT_MOST {
+                failed.push_str(&format!(" and {} more", self.failed.len() - NAMED_AT_MOST));
+            }
+            named.push_str(&format!(
+                "; could not be moved out of the tree, left as the step left it: {failed}"
+            ));
+        }
+        named
+    }
+}
+
+/// `dir` resolved, when a set-aside root can be: absolute, outside `tree` (through any link on the
+/// way to either), and with a directory, not a file, where its way ends among what exists. The
+/// path returned holds no link: every link on the way that exists now is resolved, so a link
+/// planted on it later is refused, never followed ([`DirFd::open`]). Nothing is made; the error
+/// says which it is not.
+pub fn set_aside_root(dir: &Path, tree: &Path) -> Result<PathBuf> {
+    if !dir.is_absolute() {
+        bail!(
+            "the set-aside directory {} is not an absolute path",
+            dir.display()
+        );
+    }
+    // The longest part of the way that exists, and the rest as it is.
+    let mut rest = PathBuf::new();
+    let mut base = dir;
+    while std::fs::symlink_metadata(base).is_err() {
+        match (base.parent(), base.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest = if rest.as_os_str().is_empty() {
+                    PathBuf::from(name)
+                } else {
+                    Path::new(name).join(rest)
+                };
+                base = parent;
+            }
+            _ => break,
+        }
+    }
+    if !std::fs::metadata(base).is_ok_and(|meta| meta.is_dir()) {
+        bail!(
+            "the set-aside directory {} cannot be made: {} is not a directory",
+            dir.display(),
+            base.display()
+        );
+    }
+    let resolved = std::fs::canonicalize(base)
+        .with_context(|| format!("resolve {}", base.display()))?
+        .join(rest);
+    let tree_resolved = std::fs::canonicalize(tree).unwrap_or_else(|_| tree.to_path_buf());
+    if resolved.starts_with(&tree_resolved) || dir.starts_with(tree) {
+        bail!(
+            "the set-aside directory {} is inside the tree {}, where a later restore would remove what was moved",
+            dir.display(),
+            tree.display()
+        );
+    }
+    Ok(resolved)
+}
+
+/// Where discarding a harness step moves what it rewrote: the root [`set_aside_root`] accepted,
+/// resolved; the case's own directory under it; the step's directory under that, its name
+/// before a `-2`, `-3` is put after it ([`fresh_dir`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Aside {
+    root: PathBuf,
+    case: OsString,
+    step: String,
+}
+
+/// A directory, opened so that no link on the way to it was followed ([`Self::open`]): a harness
+/// step's rewrites are moved through these, never through a path the step could have turned
+/// into a link after it was checked.
+#[cfg(unix)]
+struct DirFd(std::os::fd::OwnedFd);
+
+/// `name` as the C string a system call takes.
+#[cfg(unix)]
+fn c_name(name: &OsStr) -> std::io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt as _;
+    std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+}
+
+#[cfg(unix)]
+impl DirFd {
+    /// `path`, absolute, opened from `/` one part at a time, each a directory opened without
+    /// following a link (`O_NOFOLLOW`); a part that does not exist is made first (`mkdirat`,
+    /// mode 0700) when `make`. A link, a file or anything else on the way is the error.
+    fn open(path: &Path, make: bool) -> std::io::Result<Self> {
+        use std::path::Component;
+        let mut dir = Self::at(libc::AT_FDCWD, OsStr::new("/"))?;
+        for part in path.components() {
+            match part {
+                Component::RootDir => {}
+                Component::Normal(name) => dir = dir.child(name, make)?,
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("{} is not a plain absolute path", path.display()),
+                    ));
+                }
+            }
+        }
+        Ok(dir)
+    }
+
+    /// The directory `name` in `fd`, opened without following a link.
+    fn at(fd: libc::c_int, name: &OsStr) -> std::io::Result<Self> {
+        use std::os::fd::FromRawFd as _;
+        let name = c_name(name)?;
+        // SAFETY: a NUL-terminated name and a descriptor (or `AT_FDCWD`) that outlive the call.
+        let opened = unsafe {
+            libc::openat(
+                fd,
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if opened < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: a descriptor this call opened, owned by nothing else.
+        Ok(Self(unsafe { std::os::fd::OwnedFd::from_raw_fd(opened) }))
+    }
+
+    fn raw(&self) -> libc::c_int {
+        use std::os::fd::AsRawFd as _;
+        self.0.as_raw_fd()
+    }
+
+    /// The directory `name` in this one, made first when it does not exist and `make`.
+    fn child(&self, name: &OsStr, make: bool) -> std::io::Result<Self> {
+        match Self::at(self.raw(), name) {
+            Err(error) if make && error.kind() == std::io::ErrorKind::NotFound => {
+                self.make(name)?;
+                Self::at(self.raw(), name)
+            }
+            opened => opened,
+        }
+    }
+
+    /// Makes the directory `name` in this one: true when this call made it, false when
+    /// something was there already.
+    fn make(&self, name: &OsStr) -> std::io::Result<bool> {
+        let name = c_name(name)?;
+        // SAFETY: a NUL-terminated name and a descriptor that outlive the call.
+        if unsafe { libc::mkdirat(self.raw(), name.as_ptr(), 0o700) } == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            Ok(false)
+        } else {
+            Err(error)
+        }
+    }
+
+    /// Removes `name` in this one, a link as the link.
+    fn unlink(&self, name: &OsStr) -> std::io::Result<()> {
+        let name = c_name(name)?;
+        // SAFETY: a NUL-terminated name and a descriptor that outlive the call.
+        if unsafe { libc::unlinkat(self.raw(), name.as_ptr(), 0) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+}
+
+/// `step`, or `step-2`, `step-3` and so on, in `case`: the first this call made, never one that
+/// was there, so that no two steps ever share one; its name and the directory, opened.
+#[cfg(unix)]
+fn fresh_dir(case: &DirFd, step: &str) -> std::io::Result<(String, DirFd)> {
+    for n in 1..=10_000_u32 {
+        let name = if n == 1 {
+            step.to_owned()
+        } else {
+            format!("{step}-{n}")
+        };
+        if case.make(OsStr::new(&name))? {
+            let dir = case.child(OsStr::new(&name), false)?;
+            return Ok((name, dir));
+        }
+    }
+    Err(std::io::Error::other(format!(
+        "no new directory beside {step} could be made"
+    )))
+}
+
+/// Moves what is at `from` (a link as the link) to `name` in `dir`, never over anything there:
+/// renamed without replacing, else copied ([`copy_into`]) when the two are on different file
+/// systems.
+#[cfg(unix)]
+fn move_into(from: &Path, dir: &DirFd, name: &OsStr) -> Result<()> {
+    let (source, target) = (c_name(from.as_os_str())?, c_name(name)?);
+    match rename_no_replace(&source, dir, &target) {
+        Ok(()) => Ok(()),
+        Err(error) if error.raw_os_error() == Some(libc::EXDEV) => copy_into(from, dir, name),
+        Err(error) => Err(error).with_context(|| format!("move {} aside", from.display())),
+    }
+}
+
+/// Renames `from` to `name` in `dir`, failing when something is there, never replacing it:
+/// `renameat2` with `RENAME_NOREPLACE`, else, where the file system or the kernel has no such
+/// flag, a hard link (which fails on what is there) and then the unlink.
+#[cfg(unix)]
+fn rename_no_replace(
+    from: &std::ffi::CStr,
+    dir: &DirFd,
+    name: &std::ffi::CStr,
+) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: NUL-terminated names and a descriptor that outlive the call.
+        let done = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                dir.raw(),
+                name.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if done == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if !matches!(error.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS)) {
+            return Err(error);
+        }
+    }
+    // SAFETY: NUL-terminated names and a descriptor that outlive the call.
+    if unsafe { libc::linkat(libc::AT_FDCWD, from.as_ptr(), dir.raw(), name.as_ptr(), 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: a NUL-terminated name that outlives the call.
+    if unsafe { libc::unlink(from.as_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Copies the regular file `from` to `name` in `dir`, which must not exist, then removes
+/// `from`: the bytes synced to disk, their count checked against the source's length, its mode
+/// and modification time kept. Anything but a regular file is refused, and so is a source that
+/// became a link; a copy that fails is removed, never left half made.
+#[cfg(unix)]
+fn copy_into(from: &Path, dir: &DirFd, name: &OsStr) -> Result<()> {
+    use std::os::fd::FromRawFd as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let meta =
+        std::fs::symlink_metadata(from).with_context(|| format!("read {}", from.display()))?;
+    if !meta.is_file() {
+        bail!(
+            "{} is not a regular file, and only a file is copied across file systems",
+            from.display()
+        );
+    }
+    let mut source = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(from)
+        .with_context(|| format!("open {}", from.display()))?;
+    let target_name = c_name(name)?;
+    // SAFETY: a NUL-terminated name and a descriptor that outlive the call.
+    let opened = unsafe {
+        libc::openat(
+            dir.raw(),
+            target_name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600 as libc::c_uint,
+        )
+    };
+    if opened < 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("make the copy of {}", from.display()));
+    }
+    // SAFETY: a descriptor this call opened, owned by nothing else.
+    let mut target = std::fs::File::from(unsafe { std::os::fd::OwnedFd::from_raw_fd(opened) });
+    let copied = (|| -> Result<()> {
+        let count = std::io::copy(&mut source, &mut target)?;
+        if count != meta.len() {
+            bail!("copied {count} bytes of {}", meta.len());
+        }
+        target.set_permissions(meta.permissions())?;
+        if let Ok(modified) = meta.modified() {
+            target.set_modified(modified)?;
+        }
+        target.sync_all()?;
+        Ok(())
+    })();
+    drop(target);
+    if let Err(error) = copied {
+        let _ = dir.unlink(name);
+        return Err(error.context(format!("copy {} aside", from.display())));
+    }
+    std::fs::remove_file(from).with_context(|| format!("remove {}", from.display()))
 }
 
 impl Checkpoint {
@@ -1777,6 +2256,7 @@ impl Checkpoint {
             index_file,
             dirty,
             ignored: ignored_contents(tree, &entries)?,
+            aside: None,
             dot_git,
             head_file,
             index_lock,
@@ -1795,9 +2275,10 @@ impl Checkpoint {
     /// named in [`GitDirPutBack::failed`] and the rest is still put back.
     pub fn put_back_git_dir(&self, tree: &Path) -> GitDirPutBack {
         let mut found = GitDirPutBack::default();
+        // Each path as [`shown`] names it: a name the step chose shapes no line of a refusal.
         let shown = |path: &Path| match path.strip_prefix(tree) {
-            Ok(inside) => inside.display().to_string(),
-            Err(_) => path.display().to_string(),
+            Ok(inside) => shown(inside.as_os_str()),
+            Err(_) => shown(path.as_os_str()),
         };
         let dot_git = tree.join(".git");
         match Content::of(&dot_git) {
@@ -1935,6 +2416,13 @@ impl Checkpoint {
                 }
             }
         }
+        // What went wrong quotes paths too; escaped once more, which changes nothing already
+        // escaped ([`crate::trace::escape`]).
+        found.failed = found
+            .failed
+            .iter()
+            .map(|failed| crate::trace::escape(failed))
+            .collect();
         found
     }
 
@@ -2010,7 +2498,135 @@ impl Checkpoint {
                 }
             }
         }
+        change.ignored_set_aside = self.set_aside_of(&ignored);
         Ok(change)
+    }
+
+    /// Where discarding the step moves what it rewrote inside an ignored directory
+    /// ([`StepChange::ignored_set_aside`]): `<root>/<case>/<step>`, or, when something is there
+    /// already as the step is discarded, `<step>-2`, `<step>-3` and so on, each made new for
+    /// this step and never shared with another ([`fresh_dir`]). `root` is one
+    /// [`set_aside_root`] returned; every directory from `/` down is opened without following a
+    /// link ([`DirFd::open`]), so a link a step planted there since is refused, never followed.
+    /// None unless given; nothing is moved then.
+    #[must_use]
+    pub fn setting_aside_in(mut self, root: PathBuf, case: OsString, step: String) -> Self {
+        self.aside = Some(Aside { root, case, step });
+        self
+    }
+
+    /// The files of `now`, inside an ignored directory of this checkpoint, that the step
+    /// rewrote, of which nothing was kept: what discarding it moves aside, when it was given
+    /// somewhere to move them ([`Self::setting_aside_in`]).
+    fn set_aside_of(&self, now: &BTreeMap<OsString, Content>) -> Vec<OsString> {
+        if self.aside.is_none() {
+            return Vec::new();
+        }
+        now.iter()
+            .filter(|(path, content)| {
+                !names_dir(path)
+                    && self.ignored.get(*path).is_some_and(|before| {
+                        !before.can_be_put_back() && before != *content && self.is_inside_dir(path)
+                    })
+            })
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
+
+    /// Moves each of `paths` ([`Self::restore`] answers them), relative to `tree`, to the same
+    /// relative path under a directory made new for this step ([`fresh_dir`]): called last, once
+    /// everything else of the step is put back, since their way runs through the tree. A file
+    /// inside an ignored directory the step rewrote, of which nothing was kept, may decide the
+    /// next test run (a build's output, a cache), so it leaves the tree; it may be the operator's
+    /// own file the step only touched, so it is moved aside, never deleted. Every one is
+    /// attempted whatever became of the one before; what could not be moved is named with why,
+    /// and stays as the step left it. When
+    /// the root or the case's directory is no longer a real directory (a link, a file), nothing
+    /// is moved, and each file is named with that.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn set_aside(&self, tree: &Path, paths: &[OsString]) -> SetAside {
+        let mut done = SetAside::default();
+        let Some(aside) = &self.aside else {
+            return done;
+        };
+        if paths.is_empty() {
+            return done;
+        }
+        let case_path = aside.root.join(&aside.case);
+        let step = DirFd::open(&aside.root, true)
+            .map_err(|error| {
+                format!(
+                    "the set-aside directory {} is not a directory that can be reached without a link: {error}",
+                    aside.root.display()
+                )
+            })
+            .and_then(|root| {
+                root.child(&aside.case, true).map_err(|error| {
+                    format!(
+                        "the set-aside directory {} is not a directory that can be reached without a link: {error}",
+                        case_path.display()
+                    )
+                })
+            })
+            .and_then(|case| {
+                fresh_dir(&case, &aside.step).map_err(|error| {
+                    format!(
+                        "no directory for the step could be made in {}: {error}",
+                        case_path.display()
+                    )
+                })
+            });
+        let (name, step) = match step {
+            Ok(step) => step,
+            Err(why) => {
+                done.failed = paths
+                    .iter()
+                    .map(|path| (path.clone(), why.clone()))
+                    .collect();
+                return done;
+            }
+        };
+        for path in paths {
+            let moved = (|| -> Result<()> {
+                let relative = Path::new(path);
+                let file = relative
+                    .file_name()
+                    .ok_or_else(|| anyhow!("{} names no file", relative.display()))?;
+                let mut parent = DirFd::at(step.raw(), OsStr::new("."))?;
+                if let Some(dirs) = relative.parent() {
+                    for part in dirs.components() {
+                        parent = parent.child(part.as_os_str(), true)?;
+                    }
+                }
+                move_into(&at(tree, path), &parent, file)
+            })();
+            match moved {
+                Ok(()) => done.moved.push(path.clone()),
+                Err(error) => done.failed.push((path.clone(), format!("{error:#}"))),
+            }
+        }
+        done.dir = Some(case_path.join(name));
+        done
+    }
+
+    /// Without a file system that opens a directory without following a link, nothing is moved
+    /// aside; each file is named with why and stays as the step left it.
+    #[cfg(not(unix))]
+    #[must_use]
+    pub fn set_aside(&self, _tree: &Path, paths: &[OsString]) -> SetAside {
+        SetAside {
+            failed: paths
+                .iter()
+                .map(|path| {
+                    (
+                        path.clone(),
+                        "moving a file aside needs a unix file system".to_owned(),
+                    )
+                })
+                .collect(),
+            ..SetAside::default()
+        }
     }
 
     /// Puts the tree back to this checkpoint: everything the step did is discarded and
@@ -2018,12 +2634,15 @@ impl Checkpoint {
     /// reads as configuration first (a path it could not put back was reported by
     /// [`Self::put_back_git_dir`] and is not again here); then `HEAD`, its branch and the
     /// guarded refs; the tracked files and the index to `HEAD`; untracked files and the ignored
-    /// paths the step created removed; ignored files git names written again as they were; the
-    /// paths uncommitted before written again as they were; the index file as it was. The cases
-    /// directory is not touched here (it is the kernel's, put back by the run). Of an ignored
-    /// directory, a file too large to keep or one that could not be read nothing is kept to put
-    /// back. Checked afterwards: a tree that still differs is an error, not a refusal.
-    pub fn restore(&self, tree: &Path) -> Result<()> {
+    /// paths the step created removed, inside an ignored directory too; ignored files git names
+    /// written again as they were; the paths uncommitted before written again as they were; the
+    /// index file as it was. The cases directory is not touched here (it is the kernel's, put
+    /// back by the run). Of an ignored directory, a file inside one, a file too large to keep or
+    /// one that could not be read nothing is kept to put back. Checked afterwards: a tree that
+    /// still differs is an error, not a refusal. Answers the files inside an ignored directory the
+    /// step rewrote, of which nothing was kept, due to be moved aside ([`Self::set_aside`]) once
+    /// everything else of the step is put back too; nothing is moved here.
+    pub fn restore(&self, tree: &Path) -> Result<Vec<OsString>> {
         let _ = self.put_back_git_dir(tree);
         match &self.branch {
             Some(branch) => {
@@ -2055,15 +2674,16 @@ impl Checkpoint {
         let keep = format!("{CASES_DIR}/");
         run(tree, &["reset", "-q", "--hard", &self.head])?;
         run(tree, &["clean", "-fdq", "-e", &keep])?;
-        let now = ignored(&status(tree, true)?);
-        for path in &now {
+        let now = ignored_contents(tree, &status(tree, true)?)?;
+        let to_move = self.set_aside_of(&now);
+        for path in now.keys() {
             if !self.ignored.contains_key(path) {
-                Content::Absent.put_back(&tree.join(path.trim_end_matches('/')))?;
+                Content::Absent.put_back(&at(tree, path))?;
             }
         }
         for (path, content) in &self.ignored {
             if content.can_be_put_back() && *content != Content::Dir {
-                content.put_back(&tree.join(path.trim_end_matches('/')))?;
+                content.put_back(&at(tree, path))?;
             }
         }
         for (path, content) in &self.dirty {
@@ -2079,9 +2699,30 @@ impl Checkpoint {
             || !left.refs.is_empty()
             || !left.ignored_added.is_empty()
         {
-            bail!("the tree could not be put back as it was before the step: {left:?}");
+            bail!(
+                "the tree could not be put back as it was before the step: {left:?}{}",
+                SetAside::not_moved(
+                    &to_move,
+                    "the tree could not be put back, so nothing was moved out of it"
+                )
+                .named()
+            );
         }
-        Ok(())
+        Ok(to_move)
+    }
+
+    /// Whether the ignored path `path` lies inside an ignored directory of this checkpoint,
+    /// rather than being one git names by itself.
+    fn is_inside_dir(&self, path: &OsStr) -> bool {
+        Path::new(path)
+            .ancestors()
+            .skip(1)
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .any(|dir| {
+                let mut key = dir.as_os_str().to_owned();
+                key.push("/");
+                self.ignored.get(&key) == Some(&Content::Dir)
+            })
     }
 }
 
@@ -2439,6 +3080,226 @@ mod tests {
         assert!(parse_status(b"R  only-target\0").is_err());
         assert!(parse_status(b"?? \xff\0").is_err());
         assert!(parse_status(b"").expect("reads").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_is_shown_byte_for_byte_and_shapes_no_line() {
+        use std::os::unix::ffi::OsStrExt as _;
+        assert_eq!(shown(OsStr::new("build/a b.o")), "build/a b.o");
+        assert_eq!(shown(OsStr::from_bytes(b"build/\xffx.o")), "build/\\xffx.o");
+        assert_ne!(
+            shown(OsStr::from_bytes(b"build/\xffx.o")),
+            shown(OsStr::from_bytes(b"build/\xfex.o"))
+        );
+        assert_eq!(shown(OsStr::new("a\n  effect: b")), "a\\u{a}  effect: b");
+        // The text `\xff` and the byte 0xff read apart: a `\` is doubled.
+        assert_eq!(shown(OsStr::new("build/\\xffx.o")), "build/\\\\xffx.o");
+        assert_ne!(
+            shown(OsStr::new("build/\\xffx.o")),
+            shown(OsStr::from_bytes(b"build/\xffx.o"))
+        );
+        assert_eq!(
+            at(Path::new("/srv/t"), OsStr::new("build/sub/")),
+            Path::new("/srv/t/build/sub")
+        );
+        assert!(
+            !at(Path::new("/srv/t"), OsStr::new("build/sub/"))
+                .as_os_str()
+                .as_encoded_bytes()
+                .ends_with(b"/")
+        );
+    }
+
+    /// A scratch directory under this worktree's build directory, removed when dropped.
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/tmp")
+            .join(format!("git-unit-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        Scratch(std::fs::canonicalize(&dir).expect("resolves"))
+    }
+
+    #[test]
+    fn a_set_aside_root_is_absolute_outside_the_tree_and_makeable() {
+        let s = scratch("root");
+        let tree = s.0.join("tree");
+        std::fs::create_dir_all(tree.join("sub")).expect("a directory");
+        let outside = s.0.join("state/takt/set-aside");
+        assert_eq!(set_aside_root(&outside, &tree).expect("accepted"), outside);
+        assert!(
+            !set_aside_root(&outside, &tree)
+                .expect("accepted")
+                .as_os_str()
+                .as_encoded_bytes()
+                .ends_with(b"/"),
+            "a root that does not exist yet is named without a `/` after it"
+        );
+        // A link on the way that is there now is resolved, so none is left to follow later.
+        #[cfg(unix)]
+        {
+            std::fs::create_dir_all(s.0.join("state")).expect("a directory");
+            std::os::unix::fs::symlink(s.0.join("state"), s.0.join("via")).expect("a link");
+            assert_eq!(
+                set_aside_root(&s.0.join("via/takt"), &tree).expect("accepted"),
+                s.0.join("state/takt")
+            );
+        }
+        assert!(set_aside_root(Path::new("relative/aside"), &tree).is_err());
+        // Relative, though its way starts where the test runs and exists.
+        assert!(set_aside_root(Path::new("./aside"), &tree).is_err());
+        assert!(set_aside_root(&tree.join("sub/aside"), &tree).is_err());
+        assert!(set_aside_root(&tree, &tree).is_err());
+        // Through a link that leads into the tree.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&tree, s.0.join("into-tree")).expect("a link");
+            assert!(set_aside_root(&s.0.join("into-tree/aside"), &tree).is_err());
+        }
+        // A file where the way should go on.
+        std::fs::write(s.0.join("a-file"), "x").expect("a file");
+        assert!(set_aside_root(&s.0.join("a-file/aside"), &tree).is_err());
+        assert!(set_aside_root(&s.0.join("a-file"), &tree).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fresh_dir_is_never_one_that_exists() {
+        let s = scratch("fresh");
+        let case = DirFd::open(&s.0.join("rv"), true).expect("the case directory");
+        assert_eq!(fresh_dir(&case, "step-2").expect("made").0, "step-2");
+        assert_eq!(fresh_dir(&case, "step-2").expect("made").0, "step-2-2");
+        std::fs::write(s.0.join("rv/step-2-3"), "x").expect("a file in the way");
+        std::os::unix::fs::symlink(&s.0, s.0.join("rv/step-2-4")).expect("a link in the way");
+        assert_eq!(fresh_dir(&case, "step-2").expect("made").0, "step-2-5");
+        assert!(s.0.join("rv/step-2-5").is_dir());
+    }
+
+    /// A link anywhere on the way, the last part or one before it, is refused, never followed;
+    /// a part that is not there is made only when asked.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_is_opened_without_following_a_link_on_the_way() {
+        let s = scratch("nofollow");
+        let real = s.0.join("real");
+        std::fs::create_dir_all(real.join("inner")).expect("a directory");
+        std::os::unix::fs::symlink(&real, s.0.join("link")).expect("a link");
+        assert!(DirFd::open(&s.0.join("link"), true).is_err());
+        assert!(DirFd::open(&s.0.join("link/inner"), true).is_err());
+        assert!(DirFd::open(&s.0.join("link/made"), true).is_err());
+        assert!(!real.join("made").exists(), "made through the link");
+        assert!(DirFd::open(&s.0.join("absent"), false).is_err());
+        assert!(!s.0.join("absent").exists());
+        DirFd::open(&s.0.join("made/deeper"), true).expect("made");
+        assert!(s.0.join("made/deeper").is_dir());
+        let dir = DirFd::open(&real, false).expect("opened");
+        assert!(dir.child(OsStr::new("inner"), false).is_ok());
+        std::os::unix::fs::symlink(&real, real.join("back")).expect("a link");
+        assert!(dir.child(OsStr::new("back"), true).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn moving_aside_never_replaces_what_is_there() {
+        let s = scratch("noreplace");
+        let from = s.0.join("from.o");
+        std::fs::write(&from, "step").expect("a file");
+        let dir = DirFd::open(&s.0.join("aside"), true).expect("a directory");
+        std::fs::write(s.0.join("aside/from.o"), "there").expect("a file");
+        assert!(move_into(&from, &dir, OsStr::new("from.o")).is_err());
+        assert_eq!(std::fs::read_to_string(&from).expect("kept"), "step");
+        assert_eq!(
+            std::fs::read_to_string(s.0.join("aside/from.o")).expect("kept"),
+            "there"
+        );
+        move_into(&from, &dir, OsStr::new("moved.o")).expect("moved");
+        assert!(!from.exists());
+        assert_eq!(
+            std::fs::read_to_string(s.0.join("aside/moved.o")).expect("moved"),
+            "step"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_aside_keeps_bytes_mode_and_time_and_removes_the_source() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let s = scratch("copy");
+        let from = s.0.join("from.o");
+        let dir = DirFd::open(&s.0.join("aside"), true).expect("a directory");
+        let to = s.0.join("aside/to.o");
+        std::fs::write(&from, "the operator's bytes").expect("a file");
+        std::fs::set_permissions(&from, std::fs::Permissions::from_mode(0o640)).expect("a mode");
+        let when = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&from)
+            .expect("opens")
+            .set_modified(when)
+            .expect("a time");
+        copy_into(&from, &dir, OsStr::new("to.o")).expect("copied");
+        assert!(!from.exists(), "the source is removed");
+        let meta = std::fs::metadata(&to).expect("the copy");
+        assert_eq!(
+            std::fs::read_to_string(&to).expect("read"),
+            "the operator's bytes"
+        );
+        assert_eq!(meta.permissions().mode() & 0o777, 0o640);
+        assert_eq!(meta.modified().expect("a time"), when);
+        // Never over what is there.
+        std::fs::write(&from, "again").expect("a file");
+        assert!(copy_into(&from, &dir, OsStr::new("to.o")).is_err());
+        assert_eq!(std::fs::read_to_string(&from).expect("kept"), "again");
+        assert_eq!(
+            std::fs::read_to_string(&to).expect("kept"),
+            "the operator's bytes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_aside_takes_nothing_but_a_regular_file_and_leaves_no_half_copy() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let s = scratch("copy-refused");
+        let dir = DirFd::open(&s.0.join("aside"), true).expect("a directory");
+        // As long as the link's own target name, so only the kind tells them apart.
+        std::fs::write(s.0.join("target.o"), "12345678").expect("a file");
+        std::os::unix::fs::symlink("target.o", s.0.join("link.o")).expect("a link");
+        assert!(copy_into(&s.0.join("link.o"), &dir, OsStr::new("to-link.o")).is_err());
+        assert!(
+            std::fs::symlink_metadata(s.0.join("link.o")).is_ok(),
+            "the link stays"
+        );
+        assert!(std::fs::symlink_metadata(s.0.join("aside/to-link.o")).is_err());
+        // A source that cannot be read: refused before anything is made.
+        let locked = s.0.join("locked.o");
+        std::fs::write(&locked, "x").expect("a file");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("a mode");
+        let refused = copy_into(&locked, &dir, OsStr::new("to-locked.o"));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o600)).expect("a mode");
+        assert!(refused.is_err());
+        assert!(!s.0.join("aside/to-locked.o").exists(), "no half copy");
+        assert!(locked.exists());
+    }
+
+    /// A regular file whose bytes are not as many as its length says (the kernel's own, read
+    /// only): the copy is refused and removed, not kept half made.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_copy_aside_whose_count_is_not_the_length_is_removed() {
+        let s = scratch("copy-count");
+        let dir = DirFd::open(&s.0.join("aside"), true).expect("a directory");
+        assert!(copy_into(Path::new("/proc/self/status"), &dir, OsStr::new("status.o")).is_err());
+        assert!(!s.0.join("aside/status.o").exists(), "no half copy");
     }
 
     #[test]
