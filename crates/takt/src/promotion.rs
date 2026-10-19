@@ -6,7 +6,11 @@
 //! scorecard it read and its digest; the latest record by `promoted_at` that is no refusal
 //! names the baseline the next candidate is compared with. The first record is a `baseline`
 //! one, written by `takt promote --baseline-only`, which installs nothing and requires the
-//! installed binary to name the revision it records. Each record carries the digest of the
+//! installed binary to name the revision it records; for a binary built before `--version`
+//! named its revision, the operator states both (`--revision <sha> --binary-sha256 <hex>`):
+//! the installed binary must name no revision and hash to `<hex>`, every run of the scorecard
+//! must state `<hex>` in a `binary.txt` beside its record, and the record marks the revision
+//! and each run's digest as the operator's statement. Each record carries the digest of the
 //! record before it (`previous_sha256`), so a record removed from between two is noticed, and
 //! before anything is judged the installed binary's `--version` must name the latest baseline
 //! or promotion, so a record removed from the end is noticed too.
@@ -34,7 +38,7 @@
 //! of records with a gap, refuses every promotion until someone looks. `--dry-run` prints the
 //! verdict and the record it would write and writes nothing.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::os::fd::AsRawFd as _;
 use std::os::unix::fs::MetadataExt as _;
@@ -45,7 +49,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::scorecard::{METRICS, Rule, Scorecard};
+use crate::scorecard::{BINARY_FILE, METRICS, Rule, RunBinary, Scorecard, StatedBy, is_sha256};
 
 /// The promotion record's format.
 pub const FORMAT: &str = "takt-promotion/1";
@@ -115,6 +119,10 @@ pub struct Promotion {
     pub format: String,
     /// The revision the binary was built from, a full commit id; the candidate's for a refusal.
     pub revision: String,
+    /// Who stated `revision` when the binary could not: the operator, by `--revision`, on a
+    /// baseline of a binary whose `--version` names no revision; none when the binary named it.
+    #[serde(default)]
+    pub revision_stated_by: Option<StatedBy>,
     /// The tree of that commit, so the same tree under another commit is known.
     pub tree: String,
     /// When the record was written, `YYYY-MM-DDTHH:MM:SSZ`, read after the build; the
@@ -136,11 +144,26 @@ pub struct Promotion {
     pub worse: u32,
     /// The installed binary; none unless the record is a promotion.
     pub binary: Option<PathBuf>,
-    /// The installed binary's sha256, lower-case hex; none unless the record is a promotion.
+    /// The installed binary's sha256, lower-case hex; none unless the record is a promotion or
+    /// a baseline the operator stated, whose binary was hashed against the statement.
     pub binary_sha256: Option<String>,
+    /// On a baseline the operator stated, each run of the scorecard with the binary it states,
+    /// every digest `binary_sha256`; empty on every other record.
+    #[serde(default)]
+    pub runs: Vec<RecordedRun>,
     /// The sha256 of the record file written before this one, lower-case hex, so a record
     /// removed from between two is noticed; none on the first record only.
     pub previous_sha256: Option<String>,
+}
+
+/// One run of the scorecard a stated baseline read, with the binary it states, copied from the
+/// scorecard's row: the digest, who stated it and the operator's note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordedRun {
+    /// The case the run worked.
+    pub case: String,
+    /// The binary it states.
+    pub binary: RunBinary,
 }
 
 /// The build or the install of a candidate that held failed, or built something that is not the
@@ -171,6 +194,13 @@ pub struct Request<'a> {
     pub build_dir: &'a Path,
     /// Record the baseline only; compare with nothing, install nothing.
     pub baseline_only: bool,
+    /// With `baseline_only`: the revision the operator states the installed binary was built
+    /// from, for a binary whose `--version` names none; a full commit id, the scorecard's.
+    pub revision: Option<&'a str>,
+    /// With `baseline_only` and `revision`: the sha256 the operator states for the installed
+    /// binary, lower-case hex. The binary is hashed and must match, and every run of the
+    /// scorecard must state the same digest, before anything is written.
+    pub binary_sha256: Option<&'a str>,
     /// Print the verdict and the record that would be written; write and install nothing.
     pub dry_run: bool,
     /// The clock: read once when the store is read, and again, after the build, for the instant
@@ -563,18 +593,23 @@ fn parse_version(line: &str) -> Option<String> {
 /// before a promotion, which is the one runs use anyway; a candidate's binary is run confined
 /// ([`Confinement::printed_revision`]) instead.
 fn printed_revision(binary: &Path) -> Result<String> {
-    let output = Command::new(binary)
-        .arg("--version")
-        .output()
-        .with_context(|| format!("run {} --version", binary.display()))?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let line = text.lines().next().unwrap_or("");
-    parse_version(line).ok_or_else(|| {
+    let line = printed_line(binary)?;
+    parse_version(&line).ok_or_else(|| {
         anyhow!(
             "{} --version printed {line:?}, not `takt <version> (<revision>)`",
             binary.display()
         )
     })
+}
+
+/// The first line `binary --version` prints, run unconfined.
+fn printed_line(binary: &Path) -> Result<String> {
+    let output = Command::new(binary)
+        .arg("--version")
+        .output()
+        .with_context(|| format!("run {} --version", binary.display()))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(text.lines().next().unwrap_or("").to_owned())
 }
 
 /// The sha256 of the file at `path`, lower-case hex.
@@ -1174,7 +1209,10 @@ fn known_metrics(card: &Scorecard, shown: &Path) -> Result<()> {
 
 /// The binary at `installed` names `latest.revision`, the latest baseline or promotion in the
 /// store: a candidate is compared with the revision that is installed, so a record removed from
-/// the end of the store, or a binary replaced by hand, is a refusal naming both.
+/// the end of the store, or a binary replaced by hand, is a refusal naming both. A binary whose
+/// `--version` names no revision is checked by its sha256 against the record's
+/// `binary_sha256` when the record carries one (a baseline the operator stated), a mismatch
+/// refused naming both digests; without one it is refused as a binary naming no revision.
 fn installed_names_latest(installed: &Path, store: &Path, latest: &Promotion) -> Result<()> {
     let path = record_path(store, &latest.revision, latest.kind);
     if !installed.exists() {
@@ -1185,7 +1223,28 @@ fn installed_names_latest(installed: &Path, store: &Path, latest: &Promotion) ->
             path.display()
         );
     }
-    let printed = printed_revision(installed)?;
+    let line = printed_line(installed)?;
+    let printed = match (parse_version(&line), latest.binary_sha256.as_deref()) {
+        (Some(printed), _) => printed,
+        (None, Some(recorded)) => {
+            let digest = sha256_of(installed)?;
+            if digest != recorded {
+                bail!(
+                    "{} names no revision and hashes to {digest}, but the latest baseline or promotion recorded is {} ({}), whose binary hashes to {recorded}; a record is missing or the binary was replaced, and nothing is judged until they agree",
+                    installed.display(),
+                    latest.revision,
+                    path.display()
+                );
+            }
+            return Ok(());
+        }
+        (None, None) => bail!(
+            "{} --version printed {line:?}, not `takt <version> (<revision>)`, and the latest baseline or promotion recorded, {} ({}), names no binary digest to check it by; nothing is judged until the binary names its revision",
+            installed.display(),
+            latest.revision,
+            path.display()
+        ),
+    };
     if printed != latest.revision {
         bail!(
             "{} names {printed}, but the latest baseline or promotion recorded is {} ({}); a record is missing or the binary was replaced, and nothing is judged until they agree",
@@ -1214,6 +1273,99 @@ fn installed_names_revision(installed: &Path, revision: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// What the operator states with `--baseline-only` for a binary whose `--version` names no
+/// revision: `--revision`, which must be the scorecard's `revision`, and `--binary-sha256`,
+/// the digest returned. Both are refused without `--baseline-only`, the digest without the
+/// revision, and either malformed. `--revision` alone states nothing the binary is not asked
+/// to name itself, so none is returned and the binary is checked as without it.
+fn stated_digest(request: &Request<'_>, revision: &str) -> Result<Option<String>> {
+    let (stated, digest) = (request.revision, request.binary_sha256);
+    if stated.is_none() && digest.is_none() {
+        return Ok(None);
+    }
+    if !request.baseline_only {
+        bail!(
+            "--revision and --binary-sha256 are accepted with --baseline-only only: they record a baseline for a binary whose --version names no revision, and a candidate is named by its own binary"
+        );
+    }
+    let Some(stated) = stated else {
+        bail!(
+            "--binary-sha256 needs --revision <sha>: the binary names no revision, so the operator states the one it was built from"
+        );
+    };
+    if !is_full_revision(stated) {
+        bail!("--revision {stated:?} is no full commit id (40 or 64 lower-case hex digits)");
+    }
+    if stated != revision {
+        bail!(
+            "--revision {stated} is not the scorecard's revision {revision}; a baseline records the scorecard of the revision it names"
+        );
+    }
+    let Some(digest) = digest else {
+        return Ok(None);
+    };
+    if !is_sha256(digest) {
+        bail!("--binary-sha256 {digest:?} is no sha256 (64 lower-case hex digits)");
+    }
+    Ok(Some(digest.to_owned()))
+}
+
+/// The binary at `installed` names no revision and hashes to `stated`: a baseline the operator
+/// states records the binary at that digest and no other, and a binary whose `--version` names
+/// a revision is recorded by it, never by a statement.
+fn installed_hashes_to(installed: &Path, revision: &str, stated: &str) -> Result<()> {
+    if !installed.exists() {
+        bail!(
+            "{}: no binary is installed; --baseline-only records the scorecard of the installed binary, so install the one of {revision} there first",
+            installed.display()
+        );
+    }
+    let line = printed_line(installed)?;
+    if let Some(printed) = parse_version(&line) {
+        bail!(
+            "{} names {printed}; a binary that names its revision is recorded by it, so --revision and --binary-sha256 are refused: drop them",
+            installed.display()
+        );
+    }
+    let digest = sha256_of(installed)?;
+    if digest != stated {
+        bail!(
+            "{} hashes to {digest}, not to the stated {stated}; nothing is recorded until they agree",
+            installed.display()
+        );
+    }
+    Ok(())
+}
+
+/// Every run of `card` states the binary at `stated` (a [`BINARY_FILE`] beside its record): a
+/// run that states none, or another digest, is a refusal naming it, so the scorecard recorded
+/// is the stated binary's. The runs with their statements, for the record.
+fn runs_stating(card: &Scorecard, stated: &str, shown: &Path) -> Result<Vec<RecordedRun>> {
+    let mut runs = Vec::new();
+    let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
+    for row in &card.rows {
+        let n = counted.entry(row.case.as_str()).or_insert(0);
+        *n += 1;
+        let run = format!("{}#{n}", row.case);
+        match &row.binary {
+            None => bail!(
+                "{}: run {run} states no binary (no {BINARY_FILE} beside its record); with --binary-sha256 every run states the binary measured, so nothing is recorded",
+                shown.display()
+            ),
+            Some(binary) if binary.sha256 != stated => bail!(
+                "{}: run {run} states the binary {}, not the stated {stated}; the scorecard is not the stated binary's, so nothing is recorded",
+                shown.display(),
+                binary.sha256
+            ),
+            Some(binary) => runs.push(RecordedRun {
+                case: row.case.clone(),
+                binary: binary.clone(),
+            }),
+        }
+    }
+    Ok(runs)
 }
 
 /// The instant a record written now carries: the clock read again, after the build, which must
@@ -1440,6 +1592,7 @@ fn install(
 /// `out`.
 pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     let (card, text, revision, tree) = candidate(request)?;
+    let stated = stated_digest(request, &revision)?;
     let store = request.store;
     let installed = request.install_root.join("bin/takt");
     let confinement = if request.dry_run || request.baseline_only {
@@ -1465,6 +1618,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     let mut record = Promotion {
         format: FORMAT.to_owned(),
         revision: revision.clone(),
+        revision_stated_by: None,
         tree: tree.clone(),
         promoted_at: now.clone(),
         kind: Kind::Baseline,
@@ -1476,6 +1630,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         worse: 0,
         binary: None,
         binary_sha256: None,
+        runs: Vec::new(),
         previous_sha256,
     };
     for earlier in &existing {
@@ -1510,12 +1665,29 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
                 record_path(store, &base.revision, base.kind).display()
             );
         }
-        installed_names_revision(&installed, &revision)?;
+        match &stated {
+            Some(digest) => {
+                installed_hashes_to(&installed, &revision, digest)?;
+                record.runs = runs_stating(&card, digest, request.scorecard)?;
+                record.binary = Some(installed.clone());
+                record.binary_sha256 = Some(digest.clone());
+                record.revision_stated_by = Some(StatedBy::Operator);
+            }
+            None => installed_names_revision(&installed, &revision)?,
+        }
         enough_trials(&card, &card, request.scorecard)?;
-        writeln!(
-            out,
-            "baseline {revision}: the scorecard of the installed revision, nothing compared, nothing installed"
-        )?;
+        if let Some(digest) = &stated {
+            writeln!(
+                out,
+                "baseline {revision}, as the operator states it: {} names no revision and hashes to {digest}, which every run of the scorecard states; nothing compared, nothing installed",
+                installed.display()
+            )?;
+        } else {
+            writeln!(
+                out,
+                "baseline {revision}: the scorecard of the installed revision, nothing compared, nothing installed"
+            )?;
+        }
         if request.dry_run {
             writeln!(
                 out,

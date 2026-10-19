@@ -46,7 +46,10 @@ enum Commands {
     Scenario(ScenarioCommands),
     /// Print, per run of a case under `.engineering/cases/`, its outcome, steps, tokens,
     /// refusals, `NoProgress`, errors and wall time, read from the case's `events.jsonl` only;
-    /// a case without one is listed as `no record`.
+    /// a case without one is listed as `no record`. The binary a case's runs were made with is
+    /// read from a `binary.txt` beside the record when the operator wrote one (first line
+    /// `<path>\t<sha256>`, every further line a note), saved with each run as the operator's
+    /// statement, never a figure.
     #[command(after_help = SCORECARD_EXIT_CODES)]
     Scorecard(ScorecardArgs),
     /// Promote a takt revision: compare its saved scorecard with the promoted baseline's under
@@ -79,6 +82,20 @@ struct PromoteArgs {
     /// nothing; nothing is built or installed. Refused when the store holds a baseline already.
     #[arg(long)]
     baseline_only: bool,
+    /// With --baseline-only: the revision the installed binary was built from, a full commit
+    /// id equal to the scorecard's, for a binary built before `--version` named its revision;
+    /// the record marks it as stated by the operator. Refused without --baseline-only.
+    #[arg(long, value_name = "SHA")]
+    revision: Option<String>,
+    /// With --baseline-only and --revision: the installed binary's sha256, lower-case hex.
+    /// `<root>/bin/takt` must name no revision and hash to it, and every run of the scorecard
+    /// must state the same digest in a `binary.txt` beside its record
+    /// (`.engineering/cases/<case>/binary.txt`, first line `<path>\t<sha256>`, every further
+    /// line the operator's note, copied into the record); otherwise refused naming the binary's
+    /// digest or the run, nothing written. Refused when the binary's `--version` names a
+    /// revision, and without --baseline-only or --revision.
+    #[arg(long, value_name = "HEX")]
+    binary_sha256: Option<String>,
     /// Print the verdict and the record that would be written; write nothing, install nothing.
     #[arg(long)]
     dry_run: bool,
@@ -91,7 +108,7 @@ struct PromoteArgs {
 /// What `takt promote --help` says about the exit codes.
 const PROMOTE_EXIT_CODES: &str = "Exit codes:
   0  promoted and recorded; or the baseline recorded (--baseline-only); or, with --dry-run, the candidate would be promoted or the baseline would be recorded
-  1  refused, nothing written or installed: the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, was saved under another rule or metric definition; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree, or commits a rust-toolchain.toml with a `path`; bubblewrap (`bwrap`) or a toolchain is not found; another promotion holds the store's lock; no baseline is recorded; the installed binary does not name the latest record's revision (with --baseline-only, the revision recorded); the revision or its tree was refused or recorded already; a promotion was made this UTC day; a scenario has fewer cases than the rule's trials on either side; the store holds a file takt does not read, a record that disagrees with its name, instant or scorecard copy, or a chain of records with a gap; the record could not be written; the reason on stderr
+  1  refused, nothing written or installed: the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, was saved under another rule or metric definition; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree, or commits a rust-toolchain.toml with a `path`; bubblewrap (`bwrap`) or a toolchain is not found; another promotion holds the store's lock; no baseline is recorded; the installed binary does not name the latest record's revision, or names none and hashes to another digest than the record's binary_sha256, or to none it records (with --baseline-only, the revision recorded); --revision or --binary-sha256 without --baseline-only, --binary-sha256 without --revision, a --revision that is no full commit id or not the scorecard's, a --binary-sha256 that is no sha256; with --binary-sha256, an installed binary whose --version names a revision or that hashes to another digest (both named), or a run of the scorecard that states no binary or another (the run named); the revision or its tree was refused or recorded already; a promotion was made this UTC day; a scenario has fewer cases than the rule's trials on either side; the store holds a file takt does not read, a record that disagrees with its name, instant or scorecard copy, or a chain of records with a gap; the record could not be written; the reason on stderr
   2  the arguments do not parse
   3  refused on the scorecard: a scenario is worse than the baseline's; the refusal is recorded (not with --dry-run), nothing installed
   5  the candidate held but its clone, its confined build or its install failed, the built binary names another revision, or the binary names another revision or hashes differently once in place (then the binary before it is back in place and the record removed); nothing recorded, the installed binary unchanged";
@@ -125,7 +142,7 @@ struct ScorecardArgs {
 /// What `takt scorecard --help` says about the exit codes.
 const SCORECARD_EXIT_CODES: &str = "Exit codes:
   0  printed (and saved); with --against, no scenario is worse than the saved one
-  1  refused: the repository, a case's events.jsonl or the saved scorecard does not read; --save without --revision, onto a file that exists, or that cannot be written; the reason on stderr
+  1  refused: the repository, a case's events.jsonl or binary.txt, or the saved scorecard does not read; --save without --revision, onto a file that exists, or that cannot be written; the reason on stderr
   2  the arguments do not parse
   3  with --against: a scenario is worse: at some outcome rank its cases at that rank or better fall short of the saved share by more than the rule's margin, its median of tokens exceeds the saved maximum, or it has no run";
 
@@ -396,6 +413,8 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             repo,
             scorecard,
             baseline_only,
+            revision,
+            binary_sha256,
             dry_run,
             install_root,
         }) => {
@@ -415,6 +434,8 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 install_root: &install_root,
                 build_dir: &build_dir,
                 baseline_only,
+                revision: revision.as_deref(),
+                binary_sha256: binary_sha256.as_deref(),
                 dry_run,
                 clock: takt::now,
             };
