@@ -1101,6 +1101,12 @@ impl Validator for ScorecardCompare {
         self.observe_by(tree, revision, seq)
     }
 
+    /// It waits on the candidate's scorecard file under the state directory, which only the
+    /// operator saves.
+    fn waits_locally(&self) -> bool {
+        true
+    }
+
     fn observe_within(
         &self,
         tree: &Path,
@@ -1389,6 +1395,12 @@ impl CandidateMerged {
         }
         let main = crate::promotion::MAINLINE;
         let forge = self.mainline.forge();
+        // The mainline as a summary names it: the forge's, or with none the local one, its
+        // summaries then saying nothing of a forge.
+        let named = match self.mainline {
+            Mainline::Forge(_) => format!("{main} (forge: {forge})"),
+            Mainline::Local => format!("the local {main}"),
+        };
         let tip = self.mainline.tip(tree)?;
         if self.action == Self::JUDGE_SURFACE_ACTION
             && let Some(why) = judge_surface_refusal(&dir, tree, &tip, revision)?
@@ -1418,7 +1430,7 @@ impl CandidateMerged {
         if !holds {
             return Ok((
                 nothing(format!(
-                    "{main} (forge: {forge}) is at {}, which does not hold the candidate {}; waiting for its merge",
+                    "{named} is at {}, which does not hold the candidate {}; waiting for its merge",
                     short(&tip),
                     short(revision)
                 )),
@@ -1429,7 +1441,7 @@ impl CandidateMerged {
         Ok((
             Observation {
                 summary: format!(
-                    "{main} (forge: {forge}) at {} holds the candidate {}: merged; retained as {artifact}",
+                    "{named} at {} holds the candidate {}: merged; retained as {artifact}",
                     short(&tip),
                     short(revision)
                 ),
@@ -1484,6 +1496,12 @@ impl Validator for CandidateMerged {
         seq: usize,
     ) -> Result<(Observation, bool)> {
         self.observe_by(tree, revision, seq)
+    }
+
+    /// With no forge it waits on the local `main`, which only the operator moves; through a
+    /// forge it waits on the forge.
+    fn waits_locally(&self) -> bool {
+        matches!(self.mainline, Mainline::Local)
     }
 
     fn observe_within(
@@ -1690,6 +1708,12 @@ impl Validator for BinaryPromote {
         seq: usize,
     ) -> Result<(Observation, bool)> {
         self.observe_by(tree, revision, seq)
+    }
+
+    /// It waits on the promotion store and the binary installed, which only `takt promote`
+    /// run by the operator moves.
+    fn waits_locally(&self) -> bool {
+        true
     }
 
     fn observe_within(

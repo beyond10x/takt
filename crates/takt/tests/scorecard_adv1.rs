@@ -66,6 +66,8 @@ fn judged(tokens: u64) -> Event {
         api_ms: None,
         turns: None,
         started_at: None,
+        transcript: None,
+        transcript_refused: None,
     }
 }
 
@@ -74,6 +76,7 @@ fn stop(stop: &str, steps: u64, tokens: u64) -> Event {
         stop: stop.to_owned(),
         steps,
         tokens,
+        completed: None,
     }
 }
 
@@ -247,9 +250,35 @@ fn a_baseline_scenario_the_candidate_never_ran_is_not_passed_silently() {
     );
 }
 
+/// Sets the `at` of line `n` (from 0) of the record in `dir` to `instants[n]` where that is
+/// given; every other line, the torn one among them, is kept byte for byte. A line's `at` is
+/// its first key, as `takt::events` writes it.
+fn pin(dir: &Path, instants: &[Option<&str>]) {
+    let path = dir.join(EVENTS_FILE);
+    let text = fs::read_to_string(&path).expect("the record");
+    let mut pinned = String::new();
+    for (n, line) in text.split_inclusive('\n').enumerate() {
+        let rest = line
+            .strip_prefix(r#"{"at":""#)
+            .and_then(|rest| rest.split_once('"'));
+        match (instants.get(n).copied().flatten(), rest) {
+            (Some(at), Some((_, rest))) => {
+                pinned.push_str(r#"{"at":""#);
+                pinned.push_str(at);
+                pinned.push('"');
+                pinned.push_str(rest);
+            }
+            _ => pinned.push_str(line),
+        }
+    }
+    fs::write(&path, pinned).expect("the record at pinned instants");
+}
+
 /// A run killed mid-write leaves a torn line; the next run's first write ends it and writes
 /// the `skipped` line before its `opened`, at the next run's instant. The killed run's wall
-/// time is its own lines' span, not the time until somebody resumed the case.
+/// time is its own lines' span, not the time until somebody resumed the case. Every instant is
+/// set, none read from the clock: the killed run's two lines 100 ms apart, its torn line
+/// 100 ms later, the resumed run's lines 600 ms after that.
 #[test]
 fn a_crashed_runs_wall_time_ends_at_its_own_last_line() {
     let repo = scratch("crash");
@@ -258,10 +287,16 @@ fn a_crashed_runs_wall_time_ends_at_its_own_last_line() {
         "scenario-1-trial-1",
         &[vec![opened("scenario-1-trial-1"), judged(100)]],
     );
+    pin(
+        &dir,
+        &[
+            Some("2026-10-18T09:59:59.800000Z"),
+            Some("2026-10-18T09:59:59.900000Z"),
+        ],
+    );
     let mut text = fs::read_to_string(dir.join(EVENTS_FILE)).expect("the record");
     text.push_str(r#"{"at":"2026-10-18T10:00:00.000000Z","step":2,"event":"st"#);
     fs::write(dir.join(EVENTS_FILE), text).expect("the torn record");
-    std::thread::sleep(std::time::Duration::from_millis(600));
     let events = Events::new(&dir);
     events
         .emit(0, &opened("scenario-1-trial-1"))
@@ -269,13 +304,23 @@ fn a_crashed_runs_wall_time_ends_at_its_own_last_line() {
     events
         .emit(0, &stop("NoProgress", 0, 0))
         .expect("the resumed run stops");
+    let resumed = Some("2026-10-18T10:00:00.600000Z");
+    pin(&dir, &[None, None, None, resumed, resumed, resumed]);
+    let lines = fs::read_to_string(dir.join(EVENTS_FILE)).expect("the record");
+    assert!(
+        lines.lines().nth(3).is_some_and(|line| {
+            line.starts_with(r#"{"at":"2026-10-18T10:00:00.600000Z""#)
+                && line.contains(r#""event":"skipped""#)
+        }),
+        "the premise: the resumed run's first write ended the torn line and named it skipped\n{lines}"
+    );
     let card = Scorecard::read(&repo).expect("the scorecard reads");
     assert_eq!(card.rows.len(), 2, "{:?}", card.rows);
     assert_eq!(card.rows[0].outcome, "unfinished", "{:?}", card.rows[0]);
-    assert!(
-        card.rows[0].wall_ms < 500,
-        "the killed run's wall time runs to the resume: {} ms",
-        card.rows[0].wall_ms
+    assert_eq!(
+        card.rows[0].wall_ms, 100,
+        "the killed run's wall time is its own two lines' span, not the span to the torn line \
+         (200 ms) or to the resume (800 ms)"
     );
 }
 

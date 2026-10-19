@@ -69,16 +69,73 @@ pub enum Stop {
     StepRefused(String),
     /// A judgement step changed no file and the decision did not move: another step would not either.
     NoProgress,
-    /// The run waited on the forge (checks still running, a pull request's head behind the head
-    /// pushed) and may wait no longer: its step or hour budget is spent, or it has neither to
-    /// wait in. Nothing is recorded for what is awaited; the case stays open, and the next run
+    /// The run waits, and may wait no longer. On the forge (checks still running, a pull
+    /// request's head behind the head pushed): its step or hour budget is spent, or it has
+    /// neither to wait in. On something local ([`crate::validator::Validator::waits_locally`]: a
+    /// saved scorecard, a promoted binary, the local `main`): at once after the step that
+    /// observed it, with no pause and no decision after it, since only someone outside the run
+    /// moves it. Nothing is recorded for what is awaited; the case stays open, and the next run
     /// resumes it and observes again.
     Waiting {
-        /// The actions whose observation waits on the forge.
+        /// The actions whose observation waits.
         on: Vec<String>,
-        /// The budget spent; `None` for a run with no step or hour budget, which does not wait.
+        /// The budget spent; `None` for a run with no step or hour budget, which does not wait,
+        /// and for a wait on something local.
         budget: Option<Box<Stop>>,
+        /// What each wait on something local waits for, as its observation named it (the file
+        /// it reads); empty for a wait on the forge.
+        local: Vec<String>,
     },
+    /// No offered or due action produces evidence an open obligation's claim reads, and an
+    /// admissible action nobody in the run performs is the only producer of a claim that does
+    /// not hold: no step can move the case, and none is taken. The case stays open. Only a run
+    /// that turned it on stops so ([`Run::stop_when_unperformable`]): the CLI does, for every
+    /// run; the library's default is off.
+    Unperformable {
+        /// The claim only the missing performer decides.
+        claim: String,
+        /// What the run lacks to perform it: the forge, the gates document.
+        performer: String,
+    },
+    /// The file system holding the case's tree, or the one holding the build directory, has
+    /// less free space than the run was given as the least a step needs: read before every step
+    /// the run offers or runs, once one follows (a stop that takes no step, for a grant, a
+    /// missing performer or nothing admissible, comes first), never at open, and the run stops
+    /// before the step instead of failing in it for want of space. The case stays open. Only a
+    /// run given a threshold stops so ([`Run::stop_when_disk_below`]): the CLI gives one for
+    /// every run, `--min-free-gib`; the library's default reads nothing.
+    DiskLow {
+        /// The path whose file system was read: the tree, or the build directory.
+        path: PathBuf,
+        /// The bytes free there for a writer that is not root.
+        free_bytes: u64,
+        /// The threshold: the least free space a step needs, in bytes.
+        min_bytes: u64,
+    },
+}
+
+/// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
+/// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
+/// and fails to compile when one is added without its name here.
+pub const STOP_KINDS: [&str; 10] = [
+    "ApprovalRequired",
+    "NothingAdmissible",
+    "Iterations",
+    "Hours",
+    "Tokens",
+    "StepRefused",
+    "NoProgress",
+    "Waiting",
+    "Unperformable",
+    "DiskLow",
+];
+
+/// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
+fn bytes_shown(bytes: u64) -> String {
+    format!(
+        "{bytes} bytes ({:.2} GiB)",
+        bytes as f64 / f64::from(1_u32 << 30)
+    )
 }
 
 impl std::fmt::Display for Stop {
@@ -94,10 +151,33 @@ impl std::fmt::Display for Stop {
             Stop::Tokens(t) => write!(f, "Tokens ({t})"),
             Stop::StepRefused(why) => write!(f, "StepRefused ({why})"),
             Stop::NoProgress => write!(f, "NoProgress"),
-            Stop::Waiting { on, budget } => match budget {
+            Stop::Waiting { on, budget, local } => match budget {
+                _ if !local.is_empty() => {
+                    write!(
+                        f,
+                        "Waiting ({}; locally: {})",
+                        on.join(", "),
+                        local.join("; ")
+                    )
+                }
                 Some(budget) => write!(f, "Waiting ({}; {budget})", on.join(", ")),
                 None => write!(f, "Waiting ({}; no step or hour budget)", on.join(", ")),
             },
+            Stop::Unperformable { claim, performer } => write!(
+                f,
+                "Unperformable ({claim}; nothing performs it without {performer})"
+            ),
+            Stop::DiskLow {
+                path,
+                free_bytes,
+                min_bytes,
+            } => write!(
+                f,
+                "DiskLow ({}: {} free, under {})",
+                path.display(),
+                bytes_shown(*free_bytes),
+                bytes_shown(*min_bytes)
+            ),
         }
     }
 }
@@ -124,13 +204,15 @@ fn short(revision: &str) -> &str {
 
 /// Who took a step, with what its event records of it: a validator, and the revision it
 /// observed when it observed; or the harness, the tokens it reported, their components and
-/// what it reported about the call besides them.
+/// what it reported about the call besides them, and the path of the transcript takt kept or
+/// why it kept none.
 enum SteppedBy<'r> {
     Validator(Option<&'r str>),
     Harness(
         Option<u64>,
         Option<crate::events::TokenUsage>,
         Option<crate::harness::CallReport>,
+        Option<std::result::Result<String, String>>,
     ),
 }
 
@@ -193,6 +275,8 @@ struct Shape {
     /// The actions whose precondition the case's inputs make false for good: false whatever any
     /// claim or evidence becomes.
     blocked_for_good: BTreeSet<String>,
+    /// The kinds each obligation's discharge reads, directly or through the claims it tests.
+    discharges: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// The value of `predicate` from the case's `inputs` alone, every claim and every evidence
@@ -628,12 +712,23 @@ impl Shape {
                 );
             }
         }
+        let discharges = model
+            .obligations
+            .iter()
+            .map(|(id, obligation)| {
+                (
+                    id.as_str().to_owned(),
+                    kinds_read(&obligation.discharged_when, &reads),
+                )
+            })
+            .collect();
         Ok(Self {
             effects,
             produces,
             reads,
             choices,
             blocked_for_good,
+            discharges,
         })
     }
 
@@ -712,6 +807,68 @@ impl Shape {
             behind.extend(producers);
         }
         (!behind.is_empty()).then(|| behind.into_iter().collect())
+    }
+
+    /// The claim no step can move the case past, with the action that alone would decide it,
+    /// when none of the `offered` actions produces a kind an open obligation reads, and some
+    /// claim that does not hold is decided only by built-in actions the run has no validator for
+    /// (`performed` false), one of them admissible. An edit produces nothing and only moves the
+    /// revision. `None` while an offered action could still move an open obligation, or every
+    /// claim left has a performer or waits on an action not yet admissible: `--forge none` works
+    /// up to `pr.open` admissible, its change read ahead, before this names `pr.opened`.
+    fn unperformable(
+        &self,
+        decision: &crate::Decision,
+        offered: &[String],
+        performed: impl Fn(&str) -> bool,
+    ) -> Option<(String, String)> {
+        let open: BTreeSet<&String> = decision
+            .obligations
+            .iter()
+            .filter(|(_, status)| status.as_str() == "open")
+            .filter_map(|(id, _)| self.discharges.get(id))
+            .flatten()
+            .collect();
+        if offered.iter().any(|action| {
+            self.produces
+                .get(action)
+                .is_some_and(|produced| produced.iter().any(|kind| open.contains(kind)))
+        }) {
+            return None;
+        }
+        let admissible = decision.admissible();
+        for (claim, value) in &decision.claims {
+            if value == "true" {
+                continue;
+            }
+            let producers = self.producers(claim);
+            if producers.is_empty()
+                || producers.iter().any(|action| {
+                    !crate::validator::is_built_in_action(action) || performed(action)
+                })
+            {
+                continue;
+            }
+            if let Some(action) = producers.iter().find(|action| admissible.contains(action)) {
+                return Some((claim.clone(), action.clone()));
+            }
+        }
+        None
+    }
+}
+
+/// What a run lacks to perform the built-in `action`, as [`Stop::Unperformable`] names it.
+fn performer_of(action: &str) -> String {
+    let validator = crate::validator::BUILT_IN
+        .iter()
+        .find(|built_in| built_in.action == action)
+        .map(|built_in| built_in.validator);
+    match validator {
+        Some("GateRun") => "the gates document".to_owned(),
+        Some("PrOpen" | "CiRead" | "PrMerged") => "the forge".to_owned(),
+        Some("TestsRun") => "a test command".to_owned(),
+        Some(validator) => format!("its validator {validator}"),
+        None => format!("a validator for {action}"),
     }
 }
 
@@ -5920,6 +6077,16 @@ pub fn default_set_aside() -> Option<PathBuf> {
         .map(|dir| dir.join("takt").join("set-aside"))
 }
 
+/// Where `takt run` keeps each harness step's transcript ([`Run::transcripts_in`]), outside
+/// every repository and every case directory: `$XDG_STATE_HOME/takt/transcripts`
+/// (`~/.local/state/takt/transcripts` without it). None when neither is set.
+#[must_use]
+pub fn default_transcripts() -> Option<PathBuf> {
+    crate::promotion::state_dir()
+        .ok()
+        .map(|dir| dir.join("takt").join("transcripts"))
+}
+
 /// The subject of the commit that records a take on the case's branch: `takt: take <story>`.
 #[must_use]
 pub fn take_subject(story: &str) -> String {
@@ -6012,7 +6179,71 @@ fn to_base(tree: &Path) -> Result<()> {
     Ok(())
 }
 
-/// A run over one case.
+/// The free space of a file system as a run reads it before a step
+/// ([`Run::stop_when_disk_below`]): the device the file system is, by which the run compares
+/// each file system once, and the bytes free on it for a writer that is not root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FreeSpace {
+    /// The file system's device, as `stat` gives it for a path on it.
+    pub device: u64,
+    /// The bytes free for a writer that is not root: `statvfs`'s `f_bavail * f_frsize`.
+    pub bytes: u64,
+}
+
+/// What a run reads a path's free space with: [`free_space`] unless
+/// [`Run::read_free_space_with`] gives another.
+type FreeSpaceReader = Box<dyn Fn(&Path) -> std::io::Result<FreeSpace>>;
+
+/// The free space of the file system holding `path`, the reader a run uses unless given another:
+/// the device `stat` gives and `statvfs`'s `f_bavail * f_frsize`. A path that does not exist yet
+/// (a build directory not made) is read at its nearest ancestor that does.
+pub fn free_space(path: &Path) -> std::io::Result<FreeSpace> {
+    let mut at = path;
+    let metadata = loop {
+        match std::fs::metadata(at) {
+            Ok(metadata) => break metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => match at.parent() {
+                Some(parent) if !parent.as_os_str().is_empty() => at = parent,
+                _ => return Err(error),
+            },
+            Err(error) => return Err(error),
+        }
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::os::unix::fs::MetadataExt as _;
+        let name = std::ffi::CString::new(at.as_os_str().as_bytes())
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+        let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+        // SAFETY: `name` is a valid NUL-terminated string that outlives the call, and `stat` a
+        // buffer of the type `statvfs` fills.
+        if unsafe { libc::statvfs(name.as_ptr(), stat.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `statvfs` returned 0, so it filled `stat`.
+        let stat = unsafe { stat.assume_init() };
+        // The field types are `u64` on 64-bit Linux and narrower on some other targets.
+        #[allow(clippy::useless_conversion)]
+        let bytes = u64::from(stat.f_bavail).saturating_mul(u64::from(stat.f_frsize));
+        Ok(FreeSpace {
+            device: metadata.dev(),
+            bytes,
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "free space is read with statvfs, which this platform does not have",
+        ))
+    }
+}
+
+/// A run over one case. Its stop [`Stop::Unperformable`] is off by default in the library: a
+/// library caller opts in with [`Run::stop_when_unperformable`], and the CLI turns it on for
+/// every run in its `finish`, so the library's default is not the product's behaviour.
 pub struct Run<'a> {
     /// The worktree.
     pub tree: PathBuf,
@@ -6039,6 +6270,11 @@ pub struct Run<'a> {
     /// opens, unless [`Run::set_aside_in`] gives another; none when nothing names one, and then
     /// no harness step is taken. A validator's observation moves nothing aside.
     set_aside: Option<PathBuf>,
+    /// Where each harness step's transcript is kept ([`crate::harness::keep_transcript`]), with
+    /// the repository's key there ([`crate::harness::repo_key`]): none until
+    /// [`Run::transcripts_in`] gives one (`takt run` gives [`default_transcripts`]), and then no
+    /// transcript is kept.
+    transcripts: Option<(PathBuf, String)>,
     /// The planning store a story's run records its test result and its move in; none until
     /// [`Run::record_on`] gives one, and only a story's run writes to it.
     store: Option<&'a dyn Frontier>,
@@ -6053,6 +6289,18 @@ pub struct Run<'a> {
     /// The module names no step may put in an import directory, kept with the case
     /// ([`Modules::of_case`]).
     modules: Modules,
+    /// Whether the run stops [`Stop::Unperformable`]; off until [`Run::stop_when_unperformable`].
+    stops_unperformable: bool,
+    /// The least free space, in bytes, a step needs on the file system of the tree and of the
+    /// build directory; 0 reads nothing, and is the default until [`Run::stop_when_disk_below`].
+    min_free: u64,
+    /// The build directory whose file system is read beside the tree's; none until
+    /// [`Run::stop_when_disk_below`] names one.
+    build_dir: Option<PathBuf>,
+    /// What free space is read with ([`FreeSpaceReader`]).
+    read_free: FreeSpaceReader,
+    /// Whether a free-space read that failed was said: once a run.
+    free_unread_said: bool,
 }
 
 impl<'a> Run<'a> {
@@ -6145,12 +6393,18 @@ impl<'a> Run<'a> {
             poll: Self::POLL,
             binary: None,
             set_aside,
+            transcripts: None,
             store: None,
             started: Instant::now(),
             outside: Outside::read(tree, &outside_dirs)?,
             outside_dirs,
             options,
             modules,
+            stops_unperformable: false,
+            min_free: 0,
+            build_dir: None,
+            read_free: Box::new(free_space),
+            free_unread_said: false,
         })
     }
 
@@ -6180,6 +6434,25 @@ impl<'a> Run<'a> {
     /// else the error, and the run keeps the directory it had.
     pub fn set_aside_in(&mut self, dir: PathBuf) -> Result<()> {
         self.set_aside = Some(crate::git::set_aside_root(&dir, &self.tree)?);
+        Ok(())
+    }
+
+    /// Where each harness step's transcript is kept; none until [`Run::transcripts_in`].
+    #[must_use]
+    pub fn transcripts(&self) -> Option<&Path> {
+        self.transcripts.as_ref().map(|(root, _)| root.as_path())
+    }
+
+    /// Keeps each harness step's transcript under `dir`, in the tree's own segment
+    /// ([`crate::harness::keep_transcript`], [`crate::harness::repo_key`]), once `dir` is
+    /// accepted as a set-aside root is ([`crate::git::set_aside_root`]): absolute, outside the
+    /// tree, and makeable, every link on the way resolved now; else the error, and the run
+    /// keeps what it had.
+    pub fn transcripts_in(&mut self, dir: PathBuf) -> Result<()> {
+        let root = crate::git::set_aside_root(&dir, &self.tree)
+            .with_context(|| format!("the transcripts directory {}", dir.display()))?;
+        let key = crate::harness::repo_key(&self.tree)?;
+        self.transcripts = Some((root, key));
         Ok(())
     }
 
@@ -6229,12 +6502,18 @@ impl<'a> Run<'a> {
             poll: Self::POLL,
             binary: None,
             set_aside,
+            transcripts: None,
             store: None,
             started: Instant::now(),
             outside: Outside::read(tree, &outside_dirs)?,
             outside_dirs,
             options,
             modules,
+            stops_unperformable: false,
+            min_free: 0,
+            build_dir: None,
+            read_free: Box::new(free_space),
+            free_unread_said: false,
         })
     }
 
@@ -6476,6 +6755,69 @@ impl<'a> Run<'a> {
         }
     }
 
+    /// Stops the run [`Stop::Unperformable`] at the first step no step can move the case past:
+    /// a claim left is decided only by an admissible built-in action no validator of the run
+    /// performs (no forge, no gates document). The CLI turns it on for every run; a library
+    /// caller opts in here, and without this call a run offers the harness its step as before.
+    pub fn stop_when_unperformable(&mut self) {
+        self.stops_unperformable = true;
+    }
+
+    /// Stops the run [`Stop::DiskLow`] before a step (a harness step, a deterministic step, the
+    /// test command, a gate) when the file system holding the case's tree, or the one holding
+    /// `build_dir` (relative, the tree's), has fewer than `min_bytes` free; each file system is
+    /// compared once. `0` turns the check off, as without this call, and nothing is read. The CLI
+    /// calls it for every run with `--min-free-gib` and `CARGO_TARGET_DIR`.
+    pub fn stop_when_disk_below(&mut self, min_bytes: u64, build_dir: Option<PathBuf>) {
+        self.min_free = min_bytes;
+        self.build_dir = build_dir;
+    }
+
+    /// Reads free space with `reader` instead of [`free_space`]: a test's free space, which no
+    /// disk has to be filled for. The reader owns what it captures (`'static`), so a run keeps
+    /// no borrow alive longer than without one.
+    pub fn read_free_space_with(
+        &mut self,
+        reader: impl Fn(&Path) -> std::io::Result<FreeSpace> + 'static,
+    ) {
+        self.read_free = Box::new(reader);
+    }
+
+    /// The [`Stop::DiskLow`] for the first file system under the threshold, the tree's then the
+    /// build directory's, each read once; none with no threshold or when each has room. A read
+    /// that fails stops nothing: the run goes on unchecked there, and the first such failure of
+    /// the run is printed to `out`.
+    fn disk_low(&mut self, out: &mut dyn Write) -> Result<Option<Stop>> {
+        if self.min_free == 0 {
+            return Ok(None);
+        }
+        let build_dir = self.build_dir.as_ref().map(|dir| self.tree.join(dir));
+        let mut read: BTreeSet<u64> = BTreeSet::new();
+        for path in std::iter::once(self.tree.clone()).chain(build_dir) {
+            match (self.read_free)(&path) {
+                Ok(free) => {
+                    if read.insert(free.device) && free.bytes < self.min_free {
+                        return Ok(Some(Stop::DiskLow {
+                            path,
+                            free_bytes: free.bytes,
+                            min_bytes: self.min_free,
+                        }));
+                    }
+                }
+                Err(error) if !self.free_unread_said => {
+                    self.free_unread_said = true;
+                    writeln!(
+                        out,
+                        "  free space: {} could not be read, so it is not checked: {error}",
+                        path.display()
+                    )?;
+                }
+                Err(_) => {}
+            }
+        }
+        Ok(None)
+    }
+
     /// How long the run waits on the forge before it observes again: [`Run::poll`], cut to
     /// what is left of the hour budget. `None` for a run with neither a step nor an hour
     /// budget: it has nothing to wait in, and a wait without a bound would never end. What is
@@ -6617,6 +6959,7 @@ impl<'a> Run<'a> {
                 stop: stop.to_string(),
                 steps: self.steps,
                 tokens: self.tokens,
+                completed: Some(matches!(stop, Stop::Completed(_))),
             },
         )
     }
@@ -6924,9 +7267,16 @@ impl<'a> Run<'a> {
         action: &str,
         summary: &str,
     ) -> Result<()> {
-        let (by, tokens, usage, revision, call) = match by {
-            SteppedBy::Validator(revision) => ("validator", None, None, revision, None),
-            SteppedBy::Harness(tokens, usage, call) => ("harness", tokens, usage, None, call),
+        let (by, tokens, usage, revision, call, kept) = match by {
+            SteppedBy::Validator(revision) => ("validator", None, None, revision, None, None),
+            SteppedBy::Harness(tokens, usage, call, kept) => {
+                ("harness", tokens, usage, None, call, kept)
+            }
+        };
+        let (transcript, transcript_refused) = match kept {
+            Some(Ok(path)) => (Some(path), None),
+            Some(Err(why)) => (None, Some(why)),
+            None => (None, None),
         };
         let call = call.unwrap_or_default();
         events.emit(
@@ -6945,6 +7295,8 @@ impl<'a> Run<'a> {
                 api_ms: call.api_ms,
                 turns: call.turns,
                 started_at: call.started_at,
+                transcript,
+                transcript_refused,
             },
         )
     }
@@ -6957,6 +7309,9 @@ impl<'a> Run<'a> {
             .iter()
             .map(|(k, v)| format!("{k}={v}"))
             .collect();
+        // This run's number in the case, which names its step transcripts' directory: one
+        // more than the `opened` lines the case's record holds before this run writes its own.
+        let run_number = crate::harness::run_number(events.path())?;
         events.emit(
             self.steps,
             &Event::Opened {
@@ -6996,15 +7351,21 @@ impl<'a> Run<'a> {
         // observed at: not due again there, because the next observation would end the same
         // way; a commit moves the revision and makes them due again.
         let mut observed_without_record: BTreeSet<(String, String)> = BTreeSet::new();
-        // Of those, the ones whose observation waits on the forge, as `(name, action,
-        // revision)`: observed again after a pause, within the budget, and meanwhile no
-        // judgement step is offered, because what is missing is not the harness's to make.
-        let mut awaited: Vec<(String, String, String)> = Vec::new();
+        // Of those, the ones whose observation waits, as `(name, action, revision, local)`,
+        // `local` what a wait on something local waits for ([`Validator::waits_locally`]): on
+        // the forge, observed again after a pause, within the budget, and meanwhile no
+        // judgement step is offered, because what is missing is not the harness's to make; when
+        // every wait is local, the run stops at once instead.
+        let mut awaited: Vec<(String, String, String, Option<String>)> = Vec::new();
         // Whether the story's records were written before a granted step this run.
         let mut recorded_before = false;
-        let waiting = |awaited: &[(String, String, String)], budget: Option<Stop>| {
+        let all_local = |awaited: &[(String, String, String, Option<String>)]| {
+            awaited.iter().all(|(_, _, _, local)| local.is_some())
+        };
+        let waiting = |awaited: &[(String, String, String, Option<String>)],
+                       budget: Option<Stop>| {
             let mut on: Vec<String> = Vec::new();
-            for (_, action, _) in awaited {
+            for (_, action, _, _) in awaited {
                 if !on.contains(action) {
                     on.push(action.clone());
                 }
@@ -7012,6 +7373,14 @@ impl<'a> Run<'a> {
             Stop::Waiting {
                 on,
                 budget: budget.map(Box::new),
+                local: if all_local(awaited) {
+                    awaited
+                        .iter()
+                        .filter_map(|(_, _, _, local)| local.clone())
+                        .collect()
+                } else {
+                    Vec::new()
+                },
             }
         };
         loop {
@@ -7072,6 +7441,12 @@ impl<'a> Run<'a> {
                 }
             }
             if let Some(validator) = due {
+                // A deterministic step follows: a file system under the threshold stops the run
+                // here rather than the step failing in it for want of space
+                // ([`Run::stop_when_disk_below`]).
+                if let Some(stop) = self.disk_low(out)? {
+                    return Ok(stop);
+                }
                 // The story's records in the store, once a run, just before the step its grant
                 // authorises: they ride to the base with the merge, and without both of them the
                 // step is not taken.
@@ -7355,8 +7730,9 @@ impl<'a> Run<'a> {
                 // decision, no judgement step offered, no other validator due and none waiting
                 // on the forge: then the next pass would see the same decision, and the run
                 // stops there as no progress. One that waits on the forge is due again after
-                // the pause below.
-                awaited.retain(|(name, _, _)| name != validator.name());
+                // the pause below; when every wait is on something local, the run stops here,
+                // with no pause and no further decision.
+                awaited.retain(|(name, _, _, _)| name != validator.name());
                 if observation.records.is_empty() {
                     observed_without_record.insert((validator.name().to_owned(), revision.clone()));
                     if waits {
@@ -7364,7 +7740,13 @@ impl<'a> Run<'a> {
                             validator.name().to_owned(),
                             validator.action().to_owned(),
                             revision,
+                            validator
+                                .waits_locally()
+                                .then(|| observation.summary.clone()),
                         ));
+                        if all_local(&awaited) {
+                            return Ok(waiting(&awaited, None));
+                        }
                         last_idle = None;
                         continue;
                     }
@@ -7390,15 +7772,17 @@ impl<'a> Run<'a> {
             // No validator is due, and one waits on the forge whose action is still admissible:
             // the run pauses and observes it again, offering no judgement step meanwhile. A run
             // with no step or hour budget has nothing to wait in and stops waiting at once; the
-            // case stays open for the next run.
-            awaited.retain(|(_, action, _)| admissible.contains(action));
+            // case stays open for the next run, as it does when every wait left is on something
+            // local.
+            awaited.retain(|(_, action, _, _)| admissible.contains(action));
             if !awaited.is_empty() {
-                let Some(pause) = self.pause() else {
+                let pause = self.pause().filter(|_| !all_local(&awaited));
+                let Some(pause) = pause else {
                     return Ok(waiting(&awaited, None));
                 };
                 let on: Vec<&str> = awaited
                     .iter()
-                    .map(|(_, action, _)| action.as_str())
+                    .map(|(_, action, _, _)| action.as_str())
                     .collect();
                 events.emit(
                     self.steps,
@@ -7414,7 +7798,7 @@ impl<'a> Run<'a> {
                     on.join(", ")
                 )?;
                 std::thread::sleep(pause);
-                for (name, _, revision) in &awaited {
+                for (name, _, revision, _) in &awaited {
                     observed_without_record.remove(&(name.clone(), revision.clone()));
                 }
                 continue;
@@ -7428,6 +7812,21 @@ impl<'a> Run<'a> {
             {
                 return Ok(Stop::ApprovalRequired(behind));
             }
+            // No judgement step when no step can move the case: nothing offered produces what
+            // an open obligation reads, and a claim left is decided only by an admissible action
+            // the run has no performer for (no forge, no gates document). Checked at each step,
+            // never at open, so a `--forge none` run works up to its change read ahead first.
+            // On when the caller asked for it ([`Run::stop_when_unperformable`]): the CLI does.
+            if self.stops_unperformable
+                && let Some((claim, action)) = shape.unperformable(&decision, &offered, |action| {
+                    self.validators.iter().any(|v| v.action() == action)
+                })
+            {
+                return Ok(Stop::Unperformable {
+                    claim,
+                    performer: performer_of(&action),
+                });
+            }
             // Then a judgement step among the offered actions.
             if offered.is_empty() {
                 let approvals = decision.approval_required();
@@ -7436,6 +7835,12 @@ impl<'a> Run<'a> {
                 } else {
                     Stop::ApprovalRequired(approvals)
                 });
+            }
+            // A judgement step follows, every stop that takes none checked first (a grant, no
+            // performer, nothing admissible): a file system under the threshold stops the run
+            // here ([`Run::stop_when_disk_below`]).
+            if let Some(stop) = self.disk_low(out)? {
+                return Ok(stop);
             }
             self.steps += 1;
             let approvals: Vec<String> = decision
@@ -7567,6 +7972,40 @@ impl<'a> Run<'a> {
                 self.harness.step(&context)
             }));
             let returned = Instant::now();
+            // The step's transcript is kept now, before any way out of the step below, the
+            // panic's and the errors' too: under the transcripts directory, outside the tree
+            // and every case directory ([`Run::transcripts_in`]), so no snapshot of the step
+            // reads it and no put-back takes it along. The step's line names it, or why none
+            // was kept: a file at its path is never overwritten, and the run goes on. A way out
+            // below that writes no step line (the harness failed, the hour budget ended it,
+            // what it left could not be killed or read) names it in the error or refusal line
+            // instead (`note`) and on the run's output (`told`); a record names it relative to
+            // the transcripts directory, the output whole.
+            let kept_transcript = crate::harness::keep_step_transcript(
+                self.harness,
+                self.transcripts
+                    .as_ref()
+                    .map(|(root, key)| (root.as_path(), key.as_str())),
+                &self.case.id,
+                run_number,
+                self.steps,
+            );
+            let transcript = kept_transcript
+                .as_ref()
+                .map(crate::harness::KeptTranscript::recorded);
+            let note = kept_transcript
+                .as_ref()
+                .map(crate::harness::KeptTranscript::note)
+                .unwrap_or_default();
+            let told = kept_transcript
+                .as_ref()
+                .map(crate::harness::KeptTranscript::told);
+            let tell = |out: &mut dyn Write| -> std::io::Result<()> {
+                match &told {
+                    Some(told) => writeln!(out, "{told}"),
+                    None => Ok(()),
+                }
+            };
             // What the step left running (a writer in a process group of its own) is killed
             // before anything it did is looked at, so nothing lands after the step is judged.
             let swept = crate::forge::sweep_left();
@@ -7604,19 +8043,21 @@ impl<'a> Run<'a> {
                             self.steps
                         ),
                     }
+                    let _ = tell(out);
                     std::panic::resume_unwind(panic);
                 }
             };
             // A step whose leftovers could not all be killed is not judged: it is discarded
             // whole and the run ends on the error.
             if let Err(error) = swept {
+                let _ = tell(out);
                 return Err(match undo() {
                     Ok(moved) => error.context(format!(
-                        "step {}: what the step left running could not be killed; everything it changed was discarded{moved}",
+                        "step {}: what the step left running could not be killed; everything it changed was discarded{moved}{note}",
                         self.steps
                     )),
                     Err(undo) => error.context(format!(
-                        "step {}: what the step left running could not be killed, and its change could not be discarded: {undo:#}",
+                        "step {}: what the step left running could not be killed, and its change could not be discarded: {undo:#}{note}",
                         self.steps
                     )),
                 });
@@ -7639,13 +8080,14 @@ impl<'a> Run<'a> {
             let (touched, surface_touched) = match seen {
                 Ok(seen) => seen,
                 Err(error) => {
+                    let _ = tell(out);
                     return Err(match undo() {
                         Ok(moved) => error.context(format!(
-                            "step {}: what the step left could not be read; everything it changed was discarded{moved}",
+                            "step {}: what the step left could not be read; everything it changed was discarded{moved}{note}",
                             self.steps
                         )),
                         Err(undo) => error.context(format!(
-                            "step {}: what the step left could not be read, and its change could not be discarded: {undo:#}",
+                            "step {}: what the step left could not be read, and its change could not be discarded: {undo:#}{note}",
                             self.steps
                         )),
                     });
@@ -7679,13 +8121,13 @@ impl<'a> Run<'a> {
                     Ok(moved) => moved,
                     Err(undo) => {
                         return Err(anyhow::anyhow!(
-                            "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}{not_put_back}",
+                            "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}{not_put_back}{note}",
                             self.steps
                         ));
                     }
                 };
                 let why = format!(
-                    "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}{not_put_back}{moved}",
+                    "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}{not_put_back}{moved}{note}",
                     self.steps
                 );
                 // Written after the cases directory was put back, which would take a line
@@ -7697,6 +8139,7 @@ impl<'a> Run<'a> {
                             report.tokens,
                             self.harness.last_usage(),
                             self.harness.last_call(),
+                            transcript.clone(),
                         ),
                         self.harness.name(),
                         &report.action,
@@ -7705,18 +8148,20 @@ impl<'a> Run<'a> {
                 }
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "{why}")?;
+                tell(out)?;
                 return Ok(Stop::Hours(h));
             }
             let report = match stepped {
                 Ok(report) => report,
                 Err(error) => {
+                    let _ = tell(out);
                     return Err(match undo() {
                         Ok(moved) => error.context(format!(
-                            "step {}: the harness failed; everything the step changed was discarded{moved}",
+                            "step {}: the harness failed; everything the step changed was discarded{moved}{note}",
                             self.steps
                         )),
                         Err(undo) => error.context(format!(
-                            "step {}: the harness failed, and the step's change could not be discarded: {undo:#}",
+                            "step {}: the harness failed, and the step's change could not be discarded: {undo:#}{note}",
                             self.steps
                         )),
                     });
@@ -7731,7 +8176,12 @@ impl<'a> Run<'a> {
             let record_step = |run: &Self| {
                 run.stepped(
                     events,
-                    SteppedBy::Harness(report.tokens, harness.last_usage(), harness.last_call()),
+                    SteppedBy::Harness(
+                        report.tokens,
+                        harness.last_usage(),
+                        harness.last_call(),
+                        transcript.clone(),
+                    ),
                     harness.name(),
                     &report.action,
                     &report.summary,

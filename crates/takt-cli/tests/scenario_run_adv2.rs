@@ -230,6 +230,7 @@ impl World {
         args.extend_from_slice(extra);
         let output = Command::new(env!("CARGO_BIN_EXE_takt"))
             .args(&args)
+            .env("XDG_STATE_HOME", self.state.join("xdg-state"))
             .env_remove("B10X_GATES_POLICY")
             .env(
                 "PATH",

@@ -88,7 +88,11 @@ pub enum Event {
     /// what the harness reported about the call, each absent when it did not state it, never
     /// 0: the model, the cost in dollars, the call's duration and its time in the API in
     /// milliseconds, the turns, and the instant the call started, which precedes the line's
-    /// `at`.
+    /// `at`; and the path of its transcript relative to the transcripts directory,
+    /// `<repo>/<case>/run-<r>/step-<n>.jsonl`, when takt kept one
+    /// ([`crate::harness::keep_transcript`]), or why it kept none (`transcript_refused`, its
+    /// paths relative too: a file already at that path, which is never overwritten, or a link
+    /// on the way); so no record carries the directory's own path.
     Step {
         by: String,
         name: String,
@@ -112,6 +116,10 @@ pub enum Event {
         turns: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         started_at: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        transcript: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        transcript_refused: Option<String>,
     },
     /// What a judgement step changed: the paths committed and the implementation revision they
     /// were committed as; no path and no revision when it changed no file.
@@ -160,11 +168,17 @@ pub enum Event {
     /// The line `line`, from 1, was cut short, without its end, and is skipped on read; written
     /// with the next event, which ends the torn line first.
     Skipped { line: usize, reason: String },
-    /// The run stopped: why, with the steps taken and the tokens reported.
+    /// The run stopped: why, with the steps taken and the tokens reported, and whether the stop
+    /// is a completion (`Completed`), as the binary that stopped knows its own stops: a reader
+    /// that does not know the stop's kind takes this word for it. A run always writes it; `None`
+    /// writes no field, as a line from before it had one, which a reader scores by the stops it
+    /// knows.
     Stop {
         stop: String,
         steps: u64,
         tokens: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        completed: Option<bool>,
     },
 }
 

@@ -84,14 +84,19 @@ fn event() -> impl Strategy<Value = Event> {
                 api_ms: None,
                 turns: None,
                 started_at: None,
+                transcript: None,
+                transcript_refused: None,
             }),
         (text(), text()).prop_map(|(by, reason)| Event::Refusal { by, reason }),
         text().prop_map(|error| Event::Error { error }),
-        (text(), any::<u64>(), any::<u64>()).prop_map(|(stop, steps, tokens)| Event::Stop {
-            stop,
-            steps,
-            tokens
-        }),
+        (text(), any::<u64>(), any::<u64>(), any::<Option<bool>>()).prop_map(
+            |(stop, steps, tokens, completed)| Event::Stop {
+                stop,
+                steps,
+                tokens,
+                completed,
+            }
+        ),
     ]
 }
 
@@ -222,6 +227,7 @@ fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
                 stop: (*outcome).to_owned(),
                 held_out: None,
                 opened_binary: None,
+                completed: None,
             })
             .collect(),
         no_record: Vec::new(),

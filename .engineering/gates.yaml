@@ -1,0 +1,19 @@
+format: engineering-gates/1
+language: canon-expr/1
+gates:
+  - id: specification
+    text: The ESS specification validates.
+    assertions:
+      - 'process.succeeded("specification")'
+  - id: citations
+    text: Every read-from citation of the specification matches its lines and its digest.
+    assertions:
+      - 'process.succeeded("citations")'
+  - id: format
+    text: The workspace is formatted.
+    assertions:
+      - 'process.succeeded("format")'
+  - id: lint
+    text: Clippy finds no warning in the workspace, its tests included.
+    assertions:
+      - 'process.succeeded("lint")'

@@ -161,14 +161,63 @@ impl Harness for Fails {
     }
 }
 
-/// A gate of three commands that each sleep 25 s, under a 10 s hour budget (room for the gate's
-/// preparation under load before any command starts): every command is
-/// held to what was left when the gate started collecting, so the gate runs past the run's end
-/// by up to twice that, and is caught when it returns. The run stops on the hour budget, and
-/// nothing is recorded.
+/// Whether this process is the child [`sealed`] starts, which runs one case by itself.
+const SEALED: &str = "TAKT_TEST_SEALED";
+
+/// Runs the case `name` of this test binary again in a child process, by itself, in an
+/// environment of its own: `PATH` is `/usr/bin:/bin`, and `HOME`, `CARGO_HOME`, `RUSTUP_HOME`
+/// and `TMPDIR` are in a scratch directory; nothing else of this process's environment is
+/// passed. Asserts the case ran and passed there; true only in that child, which is where the
+/// case's body runs. A run guards every directory a program is found in that the user can
+/// write: on the host's `PATH` and `HOME`, a program another session installs while the gate
+/// runs would be taken for the gate's own write.
+fn sealed(name: &str) -> bool {
+    if std::env::var_os(SEALED).is_some() {
+        return true;
+    }
+    let root = directory("sealed");
+    let (home, tmp) = (root.join("home"), root.join("tmp"));
+    for dir in [&home, &tmp] {
+        fs::create_dir_all(dir).expect("a directory of the sealed environment");
+    }
+    let child = Command::new(std::env::current_exe().expect("the test binary"))
+        .args([name, "--exact", "--test-threads", "1"])
+        .env_clear()
+        .env(SEALED, "1")
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", &home)
+        .env("CARGO_HOME", home.join(".cargo"))
+        .env("RUSTUP_HOME", home.join(".rustup"))
+        .env("TMPDIR", &tmp)
+        .output()
+        .expect("the child test runs");
+    let stdout = String::from_utf8_lossy(&child.stdout);
+    assert!(
+        child.status.success() && stdout.contains("test result: ok. 1 passed"),
+        "{name}, run by itself in a sealed environment:\n{stdout}\n{}",
+        String::from_utf8_lossy(&child.stderr)
+    );
+    false
+}
+
+/// The hour budget of a run whose gate must start its commands before the budget ends: 30 s,
+/// over ten times the gate's preparation unloaded (2.6 s in a debug build, most of it the
+/// digest of the test binary the gate's bundle names), which grew past 10 s on a host loaded to
+/// three and four times its CPU count.
+const GATE_HOURS: f64 = 30.0 / 3600.0;
+
+/// A gate of three commands that each sleep 60 s, under [`GATE_HOURS`] (room for the gate's
+/// preparation under load before any command starts): every command is held to what was left
+/// when the gate started collecting, so the gate runs past the run's end by up to twice that,
+/// and is caught when it returns. The run stops on the hour budget, and nothing is recorded.
+/// Commands held to the project's timeout (300 s) alone would take 180 s, 80 s past three
+/// budgets and the grace.
 #[test]
 fn a_gate_of_three_commands_past_the_hour_budget_stops_on_hours_and_records_nothing() {
     let _serial = serial();
+    if !sealed("a_gate_of_three_commands_past_the_hour_budget_stops_on_hours_and_records_nothing") {
+        return;
+    }
     let scripts = directory("gate-scripts");
     let pids = scripts.join("pids");
     let tree = repository(
@@ -182,20 +231,20 @@ fn a_gate_of_three_commands_past_the_hour_budget_stops_on_hours_and_records_noth
             ),
             (
                 ".engineering/assertions-project.yaml",
-                "format: engineering-assertions-project/1\ntimeout_seconds: 40\ncommands:\n  \
+                "format: engineering-assertions-project/1\ntimeout_seconds: 300\ncommands:\n  \
                  a:\n    executable: check.sh\n  b:\n    executable: check.sh\n  c:\n    \
                  executable: check.sh\n",
             ),
             (
                 "check.sh",
                 &format!(
-                    "#!/bin/sh\necho $$ >> '{}'\nexec sleep 25\n",
+                    "#!/bin/sh\necho $$ >> '{}'\nexec sleep 60\n",
                     pids.display()
                 ),
             ),
         ],
     );
-    let hours = 10.0 / 3600.0;
+    let hours = GATE_HOURS;
     let validators: Vec<Box<dyn Validator>> =
         vec![Box::new(GateRun::new(".engineering/gates.yaml"))];
     let mut options = options("gate-hours");

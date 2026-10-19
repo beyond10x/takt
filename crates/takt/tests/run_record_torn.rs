@@ -212,6 +212,7 @@ fn the_scorecard_reads_a_record_cut_inside_a_character() {
                 stop: "NoProgress".to_owned(),
                 steps: 0,
                 tokens: 0,
+                completed: None,
             },
         )
         .expect("the resumed run stops");

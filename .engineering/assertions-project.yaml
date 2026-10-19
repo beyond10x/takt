@@ -1,0 +1,36 @@
+format: engineering-assertions-project/1
+timeout_seconds: 300
+commands:
+  specification:
+    executable: scripts/gate-exec
+    args:
+      - ess
+      - specify
+      - validate
+      - --path
+      - ess
+  citations:
+    executable: scripts/gate-exec
+    args:
+      - python3
+      - -I
+      - scripts/check-citations
+      - --require-digests
+  format:
+    executable: scripts/gate-exec
+    args:
+      - cargo
+      - fmt
+      - --all
+      - --check
+  lint:
+    executable: scripts/gate-exec
+    args:
+      - cargo
+      - clippy
+      - --workspace
+      - --all-targets
+      - --locked
+      - --
+      - -D
+      - warnings
