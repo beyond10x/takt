@@ -104,10 +104,17 @@
 # a usage error, a CHECK_FINDING_TIMEOUT that is no whole number of seconds among them, exits 64.
 set -euo pipefail
 
-# The repositories this script reads and writes are the ones it names by path; a GIT_DIR,
-# GIT_WORK_TREE or GIT_INDEX_FILE of the caller (a hook's environment) would send every `git -C`
-# to another repository, or a checkout into the caller's index.
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+# The repositories this script reads and writes are the ones it names by path, as they hold
+# them; a GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE of the caller (a hook's environment) would send
+# every `git -C` to another repository, or a checkout into the caller's index, and a
+# GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES or GIT_COMMON_DIR (a hook's environment
+# under quarantine), a GIT_CONFIG_PARAMETERS or GIT_CONFIG_COUNT, a GIT_GRAFT_FILE,
+# GIT_SHALLOW_FILE, GIT_REPLACE_REF_BASE, GIT_NAMESPACE or GIT_TEMPLATE_DIR would lend it objects,
+# configuration or history it does not hold. None reaches a git here; the build's git runs under
+# a cleared environment besides (`build_git`).
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+    GIT_COMMON_DIR GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT GIT_GRAFT_FILE GIT_SHALLOW_FILE \
+    GIT_REPLACE_REF_BASE GIT_NAMESPACE GIT_TEMPLATE_DIR
 
 say() { printf 'check-finding: %s\n' "$*" >&2; }
 usage() {
@@ -326,11 +333,21 @@ if [[ ! -x $takt || ! -f $root/builds/$sha/revision ]]; then
     [[ $cached == /* ]] || cached=$HOME/.cargo
     work=$(mktemp -d "$root/builds/$sha.work-XXXXXX")
     trap 'rm -rf -- "$work"' EXIT
-    mkdir -p "$work/target" "$work/cargo-home"
-    { git init --quiet --template= -- "$work/src" &&
-        git -C "$work/src" -c transfer.fsckObjects=true fetch --quiet --no-tags -- "$repo" "$sha"; } >&2 ||
+    mkdir -p "$work/target" "$work/cargo-home" "$work/git-home"
+    # The build's checkout is made, fetched and checked out by a git that runs as the predicate's
+    # clone does (`clone_git`): with the environment replaced (`env -i`), so no
+    # GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_COMMON_DIR, GIT_CONFIG_PARAMETERS,
+    # GIT_CONFIG_COUNT or GIT_GRAFT_FILE of the caller (a hook's environment under quarantine
+    # carries some) lends it objects or changes what it reads, in a home of its own, with no
+    # system or global configuration and no prompt.
+    build_git() {
+        env -i PATH="$PATH" HOME="$work/git-home" LANG="${LANG:-C.UTF-8}" \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 git "$@"
+    }
+    { build_git init --quiet --template= -- "$work/src" &&
+        build_git -C "$work/src" -c transfer.fsckObjects=true fetch --quiet --no-tags -- "$repo" "$sha"; } >&2 ||
         fail "fetch $sha from $repo for the build, every object hashed and checked"
-    git -C "$work/src" checkout --quiet --detach "$sha" >&2 ||
+    build_git -C "$work/src" checkout --quiet --detach "$sha" >&2 ||
         fail "check out $sha from $repo"
     # The sandbox of `takt promote`'s build (crates/takt/src/promotion.rs, `Confinement`): the
     # system directories and /etc read-only, its own /proc, /dev, /tmp and HOME, the toolchain
