@@ -1,15 +1,17 @@
 //! The `Forge` seam: the repository host behind a trait, one adapter that goes through the
 //! organization's bot route, and an in-memory double for the tests. The bot credential never
-//! enters takt: `b10x-gates bot` pushes under the bot, to the repository's HTTPS URL and over
-//! HTTPS only, `b10x-gates api` writes through JSON files and never a token in argv, the reads
-//! go through `gh`, and before any of it leaves the machine `b10x-gates scan-text` reads what a
-//! push would publish (the object set it sends: every object of the head the remote's tracking
-//! ref of the case's base does not hold, or every object of the head without one; each commit
-//! object raw, every header and the message, every name in every tree object and every path in
-//! full from each commit's root (`filename:<path>`), a gitlink's and an empty tree's included,
-//! every blob whole, `git replace` notwithstanding; a head that is not
-//! a commit refused) and a pull request's title and body. A validator turns what the forge
-//! reports into evidence; the forge itself writes no record.
+//! enters takt: `b10x-gates bot` pushes under the bot the commit scanned, by its id, to the
+//! repository's HTTPS URL and over HTTPS only, `b10x-gates api` writes through JSON files and
+//! never a token in argv, the reads go through `gh`, and before any of it leaves the machine
+//! `b10x-gates scan-text` reads what a push would publish (the object set it sends: every object
+//! of the head the repository's base does not hold, as the tracking ref of the case's base says
+//! while the repository's own base, read through the bot route, agrees with it, or every object
+//! of the head; each commit object raw, every header and the message, every name in every tree
+//! object and every path in full from each commit's root (`filename:<path>`), a gitlink's and an
+//! empty tree's included, every blob whole and, behind a UTF-16 or UTF-32 mark, decoded too, `git
+//! replace` notwithstanding; a head that is not a commit, a tree entry in a mode git does not
+//! write and a disagreeing tracking ref refused) and a pull request's title and body. A
+//! validator turns what the forge reports into evidence; the forge itself writes no record.
 //!
 //! Every child process takt starts, the forge's and the others' (the test command, the
 //! harness, `aep`), goes through [`run_child`]: no standard input, its own process group,
@@ -916,29 +918,11 @@ impl BotRoute {
         format!("https://{}/{}.git", Self::HOST, self.repository)
     }
 
-    /// The line that pushes `branch`, and no tag and no submodule's commit with it
-    /// (`--no-follow-tags`, `--recurse-submodules=no`, whatever `push.*` says); the options come
-    /// last, after the URL and the refspec.
-    #[must_use]
-    pub fn push_argv(&self, branch: &str) -> Vec<String> {
-        let url = self.push_url();
-        [
-            "b10x-gates",
-            "bot",
-            "--",
-            "push",
-            &url,
-            branch,
-            "--no-follow-tags",
-            "--recurse-submodules=no",
-        ]
-        .map(str::to_owned)
-        .to_vec()
-    }
-
     /// The line that pushes the commit `revision` as `branch`: `<revision>:refs/heads/<branch>`,
     /// both made by takt (a commit id and the case's branch), never read from a file a step can
-    /// write; no tag and no submodule's commit with it, as [`Self::push_argv`].
+    /// write, and never the branch's name, which git would resolve again when it pushes; no tag
+    /// and no submodule's commit with it (`--no-follow-tags`, `--recurse-submodules=no`,
+    /// whatever `push.*` says), the options last, after the URL and the refspec.
     #[must_use]
     pub fn push_revision_argv(&self, branch: &str, revision: &str) -> Vec<String> {
         let url = self.push_url();
@@ -955,6 +939,88 @@ impl BotRoute {
         ]
         .map(str::to_owned)
         .to_vec()
+    }
+
+    /// The line that reads, through the bot route, which commit the repository's `base` branch
+    /// is at, writing nothing: a dry-run fetch of it onto [`Self::remote`]'s tracking ref, its
+    /// porcelain report on standard output (`<flag> <old> <new> <ref>`), no tag and no
+    /// submodule, the options last as on a push.
+    #[must_use]
+    pub fn remote_base_argv(&self, base: &str) -> Vec<String> {
+        let url = self.push_url();
+        let refspec = format!("refs/heads/{base}:refs/remotes/{}/{base}", self.remote);
+        [
+            "b10x-gates",
+            "bot",
+            "--",
+            "fetch",
+            &url,
+            &refspec,
+            "--porcelain",
+            "--dry-run",
+            "--verbose",
+            "--no-tags",
+            "--recurse-submodules=no",
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    }
+
+    /// The commit the repository's `base` branch is at, read through the bot route
+    /// ([`Self::remote_base_argv`]) over HTTPS alone; `None` when the repository has no such
+    /// branch. A fetch that fails otherwise, or reports nothing for the branch, is an error: what
+    /// the repository holds is then not known.
+    fn remote_base(&self, tree: &Path, base: &str) -> Result<Option<String>> {
+        let argv = self.remote_base_argv(base);
+        let exit = self.runner.run_env(tree, &argv, &Self::PUSH_ENV)?;
+        if !exit.success() {
+            if exit.stderr.contains("couldn't find remote ref") {
+                return Ok(None);
+            }
+            return Err(Failed {
+                line: argv.join(" "),
+                code: exit.code,
+                stderr: exit.stderr.trim().to_owned(),
+            }
+            .into());
+        }
+        let target = format!("refs/remotes/{}/{base}", self.remote);
+        exit.stdout
+            .lines()
+            .find_map(|line| {
+                let fields: Vec<&str> = line.get(2..)?.split_whitespace().collect();
+                match fields[..] {
+                    [_, new, reference] if reference == target => Some(new.to_owned()),
+                    _ => None,
+                }
+            })
+            .map(Some)
+            .ok_or_else(|| {
+                anyhow!(
+                    "{} reported nothing for {target}: what the repository holds of {base} is not known; nothing was pushed",
+                    argv.join(" ")
+                )
+            })
+    }
+
+    /// The commit the repository holds as the case's `base`, what the scan need not read again:
+    /// the tracking ref `refs/remotes/<remote>/<base>`, read by its full name, but only while the
+    /// repository's own `base`, read through the bot route ([`Self::remote_base`]), is at the
+    /// same commit. A tracking ref at another commit (stale, or written by hand) refuses the
+    /// push, naming both; a repository with no `base` holds nothing of it; no tracking ref says
+    /// nothing. `None` has every commit of the head scanned.
+    fn held(&self, tree: &Path, base: &str) -> Result<Option<String>> {
+        let tracking = format!("refs/remotes/{}/{base}", self.remote);
+        let Some(tracked) = exact_ref(tree, &tracking) else {
+            return Ok(None);
+        };
+        match self.remote_base(tree, base)? {
+            None => Ok(None),
+            Some(remote) if remote == tracked => Ok(Some(tracked)),
+            Some(remote) => bail!(
+                "{tracking} is at {tracked}, but the repository's {base} is at {remote}: what the repository holds is not what the tracking ref says; refused, nothing was pushed"
+            ),
+        }
     }
 
     /// The options every `b10x-gates` line that reads the policy carries, the scan and the API
@@ -1206,29 +1272,20 @@ fn exact_ref(tree: &Path, name: &str) -> Option<String> {
 }
 
 /// The commits pushing `head` publishes, as the revision arguments of a `git rev-list`, and the
-/// words for them: the commits of `head` that `remote`'s tracking ref of `base`, the branch the
-/// case forked from, read by its full name, does not hold; without that tracking ref, every
-/// commit of `head`, since no other ref says what this remote holds. The revisions are commit
-/// ids, so none is read as an option. A tracking ref the user left stale, naming a commit the
-/// remote no longer holds, hides that commit; a step cannot write one (the checkpoint guards
-/// every ref).
-fn published_commits(
-    tree: &Path,
-    remote: &str,
-    base: &str,
-    head: &str,
-) -> Result<(Vec<String>, String)> {
+/// words for them: the commits of `head` that `held` does not hold, the commit the repository
+/// holds as the case's base ([`BotRoute::held`]); with none, every commit of `head`. The
+/// revisions are commit ids, so none is read as an option.
+fn published_commits(tree: &Path, held: Option<&str>, head: &str) -> Result<(Vec<String>, String)> {
     let head = commit_id(tree, head)?;
     let short = head[..head.len().min(12)].to_owned();
-    let tracking = format!("refs/remotes/{remote}/{base}");
-    Ok(match exact_ref(tree, &tracking) {
+    Ok(match held {
         Some(held) => (
             vec![head, format!("^{held}")],
-            format!("the commits of {short} that {tracking} does not hold"),
+            format!("the commits of {short} the repository's base at {held} does not hold"),
         ),
         None => (
             vec![head],
-            format!("every commit of {short} (no {tracking} says what {remote} holds)"),
+            format!("every commit of {short} (nothing says the repository holds any)"),
         ),
     })
 }
@@ -1288,12 +1345,18 @@ fn read_size(object: &crate::git::Object) -> usize {
     object.id.len() + object.kind.len() + 24 + object.bytes.len()
 }
 
+/// The modes git writes for a tree entry: a file, an executable, a link, a tree, a gitlink.
+/// git walks and pushes other spellings too (`040000` as a tree), so the scan refuses them.
+const GIT_MODES: [&str; 5] = ["100644", "100755", "120000", "40000", "160000"];
+
 /// Every path the trees `roots` hold, each in full from its root as a push publishes it (the
-/// unit gates scans a path in, `filename:<path>`): every entry, whatever its mode, an empty
-/// tree's and a gitlink's included, through every subtree. The trees come from `trees` (the
-/// object set read already) or are read through one `git cat-file --batch` per level of the walk
-/// ([`crate::git::read_objects`]), counted off `left`; `None` once that passes it. A subtree met
-/// again at the same path is walked once.
+/// unit gates scans a path in, `filename:<path>`): every entry, an empty tree's and a gitlink's
+/// included, through every subtree. An entry whose mode is not one git writes ([`GIT_MODES`]) is
+/// refused, naming its path and mode. The trees come from `trees` (the object set read already)
+/// or are read through one `git cat-file --batch` per level of the walk
+/// ([`crate::git::read_objects`]); what is read and every path, as it is scanned
+/// (`filename:<path>` and a line end), are counted off `left`, and `None` once that is spent. A
+/// subtree met again at the same path is walked once.
 fn full_paths(
     tree: &Path,
     trees: &mut BTreeMap<String, Vec<u8>>,
@@ -1332,6 +1395,15 @@ fn full_paths(
             let (entries, _) = parse_tree(bytes, id.len() / 2);
             for (mode, name, entry) in entries {
                 let path = format!("{prefix}{name}");
+                if !GIT_MODES.contains(&mode.as_str()) {
+                    bail!(
+                        "the tree entry {path} has the mode {mode}, which git does not write: refused, nothing was pushed"
+                    );
+                }
+                let Some(rest) = left.checked_sub("filename:\n".len() + path.len()) else {
+                    return Ok(None);
+                };
+                *left = rest;
                 if mode == "40000" {
                     next.push((format!("{path}/"), entry));
                 }
@@ -1341,6 +1413,36 @@ fn full_paths(
         level = next;
     }
     Ok(Some(paths))
+}
+
+/// The text of `bytes` when they start with a UTF-32 or UTF-16 byte-order mark, decoded, with
+/// the encoding's name: what a reader of the file sees, which its bytes, a NUL beside every
+/// ASCII character, never match. `None` for bytes with no such mark (UTF-8, Latin-1 and any
+/// other encoding without a mark are scanned as their bytes alone).
+fn decoded(bytes: &[u8]) -> Option<(&'static str, String)> {
+    let utf32 = |rest: &[u8], unit: fn([u8; 4]) -> u32| -> String {
+        rest.chunks(4)
+            .map(|chunk| {
+                let mut four = [0_u8; 4];
+                four[..chunk.len()].copy_from_slice(chunk);
+                char::from_u32(unit(four)).unwrap_or(char::REPLACEMENT_CHARACTER)
+            })
+            .collect()
+    };
+    let utf16 = |rest: &[u8], unit: fn([u8; 2]) -> u16| -> String {
+        let units: Vec<u16> = rest
+            .chunks(2)
+            .map(|chunk| unit([chunk[0], chunk.get(1).copied().unwrap_or(0)]))
+            .collect();
+        String::from_utf16_lossy(&units)
+    };
+    match bytes {
+        [0xFF, 0xFE, 0x00, 0x00, rest @ ..] => Some(("UTF-32LE", utf32(rest, u32::from_le_bytes))),
+        [0x00, 0x00, 0xFE, 0xFF, rest @ ..] => Some(("UTF-32BE", utf32(rest, u32::from_be_bytes))),
+        [0xFF, 0xFE, rest @ ..] => Some(("UTF-16LE", utf16(rest, u16::from_le_bytes))),
+        [0xFE, 0xFF, rest @ ..] => Some(("UTF-16BE", utf16(rest, u16::from_be_bytes))),
+        _ => None,
+    }
 }
 
 /// What pushing `head` would publish, read in at most `limit` bytes: the object set the push
@@ -1354,12 +1456,11 @@ fn full_paths(
 /// words for the commits.
 fn outgoing_text(
     tree: &Path,
-    remote: &str,
-    base: &str,
+    held: Option<&str>,
     head: &str,
     limit: usize,
 ) -> Result<(Option<(String, String)>, String)> {
-    let (revisions, words) = published_commits(tree, remote, base, head)?;
+    let (revisions, words) = published_commits(tree, held, head)?;
     let mut left = limit;
     let mut args = vec!["rev-list", "--objects", "--no-object-names"];
     args.extend(revisions.iter().map(String::as_str));
@@ -1409,6 +1510,17 @@ fn outgoing_text(
                 if !files.ends_with('\n') {
                     files.push('\n');
                 }
+                if let Some((encoding, text)) = decoded(&object.bytes) {
+                    let Some(rest) = left.checked_sub(text.len()) else {
+                        return Ok((None, words));
+                    };
+                    left = rest;
+                    files.push_str(&format!("{kind} {id} decoded from {encoding}\n"));
+                    files.push_str(&text);
+                    if !files.ends_with('\n') {
+                        files.push('\n');
+                    }
+                }
             }
         }
     }
@@ -1449,15 +1561,16 @@ impl Forge for BotRoute {
         "bot"
     }
 
+    /// Pushes the commit `branch` is at, by its id ([`Self::push_revision`]).
     fn push(&self, tree: &Path, branch: &str) -> Result<()> {
-        self.push_line(tree, &self.push_argv(branch))
+        let at = exact_ref(tree, &format!("refs/heads/{branch}"))
+            .ok_or_else(|| anyhow!("{branch} names no commit; nothing was pushed"))?;
+        self.push_revision(tree, branch, &at)
     }
 
+    /// Pushes the commit `revision` as `branch`, always by its id, the one scanned
+    /// ([`Self::push_revision_argv`]).
     fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> Result<()> {
-        let at = crate::git::run(tree, &["rev-parse", &format!("refs/heads/{branch}")])?;
-        if at == revision {
-            return self.push(tree, branch);
-        }
         self.push_line(tree, &self.push_revision_argv(branch, revision))
     }
 
@@ -1477,7 +1590,8 @@ impl Forge for BotRoute {
             request,
         } = *outgoing;
         head_is_a_commit(tree, branch, head)?;
-        let (text, commits) = outgoing_text(tree, &self.remote, base, head, self.scan_limit)?;
+        let held = self.held(tree, base)?;
+        let (text, commits) = outgoing_text(tree, held.as_deref(), head, self.scan_limit)?;
         let Some((messages, files)) = text else {
             bail!(
                 "{commits}, which pushing {branch} would publish, come to more than the {} bytes of messages and files one scan is given: refused, not cut; nothing was pushed",

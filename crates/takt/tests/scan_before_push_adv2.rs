@@ -143,8 +143,24 @@ impl Runner for Gates {
         self.run(tree, argv)
     }
 
-    fn run(&self, _tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
+    fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         let words: Vec<&str> = argv.iter().map(String::as_str).collect();
+        // The bot route's read of the repository's base: the same dry-run fetch, from the bare
+        // repository `origin` names, which stands in for the repository on the forge.
+        if let ["b10x-gates", "bot", "--", "fetch", _url, rest @ ..] = words.as_slice() {
+            let origin = git(tree, &["remote", "get-url", "origin"]);
+            let out = Command::new("git")
+                .arg("fetch")
+                .arg(&origin)
+                .args(rest)
+                .current_dir(tree)
+                .output()?;
+            return Ok(Exit {
+                code: out.status.code(),
+                stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            });
+        }
         let ["b10x-gates", "scan-text", rest @ ..] = words.as_slice() else {
             return Ok(Exit {
                 code: Some(2),

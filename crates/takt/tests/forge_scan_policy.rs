@@ -397,7 +397,10 @@ fn with_a_policy_given_to_the_forge_pr_open_opens_the_pull_request() {
     );
     assert_eq!(
         lines[1],
-        "b10x-gates bot -- push https://github.com/owner/repo.git takt/opens --no-follow-tags --recurse-submodules=no",
+        format!(
+            "b10x-gates bot -- push https://github.com/owner/repo.git {}:refs/heads/takt/opens --no-follow-tags --recurse-submodules=no",
+            git(&tree, &["rev-parse", "refs/heads/takt/opens"])
+        ),
         "{lines:?}"
     );
     assert_eq!(
@@ -503,7 +506,10 @@ fn a_scan_refusal_after_the_push_names_the_pushed_branch() {
     assert!(lines[0].starts_with("b10x-gates scan-text "), "{lines:?}");
     assert_eq!(
         lines[1],
-        "b10x-gates bot -- push https://github.com/owner/repo.git takt/refused --no-follow-tags --recurse-submodules=no",
+        format!(
+            "b10x-gates bot -- push https://github.com/owner/repo.git {}:refs/heads/takt/refused --no-follow-tags --recurse-submodules=no",
+            git(&tree, &["rev-parse", "refs/heads/takt/refused"])
+        ),
         "{lines:?}"
     );
     assert!(lines[2].starts_with("b10x-gates scan-text "), "{lines:?}");

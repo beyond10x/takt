@@ -612,6 +612,8 @@ impl Runner for Recording {
 fn the_bot_route_adapter_runs_these_argument_lines() {
     let tree = scratch("argv");
     let dir = tree.join("out");
+    git(&tree, &["branch", "takt/c1"]);
+    let c1 = git(&tree, &["rev-parse", "takt/c1"]);
     let recording = Rc::new(Recording::new(
         r#"{"mergedAt":null,"state":"OPEN","headRefName":"takt/c1","headRefOid":"abc123"}"#,
         r#"[{"bucket":"pass"},{"bucket":"skipping"}]"#,
@@ -665,8 +667,9 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
     assert_eq!(
         recording.lines.borrow().as_slice(),
         [
-            "b10x-gates bot -- push https://github.com/owner/repo.git takt/c1 --no-follow-tags --recurse-submodules=no"
-                .to_owned(),
+            format!(
+                "b10x-gates bot -- push https://github.com/owner/repo.git {c1}:refs/heads/takt/c1 --no-follow-tags --recurse-submodules=no"
+            ),
             format!(
                 "b10x-gates scan-text --repository owner/repo --policy policy.yaml {} {}",
                 input.display(),

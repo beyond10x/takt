@@ -187,6 +187,13 @@ impl Runner for Gates {
                 *self.pushed.borrow_mut() = Some((branch, revision));
                 exit(0, "", "")
             }
+            ["b10x-gates", "bot", "--", "fetch", _, refspec, ..] => {
+                // The bot route's read of the repository's base: the repository agrees with the
+                // tracking ref the case's tree holds.
+                let to = refspec.split_once(':').map_or(*refspec, |(_, to)| to);
+                let held = git(tree, &["rev-parse", "--verify", to]);
+                exit(0, &format!("= {held} {held} {to}\n"), "")
+            }
             ["b10x-gates", "api", ..] => {
                 let output = argv
                     .iter()

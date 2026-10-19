@@ -139,6 +139,11 @@ struct Gates {
     pushed: RefCell<Option<(String, String)>>,
     push_refusal: Option<String>,
     also_forbidden: Option<String>,
+    /// The commit the repository's base branch is at, as the bot route's dry-run fetch reports
+    /// it; none reports the tracking ref's own commit, the remote agreeing with it.
+    remote_base: Option<String>,
+    /// Whether the repository has no such base branch: the fetch fails as git does.
+    remote_lacks_base: bool,
 }
 
 impl Gates {
@@ -226,6 +231,24 @@ impl Runner for Gates {
                 };
                 *self.pushed.borrow_mut() = Some((branch, revision));
                 exit(0, "", "")
+            }
+            ["b10x-gates", "bot", "--", "fetch", _, refspec, ..] => {
+                let (from, to) = refspec
+                    .split_once(':')
+                    .expect("a refspec with a destination");
+                if self.remote_lacks_base {
+                    exit(128, "", &format!("fatal: couldn't find remote ref {from}"))
+                } else {
+                    let held = Command::new("git")
+                        .args(["rev-parse", "--verify", "-q", to])
+                        .current_dir(tree)
+                        .output()
+                        .expect("git runs");
+                    let held = String::from_utf8_lossy(&held.stdout).trim().to_owned();
+                    let remote = self.remote_base.clone().unwrap_or_else(|| held.clone());
+                    let flag = if remote == held { '=' } else { ' ' };
+                    exit(0, &format!("{flag} {held} {remote} {to}\n"), "")
+                }
             }
             ["b10x-gates", "api", ..] => {
                 let output = argv
@@ -646,10 +669,6 @@ fn the_push_names_the_repository_url_not_the_remote() {
     let gates = Rc::new(Gates::default());
     let forge = bot(&gates);
     assert_eq!(
-        forge.push_argv("takt/c").join(" "),
-        "b10x-gates bot -- push https://github.com/owner/repo.git takt/c --no-follow-tags --recurse-submodules=no"
-    );
-    assert_eq!(
         forge.push_revision_argv("takt/c", "abc").join(" "),
         "b10x-gates bot -- push https://github.com/owner/repo.git abc:refs/heads/takt/c --no-follow-tags --recurse-submodules=no"
     );
@@ -778,7 +797,17 @@ fn a_commit_the_remote_holds_is_not_scanned_again() {
         commit(tree, "work.txt", "clean\n", "implementation.edit: clean");
     });
     assert_eq!(ran.stop, Ok(Stop::Iterations(1)), "{}", ran.text);
-    let scanned = gates.lines()[0].scanned.join("\n");
+    let lines = gates.lines();
+    assert!(
+        lines[0].argv.starts_with("b10x-gates bot -- fetch "),
+        "the repository's base is read first: {lines:#?}"
+    );
+    let scanned = lines
+        .iter()
+        .find(|line| line.argv.starts_with("b10x-gates scan-text "))
+        .expect("a scan")
+        .scanned
+        .join("\n");
     assert!(scanned.contains("implementation.edit: clean"), "{scanned}");
     assert!(!scanned.contains("published long ago"), "{scanned}");
     assert!(scanned.contains("author t <t@localhost>"), "{scanned}");
@@ -1352,16 +1381,12 @@ fn the_bases_tracking_ref_is_read_by_its_full_name() {
 fn a_push_follows_no_tag_and_no_submodule() {
     let gates = Rc::new(Gates::default());
     let forge = bot(&gates);
-    for argv in [
-        forge.push_argv("takt/c"),
-        forge.push_revision_argv("takt/c", "abc"),
-    ] {
-        assert_eq!(
-            argv[argv.len() - 2..],
-            ["--no-follow-tags", "--recurse-submodules=no"],
-            "{argv:?}"
-        );
-    }
+    let argv = forge.push_revision_argv("takt/c", "abc");
+    assert_eq!(
+        argv[argv.len() - 2..],
+        ["--no-follow-tags", "--recurse-submodules=no"],
+        "{argv:?}"
+    );
 }
 
 /// A step may not set the configuration a push or takt's commit reads: `i18n.*` (the encoding a
@@ -1629,5 +1654,243 @@ fn a_path_the_policy_forbids_is_read_in_full() {
             .iter()
             .any(|text| text.contains("filename:acme/secret-repo/notes.md\n")),
         "{scanned:#?}"
+    );
+}
+
+/// Writes a tree object of `entries` (mode, name, id in hex) as it is, `--literally`, so a mode
+/// git would not write itself (`040000`) reaches the object store as a step could leave it.
+fn raw_tree(tree: &Path, entries: &[(&str, &str, &str)]) -> String {
+    let mut bytes = Vec::new();
+    for (mode, name, id) in entries {
+        bytes.extend_from_slice(format!("{mode} {name}\0").as_bytes());
+        for at in (0..id.len()).step_by(2) {
+            bytes.push(u8::from_str_radix(&id[at..at + 2], 16).expect("a hex id"));
+        }
+    }
+    let file = tree.join(".git/raw-tree");
+    fs::write(&file, bytes).expect("the tree's bytes");
+    let id = git(
+        tree,
+        &[
+            "hash-object",
+            "-t",
+            "tree",
+            "--literally",
+            "-w",
+            file.to_str().expect("utf-8"),
+        ],
+    );
+    fs::remove_file(&file).expect("the bytes removed");
+    id
+}
+
+/// A commit of `root` on top of `HEAD`, the case's branch moved to it.
+fn commit_tree(tree: &Path, root: &str) -> String {
+    let parent = git(tree, &["rev-parse", "HEAD"]);
+    let head = git(
+        tree,
+        &[
+            "commit-tree",
+            root,
+            "-p",
+            &parent,
+            "-m",
+            "implementation.edit: clean",
+        ],
+    );
+    git(tree, &["update-ref", "refs/heads/takt/case", &head]);
+    head
+}
+
+/// The bot route's scan before pushing `head` of `tree` through `gates`: how it ended.
+fn scan_through(tree: &Path, gates: &Rc<Gates>, head: &str) -> Result<(), String> {
+    bot(gates)
+        .scan_outgoing(
+            tree,
+            &tree.join(".engineering/scan"),
+            &Outgoing {
+                branch: "takt/case",
+                base: "main",
+                head,
+                request: None,
+            },
+        )
+        .map_err(|error| format!("{error:#}"))
+}
+
+/// git walks and pushes a tree entry whose mode is `040000` as a directory, though it writes
+/// `40000` itself. A tree entry in a mode that is not one of git's five (`100644`, `100755`,
+/// `120000`, `40000`, `160000`) is refused, naming its path and mode, so no spelling of a
+/// directory hides the paths under it: `acme/secret-repo/notes.md` behind two `040000` entries.
+#[test]
+fn a_tree_entry_in_a_mode_git_does_not_write_is_refused() {
+    let tree = scratch("modes");
+    git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+    let blob = git_input(&tree, &["hash-object", "-w", "--stdin"], b"clean\n");
+    let readme = git(&tree, &["rev-parse", "HEAD:README.md"]);
+    let inner = raw_tree(&tree, &[("100644", "notes.md", &blob)]);
+    let middle = raw_tree(&tree, &[("040000", "secret-repo", &inner)]);
+    let root = raw_tree(
+        &tree,
+        &[
+            ("100644", "README.md", &readme),
+            ("040000", "acme", &middle),
+        ],
+    );
+    let head = commit_tree(&tree, &root);
+    let gates = Rc::new(Gates::default());
+    let error = scan_through(&tree, &gates, &head).expect_err("a mode git does not write");
+    assert!(error.contains("acme"), "{error}");
+    assert!(error.contains("040000"), "{error}");
+    assert!(
+        gates
+            .lines()
+            .iter()
+            .all(|line| !line.argv.contains("scan-text")),
+        "scanned anyway"
+    );
+}
+
+/// A few small trees can name a great many paths: ten entries a level, six levels deep, a
+/// million paths from a dozen objects. Every path read counts against what one scan is given,
+/// and the push is refused once that is spent, not cut and not read on.
+#[test]
+fn paths_count_against_what_one_scan_is_given() {
+    let tree = scratch("fan-out");
+    git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+    let blob = git_input(&tree, &["hash-object", "-w", "--stdin"], b"clean\n");
+    let names: Vec<String> = (0..10).map(|n| format!("entry-{n}")).collect();
+    let leaf: Vec<(&str, &str, &str)> = names
+        .iter()
+        .map(|name| ("100644", name.as_str(), blob.as_str()))
+        .collect();
+    let mut level = raw_tree(&tree, &leaf);
+    for _ in 1..6 {
+        let entries: Vec<(&str, &str, &str)> = names
+            .iter()
+            .map(|name| ("40000", name.as_str(), level.as_str()))
+            .collect();
+        level = raw_tree(&tree, &entries);
+    }
+    let head = commit_tree(&tree, &level);
+    let gates = Rc::new(Gates::default());
+    let error = scan_through(&tree, &gates, &head).expect_err("too many paths to scan");
+    assert!(error.contains("refused, not cut"), "{error}");
+    assert!(
+        gates
+            .lines()
+            .iter()
+            .all(|line| !line.argv.contains("scan-text")),
+        "scanned anyway"
+    );
+}
+
+/// The tracking ref of the base says what the remote holds only while the remote agrees: the
+/// bot route reads the remote's base first. A tracking ref at a commit the remote's base is not
+/// at (stale, or written by hand) refuses the push, naming both commits.
+#[test]
+fn a_tracking_ref_the_remote_disagrees_with_is_refused() {
+    let tree = scratch("stale-tracking");
+    commit(
+        &tree,
+        "old.txt",
+        &format!("token {FORBIDDEN}\n"),
+        "published long ago, or so the tracking ref says",
+    );
+    let tracked = git(&tree, &["rev-parse", "HEAD"]);
+    git(&tree, &["update-ref", "refs/remotes/origin/main", &tracked]);
+    let remote = git(&tree, &["rev-parse", "HEAD~1"]);
+    git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+    commit(&tree, "work.txt", "clean\n", "implementation.edit: clean");
+    let head = git(&tree, &["rev-parse", "HEAD"]);
+    let gates = Rc::new(Gates {
+        remote_base: Some(remote.clone()),
+        ..Gates::default()
+    });
+    let error = scan_through(&tree, &gates, &head).expect_err("a disagreeing tracking ref");
+    assert!(error.contains(&tracked), "{error}");
+    assert!(error.contains(&remote), "{error}");
+    assert!(
+        gates
+            .lines()
+            .iter()
+            .all(|line| !line.argv.contains("scan-text")),
+        "scanned anyway"
+    );
+}
+
+/// A remote with no base branch yet holds nothing of it: every commit of the head is scanned,
+/// what the tracking ref reaches included.
+#[test]
+fn a_remote_without_the_base_has_everything_scanned() {
+    let tree = scratch("no-remote-base");
+    commit(
+        &tree,
+        "old.txt",
+        &format!("token {FORBIDDEN}\n"),
+        "never published",
+    );
+    let tracked = git(&tree, &["rev-parse", "HEAD"]);
+    git(&tree, &["update-ref", "refs/remotes/origin/main", &tracked]);
+    git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+    commit(&tree, "work.txt", "clean\n", "implementation.edit: clean");
+    let head = git(&tree, &["rev-parse", "HEAD"]);
+    let gates = Rc::new(Gates {
+        remote_lacks_base: true,
+        ..Gates::default()
+    });
+    let error = scan_through(&tree, &gates, &head).expect_err("everything is scanned");
+    assert!(
+        error.contains("would publish did not pass scan-text"),
+        "{error}"
+    );
+}
+
+/// A file in UTF-16 with its byte-order mark holds the literal as the reader sees it, while its
+/// bytes hold it with a NUL after every character, which the scanner's rules never match. A blob
+/// that starts with a UTF-16 or UTF-32 mark is scanned decoded as well, so the literal is refused.
+#[test]
+fn a_file_in_utf16_with_its_mark_is_scanned_decoded() {
+    for (n, mark, wide) in [
+        (0, vec![0xFF_u8, 0xFE], true),
+        (1, vec![0xFE_u8, 0xFF], false),
+    ] {
+        let tree = scratch(&format!("utf16-{n}"));
+        git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+        let mut bytes = mark;
+        for unit in format!("token {FORBIDDEN}\n").encode_utf16() {
+            let pair = if wide {
+                unit.to_le_bytes()
+            } else {
+                unit.to_be_bytes()
+            };
+            bytes.extend_from_slice(&pair);
+        }
+        fs::write(tree.join("notes.txt"), &bytes).expect("a file");
+        git(&tree, &["add", "-A", "--", "notes.txt"]);
+        git(&tree, &["commit", "-q", "-m", "implementation.edit: notes"]);
+        let head = git(&tree, &["rev-parse", "HEAD"]);
+        scan_refused(&tree, &head, &format!("in UTF-16 ({n})"));
+    }
+}
+
+/// A push names the commit scanned, never the branch, which git would resolve again when it
+/// pushes: `<id>:refs/heads/<branch>`, whether the branch is at the id or not.
+#[test]
+fn a_push_names_the_commit_scanned() {
+    let tree = scratch("push-id");
+    git(&tree, &["checkout", "-q", "-b", "takt/case"]);
+    commit(&tree, "work.txt", "work\n", "implementation.edit: work");
+    let head = git(&tree, &["rev-parse", "HEAD"]);
+    let gates = Rc::new(Gates::default());
+    let forge = bot(&gates);
+    forge
+        .push_revision(&tree, "takt/case", &head)
+        .expect("the push");
+    assert_eq!(
+        gates.argvs(),
+        [format!(
+            "b10x-gates bot -- push https://github.com/owner/repo.git {head}:refs/heads/takt/case --no-follow-tags --recurse-submodules=no"
+        )]
     );
 }
