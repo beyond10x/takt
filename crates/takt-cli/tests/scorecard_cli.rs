@@ -358,30 +358,22 @@ fn save_under(repo: &Path, saves: &Path, revision: &str) -> (i32, String, String
 }
 
 /// story:scorecard-save-checks-binary: a save under a revision another than the one a run's
-/// `opened` line names (another sha, `unknown revision`, `<sha>-dirty`, or the revision
-/// abbreviated) is refused, exit 1, naming that run and both revisions, and writes nothing.
+/// `opened` line names (another sha, `<sha>-dirty`) is refused, exit 1, naming that run and
+/// both revisions, and writes nothing.
 #[test]
 fn save_under_a_revision_other_than_a_runs_binary_is_refused_naming_the_run() {
     let dirty = format!("{ZEROS}-dirty");
-    for (label, binary, revision) in [
-        ("other", OTHER_BUILD, ZEROS),
-        ("unknown", "unknown revision", ZEROS),
-        ("dirty", dirty.as_str(), ZEROS),
-        ("abbreviated", ZEROS, "0000000"),
-    ] {
+    for (label, binary) in [("other", OTHER_BUILD), ("dirty", dirty.as_str())] {
         let repo = repository(&format!("made-{label}"), &[]);
         run_made_with(&repo, "scenario-1-trial-1", 5, "NoProgress", Some(ZEROS));
         run_made_with(&repo, "scenario-1-trial-2", 5, "NoProgress", Some(binary));
         let saves = scratch(&format!("made-{label}-saves"));
-        let (code, text, stderr) = save_under(&repo, &saves, revision);
+        let (code, text, stderr) = save_under(&repo, &saves, ZEROS);
         assert_eq!(code, 1, "{label}: {text}{stderr}");
-        let named = if label == "abbreviated" {
-            "scenario-1-trial-1#1"
-        } else {
-            "scenario-1-trial-2#1"
-        };
         assert!(
-            stderr.contains(named) && stderr.contains(binary) && stderr.contains(revision),
+            stderr.contains("scenario-1-trial-2#1")
+                && stderr.contains(binary)
+                && stderr.contains(ZEROS),
             "{label}: the run and both revisions are named: {stderr}"
         );
         assert!(!text.contains("saved:"), "{label}: {text}");
@@ -437,30 +429,80 @@ fn save_under_the_revision_every_run_was_made_with_succeeds() {
     );
 }
 
-/// story:scorecard-save-checks-binary, decision D2: runs whose `opened` line names no revision
-/// (a binary built before `--version` named its revision) are saved only when no run names
-/// one; a mix is refused, exit 1, naming the run that names none.
+/// story:scorecard-save-checks-binary, decision D3: `--revision` for a save is the full commit
+/// id, 40 lower-case hex digits; an abbreviated one, or a longer one, is refused, exit 1, before
+/// any run is read against it, whatever the runs name, and nothing is written.
+#[test]
+fn save_under_anything_but_a_full_commit_id_is_refused() {
+    let sha256 = "0".repeat(64);
+    for (label, binary) in [("none", None), ("own", Some(ZEROS))] {
+        let repo = repository(&format!("short-{label}"), &[]);
+        run_made_with(&repo, "scenario-1-trial-1", 5, "NoProgress", binary);
+        for revision in ["abcdef0", "0000000", &ZEROS[..39], sha256.as_str()] {
+            let saves = scratch(&format!("short-{label}-saves"));
+            let (code, text, stderr) = save_under(&repo, &saves, revision);
+            assert_eq!(code, 1, "{label} {revision}: {text}{stderr}");
+            assert!(
+                stderr.contains("40 lower-case hex digits"),
+                "{label} {revision}: {stderr}"
+            );
+            assert!(!text.contains("saved:"), "{label} {revision}: {text}");
+            assert_eq!(
+                fs::read_dir(&*saves).expect("the directory").count(),
+                0,
+                "{label} {revision}: nothing is written"
+            );
+        }
+    }
+}
+
+/// story:scorecard-save-checks-binary, decision D2 and the planner's ruling on it: a run whose
+/// `opened` line names no revision (no `binary`, as a binary built before `--version` named its
+/// revision left it, or `unknown revision`, as one built outside a checkout prints) is saved
+/// only when no run names one; a mix is refused, exit 1, naming the run that names none and what
+/// its line says, and writes nothing.
 #[test]
 fn a_mix_of_runs_naming_a_revision_and_naming_none_is_refused() {
-    let repo = repository("made-mix", &[]);
-    run_made_with(&repo, "scenario-1-trial-1", 5, "NoProgress", Some(ZEROS));
-    run_made_with(&repo, "scenario-1-trial-2", 5, "NoProgress", None);
-    let saves = scratch("made-mix-saves");
-    let (code, text, stderr) = save_under(&repo, &saves, ZEROS);
-    assert_eq!(code, 1, "{text}{stderr}");
-    assert!(
-        stderr.contains("scenario-1-trial-2#1") && stderr.contains("no revision"),
-        "{stderr}"
-    );
-    assert_eq!(fs::read_dir(&*saves).expect("the directory").count(), 0);
+    for (label, binary) in [("none", None), ("unknown", Some("unknown revision"))] {
+        let repo = repository(&format!("made-mix-{label}"), &[]);
+        run_made_with(&repo, "scenario-1-trial-1", 5, "NoProgress", Some(ZEROS));
+        run_made_with(&repo, "scenario-1-trial-2", 5, "NoProgress", binary);
+        let saves = scratch(&format!("made-mix-{label}-saves"));
+        let (code, text, stderr) = save_under(&repo, &saves, ZEROS);
+        assert_eq!(code, 1, "{label}: {text}{stderr}");
+        assert!(
+            stderr.contains("scenario-1-trial-2#1")
+                && stderr.contains("no revision")
+                && binary.is_none_or(|binary| stderr.contains(binary)),
+            "{label}: {stderr}"
+        );
+        assert!(!text.contains("saved:"), "{label}: {text}");
+        assert_eq!(
+            fs::read_dir(&*saves).expect("the directory").count(),
+            0,
+            "{label}: nothing is written"
+        );
+    }
 
-    let none = repository("made-none", &[]);
-    run_made_with(&none, "scenario-1-trial-1", 5, "NoProgress", None);
-    run_made_with(&none, "scenario-1-trial-2", 5, "NoProgress", None);
-    let saves = scratch("made-none-saves");
-    let (code, text, stderr) = save_under(&none, &saves, ZEROS);
-    assert_eq!(code, 0, "{text}{stderr}");
-    assert!(saves.join(format!("scorecard-{ZEROS}.json")).is_file());
+    let unknown = Some("unknown revision");
+    for (label, binaries) in [
+        ("none", [None, None]),
+        ("unknown", [unknown, unknown]),
+        ("unknown-and-none", [unknown, None]),
+    ] {
+        let repo = repository(&format!("made-{label}"), &[]);
+        for (n, binary) in binaries.into_iter().enumerate() {
+            let case = format!("scenario-1-trial-{}", n + 1);
+            run_made_with(&repo, &case, 5, "NoProgress", binary);
+        }
+        let saves = scratch(&format!("made-{label}-saves"));
+        let (code, text, stderr) = save_under(&repo, &saves, ZEROS);
+        assert_eq!(code, 0, "{label}: {text}{stderr}");
+        assert!(
+            saves.join(format!("scorecard-{ZEROS}.json")).is_file(),
+            "{label}: {text}"
+        );
+    }
 }
 
 /// A saved scorecard that does not read is refused, exit 1, the reason on stderr.
