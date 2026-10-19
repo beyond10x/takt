@@ -110,6 +110,7 @@ fn open(tree: &Path, protocol: &str, id: &str, inputs: &[(&str, &str)]) -> CaseD
             baseline: "baseline-1".to_owned(),
             surface: "non_judge".to_owned(),
             title: "A finding".to_owned(),
+            judge_sha256: "0".repeat(64),
         })
         .expect("the turn opens");
         return case;

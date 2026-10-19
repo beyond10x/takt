@@ -60,8 +60,9 @@ pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 1] = [
     // The script of story:check-finding-run-step-confined (its last commit f2a20e9), its build's
     // checkout a repository made with no template, by a git under a cleared environment, that
     // fetches the revision through git's transport, every object hashed and checked
-    // (story:self-improvement-protocol, part 1).
-    "0dd150f221a686d90a28b1e1b654750d3378a54e353c31be78f150247ee30278",
+    // (story:self-improvement-protocol, part 1), and no replace ref of a repository it reads
+    // honoured (part 2).
+    "7878f0f27ad4618280967d4674de65a3ae86fe4b54a5a2b28fde02b7ef36a2cf",
 ];
 
 /// The file under a turn's `artifacts/` holding the sha256 of the takt `scripts/check-finding`
@@ -1205,12 +1206,15 @@ impl Mainline {
 }
 
 /// The judge surfaces the candidate's change touches, in the order they are found: every path
-/// changed from each point where `candidate` meets `baseline` (`git merge-base --all`) to
-/// `candidate` that [`crate::validator::JUDGE_ALLOW`] at `baseline` does not admit, that is one
-/// of [`crate::validator::OWNER_ONLY`], or whose new mode is no regular file's. Read from a copy
-/// of both made through git's transport, every object hashed as it arrives. An allow-list that
-/// does not read admits nothing; a candidate with no history in common with the baseline, or
-/// commits that do not arrive as their ids, are an error.
+/// that [`crate::validator::JUDGE_ALLOW`] at `baseline` does not admit, that is one of
+/// [`crate::validator::OWNER_ONLY`], or whose new mode is no regular file's, changed from
+/// `baseline` to `candidate` (the trees' difference, which promoting the candidate installs, so
+/// a candidate branched before a judge change that would roll it back is judge) or from any point
+/// where `candidate` meets `baseline` (`git merge-base --all`) to `candidate` (the candidate's
+/// own change, which a baseline holding the same change would hide). Read from a copy of both
+/// made through git's transport, every object hashed as it arrives. An allow-list that does not
+/// read admits nothing; a candidate with no history in common with the baseline, or commits that
+/// do not arrive as their ids, are an error.
 pub fn judge_surfaces(tree: &Path, baseline: &str, candidate: &str) -> Result<Vec<String>> {
     let mirror = match crate::git::Mirror::of(tree, &[baseline, candidate])? {
         Ok(mirror) => mirror,
@@ -1242,14 +1246,14 @@ pub fn judge_surfaces(tree: &Path, baseline: &str, candidate: &str) -> Result<Ve
         );
     }
     let mut surfaces: Vec<String> = Vec::new();
-    for meet in &meets {
+    for from in std::iter::once(baseline).chain(meets.iter().map(String::as_str)) {
         let diff = mirror.bytes(&[
             "diff-tree",
             "-r",
             "-z",
             "--no-renames",
             "--raw",
-            meet,
+            from,
             candidate,
             "--",
         ])?;
@@ -1438,14 +1442,19 @@ impl Validator for CandidateMerged {
 /// `binary.promote`: observes, never promotes. Writes one `promotion_record` about `promotion`
 /// (the candidate's revision, as the turn opens it), `promoted`, when the case holds the
 /// protocol's grant for the action at that revision and the promotion store's latest record that
-/// is no refusal ([`crate::promotion::baseline`]) is of that revision: `takt promote` installed
-/// the binary built from it. While the latest record is of another revision it records nothing
-/// and waits, naming it; without the grant it records nothing.
+/// is no refusal ([`crate::promotion::baseline`]) is a promotion (no baseline, no rebaseline)
+/// of that revision whose `binary_sha256` is the sha256 of the binary installed now at
+/// `<install root>/bin/takt`: `takt promote` installed the binary built from it. While the
+/// latest record is another, or names another binary than the one installed, it records nothing
+/// and waits, naming why; without the grant it records nothing.
 #[derive(Debug, Clone)]
 pub struct BinaryPromote {
     /// The state directory; none, and it is the one the promotion store lies in, read when the
     /// validator observes, so no other case needs one.
     pub state: Option<PathBuf>,
+    /// The install root `takt promote` installs into; none, and it is
+    /// [`crate::promotion::install_root`], read when the validator observes.
+    pub install_root: Option<PathBuf>,
 }
 
 impl BinaryPromote {
@@ -1461,13 +1470,79 @@ impl BinaryPromote {
     pub fn in_state(state: &Path) -> Self {
         Self {
             state: Some(state.to_path_buf()),
+            install_root: None,
         }
     }
 
-    /// Reading the state directory the promotion store lies in, when it observes.
+    /// Reading the installed binary under the install root `root`.
+    #[must_use]
+    pub fn with_install_root(mut self, root: &Path) -> Self {
+        self.install_root = Some(root.to_path_buf());
+        self
+    }
+
+    /// Reading the state directory the promotion store lies in and the install root
+    /// `takt promote` installs into, when it observes.
     #[must_use]
     pub fn from_env() -> Self {
-        Self { state: None }
+        Self {
+            state: None,
+            install_root: None,
+        }
+    }
+
+    /// Why the store's latest record, `latest`, does not show `revision` promoted and
+    /// installed now, or none when it does.
+    fn unpromoted(
+        &self,
+        latest: Option<&crate::promotion::Promotion>,
+        revision: &str,
+    ) -> Result<Option<String>> {
+        let Some(record) = latest.filter(|record| record.revision == revision) else {
+            return Ok(Some(format!(
+                "its latest record installs {}, not {}",
+                latest.map_or("nothing", |record| short(&record.revision)),
+                short(revision)
+            )));
+        };
+        if record.kind != Kind::Promotion {
+            return Ok(Some(format!(
+                "its latest record of {} is a {:?} record, which installs no binary",
+                short(revision),
+                record.kind
+            )));
+        }
+        let Some(recorded) = record.binary_sha256.as_deref() else {
+            return Ok(Some(format!(
+                "its promotion of {} names no binary's sha256",
+                short(revision)
+            )));
+        };
+        let root = match &self.install_root {
+            Some(root) => root.clone(),
+            None => crate::promotion::install_root()?,
+        };
+        let installed = root.join("bin/takt");
+        let digest = match std::fs::read(&installed) {
+            Ok(bytes) => {
+                use sha2::{Digest as _, Sha256};
+                format!("{:x}", Sha256::digest(&bytes))
+            }
+            Err(error) => {
+                return Ok(Some(format!(
+                    "no binary is installed at {} ({error})",
+                    installed.display()
+                )));
+            }
+        };
+        if digest != recorded {
+            return Ok(Some(format!(
+                "{} hashes to {digest}, not to {recorded}, the binary its promotion of {} installed",
+                installed.display(),
+                short(revision)
+            )));
+        }
+        Ok(None)
     }
 
     fn observe_by(&self, tree: &Path, revision: &str, seq: usize) -> Result<(Observation, bool)> {
@@ -1485,11 +1560,11 @@ impl BinaryPromote {
         let store = state_dir(self.state.as_deref())?.join(crate::promotion::STORE);
         let latest = crate::promotion::baseline(&store, &crate::now())
             .with_context(|| format!("read the promotion store {}", store.display()))?;
-        match latest {
-            Some(record) if record.revision == revision => Ok((
+        match self.unpromoted(latest.as_ref(), revision)? {
+            None => Ok((
                 Observation {
                     summary: format!(
-                        "the promotion store {}'s latest record installs {}: promoted",
+                        "the promotion store {}'s latest record installs {}, the binary installed now: promoted",
                         store.display(),
                         short(revision)
                     ),
@@ -1505,13 +1580,10 @@ impl BinaryPromote {
                 },
                 false,
             )),
-            latest => Ok((
+            Some(why) => Ok((
                 nothing(format!(
-                    "the promotion store {}'s latest record installs {}, not {}; promote it with `takt promote`; waiting",
+                    "the promotion store {}: {why}; promote {} with `takt promote`; waiting",
                     store.display(),
-                    latest
-                        .as_ref()
-                        .map_or("nothing", |record| short(&record.revision)),
                     short(revision)
                 )),
                 true,

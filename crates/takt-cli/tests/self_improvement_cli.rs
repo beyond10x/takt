@@ -98,6 +98,9 @@ struct World {
     scenarios: PathBuf,
     state: PathBuf,
     cache: PathBuf,
+    /// The install root `takt promote` installs into and `binary.promote` reads the installed
+    /// binary from (`CARGO_INSTALL_ROOT`), never the operator's.
+    install: PathBuf,
 }
 
 /// A binary planted in `check-finding`'s cache in place of a build: a script that shows the
@@ -351,6 +354,7 @@ fn world_with(name: &str, setup: &Setup) -> World {
     );
 
     let cache = dir.join("cache");
+    let install = dir.join("install");
     World {
         _scratch: Scratch(dir),
         repo,
@@ -359,6 +363,7 @@ fn world_with(name: &str, setup: &Setup) -> World {
         scenarios,
         state,
         cache,
+        install,
     }
 }
 
@@ -447,6 +452,7 @@ fn run_as(
         .args(&args)
         .env("XDG_STATE_HOME", &world.state)
         .env("XDG_CACHE_HOME", &world.cache)
+        .env("CARGO_INSTALL_ROOT", &world.install)
         .envs(env.iter().copied())
         .env_remove("B10X_GATES_POLICY")
         .output()
@@ -895,6 +901,7 @@ fn takt_in(world: &World, args: &[&str]) -> (i32, String, String) {
         ])
         .env("XDG_STATE_HOME", &world.state)
         .env("XDG_CACHE_HOME", &world.cache)
+        .env("CARGO_INSTALL_ROOT", &world.install)
         .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
@@ -1281,20 +1288,94 @@ fn a_finding_rewritten_by_the_baselines_checkout_records_nothing() {
 }
 
 /// Writes the promotion record of `revision` into the world's store, chained to the record of
-/// `previous`, with its scorecard copy, as `takt promote` leaves one once it installed the
-/// binary built from `revision`.
-fn promote(world: &World, revision: &str, previous: &str) {
+/// `previous`, with its scorecard copy, naming the binary `installed` and its digest when some:
+/// the record `takt promote` leaves once it installed the binary built from `revision`.
+fn record(world: &World, revision: &str, previous: &str, installed: Option<&Path>) {
     let store = world.state.join("takt/promotions");
     let copy = store.join(format!("{revision}.scorecard.json"));
     write(&copy, &scorecard(revision, revision));
     let digest = sha256(&copy);
     let before = sha256(&store.join(format!("{previous}.json")));
     let tree = git(&world.repo, &["rev-parse", &format!("{revision}^{{tree}}")]);
+    let binary = installed.map_or(
+        "\"binary\":null,\"binary_sha256\":null".to_owned(),
+        |path| {
+            format!(
+                "\"binary\":\"{}\",\"binary_sha256\":\"{}\"",
+                path.display(),
+                sha256(path)
+            )
+        },
+    );
     write(
         &store.join(format!("{revision}.json")),
         &format!(
-            "{{\"format\":\"takt-promotion/1\",\"revision\":\"{revision}\",\"tree\":\"{tree}\",\"promoted_at\":\"2026-01-02T00:00:00Z\",\"kind\":\"promotion\",\"scorecard\":\"{revision}\",\"scorecard_file\":\"/srv/scorecards/scorecard-{revision}.json\",\"scorecard_sha256\":\"{digest}\",\"against\":\"{previous}\",\"rule\":{{\"trials\":5,\"margin\":1}},\"worse\":0,\"binary\":null,\"binary_sha256\":null,\"previous_sha256\":\"{before}\"}}"
+            "{{\"format\":\"takt-promotion/1\",\"revision\":\"{revision}\",\"tree\":\"{tree}\",\"promoted_at\":\"2026-01-02T00:00:00Z\",\"kind\":\"promotion\",\"scorecard\":\"{revision}\",\"scorecard_file\":\"/srv/scorecards/scorecard-{revision}.json\",\"scorecard_sha256\":\"{digest}\",\"against\":\"{previous}\",\"rule\":{{\"trials\":5,\"margin\":1}},\"worse\":0,{binary},\"previous_sha256\":\"{before}\"}}"
         ),
+    );
+}
+
+/// Promotes `revision` as `takt promote` would leave it: a binary built from it installed at the
+/// world's install root (a stand-in, never the binary that judges), and its promotion record.
+fn promote(world: &World, revision: &str, previous: &str) {
+    let installed = world.install.join("bin/takt");
+    executable(
+        &installed,
+        &format!("#!/bin/sh\necho 'takt 0.1.0 ({revision})'\n"),
+    );
+    record(world, revision, previous, Some(&installed));
+}
+
+/// `takt approve` on the turn: grants `capability` by the owner, and leaves the planning store
+/// and the case's branch as they were, a turn's grant being the case's alone.
+fn approve(world: &World, capability: &str) {
+    let head = git(&world.repo, &["rev-parse", "HEAD"]);
+    let finding = fs::read(world.repo.join(FINDING_FILE)).ok();
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args([
+            "approve",
+            "--repo",
+            world.repo.to_str().expect("utf-8"),
+            "turn-1",
+            capability,
+            "--by",
+            "human:owner",
+        ])
+        .env("XDG_STATE_HOME", &world.state)
+        .env("XDG_CACHE_HOME", &world.cache)
+        .env_remove("B10X_GATES_POLICY")
+        .output()
+        .expect("takt runs");
+    let shown = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.status.code(), Some(0), "{shown}");
+    assert_eq!(
+        git(&world.repo, &["rev-parse", "HEAD"]),
+        head,
+        "a commit: {shown}"
+    );
+    assert_eq!(
+        fs::read(world.repo.join(FINDING_FILE)).ok(),
+        finding,
+        "the finding's story was written: {shown}"
+    );
+    assert_eq!(
+        git(
+            &world.repo,
+            &[
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--",
+                ".",
+                ":!.engineering/cases"
+            ]
+        ),
+        "",
+        "{shown}"
     );
 }
 
@@ -1305,11 +1386,13 @@ fn resume(world: &World) -> (i32, String, String) {
 
 /// The acceptance of story:self-improvement-protocol under `--forge none`, no `--gate` given: a
 /// turn whose finding reproduces at the baseline and not at the candidate stops for the merge's
-/// grant; granted, with the candidate merged into the local `main` (the mainline under `--forge
+/// grant; granted with `takt approve` (which writes nothing to the planning store and commits
+/// nothing), with the candidate merged into the local `main` (the mainline under `--forge
 /// none`, which the operator owns) and its scorecard saved, it stops for the promotion's grant;
-/// granted, with the candidate promoted, it reaches `accepted`, every record in the case written
-/// by a validator of the turn. The merge's record retains what it read: no forge, and the tip of
-/// `main` it found the candidate in.
+/// granted, with the candidate promoted and installed, it reaches `accepted` in a run by the
+/// binary that judged it from the start, every record in the case written by a validator of the
+/// turn. The merge's record retains what it read: no forge, and the tip of `main` it found the
+/// candidate in.
 #[test]
 fn a_turn_under_forge_none_reaches_accepted_on_validators_records() {
     let world = world("accepted", true, false);
@@ -1322,8 +1405,7 @@ fn a_turn_under_forge_none_reaches_accepted_on_validators_records() {
     );
     assert_eq!(code, 4, "{out}\n{err}");
     assert!(out.contains("candidate.merge"), "{out}\n{err}");
-    takt::case::grant(&world.repo, "turn-1", "repository.merge", "human:owner")
-        .expect("the merge is granted");
+    approve(&world, "repository.merge");
     git(&world.repo, &["branch", "-f", "main", &world.candidate]);
     write(
         &world.state.join(format!(
@@ -1335,8 +1417,7 @@ fn a_turn_under_forge_none_reaches_accepted_on_validators_records() {
     let (code, out, err) = resume(&world);
     assert_eq!(code, 4, "{out}\n{err}");
     assert!(out.contains("binary.promote"), "{out}\n{err}");
-    takt::case::grant(&world.repo, "turn-1", "takt.promote", "human:owner")
-        .expect("the promotion is granted");
+    approve(&world, "takt.promote");
     promote(&world, &world.candidate, &world.baseline);
     let (code, out, err) = resume(&world);
     assert_eq!(code, 0, "{out}\n{err}");
@@ -1494,4 +1575,153 @@ fn a_turn_without_an_intent_opens_with_the_findings_title() {
     let intent = fs::read_to_string(world.repo.join(".engineering/cases/turn-1/intent.md"))
         .expect("intent.md");
     assert_eq!(intent, "The probe shows the defect");
+}
+
+/// The turn up to `binary.promote`'s grant: opened, the merge approved, the candidate merged
+/// into the local `main`, its scorecard saved, resumed, and the promotion approved.
+fn up_to_the_promotion(world: &World) {
+    let (code, out, err) = run(world, &opening(world));
+    assert_eq!(code, 4, "{out}\n{err}");
+    approve(world, "repository.merge");
+    git(&world.repo, &["branch", "-f", "main", &world.candidate]);
+    write(
+        &world.state.join(format!(
+            "takt/scorecards/scorecard-{}.json",
+            world.candidate
+        )),
+        &scorecard(&world.candidate, &world.candidate),
+    );
+    let (code, out, err) = resume(world);
+    assert_eq!(code, 4, "{out}\n{err}");
+    approve(world, "takt.promote");
+}
+
+/// The reviewer's `rv_a_step_planting_a_promotion_record_is_not_promoted`: a promotion record
+/// of the candidate that names no installed binary (one anything with the operator's rights
+/// could write; nobody ran `takt promote`) earns nothing: `binary.promote` waits, and the turn
+/// is not accepted.
+#[test]
+fn a_promotion_record_naming_no_installed_binary_is_not_promoted() {
+    let world = world("planted-promotion", true, false);
+    up_to_the_promotion(&world);
+    record(&world, &world.candidate, &world.baseline, None);
+    let (_, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--hours", "0.001"]);
+    assert!(!out.contains("Completed (accepted)"), "{out}\n{err}");
+    assert!(
+        records(&world.repo)
+            .iter()
+            .all(|record| field(record, "kind") != "promotion_record"),
+        "{out}\n{err}"
+    );
+}
+
+/// The reviewer's `rv_a_resume_by_another_binary_than_the_promoted_is_refused`: the turn
+/// recorded the binary that judges it when it opened; a resume by another binary (here a copy of
+/// it with bytes appended, as the candidate's build `takt promote` installed would be) is
+/// refused before any step, naming both digests, and nothing is recorded.
+#[test]
+fn a_resume_by_another_binary_than_the_judge_is_refused() {
+    let world = world("other-judge", true, false);
+    let (code, out, err) = run(&world, &opening(&world));
+    assert_eq!(code, 4, "{out}\n{err}");
+    approve(&world, "repository.merge");
+    git(&world.repo, &["branch", "-f", "main", &world.candidate]);
+    write(
+        &world.state.join(format!(
+            "takt/scorecards/scorecard-{}.json",
+            world.candidate
+        )),
+        &scorecard(&world.candidate, &world.candidate),
+    );
+    let other = world.repo.parent().expect("a parent").join("other-takt");
+    let mut bytes = fs::read(env!("CARGO_BIN_EXE_takt")).expect("the binary");
+    bytes.extend_from_slice(b"\nanother binary\n");
+    fs::write(&other, bytes).expect("a copy");
+    fs::set_permissions(&other, fs::Permissions::from_mode(0o755)).expect("executable");
+    let before = records(&world.repo).len();
+    let output = Command::new(&other)
+        .args([
+            "run",
+            "--case",
+            "turn-1",
+            "--iterations",
+            "6",
+            "--repo",
+            world.repo.to_str().expect("utf-8"),
+            "--harness",
+            "none",
+            "--forge",
+            "none",
+            "--test-cmd",
+            "true",
+            "--scenarios",
+            world.scenarios.to_str().expect("utf-8"),
+        ])
+        .env("XDG_STATE_HOME", &world.state)
+        .env("XDG_CACHE_HOME", &world.cache)
+        .env("CARGO_INSTALL_ROOT", &world.install)
+        .env_remove("B10X_GATES_POLICY")
+        .output()
+        .expect("the other binary runs");
+    let out = String::from_utf8_lossy(&output.stdout);
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{out}\n{err}");
+    assert_eq!(records(&world.repo).len(), before, "{out}\n{err}");
+    assert!(
+        err.contains(&sha256(Path::new(env!("CARGO_BIN_EXE_takt")))),
+        "the judge's digest is named: {err}"
+    );
+}
+
+/// The reviewer's `rv_takt_approve_on_a_turn_with_a_planning_store`, inverted as ruled: in a
+/// repository with a planning store, whose finding is a story with its frontmatter, `takt
+/// approve` on a turn grants in the case alone: no store write, no commit, and the turn runs on.
+#[test]
+fn approving_a_turn_in_a_repository_with_a_planning_store_writes_nothing_there() {
+    let world = world("approve-store", true, false);
+    write(
+        &world.repo.join(".engineering/project.yaml"),
+        "version: aep.project/5\n\nprotocol: adp/1\nprofile: development.standard\nplanning_scope: \"scratch\"\nstore:\n  git: {}\n\nsummary: >-\n  scratch\n",
+    );
+    write(
+        &world.repo.join(FINDING_FILE),
+        &format!(
+            "---\nformat: aep.planning-md/3\nid: {FINDING}\nkind: story\nstatus: proposed\ntitle: The probe shows the defect\nsummary: the probe\nrevision: 3\n---\n{}",
+            finding_text()
+        ),
+    );
+    git(&world.repo, &["add", "-A"]);
+    git(&world.repo, &["commit", "-q", "-m", "store"]);
+    let (code, out, err) = run(&world, &opening(&world));
+    assert_eq!(code, 4, "{out}\n{err}");
+    approve(&world, "repository.merge");
+    git(&world.repo, &["branch", "-f", "main", &world.candidate]);
+    let (_, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--hours", "0.001"]);
+    assert!(
+        records(&world.repo)
+            .iter()
+            .any(|record| field(record, "kind") == "merge_observation"),
+        "{out}\n{err}"
+    );
+}
+
+/// With no `main` to read the mainline from, the finding is read off the mainline: the part-1
+/// rule holds, and a candidate that rewrites the finding's body is refused, naming its file.
+#[test]
+fn without_a_mainline_a_candidate_rewriting_the_finding_is_refused() {
+    let world = world_with(
+        "no-main",
+        &Setup {
+            touches: Some((FINDING_FILE, "#!/bin/sh\necho changed by the candidate\n")),
+            ..Setup::plain(true, true)
+        },
+    );
+    git(&world.repo, &["branch", "-m", "main", "trunk"]);
+    let inputs = [
+        "surface=judge".to_owned(),
+        format!("finding={FINDING}"),
+        format!("candidate={}", world.candidate),
+    ];
+    let ran = run(&world, &inputs);
+    refused(&world, &ran, FINDING_FILE);
 }

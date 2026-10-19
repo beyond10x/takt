@@ -39,7 +39,9 @@ enum Commands {
     Run(Box<RunArgs>),
     /// Grant a case a capability: write the grant into the case's authority.yaml and record the
     /// approval on the case's story in the planning store, that record committed on the case's
-    /// branch, on which the tree must be, clean. The next run resumes the case.
+    /// branch, on which the tree must be, clean. An intent's case and an improvement turn
+    /// (`self.improvement/1`) get the grant alone: nothing in the store, no commit, no store
+    /// needed. The next run resumes the case.
     Approve(ApproveArgs),
     /// List the built-in protocols.
     Protocols,
@@ -320,7 +322,10 @@ struct RunArgs {
     /// Its case input `surface` is computed from the candidate's change against the baseline's
     /// `.engineering/judge-allow.yaml`; given, it must be the computed one. Its finding is read on
     /// the mainline, `main` as the forge reports it, or the local `main` under `--forge none`,
-    /// which the operator is trusted with.
+    /// which the operator is trusted with. The turn records the sha256 of the binary that opens
+    /// it, the promoted one, and every resume is refused before any step unless it is run by that
+    /// binary: once `takt promote` has installed the candidate, finish the turn with the binary it
+    /// replaced, which it keeps at `$XDG_STATE_HOME/takt/judges/<sha256>` and names.
     #[arg(long = "input", value_name = "NAME=VALUE")]
     inputs: Vec<String>,
     /// The case id; generated when absent.
@@ -507,7 +512,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 }
                 None => writeln!(
                     out,
-                    "recorded: nothing; the case was opened on an intent, not a story"
+                    "recorded: nothing in the planning store; the case delivers no story (it was opened on an intent, or is an improvement turn)"
                 )?,
             }
             Ok(EXIT_DONE)
@@ -694,6 +699,15 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     given_for_resume,
                     first_input.as_deref(),
                 )?;
+                // A turn is run only by the binary that judges it, recorded when it opened:
+                // checked before the case is resumed, so another binary takes no step.
+                takt::case::check_id(&resuming.id)?;
+                if let Some(why) = takt::case::turn_judge_refusal(
+                    &repo.join(takt::case::CASES_DIR).join(&resuming.id),
+                    Path::new(RUNNING_BINARY),
+                )? {
+                    return Err(anyhow!(why));
+                }
             }
             // A loop case opens with its baseline: `--input loop_baseline=<full commit id>`, no
             // case input of the protocol, is taken out of the inputs and checked here, so a
@@ -734,8 +748,9 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     let finding = taken(takt::case::TURN_FINDING);
                     let candidate = taken(takt::case::TURN_CANDIDATE);
                     let surface = taken(takt::case::TURN_SURFACE);
-                    // The binary that judges the turn is this one, which must be the promoted.
-                    let binary = std::env::current_exe().context("this binary's path")?;
+                    // The binary that judges the turn is this one, which must be the promoted:
+                    // read as it runs, whatever its path holds by now.
+                    let binary = PathBuf::from(RUNNING_BINARY);
                     let opened = takt::case::turn_opening(
                         &repo,
                         finding.as_deref(),
@@ -1556,6 +1571,10 @@ fn take_story<'a>(
     writeln!(out, "frontier: took {id}: {title}")?;
     Ok(run)
 }
+
+/// The running binary as the kernel holds it, whatever file its path names by now: what a turn's
+/// judge is read and checked from.
+const RUNNING_BINARY: &str = "/proc/self/exe";
 
 /// The protocol a store story opens on when `--protocol` is not given.
 const STORY_DELIVERY: &str = "story.delivery/1";

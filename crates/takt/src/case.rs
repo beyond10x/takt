@@ -604,7 +604,8 @@ pub struct Approval {
     /// The case the capability was granted to.
     pub case: String,
     /// The story the case was opened for; none for a case opened on an intent, which has
-    /// nothing in the store to record on.
+    /// nothing in the store to record on, and for an improvement turn, whose grant is the
+    /// case's alone.
     pub story: Option<String>,
     /// The capability granted.
     pub capability: String,
@@ -940,7 +941,13 @@ pub fn prepare_grant(
     // and an intent's alike. A story's grant is recorded in the store as its approver, and its
     // record rides to the base only with the approver as its actor; and the merge of a
     // judge-surface change reads the kind to decide whose grant it is.
-    let story = story_of(&dir)?;
+    // An improvement turn's `story.yaml` names the finding it verifies, a story it does not
+    // deliver: its grant is the case's alone, recorded nowhere in the planning store.
+    let story = if required_capabilities(&dir)?.0 == TURN_PROTOCOL {
+        None
+    } else {
+        story_of(&dir)?
+    };
     if !is_approver(approver) {
         bail!(
             "the approver `{}` is not an actor the planning store records as granting; say who grants {capability} as human:<name> or agent:<role>, not takt's own {}",
@@ -1964,7 +1971,7 @@ impl CaseDir {
     /// validator ([`crate::improvement::PRODUCERS`]) independent on
     /// [`crate::improvement::INDEPENDENT_ON`]: a validator is no agent run, so its record is
     /// another run's than the one that delivered the candidate. Nothing else declares
-    /// independence.
+    /// independence. The sha256 of the binary that judges the turn goes into [`JUDGE_FILE`].
     pub fn open_turn(&mut self, opening: &TurnOpening) -> Result<()> {
         let Some(base) = Branch::read(&self.dir)?.base_commit else {
             bail!(
@@ -1994,6 +2001,9 @@ impl CaseDir {
         }
         self.doc["independence"] = independence.into();
         self.write()?;
+        let judge = self.dir.join(JUDGE_FILE);
+        std::fs::write(&judge, format!("{}\n", opening.judge_sha256))
+            .with_context(|| format!("write {}", judge.display()))?;
         self.set_story(&opening.finding)
     }
 
@@ -2143,6 +2153,9 @@ pub struct TurnOpening {
     /// The finding's title, the turn's intent when none is given: its frontmatter's `title`,
     /// else its first `# ` heading, else the finding's id.
     pub title: String,
+    /// The sha256 of the binary that judges the turn, the promoted one that opens it: every
+    /// later run of the turn is refused unless it is that binary ([`turn_judge_refusal`]).
+    pub judge_sha256: String,
 }
 
 /// The case input a turn's judge surface is, `surface`.
@@ -2352,18 +2365,18 @@ pub fn turn_opening(
     // The binary that judges is the promoted one: of the digest the record holds, whenever it
     // holds one, and of its revision unless the operator stated the record (a binary that names
     // no revision).
-    if promoted.revision_stated_by.is_some() || promoted.binary_sha256.is_some() {
-        let bytes = std::fs::read(judge.binary)
-            .with_context(|| format!("read this binary, {}", judge.binary.display()))?;
-        let digest = format!("{:x}", Sha256::digest(&bytes));
-        if promoted.binary_sha256.as_deref() != Some(digest.as_str()) {
-            bail!(
-                "{TURN_PROTOCOL}: this binary {} hashes to sha256 {digest}, not to {}, the sha256 the record of the promoted binary of {} holds; a turn is judged by the promoted binary only; nothing was written",
-                judge.binary.display(),
-                promoted.binary_sha256.as_deref().unwrap_or("none"),
-                short(&baseline)
-            );
-        }
+    let bytes = std::fs::read(judge.binary)
+        .with_context(|| format!("read this binary, {}", judge.binary.display()))?;
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    if (promoted.revision_stated_by.is_some() || promoted.binary_sha256.is_some())
+        && promoted.binary_sha256.as_deref() != Some(digest.as_str())
+    {
+        bail!(
+            "{TURN_PROTOCOL}: this binary {} hashes to sha256 {digest}, not to {}, the sha256 the record of the promoted binary of {} holds; a turn is judged by the promoted binary only; nothing was written",
+            judge.binary.display(),
+            promoted.binary_sha256.as_deref().unwrap_or("none"),
+            short(&baseline)
+        );
     }
     if promoted.revision_stated_by.is_none() && judge.revision != baseline {
         bail!(
@@ -2420,5 +2433,50 @@ pub fn turn_opening(
         baseline,
         surface: computed.to_owned(),
         title: finding_title(finding, filed.as_deref().unwrap_or_default()),
+        judge_sha256: digest,
     })
+}
+
+/// The file of an improvement turn's case that holds the sha256 of the binary that judges it,
+/// written when the turn opens ([`CaseDir::open_turn`]).
+pub const JUDGE_FILE: &str = "judge.sha256";
+
+/// Why a run of the case at `case_dir` by the binary `binary` (`/proc/self/exe`, the running
+/// one) is refused before any step, or none: a case of any protocol but an improvement turn's is
+/// never refused here; a turn is run only by the binary whose sha256 it recorded when it opened
+/// ([`JUDGE_FILE`]), so a resume by another binary, the candidate's that `takt promote` just
+/// installed among them, judges nothing. `takt promote` keeps the binary it replaces by its
+/// digest ([`crate::promotion::kept_binary`]), and the refusal names where.
+pub fn turn_judge_refusal(case_dir: &Path, binary: &Path) -> Result<Option<String>> {
+    if required_capabilities(case_dir)?.0 != TURN_PROTOCOL {
+        return Ok(None);
+    }
+    let path = case_dir.join(JUDGE_FILE);
+    let Ok(recorded) = std::fs::read_to_string(&path) else {
+        return Ok(Some(format!(
+            "{TURN_PROTOCOL}: the turn records no binary that judges it ({} is not there), so no binary may run it; open the turn again",
+            path.display()
+        )));
+    };
+    let recorded = recorded.trim();
+    let bytes =
+        std::fs::read(binary).with_context(|| format!("read this binary, {}", binary.display()))?;
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    if digest == recorded {
+        return Ok(None);
+    }
+    let kept = crate::promotion::store()
+        .map(|store| crate::promotion::kept_binary(&store, recorded))
+        .map_or_else(
+            |_| String::new(),
+            |kept| {
+                format!(
+                    "; `takt promote` keeps a binary it replaces at {}",
+                    kept.display()
+                )
+            },
+        );
+    Ok(Some(format!(
+        "{TURN_PROTOCOL}: this binary hashes to sha256 {digest}, not to {recorded}, the binary that judges the turn since it opened; a turn is judged by one binary only, so run it with that one{kept}; nothing was run"
+    )))
 }

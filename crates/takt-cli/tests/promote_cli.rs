@@ -1238,8 +1238,35 @@ fn a_candidate_within_the_rule_is_installed_and_recorded() {
         WITHIN_TOKENS,
         [APPROVAL, APPROVAL, APPROVAL, APPROVAL, ERROR],
     );
+    let replaced = fs::read(world.installed()).expect("the binary before it");
+    let replaced_digest = sha256(&world.installed());
     let (code, out, err) = world.promote(&card, &[]);
     assert_eq!(code, 0, "{out}{err}");
+    // The binary it replaced is kept by its digest under the state directory, for a turn
+    // that judges the promotion to finish with (story:self-improvement-protocol).
+    let kept = world
+        .store
+        .parent()
+        .expect("the state's takt directory")
+        .join("judges")
+        .join(&replaced_digest);
+    assert_eq!(
+        fs::read(&kept).ok(),
+        Some(replaced),
+        "{}: {out}{err}",
+        kept.display()
+    );
+    assert!(
+        fs::metadata(&kept)
+            .is_ok_and(
+                |meta| std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o111 != 0
+            ),
+        "the kept binary runs"
+    );
+    assert!(
+        out.contains(&kept.display().to_string()),
+        "the kept binary is named: {out}"
+    );
     assert!(
         out.contains("rule  trials 5 a scenario  margin 1 case"),
         "the rule applied is printed: {out}"

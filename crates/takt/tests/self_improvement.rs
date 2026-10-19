@@ -4,7 +4,10 @@
 //! candidate's saved scorecard from `$XDG_STATE_HOME/takt/scorecards/scorecard-<candidate>.json`,
 //! waiting and naming that path while it is missing, and compares it with the baseline's copy in
 //! the promotion store under the promotion rule. `takt run` driving a turn to `unreproducible`
-//! and `declined` is `crates/takt-cli/tests/self_improvement_cli.rs`.
+//! and `declined` is `crates/takt-cli/tests/self_improvement_cli.rs`. Part 2: the judge surface
+//! a turn computes at open ([`takt::improvement::judge_surfaces`]), `candidate.merge` observed
+//! on the local `main` and through a forge's report of it, and `binary.promote` observed on the
+//! promotion store and the installed binary.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
@@ -118,6 +121,7 @@ fn turn(name: &str, finding: &str) -> Turn {
         baseline: baseline.clone(),
         surface: "non_judge".to_owned(),
         title: "The probe shows the defect".to_owned(),
+        judge_sha256: "0".repeat(64),
     })
     .expect("the turn opens");
     Turn {
@@ -407,4 +411,423 @@ fn this_trees_check_finding_is_a_reviewed_confined_script() {
         "scripts/check-finding hashes to {digest}, which the reviewed list {:?} does not name",
         takt::improvement::CONFINED_CHECK_FINDING_SHA256S
     );
+}
+
+/// A scratch repository for the judge surface: `M` holds the allow-list (`fix.txt`, `docs/**`),
+/// `tools/judge.sh` and `fix.txt`; `B`, the baseline, tightens `tools/judge.sh` on top of it.
+/// Answers the scratch directory, the repository, `M` and `B`.
+fn surface_repo(name: &str) -> (Scratch, PathBuf, String, String) {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "self-improvement-surface-{}-{name}",
+        std::process::id()
+    ));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
+    }
+    let repo = dir.join("repo");
+    write(
+        &repo.join(".engineering/judge-allow.yaml"),
+        "paths:\n  - fix.txt\n  - docs/**\n",
+    );
+    write(&repo.join("tools/judge.sh"), "#!/bin/sh\necho v1\n");
+    write(&repo.join("fix.txt"), "a\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "M"]);
+    let m = git(&repo, &["rev-parse", "HEAD"]);
+    write(&repo.join("tools/judge.sh"), "#!/bin/sh\necho v2 strict\n");
+    git(&repo, &["commit", "-q", "-am", "B: tighten the judge"]);
+    let b = git(&repo, &["rev-parse", "HEAD"]);
+    (Scratch(dir), repo, m, b)
+}
+
+/// A commit on a new branch `name` off `at` that writes each `(path, text)`; its id.
+fn commit_on(repo: &Path, name: &str, at: &str, files: &[(&str, &str)]) -> String {
+    git(repo, &["checkout", "-q", "-b", name, at]);
+    for (path, text) in files {
+        write(&repo.join(path), text);
+    }
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", name]);
+    git(repo, &["rev-parse", "HEAD"])
+}
+
+/// The reviewer's case: a candidate branched before the baseline's judge change touches only an
+/// allowed path, yet its tree differs from the baseline's at `tools/judge.sh`, so promoting it
+/// would roll the judge change back: its surface is judge.
+#[test]
+fn a_candidate_branched_before_a_judge_change_rolls_it_back_and_is_judge() {
+    let (_scratch, repo, m, b) = surface_repo("stale");
+    let c = commit_on(&repo, "fix", &m, &[("fix.txt", "b\n")]);
+    let surfaces = takt::improvement::judge_surfaces(&repo, &b, &c).expect("computes");
+    assert_eq!(surfaces, ["tools/judge.sh"]);
+}
+
+/// The candidate's own change is judged besides what the promotion installs: a candidate that
+/// changes `tools/judge.sh` exactly as the baseline already does is judge, though the baseline's
+/// tree and the candidate's agree there.
+#[test]
+fn a_judge_path_the_candidate_changes_is_judge_where_the_baseline_matches_it() {
+    let (_scratch, repo, m, b) = surface_repo("same-change");
+    let c = commit_on(
+        &repo,
+        "fix",
+        &m,
+        &[("tools/judge.sh", "#!/bin/sh\necho v2 strict\n")],
+    );
+    assert_eq!(git(&repo, &["diff", "--name-only", &b, &c]), "");
+    let surfaces = takt::improvement::judge_surfaces(&repo, &b, &c).expect("computes");
+    assert_eq!(surfaces, ["tools/judge.sh"]);
+}
+
+/// The reviewer's controls: a rename out of a judge path names the judge path; a link at an
+/// allowed path, a change to the allow-list and a judge change hidden behind a replace ref are
+/// judge; an executable bit on an allowed file is not.
+#[test]
+fn the_surface_controls_hold() {
+    let (_scratch, repo, _m, b) = surface_repo("controls");
+    git(&repo, &["checkout", "-q", "-b", "rename", &b]);
+    fs::create_dir_all(repo.join("docs")).expect("docs");
+    git(&repo, &["mv", "tools/judge.sh", "docs/judge.sh"]);
+    git(&repo, &["commit", "-q", "-m", "rename"]);
+    let c = git(&repo, &["rev-parse", "HEAD"]);
+    let surfaces = takt::improvement::judge_surfaces(&repo, &b, &c).expect("computes");
+    assert_eq!(surfaces, ["tools/judge.sh"], "rename");
+    git(&repo, &["checkout", "-q", "-b", "link", &b]);
+    fs::create_dir_all(repo.join("docs")).expect("docs");
+    std::os::unix::fs::symlink("../tools/judge.sh", repo.join("docs/judge")).expect("a link");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "link"]);
+    let c = git(&repo, &["rev-parse", "HEAD"]);
+    let surfaces = takt::improvement::judge_surfaces(&repo, &b, &c).expect("computes");
+    assert_eq!(surfaces, ["docs/judge"], "link");
+    let c = commit_on(
+        &repo,
+        "allow",
+        &b,
+        &[(".engineering/judge-allow.yaml", "paths:\n  - '**'\n")],
+    );
+    let surfaces = takt::improvement::judge_surfaces(&repo, &b, &c).expect("computes");
+    assert_eq!(surfaces, [".engineering/judge-allow.yaml"], "allow-list");
+    git(&repo, &["checkout", "-q", "-b", "exec", &b]);
+    fs::set_permissions(repo.join("fix.txt"), fs::Permissions::from_mode(0o755))
+        .expect("executable");
+    git(&repo, &["commit", "-q", "-am", "exec"]);
+    let c = git(&repo, &["rev-parse", "HEAD"]);
+    let surfaces = takt::improvement::judge_surfaces(&repo, &b, &c).expect("computes");
+    assert!(surfaces.is_empty(), "exec bit: {surfaces:?}");
+    let c = commit_on(
+        &repo,
+        "weaken",
+        &b,
+        &[("tools/judge.sh", "#!/bin/sh\nexit 0\n")],
+    );
+    let innocent = commit_on(&repo, "innocent", &b, &[("fix.txt", "c\n")]);
+    git(&repo, &["replace", &c, &innocent]);
+    let surfaces = takt::improvement::judge_surfaces(&repo, &b, &c).expect("computes");
+    assert_eq!(surfaces, ["tools/judge.sh"], "replace ref");
+}
+
+/// The delegation record is the owner's alone: a candidate that changes it is judge even where
+/// the allow-list admits it.
+#[test]
+fn a_change_to_the_delegation_record_is_judge_whatever_the_allow_list_admits() {
+    let (_scratch, repo, _m, b) = surface_repo("owner-only");
+    let wide = commit_on(
+        &repo,
+        "wide",
+        &b,
+        &[(
+            ".engineering/judge-allow.yaml",
+            "paths:\n  - fix.txt\n  - .engineering/**\n",
+        )],
+    );
+    let c = commit_on(
+        &repo,
+        "delegate",
+        &wide,
+        &[(".engineering/delegations.yaml", "delegations: []\n")],
+    );
+    let surfaces = takt::improvement::judge_surfaces(&repo, &wide, &c).expect("computes");
+    assert_eq!(surfaces, [".engineering/delegations.yaml"]);
+}
+
+/// The allow-list is the baseline's: a candidate that widens it to admit its own judge change
+/// still touches that judge path.
+#[test]
+fn the_allow_list_is_read_at_the_baseline_not_the_candidate() {
+    let (_scratch, repo, _m, b) = surface_repo("allow-at-baseline");
+    let c = commit_on(
+        &repo,
+        "widen",
+        &b,
+        &[
+            (
+                ".engineering/judge-allow.yaml",
+                "paths:\n  - fix.txt\n  - tools/**\n",
+            ),
+            ("tools/judge.sh", "#!/bin/sh\nexit 0\n"),
+        ],
+    );
+    let surfaces = takt::improvement::judge_surfaces(&repo, &b, &c).expect("computes");
+    assert!(
+        surfaces.iter().any(|path| path == "tools/judge.sh"),
+        "{surfaces:?}"
+    );
+}
+
+/// With two merge bases, a criss-cross, the change from each counts: `tools/a.sh` changed on one
+/// side and `tools/b.sh` on the other, each put back in both merges, show only from the merge
+/// base whose side changed it, and both are judge.
+#[test]
+fn every_merge_base_decides_the_surface() {
+    let (_scratch, repo, m, _b) = surface_repo("criss-cross");
+    git(&repo, &["checkout", "-q", "-b", "base", &m]);
+    write(&repo.join("tools/a.sh"), "a1\n");
+    write(&repo.join("tools/b.sh"), "b1\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "O"]);
+    let o = git(&repo, &["rev-parse", "HEAD"]);
+    let x = commit_on(&repo, "x", &o, &[("tools/a.sh", "a2\n")]);
+    let y = commit_on(&repo, "y", &o, &[("tools/b.sh", "b2\n")]);
+    // Each merge takes neither side's change: both files as they were at O.
+    let merge = |name: &str, first: &str, second: &str| {
+        git(&repo, &["checkout", "-q", "-b", name, first]);
+        git(&repo, &["merge", "-q", "--no-ff", "--no-commit", second]);
+        write(&repo.join("tools/a.sh"), "a1\n");
+        write(&repo.join("tools/b.sh"), "b1\n");
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", name]);
+        git(&repo, &["rev-parse", "HEAD"])
+    };
+    let baseline = merge("left", &x, &y);
+    let merged = merge("right", &y, &x);
+    let candidate = commit_on(&repo, "fix", &merged, &[("fix.txt", "fixed\n")]);
+    let meets = git(&repo, &["merge-base", "--all", &baseline, &candidate]);
+    assert_eq!(meets.lines().count(), 2, "{meets}");
+    let mut surfaces =
+        takt::improvement::judge_surfaces(&repo, &baseline, &candidate).expect("computes");
+    surfaces.sort();
+    assert_eq!(surfaces, ["tools/a.sh", "tools/b.sh"]);
+}
+
+/// Grants `capability` to the turn's case at the candidate revision, as `takt approve` does.
+fn granted(turn: &Turn, capability: &str) {
+    let dir = turn.tree.join(".engineering/cases/turn");
+    let mut authority = takt::case::Authority::read(&dir)
+        .expect("the authority reads")
+        .unwrap_or_default();
+    authority.decisions.push(takt::case::AuthorityDecision {
+        capability: capability.to_owned(),
+        decision: takt::case::Grant::Granted,
+        approver: "human:owner".to_owned(),
+        granted_at: "2026-01-01T00:00:00Z".to_owned(),
+        revision: Some(turn.candidate.clone()),
+    });
+    authority.write(&dir).expect("the authority is written");
+}
+
+/// What `validator` observes at the candidate: its records' results, whether it waits, and its
+/// summary.
+fn observed(validator: &dyn Validator, turn: &Turn) -> (Vec<String>, bool, String) {
+    let (observation, waiting) = validator
+        .observe_waiting(&turn.tree, &turn.candidate, 1)
+        .expect("observes");
+    let results = observation
+        .records
+        .iter()
+        .map(|record| record.result.clone().unwrap_or_default())
+        .collect();
+    (results, waiting, observation.summary)
+}
+
+/// `candidate.merge` on the local `main`: nothing without the case's grant, even with `main` at
+/// the candidate; granted, it waits while `main` does not hold the candidate and records
+/// `merged` once it does, retaining `forge: none` and the tip.
+#[test]
+fn the_merge_is_observed_on_local_main_only_with_the_grant() {
+    let turn = turn("merge-local", &finding("docs/runs/trial-1.md"));
+    let validator = takt::improvement::CandidateMerged::new(takt::improvement::Mainline::Local);
+    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert!(results.is_empty() && !waiting, "{summary}");
+    git(&turn.tree, &["branch", "-f", "main", &turn.baseline]);
+    granted(&turn, "repository.merge");
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert!(results.is_empty() && waiting, "{summary}");
+    assert!(summary.contains(&turn.baseline[..8]), "{summary}");
+    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
+    let (observation, waiting) = validator
+        .observe_waiting(&turn.tree, &turn.candidate, 1)
+        .expect("observes");
+    assert!(!waiting, "{}", observation.summary);
+    assert_eq!(observation.records.len(), 1, "{}", observation.summary);
+    assert_eq!(observation.records[0].result.as_deref(), Some("merged"));
+    assert_eq!(observation.records[0].producer, "takt.candidate-merge");
+    let retained = String::from_utf8(observation.artifact.expect("retained").bytes).expect("text");
+    assert!(retained.contains("forge: none"), "{retained}");
+    assert!(
+        retained.contains(&format!("tip: {}", turn.candidate)),
+        "{retained}"
+    );
+}
+
+/// `candidate.merge` through a forge (the in-memory double, whose `main` is the tree's): it waits
+/// while the forge's `main` does not hold the candidate, records `merged` once it does, naming
+/// the forge, and a tip the forge cannot report is an error, never a record.
+#[test]
+fn the_merge_is_observed_through_the_forges_report_of_main() {
+    let turn = turn("merge-forge", &finding("docs/runs/trial-1.md"));
+    let forge: std::rc::Rc<dyn takt::forge::Forge> =
+        std::rc::Rc::new(takt::forge::Memory::default());
+    let validator =
+        takt::improvement::CandidateMerged::new(takt::improvement::Mainline::Forge(forge));
+    granted(&turn, "repository.merge");
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert!(results.is_empty() && waiting, "{summary}");
+    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
+    let (observation, _) = validator
+        .observe_waiting(&turn.tree, &turn.candidate, 1)
+        .expect("observes");
+    assert_eq!(observation.records.len(), 1, "{}", observation.summary);
+    let retained = String::from_utf8(observation.artifact.expect("retained").bytes).expect("text");
+    assert!(retained.contains("forge: memory"), "{retained}");
+    git(&turn.tree, &["branch", "-D", "main"]);
+    let error = validator
+        .observe_waiting(&turn.tree, &turn.candidate, 1)
+        .expect_err("no tip, no observation");
+    assert!(format!("{error:#}").contains("main"), "{error:#}");
+}
+
+/// Writes the promotion store's record of `revision` of `kind`, chained to the file `previous`
+/// when given, with `binary_sha256` and a scorecard copy.
+fn record(
+    state: &Path,
+    tree: &Path,
+    revision: &str,
+    kind: Kind,
+    binary_sha256: Option<String>,
+    previous: Option<&Path>,
+) -> PathBuf {
+    let store = state.join("takt/promotions");
+    let card = scorecard(revision, "accepted", revision);
+    let text = serde_json::to_vec_pretty(&card).expect("the scorecard serializes");
+    fs::create_dir_all(&store).expect("the store");
+    fs::write(store.join(format!("{revision}.scorecard.json")), &text).expect("the copy");
+    let promotion = Promotion {
+        format: takt::promotion::FORMAT.to_owned(),
+        revision: revision.to_owned(),
+        revision_stated_by: None,
+        tree: git(tree, &["rev-parse", &format!("{revision}^{{tree}}")]),
+        promoted_at: if previous.is_some() {
+            "2026-01-02T00:00:00Z"
+        } else {
+            "2026-01-01T00:00:00Z"
+        }
+        .to_owned(),
+        kind,
+        scorecard: revision.to_owned(),
+        scorecard_file: PathBuf::from(format!("/srv/scorecards/scorecard-{revision}.json")),
+        scorecard_sha256: format!("{:x}", Sha256::digest(&text)),
+        against: None,
+        rule: Rule::default(),
+        worse: 0,
+        binary: binary_sha256
+            .as_ref()
+            .map(|_| PathBuf::from("/srv/install/bin/takt")),
+        binary_sha256,
+        runs: Vec::new(),
+        previous_sha256: previous
+            .map(|path| format!("{:x}", Sha256::digest(fs::read(path).expect("previous")))),
+        rejudges: None,
+        replaces_sha256: None,
+        cases: Vec::new(),
+    };
+    let path = store.join(format!("{revision}.json"));
+    fs::write(
+        &path,
+        serde_json::to_vec_pretty(&promotion).expect("the record serializes"),
+    )
+    .expect("the record");
+    path
+}
+
+/// `binary.promote` records `promoted` only for a promotion record of the candidate whose
+/// digest is the installed binary's, and only with the case's grant: not for a baseline record
+/// of the candidate, not for a promotion of the candidate whose binary is not the one installed,
+/// not while the latest record is another revision's, even a promotion whose binary is the one
+/// installed, and not without the grant.
+#[test]
+fn binary_promote_observes_only_a_promotion_of_the_candidate_that_is_installed() {
+    let turn = turn("promote", &finding("docs/runs/trial-1.md"));
+    let root = turn.state.join("install");
+    write(
+        &root.join("bin/takt"),
+        "#!/bin/sh\necho the candidate's takt\n",
+    );
+    let installed = format!(
+        "{:x}",
+        Sha256::digest(fs::read(root.join("bin/takt")).expect("installed"))
+    );
+    let validator =
+        takt::improvement::BinaryPromote::in_state(&turn.state).with_install_root(&root);
+    let base = record(
+        &turn.state,
+        &turn.tree,
+        &turn.baseline,
+        Kind::Baseline,
+        None,
+        None,
+    );
+    let promoted = record(
+        &turn.state,
+        &turn.tree,
+        &turn.candidate,
+        Kind::Promotion,
+        Some(installed.clone()),
+        Some(&base),
+    );
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert!(results.is_empty() && !waiting, "no grant: {summary}");
+    granted(&turn, "takt.promote");
+    let (results, _, summary) = observed(&validator, &turn);
+    assert_eq!(results, ["promoted"], "{summary}");
+    // Each record below takes the place of the one before it, the same file.
+    record(
+        &turn.state,
+        &turn.tree,
+        &turn.candidate,
+        Kind::Promotion,
+        Some("0".repeat(64)),
+        Some(&base),
+    );
+    let (results, _, summary) = observed(&validator, &turn);
+    assert!(results.is_empty(), "another binary installed: {summary}");
+    record(
+        &turn.state,
+        &turn.tree,
+        &turn.candidate,
+        Kind::Baseline,
+        Some(installed.clone()),
+        Some(&base),
+    );
+    let (results, _, summary) = observed(&validator, &turn);
+    assert!(results.is_empty(), "a baseline record: {summary}");
+    fs::remove_file(&promoted).expect("removed");
+    fs::remove_file(
+        turn.state
+            .join(format!("takt/promotions/{}.scorecard.json", turn.candidate)),
+    )
+    .expect("removed");
+    // The latest record a promotion of the baseline, whose binary is the one installed.
+    record(
+        &turn.state,
+        &turn.tree,
+        &turn.baseline,
+        Kind::Promotion,
+        Some(installed),
+        None,
+    );
+    let (results, waiting, summary) = observed(&validator, &turn);
+    assert!(results.is_empty() && waiting, "the baseline's: {summary}");
 }
