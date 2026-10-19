@@ -129,8 +129,8 @@ pub const CACHED: [&str; 4] = [
 /// What a record is: the first baseline (`takt promote --baseline-only`, nothing installed), a
 /// promotion that installed a binary, a candidate refused on its scorecard, kept so the same
 /// revision is not judged again but on new runs, or the baseline's scorecard replaced by one of
-/// the same revision and cases under newer metric definitions (`--rebaseline`), which installs
-/// nothing.
+/// the same revision and cases under newer metric definitions, or adding whole scenarios
+/// (`--rebaseline`), which installs nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -277,8 +277,9 @@ pub struct Request<'a> {
 
 /// What `takt promote --rebaseline` asks for.
 pub struct Rebaseline<'a> {
-    /// The scorecard that replaces the baseline's: of the baseline's revision, its cases exactly,
-    /// under metric definitions at or above the stored ones and one of them newer.
+    /// The scorecard that replaces the baseline's: of the baseline's revision, its cases exactly
+    /// and whole scenarios it lacks, under metric definitions at or above the stored ones, one of
+    /// them newer or a scenario added.
     pub scorecard: &'a Path,
     /// The store of promotion records.
     pub store: &'a Path,
@@ -729,8 +730,9 @@ fn chain(store: &Path, now: &str) -> Result<Vec<Promotion>> {
 
 /// Every rebaseline in the chain `records` replaces the baseline before it: its
 /// `replaces_sha256` is the scorecard digest of the latest record before it that is no refusal,
-/// of its revision, and the case ids of its scorecard copy are that record's copy's. One that
-/// replaces anything else is an error naming it.
+/// of its revision, and the case ids of its scorecard copy are that record's copy's, but for the
+/// cases of whole scenarios that copy lacks ([`added_scenarios`]). One that replaces anything
+/// else is an error naming it.
 fn rebaselines_in_chain(store: &Path, records: &[Promotion]) -> Result<()> {
     for (n, record) in records.iter().enumerate() {
         if record.kind != Kind::Rebaseline {
@@ -753,9 +755,11 @@ fn rebaselines_in_chain(store: &Path, records: &[Promotion]) -> Result<()> {
             );
         };
         let (copy, replaced_copy) = (copy_path(store, record), copy_path(store, replaced));
-        if case_ids(&Scorecard::load(&copy)?) != case_ids(&Scorecard::load(&replaced_copy)?) {
+        if let Err(why) =
+            added_scenarios(&Scorecard::load(&copy)?, &Scorecard::load(&replaced_copy)?)
+        {
             bail!(
-                "{}: the case ids of its scorecard {} are not those of the scorecard it replaces, {}; the store is not read past this",
+                "{}: the case ids of its scorecard {} are not those of the scorecard it replaces, {}, with whole scenarios added: {why}; the store is not read past this",
                 path.display(),
                 copy.display(),
                 replaced_copy.display()
@@ -763,6 +767,53 @@ fn rebaselines_in_chain(store: &Path, records: &[Promotion]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The scenarios a rebaseline's `card` adds to the `stored` scorecard it replaces: every case of
+/// `stored` is one of `card`'s, and every case `card` adds is of a scenario `stored` has no case
+/// of, so the stored cases are re-scored exactly and a new scenario joins the corpus whole,
+/// never a case slipped into a scenario the baseline judges already. Otherwise the first case
+/// that is not, named with why.
+fn added_scenarios(
+    card: &Scorecard,
+    stored: &Scorecard,
+) -> std::result::Result<BTreeSet<String>, String> {
+    let (cases, stored_cases) = (case_ids(card), case_ids(stored));
+    if let Some(case) = stored_cases.difference(&cases).next() {
+        return Err(format!(
+            "case {case} is among the baseline's and not this scorecard's"
+        ));
+    }
+    let stored_scenarios: BTreeSet<&str> = stored
+        .rows
+        .iter()
+        .filter_map(|row| row.scenario.as_deref())
+        .collect();
+    let mut added = BTreeSet::new();
+    for row in card
+        .rows
+        .iter()
+        .filter(|row| !stored_cases.contains(&row.case))
+    {
+        match row.scenario.as_deref() {
+            None => {
+                return Err(format!(
+                    "case {} is in this scorecard and not among the baseline's, and is of no scenario",
+                    row.case
+                ));
+            }
+            Some(scenario) if stored_scenarios.contains(scenario) => {
+                return Err(format!(
+                    "case {} is in this scorecard and not among the baseline's, and its scenario {scenario} is the baseline's",
+                    row.case
+                ));
+            }
+            Some(scenario) => {
+                added.insert(scenario.to_owned());
+            }
+        }
+    }
+    Ok(added)
 }
 
 /// Every run of `card` is the run of `stored` of the same case at the same position, re-derived
@@ -776,10 +827,13 @@ fn rebaselines_in_chain(store: &Path, records: &[Promotion]) -> Result<()> {
 /// run naming none; anything else is refused. No run's outcome may rank below the stored one's,
 /// so a rebaseline keeps or raises the bar and never lowers it. A stored scorecard with no
 /// outcome metric is refused. The first run that is not bound is the refusal, named with the
-/// field and both figures.
+/// field and both figures. A case of a scenario in `added`, one the rebaseline adds whole
+/// ([`added_scenarios`]), has no stored run to be bound to; its runs are checked as a
+/// baseline's are, and nothing here.
 fn runs_bound(
     card: &Scorecard,
     stored: &Scorecard,
+    added: &BTreeSet<String>,
     base: &Promotion,
     shown: &Path,
     stored_path: &Path,
@@ -800,6 +854,9 @@ fn runs_bound(
     let (runs, stored_runs) = (runs_of(card), runs_of(stored));
     let unchanged = |metric: &str| card.metrics.get(metric) == stored.metrics.get(metric);
     for (case, now) in &runs {
+        if crate::scorecard::scenario_of(case).is_some_and(|scenario| added.contains(scenario)) {
+            continue;
+        }
         let then = stored_runs.get(case).map_or(&[][..], Vec::as_slice);
         if now.len() != then.len() {
             bail!(
@@ -2429,6 +2486,12 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
             None => installed_names_revision(&installed, &revision)?,
         }
         enough_trials(&card, &card, request.scorecard)?;
+        if card.rows.iter().all(|row| row.scenario.is_none()) {
+            bail!(
+                "{}: no scenario case, so a baseline of it would judge nothing; a comparison covers every scenario either side has, and a baseline needs at least one",
+                request.scorecard.display()
+            );
+        }
         if let Some(digest) = &stated {
             writeln!(
                 out,
@@ -2588,13 +2651,15 @@ fn case_ids(card: &Scorecard) -> BTreeSet<String> {
 /// `takt promote --rebaseline <scorecard>`: replaces the scorecard of the baseline, the latest
 /// record that is no refusal, with `scorecard`, which a promotion then compares candidates
 /// with. Accepted only when the scorecard's revision is the baseline's, its case ids are the
-/// stored scorecard's exactly, and every metric definition is at or above the stored one's
-/// version with one of them higher; its runs are checked as a baseline's are (made with the
-/// baseline revision's binary, or stating the baseline's digest when its revision is stated,
-/// each scenario run with its held-out result) and the installed binary must be the baseline's.
-/// The record appended to the chain carries the baseline's revision, tree and binary, and names
-/// the scorecard it replaces by its sha256 (`replaces_sha256`); nothing is built or installed.
-/// Anything else is refused naming the reason, nothing written.
+/// stored scorecard's exactly but for the cases of whole scenarios it adds ([`added_scenarios`]:
+/// a new scenario joins the corpus only here), and every metric definition is at or above the
+/// stored one's version with one of them higher or a scenario added; its runs are checked as a
+/// baseline's are (made with the baseline revision's binary, or stating the baseline's digest
+/// when its revision is stated, each scenario run with its held-out result) and the installed
+/// binary must be the baseline's. The record appended to the chain carries the baseline's
+/// revision, tree and binary, and names the scorecard it replaces by its sha256
+/// (`replaces_sha256`); nothing is built or installed. Anything else is refused naming the
+/// reason, nothing written.
 pub fn rebaseline(request: &Rebaseline<'_>, out: &mut dyn Write) -> Result<Outcome> {
     let shown = request.scorecard;
     let metadata =
@@ -2668,24 +2733,13 @@ pub fn rebaseline(request: &Rebaseline<'_>, out: &mut dyn Write) -> Result<Outco
     }
     let base_copy = copy_path(store, &base);
     let stored = Scorecard::load(&base_copy)?;
-    let (cases, stored_cases) = (case_ids(&card), case_ids(&stored));
-    if let Some(case) = cases.symmetric_difference(&stored_cases).next() {
-        bail!(
-            "{}: case {case} is {}; --rebaseline re-scores the baseline's cases exactly",
+    let added = added_scenarios(&card, &stored).map_err(|why| {
+        anyhow!(
+            "{}: {why} ({}); --rebaseline re-scores the baseline's cases exactly and adds a whole scenario the baseline lacks, nothing else",
             shown.display(),
-            if stored_cases.contains(case) {
-                format!(
-                    "among the baseline's ({}) and not this scorecard's",
-                    base_copy.display()
-                )
-            } else {
-                format!(
-                    "in this scorecard and not among the baseline's ({})",
-                    base_copy.display()
-                )
-            }
-        );
-    }
+            base_copy.display()
+        )
+    })?;
     let mut newer = false;
     for (metric, stored_version) in &stored.metrics {
         match card.metrics.get(metric) {
@@ -2707,14 +2761,14 @@ pub fn rebaseline(request: &Rebaseline<'_>, out: &mut dyn Write) -> Result<Outco
         .metrics
         .keys()
         .any(|metric| !stored.metrics.contains_key(metric));
-    if !newer {
+    if !newer && added.is_empty() {
         bail!(
-            "{}: no metric definition is newer than the stored scorecard's ({}); --rebaseline replaces a baseline's scorecard only under a newer definition",
+            "{}: no metric definition is newer than the stored scorecard's ({}), and no scenario is added; --rebaseline replaces a baseline's scorecard only under a newer definition or to add a whole scenario",
             shown.display(),
             base_copy.display()
         );
     }
-    runs_bound(&card, &stored, &base, shown, &base_copy)?;
+    runs_bound(&card, &stored, &added, &base, shown, &base_copy)?;
     let runs = match (base.revision_stated_by, &base.binary_sha256) {
         (Some(_), Some(digest)) => {
             runs_judged(&card, None, shown)?;
@@ -2752,12 +2806,27 @@ pub fn rebaseline(request: &Rebaseline<'_>, out: &mut dyn Write) -> Result<Outco
         replaces_sha256: Some(base.scorecard_sha256.clone()),
         cases: Vec::new(),
     };
+    let mut why: Vec<String> = Vec::new();
+    if newer {
+        why.push("under newer metric definitions".to_owned());
+    }
+    if !added.is_empty() {
+        why.push(format!(
+            "and adds {}",
+            added
+                .iter()
+                .map(|scenario| format!("scenario {scenario}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     writeln!(
         out,
-        "rebaseline {revision}: {} replaces the scorecard {} ({}) under newer metric definitions; nothing compared, nothing installed",
+        "rebaseline {revision}: {} replaces the scorecard {} ({}) {}; nothing compared, nothing installed",
         shown.display(),
         base.scorecard_sha256,
-        base_copy.display()
+        base_copy.display(),
+        why.join(" ")
     )?;
     if request.dry_run {
         writeln!(

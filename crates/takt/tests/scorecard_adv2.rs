@@ -121,6 +121,12 @@ const NO_PROGRESS: &str = "NoProgress";
 /// rule of one trial: these cases are about the ranks and the margin at any n, and five trials
 /// are story:scorecard-against-needs-the-trials'.
 fn compare(candidate: &Path, saved: &Path, name: &str) -> (usize, String) {
+    let (worse, text) = compared(candidate, saved, name);
+    (worse.expect("the comparison prints"), text)
+}
+
+/// As [`compare`], the comparison's result as it is, a refusal included.
+fn compared(candidate: &Path, saved: &Path, name: &str) -> (anyhow::Result<usize>, String) {
     let saves = scratch(&format!("{name}-saves"));
     let file = Scorecard::read(saved)
         .expect("the saved side reads")
@@ -133,9 +139,7 @@ fn compare(candidate: &Path, saved: &Path, name: &str) -> (usize, String) {
     let mut card = Scorecard::read(candidate).expect("the candidate reads");
     card.rule.trials = 1;
     let mut out = Vec::new();
-    let worse = card
-        .against(&Scorecard::load(&file).expect("loads"), &mut out)
-        .expect("the comparison prints");
+    let worse = card.against(&Scorecard::load(&file).expect("loads"), &mut out);
     (worse, String::from_utf8(out).expect("utf-8"))
 }
 
@@ -212,9 +216,11 @@ fn an_accepted_case_whose_later_run_errored_stays_accepted() {
     );
 }
 
-/// A scenario only the candidate has is new: printed, never worse.
+/// story:the-judge-requires-the-whole-corpus: a scenario only the candidate has is a scenario of
+/// the corpus the saved side lacks, so the comparison is refused naming it; it is never `not
+/// worse` and never `no baseline`.
 #[test]
-fn a_scenario_only_the_candidate_has_is_not_worse() {
+fn a_scenario_only_the_candidate_has_is_refused_naming_it() {
     let saved = trials("new-scenario-saved", &[ACCEPTED]);
     let candidate = trials("new-scenario-candidate", &[ACCEPTED]);
     record(
@@ -222,9 +228,38 @@ fn a_scenario_only_the_candidate_has_is_not_worse() {
         "scenario-2-trial-1",
         &[run("scenario-2-trial-1", "error")],
     );
-    let (worse, text) = compare(&candidate, &saved, "new-scenario");
-    assert_eq!(worse, 0, "{text}");
-    assert!(text.contains("scenario 2  no baseline"), "{text}");
+    let (worse, text) = compared(&candidate, &saved, "new-scenario");
+    let error = format!(
+        "{:#}",
+        worse.expect_err(&format!(
+            "scenario 2 is the candidate's only, and the comparison gave a verdict:\n{text}"
+        ))
+    );
+    assert!(
+        error.contains("scenario 2") && error.contains("not in the saved scorecard"),
+        "{error}"
+    );
+    assert!(
+        text.contains("scenario 2  not in the saved scorecard"),
+        "{text}"
+    );
+    assert!(!text.contains("no baseline"), "{text}");
+}
+
+/// story:the-judge-requires-the-whole-corpus: two scorecards with no scenario case between them
+/// are no corpus, so their comparison is refused, never zero scenarios worse.
+#[test]
+fn empty_against_empty_is_refused() {
+    let saved = scratch("empty-saved");
+    let candidate = scratch("empty-candidate");
+    let (worse, text) = compared(&candidate, &saved, "empty");
+    let error = format!(
+        "{:#}",
+        worse.expect_err(&format!(
+            "no scenario on either side, and the comparison gave a verdict:\n{text}"
+        ))
+    );
+    assert!(error.contains("no scenario case"), "{error}");
 }
 
 /// A line holding three `at` keys: its instant is the first, its `observed_at` the last, and
