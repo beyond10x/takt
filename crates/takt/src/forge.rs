@@ -22,6 +22,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -528,27 +529,51 @@ impl Drop for ScratchHome {
 
 /// Starts `command` with no login of the user's in reach: `HOME` is `home`, every variable of
 /// [`LOGIN_LOCATIONS`] is removed, and the toolchain stays where it was (`CARGO_HOME` and
-/// `RUSTUP_HOME`, when unset, name the user's `~/.cargo` and `~/.rustup`). On Linux the process
+/// `RUSTUP_HOME`, when unset, name the user's `~/.cargo` and `~/.rustup`). `HOME`,
+/// `CARGO_HOME` and `RUSTUP_HOME` are read as the command will see them: its own setting
+/// first, this process's after, a relative one from the command's directory. On Linux the process
 /// starts in a user and a mount namespace of its own, which every child of it inherits, where
 /// `/run/user` and the runtime directory `XDG_RUNTIME_DIR` names (unless it holds `home` or the
 /// command's directory) are empty and read-only, and where each socket
-/// `DBUS_SESSION_BUS_ADDRESS` names by path and each registry login under `CARGO_HOME` is
+/// `DBUS_SESSION_BUS_ADDRESS` names by path and each registry login under the `CARGO_HOME` the
+/// command will see is
 /// `/dev/null`; with no capability left once it executes, nothing it runs can unmount them. The
 /// spawn fails when the host refuses the namespaces: the command is never run with the user's
 /// session in reach. Not hidden: an abstract socket a bus address names, and the user's home
 /// read by its path.
 pub fn without_login(command: &mut Command, home: &Path) {
-    let user_home = std::env::var_os("HOME")
-        .filter(|dir| Path::new(dir).is_absolute())
-        .map(PathBuf::from);
+    // What the command will see of `name`: its own setting when it has one (a caller such as
+    // the test command's fresh home sets `CARGO_HOME`, or removes a variable), else this
+    // process's. A relative path is read from the command's own directory.
+    let seen = |name: &str| -> Option<PathBuf> {
+        let own = command
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new(name))
+            .map(|(_, value)| value.map(OsStr::to_os_string));
+        let value = match own {
+            Some(value) => value,
+            None => std::env::var_os(name),
+        }
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)?;
+        Some(match command.get_current_dir() {
+            Some(dir) if value.is_relative() => dir.join(value),
+            _ => value,
+        })
+    };
+    let user_home = seen("HOME").filter(|dir| dir.is_absolute());
+    let mut cargo_home = seen("CARGO_HOME");
+    let rustup_home = seen("RUSTUP_HOME");
     for name in LOGIN_LOCATIONS {
         command.env_remove(name);
     }
-    let mut cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from);
     if let Some(user_home) = &user_home {
-        for (name, dir) in [("CARGO_HOME", ".cargo"), ("RUSTUP_HOME", ".rustup")] {
+        for (name, dir, set) in [
+            ("CARGO_HOME", ".cargo", cargo_home.is_some()),
+            ("RUSTUP_HOME", ".rustup", rustup_home.is_some()),
+        ] {
             let dir = user_home.join(dir);
-            if std::env::var_os(name).is_none() && dir.is_dir() {
+            if !set && dir.is_dir() {
                 command.env(name, &dir);
                 if name == "CARGO_HOME" {
                     cargo_home = Some(dir);

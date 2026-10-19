@@ -5789,6 +5789,26 @@ fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Undone> {
                 &format!("{way:#}; so nothing was moved out of the tree"),
             ),
         };
+        // The tree is read once more after the move: a process the step left behind may have
+        // written into it, or moved what was set aside back into it, while the files moved.
+        // Anything it names is the error, which still says where the files went.
+        let after = kept.checkpoint.change(tree).with_context(|| {
+            format!(
+                "read the tree after the step was discarded{}",
+                aside.named()
+            )
+        })?;
+        if !after.paths.is_empty()
+            || after.staged
+            || after.head.is_some()
+            || !after.refs.is_empty()
+            || !after.ignored_added.is_empty()
+        {
+            bail!(
+                "the tree could not be put back as it was before the step, as read after the files inside an ignored directory were moved: {after:?}{}",
+                aside.named()
+            );
+        }
         Ok(Undone { aside, left })
     } else {
         // The files that were due to move, or, when the reset itself failed, those the

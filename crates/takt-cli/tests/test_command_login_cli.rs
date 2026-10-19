@@ -230,3 +230,147 @@ fn the_test_command_reaches_no_login_of_the_operator() {
         "the scratch home {home} is removed after the run"
     );
 }
+
+/// What `id` prints for `flag`, trimmed.
+fn id(flag: &str) -> String {
+    let output = Command::new("id").arg(flag).output().expect("id runs");
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// One `takt run --harness none` whose test command reports what it sees of the registry login
+/// (`${CARGO_HOME:-$HOME/.cargo}/credentials.toml`), with `HOME` as `home` gives it (unset
+/// when none), run under bubblewrap with `passwd` as `/etc/passwd`, so the home this user's
+/// passwd entry names is the scratch one and the operator's own is never looked at.
+fn registry_probe(
+    outer: &Path,
+    passwd: &Path,
+    case: &str,
+    home: Option<&std::ffi::OsStr>,
+) -> String {
+    let seen = outer.join(format!("seen-{case}"));
+    let mut takt = Command::new("bwrap");
+    takt.args(["--dev-bind", "/", "/", "--ro-bind"])
+        .arg(passwd)
+        .arg("/etc/passwd")
+        .arg("--")
+        .arg(env!("CARGO_BIN_EXE_takt"))
+        .args(["run", "--repo"])
+        .arg(outer.join("repo"))
+        .args([
+            "--intent",
+            "probe",
+            "--harness",
+            "none",
+            "--forge",
+            "none",
+            "--iterations",
+            "1",
+            "--test-cmd",
+        ])
+        .arg(format!("sh probe.sh {}", seen.display()))
+        .args(["--case-id", case])
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("XDG_STATE_HOME", outer.join("state"))
+        .env("TMPDIR", outer.join("tmp"));
+    if let Some(home) = home {
+        takt.env("HOME", home);
+    }
+    let output = takt.output().expect("bwrap runs (CI installs bubblewrap)");
+    let printed = format!(
+        "exit {:?}\nstdout {}\nstderr {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let seen = fs::read_to_string(&seen)
+        .unwrap_or_else(|error| panic!("the probe ran ({error}): {printed}"));
+    format!("{seen}\n{printed}")
+}
+
+/// Whatever `HOME` takt starts with (unset, relative or set), the test command finds no registry
+/// login as a file it can read: the registry login under whichever `CARGO_HOME` the command
+/// sees is covered. With no absolute `HOME` the command's `CARGO_HOME` is the passwd home's
+/// `.cargo`, here a scratch one holding a stand-in token.
+#[test]
+fn a_test_command_finds_no_registry_login_whatever_home_takt_has() {
+    let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("login-cli-registry-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&outer);
+    let _scratch = Scratch(outer.clone());
+    for dir in ["tmp", "state", "home/.cargo"] {
+        fs::create_dir_all(outer.join(dir)).expect("a directory");
+    }
+    fs::write(
+        outer.join("home/.cargo/credentials.toml"),
+        "token = \"operator-registry-token\"\n",
+    )
+    .expect("a stand-in token");
+    let passwd = outer.join("passwd");
+    fs::write(
+        &passwd,
+        format!(
+            "root:x:0:0::/root:/bin/sh\n{}:x:{}:{}::{}:/bin/sh\n",
+            id("-un"),
+            id("-u"),
+            id("-g"),
+            outer.join("home").display()
+        ),
+    )
+    .expect("a passwd file");
+    let repo = outer.join("repo");
+    fs::create_dir_all(&repo).expect("a directory");
+    // The probe only reports the kind of the file; it never reads it.
+    script(
+        &repo.join("probe.sh"),
+        "#!/bin/sh\nexec > \"$1\" 2>&1\n\
+         echo \"-- home $HOME\"\necho \"-- cargo $CARGO_HOME\"\n\
+         f=\"${CARGO_HOME:-$HOME/.cargo}/credentials.toml\"\n\
+         if [ -e \"$f\" ]; then echo \"-- kind $(stat -L -c %F \"$f\")\"; else echo '-- kind absent'; fi\n\
+         echo '-- end'\nexit 0\n",
+    );
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "start"]);
+    let set = outer.join("home");
+    // Every state is run before anything is asserted, so a failure names each state's outcome.
+    let mut failed = Vec::new();
+    for (case, home) in [
+        ("unset", None),
+        ("relative", Some(std::ffi::OsStr::new("relative-home"))),
+        ("set", Some(set.as_os_str())),
+    ] {
+        let seen = registry_probe(&outer, &passwd, case, home);
+        let kind = seen
+            .lines()
+            .find_map(|line| line.strip_prefix("-- kind "))
+            .unwrap_or("none reported")
+            .to_owned();
+        let cargo = seen
+            .lines()
+            .find_map(|line| line.strip_prefix("-- cargo "))
+            .unwrap_or("none reported")
+            .to_owned();
+        eprintln!("HOME {case}: {kind}; CARGO_HOME {cargo}");
+        if !seen.contains("-- end") || seen.contains("-- kind regular file") {
+            failed.push(format!(
+                "HOME {case}: the registry login is a regular file the test command can read, or the probe did not end:\n{seen}"
+            ));
+        }
+        // With no absolute HOME, the command's toolchain home is the passwd home's `.cargo`, the
+        // stand-in here, never one resolved inside the tree, and its login is covered.
+        if case != "set" {
+            if !seen.contains(&format!("-- cargo {}", outer.join("home/.cargo").display())) {
+                failed.push(format!(
+                    "HOME {case}: the command's CARGO_HOME is not the passwd home's:\n{seen}"
+                ));
+            }
+            if kind != "character special file" {
+                failed.push(format!(
+                    "HOME {case}: the stand-in registry login is not covered ({kind}):\n{seen}"
+                ));
+            }
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}

@@ -10,6 +10,9 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{TestsRun, Validator};
@@ -884,6 +887,146 @@ fn the_fallback_moves_and_never_replaces() {
         assert!(
             fs::symlink_metadata(s.repo.join("build/lnk.o")).is_err(),
             "{errno}: {said}"
+        );
+    }
+}
+
+// Two passes against the wave close: a process the step left behind, active while the
+// discard moves files aside, is caught by the read of the tree after the move.
+
+type Handles = Arc<Mutex<Vec<std::thread::JoinHandle<u64>>>>;
+
+fn files(dir: &Path, n: usize, body: &str) {
+    fs::create_dir_all(dir).expect("a directory");
+    for i in 0..n {
+        fs::write(dir.join(format!("f{i:04}.o")), body).expect("a file");
+    }
+}
+
+/// Every regular file under `dir` whose bytes are `body`.
+fn count_body(dir: &Path, body: &str) -> usize {
+    listing(dir)
+        .iter()
+        .filter(|rel| {
+            let p = dir.join(rel);
+            fs::symlink_metadata(&p).is_ok_and(|m| m.is_file())
+                && fs::read_to_string(&p).ok().as_deref() == Some(body)
+        })
+        .count()
+}
+
+fn wait_for(path: &Path, stop: &AtomicBool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !stop.load(SeqCst) && Instant::now() < deadline {
+        if path.exists() {
+            return true;
+        }
+        std::hint::spin_loop();
+    }
+    false
+}
+
+/// A process the step left behind writes an untracked file once the discard has begun moving
+/// files aside: the read of the tree after the move names it, and the error still says where
+/// the files went.
+#[test]
+fn a_lingering_writer_reaches_the_read_after_the_move() {
+    let (mut reached, mut named) = (0, 0);
+    let mut last = String::new();
+    for attempt in 0..6 {
+        let s = repository(&format!("l1-{attempt}"), "build/\n");
+        files(&s.repo.join("build"), 300, "AAAA");
+        let stop = Arc::new(AtomicBool::new(false));
+        let handles: Handles = Arc::default();
+        let (st, hs, aside) = (stop.clone(), handles.clone(), s.aside_root());
+        let (run, _text) = go(
+            &s,
+            Box::new(move |tree: &Path| {
+                files(&tree.join("build"), 300, "POISON");
+                let (tree, st, aside) = (tree.to_path_buf(), st.clone(), aside.clone());
+                hs.lock().unwrap().push(std::thread::spawn(move || {
+                    let mut n = 0;
+                    if wait_for(&aside.join("rv/step-2"), &st) {
+                        while !st.load(SeqCst) {
+                            let _ = fs::write(tree.join("racer.txt"), "r");
+                            n += 1;
+                            std::thread::sleep(Duration::from_micros(200));
+                        }
+                    }
+                    n
+                }));
+                Ok(())
+            }),
+        );
+        stop.store(true, SeqCst);
+        for h in handles.lock().unwrap().drain(..) {
+            let _ = h.join();
+        }
+        let said = said(&run);
+        if said.contains("could not be put back") {
+            reached += 1;
+            if said.contains("moved out of the tree, not deleted, into") {
+                named += 1;
+            }
+        }
+        last = said;
+    }
+    eprintln!(
+        "R1 reached {reached}/6, named {named}; last: {}",
+        &last[..last.len().min(600)]
+    );
+    assert!(reached > 0, "the post-move bail was never reached: {last}");
+    assert_eq!(
+        named, reached,
+        "the post-move bail did not name the set-aside: {last}"
+    );
+}
+
+/// A process the step left behind renames the case's set-aside directory into the tree's
+/// ignored directory once the discard has opened it. Nothing may be lost, and the run may not
+/// end as if the tree were put back.
+#[test]
+fn a_case_dir_renamed_into_the_tree_after_open_is_caught() {
+    let s = repository("case-into-tree", "build/\n");
+    files(&s.repo.join("build"), 300, "AAAA");
+    let stop = Arc::new(AtomicBool::new(false));
+    let handles: Handles = Arc::default();
+    let (st, hs, aside) = (stop.clone(), handles.clone(), s.aside_root());
+    let (run, _text) = go(
+        &s,
+        Box::new(move |tree: &Path| {
+            files(&tree.join("build"), 300, "POISON");
+            let (tree, st, aside) = (tree.to_path_buf(), st.clone(), aside.clone());
+            hs.lock().unwrap().push(std::thread::spawn(move || {
+                if wait_for(&aside.join("rv/step-2"), &st)
+                    && fs::rename(aside.join("rv"), tree.join("build/zz")).is_ok()
+                {
+                    return 1;
+                }
+                0
+            }));
+            Ok(())
+        }),
+    );
+    stop.store(true, SeqCst);
+    let mut swapped = 0;
+    for h in handles.lock().unwrap().drain(..) {
+        swapped += h.join().unwrap_or(0);
+    }
+    let said = said(&run);
+    let in_aside = count_body(&s.aside_root(), "POISON");
+    let in_tree = count_body(&s.repo.join("build"), "POISON");
+    eprintln!(
+        "R3 swapped {swapped}; POISON in aside {in_aside}, in tree {in_tree}; {}",
+        &said[..said.len().min(500)]
+    );
+    assert_eq!(in_aside + in_tree, 300, "files lost: {said}");
+    if swapped == 1 {
+        assert!(
+            !matches!(&run, Ok(Stop::StepRefused(_)))
+                || in_tree == 0
+                || said.contains("could not be put back"),
+            "the run ended as a refusal with files moved into the tree: {said}"
         );
     }
 }
