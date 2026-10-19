@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-19T06:04:51Z",
+  "actor": "human:timo",
+  "artifact": "story:improvement-turns-2-and-3-recorded",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "both cases under .engineering/cases end accepted (legitimate) at their last Canon decision (turn-2-case-id decisions/0010.json, turn-3-hours decisions/0009.json) with all six claims true and each claim's evidence in notes.md; docs/metrics/improvement-turns.jsonl has three lines; run record docs/runs/2026-10-19-improvement-turns-2-and-3 merged at b60cddc after reviewer approve at 149458a; promotion 44f96a4 over a0b8576 decided by the scorecard",
+    "reference": "b60cddc"
+  }
+}

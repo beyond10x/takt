@@ -1,0 +1,4 @@
+name: takt/turn-2-case-id
+base: main
+base_commit: a53ac13f557108c83606b96f0a119cc9b8a87f64
+left: takt/turn-1-scenario-help

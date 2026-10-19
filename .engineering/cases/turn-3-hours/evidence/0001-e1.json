@@ -1,0 +1,10 @@
+{
+  "format": "canon-evidence/1",
+  "id": "e1",
+  "kind": "finding_record",
+  "result": "filed",
+  "subject": "finding",
+  "subject_revision": "a9dd0d3",
+  "observed_at": "2026-10-18T18:34:15Z",
+  "producer": "planner-run"
+}
