@@ -4,9 +4,11 @@ id: story:gate-tests-are-deterministic
 kind: story
 status: draft
 title: The gate's tests pass or fail on the code alone
+tags:
+- rsi
 relations:
 - decomposes: epic:composable-agentic-work
-revision: 2
+revision: 3
 ---
 ## Outcome
 

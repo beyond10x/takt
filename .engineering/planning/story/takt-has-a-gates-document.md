@@ -5,10 +5,12 @@ kind: story
 status: active
 title: takt's repository names its gate so delivery on takt reaches pr.open
 summary: 'trials 1 and 2: delivery stalled on gate.green'
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 3}
@@ -31,3 +33,6 @@ this gives takt the gate.
 
 - `takt run` on a takt story offers `gate.run` after the implementation and reaches `pr.open`
   when `task check` passes: a scenario or test against a copy of the repository.
+- The gate is the four fast commands of `task check` (specification, citations, format, lint)
+  run through `scripts/gate-exec`; the workspace tests run as the delivery's test command with
+  1800 s (planner, 2026-10-19: the gate's per-command limit is 300 s).

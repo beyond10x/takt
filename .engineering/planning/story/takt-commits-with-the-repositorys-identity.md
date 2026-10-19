@@ -5,10 +5,12 @@ kind: story
 status: active
 title: takt commits with the identity the repository configures, never the operator's git config
 summary: the first real turn's candidate carried takt@localhost and the owner's committer; bot rulesets now refuse that
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T18:37:46Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T18:37:46Z", actor: "human:timo", revision: 3}
@@ -33,8 +35,11 @@ candidate takt delivers and every trial commit a scenario run pushes is refused.
 
 ## Acceptance
 
-- With an identity configured for the repository (`.engineering/project.yaml` or a flag), every
-  commit of a delivery and of a scenario run carries it as author and committer: a test.
-- With none configured, takt refuses to commit rather than use the operator's git configuration,
-  naming the setting.
+- With an identity configured for the repository (`.engineering/commit-identity.conf`, read at the
+  revision the case opens on, or `--commit-identity`), every commit of a delivery and of a scenario
+  run carries it as author and committer, whatever the operator's git configuration and
+  environment say: a test.
+- With none configured, takt commits as its fixed `takt <takt@localhost>`, never the operator's
+  identity, and refuses at open any run whose commits leave the machine (a bot-route forge, a
+  scenario run's trial branch), naming the file and the flag (planner, 2026-10-19).
 - A scenario run against the scenario repository pushes through its identity ruleset.

@@ -5,10 +5,12 @@ kind: story
 status: active
 title: The token rule does not refuse a candidate whose tokens per request equal the baseline's
 summary: 0.2.2 refused on tokens with byte-identical prompts; baseline max below today's median
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T16:18:10Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T16:18:10Z", actor: "human:timo", revision: 3}

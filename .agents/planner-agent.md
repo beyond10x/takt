@@ -102,6 +102,9 @@ Each wait is one blocking wait on a file or a ref, not a stream of empty turns.
 
 Cadence, until takt drives the loop itself:
 
+- **RSI stories first** (AGENTS.md § Rules): a story filed from a self-improvement trial, turn or
+  review carries the tag `rsi` (`aep plan artifact new … --tag rsi`, or `set --tag rsi`); wave
+  selection takes every open `rsi` story before any other.
 - **Every wave carries at least one improvement turn**: a finding from a run or a review, filed
   with an `expected_before` predicate, delivered as its own unit and recorded as a
   `self.improvement` case when it merges.

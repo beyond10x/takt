@@ -5,10 +5,12 @@ kind: story
 status: active
 title: A delivery that ends green hands a turn its candidate with no operator step
 summary: the first real turn's candidate was cherry-picked by the operator
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T18:37:46Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T18:37:46Z", actor: "human:timo", revision: 3}
@@ -33,3 +35,6 @@ The turn's records hold, but the candidate was not handed over by takt.
 - A delivery under `--forge none` that reaches a green test step ends with a named stop that prints
   a candidate revision: the code commits replayed on the base, the take commit left out.
 - A self.improvement/1 turn opened on that revision passes its opening checks: a test, end to end.
+- The candidate's commits carry the repository's configured identity
+  (story:takt-commits-with-the-repositorys-identity); with none configured, no candidate is handed
+  over and the stop names the missing identity.

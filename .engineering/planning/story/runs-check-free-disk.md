@@ -5,10 +5,12 @@ kind: story
 status: active
 title: takt runs stop with a named refusal when free disk is low
 summary: ENOSPC at 64M free killed edits mid-step on 2026-10-19
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 3}
