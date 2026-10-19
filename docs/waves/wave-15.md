@@ -20,6 +20,8 @@ Skill: `aep:implementing` 0.23.1, wave mode. Stage: **running**. Approval: the p
 
 Lane A: A1, then A2 (the same five files). Lane B: B1, B2, B3 (the run loop, the `Stop` enum, the exit codes). Lane C in parallel. Lane D: D1, then D2, after B1. Lane E merges after B3.
 
+Between B1 and D2, a `story.delivery/1` run on takt itself stops at its seed with exit 7, naming `gate.green` and the missing gates document, as B1 intends: takt has no gates document until D2 lands. A trial in that window that stops so is not a regression.
+
 ## Left out
 
 `story:run-child-sweep-survives-setsid` (a real race, not a timing bound) stays out of D1.
