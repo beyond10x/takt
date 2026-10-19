@@ -23,7 +23,7 @@ scope:
   path: docs/metrics/README.md
 - confidence: cited
   path: ess/domains/takt.yaml
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-18T22:43:23Z", actor: "human:timo", revision: 3}
@@ -47,4 +47,4 @@ From the owner's ask of 2026-10-19 (several reporters over one trace, the journe
 
 ## Acceptance
 
-On trial 1's case `takt report` prints validators 107 s, model calls 130 s and other 5 s, the figures of `docs/runs/2026-10-18-trial-1-worktree.md`; on T-24's case the trace holds 18 operations, 2 `idle` operations of 30 s and 3 model calls with four token components; for both, the trace's token sum equals `takt scorecard`'s for the same case; no trace line contains a home-directory path.
+On trial 1's case `takt report` prints validators 107 s, model calls 130 s and other 5 s, the figures of `docs/runs/2026-10-18-trial-1-worktree.md`; on T-24's case the trace holds 18 step operations, 2 `idle` operations of 30 s, one stop and 3 model calls with four token components; for both, the trace's token sum equals `takt scorecard`'s for the same case; no trace line contains a home-directory path.

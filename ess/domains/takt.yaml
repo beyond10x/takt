@@ -1066,7 +1066,7 @@ types:
   # candidate whose scorecard was worse, kept as `<revision>.refused.json` so the same revision is
   # not judged again until it changes (the design's "no re-run of an unchanged candidate").
   # Decided 2026-10-18.
-  # read from: .engineering/planning/story/promotion.md:91
+  # read from: .engineering/planning/story/promotion.md:95
   # read from: .engineering/planning/design/recursive-self-improvement.md:130-138
   # read from: crates/takt/src/promotion.rs:102-111
   - name: takt.work.PromotionKind
@@ -1080,7 +1080,7 @@ types:
   # read from: .engineering/planning/design/recursive-self-improvement.md:37-43
   # UNMAPPED: whether `agent:<role>` must name one of the four (an enum) or may name any role (a
   # name, as declared); story:judge-guard's acceptance grants as `agent:planner`.
-  # read from: .engineering/planning/story/judge-guard.md:104-107
+  # read from: .engineering/planning/story/judge-guard.md:103-106
   - name: takt.work.AgentRole
     kind: newtype
     of: String
@@ -1092,9 +1092,9 @@ types:
   # read from: .engineering/planning/story/judge-guard.md:47
   # read from: .engineering/planning/story/judge-guard.md:70
   # read from: crates/takt-cli/src/main.rs:192-194
-  # UNMAPPED: whether a grant or a store record written before the type, free text such as
-  # `operator`, still reads once grants are typed. Open for the owner.
-  # read from: .engineering/planning/story/judge-guard.md:93
+  # Decided by the planner (story:judge-guard, D5): an untyped approver such as `operator`
+  # grants nothing at a judge-surface merge and reads as before on any other merge.
+  # read from: .engineering/planning/story/judge-guard.md:135
   - name: takt.work.Approver
     kind: union
     tag: kind
@@ -1354,7 +1354,7 @@ entities:
       # any other protocol. Declared ahead of the code (story:self-improvement-protocol), decided
       # 2026-10-18.
       # read from: protocols/self-improvement/1.yaml:28-32
-      # read from: .engineering/planning/story/self-improvement-protocol.md:52
+      # read from: .engineering/planning/story/self-improvement-protocol.md:55
       - name: finding
         type: Optional<takt.work.FindingKey>
     relations:
@@ -1379,7 +1379,7 @@ entities:
       # `finding` artifact is the finding the turn verifies. Decided 2026-10-18: an improvement
       # case references exactly one finding, and a finding may have many cases (a retried or
       # re-opened turn); many-to-one, the case side references.
-      # read from: .engineering/planning/story/self-improvement-protocol.md:50-52
+      # read from: .engineering/planning/story/self-improvement-protocol.md:53-55
       # read from: protocols/self-improvement/1.yaml:28-32
       - name: finding
         kind: references
@@ -2108,9 +2108,9 @@ entities:
   # root, checked again, hashed, recorded, then moved into place in one rename and checked once
   # more in place against the revision and the digest; `--dry-run` prints the verdict and the
   # record and writes nothing.
-  # read from: .engineering/planning/story/promotion.md:35-40
-  # read from: .engineering/planning/story/promotion.md:48-50
-  # read from: .engineering/planning/story/promotion.md:137
+  # read from: .engineering/planning/story/promotion.md:39-44
+  # read from: .engineering/planning/story/promotion.md:52-54
+  # read from: .engineering/planning/story/promotion.md:141
   # read from: crates/takt/src/promotion.rs:518-524
   # read from: crates/takt/src/promotion.rs:1044-1154
   # read from: crates/takt/src/promotion.rs:1387-1585
@@ -2144,9 +2144,9 @@ entities:
   # (`previous_sha256`, absent on the first), and a chain with a gap refuses naming it;
   # `--baseline-only` requires the installed binary to name the revision it records; and
   # `promoted_at` is read after the build.
-  # read from: .engineering/planning/story/promotion.md:88-91
-  # read from: .engineering/planning/story/promotion.md:112
-  # read from: .engineering/planning/story/promotion.md:148
+  # read from: .engineering/planning/story/promotion.md:92-95
+  # read from: .engineering/planning/story/promotion.md:116
+  # read from: .engineering/planning/story/promotion.md:152
   # read from: crates/takt/src/promotion.rs:226-229
   # read from: crates/takt/src/promotion.rs:276-287
   # read from: crates/takt/src/promotion.rs:297-418
@@ -2175,7 +2175,7 @@ entities:
   # One scorecard backs at most one promotion, decided 2026-10-18: one-to-one, the promotion
   # referencing its scorecard. A relation entry carries no bound on the scorecard's side, so the
   # bound is stated here.
-  # read from: .engineering/planning/story/promotion.md:86
+  # read from: .engineering/planning/story/promotion.md:90
   # The rule's parameters, trials and margin, are recorded with the scorecard
   # (takt.work.ScorecardRule) and copied into the record that read it.
   # read from: .engineering/planning/design/recursive-self-improvement.md:132-138
@@ -2416,7 +2416,7 @@ entities:
   # the owner's grant merges. Until story:judge-guard lands, a delegation is the owner's decision
   # recorded in the planning store. Declared ahead of the code (story:judge-guard).
   # read from: .engineering/planning/story/judge-guard.md:52-58
-  # read from: .engineering/planning/story/judge-guard.md:113
+  # read from: .engineering/planning/story/judge-guard.md:112
   - name: takt.work.DelegationRecord
     naming:
       summary: >-
@@ -2439,8 +2439,8 @@ entities:
   # and `CHANGELOG.md`; adding a path to it is a judge-surface change, and a candidate's own edit
   # of it counts for nothing. Declared ahead of the code (story:judge-guard).
   # read from: .engineering/planning/design/recursive-self-improvement.md:109-110
-  # read from: .engineering/planning/story/judge-guard.md:82
-  # read from: .engineering/planning/story/judge-guard.md:113
+  # read from: .engineering/planning/story/judge-guard.md:81
+  # read from: .engineering/planning/story/judge-guard.md:112
   # UNMAPPED: the file's layout and the pattern syntax its paths are matched with (`docs/**` is
   # a glob; which glob dialect is not named).
   - name: takt.work.JudgeAllowList
