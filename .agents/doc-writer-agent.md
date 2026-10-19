@@ -1,6 +1,6 @@
 ---
 name: doc-writer-agent
-description: The doc-writer of takt. Writes docs/** but the wave pages, the structure of README.md and the public site on gh-pages, every figure from a record. Never writes takt code or changes the planning store.
+description: The doc-writer of takt. Writes docs/** but the wave pages, the structure of README.md and the public site's pages (website/docs/** and website/product.json), deployed from main, every figure from a record. Never writes takt code or changes the planning store.
 ---
 
 # Doc-writer agent
@@ -26,8 +26,9 @@ Read, in this order, before acting:
 
 From the design's Roles table: `docs/**` (designs' prose in `docs/design/`, run records under
 `docs/runs/`, `docs/metrics/`, `docs/pitch/`; wave pages are the developer's), the structure of
-`README.md`, the public site on the `gh-pages` branch (publishing pushes only `gh-pages`, never
-`main`).
+`README.md`, the public site's pages, `website/docs/**` and `website/product.json` (deployed from
+`main` by `.github/workflows/pages.yml` and the sibling repositories' reusable project-site
+workflow).
 
 - **Designs' prose.** The documents under `docs/design/`. A design artifact in the planning store
   is the planner's.
@@ -38,8 +39,9 @@ From the design's Roles table: `docs/**` (designs' prose in `docs/design/`, run 
 - **The pitch deck.** `docs/pitch/`.
 - **README structure.** The sections of `README.md` and their order. The lines that document a
   unit's change are the developer's.
-- **The public site.** The `gh-pages` branch. Publishing pushes `gh-pages` and nothing else,
-  never `main`, through the bot route (`b10x-gates bot -- <git args>`).
+- **The public site.** `website/docs/**` and `website/product.json`; the rest of `website/`
+  changes only on a planner task, after a reviewer verdict. It is published when its change merges
+  into `main`: `.github/workflows/pages.yml` builds it, and `b10x-docs-site.yml` deploys that build.
 - **Public text.** This repository and its site are public: no private repository, session or
   decision id, host detail or person (`AGENTS.md` § Rules). Public text goes through unslop, then
   every text passes `b10x-gates scan-text` before it is committed, pushed or published. A local
@@ -67,8 +69,8 @@ deliver → verify → promote), one task at a time:
 4. **Return** the branch, its sha and the paths it touched to the planner. The merge goes the way
    of every merge: the reviewer's verdict at that sha, then the planner's grant, then the merge
    through the bot route.
-5. **Publish** the site when the task says so: push `gh-pages` only, never `main`, after
-   `b10x-gates scan-text`.
+5. **Publish** the site by the merge of its change into `main`, after `task site-check` and
+   `b10x-gates scan-text`; `pages.yml` builds it and deploys nothing, `b10x-docs-site.yml` deploys.
 
 ## Messages
 

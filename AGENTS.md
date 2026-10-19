@@ -26,6 +26,7 @@ every step validated by Canon over evidence. This file is for agents working on 
 | `ess/` | the ESS specification of takt's nouns and their relations |
 | `docs/design/` | design documents |
 | `docs/waves/`, `docs/runs/`, `docs/handoff/` | wave pages, recorded runs, handoff notes |
+| `website/` | the public site: Docusaurus pages in `website/docs/`, the landing in `product.json`, and `scripts/generate.mjs`, which writes the status, charts, CLI reference and protocol viewer from the records at build time |
 | `.engineering/planning` | the AEP planning store; change it only through `aep plan artifact` verbs |
 | `.engineering/cases` | in a repository takt runs on: the cases a run writes; never edited by hand (absent here until takt runs on this repository) |
 
@@ -34,6 +35,8 @@ every step validated by Canon over evidence. This file is for agents working on 
 ```
 task check                      # specification, citations, format, lint, tests
 task build
+task site-build                 # the documentation site into website/build
+task site-check                 # site-build, then every page at 1440 and 390 px in headless Chrome (website/.site-check/)
 aep plan artifact validate
 python3 -I scripts/check-citations --require-digests [dump | fix | accept <doc>:<line>...]   # each ess/ `read from:` against its needles and digest (ess/domains/<doc>.citations.tsv); accept records a digest after a person read the lines
 git add <paths> && b10x-gates bot -- commit -F <file>   # staging is plain git; the route refuses add
@@ -105,7 +108,7 @@ the profile; `.claude/agents/<role>-agent.md` is a relative symlink to it.
 | planner | the main agent and orchestrator; the planning store: stories, priorities within the owner's, wave order with the developer; filing findings; deciding what the developer escalates; granting merges on a reviewer verdict, judge surfaces only under a delegation on record naming the planner; dispatching the reviewer and the doc-writer; reporting to the owner | writes takt code; grants without a reviewer verdict on that exact sha; grants a widening change without a reviewer verdict or without naming it to the owner (the owner's standing grant of 2026-10-18 covers widening changes) | the main session |
 | developer | moving stories to active, waves and their pages under `docs/waves/`, implementation, merges through the bot route, building and installing promoted binaries; README lines that document its own unit's change | marks its own fix verified; edits `docs/**` other than its wave pages, the site or the deck | its own long-running session |
 | reviewer | a verdict with cited findings on each `[GRANT? takt]` diff at its exact sha; independent code reviews (correctness, security, usability); adversarial passes on request; trials, scenario runs and verification runs (`scripts/check-finding`, `takt scenario run`); measurement against the baseline | writes takt code; grants; files to the store (it returns findings to the planner, who files them); reviews its own work | started by the planner per task, from its profile, and resumed by name |
-| doc-writer | `docs/**` but the wave pages: designs' prose under `docs/design/`, run records under `docs/runs/`, `docs/metrics/`, `docs/pitch/`; the structure of `README.md`; the public site on the `gh-pages` branch, published by a push of `gh-pages` only, never of `main` | writes takt code; changes the planning store; states a figure no record holds | started by the planner per task, from its profile, and resumed by name |
+| doc-writer | `docs/**` but the wave pages: designs' prose under `docs/design/`, run records under `docs/runs/`, `docs/metrics/`, `docs/pitch/`; the structure of `README.md`; the public site's pages, `website/docs/**` and `website/product.json`, deployed from `main` by `.github/workflows/pages.yml` and the sibling repositories' reusable project-site workflow, while the rest of `website/` changes only on a planner task after a reviewer verdict | writes takt code; changes the planning store; states a figure no record holds | started by the planner per task, from its profile, and resumed by name |
 
 Until takt drives this flow itself, the planner is the main agent: it starts the reviewer and the
 doc-writer, and the developer reports to it.
