@@ -1804,6 +1804,49 @@ fn a_baseline_with_fewer_cases_than_the_trials_judges_nothing() {
     assert!(err.contains("the baseline has 3 cases"), "{err}");
 }
 
+/// A stop line a run stopped for want of free disk writes.
+const DISK_LOW: &str =
+    "DiskLow (/srv/tree: 1073741824 bytes (1.00 GiB) free, under 10737418240 bytes (10.00 GiB))";
+
+/// A baseline with a `DiskLow` trial judges nothing, though it holds the rule's five cases: the
+/// promotion is refused naming the trial, before anything is built.
+#[test]
+fn a_baseline_with_a_disk_low_trial_judges_nothing() {
+    let world = World::new(
+        "disk-low-baseline",
+        BASELINE_TOKENS,
+        [APPROVAL, APPROVAL, APPROVAL, APPROVAL, DISK_LOW],
+    );
+    world.record_baseline_of(&world.baseline);
+    let card = world.candidate_card("disk-low-baseline", BASELINE_TOKENS, FIVE_APPROVALS);
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("the baseline has DiskLow trials (scenario-1-trial-5)"),
+        "{err}"
+    );
+}
+
+/// A candidate set with a `DiskLow` trial is not recorded as a baseline, though it holds the
+/// rule's five cases.
+#[test]
+fn a_set_with_a_disk_low_trial_is_not_recorded_as_a_baseline() {
+    let world = World::new("disk-low-only", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.install_stand_in(&world.revision);
+    let card = world.candidate_card(
+        "disk-low-only",
+        BASELINE_TOKENS,
+        [APPROVAL, APPROVAL, APPROVAL, APPROVAL, DISK_LOW],
+    );
+    let (code, out, err) = world.promote(&card, &["--baseline-only"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("has DiskLow trials (scenario-1-trial-15)"),
+        "{err}"
+    );
+    assert!(world.records().is_empty(), "{:?}", world.records());
+}
+
 /// The build reads nothing outside the commit (probes N1, N2, N3, N4, N6, N7, N9 and V2a): a
 /// `RUSTC`, `RUSTC_WRAPPER`, `CARGO_ENCODED_RUSTFLAGS`, `CARGO_PROFILE_*` or `RUSTUP_TOOLCHAIN`
 /// in the caller's environment, a `.cargo/config.toml` in an ancestor of the build directory or

@@ -602,12 +602,23 @@ fn card(name: &str, low: bool) -> (Scratch, takt::scorecard::Scorecard) {
     (repo, card)
 }
 
-/// The planner's ruling: a `DiskLow` trial is no measurement, since disk fullness measures the
-/// machine, not takt. The scorecard leaves it out of its scenario, so on the candidate's side
-/// the scenario is short of the rule's trials and gets no verdict ("too few cases"), not a
-/// worse rank.
+/// `candidate` against `saved`: `worse <n>`, or `no verdict: <the error>`, and the printed text.
+fn verdict(
+    candidate: &takt::scorecard::Scorecard,
+    saved: &takt::scorecard::Scorecard,
+) -> (String, String) {
+    let mut out = Vec::new();
+    let verdict = match candidate.against(saved, &mut out) {
+        Ok(worse) => format!("worse {worse}"),
+        Err(error) => format!("no verdict: {error:#}"),
+    };
+    (verdict, String::from_utf8(out).expect("utf-8"))
+}
+
+/// The planner's ruling: a `DiskLow` trial on the candidate's side gives its scenario no verdict,
+/// whatever the count, naming the trial; it is no worse rank and no case dropped either.
 #[test]
-fn a_disk_low_trial_on_the_candidate_side_is_too_few_cases_not_worse() {
+fn a_disk_low_trial_on_the_candidate_side_gives_no_verdict_naming_it() {
     let (_saved_repo, saved) = card("saved-fine", false);
     let (_repo, candidate) = card("candidate-low", true);
     let low = candidate
@@ -615,50 +626,182 @@ fn a_disk_low_trial_on_the_candidate_side_is_too_few_cases_not_worse() {
         .into_iter()
         .find(|case| case.case == "scenario-s-trial-1")
         .expect("the trial is listed");
-    assert_eq!(low.scenario, None, "{low:?}");
-    let mut out = Vec::new();
-    let compared = candidate.against(&saved, &mut out);
-    let text = String::from_utf8(out).expect("utf-8");
+    assert_eq!(low.scenario.as_deref(), Some("s"), "{low:?}");
+    let (verdict, text) = verdict(&candidate, &saved);
     assert!(
-        text.contains("scenario s  too few cases (1 of 2)"),
+        text.contains(
+            "scenario s  no verdict: DiskLow trials (the candidate's scenario-s-trial-1)"
+        ),
         "{text}"
     );
-    let error = compared.expect_err("no verdict on too few cases");
-    assert!(format!("{error:#}").contains("too few cases"), "{error:#}");
+    assert!(verdict.starts_with("no verdict: "), "{verdict}");
+    assert!(
+        verdict.contains("scenario s (the candidate's scenario-s-trial-1)")
+            && verdict.contains("not topped up"),
+        "{verdict}"
+    );
 }
 
-/// The same on the saved side: a baseline whose trial stopped `DiskLow` is short of the rule's
-/// trials and judges nothing, as a baseline with too few cases does.
+/// The same on the saved side: a baseline with a `DiskLow` trial judges nothing in that
+/// scenario.
 #[test]
-fn a_disk_low_trial_on_the_saved_side_is_too_few_cases_there() {
+fn a_disk_low_trial_on_the_saved_side_gives_no_verdict_naming_it() {
     let (_saved_repo, saved) = card("saved-low", true);
     let (_repo, candidate) = card("candidate-fine", false);
-    let mut out = Vec::new();
-    let compared = candidate.against(&saved, &mut out);
-    let text = String::from_utf8(out).expect("utf-8");
+    let (verdict, text) = verdict(&candidate, &saved);
     assert!(
-        text.contains("scenario s  too few cases on the saved side (1 of 2)"),
+        text.contains(
+            "scenario s  no verdict: DiskLow trials (the saved side's scenario-s-trial-1)"
+        ),
         "{text}"
     );
-    assert!(compared.is_err(), "{text}");
+    assert!(verdict.starts_with("no verdict: "), "{verdict}");
 }
 
-/// A `DiskLow` trial resumed on a disk with room, and completed, is a measurement again: it is
-/// the trial's last run, not its first, that says whether the machine ended it.
+/// A run of scenario `s`'s trial `n` that stopped `stop`, its held-out check passed or not.
+fn trial_row(n: usize, stop: &str, passed: bool) -> Row {
+    Row {
+        case: format!("scenario-s-trial-{n}"),
+        scenario: Some("s".to_owned()),
+        outcome: if passed {
+            stop.to_owned()
+        } else {
+            takt::scorecard::FAILED.to_owned()
+        },
+        stop: stop.to_owned(),
+        held_out: Some(HeldOut {
+            passed,
+            result: if passed { "PASS" } else { "FAIL: x" }.to_owned(),
+        }),
+        steps: 1,
+        tokens: 100,
+        refusals: 0,
+        no_progress: 0,
+        errors: 0,
+        wall_ms: 0,
+        saturated: false,
+        binary: None,
+        opened_binary: None,
+        completed: Some(stop == "accepted"),
+    }
+}
+
+/// A scorecard of `rows` under a rule of three trials and a margin of 0.
+fn rows_card(rows: Vec<Row>) -> takt::scorecard::Scorecard {
+    takt::scorecard::Scorecard {
+        format: takt::scorecard::FORMAT.to_owned(),
+        revision: None,
+        named_by: None,
+        metrics: takt::scorecard::METRICS
+            .iter()
+            .map(|(metric, version)| ((*metric).to_owned(), *version))
+            .collect(),
+        rule: takt::scorecard::Rule {
+            trials: 3,
+            margin: 0,
+        },
+        rows,
+        no_record: Vec::new(),
+        unstated: std::collections::BTreeMap::new(),
+    }
+}
+
+/// Five accepted trials, the baseline every case below is judged against.
+fn five_accepted() -> takt::scorecard::Scorecard {
+    rows_card((0..5).map(|n| trial_row(n, "accepted", true)).collect())
+}
+
+/// A case any run of which stopped `DiskLow` is a `DiskLow` trial, though a later run completed
+/// it: the case's runs, not its last, say whether the machine ended one of them.
 #[test]
-fn a_disk_low_trial_completed_later_counts_in_its_scenario() {
-    let repo = scratch("resumed-trial");
-    trial(
-        &repo,
-        "scenario-s-trial-0",
-        &[(DISK_LOW, false), ("Completed (accepted)", true)],
-        "PASS",
+fn a_trial_with_any_disk_low_run_is_a_disk_low_trial_though_completed_later() {
+    let saved = five_accepted();
+    let mut rows: Vec<Row> = (0..3).map(|n| trial_row(n, "accepted", true)).collect();
+    rows.push(trial_row(3, "DiskLow", false));
+    rows.push(trial_row(3, "accepted", true));
+    let (verdict, text) = verdict(&rows_card(rows), &saved);
+    assert!(verdict.starts_with("no verdict: "), "{verdict}\n{text}");
+    assert!(
+        verdict.contains("the candidate's scenario-s-trial-3"),
+        "{verdict}"
     );
-    let cases = takt::scorecard::Scorecard::read(&repo)
-        .expect("the scorecard reads")
-        .cases();
-    assert_eq!(cases[0].scenario.as_deref(), Some("s"), "{cases:?}");
-    assert_eq!(cases[0].outcome, "accepted", "{cases:?}");
+}
+
+/// Surplus trials: five, two of which failed. Honestly stopped they are worse; stopped
+/// `DiskLow`, the scenario gets no verdict naming both, never the verdict of the three good ones.
+#[test]
+fn surplus_trials_stopping_disk_low_give_no_verdict_rather_than_drop_failures() {
+    let saved = five_accepted();
+    let honest = rows_card(
+        (0..5)
+            .map(|n| match n {
+                0..3 => trial_row(n, "accepted", true),
+                _ => trial_row(n, "NoProgress", false),
+            })
+            .collect(),
+    );
+    assert_eq!(verdict(&honest, &saved).0, "worse 1", "the premise");
+    let dropped = rows_card(
+        (0..5)
+            .map(|n| match n {
+                0..3 => trial_row(n, "accepted", true),
+                _ => trial_row(n, "DiskLow", false),
+            })
+            .collect(),
+    );
+    let (verdict, text) = verdict(&dropped, &saved);
+    assert!(verdict.starts_with("no verdict: "), "{verdict}\n{text}");
+    assert!(
+        verdict.contains("the candidate's scenario-s-trial-3, scenario-s-trial-4"),
+        "{verdict}"
+    );
+}
+
+/// Exactly the rule's trials, one stopped `DiskLow`: no verdict; topping the set up with more
+/// good trials does not clear it.
+#[test]
+fn a_disk_low_trial_is_not_cleared_by_topping_up() {
+    let saved = five_accepted();
+    let mut rows: Vec<Row> = (0..3)
+        .map(|n| match n {
+            0..2 => trial_row(n, "accepted", true),
+            _ => trial_row(n, "DiskLow", false),
+        })
+        .collect();
+    let (exact, text) = verdict(&rows_card(rows.clone()), &saved);
+    assert!(exact.starts_with("no verdict: "), "{exact}\n{text}");
+    assert!(!exact.contains("too few cases"), "{exact}");
+    rows.extend((3..5).map(|n| trial_row(n, "accepted", true)));
+    let (topped, text) = verdict(&rows_card(rows), &saved);
+    assert!(topped.starts_with("no verdict: "), "{topped}\n{text}");
+    assert!(
+        topped.contains("the candidate's scenario-s-trial-2"),
+        "{topped}"
+    );
+}
+
+/// A failed trial counted, then resumed into a `DiskLow` stop: the case stays in its scenario
+/// and the scenario gets no verdict; the resume does not launder the failure.
+#[test]
+fn a_resume_that_stops_disk_low_does_not_drop_a_counted_failure() {
+    let saved = five_accepted();
+    let mut rows: Vec<Row> = (0..3).map(|n| trial_row(n, "accepted", true)).collect();
+    rows.push(trial_row(3, "NoProgress", false));
+    rows.push(trial_row(3, "DiskLow", false));
+    rows.push(trial_row(4, "accepted", true));
+    let candidate = rows_card(rows);
+    let resumed = candidate
+        .cases()
+        .into_iter()
+        .find(|case| case.case == "scenario-s-trial-3")
+        .expect("the trial is listed");
+    assert_eq!(resumed.scenario.as_deref(), Some("s"), "{resumed:?}");
+    let (verdict, text) = verdict(&candidate, &saved);
+    assert!(verdict.starts_with("no verdict: "), "{verdict}\n{text}");
+    assert!(
+        verdict.contains("the candidate's scenario-s-trial-3"),
+        "{verdict}"
+    );
 }
 
 /// The scorecard counts a `DiskLow` run as no completion.

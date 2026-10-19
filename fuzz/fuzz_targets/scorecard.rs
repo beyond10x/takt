@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use libfuzzer_sys::fuzz_target;
 use takt::run::STOP_KINDS;
-use takt::scorecard::{FORMAT, METRICS, Row, Rule, Scorecard, rank};
+use takt::scorecard::{DISK_LOW, FORMAT, METRICS, Row, Rule, Scorecard, rank};
 
 /// Two outcomes a `Completed` stop names, every other stop's kind, an error and no stop.
 const OUTCOMES: [&str; STOP_KINDS.len() + 4] = {
@@ -106,15 +106,16 @@ fuzz_target!(|data: &[u8]| {
         }
     }
     let (saved, candidate) = (card(&saved, margin), card(&candidate, margin));
-    // The cases a side's scenario counts: a `DiskLow` trial that never completed is no
-    // measurement and belongs to no scenario.
-    let measured = |card: &Scorecard| {
-        card.cases()
-            .iter()
-            .filter(|case| case.scenario.is_some())
-            .count()
-    };
-    let short = measured(&saved) == 0 || measured(&candidate) == 0;
+    // A `DiskLow` trial on either side gives the scenario no verdict, whatever the count.
+    if !saved.disk_low().is_empty() || !candidate.disk_low().is_empty() {
+        let mut out = Vec::new();
+        let error = candidate
+            .against(&saved, &mut out)
+            .expect_err("a scenario with a DiskLow trial gave a verdict");
+        assert!(error.to_string().contains(DISK_LOW), "{error:#}");
+        return;
+    }
+    let short = saved.rows.is_empty() || candidate.rows.is_empty();
     // Fewer cases on a side than the rule's one trial gives no verdict, and says so; with no
     // case on the saved side there is no scenario to judge and nothing is worse.
     if short {
@@ -122,7 +123,7 @@ fuzz_target!(|data: &[u8]| {
         match candidate.against(&saved, &mut out) {
             Err(error) => assert!(error.to_string().contains("too few cases"), "{error:#}"),
             Ok(worse) => assert!(
-                measured(&saved) == 0 && worse == 0,
+                saved.rows.is_empty() && worse == 0,
                 "a side with no case gave a verdict: {worse}"
             ),
         }
@@ -139,6 +140,25 @@ fuzz_target!(|data: &[u8]| {
         assert!(min <= median && median <= max, "{line}");
     }
     assert_eq!(against(&candidate, &candidate).0, 0);
+    // Turning any counted case into `DiskLow`, on either side, never improves the verdict: it
+    // keeps it or gives none.
+    let lowered = |card: &Scorecard| {
+        let mut card = card.clone();
+        let at = usize::from(*first) % card.rows.len();
+        card.rows[at].stop = DISK_LOW.to_owned();
+        card.rows[at].outcome = DISK_LOW.to_owned();
+        card.rows[at].completed = Some(false);
+        card
+    };
+    for (one, other) in [
+        (lowered(&candidate), saved.clone()),
+        (candidate.clone(), lowered(&saved)),
+    ] {
+        let mut out = Vec::new();
+        if let Ok(after) = one.against(&other, &mut out) {
+            assert!(after >= worse, "a DiskLow trial improved the verdict: {after} < {worse}");
+        }
+    }
     let cases: Vec<(&str, u64, Option<bool>)> = candidate
         .rows
         .iter()
@@ -154,7 +174,7 @@ fuzz_target!(|data: &[u8]| {
         let most = cases.iter().map(|(_, tokens, _)| *tokens).max().unwrap_or(0);
         let outcome = OUTCOMES
             .iter()
-            .find(|outcome| rank(outcome) <= lowest)
+            .find(|outcome| rank(outcome) <= lowest && **outcome != DISK_LOW)
             .expect("some outcome ranks lowest");
         let mut more = cases.clone();
         more.push((outcome, most.saturating_add(u64::from(*first)), completed(*first)));
