@@ -74,9 +74,12 @@
 # every process it leaves is killed when it ends; bubblewrap's status reaches the script on a
 # pipe, so no process of an earlier check reaches this one's result. It keeps the caller's
 # user, and a socket the host holds outside the paths above stays in sight where the user may
-# open it; without bubblewrap no predicate runs. The script's own git reads and writes name
-# their repository by path, so a `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE` of the caller
-# (a hook's environment) is unset before any of them.
+# open it; without bubblewrap no predicate runs. Neither bubblewrap, the build's nor the
+# command's, inherits a descriptor above 2 the caller left open: each is closed first, so no
+# file the caller holds open reaches the revision's code through `/proc/self/fd`. The
+# script's own git reads and writes name their repository by path, so a `GIT_DIR`,
+# `GIT_WORK_TREE` or `GIT_INDEX_FILE` of the caller (a hook's environment) is unset before any
+# of them.
 # The cache is `$XDG_CACHE_HOME/takt/check-finding`, `~/.cache/takt/check-finding` without it:
 # `builds/<sha>/takt` and `builds/<sha>/revision`, and one directory per check under `runs/`
 # holding the finding, the clone, the predicate's home, the command's output and the result,
@@ -113,6 +116,18 @@ usage() {
 fail() {
     say "$*; no result"
     exit 1
+}
+# Closes every descriptor above 2 of the shell it runs in, to be called in the subshell that
+# then starts bubblewrap: a descriptor the caller left open passes to every process bubblewrap
+# runs, and through `/proc/self/fd/N` or `/dev/fd/N` it reads the file it names, whatever the
+# sandbox hides of that file's path.
+close_inherited() {
+    local fd
+    for fd in /proc/self/fd/*; do
+        fd=${fd##*/}
+        [[ $fd =~ ^[0-9]+$ ]] && ((fd > 2)) || continue
+        { exec {fd}<&-; } 2>/dev/null || true
+    done
 }
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
@@ -343,9 +358,9 @@ if [[ ! -x $takt || ! -f $root/builds/$sha/revision ]]; then
         fail "$toolchain/bin/rustc -vV names no host"
     [[ $host =~ ^[A-Za-z0-9_.-]+$ ]] || fail "$toolchain/bin/rustc names the host \`$host\`, no target triple"
     say "building takt at ${sha:0:12} in $work for $host, confined in bwrap"
-    "${sandbox[@]}" --chdir /work -- /toolchain/bin/cargo build --locked --offline \
-        --config "build.target=\"$host\"" --message-format=json \
-        -p b10x-takt-cli --bin takt --target-dir /target </dev/null >"$work/messages" ||
+    (close_inherited && exec "${sandbox[@]}" --chdir /work -- /toolchain/bin/cargo build \
+        --locked --offline --config "build.target=\"$host\"" --message-format=json \
+        -p b10x-takt-cli --bin takt --target-dir /target </dev/null >"$work/messages") ||
         fail "takt does not build at ${sha:0:12}, confined in bwrap"
     built=()
     while IFS= read -r line; do
@@ -475,7 +490,7 @@ sandbox+=(--chdir "$clone")
 # is that status; else bwrap did not run the command to its end, and there is no result. N
 # says how `sh -c` ended, nothing of what the command did on the way.
 set +e
-reported=$(cd "$clone" && env -i "${environment[@]}" timeout --kill-after=10 "$limit" \
+reported=$(close_inherited && cd "$clone" && env -i "${environment[@]}" timeout --kill-after=10 "$limit" \
     "${sandbox[@]}" -- sh -c "$command" 3>&1 >"$run/output" 2>&1 </dev/null)
 status=$?
 set -e

@@ -736,6 +736,32 @@ fn the_predicate_is_not_reproduced_with_a_takt_built_from_the_revision_that_fixe
     );
 }
 
+/// Runs `check-finding` as [`World::check`] does, with `held` open for reading on descriptor 7
+/// of its process, as a caller that leaves a descriptor open would.
+fn check_holding(
+    world: &World,
+    finding: &str,
+    revision: &str,
+    env: &[(&str, &str)],
+    held: &Path,
+) -> Output {
+    Command::new("bash")
+        .args(["-c", "exec 7<\"$1\" && shift && exec \"$@\"", "bash"])
+        .arg(held)
+        .arg(Path::new(SCRIPTS).join("check-finding"))
+        .args([
+            "--scenarios",
+            world.scenarios.to_str().expect("UTF-8"),
+            finding,
+            revision,
+        ])
+        .current_dir(&world.takt)
+        .env("XDG_CACHE_HOME", world.cache())
+        .envs(env.iter().copied())
+        .output()
+        .expect("check-finding runs")
+}
+
 /// The run directory a check names on standard error (`check-finding: record: <dir>`).
 fn record(output: &Output) -> PathBuf {
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -876,8 +902,9 @@ fn a_command_that_does_not_end_healthy_or_with_the_defect_gives_error_naming_its
 
 /// The `build.rs` of a revision that probes its build's confinement, the paths it tries filled
 /// in by [`probe_build`]: it writes `$HOME/canary`, writes and reads under the caller's home by
-/// its path, overwrites another revision's kept binary and plants a file beside it, and copies
-/// its whole environment; each attempt and the environment go to `probe.txt` in its `OUT_DIR`,
+/// its path, overwrites another revision's kept binary and plants a file beside it, looks for
+/// the caller's secret in a descriptor it holds, and copies its whole environment; each
+/// attempt and the environment go to `probe.txt` in its `OUT_DIR`,
 /// which the binary prints for `--probe`. Every attempt is recorded, none fails the build.
 const PROBE_BUILD: &str = r#"use std::fmt::Write as _;
 
@@ -886,6 +913,20 @@ fn attempt(what: &str, result: std::io::Result<()>, out: &mut String) {
         Ok(()) => writeln!(out, "{what}: done").unwrap(),
         Err(error) => writeln!(out, "{what}: refused: {error}").unwrap(),
     }
+}
+
+/// Done when a descriptor this process holds is a regular file naming the planted secret.
+fn held_secret() -> std::io::Result<()> {
+    for entry in std::fs::read_dir("/proc/self/fd")? {
+        let path = entry?.path();
+        let regular = std::fs::metadata(&path).is_ok_and(|meta| meta.is_file());
+        if regular
+            && std::fs::read_to_string(&path).is_ok_and(|text| text.contains("PLANTED-HOME-SECRET"))
+        {
+            return Ok(());
+        }
+    }
+    Err(std::io::Error::other("no descriptor held names the secret"))
 }
 
 fn main() {
@@ -900,6 +941,7 @@ fn main() {
     );
     attempt("other-build", std::fs::write("@OTHER@/takt", "build.rs\n"), &mut out);
     attempt("other-build-planted", std::fs::write("@OTHER@/planted", "build.rs\n"), &mut out);
+    attempt("inherited-fd", held_secret(), &mut out);
     for (name, value) in std::env::vars() {
         writeln!(out, "env {name}={value:?}").unwrap();
     }
@@ -963,7 +1005,8 @@ fn allowed_in_a_build(name: &str) -> bool {
 /// A revision whose `build.rs` writes `$HOME/canary`, writes and reads under the caller's home,
 /// overwrites another revision's kept binary and copies its environment still builds, and
 /// leaves no canary in the caller's home and the other revision's build as it was; its
-/// environment holds the allow-list only, nothing the caller set, and not the caller's home.
+/// environment holds the allow-list only, nothing the caller set, and not the caller's home;
+/// and the secret file the caller left open on a descriptor reaches it on none.
 #[test]
 fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes_only_its_own() {
     let world = world("confined");
@@ -1007,7 +1050,8 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
     );
     assert!(filed.status.success(), "{}", shown(&filed));
     let shared = world.outer.0.join("shared-target");
-    let output = world.check(
+    let output = check_holding(
+        &world,
         "story:probe",
         &probe,
         &[
@@ -1016,6 +1060,7 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
             ("GITHUB_TOKEN", "PLANTED-CREDENTIAL"),
             ("CARGO_TARGET_DIR", shared.to_str().expect("UTF-8")),
         ],
+        &home.join(".secret"),
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
@@ -1070,6 +1115,7 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
         "callers-home-secret",
         "other-build",
         "other-build-planted",
+        "inherited-fd",
     ] {
         assert!(
             printed
@@ -1827,6 +1873,112 @@ fn the_predicate_sees_no_file_of_the_users_passwd_home() {
     assert!(
         visible.is_empty(),
         "files of the user's passwd home are in the command's sight: {visible:?}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&output)
+    );
+}
+
+/// The passwd home is hidden beside HOME, not only when it holds HOME: the user's passwd entry
+/// is read from a `getent` first on PATH that names a home of the scratch's, beside the
+/// HOME the check is given, so the case reaches that branch whether or not the scratch lies
+/// under the user's real passwd home. A file planted there is not in the command's sight.
+#[test]
+fn a_passwd_home_beside_home_is_hidden_as_well() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let world = world("passwd-beside");
+    let (home, env) = callers_home(&world);
+    let passwd_home = world.outer.0.join("passwd-home");
+    write(
+        &passwd_home.join(".ssh/id_planted"),
+        "PLANTED-PASSWD-HOME\n",
+    );
+    assert!(
+        !home.starts_with(&passwd_home) && !passwd_home.starts_with(&home),
+        "the two homes lie beside each other"
+    );
+    let bin = world.outer.0.join("bin-getent");
+    write(
+        &bin.join("getent"),
+        &format!(
+            "#!/bin/sh\n[ \"$1\" = passwd ] || exit 2\nprintf 'u:x:%s:%s::%s:/bin/sh\\n' \"$(id -u)\" \"$(id -g)\" '{}'\n",
+            passwd_home.display()
+        ),
+    );
+    fs::set_permissions(bin.join("getent"), fs::Permissions::from_mode(0o755)).expect("executable");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").expect("a PATH")
+    );
+    let mut env: Vec<(&str, &str)> = env
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
+    env.push(("PATH", &path));
+    let filed = file(
+        &world.takt,
+        "passwd-beside",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; cat '{}' 2>/dev/null; echo probe-ran\nexit: 0\noutput: probe-ran\nsource: {SOURCE}\n",
+            passwd_home.join(".ssh/id_planted").display()
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = world.check("story:passwd-beside", &world.defect, &env);
+    let ran = fs::read_to_string(record(&output).join("output")).unwrap_or_default();
+    assert!(
+        !ran.contains("PLANTED-PASSWD-HOME"),
+        "the command read a file of the passwd home beside HOME:\n{ran}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&output)
+    );
+}
+
+/// The review's last finding: a descriptor the caller left open passes to no process the
+/// check runs under bubblewrap. A caller holding a file of its hidden home open on descriptor
+/// 7 gives the command nothing of it, through `/proc/self/fd/7` or `/dev/fd/7`.
+#[test]
+fn the_predicate_reads_no_descriptor_the_caller_left_open() {
+    let world = world("held-fd");
+    let (home, env) = callers_home(&world);
+    let env: Vec<(&str, &str)> = env
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
+    let filed = file(
+        &world.takt,
+        "held-fd",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; for f in /proc/self/fd/7 /dev/fd/7; do cat \"$f\" 2>/dev/null | grep -q PLANTED-HOME-SECRET && echo \"read $f\"; done; echo probe-ran\nexit: 0\noutput: probe-ran\nsource: {SOURCE}\n"
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = check_holding(
+        &world,
+        "story:held-fd",
+        &world.defect,
+        &env,
+        &home.join(".secret"),
+    );
+    let ran = fs::read_to_string(record(&output).join("output")).unwrap_or_default();
+    let read: Vec<_> = ran
+        .lines()
+        .filter(|line| line.starts_with("read "))
+        .collect();
+    assert!(
+        read.is_empty(),
+        "the command read the caller's open descriptor: {read:?}"
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
