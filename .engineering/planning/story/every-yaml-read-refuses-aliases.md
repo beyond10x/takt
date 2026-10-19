@@ -7,6 +7,7 @@ title: Every YAML file takt reads refuses anchors and aliases
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
+- depends_on: story:judge-guard
 revision: 1
 ---
 ## Outcome
