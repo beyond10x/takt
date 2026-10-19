@@ -184,7 +184,7 @@ impl Harness for FailsEarly {
     }
 }
 
-/// A harness that fails for a reason of its own (not logged in) 100 ms before the budget is
+/// A harness that fails for a reason of its own (not logged in) half the budget before it is
 /// spent, its step having changed 20000 files, is reported as the hour budget: the run checks
 /// `time_left() == 0` after the sweep, the put-back of the git directory and the snapshots
 /// (run.rs:3939), not whether the budget is what ended the step. Decision 1 of the brief: a
@@ -200,9 +200,7 @@ fn a_harness_that_fails_by_itself_before_the_budget_ends_is_reported_as_the_hour
     let mut run = Run::open(&tree, options("adv-early"), &harness, &validators).expect("opens");
     let after_open = Instant::now();
     let run_end = after_open + budget();
-    harness
-        .fail_at
-        .set(Some(run_end - Duration::from_millis(100)));
+    harness.fail_at.set(Some(run_end - budget() / 2));
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out);
