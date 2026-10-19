@@ -1208,3 +1208,101 @@ fn a_panic_after_a_failed_undo_records_nothing_through_an_engineering_link() {
         "the hold beside the tree was removed through the link"
     );
 }
+
+/// The copy of a case beside the tree is as the step left it: no `error` and no `stop` line
+/// appended to its event log, its hold still there.
+fn assert_copy_untouched(copy: &Path, text: &str) {
+    let events = fs::read_to_string(copy.join("events.jsonl")).unwrap_or_default();
+    assert!(
+        !events.contains("\"error\"") && !events.contains("\"stop\""),
+        "a line was written through the link into {}:\n{events}\n{text}",
+        copy.join("events.jsonl").display()
+    );
+    assert!(
+        copy.join("run.lock").exists(),
+        "the hold in the copy {} was removed through the link\n{text}",
+        copy.display()
+    );
+}
+
+/// What a step runs to leave its case's own directory a link to a copy beside the tree that the
+/// undo cannot remove (`.engineering/cases` made read-only, the reset failing).
+fn case_dir_link(id: &str) -> String {
+    format!(
+        "cp -r .engineering/cases/{id} ../c && rm ../c/case.yaml && rm -rf .engineering/cases/{id} && ln -s ../../../c .engineering/cases/{id} && chmod 555 .engineering/cases && {RESET_FAILS}"
+    )
+}
+
+/// `.engineering` real, the case's own directory left a link to a copy beside the tree by a
+/// failed undo: nothing is recorded or let go through the link, and the error names it.
+#[test]
+fn a_case_directory_link_after_a_failed_undo_records_nothing() {
+    let id = "case-dir-link";
+    let scratch = repository(id, &[("src/a", "a\n")]);
+    let (stop, text, _) = step(&scratch, id, case_dir_link(id));
+    assert!(
+        fs::symlink_metadata(scratch.tree().join(".engineering/cases").join(id))
+            .is_ok_and(|meta| meta.file_type().is_symlink()),
+        "precondition: the case directory is still a link after the failed undo\n{text}"
+    );
+    assert_copy_untouched(&scratch.0.join("c"), &text);
+    let Err(error) = stop else {
+        panic!("the run ends on the error\n{text}");
+    };
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("nothing of the run was recorded")
+            && error.contains(&format!(".engineering/cases/{id} is a link to ../../../c")),
+        "the error names the case directory's link: {error}"
+    );
+}
+
+/// `.engineering` real, `.engineering/cases` left a link to a copy beside the tree by a failed
+/// undo (`.engineering` made read-only, the reset failing): nothing is recorded or let go
+/// through the link, and the error names it.
+#[test]
+fn a_cases_directory_link_after_a_failed_undo_records_nothing() {
+    let id = "cases-dir-link";
+    let scratch = repository(id, &[("src/a", "a\n")]);
+    let (stop, text, _) = step(
+        &scratch,
+        id,
+        format!(
+            "cp -r .engineering/cases ../x && rm ../x/{id}/case.yaml && rm -rf .engineering/cases && ln -s ../../x .engineering/cases && chmod 555 .engineering && {RESET_FAILS}"
+        ),
+    );
+    assert!(
+        fs::symlink_metadata(scratch.tree().join(".engineering/cases"))
+            .is_ok_and(|meta| meta.file_type().is_symlink()),
+        "precondition: the cases directory is still a link after the failed undo\n{text}"
+    );
+    assert_copy_untouched(&scratch.0.join("x").join(id), &text);
+    let Err(error) = stop else {
+        panic!("the run ends on the error\n{text}");
+    };
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("nothing of the run was recorded")
+            && error.contains(".engineering/cases is a link to ../../x"),
+        "the error names the cases link: {error}"
+    );
+}
+
+/// The panic path with the case's own directory left a link by a failed undo: the panic goes
+/// on and nothing is recorded or let go through the link.
+#[test]
+fn a_panic_with_a_case_directory_link_records_nothing() {
+    let id = "panic-case-dir";
+    let scratch = repository(id, &[("src/a", "a\n")]);
+    let harness = PanicsAfter(case_dir_link(id));
+    let validators: Vec<Box<dyn Validator>> =
+        vec![Box::new(TestsRun::new("true").expect("a command"))];
+    let mut run =
+        Run::open(&scratch.tree(), options(id, 4), &harness, &validators).expect("the case opens");
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut out = Vec::new();
+        let _ = run.run(&mut out);
+    }));
+    assert!(panicked.is_err(), "the harness's panic goes on");
+    assert_copy_untouched(&scratch.0.join("c"), "the run panicked");
+}

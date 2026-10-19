@@ -437,7 +437,8 @@ types:
   # the store's; a wait on the forge; an error;
   # a line skipped as cut short; and the stop. A line about a judgement step is written once its
   # change is kept or put back, so putting the case directory back never takes a line with it.
-  # Every run's lines end on its `stop`, or on an `error` when the run ends on one.
+  # Every run's lines end on its `stop`, or on an `error` when the run ends on one; but a run
+  # that finds a link on the way to its case directory writes neither (`takt.work.Run`).
   # read from: crates/takt/src/events.rs:59-169
   # read from: crates/takt/src/run.rs:1-13
   # read from: crates/takt/src/run.rs:3595-3666
@@ -684,7 +685,8 @@ types:
         type: Decimal
 
   # An error as it was reported: the one a run ended on (a panic in the loop among them, recorded
-  # before the panic goes on and the case is let go), or one met while recording an accepted
+  # before the panic goes on and the case is let go, unless a link stands on the way to the case
+  # directory, when neither is done: `takt.work.Run`), or one met while recording an accepted
   # case in the store (an `events.jsonl` line that does not read, an `out` that fails), after
   # which the run keeps its stop and records it next.
   # read from: crates/takt/src/run.rs:3611-3637
@@ -2137,7 +2139,8 @@ entities:
   # read from: crates/takt/src/run.rs:4037-5191
   # A run holds its case for its whole duration: `run.lock`, holding the instant it took hold, is
   # created with `create_new` at start, so of two that try at once exactly one holds, and removed
-  # at every stop, on error and on a panic, the panic recorded first. A resume holds the case
+  # at every stop, on error and on a panic, the panic recorded first, unless a link stands on the
+  # way to the case directory, when it stays (below). A resume holds the case
   # while it checks out the branch and moves the revision, and a grant while it is checked,
   # recorded and written. A run, a resume or `takt approve` on a held case is refused naming the
   # lock; a lock a holder that crashed left behind is removed by hand.
@@ -2148,7 +2151,8 @@ entities:
   # Nothing under the case directory is written, appended to or removed while a part of the way
   # from the tree down to it is not a real directory, each read with `symlink_metadata` before
   # the hold, before the stop and before the error line: a run that finds a link there (one a
-  # step left at `.engineering` when its undo failed) records nothing and keeps its hold, says on
+  # step left at `.engineering`, at the cases directory or at the case's own directory when its
+  # undo failed) records nothing and keeps its hold, says on
   # standard error what it took (its steps and tokens) and why nothing was recorded, and ends on
   # the error.
   # read from: crates/takt/src/case.rs:1805-1837
@@ -2287,7 +2291,8 @@ entities:
       # One run, many lines of its case's `events.jsonl`: the run appends one per event, beside
       # each line it prints, and rewrites none; a resumed run appends to the file of the runs
       # before it, so the file holds every run of the case in order, each opening with `opened`
-      # and ending with `stop` or `error`.
+      # and ending with `stop` or `error`; a run that finds a link on the way to its case
+      # directory appends neither (`takt.work.Run`).
       # read from: crates/takt/src/events.rs:1-11
       # read from: crates/takt/src/events.rs:201-232
       # read from: crates/takt/src/run.rs:3595-3666
