@@ -266,7 +266,7 @@ types:
   # `takt.gate-run`). Carries
   # canon.protocol.Principal (protocol.yaml:241), an opaque principal Canon records as given.
   # read from: crates/takt/src/validator.rs:47-48
-  # read from: crates/takt/src/validator.rs:596
+  # read from: crates/takt/src/validator.rs:624
   # read from: crates/takt/src/evidence.rs:16
   - name: takt.work.ProducerName
     kind: newtype
@@ -275,7 +275,7 @@ types:
   # An evidence record's id, unique within the case (`test-result-<seq>`). Carries
   # canon.protocol.EvidenceId (protocol.yaml:538).
   # read from: crates/takt/src/evidence.rs:9
-  # read from: crates/takt/src/validator.rs:702
+  # read from: crates/takt/src/validator.rs:730
   # Takt's ids are `<kind>-<evaluation number>`, the number continued across the case's runs, so an
   # id is unique within a case.
   # read from: crates/takt/src/case.rs:1953
@@ -909,10 +909,10 @@ types:
   # `--test-cmd` split at white space; the `gate.run` validator over the gates document `--gates`
   # names, taken from the case's base commit; `pr.open`, `ci.read` and `repository.merge` through
   # the forge, the last admissible only under a recorded grant at the case's revision.
-  # read from: crates/takt/src/validator.rs:1727
-  # read from: crates/takt/src/validator.rs:1164
-  # read from: crates/takt/src/validator.rs:1520
-  # read from: crates/takt/src/validator.rs:739
+  # read from: crates/takt/src/validator.rs:2003
+  # read from: crates/takt/src/validator.rs:1440
+  # read from: crates/takt/src/validator.rs:1796
+  # read from: crates/takt/src/validator.rs:779
   # read from: docs/design/takt.md:56
   # read from: crates/takt/src/validator.rs:458-460
   # read from: crates/takt-cli/src/main.rs:381-383
@@ -1831,7 +1831,7 @@ types:
   # holds no revocation.
   # read from: .engineering/planning/story/judge-guard.md:58-62
   # read from: .engineering/planning/design/recursive-self-improvement.md:50-54
-  # read from: crates/takt/src/validator.rs:1815-1835
+  # read from: crates/takt/src/validator.rs:2091-2111
   - name: takt.work.Delegation
     kind: struct
     fields:
@@ -3198,8 +3198,18 @@ entities:
   # project file `--project` names, or `.engineering/assertions-project.yaml` when that is a file,
   # both taken from the base commit the case pinned at open, never from the tree a model edits:
   # `pass` when every gate is true, `fail` when any is false, no record when a gate is unknown, the
-  # case pins no base commit, or a program or catalog the project file admits differs from the
-  # base; the summary names the gate that decided. The third is `takt.pr-open`: action `pr.open`,
+  # case pins no base commit, or, with a project file, what its commands run or read in the tree
+  # differs from the base, was added or was deleted (a program or catalog it admits, a file a gate
+  # command takes as an argument but a directory the base holds there, the tool configuration
+  # `.cargo/config`, `.cargo/config.toml`, `clippy.toml`, `.clippy.toml`, `rustfmt.toml`,
+  # `.rustfmt.toml`, `Taskfile.yml`, `Taskfile.yaml`, `Taskfile.dist.yml` and
+  # `Taskfile.dist.yaml` by name at any depth, a link there too, the entries of the `[lints]` and
+  # `[workspace.lints]` tables of every cargo manifest (a manifest the scanner cannot read with
+  # certainty counts as changed), or the judge surface `takt.tests-run` is compared on, the
+  # repository's own list included), the summary naming the paths; the summary names the gate that
+  # decided. Code that runs while cargo builds (a build script, a procedural macro) is not closed
+  # by comparing files: `gate.green` does not vouch for code the step wrote that runs at build
+  # time, and the merge stays the owner's to grant. The third is `takt.pr-open`: action `pr.open`,
   # kind `pull_request`, subject `implementation`; it refuses a HEAD other than the revision (or
   # takt's riders on top of it: the approval's commits, the story's `test_result` record and its
   # move to `implemented`) or a case without a base before anything is pushed, pushes nothing
@@ -3321,12 +3331,19 @@ entities:
   # read from: crates/takt/src/improvement.rs:508-516
   # read from: crates/takt/src/improvement.rs:659-665
   # read from: crates/takt/src/improvement.rs:838-848
-  # read from: crates/takt/src/validator.rs:2680-2698
+  # read from: crates/takt/src/validator.rs:2956-2974
   # read from: crates/takt/src/improvement.rs:321-395
   # read from: crates/takt/src/improvement.rs:399-468
-  # read from: crates/takt/src/forge.rs:580-598
-  # read from: crates/takt/src/validator.rs:224-227
-  # read from: crates/takt/src/validator.rs:292-303
+  # read from: crates/takt/src/forge.rs:548-566
+  # read from: crates/takt/src/validator.rs:252-255
+  # read from: crates/takt/src/validator.rs:320-331
+  # read from: crates/takt/src/validator.rs:868-897
+  # read from: crates/takt/src/validator.rs:899-929
+  # read from: crates/takt/src/validator.rs:1199-1234
+  # read from: crates/takt/src/validator.rs:993-1078
+  # read from: crates/takt/src/validator.rs:223-235
+  # read from: crates/takt/src/validator.rs:774-777
+  # read from: crates/takt/src/validator.rs:174-205
   # read from: crates/takt/src/improvement.rs:1544-1545
   - name: takt.work.EvidenceProducer
     naming:
@@ -3996,8 +4013,8 @@ entities:
   # read from: .engineering/planning/story/judge-guard.md:122
   # Decided by the planner (story:judge-guard, D3, D7): both files are read at the merge target's
   # tip as the forge reports it; a forge that cannot report it merges nothing.
-  # read from: crates/takt/src/validator.rs:1749-1751
-  # read from: crates/takt/src/validator.rs:2263-2269
+  # read from: crates/takt/src/validator.rs:2025-2027
+  # read from: crates/takt/src/validator.rs:2539-2545
   # read from: crates/takt/src/forge.rs:346-349
   - name: takt.work.DelegationRecord
     naming:

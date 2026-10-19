@@ -6,6 +6,19 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+- `gate.run` with a project file compares at the case's pinned base, besides the executables and
+  catalogs it admits, every file a gate command takes as an argument, the tool configuration
+  (`.cargo/config`, `.cargo/config.toml`, `clippy.toml`, `.clippy.toml`, `rustfmt.toml`,
+  `.rustfmt.toml`, `Taskfile.yml`, `Taskfile.yaml`, `Taskfile.dist.yml`, `Taskfile.dist.yaml`, by
+  file name at any depth), the `[lints]` and `[workspace.lints]` entries of
+  every `Cargo.toml`, and the judge surface `tests.run` is compared on, `rust-toolchain*` and the
+  repository's own `.engineering/judge-surface.yaml` included. One that differs, was added or was
+  deleted runs nothing and writes no record, and the summary names it. A directory the base holds
+  where an argument points is the data a command checks and is not compared. Build-time code (a
+  build script, a procedural macro) is not closed by comparison: `gate.green` does not vouch for
+  it, and the merge stays owner-granted. takt's repository lists `scripts/**` on its judge
+  surface.
+
 ### Improvement turns
 
 - `candidate.merge_judge_surface` records `merged` only for a candidate that reached the mainline
