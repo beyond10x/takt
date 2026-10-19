@@ -8,6 +8,9 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ### Changed
 
+- The scorecard's outcome metric is at definition version 3: `Unperformable` and `DiskLow`
+  changed what its ranks mean. A takt that knows version 2 refuses a version 3 scorecard, and a
+  stored version 2 baseline meets a version 3 candidate only after `takt promote --rebaseline`.
 - A run that stops `DiskLow` exits 8, for `takt run` and `takt scenario run`, not 3: a runner that
   resumes a stopped case on 3 no longer resumes a trial that ran out of disk.
 

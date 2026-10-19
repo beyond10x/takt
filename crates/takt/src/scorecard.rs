@@ -75,8 +75,10 @@ pub const BINARY_FILE: &str = "binary.txt";
 
 /// Each metric with the version of its definition. A changed definition takes the next
 /// version, so a comparison with a scorecard saved under the previous one prints both figures.
+/// The outcome is at version 3: `Unperformable` ranks with the budget stops and a [`DISK_LOW`]
+/// trial takes no rank, so a takt that knows version 2 refuses a scorecard saved under it.
 pub const METRICS: [(&str, u32); 7] = [
-    ("outcome", 2),
+    ("outcome", 3),
     ("steps", 1),
     ("tokens", 1),
     ("refusals", 1),

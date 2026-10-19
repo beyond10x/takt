@@ -1964,7 +1964,13 @@ fn no_own_toolchain(repo: &Path) -> Result<()> {
 /// Every metric definition of `card` is one this takt knows, at the version it knows; another
 /// is refused, never skipped.
 fn known_metrics(card: &Scorecard, shown: &Path) -> Result<()> {
-    for (metric, version) in METRICS {
+    known_metrics_of(card, shown, &METRICS)
+}
+
+/// [`known_metrics`] against the definitions `known`, so a test can read a scorecard as a takt
+/// that knows other versions does.
+fn known_metrics_of(card: &Scorecard, shown: &Path, known: &[(&str, u32)]) -> Result<()> {
+    for &(metric, version) in known {
         match card.metrics.get(metric) {
             Some(saved) if *saved == version => {}
             Some(saved) => bail!(
@@ -1978,7 +1984,7 @@ fn known_metrics(card: &Scorecard, shown: &Path) -> Result<()> {
         }
     }
     for metric in card.metrics.keys() {
-        if !METRICS.iter().any(|(known, _)| known == metric) {
+        if !known.iter().any(|(name, _)| name == metric) {
             bail!(
                 "{}: metric {metric} is one this takt does not know; a scorecard with it is not compared",
                 shown.display()
@@ -3134,4 +3140,56 @@ fn enough_trials(card: &Scorecard, base_card: &Scorecard, shown: &Path) -> Resul
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A scorecard saved by this takt under its metric definitions, a run of which stopped
+    /// `DiskLow`.
+    const SAVED_V3: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/scorecard-outcome-v3/scorecard-0123456789abcdef0123456789abcdef01234567.json"
+    );
+
+    /// The metric definitions of takt 0.2.3 and of 0fae6305, before `Unperformable` and
+    /// `DiskLow` changed what the outcome ranks mean.
+    const METRICS_V2: [(&str, u32); 7] = [
+        ("outcome", 2),
+        ("steps", 1),
+        ("tokens", 1),
+        ("refusals", 1),
+        ("no_progress", 1),
+        ("errors", 1),
+        ("wall", 1),
+    ];
+
+    /// story:outcome-metric-takes-version-3, acceptance 2: the fixture is what this takt saves,
+    /// its outcome metric at version 3, and the reading of a takt that knows version 2 refuses it
+    /// for that definition instead of judging its `DiskLow` run under ranks it does not have.
+    #[test]
+    fn a_takt_knowing_outcome_v2_refuses_a_scorecard_saved_under_v3() {
+        let shown = Path::new(SAVED_V3);
+        let card = Scorecard::load(shown).expect("the fixture reads");
+        let known: BTreeMap<String, u32> = METRICS
+            .iter()
+            .map(|(metric, version)| ((*metric).to_owned(), *version))
+            .collect();
+        assert_eq!(
+            card.metrics, known,
+            "the fixture is saved under this takt's definitions"
+        );
+        assert_eq!(card.metrics.get("outcome"), Some(&3));
+        known_metrics_of(&card, shown, &METRICS).expect("this takt reads it");
+        let refused = known_metrics_of(&card, shown, &METRICS_V2)
+            .expect_err("a takt knowing version 2 refuses it")
+            .to_string();
+        assert!(
+            refused.contains(
+                "metric outcome is at definition version 3; this takt knows version 2, and a scorecard under another definition is not compared"
+            ),
+            "{refused}"
+        );
+    }
 }

@@ -814,3 +814,30 @@ fn help_names_the_corpus_refusals() {
         assert!(help.contains(refusal), "{refusal} in {help}");
     }
 }
+
+/// story:outcome-metric-takes-version-3, acceptance 1: `Unperformable` ranking with the budget
+/// stops and a `DiskLow` trial taking no rank changed what the outcome ranks mean, so the outcome
+/// metric is at definition version 3: `takt scorecard` prints `outcome v3` and a saved scorecard
+/// records it.
+#[test]
+fn the_outcome_metric_is_printed_and_saved_at_definition_version_3() {
+    let repo = repository(
+        "outcome-v3",
+        &[("scenario-1-trial-1", 1200, "Completed (accepted)")],
+    );
+    let (code, text, stderr) = takt(&["scorecard", "--repo", &repo.display().to_string()]);
+    assert_eq!(code, 0, "{text}{stderr}");
+    let definitions = text
+        .lines()
+        .find_map(|line| line.split_once("definitions: ").map(|(_, rest)| rest))
+        .unwrap_or_else(|| panic!("the definitions in {text}"));
+    assert!(
+        definitions
+            .split(", ")
+            .any(|definition| definition == "outcome v3"),
+        "{definitions}"
+    );
+    let saves = scratch("outcome-v3-saves");
+    let card = fs::read_to_string(saved(&repo, &saves)).expect("the saved scorecard");
+    assert_eq!(card.matches("\"outcome\": 3,").count(), 1, "{card}");
+}
