@@ -5,10 +5,12 @@ kind: story
 status: draft
 title: Moving a story in the planning store does not leave ESS citations unresolved
 summary: an aep move shifts every cited body line by one
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
 ---
 # Story: a-store-move-keeps-its-citations
 

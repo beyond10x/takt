@@ -29,6 +29,8 @@ change.
 
 - **Moving stories to active.** Only a story whose dependencies have landed, in the order the
   planner set with this role.
+- **RSI stories first.** A wave takes every open story tagged `rsi` before any other (AGENTS.md
+  § Rules); a proposed lane plan that leaves one out says which unit it waits for.
 - **Waves.** One integration branch per wave, one managed worktree per story (`worktree create
   --purpose <what>`), each building into its own `target/`, and one page per wave under
   `docs/waves/`. The wave pages are this role's; the rest of `docs/**` is the doc-writer's. At

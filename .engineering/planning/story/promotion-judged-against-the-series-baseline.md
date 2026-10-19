@@ -5,11 +5,13 @@ kind: story
 status: active
 title: takt promote also judges against the first record of the series
 summary: without the daily cap, one-case-worse steps can add up
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 - depends_on: story:promotion-without-daily-cap
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:58Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:58:58Z", actor: "human:timo", revision: 3}

@@ -5,10 +5,12 @@ kind: story
 status: draft
 title: The cases snapshot holds large files by length and digest, not their bytes
 summary: every file under .engineering/cases is read into memory before and after each step
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
 ---
 # Story: the-cases-snapshot-holds-hashes-not-bytes
 

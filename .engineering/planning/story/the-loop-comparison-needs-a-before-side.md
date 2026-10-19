@@ -5,10 +5,12 @@ kind: story
 status: draft
 title: LoopCompare refuses a before side with fewer turns than the minimum
 summary: an empty retained measurement records improved with 0 turns before
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
 ---
 # Story: the-loop-comparison-needs-a-before-side
 

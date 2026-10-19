@@ -5,10 +5,12 @@ kind: story
 status: active
 title: takt's repository names its gate so delivery on takt reaches pr.open
 summary: 'trials 1 and 2: delivery stalled on gate.green'
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T15:58:59Z", actor: "human:timo", revision: 3}

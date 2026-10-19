@@ -5,10 +5,12 @@ kind: story
 status: draft
 title: A gate observation completes after the running takt is replaced on disk
 summary: current_exe() reads '(deleted)' after a promotion installs mid-run; the gate digests that path
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
 ---
 # Story: a-gate-runs-after-takt-is-replaced-on-disk
 

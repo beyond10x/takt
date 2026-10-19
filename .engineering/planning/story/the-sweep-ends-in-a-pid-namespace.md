@@ -5,10 +5,12 @@ kind: story
 status: draft
 title: A scenario run's sweep ends its leftovers when takt runs in its own PID namespace
 summary: under bwrap --unshare-pid every tests.run stopped StepRefused after 64 rounds of killing
+tags:
+- rsi
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
 ---
 # Story: the-sweep-ends-in-a-pid-namespace
 
