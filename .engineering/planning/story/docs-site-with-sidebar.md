@@ -7,6 +7,7 @@ title: The takt site is a beyond10x docs site with a sidebar, its pages generate
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
+- depends_on: story:main-history-names-no-private-repository
 revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T01:34:31Z", actor: "human:timo", revision: 4}
