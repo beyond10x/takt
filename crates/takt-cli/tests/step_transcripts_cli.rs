@@ -188,13 +188,18 @@ fn takt_run_keeps_each_step_transcript_under_the_state_home() {
         .lines()
         .find(|line| line.contains("\"event\":\"step\"") && line.contains("\"by\":\"harness\""))
         .unwrap_or_else(|| panic!("a harness step in\n{events}"));
+    // Relative to the transcripts directory: the record carries no home directory.
+    let named = format!(
+        "{repo_key}/{}/run-1/step-2.jsonl",
+        case.to_str().expect("utf-8")
+    );
     assert!(
-        step.contains(&format!(
-            "\"transcript\":\"{}\"",
-            path.to_str().expect("utf-8")
-        )),
-        "the step's line names its transcript {}: {step}",
-        path.display()
+        step.contains(&format!("\"transcript\":\"{named}\"")),
+        "the step's line names its transcript {named}: {step}"
+    );
+    assert!(
+        !events.contains(real_state.to_str().expect("utf-8")),
+        "no line of the run record names the state home:\n{events}"
     );
     drop(scratch);
 }

@@ -7621,8 +7621,12 @@ impl<'a> Run<'a> {
             // panic's and the errors' too: under the transcripts directory, outside the tree
             // and every case directory ([`Run::transcripts_in`]), so no snapshot of the step
             // reads it and no put-back takes it along. The step's line names it, or why none
-            // was kept: a file at its path is never overwritten, and the run goes on.
-            let transcript = crate::harness::keep_step_transcript(
+            // was kept: a file at its path is never overwritten, and the run goes on. A way out
+            // below that writes no step line (the harness failed, the hour budget ended it,
+            // what it left could not be killed or read) names it in the error or refusal line
+            // instead (`note`) and on the run's output (`told`); a record names it relative to
+            // the transcripts directory, the output whole.
+            let kept_transcript = crate::harness::keep_step_transcript(
                 self.harness,
                 self.transcripts
                     .as_ref()
@@ -7630,8 +7634,23 @@ impl<'a> Run<'a> {
                 &self.case.id,
                 run_number,
                 self.steps,
-            )
-            .map(|kept| kept.map(|path| path.display().to_string()));
+            );
+            let transcript = kept_transcript
+                .as_ref()
+                .map(crate::harness::KeptTranscript::recorded);
+            let note = kept_transcript
+                .as_ref()
+                .map(crate::harness::KeptTranscript::note)
+                .unwrap_or_default();
+            let told = kept_transcript
+                .as_ref()
+                .map(crate::harness::KeptTranscript::told);
+            let tell = |out: &mut dyn Write| -> std::io::Result<()> {
+                match &told {
+                    Some(told) => writeln!(out, "{told}"),
+                    None => Ok(()),
+                }
+            };
             // What the step left running (a writer in a process group of its own) is killed
             // before anything it did is looked at, so nothing lands after the step is judged.
             let swept = crate::forge::sweep_left();
@@ -7669,19 +7688,21 @@ impl<'a> Run<'a> {
                             self.steps
                         ),
                     }
+                    let _ = tell(out);
                     std::panic::resume_unwind(panic);
                 }
             };
             // A step whose leftovers could not all be killed is not judged: it is discarded
             // whole and the run ends on the error.
             if let Err(error) = swept {
+                let _ = tell(out);
                 return Err(match undo() {
                     Ok(moved) => error.context(format!(
-                        "step {}: what the step left running could not be killed; everything it changed was discarded{moved}",
+                        "step {}: what the step left running could not be killed; everything it changed was discarded{moved}{note}",
                         self.steps
                     )),
                     Err(undo) => error.context(format!(
-                        "step {}: what the step left running could not be killed, and its change could not be discarded: {undo:#}",
+                        "step {}: what the step left running could not be killed, and its change could not be discarded: {undo:#}{note}",
                         self.steps
                     )),
                 });
@@ -7704,13 +7725,14 @@ impl<'a> Run<'a> {
             let (touched, surface_touched) = match seen {
                 Ok(seen) => seen,
                 Err(error) => {
+                    let _ = tell(out);
                     return Err(match undo() {
                         Ok(moved) => error.context(format!(
-                            "step {}: what the step left could not be read; everything it changed was discarded{moved}",
+                            "step {}: what the step left could not be read; everything it changed was discarded{moved}{note}",
                             self.steps
                         )),
                         Err(undo) => error.context(format!(
-                            "step {}: what the step left could not be read, and its change could not be discarded: {undo:#}",
+                            "step {}: what the step left could not be read, and its change could not be discarded: {undo:#}{note}",
                             self.steps
                         )),
                     });
@@ -7744,13 +7766,13 @@ impl<'a> Run<'a> {
                     Ok(moved) => moved,
                     Err(undo) => {
                         return Err(anyhow::anyhow!(
-                            "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}{not_put_back}",
+                            "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}{not_put_back}{note}",
                             self.steps
                         ));
                     }
                 };
                 let why = format!(
-                    "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}{not_put_back}{moved}",
+                    "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}{not_put_back}{moved}{note}",
                     self.steps
                 );
                 // Written after the cases directory was put back, which would take a line
@@ -7771,18 +7793,20 @@ impl<'a> Run<'a> {
                 }
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "{why}")?;
+                tell(out)?;
                 return Ok(Stop::Hours(h));
             }
             let report = match stepped {
                 Ok(report) => report,
                 Err(error) => {
+                    let _ = tell(out);
                     return Err(match undo() {
                         Ok(moved) => error.context(format!(
-                            "step {}: the harness failed; everything the step changed was discarded{moved}",
+                            "step {}: the harness failed; everything the step changed was discarded{moved}{note}",
                             self.steps
                         )),
                         Err(undo) => error.context(format!(
-                            "step {}: the harness failed, and the step's change could not be discarded: {undo:#}",
+                            "step {}: the harness failed, and the step's change could not be discarded: {undo:#}{note}",
                             self.steps
                         )),
                     });

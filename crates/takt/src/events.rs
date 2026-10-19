@@ -88,10 +88,11 @@ pub enum Event {
     /// what the harness reported about the call, each absent when it did not state it, never
     /// 0: the model, the cost in dollars, the call's duration and its time in the API in
     /// milliseconds, the turns, and the instant the call started, which precedes the line's
-    /// `at`; and the path of its transcript, `<transcripts>/<repo>/<case>/run-<r>/step-<n>.jsonl`,
-    /// when takt kept one ([`crate::harness::keep_transcript`]), or why it kept none
-    /// (`transcript_refused`: a file already at that path, which is never overwritten, or a link
-    /// on the way).
+    /// `at`; and the path of its transcript relative to the transcripts directory,
+    /// `<repo>/<case>/run-<r>/step-<n>.jsonl`, when takt kept one
+    /// ([`crate::harness::keep_transcript`]), or why it kept none (`transcript_refused`, its
+    /// paths relative too: a file already at that path, which is never overwritten, or a link
+    /// on the way); so no record carries the directory's own path.
     Step {
         by: String,
         name: String,

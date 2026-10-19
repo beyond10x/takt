@@ -504,15 +504,59 @@ pub(crate) fn keep_step_transcript(
     case: &str,
     run: u64,
     step: u64,
-) -> Option<std::result::Result<std::path::PathBuf, String>> {
+) -> Option<KeptTranscript> {
     let ((root, repo), bytes) = root.zip(harness.last_transcript())?;
-    Some(
-        keep_transcript(root, repo, case, run, step, &bytes).map_err(|error| {
-            let why = format!("{error:#}");
-            eprintln!("step {step}: its transcript was not kept: {why}");
-            why
-        }),
-    )
+    let kept = keep_transcript(root, repo, case, run, step, &bytes).map_err(|error| {
+        let why = format!("{error:#}");
+        eprintln!("step {step}: its transcript was not kept: {why}");
+        why
+    });
+    Some(KeptTranscript {
+        root: root.to_path_buf(),
+        kept,
+    })
+}
+
+/// What [`keep_step_transcript`] did with a step's transcript: the file it wrote, or why it
+/// wrote none, under the transcripts directory `root`.
+#[derive(Debug, Clone)]
+pub(crate) struct KeptTranscript {
+    root: std::path::PathBuf,
+    kept: std::result::Result<std::path::PathBuf, String>,
+}
+
+impl KeptTranscript {
+    /// As the run record names it: the file's path relative to the transcripts directory
+    /// (`<repo-key>/<case>/run-<r>/step-<n>.jsonl`), or why none was kept, every path under
+    /// that directory in it relative too; so no record carries the directory's own path.
+    pub(crate) fn recorded(&self) -> std::result::Result<String, String> {
+        match &self.kept {
+            Ok(path) => Ok(path
+                .strip_prefix(&self.root)
+                .unwrap_or(path)
+                .display()
+                .to_string()),
+            Err(why) => Err(why.replace(&format!("{}/", self.root.display()), "")),
+        }
+    }
+
+    /// What a step that wrote no step line says of it, as the run record holds it:
+    /// `; its transcript: <path>`, or `; its transcript was not kept: <why>`.
+    pub(crate) fn note(&self) -> String {
+        match self.recorded() {
+            Ok(path) => format!("; its transcript: {path}"),
+            Err(why) => format!("; its transcript was not kept: {why}"),
+        }
+    }
+
+    /// The run's output line for it, for a person: `  transcript: <path>` with the whole path,
+    /// or `  transcript not kept: <why>`.
+    pub(crate) fn told(&self) -> String {
+        match &self.kept {
+            Ok(path) => format!("  transcript: {}", path.display()),
+            Err(why) => format!("  transcript not kept: {why}"),
+        }
+    }
 }
 
 impl Harness for ClaudeCode {

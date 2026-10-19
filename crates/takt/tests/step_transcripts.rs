@@ -153,6 +153,23 @@ fn case_dir_in(root: &Path, tree: &Path, id: &str) -> PathBuf {
     root.join(repo_key(tree)).join(id)
 }
 
+/// The transcript of step `n` of run `run` of the case `id` of `tree` as the run record names
+/// it: relative to the transcripts directory, `<repo-key>/<id>/run-<run>/step-<n>.jsonl`.
+fn relative(tree: &Path, id: &str, run: usize, n: usize) -> String {
+    format!("{}/{id}/run-{run}/step-{n}.jsonl", repo_key(tree))
+}
+
+/// The one line of the case `id`'s run record whose `event` is `event`.
+fn line_of(tree: &Path, id: &str, event: &str) -> serde_json::Value {
+    let lines = Events::new(&tree.join(".engineering/cases").join(id))
+        .read()
+        .expect("the run record");
+    let found: Vec<&serde_json::Value> =
+        lines.iter().filter(|line| line["event"] == event).collect();
+    assert_eq!(found.len(), 1, "one {event} line in {lines:#?}");
+    found[0].clone()
+}
+
 /// The transcript of step `n` of the case's run `run` (1 for the run that opened it) of the
 /// case `id` of `tree`, under the transcripts directory of `scripts`.
 fn transcript(tree: &Path, scripts: &Path, id: &str, run: usize, n: usize) -> PathBuf {
@@ -300,13 +317,8 @@ fn every_harness_step_keeps_the_stream_it_printed() {
         .filter(|line| line["event"] == "step" && line["by"] == "harness")
         .map(|line| line["transcript"].as_str().unwrap_or("none"))
         .collect();
-    let paths: Vec<String> = (1..=2)
-        .map(|n| {
-            transcript(&tree, &scripts, "kept", 1, n)
-                .display()
-                .to_string()
-        })
-        .collect();
+    // Relative to the transcripts directory: no home directory in a run record.
+    let paths: Vec<String> = (1..=2).map(|n| relative(&tree, "kept", 1, n)).collect();
     assert_eq!(named, paths, "each step's line names its transcript");
 }
 
@@ -434,6 +446,22 @@ fn a_step_whose_harness_fails_keeps_its_transcript() {
     let error = stop.expect_err("the harness failed");
     assert!(format!("{error:#}").contains("exited 3"), "{error:#}");
     assert_kept(&tree, "fails", (1, 1, 1), &scripts, &text);
+    // No step line is written for it: the run's `error` line names the transcript, relative to
+    // the transcripts directory, and the run's output names it whole.
+    let named = relative(&tree, "fails", 1, 1);
+    let line = line_of(&tree, "fails", "error");
+    let said = line["error"].as_str().expect("the error");
+    assert!(
+        said.contains(&format!("its transcript: {named}"))
+            && !said.contains(&root(&scripts).display().to_string()),
+        "the error line names the transcript {named}: {said}"
+    );
+    let whole = transcript(&tree, &scripts, "fails", 1, 1);
+    assert!(
+        text.contains(&format!("transcript: {}", whole.display())),
+        "the run's output names the transcript {}:\n{text}",
+        whole.display()
+    );
 }
 
 /// Acceptance 2: a step whose harness ends without the line naming its action keeps its
@@ -505,6 +533,22 @@ fn a_step_the_hour_budget_ends_keeps_what_it_printed() {
     let text = String::from_utf8_lossy(&out).into_owned();
     assert!(matches!(stop, Ok(Stop::Hours(_))), "{stop:?}\n{text}");
     assert_kept(&tree, "hours", (1, 1, 1), &scripts, &text);
+    // The step was killed, so no step line is written: the refusal line names the transcript,
+    // relative to the transcripts directory, and the run's output names it whole.
+    let named = relative(&tree, "hours", 1, 1);
+    let line = line_of(&tree, "hours", "refusal");
+    let reason = line["reason"].as_str().expect("the reason");
+    assert!(
+        reason.contains(&format!("its transcript: {named}"))
+            && !reason.contains(&root(&scripts).display().to_string()),
+        "the refusal line names the transcript {named}: {reason}"
+    );
+    let whole = transcript(&tree, &scripts, "hours", 1, 1);
+    assert!(
+        text.contains(&format!("transcript: {}", whole.display())),
+        "the run's output names the transcript {}:\n{text}",
+        whole.display()
+    );
 }
 
 /// Acceptance 3, and ruling 2 of correction 2: the transcript is on no validator's read path,
@@ -610,10 +654,10 @@ fn a_planted_step_file_is_not_overwritten_and_the_step_line_names_the_clash() {
         let clash = step["transcript_refused"]
             .as_str()
             .unwrap_or_else(|| panic!("{name}: the step's line names the clash: {step}"));
+        let named = relative(&tree, name, 1, 1);
         assert!(
-            clash.contains(&planted.display().to_string()),
-            "{name}: the clash names the path {}: {clash}",
-            planted.display()
+            clash.contains(&named) && !clash.contains(&root(&scripts).display().to_string()),
+            "{name}: the clash names the path relative to the transcripts directory, {named}: {clash}"
         );
     }
 }
