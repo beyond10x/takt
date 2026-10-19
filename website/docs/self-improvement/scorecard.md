@@ -47,7 +47,13 @@ scorecard's rule. When no scenario is worse it builds a fresh clone of that revi
 bubblewrap (`cargo build --locked --offline`, the environment cleared, only the clone, rustup's
 default toolchain and the registry cache visible), installs the binary, records the promotion
 under `~/.local/state/takt/promotions/`, where the latest record is the next baseline, and moves
-the binary into place. Promotions run one at a time under the store's lock.
+the binary into place. Promotions run one at a time under the store's lock. `--install-root`
+names where the binary goes; without it, `CARGO_INSTALL_ROOT`, else `CARGO_HOME`, else `~/.cargo`.
+
+From 0.2.2, `takt promote` keeps the binary it replaces, executable, at
+`$XDG_STATE_HOME/takt/judges/<sha256>`, and prints that path. An improvement turn that judged the
+promotion finishes under that binary ([Running a turn](./the-loop.md#running-a-turn)). Kept
+binaries are not removed.
 
 Linux only ([Getting started](../getting-started.md#what-it-needs)).
 
