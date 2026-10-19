@@ -36,7 +36,7 @@ scope:
   path: crates/takt/tests/authority_adv1.rs
 - confidence: inferred
   path: crates/takt/tests/merge_under_authority.rs
-revision: 20
+revision: 21
 ---
 # Story: judge-guard
 
@@ -130,7 +130,7 @@ The planner's decisions on the questions the 2026-10-19 scope left open, inside 
 
 - D1, the guarded range: the guard diffs `base_commit..<granted revision>`, the range `judged` already computes (`validator.rs:140-152@3e87bca`). This is the design's `base..head` (`recursive-self-improvement.md:111`) split at the grant: `granted..head` may carry only approval records, which `carries`/`approvals_only` already enforce (`validator.rs:1374,1437-1442@3e87bca`, `case.rs:1067@3e87bca`), so the guard need not judge it. A path in `granted..head` that `approvals_only` does not admit stops the merge as today.
 - D2, allow-list and deny-list: `.engineering/judge-allow.yaml` gates only the merge; the existing deny-list `.engineering/judge-surface.yaml` keeps gating what steps and validators may write. Neither replaces the other.
-- D3, which revision the lists are read at: the allow-list and `.engineering/delegations.yaml` are read at the merge target's tip as the forge reports it when the merge is decided, never at `base_commit` and never from the tree. Under `--forge none` the target's tip is the local base ref as recorded by the run's last step checkpoint (`run.rs:2840-2847@3156517`), not as read at merge time, since a test command can move the local ref. "The promoted takt" is the binary named by story:promotion's latest record, which runs the case.
+- D3, which revision the lists are read at: the allow-list and `.engineering/delegations.yaml` are read at the merge target's tip as the forge reports it when the merge is decided, never at `base_commit` and never from the tree. Under `--forge none` the target's tip is the local base ref as recorded by the step checkpoint (`Checkpoint::take_guarding`, `git.rs:1075@3156517`, over the refs `kept_branches` lists, `run.rs:2840-2847@3156517`), not as read at merge time, since a test command can move the local ref. "The promoted takt" is the binary named by story:promotion's latest record, which runs the case.
 - D4, the base: the guard refuses the merge when `base_commit` is not an ancestor of the merge target's tip as the forge reports it. `branch.yaml` is the only copy of `base_commit` (`case.rs:1427@3e87bca`), so no comparison with "the value pinned at open" is possible; the target's tip is the independent fact.
 - D5, untyped approvers: an `authority.yaml` approver that is neither `human:` nor `agent:` grants nothing at a judge-surface merge; on any other merge it reads as before.
 
