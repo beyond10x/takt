@@ -1349,9 +1349,26 @@ fn a_pyproject_refusal_does_not_speak_of_cargo() {
     assert!(!why.contains("cargo"), "{why}");
 }
 
+/// The process id of the writer [`a_writer_a_step_leaves_running_is_killed_with_its_group`]'s
+/// step leaves running.
+static LATE_WRITER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Whether process `pid` is still running: listed, and not a zombie.
+fn alive(pid: u32) -> bool {
+    fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| {
+            stat.rsplit_once(") ")
+                .map(|(_, rest)| !rest.starts_with('Z'))
+        })
+        .unwrap_or(false)
+}
+
 /// A judgement step whose harness leaves a writer running in a process group of its own: the
 /// group is killed once the step is over, so nothing it would write lands in the tree after it,
-/// between steps or after the run.
+/// between steps or after the run. The case waits for the writer to be gone, killed or done
+/// writing, not for a time it would take to write: a writer the run left alive writes 1 s
+/// later, however loaded the host.
 #[test]
 fn a_writer_a_step_leaves_running_is_killed_with_its_group() {
     use std::os::unix::process::CommandExt as _;
@@ -1359,14 +1376,29 @@ fn a_writer_a_step_leaves_running_is_killed_with_its_group() {
     let ran = run(&tree, "./check.sh", |tree| {
         // Left running on purpose: the run kills and reaps it once the step is over.
         #[allow(clippy::zombie_processes)]
-        Command::new("sh")
+        let writer = Command::new("sh")
             .args(["-c", "sleep 1; echo late > late.txt"])
             .current_dir(tree)
             .process_group(0)
             .spawn()
             .expect("a writer");
+        LATE_WRITER.store(writer.id(), std::sync::atomic::Ordering::SeqCst);
     });
-    std::thread::sleep(std::time::Duration::from_millis(2500));
+    let writer = LATE_WRITER.load(std::sync::atomic::Ordering::SeqCst);
+    assert_ne!(
+        writer, 0,
+        "the premise: the step started its writer\n{}",
+        ran.text
+    );
+    let waited = std::time::Instant::now();
+    while alive(writer) && waited.elapsed() < std::time::Duration::from_secs(60) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        !alive(writer),
+        "the writer {writer} still runs a minute after the run\n{}",
+        ran.text
+    );
     assert!(
         !tree.join("late.txt").exists(),
         "a writer the step left wrote into the tree after it\n{:?}\n{}",

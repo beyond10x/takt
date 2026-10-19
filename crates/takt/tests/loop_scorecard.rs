@@ -1777,11 +1777,48 @@ fn a_forged_parentless_commit_on_the_way_is_an_error_not_false() {
     assert!(format!("{error:#}").contains(&middle), "{error:#}");
 }
 
+/// The test of [`a_twenty_thousand_commit_history_is_walked_by_a_few_git_processes`], as its
+/// child is started with it.
+const LONG_WALK: &str = "a_twenty_thousand_commit_history_is_walked_by_a_few_git_processes";
+
+/// How many `git` processes the two walks of [`LONG_WALK`] may start: a few for each walk
+/// (four today: the object format twice, the reader, the shallow file), whatever the history's
+/// length; one per commit would be 40,000.
+const WALK_GITS: usize = 20;
+
+/// The two walks of [`LONG_WALK`] in a debug build: over ten times their unloaded median
+/// (1.5 s), and under the 82 s the walks took starting a reader per commit.
+const WALK_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// The reviewer's L3: the walk reads a 20,000-commit history through one `git cat-file --batch`
-/// and checks each commit in this process, in a debug build under 10 s, both when the ancestor
-/// is the root (found at the end) and when it is off the history (the whole history walked).
+/// and checks each commit in this process, both when the ancestor is the root (found at the
+/// end) and when it is off the history (the whole history walked). The work is counted, not
+/// only timed: the walks run in a child of this test whose `PATH` leads to a `git` that writes
+/// a line for each process it starts and refuses past the hundredth, so a walk that starts one
+/// per commit fails at once. They start at most [`WALK_GITS`] and take less than
+/// [`WALK_BOUND`].
 #[test]
-fn a_twenty_thousand_commit_history_is_walked_within_ten_seconds() {
+fn a_twenty_thousand_commit_history_is_walked_by_a_few_git_processes() {
+    if let Some(tree) = std::env::var_os("TAKT_LONG_WALK_TREE") {
+        let tree = PathBuf::from(tree);
+        let named = |name: &str| std::env::var(name).expect("the parent names the revision");
+        let (root, tip, main) = (
+            named("TAKT_LONG_WALK_ROOT"),
+            named("TAKT_LONG_WALK_TIP"),
+            named("TAKT_LONG_WALK_MAIN"),
+        );
+        let started = std::time::Instant::now();
+        assert!(
+            takt::loop_scorecard::verified_descends(&tree, &root, &tip).expect("walks"),
+            "the root is an ancestor of the tip"
+        );
+        assert!(
+            !takt::loop_scorecard::verified_descends(&tree, &main, &tip).expect("walks"),
+            "main's commit is off the long history"
+        );
+        println!("walked in {} ms", started.elapsed().as_millis());
+        return;
+    }
     let (tree, _) = scratch("long-history", DEFINED);
     let mut stream = String::new();
     for n in 1..=20_000 {
@@ -1812,18 +1849,65 @@ fn a_twenty_thousand_commit_history_is_walked_within_ten_seconds() {
     let tip = git(&tree, &["rev-parse", "long"]);
     let root = git(&tree, &["rev-list", "--max-parents=0", "long"]);
     let main = git(&tree, &["rev-parse", "main"]);
-    let started = std::time::Instant::now();
+    let bin = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "loop-scorecard-{}-long-walk-bin",
+        std::process::id()
+    ));
+    fs::create_dir_all(&bin).expect("a directory for the counting git");
+    let bin = Scratch(bin);
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let real = std::env::split_paths(&path)
+        .map(|dir| dir.join("git"))
+        .find(|git| git.is_file())
+        .expect("git on the PATH");
+    let calls = bin.join("calls");
+    let counting = bin.join("git");
+    fs::write(
+        &counting,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{calls}'\n[ \"$(wc -l < '{calls}')\" -le 100 ] || exit 1\nexec '{real}' \"$@\"\n",
+            calls = calls.display(),
+            real = real.display()
+        ),
+    )
+    .expect("the counting git");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&counting, fs::Permissions::from_mode(0o755)).expect("exec bit");
+    }
+    let mut searched = vec![bin.to_path_buf()];
+    searched.extend(std::env::split_paths(&path));
+    let child = Command::new(std::env::current_exe().expect("the test binary"))
+        .args([LONG_WALK, "--exact", "--test-threads", "1", "--nocapture"])
+        .env("PATH", std::env::join_paths(searched).expect("a PATH"))
+        .env("TAKT_LONG_WALK_TREE", &*tree)
+        .env("TAKT_LONG_WALK_ROOT", &root)
+        .env("TAKT_LONG_WALK_TIP", &tip)
+        .env("TAKT_LONG_WALK_MAIN", &main)
+        .output()
+        .expect("the child test runs");
+    let stdout = String::from_utf8_lossy(&child.stdout);
+    let stderr = String::from_utf8_lossy(&child.stderr);
+    let started = fs::read_to_string(&calls).unwrap_or_default();
+    let gits = started.lines().count();
     assert!(
-        takt::loop_scorecard::verified_descends(&tree, &root, &tip).expect("walks"),
-        "the root is an ancestor of the tip"
+        child.status.success(),
+        "the walks failed after {gits} git processes:\n{stdout}\n{stderr}"
     );
     assert!(
-        !takt::loop_scorecard::verified_descends(&tree, &main, &tip).expect("walks"),
-        "main's commit is off the long history"
+        (1..=WALK_GITS).contains(&gits),
+        "two walks of 20,000 commits started {gits} git processes:\n{started}"
     );
-    let took = started.elapsed();
+    let took = stdout
+        .lines()
+        .find_map(|line| {
+            let (_, ms) = line.split_once("walked in ")?;
+            ms.split_once(" ms")?.0.parse::<u64>().ok()
+        })
+        .map(std::time::Duration::from_millis)
+        .unwrap_or_else(|| panic!("the child says how long the walks took:\n{stdout}"));
     assert!(
-        took < std::time::Duration::from_secs(10),
+        took < WALK_BOUND,
         "two walks of 20,000 commits took {took:?}"
     );
 }

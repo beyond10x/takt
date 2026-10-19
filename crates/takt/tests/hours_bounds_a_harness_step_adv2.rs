@@ -157,11 +157,18 @@ impl Harness for Fails {
     }
 }
 
+/// The hour budget of a run whose gate must start its command before the budget ends: 30 s,
+/// over ten times the gate's preparation unloaded (2.6 s in a debug build, most of it the
+/// digest of the test binary the gate's bundle names), which grew past 10 s on a host loaded to
+/// three and four times its CPU count.
+const GATE_HOURS: f64 = 30.0 / 3600.0;
+
 /// A gate command that sleeps past the hour budget is held to it: `GateRun` overrides
 /// `observe_within` and gives each command the smaller of the project file's `timeout_seconds`
-/// (here 40 s) and what is left of the run, so the run ends within the budget and the grace.
-/// This case runs under a 10 s budget of its own, so the gate's preparation has room under load
-/// before its command starts; the command still sleeps past it.
+/// (here 300 s) and what is left of the run, so the run ends within the budget and the grace.
+/// This case runs under [`GATE_HOURS`], so the gate's preparation has room under load before
+/// its command starts; the command sleeps 120 s, so a command held to the project's timeout
+/// alone runs the run 80 s past the budget and the grace.
 #[test]
 fn a_gate_command_that_outlives_the_hour_budget_is_held_to_the_hour_budget() {
     let _serial = serial();
@@ -177,17 +184,17 @@ fn a_gate_command_that_outlives_the_hour_budget_is_held_to_the_hour_budget() {
             ),
             (
                 ".engineering/assertions-project.yaml",
-                "format: engineering-assertions-project/1\ntimeout_seconds: 40\ncommands:\n  check:\n    executable: check.sh\n",
+                "format: engineering-assertions-project/1\ntimeout_seconds: 300\ncommands:\n  check:\n    executable: check.sh\n",
             ),
             (
                 "check.sh",
-                &format!("#!/bin/sh\necho $$ >> '{}'\nsleep 25\n", pids.display()),
+                &format!("#!/bin/sh\necho $$ >> '{}'\nsleep 120\n", pids.display()),
             ),
         ],
     );
     let validators: Vec<Box<dyn Validator>> =
         vec![Box::new(GateRun::new(".engineering/gates.yaml"))];
-    let hours = 10.0 / 3600.0;
+    let hours = GATE_HOURS;
     let budget = Duration::from_secs_f64(hours * 3600.0);
     let mut options = options("adv2-gate");
     options.protocol = GATE_ONLY.to_owned();

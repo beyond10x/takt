@@ -161,11 +161,18 @@ impl Harness for Fails {
     }
 }
 
-/// A gate of three commands that each sleep 25 s, under a 10 s hour budget (room for the gate's
-/// preparation under load before any command starts): every command is
-/// held to what was left when the gate started collecting, so the gate runs past the run's end
-/// by up to twice that, and is caught when it returns. The run stops on the hour budget, and
-/// nothing is recorded.
+/// The hour budget of a run whose gate must start its commands before the budget ends: 30 s,
+/// over ten times the gate's preparation unloaded (2.6 s in a debug build, most of it the
+/// digest of the test binary the gate's bundle names), which grew past 10 s on a host loaded to
+/// three and four times its CPU count.
+const GATE_HOURS: f64 = 30.0 / 3600.0;
+
+/// A gate of three commands that each sleep 60 s, under [`GATE_HOURS`] (room for the gate's
+/// preparation under load before any command starts): every command is held to what was left
+/// when the gate started collecting, so the gate runs past the run's end by up to twice that,
+/// and is caught when it returns. The run stops on the hour budget, and nothing is recorded.
+/// Commands held to the project's timeout (300 s) alone would take 180 s, 80 s past three
+/// budgets and the grace.
 #[test]
 fn a_gate_of_three_commands_past_the_hour_budget_stops_on_hours_and_records_nothing() {
     let _serial = serial();
@@ -182,20 +189,20 @@ fn a_gate_of_three_commands_past_the_hour_budget_stops_on_hours_and_records_noth
             ),
             (
                 ".engineering/assertions-project.yaml",
-                "format: engineering-assertions-project/1\ntimeout_seconds: 40\ncommands:\n  \
+                "format: engineering-assertions-project/1\ntimeout_seconds: 300\ncommands:\n  \
                  a:\n    executable: check.sh\n  b:\n    executable: check.sh\n  c:\n    \
                  executable: check.sh\n",
             ),
             (
                 "check.sh",
                 &format!(
-                    "#!/bin/sh\necho $$ >> '{}'\nexec sleep 25\n",
+                    "#!/bin/sh\necho $$ >> '{}'\nexec sleep 60\n",
                     pids.display()
                 ),
             ),
         ],
     );
-    let hours = 10.0 / 3600.0;
+    let hours = GATE_HOURS;
     let validators: Vec<Box<dyn Validator>> =
         vec![Box::new(GateRun::new(".engineering/gates.yaml"))];
     let mut options = options("gate-hours");

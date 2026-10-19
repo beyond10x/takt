@@ -446,6 +446,8 @@ fn a_step_budget_that_ends_while_the_checks_are_pending_stops_waiting_and_the_ne
 
 /// An hour budget bounds the wait as a step budget does: a poll longer than what is left of
 /// the hours is cut to it, and the run stops `Waiting` with `Hours` spent, well before the poll.
+/// The budget is 3 s and the poll 120 s, and the run ends within 60 s: a loaded host may take
+/// 57 s past the budget, and a wait the budget did not cut takes the whole poll.
 #[test]
 fn an_hour_budget_cuts_the_wait_and_stops_waiting() {
     let repo = repository("pending-hours");
@@ -461,13 +463,13 @@ fn an_hour_budget_cuts_the_wait_and_stops_waiting() {
         &validators,
     )
     .expect("the case resumes");
-    run.poll = Duration::from_secs(30);
+    run.poll = Duration::from_secs(120);
     let mut out = Vec::new();
     let started = Instant::now();
     let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
     let text = String::from_utf8_lossy(&out);
     assert!(
-        started.elapsed() < Duration::from_secs(10),
+        started.elapsed() < Duration::from_secs(60),
         "waited {:?}: {text}",
         started.elapsed()
     );
