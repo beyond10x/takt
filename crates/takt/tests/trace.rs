@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use takt::case::CASES_DIR;
+use takt::events::{Event, Events};
 use takt::report::{self, Basis};
 use takt::scorecard::Scorecard;
 use takt::trace::{Actor, Evidence, Kind, Trace};
@@ -82,16 +83,16 @@ fn trial_1_attribution_matches_the_run_record() {
     let trace = trace("trial-1", true);
     let a = report::attribution(&trace);
     assert_eq!(a.wall_s, Some(242.0), "{a:?}");
-    assert_eq!(a.of(Actor::Validator).round(), 107.0, "{a:?}");
-    assert_eq!(a.of(Actor::Harness).round(), 130.0, "{a:?}");
-    assert_eq!(a.of(Actor::Takt).round(), 5.0, "{a:?}");
-    assert_eq!(a.of(Actor::Forge), 0.0, "{a:?}");
-    assert_eq!(a.of(Actor::Idle), 0.0, "{a:?}");
+    assert_eq!(a.of(Actor::Validator).map(f64::round), Some(107.0), "{a:?}");
+    assert_eq!(a.of(Actor::Harness).map(f64::round), Some(130.0), "{a:?}");
+    assert_eq!(a.of(Actor::Takt).map(f64::round), Some(5.0), "{a:?}");
+    assert_eq!(a.of(Actor::Forge), Some(0.0), "{a:?}");
+    assert_eq!(a.of(Actor::Idle), Some(0.0), "{a:?}");
     assert_eq!(a.basis, Basis::Reported);
     assert_eq!(a.api_s.map(f64::round), Some(128.0), "{a:?}");
     assert_eq!((a.steps, a.model_calls, a.turns), (6, 3, Some(33)), "{a:?}");
     let header = &trace.header;
-    assert_eq!(header.tokens.sum, 592_698);
+    assert_eq!(header.tokens.sum, Some(592_698));
     assert_eq!(
         (
             header.tokens.input,
@@ -138,14 +139,14 @@ fn trial_1_without_the_steps_file_uses_the_spans_and_says_what_is_missing() {
     let trace = trace("trial-1", false);
     let a = report::attribution(&trace);
     assert_eq!(a.basis, Basis::Spans);
-    assert_eq!(a.of(Actor::Harness).round(), 135.0, "{a:?}");
-    assert_eq!(a.of(Actor::Validator).round(), 107.0, "{a:?}");
-    assert_eq!(a.of(Actor::Takt).round(), 0.0, "{a:?}");
+    assert_eq!(a.of(Actor::Harness).map(f64::round), Some(135.0), "{a:?}");
+    assert_eq!(a.of(Actor::Validator).map(f64::round), Some(107.0), "{a:?}");
+    assert_eq!(a.of(Actor::Takt).map(f64::round), Some(0.0), "{a:?}");
     assert_eq!(a.api_s, None);
     assert_eq!(a.turns, None);
     assert_eq!(trace.header.model, None);
     assert_eq!(trace.header.cost_usd, None);
-    assert_eq!(trace.header.tokens.sum, 592_698);
+    assert_eq!(trace.header.tokens.sum, Some(592_698));
     assert_eq!(trace.header.tokens.input, None);
     assert!(trace.header.notes.is_empty(), "{:?}", trace.header.notes);
     assert_eq!(
@@ -201,7 +202,7 @@ fn t_24_trace_holds_the_steps_the_idle_waits_and_the_calls() {
         assert_eq!(call.tokens_sum, Some(tokens.sum()), "{call:?}");
         assert_eq!(call.evidence, Some(Evidence::Declared));
     }
-    assert_eq!(trace.header.tokens.sum, 122_095);
+    assert_eq!(trace.header.tokens.sum, Some(122_095));
     assert_eq!(trace.header.tokens.input, Some(16));
     assert_eq!(trace.header.tokens.output, Some(3_311));
     assert_eq!(trace.header.tokens.cache_read, Some(98_707));
@@ -238,15 +239,17 @@ fn t_24_trace_holds_the_steps_the_idle_waits_and_the_calls() {
     assert_eq!(trace.header.binary.as_deref(), Some("unknown revision"));
     assert_eq!(trace.header.revision, None);
     let a = report::attribution(&trace);
-    assert_eq!(a.of(Actor::Idle).round(), 60.0, "{a:?}");
+    assert_eq!(a.of(Actor::Idle).map(f64::round), Some(60.0), "{a:?}");
     assert_eq!(a.wall_s.map(f64::round), Some(123.0), "{a:?}");
     // The CI cost: five `ci.read` steps (4, 9, 10, 15, 17; two of them found nothing to
     // read), 5.263 s of step spans, and the two 30 s polls on the forge before reads 10 and
     // 17, 60.007 s: what a read costs the run is (5.263 + 60.007) / 5, about 13.1 s.
     assert_eq!(a.ci_reads, 5, "{a:?}");
-    assert!((a.ci_read_s - 5.263).abs() < 0.002, "{a:?}");
+    let read_s = a.ci_read_s.value().expect("every read has a span");
+    assert!((read_s - 5.263).abs() < 0.002, "{a:?}");
     assert_eq!(a.ci_waits, 2, "{a:?}");
-    assert!((a.ci_wait_s - 60.007).abs() < 0.002, "{a:?}");
+    let wait_s = a.ci_wait_s.value().expect("every wait has a span");
+    assert!((wait_s - 60.007).abs() < 0.002, "{a:?}");
     let per = a.per_ci_read().expect("reads");
     assert!((per - 13.054).abs() < 0.001, "{per}");
     // Two CI cycles: the pull request opened at step 8 and passed at 10; the push at 14 was
@@ -277,7 +280,7 @@ fn t_24_with_the_steps_file_gains_the_calls_fields_and_keeps_its_tokens() {
     assert_eq!(trace.header.model.as_deref(), Some("claude-opus-5-5"));
     let cost = trace.header.cost_usd.expect("a cost");
     assert!((cost - 0.246_513).abs() < 0.000_5, "{cost}");
-    assert_eq!(trace.header.tokens.sum, 122_095);
+    assert_eq!(trace.header.tokens.sum, Some(122_095));
     assert_eq!(
         trace.header.notes,
         vec!["steps file: model, cost_usd, turns, duration_ms, api_ms for 3 of 3 calls".to_owned()]
@@ -299,7 +302,7 @@ fn the_token_sum_equals_the_scorecards() {
         .expect("a copy");
         let card = Scorecard::read(&repo).expect("the scorecard reads");
         assert_eq!(card.rows.len(), 1, "{name}: {card:?}");
-        assert_eq!(card.rows[0].tokens, trace.header.tokens.sum, "{name}");
+        assert_eq!(Some(card.rows[0].tokens), trace.header.tokens.sum, "{name}");
         assert_eq!(card.rows[0].steps, trace.header.steps, "{name}");
         assert_eq!(card.rows[0].outcome, trace.header.outcome, "{name}");
         let wall = trace.header.wall_s.expect("a wall time");
@@ -312,7 +315,7 @@ fn the_token_sum_equals_the_scorecards() {
 }
 
 /// No line of a trace names a home directory: summaries are classified, not copied, and the
-/// sources are written with `~`.
+/// sources are named relative to the case directory.
 #[test]
 fn no_trace_line_names_a_home_directory() {
     let home = std::env::var("HOME").expect("HOME");
@@ -342,7 +345,7 @@ fn a_record_written_before_the_fields_traces() {
             .all(|op| op.tokens.is_none() && op.tokens_sum.is_some())
     );
     assert_eq!(bare.header.tokens.input, None);
-    assert!(bare.header.tokens.sum > 0);
+    assert!(bare.header.tokens.sum.is_some_and(|sum| sum > 0));
     assert!(bare.header.wall_s.is_some_and(|wall| wall > 0.0));
     let full = trace("t-16", true);
     assert!(full.calls().iter().all(|op| op.tokens.is_some()));
@@ -431,7 +434,7 @@ fn a_repeated_validator_failure_is_labelled_and_reported() {
     );
     assert_eq!(trace.header.outcome, "NoProgress");
     assert_eq!(trace.header.run, "synthetic");
-    assert_eq!(trace.header.tokens.sum, 1500);
+    assert_eq!(trace.header.tokens.sum, Some(1500));
     assert_eq!(
         trace.header.cost_usd, None,
         "one call states no cost, so the sum is unknown"
@@ -448,5 +451,355 @@ fn a_repeated_validator_failure_is_labelled_and_reported() {
     assert!(
         text.contains("| synthetic | software.change/1 | - | NoProgress | 60 |"),
         "{text}"
+    );
+}
+
+/// A record whose text a harness shaped cannot drive the terminal the report is read on, and
+/// no local path travels in the trace: every text a record contributes (the run's name, case,
+/// model, stop, outcome, action, protocol, story, the harness's name, a refusal's `by`, the
+/// paths) passes one escape, in the trace file as in the report, which writes a C0 or C1
+/// control character and DEL as `\u{..}`, and the home directory as `~`.
+#[test]
+fn the_report_escapes_every_text_a_record_contributes() {
+    let home = std::env::var("HOME").ok().filter(|home| home.len() > 1);
+    let under_home = home
+        .as_deref()
+        .map_or_else(|| "/elsewhere/x/y".to_owned(), |home| format!("{home}/x/y"));
+    let lines = vec![
+        serde_json::json!({"at": "2026-10-19T10:00:00.000000Z", "step": 0, "event": "opened", "case": "takt-esc", "protocol": "software.change/1\u{9b}31m", "story": "story:\u{7f}x", "inputs": []}),
+        serde_json::json!({"at": "2026-10-19T10:00:10.000000Z", "step": 1, "event": "step", "by": "validator", "name": "takt.tests-run", "action": "tests.run\u{1b}[2J", "summary": "the test command exited 0: pass"}),
+        serde_json::json!({"at": "2026-10-19T10:00:40.000000Z", "step": 2, "event": "step", "by": "harness", "name": "claude-code\u{1b}[31m", "action": "implementation.edit", "summary": "edited", "tokens": 1000, "model": "\u{1b}[31mclaude-opus-5-5\u{1b}[0m"}),
+        serde_json::json!({"at": "2026-10-19T10:00:40.000100Z", "step": 2, "event": "refusal", "by": "takt\u{1b}]0;title\u{7}", "reason": "no"}),
+        serde_json::json!({"at": "2026-10-19T10:00:41.000000Z", "step": 2, "event": "stop", "stop": format!("Error (read {under_home} \u{1b}[2J)"), "steps": 2, "tokens": 1000}),
+    ];
+    let trace = Trace::from_lines(
+        &lines,
+        None,
+        "takt-esc",
+        Some("esc\u{1b}[0m"),
+        vec!["events.jsonl".to_owned()],
+    );
+    let shown = if home.is_some() {
+        "~/x/y".to_owned()
+    } else {
+        under_home.clone()
+    };
+    let expected_stop = format!("Error (read {shown} \\u{{1b}}[2J)");
+    assert_eq!(trace.header.run, "esc\\u{1b}[0m");
+    assert_eq!(trace.header.stop.as_deref(), Some(expected_stop.as_str()));
+    assert_eq!(trace.header.outcome, "Error");
+    assert_eq!(
+        trace.header.model.as_deref(),
+        Some("\\u{1b}[31mclaude-opus-5-5\\u{1b}[0m")
+    );
+    assert_eq!(
+        trace.header.harness.as_deref(),
+        Some("claude-code\\u{1b}[31m")
+    );
+    assert_eq!(
+        trace.header.protocol.as_deref(),
+        Some("software.change/1\\u{9b}31m")
+    );
+    assert_eq!(trace.header.story.as_deref(), Some("story:\\u{7f}x"));
+    assert_eq!(trace.ops[0].action.as_deref(), Some("tests.run\\u{1b}[2J"));
+    let refusal = trace
+        .ops
+        .iter()
+        .find(|op| op.kind == Kind::Refusal)
+        .expect("a refusal");
+    assert_eq!(refusal.name.as_deref(), Some("takt\\u{1b}]0;title\\u{7}"));
+    let file = trace_text(&trace);
+    for (n, line) in file.lines().enumerate() {
+        assert!(
+            !line.contains(&under_home),
+            "line {}: a local path travels: {line}",
+            n + 1
+        );
+        assert!(
+            !line.bytes().any(|byte| byte < 0x20 || byte == 0x7f),
+            "line {}: {line}",
+            n + 1
+        );
+    }
+    if home.is_some() {
+        let header = file.lines().next().expect("a header");
+        assert!(header.contains("~/x/y"), "{header}");
+    }
+    let text = report_text(&trace);
+    for (n, byte) in text.bytes().enumerate() {
+        assert!(
+            byte == b'\n' || (byte >= 0x20 && byte != 0x7f),
+            "byte {byte:#x} at {n} of:\n{text}"
+        );
+    }
+    assert!(
+        !text.contains('\u{9b}'),
+        "a C1 control reached the output:\n{text}"
+    );
+    assert!(text.contains("### esc\\u{1b}[0m\n"), "{text}");
+    assert!(
+        text.contains(
+            "harness claude-code\\u{1b}[31m; model \\u{1b}[31mclaude-opus-5-5\\u{1b}[0m;"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("| software.change/1\\u{9b}31m | story:\\u{7f}x | Error |"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| 1 | validator | tests.run\\u{1b}[2J |"),
+        "{text}"
+    );
+    assert!(
+        text.contains("- step 2: refusal by takt\\u{1b}]0;title\\u{7}\n"),
+        "{text}"
+    );
+    if let Some(home) = &home {
+        assert!(
+            text.contains("; stop Error (read ~/x/y \\u{1b}[2J)\n"),
+            "{text}"
+        );
+        assert!(
+            !text.contains(home.as_str()),
+            "the home directory is named:\n{text}"
+        );
+    }
+}
+
+/// The header's sources name the files relative to the case directory: `events.jsonl`, and
+/// `steps.jsonl` when it lies beside the record; a steps file elsewhere by its file name
+/// alone; the same for a case given by a relative path. No source is an absolute path or one
+/// under `~`.
+#[test]
+fn sources_are_named_relative_to_the_case_directory() {
+    let trace = trace("trial-1", true);
+    assert_eq!(
+        trace.header.sources,
+        vec!["events.jsonl".to_owned(), "steps.jsonl".to_owned()]
+    );
+    let dir = scratch("sources");
+    let elsewhere = dir.join("shim").join("t1-steps.jsonl");
+    fs::create_dir_all(elsewhere.parent().expect("a parent")).expect("a directory");
+    fs::copy(fixture("trial-1").join("steps.jsonl"), &elsewhere).expect("a copy");
+    let trace =
+        Trace::from_case(&fixture("trial-1"), Some(elsewhere.as_path()), None).expect("traces");
+    assert_eq!(
+        trace.header.sources,
+        vec!["events.jsonl".to_owned(), "t1-steps.jsonl".to_owned()]
+    );
+    let relative = Path::new("tests/fixtures/trace/trial-1");
+    let steps = relative.join("steps.jsonl");
+    let trace =
+        Trace::from_case(relative, Some(steps.as_path()), None).expect("a relative case traces");
+    assert_eq!(
+        trace.header.sources,
+        vec!["events.jsonl".to_owned(), "steps.jsonl".to_owned()]
+    );
+    for source in &trace.header.sources {
+        assert!(
+            !source.starts_with('/') && !source.starts_with('~'),
+            "{source}"
+        );
+    }
+}
+
+/// A record with no instants and a call that states no tokens: a figure no source states
+/// prints `unknown`, never 0. One `ci.read` with no span is `unknown (0.0 s over 0 of 1
+/// read)`, never `0.0 s over 1 read`; the tokens are `unknown`; takt's remainder is unknown;
+/// a sum over no operation is 0, stated; and the not-recorded list names the tokens and the
+/// times.
+#[test]
+fn an_unstated_figure_prints_unknown_never_zero() {
+    let lines = vec![
+        serde_json::json!({"step": 0, "event": "opened", "case": "takt-bare", "protocol": "software.change/1", "inputs": []}),
+        serde_json::json!({"step": 1, "event": "step", "by": "validator", "name": "takt.ci-read", "action": "ci.read", "summary": "checks on pull request #4 at abc: pass"}),
+        serde_json::json!({"step": 2, "event": "step", "by": "harness", "name": "claude-code", "action": "repository.inspect", "summary": "read"}),
+        serde_json::json!({"step": 2, "event": "stop", "stop": "NoProgress", "steps": 2, "tokens": 0}),
+    ];
+    let trace = Trace::from_lines(
+        &lines,
+        None,
+        "takt-bare",
+        None,
+        vec!["events.jsonl".to_owned()],
+    );
+    assert_eq!(trace.header.wall_s, None);
+    assert_eq!(
+        trace.header.tokens.sum, None,
+        "the one call states no tokens, so the sum is unknown"
+    );
+    let a = report::attribution(&trace);
+    assert_eq!(a.of(Actor::Forge), None, "{a:?}");
+    assert_eq!(a.of(Actor::Harness), None, "{a:?}");
+    assert_eq!(a.of(Actor::Takt), None, "{a:?}");
+    assert_eq!(
+        a.of(Actor::Validator),
+        Some(0.0),
+        "no validator step: a sum over nothing is 0, stated: {a:?}"
+    );
+    assert_eq!(
+        (a.ci_reads, a.ci_read_s.known, a.ci_read_s.of),
+        (1, 0, 1),
+        "{a:?}"
+    );
+    assert_eq!(a.per_ci_read(), None, "{a:?}");
+    assert_eq!(
+        (a.tokens.known, a.tokens.of, a.tokens.value()),
+        (0, 1, None),
+        "{a:?}"
+    );
+    let text = report_text(&trace);
+    assert!(
+        text.contains("\ntokens unknown (0 over 0 of 1 call): components not recorded; cost -\n"),
+        "{text}"
+    );
+    assert!(!text.contains("0.0 s over 1 read"), "{text}");
+    assert!(
+        text.contains("\nseconds per ci read: -; unknown (0.0 s over 0 of 1 read); waits on ci.read between them: 0, 0.0 s\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| forge | unknown (0 over 0 of 1 step) | - |\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| harness | unknown (0 over 0 of 1 call) | - |\n"),
+        "{text}"
+    );
+    assert!(text.contains("| validator | 0 | - |\n"), "{text}");
+    assert!(text.contains("| takt | unknown | - |\n"), "{text}");
+    assert!(
+        text.contains("| 1 | forge | ci.read | - | - | - | - | - |\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| takt-bare | software.change/1 | - | NoProgress | - | 2 | 1 | - | unknown (0 over 0 of 1 call) | - | 0 | unknown (0 over 0 of 1 step) | 0 | 0 | unknown (0 over 0 of 1 call) | - | unknown | 1 | - |\n"),
+        "the cross-run row: {text}"
+    );
+    let missing = report::not_recorded(&trace);
+    assert!(missing.contains(&"tokens"), "{missing:?}");
+    assert!(missing.contains(&"times"), "{missing:?}");
+}
+
+/// A sum some calls cannot join says how many did: of two calls, one states tokens and a
+/// duration and has instants, the other none of them, so the tokens and the harness's
+/// seconds print as `unknown (<stated> over 1 of 2 calls)`, the validator's seconds stand,
+/// and takt's remainder is unknown.
+#[test]
+fn a_sum_some_calls_cannot_join_says_how_many_did() {
+    let lines = vec![
+        serde_json::json!({"at": "2026-10-19T10:00:00.000000Z", "step": 0, "event": "opened", "case": "takt-mixed", "protocol": "software.change/1", "inputs": []}),
+        serde_json::json!({"at": "2026-10-19T10:00:10.000000Z", "step": 1, "event": "step", "by": "validator", "name": "takt.tests-run", "action": "tests.run", "summary": "the test command exited 0: pass"}),
+        serde_json::json!({"step": 2, "event": "step", "by": "harness", "name": "claude-code", "action": "repository.inspect", "summary": "read"}),
+        serde_json::json!({"at": "2026-10-19T10:00:30.000000Z", "step": 3, "event": "step", "by": "harness", "name": "claude-code", "action": "implementation.edit", "summary": "edited", "tokens": 1000, "duration_ms": 15000}),
+        serde_json::json!({"at": "2026-10-19T10:00:30.000000Z", "step": 3, "event": "stop", "stop": "Budget (steps)", "steps": 3, "tokens": 1000}),
+    ];
+    let trace = Trace::from_lines(
+        &lines,
+        None,
+        "takt-mixed",
+        None,
+        vec!["events.jsonl".to_owned()],
+    );
+    assert_eq!(trace.header.wall_s, Some(30.0));
+    assert_eq!(trace.header.tokens.sum, None);
+    let a = report::attribution(&trace);
+    assert_eq!(a.basis, Basis::Spans);
+    assert_eq!(a.of(Actor::Validator), Some(10.0), "{a:?}");
+    assert_eq!(a.of(Actor::Harness), None, "{a:?}");
+    assert_eq!(a.of(Actor::Takt), None, "{a:?}");
+    let harness = a.seconds[&Actor::Harness];
+    assert_eq!(
+        (harness.stated, harness.known, harness.of),
+        (20.0, 1, 2),
+        "{a:?}"
+    );
+    assert_eq!((a.tokens.stated, a.tokens.known, a.tokens.of), (1000, 1, 2));
+    let text = report_text(&trace);
+    assert!(text.contains("| validator | 10 | 33% |\n"), "{text}");
+    assert!(
+        text.contains("| harness | unknown (20 over 1 of 2 calls) | - |\n"),
+        "{text}"
+    );
+    assert!(text.contains("| takt | unknown | - |\n"), "{text}");
+    assert!(
+        text.contains(
+            "\ntokens unknown (1000 over 1 of 2 calls): components not recorded; cost -\n"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("| 2 | harness | repository.inspect | - | - | - | - | - |\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| 3 | harness | implementation.edit | 20.0 | 15.0 | - | 1000 | - |\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| takt-mixed | software.change/1 | - | Budget | 30 | 3 | 2 | - | unknown (1000 over 1 of 2 calls) | - | 10 | 0 | 0 | 0 | unknown (20 over 1 of 2 calls) | - | unknown | 0 | - |\n"),
+        "the cross-run row: {text}"
+    );
+    let missing = report::not_recorded(&trace);
+    assert!(
+        missing.contains(&"tokens") && missing.contains(&"times"),
+        "{missing:?}"
+    );
+    assert!(missing.contains(&"call durations"), "{missing:?}");
+}
+
+/// A symbolic link where `events.jsonl` should be is refused, never followed: by the trace
+/// and by the scorecard, which both read through [`Events::read`], and by [`Events::emit`],
+/// which leaves the link's target as it was. A link that leads nowhere is refused too, not
+/// read as no record and not written through.
+#[test]
+fn a_symlinked_record_is_refused_and_never_followed() {
+    let dir = scratch("symlink");
+    let real = dir.join("real");
+    fs::create_dir_all(&real).expect("a directory");
+    fs::copy(
+        fixture("trial-1").join("events.jsonl"),
+        real.join("events.jsonl"),
+    )
+    .expect("a copy");
+    let before = fs::read(real.join("events.jsonl")).expect("reads");
+    let repo = dir.join("repo");
+    let case = repo.join(CASES_DIR).join("takt-linked");
+    fs::create_dir_all(&case).expect("a case directory");
+    std::os::unix::fs::symlink(real.join("events.jsonl"), case.join("events.jsonl"))
+        .expect("a link");
+
+    let error = Trace::from_case(&case, None, None).expect_err("refused");
+    assert!(format!("{error:#}").contains("symbolic link"), "{error:#}");
+    assert!(format!("{error:#}").contains("events.jsonl"), "{error:#}");
+    let error = Scorecard::read(&repo).expect_err("refused");
+    assert!(format!("{error:#}").contains("symbolic link"), "{error:#}");
+    let planted = Event::Error {
+        error: "planted".to_owned(),
+    };
+    let error = Events::new(&case).emit(0, &planted).expect_err("refused");
+    assert!(format!("{error:#}").contains("symbolic link"), "{error:#}");
+    assert_eq!(
+        fs::read(real.join("events.jsonl")).expect("reads"),
+        before,
+        "the link's target is as it was"
+    );
+
+    let dangling = dir.join("dangling");
+    fs::create_dir_all(&dangling).expect("a directory");
+    std::os::unix::fs::symlink(dir.join("nowhere.jsonl"), dangling.join("events.jsonl"))
+        .expect("a link");
+    let error = Events::new(&dangling)
+        .read()
+        .expect_err("refused, not read as no record");
+    assert!(format!("{error:#}").contains("symbolic link"), "{error:#}");
+    let error = Events::new(&dangling)
+        .emit(0, &planted)
+        .expect_err("refused");
+    assert!(format!("{error:#}").contains("symbolic link"), "{error:#}");
+    assert!(
+        !dir.join("nowhere.jsonl").exists(),
+        "nothing was created through the link"
     );
 }

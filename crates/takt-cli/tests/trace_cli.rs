@@ -85,7 +85,7 @@ fn trace_prints_a_header_then_one_line_per_operation() {
     assert_eq!(trace.header.format, "takt-trace/1");
     assert_eq!(trace.header.run, "trial-1");
     assert_eq!(trace.header.case, "takt-20261018T205520Z");
-    assert_eq!(trace.header.tokens.sum, 592_698);
+    assert_eq!(trace.header.tokens.sum, Some(592_698));
     assert_eq!(trace.header.model.as_deref(), Some("claude-opus-5-5"));
     assert_eq!(trace.ops.len(), 7);
     let second = &trace.ops[1];
@@ -172,4 +172,39 @@ fn refusals_name_their_reason() {
 
     let (code, _, stderr) = takt(&["report"]);
     assert_eq!(code, 2, "{stderr}");
+}
+
+/// The trace names its sources relative to the case directory whatever `HOME` is: with
+/// `HOME` pointing nowhere and the case given by an absolute path, the header's `sources`
+/// are `events.jsonl` and `steps.jsonl`, and no line holds the case's path.
+#[test]
+fn sources_are_relative_whatever_home_is() {
+    let case = fixture("trial-1");
+    let steps = fixture("trial-1/steps.jsonl");
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args(["trace", "--case", &case, "--steps", &steps])
+        .env("HOME", "/nonexistent")
+        .output()
+        .expect("takt runs");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let absolute = Path::new(FIXTURES)
+        .canonicalize()
+        .expect("the fixtures")
+        .display()
+        .to_string();
+    for line in stdout.lines() {
+        assert!(!line.contains("/home/"), "{line}");
+        assert!(!line.contains(&absolute), "{line}");
+        assert!(!line.contains(FIXTURES), "{line}");
+    }
+    let dir = scratch("home");
+    let file = dir.join("trial-1.jsonl");
+    fs::write(&file, &stdout).expect("the printed trace is kept");
+    let trace = takt::trace::Trace::load(&file).expect("the printed trace reads back");
+    assert_eq!(
+        trace.header.sources,
+        vec!["events.jsonl".to_owned(), "steps.jsonl".to_owned()]
+    );
 }

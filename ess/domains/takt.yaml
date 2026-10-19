@@ -378,10 +378,10 @@ types:
   # an earlier takt wrote carries the store's instant as a second `at`, read as `observed_at`.
   # read from: crates/takt/src/events.rs:1-11
   # read from: crates/takt/src/events.rs:171-178
-  # read from: crates/takt/src/events.rs:201-230
-  # read from: crates/takt/src/events.rs:265-322
+  # read from: crates/takt/src/events.rs:201-232
+  # read from: crates/takt/src/events.rs:286-348
   # read from: crates/takt/src/events.rs:27-36
-  # read from: crates/takt/src/events.rs:326-338
+  # read from: crates/takt/src/events.rs:352-364
   - name: takt.work.RunEventLine
     kind: struct
     fields:
@@ -658,7 +658,7 @@ types:
   # The line `line`, counted from 1, was cut short, without its end, and is skipped on read;
   # written with the next event, which ends the torn line first.
   # read from: crates/takt/src/events.rs:160-162
-  # read from: crates/takt/src/events.rs:201-230
+  # read from: crates/takt/src/events.rs:201-232
   - name: takt.work.RunSkipped
     kind: struct
     fields:
@@ -1140,8 +1140,8 @@ types:
 
   # A trace's id: the run's name, `--run` when given, else the case id; one trace per case,
   # every run of the case inside.
-  # read from: crates/takt/src/trace.rs:264-267
-  # read from: crates/takt/src/trace.rs:1083-1086
+  # read from: crates/takt/src/trace.rs:265-268
+  # read from: crates/takt/src/trace.rs:1142-1145
   - name: takt.work.TraceId
     kind: newtype
     of: String
@@ -1215,7 +1215,7 @@ types:
   # is its outcome as the scorecard names it. The label is a pattern mark: `approval-only call`,
   # `seed pr.open`, `2nd CI`, `inspect, then NoProgress` or `repeated failure (as step N)`.
   # read from: crates/takt/src/trace.rs:174-232
-  # read from: crates/takt/src/trace.rs:373-484
+  # read from: crates/takt/src/trace.rs:437-548
   - name: takt.work.TraceOperation
     kind: struct
     fields:
@@ -1265,7 +1265,8 @@ types:
         type: Optional<String>
 
   # The run's tokens: the components summed over its model calls when every call states them,
-  # and the sum of the calls' tokens (each the step's `tokens`, else its components' sum).
+  # and the sum of the calls' tokens (each the step's `tokens`, else its components' sum) when
+  # every call states one; a sum some call cannot join is absent, never a smaller number.
   # read from: crates/takt/src/trace.rs:248-257
   - name: takt.work.TraceTokens
     kind: struct
@@ -1279,7 +1280,7 @@ types:
       - name: cache_write
         type: Optional<Integer>
       - name: sum
-        type: Integer
+        type: Optional<Integer>
 
   # A confinement adapter's name: the one seam every process a run spawns starts through (the
   # test command, the harness child, git, the bot-route forge, the `aep` frontier), `none` the
@@ -1659,7 +1660,7 @@ entities:
       # before it, so the file holds every run of the case in order, each opening with `opened`
       # and ending with `stop` or `error`.
       # read from: crates/takt/src/events.rs:1-11
-      # read from: crates/takt/src/events.rs:201-230
+      # read from: crates/takt/src/events.rs:201-232
       # read from: crates/takt/src/run.rs:2910-2965
       - name: events
         type: List<takt.work.RunEventLine>
@@ -2437,8 +2438,8 @@ entities:
   # (`--steps`), and `notes` say which fields it supplied. A free-running harness's run has no
   # case and no trace yet (story:normalized-harness-trace).
   # read from: crates/takt/src/trace.rs:1-16
-  # read from: crates/takt/src/trace.rs:259-305
-  # read from: crates/takt/src/trace.rs:1083-1086
+  # read from: crates/takt/src/trace.rs:260-306
+  # read from: crates/takt/src/trace.rs:1142-1145
   # read from: crates/takt-cli/src/main.rs:52-62
   # read from: crates/takt/src/report.rs:1-9
   - name: takt.work.Trace
@@ -2501,13 +2502,16 @@ entities:
         summary: The held-out check; the record never holds it.
       - name: sources
         type: List<String>
+        summary: >-
+          The trace's source files, each named relative to the case directory, or by its file
+          name alone when it lies elsewhere; never an absolute path.
       - name: notes
         type: List<String>
       - name: operations
         type: List<takt.work.TraceOperation>
     relations:
       # A trace renders one case's record, every run of the case inside.
-      # read from: crates/takt/src/trace.rs:1083-1086
+      # read from: crates/takt/src/trace.rs:1142-1145
       - name: case
         kind: references
         target: takt.work.Case

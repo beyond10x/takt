@@ -17,7 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -246,14 +246,15 @@ impl Op {
 }
 
 /// The run's tokens: the components summed over its model calls when every call states them,
-/// and the sum of the calls' tokens.
+/// and the sum of the calls' tokens (each the step's `tokens`, else its components' sum) when
+/// every call states one; a sum some call cannot join is absent, never a smaller number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Tokens {
     pub input: Option<u64>,
     pub output: Option<u64>,
     pub cache_read: Option<u64>,
     pub cache_write: Option<u64>,
-    pub sum: u64,
+    pub sum: Option<u64>,
 }
 
 /// The trace's first line: the run.
@@ -298,7 +299,8 @@ pub struct Header {
     pub cost_usd: Option<f64>,
     /// The held-out check; never in the record.
     pub acceptance: Option<String>,
-    /// The files the trace was read from, `~` for the home directory.
+    /// The files the trace was read from, each relative to the case directory, or its file
+    /// name alone when it lies elsewhere; never an absolute path.
     pub sources: Vec<String>,
     /// What the steps file supplied, and what did not match.
     pub notes: Vec<String>,
@@ -308,8 +310,8 @@ pub struct Header {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Line {
-    Header(Header),
-    Op(Op),
+    Header(Box<Header>),
+    Op(Box<Op>),
 }
 
 /// One run's trace.
@@ -331,15 +333,77 @@ fn round_ms(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
 }
 
-/// `path`, absolute, with the home directory as `~`.
-fn tilde(path: &Path) -> String {
-    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    if let Some(home) = std::env::var_os("HOME")
-        && let Ok(rest) = absolute.strip_prefix(PathBuf::from(home))
-    {
-        return format!("~/{}", rest.display());
+/// `path` as the trace names a source: relative to the case directory when it lies under it
+/// (`events.jsonl`, `steps.jsonl`), else its file name alone; never an absolute path and
+/// never one under `~`, so a trace carries no local path whatever `HOME` is.
+fn source_name(case_dir: &Path, path: &Path) -> String {
+    let resolved = |path: &Path| {
+        std::fs::canonicalize(path)
+            .or_else(|_| std::path::absolute(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    let name = |path: &Path| path.to_string_lossy().into_owned();
+    match resolved(path).strip_prefix(resolved(case_dir)) {
+        Ok(rest) if !rest.as_os_str().is_empty() => name(rest),
+        _ => path
+            .file_name()
+            .map_or_else(|| name(path), |file| name(Path::new(file))),
     }
-    absolute.display().to_string()
+}
+
+/// `text` as a trace carries it and a report prints it, the one escape every text a record
+/// contributes passes: the home directory as `~`, so no local path travels, and each control
+/// character (C0, DEL and C1) as `\u{..}`, so a record a harness shaped cannot drive the
+/// terminal a report is read on. Passing a text through twice changes nothing.
+#[must_use]
+pub fn escape(text: &str) -> String {
+    let home = std::env::var_os("HOME").map(|home| home.to_string_lossy().into_owned());
+    escape_with(text, home.as_deref())
+}
+
+/// [`escape`] with the home directory given: each occurrence of `home` that no more of a
+/// name follows becomes `~`, so `<home>/x` reads `~/x` and `<home>name` is left as it is.
+fn escape_with(text: &str, home: Option<&str>) -> String {
+    let home = home
+        .map(|home| home.trim_end_matches('/'))
+        .filter(|home| !home.is_empty());
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        if let Some(home) = home
+            && let Some(after) = rest.strip_prefix(home)
+            && !after.starts_with(continues_name)
+        {
+            out.push('~');
+            rest = after;
+            continue;
+        }
+        if c.is_control() {
+            out.push_str(&format!("\\u{{{:x}}}", u32::from(c)));
+        } else {
+            out.push(c);
+        }
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
+/// Whether `c` continues a path component's name, so a home directory it follows was not
+/// the one named.
+fn continues_name(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '.')
+}
+
+/// The four components of a shim line's `usage`, when it states every one of them; a line
+/// that states fewer supplies none, never a 0 for the one it lacks.
+fn components(usage: &serde_json::Map<String, Value>) -> Option<OpTokens> {
+    let component = |key: &str| usage.get(key).and_then(Value::as_u64);
+    Some(OpTokens {
+        input: component("input_tokens")?,
+        output: component("output_tokens")?,
+        cache_read: component("cache_read_input_tokens")?,
+        cache_write: component("cache_creation_input_tokens")?,
+    })
 }
 
 /// `summary` without its durations (`7.89s`, `0.007s`, `12ms`), so two failures that differ
@@ -580,8 +644,9 @@ impl Builder {
         seq - 1
     }
 
+    /// The text at `key`, escaped ([`escape`]), when the line holds one.
     fn text(line: &Value, key: &str) -> Option<String> {
-        line[key].as_str().map(str::to_owned)
+        line[key].as_str().map(escape)
     }
 
     fn line(&mut self, line: &Value) {
@@ -618,7 +683,7 @@ impl Builder {
                 if self.t0.is_none()
                     && let (Some(at), Some(text)) = (at, at_text)
                 {
-                    self.t0 = Some((at, text.to_owned()));
+                    self.t0 = Some((at, escape(text)));
                 }
                 self.case = self.case.take().or_else(|| Self::text(line, "case"));
                 self.protocol = self
@@ -647,7 +712,7 @@ impl Builder {
                 let draft = &mut self.drafts[index];
                 draft.summary = Some(summary.to_owned());
                 let op = &mut draft.op;
-                op.action = Some(action.to_owned());
+                op.action = Some(escape(action));
                 op.name = Self::text(line, "name");
                 op.outcome = class.outcome.map(str::to_owned);
                 op.evidence = Some(class.evidence);
@@ -674,7 +739,11 @@ impl Builder {
                 if let Some(index) = self.pending_harness.take() {
                     let op = &mut self.drafts[index].op;
                     let paths: Vec<String> =
-                        serde_json::from_value(line["paths"].clone()).unwrap_or_default();
+                        serde_json::from_value::<Vec<String>>(line["paths"].clone())
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|path| escape(path))
+                            .collect();
                     if paths.is_empty() {
                         op.outcome = Some("unchanged".to_owned());
                     } else {
@@ -706,7 +775,7 @@ impl Builder {
                 };
                 let index = self.push(step, Actor::Idle, Intent::Wait, kind, at, None);
                 let op = &mut self.drafts[index].op;
-                op.action = Some(on.join(","));
+                op.action = Some(escape(&on.join(",")));
                 op.evidence = Some(Evidence::Observed);
                 self.pending_idle = Some(index);
             }
@@ -738,8 +807,8 @@ impl Builder {
                 op.evidence = Some(Evidence::Observed);
             }
             "stop" => {
-                let stop = line["stop"].as_str().unwrap_or("");
-                let outcome = outcome_of(Some(stop), self.run_errors);
+                let stop = escape(line["stop"].as_str().unwrap_or(""));
+                let outcome = outcome_of(Some(&stop), self.run_errors);
                 let (actor, intent, kind) = match outcome.as_str() {
                     "ApprovalRequired" => (Actor::Human, Intent::Wait, Kind::ApprovalWait),
                     "NoProgress" => (Actor::Takt, Intent::Coordinate, Kind::NoProgress),
@@ -749,7 +818,7 @@ impl Builder {
                 let op = &mut self.drafts[index].op;
                 op.outcome = Some(outcome);
                 op.evidence = Some(Evidence::Observed);
-                self.stop = Some(stop.to_owned());
+                self.stop = Some(stop);
                 self.pending_stop = at;
                 self.pending_harness = None;
                 self.pending_validator = None;
@@ -758,7 +827,7 @@ impl Builder {
         }
         if let (Some(at), Some(text)) = (at, at_text) {
             self.previous = Some(at);
-            self.last = Some((at, text.to_owned()));
+            self.last = Some((at, escape(text)));
         }
     }
 
@@ -871,28 +940,23 @@ impl Builder {
             let op = &mut self.drafts[*index].op;
             if op.tokens.is_none()
                 && let Some(usage) = line["usage"].as_object()
+                && let Some(tokens) = components(usage)
+                && tokens.sum() > 0
             {
-                let component = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
-                let tokens = OpTokens {
-                    input: component("input_tokens"),
-                    output: component("output_tokens"),
-                    cache_read: component("cache_read_input_tokens"),
-                    cache_write: component("cache_creation_input_tokens"),
-                };
-                if tokens.sum() > 0 {
-                    op.tokens = Some(tokens);
-                    supplied.insert("token components");
-                    if op.tokens_sum.is_none() {
-                        op.tokens_sum = Some(tokens.sum());
-                        supplied.insert("tokens");
-                    }
+                op.tokens = Some(tokens);
+                supplied.insert("token components");
+                if op.tokens_sum.is_none() {
+                    op.tokens_sum = Some(tokens.sum());
+                    supplied.insert("tokens");
                 }
             }
             if op.model.is_none()
                 && let Some(models) = line["modelUsage"].as_object()
                 && !models.is_empty()
             {
-                op.model = Some(models.keys().cloned().collect::<Vec<_>>().join("+"));
+                op.model = Some(escape(
+                    &models.keys().cloned().collect::<Vec<_>>().join("+"),
+                ));
                 supplied.insert("model");
             }
             if op.cost_usd.is_none()
@@ -998,18 +1062,16 @@ impl Builder {
             cache_write: all(|op| op.tokens.map(|tokens| tokens.cache_write)),
             sum: calls
                 .iter()
-                .map(|op| op.tokens_sum.unwrap_or(0))
-                .fold(0_u64, u64::saturating_add),
+                .map(|op| op.tokens_sum)
+                .try_fold(0_u64, |sum, tokens| Some(sum.saturating_add(tokens?))),
         };
-        let cost_usd = if calls.is_empty() || calls.iter().any(|op| op.cost_usd.is_none()) {
+        let cost_usd = if calls.is_empty() {
             None
         } else {
-            Some(
-                calls
-                    .iter()
-                    .map(|op| op.cost_usd.unwrap_or(0.0))
-                    .fold(0.0, |sum, cost| sum + cost),
-            )
+            calls
+                .iter()
+                .map(|op| op.cost_usd)
+                .try_fold(0.0, |sum, cost| Some(sum + cost?))
         };
         let mut models: Vec<String> = Vec::new();
         for op in &calls {
@@ -1019,10 +1081,7 @@ impl Builder {
                 models.push(model.clone());
             }
         }
-        let case = self
-            .case
-            .clone()
-            .unwrap_or_else(|| case_dir_name.to_owned());
+        let case = self.case.clone().unwrap_or_else(|| escape(case_dir_name));
         let revision = self
             .binary
             .as_deref()
@@ -1034,7 +1093,7 @@ impl Builder {
         };
         let header = Header {
             format: FORMAT.to_owned(),
-            run: run.map_or_else(|| case.clone(), str::to_owned),
+            run: run.map_or_else(|| case.clone(), escape),
             scenario: scenario_of(&case).map(str::to_owned),
             case,
             arm: ARM.to_owned(),
@@ -1093,9 +1152,9 @@ impl Trace {
         }
         let lines = Events::new(case_dir).read()?;
         let shim = steps.map(read_steps).transpose()?;
-        let mut sources = vec![tilde(&events)];
+        let mut sources = vec![source_name(case_dir, &events)];
         if let Some(path) = steps {
-            sources.push(tilde(path));
+            sources.push(source_name(case_dir, path));
         }
         let name = case_dir
             .file_name()
@@ -1143,12 +1202,13 @@ impl Trace {
 
     /// Writes the trace: the header line, then one line per operation.
     pub fn write(&self, out: &mut dyn Write) -> Result<()> {
-        let mut text = serde_json::to_string(&Line::Header(self.header.clone()))
+        let mut text = serde_json::to_string(&Line::Header(Box::new(self.header.clone())))
             .context("write the trace header")?;
         text.push('\n');
         for op in &self.ops {
             text.push_str(
-                &serde_json::to_string(&Line::Op(op.clone())).context("write an operation")?,
+                &serde_json::to_string(&Line::Op(Box::new(op.clone())))
+                    .context("write an operation")?,
             );
             text.push('\n');
         }
@@ -1198,7 +1258,7 @@ impl Trace {
                             found.format
                         );
                     }
-                    header = Some(found);
+                    header = Some(*found);
                 }
                 Line::Op(op) => {
                     if header.is_none() {
@@ -1208,7 +1268,7 @@ impl Trace {
                             n + 1
                         );
                     }
-                    ops.push(op);
+                    ops.push(*op);
                 }
             }
         }
@@ -1286,5 +1346,28 @@ mod tests {
     fn seconds_round_to_the_millisecond() {
         assert_eq!(seconds(30_003_589_000), 30.003);
         assert_eq!(round_ms(44.000_000_001), 44.0);
+    }
+
+    #[test]
+    fn every_text_passes_one_escape() {
+        assert_eq!(
+            escape_with("a\u{1b}[31mb\u{7f}c\u{9b}d", None),
+            "a\\u{1b}[31mb\\u{7f}c\\u{9b}d"
+        );
+        assert_eq!(escape_with("\n\t", None), "\\u{a}\\u{9}");
+        assert_eq!(
+            escape_with("read /srv/u/x and /srv/user/y", Some("/srv/u")),
+            "read ~/x and /srv/user/y"
+        );
+        assert_eq!(escape_with("/srv/u", Some("/srv/u/")), "~");
+        assert_eq!(escape_with("/x", Some("/")), "/x");
+        assert_eq!(escape_with("plain", Some("")), "plain");
+        assert_eq!(escape_with("plain", None), "plain");
+        let once = escape_with("Error (read /srv/u/x \u{1b}[2J)", Some("/srv/u"));
+        assert_eq!(
+            escape_with(&once, Some("/srv/u")),
+            once,
+            "escaping twice changes nothing"
+        );
     }
 }

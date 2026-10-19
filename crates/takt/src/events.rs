@@ -10,7 +10,7 @@
 //! The file lies in the case directory, which a judgement step and a validator's command may
 //! not write: a line in it was written by the kernel.
 
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
@@ -202,13 +202,16 @@ impl Events {
     /// last line was cut short (a write that hit a full disk, a process killed mid-write) has no
     /// end to that line: it is ended first, and a [`Event::Skipped`] line naming it is written
     /// before the event, in the same write, so the event is never appended to a torn line and
-    /// the reader knows the torn one was skipped.
+    /// the reader knows the torn one was skipped. A symbolic link at the path is refused, never
+    /// written through ([`Events::open`]).
     pub fn emit(&self, step: u64, event: &Event) -> Result<()> {
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .append(true)
-            .open(&self.path)
+        let mut file = self
+            .open(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .read(true)
+                    .append(true),
+            )
             .with_context(|| format!("open {}", self.path.display()))?;
         let mut text = String::new();
         if let Some(line) = self
@@ -227,6 +230,24 @@ impl Events {
         text.push_str(&Self::line(step, event)?);
         file.write_all(text.as_bytes())
             .with_context(|| format!("write {}", self.path.display()))
+    }
+
+    /// Opens the record with `options`, never through a symbolic link at its path
+    /// (`O_NOFOLLOW`): the record is the plain file the kernel wrote, and a link there would
+    /// read as, or append to, some other file. The open itself refuses the link, so no check
+    /// races it; the refusal says so, and holds for a link that leads nowhere too.
+    fn open(&self, options: &mut std::fs::OpenOptions) -> std::io::Result<std::fs::File> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&self.path)
+            .map_err(|error| {
+                if error.raw_os_error() == Some(libc::ELOOP) {
+                    std::io::Error::other("a symbolic link, which a run record never is: refused")
+                } else {
+                    error
+                }
+            })
     }
 
     /// `event` at `step`, the instant now, as one line with its end.
@@ -270,14 +291,19 @@ impl Events {
     /// last of them is such a line. Any other line that does not read is an error naming the
     /// file and the line. A line's `at` is its first: a `store_evidence` line an earlier takt
     /// wrote carries the store's instant as a second `at`, which is read as `observed_at`.
+    /// A symbolic link at the path is refused, never read through ([`Events::open`]).
     pub fn read(&self) -> Result<Vec<serde_json::Value>> {
-        let text = match std::fs::read_to_string(&self.path) {
-            Ok(text) => text,
+        let mut text = String::new();
+        match self.open(std::fs::OpenOptions::new().read(true)) {
+            Ok(mut file) => {
+                file.read_to_string(&mut text)
+                    .with_context(|| format!("read {}", self.path.display()))?;
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => {
                 return Err(error).with_context(|| format!("read {}", self.path.display()));
             }
-        };
+        }
         let ended = text.ends_with('\n');
         let lines: Vec<&str> = text.split_terminator('\n').collect();
         let parsed: Vec<Option<serde_json::Value>> =
