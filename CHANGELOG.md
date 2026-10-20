@@ -4,7 +4,12 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 `[workspace.package] version` in `Cargo.toml` and has a section `## [<version>] — <date>` here;
 `.github/workflows/release.yml` checks that, runs `task check` and publishes the binaries.
 
-## [Unreleased]
+## [0.6.0] — 2026-10-20
+
+The minor version moves because a run whose harness step recorded no tokens has unknown tokens
+(the `tokens` and `step_tokens` definitions move to version 2, so a stored baseline is judged
+again only after `takt promote --rebaseline`), a run records the layers it ran on, and the gate's
+reader fails closed on lines 0.5.0 read.
 
 ### Changed
 
@@ -22,15 +27,20 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 - The step guard reads the same forms and is stricter in five places: a shell reading the
   input a redirection-only `exec` set, `python -` with an unknown input, the wrappers above, an
   `env -S` string split into words, and a program the reader does not know given one it knows
-  (`doas python3 …`), which fails closed naming both.
+  (`doas python3 …`), which fails closed naming both; a file of the tree given one
+  (`scripts/gate-exec python3 …`) is compared whole at the base and read as running that
+  program with the words after it.
 
 ### Added
 
-- A run's `opened` line records `layers`, layer name to revision, read from what ran and never
-  typed: `takt` (the binary's revision), `harness` (the program's own version), and the model
-  from the steps' stream (ADR 0101). `takt scorecard` prints the layers of the runs it scores
-  and refuses to score runs whose layers differ, naming the layer, unless `--across-layers`;
-  a record without `layers` reads as not recorded, never as a revision.
+- A run records its layers, layer name to revision, read from what ran and never typed (ADR
+  0101): the `opened` line's `layers` names `takt` (the binary's revision); each harness step's
+  line names the harness program's own version as its stream stated it (`version`; Claude
+  Code's `claude_code_version` in the `system`/`init` event) and the model (`model`). takt runs
+  the harness program in a judgement step and nowhere else, never for its version. `takt
+  scorecard` joins the `harness` and `model` layers from the step lines, prints the layers of
+  the runs it scores and refuses to score runs whose layers differ, naming the layer, unless
+  `--across-layers`; a record without `layers` reads as not recorded, never as a revision.
 - `takt report` attributes tokens, cost, wall time and failures by layer, per run and in total,
   each figure naming the record line it came from (`events.jsonl:<n>`); a figure a layer's
   record does not state prints `not reported`, never 0; a run whose layers wrote no records is
