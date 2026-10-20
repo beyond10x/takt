@@ -965,6 +965,118 @@ fn a_changed_metric_definition_prints_both_figures_for_one_cycle() {
     assert!(!text.contains(&format!("v{current}")), "{text}");
 }
 
+/// story:the-scorecard-names-no-metric-it-did-not-compute, acceptances 2 and 3: against a saved
+/// scorecard every definition of which is at another version, each metric of `METRICS` either
+/// prints its own medians, the saved side's and this side's under their versions, as it did
+/// (`median wall` the wall time, and the wall time under no other name), or is known to have no
+/// per-case figure (`step_tokens`, a map by action) and prints none. A metric added later is one
+/// or the other, or this fails naming it.
+#[test]
+fn each_metric_prints_its_own_medians_or_is_known_to_have_none() {
+    use std::collections::BTreeMap;
+    use takt::scorecard::{METRICS, Row, rank};
+
+    /// The metrics no case has one figure of.
+    const NO_FIGURE: [&str; 1] = ["step_tokens"];
+    // steps, tokens, refusals, no_progress, errors, wall_ms
+    let row = |case: &str, outcome: &str, figures: [u64; 6]| {
+        let [steps, tokens, refusals, no_progress, errors, wall_ms] = figures;
+        Row {
+            case: case.to_owned(),
+            scenario: Some("1".to_owned()),
+            outcome: outcome.to_owned(),
+            stop: outcome.to_owned(),
+            held_out: None,
+            steps,
+            tokens: Some(tokens),
+            refusals,
+            no_progress,
+            errors,
+            wall_ms,
+            saturated: false,
+            binary: None,
+            opened_binary: None,
+            completed: None,
+            step_tokens: BTreeMap::from([("implementation.edit".to_owned(), Some(tokens))]),
+            layers: None,
+        }
+    };
+    let empty = scratch("medians");
+    let mut candidate = Scorecard::read(&empty).expect("an empty scorecard");
+    // One case a side: compared under a rule of one trial, since this case is about the medians.
+    candidate.rule.trials = 1;
+    let mut saved = candidate.clone();
+    for version in saved.metrics.values_mut() {
+        *version += 1;
+    }
+    saved.rows.push(row(
+        "scenario-1-trial-1",
+        "NoProgress",
+        [5, 450, 8, 1, 6, 9000],
+    ));
+    candidate.rows.push(row(
+        "scenario-1-trial-2",
+        "accepted",
+        [3, 500, 2, 0, 4, 7000],
+    ));
+    // Each metric's figures, the saved side's and this side's, distinct from every other's.
+    let figures: BTreeMap<&str, (u64, u64)> = BTreeMap::from([
+        (
+            "outcome",
+            (u64::from(rank("NoProgress")), u64::from(rank("accepted"))),
+        ),
+        ("steps", (5, 3)),
+        ("tokens", (450, 500)),
+        ("refusals", (8, 2)),
+        ("no_progress", (1, 0)),
+        ("errors", (6, 4)),
+        ("wall", (9000, 7000)),
+    ]);
+
+    let mut out = Vec::new();
+    candidate
+        .against(&saved, &mut out)
+        .expect("the comparison prints");
+    let text = String::from_utf8(out).expect("utf-8");
+    let medians: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("scenario 1  median "))
+        .collect();
+    for (metric, version) in METRICS {
+        let named: Vec<&str> = medians
+            .iter()
+            .copied()
+            .filter(|line| line.starts_with(&format!("scenario 1  median {metric} ")))
+            .collect();
+        match (figures.get(metric), NO_FIGURE.contains(&metric)) {
+            (Some((was, is)), false) => assert_eq!(
+                named,
+                [format!(
+                    "scenario 1  median {metric} v{} {was} v{version} {is}",
+                    version + 1
+                )],
+                "{text}"
+            ),
+            (None, true) => assert!(
+                named.is_empty(),
+                "{metric} has no per-case figure, yet: {named:?}\n{text}"
+            ),
+            _ => panic!(
+                "{metric} is in METRICS but is not exactly one of a metric with a per-case figure this test knows and one known to have none\n{text}"
+            ),
+        }
+    }
+    assert_eq!(
+        medians.len(),
+        figures.len(),
+        "a median line a metric with a figure, and no other: {text}"
+    );
+    assert!(
+        text.contains("scenario 1  outcomes by rank held  tokens held  not worse"),
+        "{text}"
+    );
+}
+
 /// The saved scorecard carries its metric definitions' versions, the revision that names it
 /// and what named it.
 #[test]

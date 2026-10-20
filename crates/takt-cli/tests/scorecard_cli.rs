@@ -948,3 +948,39 @@ fn runs_whose_layers_differ_are_refused_unless_across_layers() {
     assert!(text.contains("--across-layers"), "{text}");
     assert!(text.contains("layers differ"), "{text}");
 }
+
+/// story:the-scorecard-names-no-metric-it-did-not-compute, acceptance 1: against a saved
+/// scorecard whose `step_tokens` definition differs from this takt's, absent as in a file saved
+/// before the metric (`v-`) or at another version, `takt scorecard --against` prints no `median
+/// step_tokens` line: the metric is a map by action with no per-case figure, and no line shows
+/// another metric's figures (wall time) under its name. The verdict is the one it was.
+#[test]
+fn against_a_changed_step_tokens_definition_prints_no_median_of_it() {
+    let baseline = repository_of("step-tokens-baseline", &five_accepted(1, 1));
+    let candidate = repository_of("step-tokens-candidate", &five_accepted(1, 6));
+    for (n, other) in [None, Some(1)].into_iter().enumerate() {
+        let saves = scratch(&format!("step-tokens-saves-{n}"));
+        let path = saved(&baseline, &saves);
+        let mut file: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("the saved scorecard"))
+                .expect("json");
+        let metrics = file["metrics"].as_object_mut().expect("the definitions");
+        let current = metrics
+            .remove("step_tokens")
+            .and_then(|version| version.as_u64())
+            .expect("a step_tokens definition");
+        if let Some(other) = other {
+            assert_ne!(other, current, "another version");
+            metrics.insert("step_tokens".to_owned(), other.into());
+        }
+        fs::write(&path, serde_json::to_string(&file).expect("json")).expect("the file");
+
+        let (code, text, stderr) = against(&candidate, &path);
+        assert_eq!(code, 0, "{text}{stderr}");
+        assert!(!text.contains("median step_tokens"), "{text}");
+        assert!(
+            text.contains("scenario 1  outcomes by rank held  tokens held  not worse"),
+            "{text}"
+        );
+    }
+}

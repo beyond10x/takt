@@ -33,7 +33,8 @@
 //! printed per
 //! scenario and side as n, minimum, median and maximum over cases with the difference of the
 //! medians. A metric whose definition changed between the two is printed with both figures and
-//! does not make a scenario worse; outcomes are compared under the current definition whatever
+//! does not make a scenario worse, but for one with no figure a case (`step_tokens`, by action),
+//! which prints none; outcomes are compared under the current definition whatever
 //! the saved one's version. The rule applied is printed with every comparison.
 //!
 //! A candidate that targets steps (the actions its finding names) is judged on them too
@@ -836,16 +837,18 @@ fn figure(case: &Case, metric: &str) -> String {
 }
 
 /// A metric's figure of `case` as a number, a scenario's median is taken over: an outcome by
-/// its rank, wall time in milliseconds.
-fn number(case: &Case, metric: &str) -> u64 {
+/// its rank, wall time in milliseconds; none for a metric with no figure a case, `step_tokens`
+/// (by action) or one this function does not name, never another metric's.
+fn number(case: &Case, metric: &str) -> Option<u64> {
     match metric {
-        "outcome" => u64::from(rank(&case.outcome)),
-        "steps" => case.steps,
-        "tokens" => case.tokens,
-        "refusals" => case.refusals,
-        "no_progress" => case.no_progress,
-        "errors" => case.errors,
-        _ => case.wall_ms,
+        "outcome" => Some(u64::from(rank(&case.outcome))),
+        "steps" => Some(case.steps),
+        "tokens" => Some(case.tokens),
+        "refusals" => Some(case.refusals),
+        "no_progress" => Some(case.no_progress),
+        "errors" => Some(case.errors),
+        "wall" => Some(case.wall_ms),
+        _ => None,
     }
 }
 
@@ -1445,7 +1448,8 @@ impl Scorecard {
     /// Compares this scorecard with `saved`, scenario by scenario, over cases, under this
     /// scorecard's [`Rule`], printed first: each case and its outcome; each side's n and the
     /// minimum, median and maximum of tokens, and the difference of the medians; both figures
-    /// of every metric whose definition's version differs; each outcome rank at which the
+    /// of every metric whose definition's version differs, none for one with no figure a case
+    /// (`step_tokens`, by action); each outcome rank at which the
     /// candidate falls short, with both counts; then the verdict. A scenario is worse when, for
     /// some rank, the candidate's cases at that rank or better fall short of the saved share of
     /// the candidate's n by more than the margin (at equal n: by more than `margin` cases),
@@ -1610,13 +1614,13 @@ impl Scorecard {
                 unsaved.push(format!("scenario {scenario}"));
                 continue;
             }
+            // A metric's median over `cases`; none for a metric with no figure a case.
             let median = |cases: &[Case], metric: &str| {
-                median2(
-                    &cases
-                        .iter()
-                        .map(|case| number(case, metric))
-                        .collect::<Vec<_>>(),
-                )
+                cases
+                    .iter()
+                    .map(|case| number(case, metric))
+                    .collect::<Option<Vec<_>>>()
+                    .map(|figures| median2(&figures))
             };
             for (side, cases) in [("saved", &baseline), ("candidate", &candidate)] {
                 let tokens: Vec<u64> = cases.iter().map(|case| case.tokens).collect();
@@ -1629,8 +1633,9 @@ impl Scorecard {
                     half(median2(&tokens))
                 )?;
             }
-            let (saved_tokens, tokens) =
-                (median(&baseline, "tokens"), median(&candidate, "tokens"));
+            let tokens_median =
+                |cases: &[Case]| median2(&cases.iter().map(|case| case.tokens).collect::<Vec<_>>());
+            let (saved_tokens, tokens) = (tokens_median(&baseline), tokens_median(&candidate));
             let mut over_tokens = false;
             if changed("tokens") {
                 writeln!(
@@ -1661,14 +1666,20 @@ impl Scorecard {
                 }
             }
             for (metric, _) in METRICS {
-                if metric != "tokens" && changed(metric) {
+                // A metric with no figure a case (`step_tokens`, by action) has no median and
+                // prints none, never another metric's figures under its name.
+                if metric != "tokens"
+                    && changed(metric)
+                    && let (Some(was), Some(is)) =
+                        (median(&baseline, metric), median(&candidate, metric))
+                {
                     writeln!(
                         out,
                         "scenario {scenario}  median {metric} {} {} {} {}",
                         version(saved, metric),
-                        half(median(&baseline, metric)),
+                        half(was),
                         version(self, metric),
-                        half(median(&candidate, metric))
+                        half(is)
                     )?;
                 }
             }
