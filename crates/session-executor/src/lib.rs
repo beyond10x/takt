@@ -1342,7 +1342,7 @@ mod tests {
         let input = serde_json::json!({"file_path": "/s/copy/a.rs"});
         assert!(decide("Edit", &input, copy).is_ok());
         assert!(decide("Bash", &serde_json::json!({"command": "ls"}), copy).is_err());
-        let outside = serde_json::json!({"file_path": "/home/u/.bashrc"});
+        let outside = serde_json::json!({"file_path": "/var/empty/.bashrc"});
         assert!(decide("Write", &outside, copy).is_err());
     }
 
@@ -1371,7 +1371,7 @@ mod tests {
             "cat ~/.ssh/id_ed25519",
             "cat $HOME/.codex/auth.json",
             "cat ${CODEX_HOME}/auth.json",
-            "cat /home/u/.config/secret",
+            "cat /var/empty/.config/secret",
             "ls /etc",
             "cd .. && ls",
             "cat ../other/file",

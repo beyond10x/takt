@@ -2537,7 +2537,7 @@ mod tests {
                 )),
                 Answer::NoPolicy => Ok(exit(
                     1,
-                    "b10x-gates: protected file /home/nobody/.config/b10x/gates/policy.json unavailable: not found\n",
+                    "b10x-gates: protected file /var/empty/.config/b10x/gates/policy.json unavailable: not found\n",
                 )),
                 Answer::NotInstalled => Err(anyhow::Error::new(std::io::Error::from(
                     std::io::ErrorKind::NotFound,
