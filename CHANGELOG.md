@@ -64,6 +64,10 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 - A turn is refused at open, exit 1, when the mainline's tip already holds its candidate (the
   candidate or a descendant of it), naming both ids; open it on a fresh candidate. A turn whose
   candidate reaches the mainline after it opened still resumes.
+- A turn is also refused at open, exit 1, before anything is written, when the mainline's tip
+  cannot be read (the bot route or the network down, no `main`) or whether it holds the candidate
+  cannot be read, naming the forge and the read's error; open it again once the tip can be read.
+  A resumed turn is unchanged.
 - A turn resumed through another forge than the one it recorded when it opened is refused, exit
   1, before anything is written, naming both and `--forge <recorded>` as the way past.
 

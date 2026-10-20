@@ -365,7 +365,11 @@ struct RunArgs {
     /// Its case input `surface` is computed from the candidate's change against the baseline's
     /// `.engineering/judge-allow.yaml`; given, it must be the computed one. Its finding is read on
     /// the mainline, `main` as the forge reports it, or the local `main` under `--forge none`,
-    /// which the operator is trusted with. The turn records the sha256 of the binary that opens
+    /// which the operator is trusted with. It opens only once that tip is read and found not to
+    /// hold the candidate: a candidate it holds was merged before a turn could grant it (open
+    /// the turn on a fresh candidate), and a tip that cannot be read (the forge's route or the
+    /// network down, no `main`) is refused too, naming the forge and why, before anything is
+    /// written (open the turn again once the tip can be read). The turn records the sha256 of the binary that opens
     /// it, the promoted one, and every resume is refused before any step unless it is run by that
     /// binary: once `takt promote` has installed the candidate, finish the turn with the binary it
     /// replaced, which it keeps at `$XDG_STATE_HOME/takt/judges/<sha256>` and names.
