@@ -229,6 +229,7 @@ fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
                 opened_binary: None,
                 completed: None,
                 step_tokens: Default::default(),
+                layers: None,
             })
             .collect(),
         no_record: Vec::new(),

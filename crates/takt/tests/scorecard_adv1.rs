@@ -48,6 +48,7 @@ fn opened(case: &str) -> Event {
         inputs: Vec::new(),
         base: None,
         binary: None,
+        layers: None,
     }
 }
 

@@ -405,12 +405,21 @@ struct ScorecardArgs {
         requires = "against"
     )]
     steps: Vec<String>,
+    /// Score runs whose layers differ (ADR 0101). Each run's `opened` line records the layers
+    /// it ran on, name to revision, each read from what ran (takt's build, the harness
+    /// program's version, the model the harness's stream reported); the scorecard prints each
+    /// distinct set of layers with its runs' count and, without this flag, refuses to score
+    /// runs whose layers differ, naming the layer and the runs. A run that recorded no layers
+    /// (a record from before the field) is "not recorded", never a revision, and differs from
+    /// one that did.
+    #[arg(long)]
+    across_layers: bool,
 }
 
 /// What `takt scorecard --help` says about the exit codes.
 const SCORECARD_EXIT_CODES: &str = "Exit codes:
   0  printed (and saved); with --against, no scenario is worse than the saved one; with --steps too, better on every targeted step as well
-  1  refused: the repository, a case's events.jsonl, or the saved scorecard does not read (a binary.txt that does not read leaves its case's runs stating no binary, the case listed with the reason); a scenario case has no held-out.txt beside its record, or one that does not read or states no result (the case named); --save without --revision, or under a --revision that is not the full commit id (40 lower-case hex digits), onto a file that exists, or that cannot be written; --save with a run made with another binary than the --revision's (the run named; its `opened` line names another revision or the revision -dirty, or names none, no `binary` or `unknown revision`, beside runs that name one), nothing written; with --against, a scenario the saved scorecard has with fewer cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), or any scenario with fewer on this side, none included (`too few cases (<n> of <trials>)`), or a scenario the saved scorecard lacks, however many its cases here (`not in the saved scorecard`): no verdict given, as a promotion refuses; with --against, no scenario case on either side (`no scenario case`), nothing compared; a saved scorecard with a run whose outcome disagrees with its held-out result; with --steps, a saved scorecard with no step_tokens definition (saved before it) or under another version, or an empty action; with --steps, a scenario case of either side whose tokens at a targeted step are unknown, a harness step of it having recorded no tokens or 0 (the case and the step named), nothing judged; with --against, with or without --steps, a scenario case of either side whose run tokens are unknown, a harness step of it having recorded no tokens or 0, which is never read as 0 (the case and the step named), nothing judged; the reason on stderr
+  1  refused: the repository, a case's events.jsonl, or the saved scorecard does not read (a binary.txt that does not read leaves its case's runs stating no binary, the case listed with the reason); a scenario case has no held-out.txt beside its record, or one that does not read or states no result (the case named); without --across-layers, runs whose layers differ (the layer and both runs named: a revision each, or that a run recorded none), nothing printed or saved; --save without --revision, or under a --revision that is not the full commit id (40 lower-case hex digits), onto a file that exists, or that cannot be written; --save with a run made with another binary than the --revision's (the run named; its `opened` line names another revision or the revision -dirty, or names none, no `binary` or `unknown revision`, beside runs that name one), nothing written; with --against, a scenario the saved scorecard has with fewer cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), or any scenario with fewer on this side, none included (`too few cases (<n> of <trials>)`), or a scenario the saved scorecard lacks, however many its cases here (`not in the saved scorecard`): no verdict given, as a promotion refuses; with --against, no scenario case on either side (`no scenario case`), nothing compared; a saved scorecard with a run whose outcome disagrees with its held-out result; with --steps, a saved scorecard with no step_tokens definition (saved before it) or under another version, or an empty action; with --steps, a scenario case of either side whose tokens at a targeted step are unknown, a harness step of it having recorded no tokens or 0 (the case and the step named), nothing judged; with --against, with or without --steps, a scenario case of either side whose run tokens are unknown, a harness step of it having recorded no tokens or 0, which is never read as 0 (the case and the step named), nothing judged; the reason on stderr
   2  the arguments do not parse
   3  with --against: a scenario is worse: at some outcome rank its cases at that rank or better fall short of the saved share by more than the rule's margin, or its median of tokens exceeds the saved maximum (a scenario with no run on this side is exit 1, too few cases); with --steps, whatever the steps: refused, naming the steps' result and the scenarios worse on the run
   4  with --steps: no scenario is worse on the run, but a targeted step is not better (or no case on either side took it)";
@@ -820,6 +829,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             revision,
             against,
             steps,
+            across_layers,
         }) => {
             let reported = takt::scorecard::report(
                 &repo,
@@ -827,6 +837,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 revision.as_deref(),
                 against.as_deref(),
                 &steps,
+                across_layers,
                 out,
             )?;
             Ok(if reported.worse > 0 {

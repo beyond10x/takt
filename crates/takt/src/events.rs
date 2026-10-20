@@ -10,6 +10,7 @@
 //! The file lies in the case directory, which a judgement step and a validator's command may
 //! not write: a line in it was written by the kernel.
 
+use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
@@ -64,6 +65,14 @@ pub enum Event {
     /// one, the inputs as `name=value`, the commit the case's branch forked from when the
     /// case recorded one, and the revision the running binary was built from when its caller
     /// gave one, as `takt --version` prints it: `<sha>`, `<sha>-dirty` or `unknown revision`.
+    /// The layers (ADR 0101): layer name to revision, each read from the binary or library
+    /// that ran, never typed: `takt`, the binary's revision as `binary` names it, when the
+    /// caller gave one; `harness`, the harness program's version as it reports it
+    /// ([`crate::harness::Harness::revision`]). The model layer is not known when the run
+    /// opens: a reader takes it from the run's harness `step` lines, whose `model` is the model
+    /// id the harness's stream reported. A layer the run cannot read is absent, never guessed;
+    /// the map is written, empty or not, by every run of this takt, and absent on a line
+    /// written before it, which a reader reads as "layers not recorded", never as a revision.
     Opened {
         case: String,
         protocol: String,
@@ -74,6 +83,8 @@ pub enum Event {
         base: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         binary: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        layers: Option<BTreeMap<String, String>>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.
@@ -309,6 +320,17 @@ impl Events {
     /// `store_evidence` line an earlier takt wrote carries the store's instant as a second
     /// `at`, which is read as `observed_at`. A symbolic link at the path is refused, never read through ([`Events::open`]).
     pub fn read(&self) -> Result<Vec<serde_json::Value>> {
+        Ok(self
+            .read_numbered()?
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect())
+    }
+
+    /// As [`Events::read`], each line with its number in the file, from 1, counting the
+    /// blank and the skipped lines it passes over: the line a report names as the record a
+    /// figure came from.
+    pub fn read_numbered(&self) -> Result<Vec<(usize, serde_json::Value)>> {
         let mut bytes = Vec::new();
         match self.open(std::fs::OpenOptions::new().read(true)) {
             Ok(mut file) => {
@@ -339,7 +361,7 @@ impl Events {
                 continue;
             }
             if let Some(value) = &parsed[n] {
-                read.push(value.clone());
+                read.push((n + 1, value.clone()));
                 n += 1;
                 continue;
             }

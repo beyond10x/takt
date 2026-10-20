@@ -2564,9 +2564,7 @@ fn known_program(word: &str) -> bool {
 pub(crate) fn imports_of(text: &str) -> BTreeSet<String> {
     let identifier = |name: &str| {
         !name.is_empty()
-            && name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
             && !name.starts_with(|c: char| c.is_ascii_digit())
     };
     let mut names = BTreeSet::new();
@@ -4401,7 +4399,15 @@ fn command_paths(
                             let Some(string) = string else {
                                 return;
                             };
-                            return env_split(tree, string, &words[after.min(words.len())..], dir, named, depth, &env);
+                            return env_split(
+                                tree,
+                                string,
+                                &words[after.min(words.len())..],
+                                dir,
+                                named,
+                                depth,
+                                &env,
+                            );
                         }
                         _ => {}
                     }
@@ -4444,10 +4450,26 @@ fn command_paths(
                                 return;
                             };
                             let after = (at + 2).min(words.len());
-                            return env_split(tree, string, &words[after..], dir, named, depth, &env);
+                            return env_split(
+                                tree,
+                                string,
+                                &words[after..],
+                                dir,
+                                named,
+                                depth,
+                                &env,
+                            );
                         }
                         Some(rest) => {
-                            return env_split(tree, rest, &words[at + 1..], dir, named, depth, &env);
+                            return env_split(
+                                tree,
+                                rest,
+                                &words[at + 1..],
+                                dir,
+                                named,
+                                depth,
+                                &env,
+                            );
                         }
                         None => {}
                     }
@@ -4504,9 +4526,10 @@ fn command_paths(
                 });
                 if python {
                     let mut under_python = vec!["python"];
-                    under_python.extend(rest.iter().map(|word| {
-                        if *word == "--module" { "-m" } else { word }
-                    }));
+                    under_python.extend(
+                        rest.iter()
+                            .map(|word| if *word == "--module" { "-m" } else { word }),
+                    );
                     return command_paths(tree, &under_python, dir, named, depth + 1, &env);
                 }
                 return command_paths(tree, rest, dir, named, depth + 1, &env);
@@ -8410,6 +8433,16 @@ impl<'a> Run<'a> {
         // This run's number in the case, which names its step transcripts' directory: one
         // more than the `opened` lines the case's record holds before this run writes its own.
         let run_number = crate::harness::run_number(events.path())?;
+        // The layers the run can read as it opens (ADR 0101), each from what ran: takt's own
+        // revision as the caller gave it, the harness's as the program reports it. The model
+        // is read from the harness's stream at each step, so its layer is on the step lines.
+        let mut layers = std::collections::BTreeMap::new();
+        if let Some(binary) = &self.binary {
+            layers.insert("takt".to_owned(), binary.clone());
+        }
+        if let Some(revision) = self.harness.revision() {
+            layers.insert("harness".to_owned(), revision);
+        }
         events.emit(
             self.steps,
             &Event::Opened {
@@ -8424,6 +8457,7 @@ impl<'a> Run<'a> {
                     .ok()
                     .and_then(|branch| branch.base_commit),
                 binary: self.binary.clone(),
+                layers: Some(layers),
             },
         )?;
         writeln!(

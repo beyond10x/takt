@@ -208,3 +208,51 @@ fn sources_are_relative_whatever_home_is() {
         vec!["events.jsonl".to_owned(), "steps.jsonl".to_owned()]
     );
 }
+
+/// story:the-report-attributes-cost-and-failures-to-layers (ADR 0101) through the binary: the
+/// report's first table ends in a layers column, `not recorded` for a record without
+/// `layers`, and each run's section holds the cost and the failures by layer, each figure
+/// naming the record line it came from.
+#[test]
+fn report_prints_the_layers_column_and_the_cost_by_layer() {
+    let (code, stdout, stderr) = takt(&[
+        "report",
+        "--case",
+        &fixture("trial-1"),
+        "--steps",
+        &fixture("trial-1/steps.jsonl"),
+        "--case",
+        &fixture("layered-1"),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.starts_with("| run | protocol | story | outcome | wall s |"),
+        "{stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .next()
+            .is_some_and(|line| line.ends_with("| layers |")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("| takt-20261018T205520Z | software.change/1 | - | ApprovalRequired | 242 | 6 | 3 | 33 | 592698 | 0.849 | 107 | 0 | 0 | 0 | 130 | 128 | 5 | 0 | - | not recorded |"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("| takt 0123456789abcdef0123456789abcdef01234567; harness 2.1.304 (Claude Code); model claude-opus-5-5 |"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "| model | not recorded | 592698 | 0.849 | 128 | not reported | events.jsonl:6,12,18 |"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("- takt: step 1: refusal by takt (events.jsonl:5)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("## total by layer"), "{stdout}");
+}

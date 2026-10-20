@@ -264,7 +264,7 @@ fn t_24_trace_holds_the_steps_the_idle_waits_and_the_calls() {
         "{text}"
     );
     assert!(
-        text.contains("| 5 | 13.1 |\n"),
+        text.contains("| 5 | 13.1 | not recorded |\n"),
         "the cross-run columns: {text}"
     );
 }
@@ -676,7 +676,7 @@ fn an_unstated_figure_prints_unknown_never_zero() {
         "{text}"
     );
     assert!(
-        text.contains("| takt-bare | software.change/1 | - | NoProgress | - | 2 | 1 | - | unknown (0 over 0 of 1 call) | - | 0 | unknown (0 over 0 of 1 step) | 0 | 0 | unknown (0 over 0 of 1 call) | - | unknown | 1 | - |\n"),
+        text.contains("| takt-bare | software.change/1 | - | NoProgress | - | 2 | 1 | - | unknown (0 over 0 of 1 call) | - | 0 | unknown (0 over 0 of 1 step) | 0 | 0 | unknown (0 over 0 of 1 call) | - | unknown | 1 | - | not recorded |\n"),
         "the cross-run row: {text}"
     );
     let missing = report::not_recorded(&trace);
@@ -740,7 +740,7 @@ fn a_sum_some_calls_cannot_join_says_how_many_did() {
         "{text}"
     );
     assert!(
-        text.contains("| takt-mixed | software.change/1 | - | Budget | 30 | 3 | 2 | - | unknown (1000 over 1 of 2 calls) | - | 10 | 0 | 0 | 0 | unknown (20 over 1 of 2 calls) | - | unknown | 0 | - |\n"),
+        text.contains("| takt-mixed | software.change/1 | - | Budget | 30 | 3 | 2 | - | unknown (1000 over 1 of 2 calls) | - | 10 | 0 | 0 | 0 | unknown (20 over 1 of 2 calls) | - | unknown | 0 | - | not recorded |\n"),
         "the cross-run row: {text}"
     );
     let missing = report::not_recorded(&trace);
@@ -803,5 +803,109 @@ fn a_symlinked_record_is_refused_and_never_followed() {
     assert!(
         !dir.join("nowhere.jsonl").exists(),
         "nothing was created through the link"
+    );
+}
+
+/// story:the-report-attributes-cost-and-failures-to-layers (ADR 0101): the report prints, per
+/// run, cost and failures by layer, read from the records each layer wrote. Trial 1's record
+/// has no `layers`: its layers column says `not recorded`; its model layer's tokens and cost
+/// come from the harness steps' lines, named by file and line; takt's tokens are not reported,
+/// never 0; the harness session layer's and the runtime's failures are not reported, since no
+/// record of theirs is read.
+#[test]
+fn trial_1_report_attributes_cost_by_layer_from_the_steps_lines() {
+    let printed = report_text(&trace("trial-1", true));
+    assert!(printed.contains("| layers |"), "{printed}");
+    assert!(
+        printed.contains("| 0 | - | not recorded |"),
+        "the layers column of a record without layers: {printed}"
+    );
+    assert!(
+        printed.contains("| layer | revision | tokens | cost $ | wall s | failures | records |"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains(
+            "| model | not recorded | 592698 | 0.849 | 128 | not reported | events.jsonl:6,12,18"
+        ),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("| takt | not recorded | not reported | not reported | 112 | 0 |"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("| harness | not recorded | not reported | not reported | 130 | not reported | events.jsonl:6,12,18"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("| runtime | not recorded | not reported | not reported | not reported | not reported | - |"),
+        "{printed}"
+    );
+    assert!(printed.contains("layers reported today:"), "{printed}");
+}
+
+/// A record with `layers` prints them in the layers column, the model layer's from the steps'
+/// reported model, and each failure under the layer whose record states it, with the record's
+/// file and line: takt's refusal and `NoProgress` stop; the total across runs is by layer too.
+#[test]
+fn a_layered_record_reports_its_layers_and_the_failures_by_line() {
+    let layered = trace("layered-1", false);
+    assert_eq!(
+        layered.header.layers,
+        Some(
+            [
+                ("takt", "0123456789abcdef0123456789abcdef01234567"),
+                ("harness", "2.1.304 (Claude Code)"),
+                ("model", "claude-opus-5-5"),
+            ]
+            .into_iter()
+            .map(|(name, revision)| (name.to_owned(), revision.to_owned()))
+            .collect()
+        ),
+        "{:#?}",
+        layered.header
+    );
+    let lines: Vec<Option<usize>> = layered.ops.iter().map(|op| op.line).collect();
+    assert_eq!(lines, vec![Some(3), Some(5), Some(6)], "{:#?}", layered.ops);
+    let mut out = Vec::new();
+    report::print(&[trace("trial-1", true), layered], &mut out).expect("prints");
+    let printed = String::from_utf8(out).expect("utf-8");
+    assert!(
+        printed.contains(
+            "| takt 0123456789abcdef0123456789abcdef01234567; harness 2.1.304 (Claude Code); model claude-opus-5-5 |"
+        ),
+        "{printed}"
+    );
+    assert!(
+        printed.contains(
+            "| model | claude-opus-5-5 | 1000 | 0.500 | 18 | not reported | events.jsonl:3 |"
+        ),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("| harness | 2.1.304 (Claude Code) | not reported | not reported | 20 | not reported | events.jsonl:3 |"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("| takt | 0123456789abcdef0123456789abcdef01234567 | not reported | not reported | 1 | 2 |"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("- takt: step 1: refusal by takt (events.jsonl:5)"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("- takt: step 1: stop NoProgress (events.jsonl:6)"),
+        "{printed}"
+    );
+    assert!(printed.contains("## total by layer"), "{printed}");
+    assert!(
+        printed.contains("| model | 593698 | 1.349 | 146 | not reported | 2 |"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("| takt | not reported | not reported | 113 | 2 | 2 |"),
+        "{printed}"
     );
 }

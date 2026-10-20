@@ -151,6 +151,17 @@ types:
     kind: newtype
     of: String
 
+  # The name of a layer of the stack a run ran on (ADR 0101: self-improvement measures the
+  # stack, not takt alone): `takt`, the binary; `harness`, the harness session layer, the
+  # program that takes a judgement step; `model`, the model the harness called; and any other
+  # layer whose revision takt can read from what ran. A layer's revision is read from the
+  # binary or library that ran, never typed by a person: takt's from its own build, the
+  # harness's as the harness program reports its version, the model's as the harness's stream
+  # reports the model id. A layer takt cannot read is absent, never guessed.
+  - name: takt.work.LayerName
+    kind: newtype
+    of: String
+
   # An evidence kind the protocol declares, by id (`test_result`). Carries
   # canon.protocol.EvidenceKindId (protocol.yaml:42).
   # read from: crates/takt/src/validator.rs:51-52
@@ -652,6 +663,16 @@ types:
   # build; until then the binary can print a clean revision. The binary gives it to every run;
   # absent on a line an earlier takt wrote and on a run through the library whose caller gave
   # none.
+  # The layers (ADR 0101): the map, layer name to revision, of the layers the run could read
+  # when it opened, each from the binary or library that ran and never typed: `takt`, the
+  # binary's revision as `binary` names it, when the caller gave one; `harness`, the harness
+  # program's version as it reports it (Claude Code: the first line `claude --version` prints;
+  # no metaharness path exists in takt yet, so none is read from one). The model layer is not
+  # known when the run opens: a reader takes it from the run's harness `step` lines, whose
+  # `model` is the model id the harness's stream reported. A layer the run cannot read is
+  # absent; the map is written, empty or not, by every run of a takt that records layers, and
+  # absent on a line written before, which a reader reads as "layers not recorded", never as a
+  # revision.
   # read from: crates/takt/src/events.rs:63-76
   # read from: crates/takt/src/run.rs:8098-8113
   # read from: crates/takt/src/run.rs:6781-6784
@@ -677,6 +698,11 @@ types:
         summary: >-
           The revision the running takt was built from: `<sha>`, `<sha>-dirty` or `unknown
           revision`.
+      - name: layers
+        type: Optional<Map<takt.work.LayerName, String>>
+        summary: >-
+          Layer name to revision, each read from what ran; absent on a line written before the
+          field, which reads as "layers not recorded".
 
   # An evaluation: its number in the case's one sequence, the decision file it was written to,
   # `decisions/<seq>.json` under the case, and the frontier as printed.
@@ -1240,6 +1266,16 @@ types:
         type: Optional<Boolean>
       - name: step_tokens
         type: Map<takt.work.ActionId, Optional<Integer>>
+      - name: layers
+        type: Optional<Map<takt.work.LayerName, String>>
+        summary: >-
+          The run's layers (ADR 0101): its `opened` line's `layers`, and the model layer joined
+          from the model its harness steps reported (several, distinct, joined by `+`); absent
+          when the line has no `layers`, "layers not recorded", never a revision. `takt
+          scorecard` prints each distinct set with its runs' count and refuses to score runs
+          whose layers differ, naming the layer and the runs (a run that recorded none beside one
+          that did, or a layer one run states and another does not, differ too), unless
+          `--across-layers` asks to compare across them.
 
   # The held-out check's result for a scenario case, as the runner wrote it after the run in
   # `.engineering/cases/<case>/held-out.txt`, beside the record and never by the takt binary under
@@ -2197,6 +2233,12 @@ types:
         type: Optional<takt.work.TraceEvidence>
       - name: label
         type: Optional<String>
+      - name: line
+        type: Optional<Integer>
+        summary: >-
+          The line, from 1, of the case's `events.jsonl` the operation was read from, which a
+          report names as the record a figure came from; absent for a trace built from lines
+          without their numbers.
 
   # The run's tokens: the components summed over its model calls when every call states them,
   # and the sum of the calls' tokens (each the step's `tokens`, else its components' sum) when
@@ -4617,6 +4659,21 @@ entities:
       - name: acceptance
         type: Optional<String>
         summary: The held-out check; the record never holds it.
+      - name: layers
+        type: Optional<Map<takt.work.LayerName, String>>
+        summary: >-
+          The run's layers (ADR 0101) as the scorecard reads them: the first `opened` line's
+          `layers` and the model the calls reported; absent when the record has no `layers`.
+          `takt report` prints them in a layers column, `not recorded` when absent, and per run
+          and in total the cost (tokens, money, wall seconds) and the failures by layer, each
+          figure read from the record its layer wrote and naming that record's file and line:
+          the model layer's tokens, cost and API seconds from the harness steps' lines (the
+          stream's result the harness reported), the harness layer's call durations from the
+          same lines, takt's wall seconds from its validators' spans and its remainder, and
+          takt's failures (refusals, errors, `NoProgress` stops) from its own lines. A figure a
+          layer's record does not state is `not reported`, never 0: the harness session layer's
+          trace (`trace-ir/1`), the model layer's own failures and the runtime's decision
+          records are read by nothing yet, so those figures are not reported.
       - name: sources
         type: List<String>
         summary: >-

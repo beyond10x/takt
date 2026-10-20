@@ -71,6 +71,13 @@ pub trait Harness {
     fn name(&self) -> &str;
     /// Performs one of the offered actions in the tree and reports it.
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport>;
+    /// The revision of the harness session layer, as the program that takes the steps reports
+    /// its own version (ADR 0101), recorded on the run's `opened` line as the `harness` layer;
+    /// none by default, and none when the program cannot say: a layer takt cannot read is
+    /// absent, never guessed.
+    fn revision(&self) -> Option<String> {
+        None
+    }
     /// The tokens of the last step by component, when the harness reported them; none by
     /// default.
     fn last_usage(&self) -> Option<crate::events::TokenUsage> {
@@ -667,6 +674,25 @@ impl KeptTranscript {
 impl Harness for ClaudeCode {
     fn name(&self) -> &str {
         "claude-code"
+    }
+
+    /// The first line `<program> --version` prints, trimmed (Claude Code: `2.1.304 (Claude
+    /// Code)`), when the program runs, exits 0 and prints one; none otherwise. Read from the
+    /// program that takes the steps, never from a flag or a file; no metaharness path exists in
+    /// takt yet, so no version is read from one.
+    fn revision(&self) -> Option<String> {
+        let mut command = Command::new(&self.program);
+        command.arg("--version");
+        command.env_remove("CLAUDECODE");
+        command.env_remove("CLAUDE_PID");
+        crate::forge::without_credentials(&mut command, |_| false);
+        let output = command.output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+        Some(line.to_owned())
     }
 
     fn last_usage(&self) -> Option<crate::events::TokenUsage> {

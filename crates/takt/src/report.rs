@@ -431,6 +431,280 @@ pub fn not_recorded(trace: &Trace) -> Vec<&'static str> {
     missing
 }
 
+/// The layers of the stack a run ran on (ADR 0101), in the order the report lists them: takt,
+/// the harness session layer, the model layer, the runtime ([`crate::scorecard::LAYERS`]).
+pub use crate::scorecard::LAYERS;
+
+/// One layer's cost and failures in one run, each read from the record the layer wrote and
+/// none when that record states none, never 0: the report prints `not reported` for none.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LayerCost {
+    /// The layer's revision as the run recorded it; none when the record has no `layers` or
+    /// the layer is absent from them.
+    pub revision: Option<String>,
+    /// The tokens the layer's record states, summed when every record states them.
+    pub tokens: Option<u64>,
+    /// The dollars the layer's record states, summed when every record states them.
+    pub cost_usd: Option<f64>,
+    /// The seconds the layer's record states, summed when every record states them.
+    pub wall_s: Option<f64>,
+    /// The failures the layer's record states, each with the step and the record line; none
+    /// when no record of the layer's failures is read.
+    pub failures: Option<Vec<String>>,
+    /// The record lines the figures came from, in the record's order.
+    pub records: Vec<usize>,
+}
+
+/// The cost and the failures of `trace` by layer, in [`LAYERS`] order, each read from the
+/// record its layer wrote: the model layer's tokens, cost and API seconds from the harness
+/// steps' lines (the stream's result the harness reported); the harness layer's call
+/// durations from the same lines; takt's wall seconds from its validators' spans and its
+/// remainder, and its failures (refusals, errors, `NoProgress` stops) from its own lines. The
+/// harness session layer's own trace (`trace-ir/1`), the model layer's own failures and the
+/// runtime's decision records are read by nothing yet: those figures are none.
+#[must_use]
+pub fn by_layer(trace: &Trace) -> Vec<(&'static str, LayerCost)> {
+    let a = attribution(trace);
+    let calls = trace.calls();
+    let call_lines: Vec<usize> = calls.iter().filter_map(|op| op.line).collect();
+    let revision = |layer: &str| {
+        trace
+            .header
+            .layers
+            .as_ref()
+            .and_then(|layers| layers.get(layer).cloned())
+    };
+    let every = |figure: &dyn Fn(&Op) -> Option<f64>| -> Option<f64> {
+        if calls.is_empty() {
+            return None;
+        }
+        calls
+            .iter()
+            .map(|op| figure(op))
+            .try_fold(0.0, |sum, value| Some(sum + value?))
+    };
+    let mut takt_failures: Vec<String> = Vec::new();
+    let mut takt_records: Vec<usize> = Vec::new();
+    for op in &trace.ops {
+        let at = |op: &Op| {
+            op.line.map_or_else(
+                || " (line not numbered)".to_owned(),
+                |line| format!(" ({}:{line})", record_name(trace)),
+            )
+        };
+        match op.kind {
+            Kind::Refusal => takt_failures.push(format!(
+                "step {}: refusal by {}{}",
+                op.step,
+                dash(op.name.as_deref()),
+                at(op)
+            )),
+            Kind::NoProgress => {
+                takt_failures.push(format!("step {}: stop NoProgress{}", op.step, at(op)));
+            }
+            Kind::Other if op.outcome.as_deref() == Some("error") => {
+                takt_failures.push(format!("step {}: error{}", op.step, at(op)));
+            }
+            _ => {}
+        }
+        if op.actor == Actor::Validator
+            || matches!(op.kind, Kind::Refusal | Kind::NoProgress)
+            || (op.kind == Kind::Other && op.outcome.as_deref() == Some("error"))
+        {
+            takt_records.extend(op.line);
+        }
+    }
+    let validator_s = a.seconds.get(&Actor::Validator).and_then(Sum::value);
+    let takt = LayerCost {
+        revision: revision("takt"),
+        tokens: None,
+        cost_usd: None,
+        wall_s: match (validator_s, a.takt_s) {
+            (Some(validator), Some(takt)) => Some(validator + takt),
+            _ => None,
+        },
+        failures: Some(takt_failures),
+        records: takt_records,
+    };
+    let harness = LayerCost {
+        revision: revision("harness"),
+        tokens: None,
+        cost_usd: None,
+        wall_s: every(&|op| op.duration_ms.map(ms)),
+        failures: None,
+        records: call_lines.clone(),
+    };
+    let model = LayerCost {
+        revision: revision("model"),
+        tokens: a.tokens.value().filter(|_| !calls.is_empty()),
+        cost_usd: every(&|op| op.cost_usd),
+        wall_s: every(&|op| op.api_ms.map(ms)),
+        failures: None,
+        records: call_lines,
+    };
+    let runtime = LayerCost {
+        revision: revision("runtime"),
+        ..LayerCost::default()
+    };
+    vec![
+        ("takt", takt),
+        ("harness", harness),
+        ("model", model),
+        ("runtime", runtime),
+    ]
+}
+
+/// The name of the record a trace's figures came from: its first source's file name, or
+/// `events.jsonl`.
+fn record_name(trace: &Trace) -> String {
+    trace.header.sources.first().map_or_else(
+        || "events.jsonl".to_owned(),
+        |source| escape(basename(source)),
+    )
+}
+
+/// A figure as the by-layer tables print it: the text, or `not reported` for none.
+fn reported<T>(value: Option<T>, text: impl Fn(T) -> String) -> String {
+    value.map_or_else(|| "not reported".to_owned(), text)
+}
+
+/// The record lines as the by-layer table names them: `<file>:<l1>,<l2>`; `-` for none.
+fn records(trace: &Trace, lines: &[usize]) -> String {
+    if lines.is_empty() {
+        return "-".to_owned();
+    }
+    let lines: Vec<String> = lines.iter().map(usize::to_string).collect();
+    format!("{}:{}", record_name(trace), lines.join(","))
+}
+
+/// One run's cost and failures by layer: the table, then each failure under its layer.
+fn layer_section(trace: &Trace, out: &mut dyn Write) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "| layer | revision | tokens | cost $ | wall s | failures | records |"
+    )?;
+    writeln!(out, "|---|---|---|---|---|---|---|")?;
+    let layers = by_layer(trace);
+    for (layer, cost) in &layers {
+        writeln!(
+            out,
+            "| {layer} | {} | {} | {} | {} | {} | {} |",
+            cost.revision
+                .as_deref()
+                .map_or_else(|| "not recorded".to_owned(), escape),
+            reported(cost.tokens, |tokens| tokens.to_string()),
+            reported(cost.cost_usd, |cost| format!("{cost:.3}")),
+            reported(cost.wall_s, whole),
+            reported(cost.failures.as_ref(), |failures| failures
+                .len()
+                .to_string()),
+            records(trace, &cost.records)
+        )?;
+    }
+    let failures: Vec<String> = layers
+        .iter()
+        .flat_map(|(layer, cost)| {
+            cost.failures
+                .iter()
+                .flatten()
+                .map(move |failure| format!("- {layer}: {failure}"))
+        })
+        .collect();
+    if failures.is_empty() {
+        let (reported, not): (Vec<&str>, Vec<&str>) = layers
+            .iter()
+            .map(|(layer, cost)| (*layer, cost.failures.is_some()))
+            .fold(
+                (Vec::new(), Vec::new()),
+                |(mut yes, mut no), (layer, is)| {
+                    if is {
+                        yes.push(layer)
+                    } else {
+                        no.push(layer)
+                    }
+                    (yes, no)
+                },
+            );
+        writeln!(
+            out,
+            "failures by layer: {} none; {} not reported",
+            reported.join(", "),
+            not.join(", ")
+        )?;
+    } else {
+        writeln!(out, "failures by layer:")?;
+        for failure in failures {
+            writeln!(out, "{failure}")?;
+        }
+    }
+    Ok(())
+}
+
+/// A sum over runs as the total table prints it: `not reported` when no run reported the
+/// figure, the sum when every run did, else the sum over the runs that did, marked.
+fn total<T: Copy>(sum: &Sum<T>, text: impl Fn(T) -> String) -> String {
+    if sum.known == 0 {
+        "not reported".to_owned()
+    } else if sum.complete() {
+        text(sum.stated)
+    } else {
+        format!(
+            "not reported ({} over {} of {} runs)",
+            text(sum.stated),
+            sum.known,
+            sum.of
+        )
+    }
+}
+
+/// The total across `traces` by layer, then which layers are reported today.
+fn total_section(traces: &[Trace], out: &mut dyn Write) -> std::io::Result<()> {
+    writeln!(out)?;
+    writeln!(out, "## total by layer")?;
+    writeln!(out)?;
+    writeln!(
+        out,
+        "| layer | tokens | cost $ | wall s | failures | runs |"
+    )?;
+    writeln!(out, "|---|---|---|---|---|---|")?;
+    /// One layer's figures summed over the runs, each over the runs that reported it.
+    #[derive(Default)]
+    struct Total {
+        tokens: Sum<u64>,
+        dollars: Sum<f64>,
+        seconds: Sum<f64>,
+        failures: Sum<u64>,
+    }
+    let mut totals: BTreeMap<&'static str, Total> = BTreeMap::new();
+    for trace in traces {
+        for (layer, cost) in by_layer(trace) {
+            let sum = totals.entry(layer).or_default();
+            sum.tokens.add(cost.tokens);
+            sum.dollars.add(cost.cost_usd);
+            sum.seconds.add(cost.wall_s);
+            sum.failures
+                .add(cost.failures.map(|failures| failures.len() as u64));
+        }
+    }
+    for layer in LAYERS {
+        let sum = totals.entry(layer).or_default();
+        writeln!(
+            out,
+            "| {layer} | {} | {} | {} | {} | {} |",
+            total(&sum.tokens, |tokens| tokens.to_string()),
+            total(&sum.dollars, |cost| format!("{cost:.3}")),
+            total(&sum.seconds, whole),
+            total(&sum.failures, |failures| failures.to_string()),
+            traces.len()
+        )?;
+    }
+    writeln!(out)?;
+    writeln!(
+        out,
+        "layers reported today: model (tokens, cost and API seconds from the harness steps' lines, the stream's result the harness reported); harness (call durations from the same lines); takt (wall seconds from its validators' spans and its remainder; failures from its refusal, error and NoProgress lines). Not read yet, so not reported: the harness session layer's own trace (trace-ir/1), the model layer's own failures, and the runtime's decision records."
+    )
+}
+
 /// One run's section.
 fn section(trace: &Trace, out: &mut dyn Write) -> std::io::Result<()> {
     let a = attribution(trace);
@@ -532,6 +806,8 @@ fn section(trace: &Trace, out: &mut dyn Write) -> std::io::Result<()> {
         )?;
     }
     writeln!(out)?;
+    layer_section(trace, out)?;
+    writeln!(out)?;
     let defects = defects(trace);
     if defects.is_empty() {
         writeln!(out, "defects: none")?;
@@ -571,18 +847,18 @@ fn section(trace: &Trace, out: &mut dyn Write) -> std::io::Result<()> {
 pub fn print(traces: &[Trace], out: &mut dyn Write) -> std::io::Result<()> {
     writeln!(
         out,
-        "| run | protocol | story | outcome | wall s | steps | model calls | turns | tokens | cost $ | validator s | forge s | idle s | human s | harness s | api s | other s | ci reads | s per ci read |"
+        "| run | protocol | story | outcome | wall s | steps | model calls | turns | tokens | cost $ | validator s | forge s | idle s | human s | harness s | api s | other s | ci reads | s per ci read | layers |"
     )?;
     writeln!(
         out,
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
     )?;
     for trace in traces {
         let a = attribution(trace);
         let header = &trace.header;
         writeln!(
             out,
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             escape(&header.run),
             dash(header.protocol.as_deref()),
             dash(header.story.as_deref()),
@@ -601,13 +877,14 @@ pub fn print(traces: &[Trace], out: &mut dyn Write) -> std::io::Result<()> {
             a.api_s.map_or_else(|| "-".to_owned(), whole),
             a.printed(Actor::Takt),
             a.ci_reads,
-            a.per_ci_read().map_or_else(|| "-".to_owned(), tenth)
+            a.per_ci_read().map_or_else(|| "-".to_owned(), tenth),
+            escape(&crate::scorecard::layers_text(header.layers.as_ref()))
         )?;
     }
     for trace in traces {
         section(trace, out)?;
     }
-    Ok(())
+    total_section(traces, out)
 }
 
 #[cfg(test)]

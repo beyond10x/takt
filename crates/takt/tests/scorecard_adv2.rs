@@ -47,6 +47,7 @@ fn opened(case: &str) -> Event {
         inputs: Vec::new(),
         base: None,
         binary: None,
+        layers: None,
     }
 }
 
@@ -367,6 +368,7 @@ fn row(case: &str, outcome: &str) -> Row {
         opened_binary: None,
         completed: None,
         step_tokens: Default::default(),
+        layers: None,
     }
 }
 

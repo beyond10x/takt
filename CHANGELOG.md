@@ -22,6 +22,22 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   `env -S` string split into words, and a program the reader does not know given one it knows
   (`doas python3 …`), which fails closed naming both.
 
+### Added
+
+- A run's `opened` line records `layers`, layer name to revision, read from what ran and never
+  typed: `takt` (the binary's revision), `harness` (the program's own version), and the model
+  from the steps' stream (ADR 0101). `takt scorecard` prints the layers of the runs it scores
+  and refuses to score runs whose layers differ, naming the layer, unless `--across-layers`;
+  a record without `layers` reads as not recorded, never as a revision.
+- `takt report` attributes tokens, cost, wall time and failures by layer, per run and in total,
+  each figure naming the record line it came from (`events.jsonl:<n>`); a figure a layer's
+  record does not state prints `not reported`, never 0; a run whose layers wrote no records is
+  reported as before with the layers column `not recorded`. Trace operations carry their
+  record line and the trace header the layers. Reported today: the model (tokens, cost, API
+  time), the harness (call durations) and takt (wall time, refusals and errors); the harness's
+  own trace, the model's own failures and the runtime's decision records have no reader yet
+  and print `not reported`.
+
 - A run whose harness step recorded no tokens, or 0, has unknown tokens, never a sum counting
   the step 0; `takt scorecard --against` and `takt promote` (with `--baseline-only` and
   `--rebaseline`) refuse such a set, exit 1, naming the case and the step, before anything is

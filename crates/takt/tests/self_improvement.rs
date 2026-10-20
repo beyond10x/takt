@@ -185,6 +185,7 @@ fn scorecard(revision: &str, outcome: &str, binary: &str) -> Scorecard {
                 opened_binary: Some(binary.to_owned()),
                 completed: None,
                 step_tokens: Default::default(),
+                layers: None,
             })
             .collect(),
         no_record: Vec::new(),
