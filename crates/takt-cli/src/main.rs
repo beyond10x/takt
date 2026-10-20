@@ -2225,6 +2225,23 @@ mod tests {
 
     /// Runs `takt <args>` in this process; the exit code and what it printed.
     fn takt(args: &[&str]) -> (u8, String) {
+        // These tests run takt in one process, side by side, under one home. The first run makes
+        // the transcripts directory; on a home without `.local` another run's step would then see
+        // `.local` appear outside its tree and be refused. Make it once, before any run.
+        static TRANSCRIPTS: std::sync::Once = std::sync::Once::new();
+        TRANSCRIPTS.call_once(|| {
+            let state = std::env::var_os("XDG_STATE_HOME")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state"))
+                });
+            if let Some(state) = state {
+                let _ = takt::harness::make_transcripts_root(
+                    &state.join("takt/transcripts"),
+                    &mut Vec::new(),
+                );
+            }
+        });
         let cli = Cli::parse_from(std::iter::once("takt").chain(args.iter().copied()));
         let mut out = Vec::new();
         let code = run(cli, &mut out).expect("takt runs");
