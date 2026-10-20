@@ -33,9 +33,11 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   names what runs, an option it does not know, another input a shell reads as its script on the
   same command, standard input from a duplicated descriptor, a redirection form it does not know)
   makes the gate compare every Python file, shell file and program, and the summary names why.
-  takt's own gates run through `scripts/gate-exec`, whose lines the reader cannot follow, so a
-  delivery that changes a `.py`, `.sh` or program file stops takt's own gates until
-  story:gate-exec-is-readable-by-the-gate.
+  takt's own gates run through `scripts/gate-exec`, now a Python program (`/usr/bin/python3 -I`)
+  the gate compares whole at the base: a delivery changing a Python file, shell file or program
+  no gate command runs is judged by takt's gate, and one changing `gate-exec` or
+  `scripts/check-citations` still stops it, naming the file
+  (story:gate-exec-is-readable-by-the-gate).
 
 ## [0.4.0] — 2026-10-20
 
