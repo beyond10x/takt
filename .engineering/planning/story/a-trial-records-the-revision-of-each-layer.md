@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-trial-records-the-revision-of-each-layer
 kind: story
-status: draft
+status: implemented
 title: A trial records the revision of each layer it ran in its record
 summary: the trial agent writes the layers it ran beside the record; ADR 0101 makes them part of it
 tags:
@@ -10,7 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T07:15:36Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-20T07:15:37Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-20T09:12:47Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: a-trial-records-the-revision-of-each-layer
 

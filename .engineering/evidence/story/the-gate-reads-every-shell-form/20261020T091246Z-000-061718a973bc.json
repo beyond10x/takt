@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-20T09:12:46Z",
+  "actor": "human:timo",
+  "artifact": "story:the-gate-reads-every-shell-form",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --locked at 7bf9ebb: 1531 passed, 0 failed, 6 ignored",
+    "reference": "https://github.com/beyond10x/takt/commit/7bf9ebb"
+  }
+}

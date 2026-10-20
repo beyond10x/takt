@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-gate-reads-every-shell-form
 kind: story
-status: draft
+status: implemented
 title: The gate reads or fails closed on every shell form that runs Python
 summary: eleven probed shell forms and several wrapper programs still let a change decide the gate
 tags:
@@ -13,7 +13,11 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/run.rs
-revision: 5
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T07:15:36Z", actor: "human:timo", revision: 6}
+- {from: "proposed", to: "active", at: "2026-10-20T07:15:36Z", actor: "human:timo", revision: 7}
+- {from: "active", to: "implemented", at: "2026-10-20T09:12:46Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: the-gate-reads-every-shell-form
 

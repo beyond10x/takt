@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-report-attributes-cost-and-failures-to-layers
 kind: story
-status: draft
+status: implemented
 title: takt report attributes cost and failures to the layer that spent or failed
 summary: 'ADR 0101: a report says which layer a cost or a failure belongs to, from the records each layer writes'
 tags:
@@ -10,7 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T07:15:37Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-20T07:15:37Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-20T09:12:47Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: the-report-attributes-cost-and-failures-to-layers
 
