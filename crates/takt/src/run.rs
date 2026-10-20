@@ -260,7 +260,7 @@ enum SteppedBy<'r> {
     Harness(
         Option<u64>,
         Option<crate::events::TokenUsage>,
-        Option<crate::harness::CallReport>,
+        Option<Box<crate::harness::CallReport>>,
         Option<std::result::Result<String, String>>,
     ),
 }
@@ -8474,7 +8474,7 @@ impl<'a> Run<'a> {
             Some(Err(why)) => (None, Some(why)),
             None => (None, None),
         };
-        let call = call.unwrap_or_default();
+        let call = call.map(|call| *call).unwrap_or_default();
         events.emit(
             self.steps,
             &Event::Step {
@@ -8486,6 +8486,7 @@ impl<'a> Run<'a> {
                 usage,
                 revision: revision.map(str::to_owned),
                 model: call.model,
+                version: call.version,
                 cost_usd: call.cost_usd,
                 duration_ms: call.duration_ms,
                 api_ms: call.api_ms,
@@ -8509,14 +8510,12 @@ impl<'a> Run<'a> {
         // more than the `opened` lines the case's record holds before this run writes its own.
         let run_number = crate::harness::run_number(events.path())?;
         // The layers the run can read as it opens (ADR 0101), each from what ran: takt's own
-        // revision as the caller gave it, the harness's as the program reports it. The model
-        // is read from the harness's stream at each step, so its layer is on the step lines.
+        // revision as the caller gave it. The harness's version and the model are read from
+        // the harness's stream at each step, so their layers are on the step lines: takt runs
+        // the harness program in a judgement step and nowhere else, never for its version.
         let mut layers = std::collections::BTreeMap::new();
         if let Some(binary) = &self.binary {
             layers.insert("takt".to_owned(), binary.clone());
-        }
-        if let Some(revision) = self.harness.revision() {
-            layers.insert("harness".to_owned(), revision);
         }
         events.emit(
             self.steps,
@@ -9355,7 +9354,7 @@ impl<'a> Run<'a> {
                         SteppedBy::Harness(
                             report.tokens,
                             self.harness.last_usage(),
-                            self.harness.last_call(),
+                            self.harness.last_call().map(Box::new),
                             transcript.clone(),
                         ),
                         self.harness.name(),
@@ -9396,7 +9395,7 @@ impl<'a> Run<'a> {
                     SteppedBy::Harness(
                         report.tokens,
                         harness.last_usage(),
-                        harness.last_call(),
+                        harness.last_call().map(Box::new),
                         transcript.clone(),
                     ),
                     harness.name(),

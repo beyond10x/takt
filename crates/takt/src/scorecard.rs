@@ -193,10 +193,11 @@ pub struct Row {
     /// saved before it had the field (metric `step_tokens`).
     #[serde(default)]
     pub step_tokens: BTreeMap<String, Option<u64>>,
-    /// The run's layers (ADR 0101), layer name to revision: its `opened` line's `layers`, and
-    /// the model layer joined from the model its harness steps reported (several, distinct, in
-    /// name order, joined by `+`); none when the line has no `layers`, a record written before
-    /// the field, which is "layers not recorded", never a revision, whatever its steps say.
+    /// The run's layers (ADR 0101), layer name to revision: its `opened` line's `layers`, the
+    /// harness layer joined from the version its harness steps' lines state and the model
+    /// layer from the model they state (each several, distinct, in name order, joined by `+`);
+    /// none when the line has no `layers`, a record written before the field, which is "layers
+    /// not recorded", never a revision, whatever its steps say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layers: Option<BTreeMap<String, String>>,
 }
@@ -677,6 +678,8 @@ struct Span {
     layers: Option<BTreeMap<String, String>>,
     /// The models the harness steps reported, distinct.
     models: BTreeSet<String>,
+    /// The harness versions the harness steps reported, distinct.
+    versions: BTreeSet<String>,
 }
 
 /// A run's outcome from its stop: a `Completed` stop's outcome (`accepted`), else the stop's
@@ -719,6 +722,11 @@ impl Span {
             completed: self.stop.and(self.completed),
             step_tokens: self.step_tokens,
             layers: self.layers.map(|mut layers| {
+                if !self.versions.is_empty() {
+                    layers.entry("harness".to_owned()).or_insert_with(|| {
+                        self.versions.iter().cloned().collect::<Vec<_>>().join("+")
+                    });
+                }
                 if !self.models.is_empty() {
                     layers.entry("model".to_owned()).or_insert_with(|| {
                         self.models.iter().cloned().collect::<Vec<_>>().join("+")
@@ -761,11 +769,13 @@ fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
         if span.stop.is_some() || line["event"] == "skipped" {
             continue;
         }
-        if line["event"] == "step"
-            && line["by"] == "harness"
-            && let Some(model) = line["model"].as_str()
-        {
-            span.models.insert(model.to_owned());
+        if line["event"] == "step" && line["by"] == "harness" {
+            if let Some(model) = line["model"].as_str() {
+                span.models.insert(model.to_owned());
+            }
+            if let Some(version) = line["version"].as_str() {
+                span.versions.insert(version.to_owned());
+            }
         }
         if let Some(at) = line["at"].as_str().and_then(instant) {
             span.first = Some(span.first.map_or(at, |first| first.min(at)));

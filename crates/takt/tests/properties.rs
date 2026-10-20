@@ -79,6 +79,7 @@ fn event() -> impl Strategy<Value = Event> {
                 usage: None,
                 revision: None,
                 model: None,
+                version: None,
                 cost_usd: None,
                 duration_ms: None,
                 api_ms: None,

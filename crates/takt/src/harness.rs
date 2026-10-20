@@ -52,12 +52,16 @@ pub struct StepReport {
 }
 
 /// What a harness reported about one call besides its tokens, each field absent when it did
-/// not state it, never 0: the model, the cost in dollars, the call's duration and its time in
-/// the API in milliseconds, the turns, and the instant the call started (stamped by takt, as
-/// [`crate::events::instant`] writes one).
+/// not state it, never 0: the model, the harness program's own version as its stream stated it
+/// (ADR 0101: the `harness` layer's revision, read from the stream of the step that ran and
+/// never from a call of the program outside a step; Claude Code: `claude_code_version` of the
+/// `system`/`init` event that opens its stream), the cost in dollars, the call's duration and
+/// its time in the API in milliseconds, the turns, and the instant the call started (stamped
+/// by takt, as [`crate::events::instant`] writes one).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CallReport {
     pub model: Option<String>,
+    pub version: Option<String>,
     pub cost_usd: Option<f64>,
     pub duration_ms: Option<u64>,
     pub api_ms: Option<u64>,
@@ -71,13 +75,6 @@ pub trait Harness {
     fn name(&self) -> &str;
     /// Performs one of the offered actions in the tree and reports it.
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport>;
-    /// The revision of the harness session layer, as the program that takes the steps reports
-    /// its own version (ADR 0101), recorded on the run's `opened` line as the `harness` layer;
-    /// none by default, and none when the program cannot say: a layer takt cannot read is
-    /// absent, never guessed.
-    fn revision(&self) -> Option<String> {
-        None
-    }
     /// The tokens of the last step by component, when the harness reported them; none by
     /// default.
     fn last_usage(&self) -> Option<crate::events::TokenUsage> {
@@ -676,25 +673,6 @@ impl Harness for ClaudeCode {
         "claude-code"
     }
 
-    /// The first line `<program> --version` prints, trimmed (Claude Code: `2.1.304 (Claude
-    /// Code)`), when the program runs, exits 0 and prints one; none otherwise. Read from the
-    /// program that takes the steps, never from a flag or a file; no metaharness path exists in
-    /// takt yet, so no version is read from one.
-    fn revision(&self) -> Option<String> {
-        let mut command = Command::new(&self.program);
-        command.arg("--version");
-        command.env_remove("CLAUDECODE");
-        command.env_remove("CLAUDE_PID");
-        crate::forge::without_credentials(&mut command, |_| false);
-        let output = command.output().ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let text = String::from_utf8_lossy(&output.stdout);
-        let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
-        Some(line.to_owned())
-    }
-
     fn last_usage(&self) -> Option<crate::events::TokenUsage> {
         self.reported.get()
     }
@@ -830,7 +808,14 @@ impl Harness for ClaudeCode {
         });
         let usage = usage.filter(|usage| usage.total() > 0);
         let tokens = usage.map(|usage| usage.total());
-        let call = Self::call(&doc, started_at);
+        // The stream's start, where its init event stands: the head keeps it when the output
+        // was cut.
+        let front: &[u8] = if output.stdout_cut {
+            &output.stdout_head
+        } else {
+            &output.stdout
+        };
+        let call = Self::call(&doc, Self::version(front), started_at);
         let (action, summary) = Self::parse(result)?;
         self.reported.set(usage);
         *self.call.borrow_mut() = Some(call);
@@ -843,18 +828,41 @@ impl Harness for ClaudeCode {
 }
 
 impl ClaudeCode {
+    /// How many lines of the stream's start are read for its init event, the event Claude Code
+    /// prints first.
+    const OPENING_LINES: usize = 8;
+
+    /// The harness program's own version as the stream's `system`/`init` event states it
+    /// (`claude_code_version`), read among the first [`Self::OPENING_LINES`] lines of `front`,
+    /// the stream's start; none when no line among them is that event or it states no version.
+    /// Read from the step's own stream and never from a call of the program outside a step:
+    /// takt runs the harness program in a judgement step and nowhere else, and a layer it
+    /// cannot read from what ran is absent, never guessed (ADR 0101).
+    fn version(front: &[u8]) -> Option<String> {
+        front
+            .split(|byte| *byte == b'\n')
+            .map(<[u8]>::trim_ascii)
+            .filter(|line| !line.is_empty())
+            .take(Self::OPENING_LINES)
+            .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+            .find(|doc| doc["type"] == "system" && doc["subtype"] == "init")
+            .and_then(|doc| doc["claude_code_version"].as_str().map(str::to_owned))
+    }
+
     /// What the result event of `claude --output-format stream-json` (the document
     /// `--output-format json` prints) stated about the call, each field absent when the
     /// result does not state it: `modelUsage`'s keys as the model (several joined with `+`),
-    /// `total_cost_usd`, `duration_ms`, `duration_api_ms` and `num_turns`; `started_at` is the
-    /// instant takt started the child.
-    fn call(doc: &serde_json::Value, started_at: String) -> CallReport {
+    /// `total_cost_usd`, `duration_ms`, `duration_api_ms` and `num_turns`; `version` is what
+    /// [`Self::version`] read from the stream's start; `started_at` is the instant takt started
+    /// the child.
+    fn call(doc: &serde_json::Value, version: Option<String>, started_at: String) -> CallReport {
         let model = doc["modelUsage"].as_object().and_then(|models| {
             let names: Vec<&str> = models.keys().map(String::as_str).collect();
             (!names.is_empty()).then(|| names.join("+"))
         });
         CallReport {
             model,
+            version,
             cost_usd: doc["total_cost_usd"].as_f64(),
             duration_ms: doc["duration_ms"].as_u64(),
             api_ms: doc["duration_api_ms"].as_u64(),
@@ -987,6 +995,30 @@ mod tests {
         assert_eq!(ClaudeCode::transcript(b"p\n", None), b"p\n".to_vec());
         let short = ClaudeCode::transcript(b"p\n", Some(&finished(b"", b"r\n", false, 2)));
         assert_eq!(short, b"p\nr\n".to_vec());
+    }
+
+    /// The harness's version is the one its stream's opening `system`/`init` event states; a
+    /// stream without that event among its first lines, or whose init event states none, gives
+    /// none, and no other event's field is read as one.
+    #[test]
+    fn the_version_is_the_init_events_and_none_without_one() {
+        let stream = b"\n{\"type\":\"system\",\"subtype\":\"init\",\"claude_code_version\":\"2.1.303\"}\n{\"type\":\"result\"}\n";
+        assert_eq!(ClaudeCode::version(stream).as_deref(), Some("2.1.303"));
+        assert_eq!(
+            ClaudeCode::version(b"{\"type\":\"system\",\"subtype\":\"init\"}\n"),
+            None
+        );
+        assert_eq!(
+            ClaudeCode::version(b"{\"type\":\"result\",\"claude_code_version\":\"x\"}\n"),
+            None
+        );
+        assert_eq!(ClaudeCode::version(b""), None);
+        let late = [
+            &b"{\"type\":\"assistant\"}\n".repeat(ClaudeCode::OPENING_LINES)[..],
+            b"{\"type\":\"system\",\"subtype\":\"init\",\"claude_code_version\":\"2.1.303\"}\n",
+        ]
+        .concat();
+        assert_eq!(ClaudeCode::version(&late), None, "past the start, not read");
     }
 
     /// The reply is read from the last result event wherever it stands, else from the last

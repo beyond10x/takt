@@ -856,7 +856,7 @@ fn a_layered_record_reports_its_layers_and_the_failures_by_line() {
         Some(
             [
                 ("takt", "0123456789abcdef0123456789abcdef01234567"),
-                ("harness", "2.1.304 (Claude Code)"),
+                ("harness", "2.1.304"),
                 ("model", "claude-opus-5-5"),
             ]
             .into_iter()
@@ -873,7 +873,7 @@ fn a_layered_record_reports_its_layers_and_the_failures_by_line() {
     let printed = String::from_utf8(out).expect("utf-8");
     assert!(
         printed.contains(
-            "| takt 0123456789abcdef0123456789abcdef01234567; harness 2.1.304 (Claude Code); model claude-opus-5-5 |"
+            "| takt 0123456789abcdef0123456789abcdef01234567; harness 2.1.304; model claude-opus-5-5 |"
         ),
         "{printed}"
     );
@@ -884,7 +884,7 @@ fn a_layered_record_reports_its_layers_and_the_failures_by_line() {
         "{printed}"
     );
     assert!(
-        printed.contains("| harness | 2.1.304 (Claude Code) | not reported | not reported | 20 | not reported | events.jsonl:3 |"),
+        printed.contains("| harness | 2.1.304 | not reported | not reported | 20 | not reported | events.jsonl:3 |"),
         "{printed}"
     );
     assert!(

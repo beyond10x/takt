@@ -241,7 +241,7 @@ fn report_prints_the_layers_column_and_the_cost_by_layer() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("| takt 0123456789abcdef0123456789abcdef01234567; harness 2.1.304 (Claude Code); model claude-opus-5-5 |"),
+        stdout.contains("| takt 0123456789abcdef0123456789abcdef01234567; harness 2.1.304; model claude-opus-5-5 |"),
         "{stdout}"
     );
     assert!(
