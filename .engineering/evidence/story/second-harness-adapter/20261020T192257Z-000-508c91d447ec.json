@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-20T19:22:57Z",
+  "actor": "human:timo",
+  "artifact": "story:second-harness-adapter",
+  "kind": "story",
+  "revision": 12,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check at 5741420: cargo test --workspace --locked 1583 passed, 0 failed, 6 ignored; citations 1016/1016",
+    "reference": "https://github.com/beyond10x/takt/commit/5741420"
+  }
+}

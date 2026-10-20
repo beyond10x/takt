@@ -30,11 +30,25 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   program writes a `PYTHON*` variable, changes directory or writes `sys.path` before it runs
   it, when a word stands between the file and the program, or when the file is neither Python
   nor shell; a `PATH` write does not.
+- `--harness` takes `claude`, `codex` or `harness`, each through one metaharness session seam:
+  Claude Code (`HermeticMode::Strict`), Codex (codex-cli 0.153.4, resolved on the child's
+  `PATH`; hermetic `On`, the verdict in each step's summary, H9 gating; its own sandbox writes
+  only to the copy, with no network) and b10x-harness (observed, no per-call decision). Codex's
+  home and XDG directories are the session's scratch.
+- Every proposal's files and the step's summary are checked before the edit effect writes:
+  a credential shape (private key, JWT, `sk-ant-`, `gh?_`, `github_pat_`, `sk-`, a token field)
+  or a refusal of `b10x-gates scan-text` under the run's policy refuses the whole proposal,
+  naming the file and never the text, and the summary is replaced by a fixed line; a scan that
+  cannot run refuses too. With no policy, a `codex` or `harness` proposal is refused.
+- The session's scratch copy carries the case tree's git state through a `.git` file naming a
+  git directory outside the copy, so Claude Code's start-up git commands answer there as in the
+  tree; the case tree's `.git` is never written, and an edit under `.git` is refused.
 
 ### Repository
 
 - `b10x-loom-sdk` 0.27.0 → 0.28.0, now a dependency of `b10x-takt`; `metaharness` 0.10.1 through
-  the new crate `b10x-session-executor`, which depends on no takt crate.
+  the new crate `b10x-session-executor`, which depends on no takt crate; `metaharness-b10x`
+  0.10.1 beside it.
 
 ## [0.6.0] — 2026-10-20
 
