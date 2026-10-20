@@ -1,0 +1,15 @@
+{"at":"2026-10-20T00:57:12.891282Z","step":0,"event":"opened","case":"scenario-1-trial-88","protocol":"story.delivery/1","binary":"bee77822aa9ac86df153de9871b962b419d195f3"}
+{"at":"2026-10-20T00:57:13.054680Z","step":1,"event":"step","by":"validator","name":"takt.tests-run","action":"tests.run"}
+{"at":"2026-10-20T00:57:13.235668Z","step":2,"event":"step","by":"validator","name":"takt.gate-run","action":"gate.run"}
+{"at":"2026-10-20T00:57:29.576277Z","step":3,"event":"step","by":"harness","name":"claude-code","action":"tests.write","tokens":24626}
+{"at":"2026-10-20T00:57:29.726668Z","step":4,"event":"step","by":"validator","name":"takt.tests-run","action":"tests.run"}
+{"at":"2026-10-20T00:57:29.910458Z","step":5,"event":"step","by":"validator","name":"takt.gate-run","action":"gate.run"}
+{"at":"2026-10-20T00:57:46.244558Z","step":6,"event":"step","by":"harness","name":"claude-code","action":"implementation.edit","tokens":26218}
+{"at":"2026-10-20T00:57:46.476118Z","step":7,"event":"step","by":"validator","name":"takt.tests-run","action":"tests.run"}
+{"at":"2026-10-20T00:57:46.750414Z","step":8,"event":"step","by":"validator","name":"takt.gate-run","action":"gate.run"}
+{"at":"2026-10-20T00:57:55.290243Z","step":9,"event":"step","by":"harness","name":"claude-code","action":"change.handover","tokens":15875}
+{"at":"2026-10-20T00:57:55.366022Z","step":10,"event":"step","by":"validator","name":"takt.change-read","action":"change.read"}
+{"at":"2026-10-20T00:58:00.702704Z","step":11,"event":"step","by":"validator","name":"takt.pr-open","action":"pr.open"}
+{"at":"2026-10-20T00:58:03.696863Z","step":12,"event":"step","by":"validator","name":"takt.ci-read","action":"ci.read"}
+{"at":"2026-10-20T00:58:37.103218Z","step":13,"event":"step","by":"validator","name":"takt.ci-read","action":"ci.read"}
+{"at":"2026-10-20T00:58:37.104987Z","step":13,"event":"stop","stop":"ApprovalRequired (repository.merge)","steps":13,"tokens":66719,"completed":false}

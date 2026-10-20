@@ -35,6 +35,14 @@
 //! medians. A metric whose definition changed between the two is printed with both figures and
 //! does not make a scenario worse; outcomes are compared under the current definition whatever
 //! the saved one's version. The rule applied is printed with every comparison.
+//!
+//! A candidate that targets steps (the actions its finding names) is judged on them too
+//! ([`Scorecard::judge_steps`], `takt scorecard --against --steps`), under the `step_tokens`
+//! definition: each run keeps its tokens by action, and per scenario and action a step is
+//! better when every candidate case's tokens at it are below the saved side's cheapest, or a
+//! one-sided exact Mann-Whitney U test at five cases a side or more rejects equality at 1 in 20
+//! ([`rank_test`]). The whole run is still judged as above, and a candidate better on its steps
+//! but worse on the run is refused, naming both.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -77,7 +85,10 @@ pub const BINARY_FILE: &str = "binary.txt";
 /// version, so a comparison with a scorecard saved under the previous one prints both figures.
 /// The outcome is at version 3: `Unperformable` ranks with the budget stops and a [`DISK_LOW`]
 /// trial takes no rank, so a takt that knows version 2 refuses a scorecard saved under it.
-pub const METRICS: [(&str, u32); 7] = [
+/// `step_tokens` is a run's tokens by the action of its `step` lines ([`Row::step_tokens`]) and
+/// the rule that judges the steps a candidate targets with them ([`Scorecard::judge_steps`]); a
+/// takt that does not know it refuses a scorecard saved under it.
+pub const METRICS: [(&str, u32); 8] = [
     ("outcome", 3),
     ("steps", 1),
     ("tokens", 1),
@@ -85,7 +96,16 @@ pub const METRICS: [(&str, u32); 7] = [
     ("no_progress", 1),
     ("errors", 1),
     ("wall", 1),
+    ("step_tokens", 1),
 ];
+
+/// The cases a side needs for the rank test of a targeted step ([`rank_test`]): five, the
+/// rule's trials, at which the one-sided exact test rejects equality at [`RANK_TEST_ALPHA`] for
+/// U of at most 4 (12 of the 252 arrangements).
+pub const RANK_TEST_CASES: usize = 5;
+
+/// The significance level of the rank test, as a fraction: 1 in 20, one-sided.
+pub const RANK_TEST_ALPHA: (u128, u128) = (1, 20);
 
 /// What named a saved scorecard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +167,12 @@ pub struct Row {
     /// knows ([`NOT_COMPLETED`]).
     #[serde(default)]
     pub completed: Option<bool>,
+    /// The tokens of the run's `step` lines by their action, each summed over the run's steps
+    /// of that action (at most `u64::MAX`, the run then `saturated`); an action with no
+    /// harness step reads 0. Empty on a file saved before it had the field (metric
+    /// `step_tokens`).
+    #[serde(default)]
+    pub step_tokens: BTreeMap<String, u64>,
 }
 
 impl Row {
@@ -287,6 +313,8 @@ pub struct Case {
     pub wall_ms: u64,
     /// A sum, the case's or a run's, stopped at `u64::MAX`.
     pub saturated: bool,
+    /// Its runs' tokens by action ([`Row::step_tokens`]), summed.
+    pub step_tokens: BTreeMap<String, u64>,
 }
 
 impl Case {
@@ -316,6 +344,14 @@ impl Case {
             sum(|run| run.errors),
             sum(|run| run.wall_ms),
         );
+        let mut step_tokens: BTreeMap<String, u64> = BTreeMap::new();
+        for (action, tokens) in runs.iter().flat_map(|run| &run.step_tokens) {
+            let sum = step_tokens.entry(action.clone()).or_insert(0);
+            *sum = sum.checked_add(*tokens).unwrap_or_else(|| {
+                saturated = true;
+                u64::MAX
+            });
+        }
         Some(Self {
             case: last.case.clone(),
             scenario: last.scenario.clone(),
@@ -328,6 +364,7 @@ impl Case {
             errors,
             wall_ms,
             saturated,
+            step_tokens,
         })
     }
 }
@@ -496,6 +533,7 @@ struct Span {
     stop: Option<String>,
     completed: Option<bool>,
     binary: Option<String>,
+    step_tokens: BTreeMap<String, u64>,
 }
 
 /// A run's outcome from its stop: a `Completed` stop's outcome (`accepted`), else the stop's
@@ -536,6 +574,7 @@ impl Span {
             binary: None,
             opened_binary: self.binary,
             completed: self.stop.and(self.completed),
+            step_tokens: self.step_tokens,
         }
     }
 }
@@ -571,11 +610,14 @@ fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
             });
         };
         match line["event"].as_str() {
-            Some("step") => count(
-                &mut span.tokens,
-                line["tokens"].as_u64().unwrap_or(0),
-                &mut span.saturated,
-            ),
+            Some("step") => {
+                let tokens = line["tokens"].as_u64().unwrap_or(0);
+                count(&mut span.tokens, tokens, &mut span.saturated);
+                if let Some(action) = line["action"].as_str() {
+                    let at = span.step_tokens.entry(action.to_owned()).or_insert(0);
+                    count(at, tokens, &mut span.saturated);
+                }
+            }
             Some("refusal") => count(&mut span.refusals, 1, &mut span.saturated),
             Some("error") => count(&mut span.errors, 1, &mut span.saturated),
             Some("stop") => {
@@ -685,6 +727,123 @@ pub fn unnamed_in_a_mix(rows: &[Row]) -> Option<(String, &Row)> {
         }
     }
     None
+}
+
+/// The one-sided exact Mann-Whitney U test of a targeted step: whether the candidate's tokens at
+/// the step are stochastically below the saved side's. `u` counts the pairs of a candidate case
+/// and a saved case in which the candidate's is not below (a tie counts against the candidate,
+/// so ties never help it); `at_most` is the number of the `total` equally likely arrangements of
+/// the two sides, under equality and without ties, whose U is at most `u`; and `rejects` is
+/// whether `at_most / total` is at most [`RANK_TEST_ALPHA`], compared in integers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RankTest {
+    pub u: u64,
+    pub at_most: u128,
+    pub total: u128,
+    pub rejects: bool,
+}
+
+/// The rank test of `candidate` against `saved`, each a side's tokens at one step, a figure a
+/// case; none when a side has fewer than [`RANK_TEST_CASES`] cases, or so many that the count of
+/// arrangements does not fit 128 bits.
+///
+/// Why this test: the tokens of a step are not normal (a step takes one request or three, so the
+/// figures cluster with gaps), the sides are small and independent, and the question is one-sided
+/// (cheaper, not different). The exact Mann-Whitney U test assumes nothing of the distribution,
+/// is exact at five a side where a normal approximation is not, and counts in integers, so its
+/// verdict does not depend on rounding. At five a side it rejects at U of at most 4 (12 of 252
+/// arrangements, 0.048), not at 5 (19 of 252, 0.075).
+#[must_use]
+pub fn rank_test(candidate: &[u64], saved: &[u64]) -> Option<RankTest> {
+    let (n, m) = (candidate.len(), saved.len());
+    if n < RANK_TEST_CASES || m < RANK_TEST_CASES {
+        return None;
+    }
+    let u = candidate
+        .iter()
+        .map(|c| saved.iter().filter(|s| c >= s).count() as u64)
+        .sum::<u64>();
+    // ways[i][j][k]: the arrangements of i candidate and j saved cases with U = k. The largest
+    // of them is a candidate case, which is above all j saved ones, or a saved case, which adds
+    // nothing.
+    let mut ways: Vec<Vec<Vec<u128>>> = vec![vec![Vec::new(); m + 1]; n + 1];
+    for i in 0..=n {
+        for j in 0..=m {
+            let mut row = vec![0_u128; i * j + 1];
+            if i == 0 || j == 0 {
+                row[0] = 1;
+            } else {
+                for (k, slot) in row.iter_mut().enumerate() {
+                    let above = k
+                        .checked_sub(j)
+                        .and_then(|k| ways[i - 1][j].get(k))
+                        .copied()
+                        .unwrap_or(0);
+                    let below = ways[i][j - 1].get(k).copied().unwrap_or(0);
+                    *slot = above.checked_add(below)?;
+                }
+            }
+            ways[i][j] = row;
+        }
+    }
+    let all = &ways[n][m];
+    let total = all
+        .iter()
+        .try_fold(0_u128, |sum, ways| sum.checked_add(*ways))?;
+    let reach = usize::try_from(u).unwrap_or(usize::MAX).min(all.len() - 1);
+    let at_most = all[..=reach]
+        .iter()
+        .try_fold(0_u128, |sum, ways| sum.checked_add(*ways))?;
+    let (numerator, denominator) = RANK_TEST_ALPHA;
+    let rejects = at_most.checked_mul(denominator)? <= total.checked_mul(numerator)?;
+    Some(RankTest {
+        u,
+        at_most,
+        total,
+        rejects,
+    })
+}
+
+/// One targeted step of one scenario, as [`Scorecard::judge_steps`] judged it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetedStep {
+    pub scenario: String,
+    pub action: String,
+    /// Each candidate case that took the step, with its tokens at it, in case order.
+    pub candidate: Vec<(String, u64)>,
+    /// Each saved case that took the step, with its tokens at it, in case order.
+    pub saved: Vec<(String, u64)>,
+    /// The saved side's cheapest case at the step; none when no saved case took it.
+    pub saved_cheapest: Option<u64>,
+    /// Every candidate case took the step and is below `saved_cheapest`.
+    pub every_below: bool,
+    /// The rank test, with five cases a side or more ([`rank_test`]).
+    pub rank: Option<RankTest>,
+    /// The cases, either side's, that took no step of the action, which no figure stands for.
+    pub missing: Vec<String>,
+    /// No case is missing, and every candidate case is below or the rank test rejects equality.
+    pub better: bool,
+}
+
+/// The verdict of [`Scorecard::judge_steps`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepVerdict {
+    /// Better on every targeted step in every scenario that has it, and no scenario worse on the
+    /// run.
+    Better,
+    /// No scenario worse on the run, but some targeted step not better, or none judged.
+    NotBetter,
+    /// Some scenario worse on the run, whatever the steps: refused.
+    WorseOnTheRun,
+}
+
+/// What [`Scorecard::judge_steps`] found: each targeted step of each scenario, the scenarios
+/// worse on the run, and the verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Judgement {
+    pub steps: Vec<TargetedStep>,
+    pub worse: Vec<String>,
+    pub verdict: StepVerdict,
 }
 
 impl Scorecard {
@@ -1326,18 +1485,229 @@ impl Scorecard {
         }
         Ok(worse)
     }
+
+    /// Judges this scorecard as a candidate that targets the steps of `actions` (the actions its
+    /// finding names), against `saved`, under the `step_tokens` rule. The whole run first, as
+    /// [`Scorecard::worse_against`] judges and prints it, its refusals (too few cases, a
+    /// scenario one side lacks, a `DiskLow` trial) refusing this too. Then, per scenario and
+    /// action, each side's tokens at the step, a figure a case, the saved side's cheapest, and
+    /// the [`rank_test`]: the step is better when every candidate case is below the saved
+    /// cheapest, or the rank test rejects equality; a case of either side that took no step of
+    /// the action is named and the step is not better. A scenario neither side took the action
+    /// in is printed and not judged; an action no scenario took is not better. The verdict
+    /// ([`StepVerdict`]) is printed last: better on its steps and not worse on the run; not
+    /// better; or, a scenario worse on the run, refused naming both the steps' result and the
+    /// scenarios. Both sides must be under this takt's `step_tokens` definition, else refused
+    /// naming it: a scorecard saved without it has no figure a step to judge.
+    pub fn judge_steps(
+        &self,
+        saved: &Scorecard,
+        actions: &[String],
+        out: &mut dyn Write,
+    ) -> Result<Judgement> {
+        let mut targeted: Vec<&str> = Vec::new();
+        for action in actions {
+            let action = action.trim();
+            if action.is_empty() {
+                bail!(
+                    "a targeted step is named by its action (`change.handover`); an empty one names none"
+                );
+            }
+            if !targeted.contains(&action) {
+                targeted.push(action);
+            }
+        }
+        if targeted.is_empty() {
+            bail!("no targeted step: name the actions the candidate's finding names");
+        }
+        let known = METRICS
+            .iter()
+            .find(|(metric, _)| *metric == "step_tokens")
+            .map_or(0, |(_, version)| *version);
+        for (card, side) in [(self, "this scorecard"), (saved, "the saved scorecard")] {
+            match card.metrics.get("step_tokens") {
+                Some(version) if *version == known => {}
+                Some(version) => bail!(
+                    "{side} is under step_tokens definition version {version}; this takt judges targeted steps under version {known}, and a scorecard under another is not judged"
+                ),
+                None => bail!(
+                    "{side} has no step_tokens definition: it was saved without tokens by step, so its steps cannot be judged; save it again with this takt"
+                ),
+            }
+        }
+        let worse = self.worse_against(saved, out)?;
+        writeln!(
+            out,
+            "rule  step_tokens v{known}  a targeted step is better when every candidate case's tokens at it are below the saved side's cheapest, or a one-sided exact Mann-Whitney U test (a tie counts against the candidate) rejects equality at p <= {}/{} with {RANK_TEST_CASES} cases a side or more",
+            RANK_TEST_ALPHA.0, RANK_TEST_ALPHA.1
+        )?;
+        let (candidates, baselines) = (self.cases(), saved.cases());
+        let scenarios: BTreeSet<&str> = candidates
+            .iter()
+            .chain(&baselines)
+            .filter_map(|case| case.scenario.as_deref())
+            .collect();
+        let mut steps: Vec<TargetedStep> = Vec::new();
+        for scenario in scenarios {
+            for &action in &targeted {
+                let took = |cases: &[Case]| {
+                    let (mut took, mut missing) = (Vec::new(), Vec::new());
+                    for case in cases
+                        .iter()
+                        .filter(|case| case.scenario.as_deref() == Some(scenario))
+                    {
+                        match case.step_tokens.get(action) {
+                            Some(tokens) => took.push((case.case.clone(), *tokens)),
+                            None => missing.push(case.case.clone()),
+                        }
+                    }
+                    (took, missing)
+                };
+                let ((candidate, mut missing), (saved_took, saved_missing)) =
+                    (took(&candidates), took(&baselines));
+                if candidate.is_empty() && saved_took.is_empty() {
+                    writeln!(
+                        out,
+                        "scenario {scenario}  step {action}  taken by no case on either side, not judged"
+                    )?;
+                    continue;
+                }
+                missing.extend(saved_missing);
+                let figures = |took: &[(String, u64)]| -> Vec<u64> {
+                    took.iter().map(|(_, tokens)| *tokens).collect()
+                };
+                let (mine, theirs) = (figures(&candidate), figures(&saved_took));
+                let saved_cheapest = theirs.iter().min().copied();
+                let every_below = !mine.is_empty()
+                    && saved_cheapest.is_some_and(|cheapest| mine.iter().all(|t| *t < cheapest));
+                let rank = rank_test(&mine, &theirs);
+                let better =
+                    missing.is_empty() && (every_below || rank.is_some_and(|rank| rank.rejects));
+                let list = |figures: &[u64]| {
+                    figures
+                        .iter()
+                        .map(u64::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                };
+                writeln!(
+                    out,
+                    "scenario {scenario}  step {action}  candidate {}  saved {}  saved cheapest {}",
+                    list(&mine),
+                    list(&theirs),
+                    saved_cheapest.map_or_else(|| "-".to_owned(), |cheapest| cheapest.to_string())
+                )?;
+                let tested = match rank {
+                    Some(rank) => format!(
+                        "U {}, {} of {} arrangements at U {} or less, {} equality at p <= {}/{}",
+                        rank.u,
+                        rank.at_most,
+                        rank.total,
+                        rank.u,
+                        if rank.rejects {
+                            "rejects"
+                        } else {
+                            "does not reject"
+                        },
+                        RANK_TEST_ALPHA.0,
+                        RANK_TEST_ALPHA.1
+                    ),
+                    None => format!("no rank test (fewer than {RANK_TEST_CASES} cases a side)"),
+                };
+                writeln!(
+                    out,
+                    "scenario {scenario}  step {action}  every candidate case below: {}  {tested}{}  {}",
+                    if every_below { "yes" } else { "no" },
+                    if missing.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  no {action} step in {}", missing.join(", "))
+                    },
+                    if better { "better" } else { "not better" }
+                )?;
+                steps.push(TargetedStep {
+                    scenario: scenario.to_owned(),
+                    action: action.to_owned(),
+                    candidate,
+                    saved: saved_took,
+                    saved_cheapest,
+                    every_below,
+                    rank,
+                    missing,
+                    better,
+                });
+            }
+        }
+        let not_better: Vec<&str> = targeted
+            .iter()
+            .copied()
+            .filter(|action| {
+                let judged: Vec<&TargetedStep> =
+                    steps.iter().filter(|step| step.action == *action).collect();
+                judged.is_empty() || judged.iter().any(|step| !step.better)
+            })
+            .collect();
+        let better_on_steps = not_better.is_empty();
+        let named = targeted.join(", ");
+        let steps_said = if better_on_steps {
+            format!("better on its steps ({named})")
+        } else {
+            format!(
+                "not better on its steps ({named}; not better: {})",
+                not_better.join(", ")
+            )
+        };
+        let verdict = if !worse.is_empty() {
+            let scenarios = worse
+                .iter()
+                .map(|scenario| format!("scenario {scenario}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(
+                out,
+                "verdict  refused: {steps_said}, but worse on the run ({scenarios})"
+            )?;
+            StepVerdict::WorseOnTheRun
+        } else if better_on_steps {
+            writeln!(out, "verdict  {steps_said}, not worse on the run")?;
+            StepVerdict::Better
+        } else {
+            writeln!(out, "verdict  {steps_said}, not worse on the run")?;
+            StepVerdict::NotBetter
+        };
+        Ok(Judgement {
+            steps,
+            worse,
+            verdict,
+        })
+    }
+}
+
+/// What `takt scorecard` found: the scenarios marked worse, and with targeted steps, the verdict
+/// on them ([`Scorecard::judge_steps`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reported {
+    pub worse: usize,
+    pub steps: Option<StepVerdict>,
 }
 
 /// `takt scorecard`: prints the scorecard of `repo`'s runs; with `save`, saves it there, named
 /// by `revision`, the revision of takt under test, which a save needs; with `against`,
-/// compares it with that saved scorecard. The number of scenarios marked worse.
+/// compares it with that saved scorecard, and with `steps` too, the actions a candidate targets,
+/// judges it on them ([`Scorecard::judge_steps`]), which needs `against`.
 pub fn report(
     repo: &Path,
     save: Option<&Path>,
     revision: Option<&str>,
     against: Option<&Path>,
+    steps: &[String],
     out: &mut dyn Write,
-) -> Result<usize> {
+) -> Result<Reported> {
+    if !steps.is_empty() && against.is_none() {
+        bail!(
+            "--steps needs --against <saved scorecard>: a targeted step is judged against the saved side's"
+        );
+    }
     let saved = against.map(Scorecard::load).transpose()?;
     let card = Scorecard::read(repo)?;
     let named = match (save, revision) {
@@ -1356,7 +1726,20 @@ pub fn report(
         )?;
     }
     match saved {
-        Some(saved) => card.against(&saved, out),
-        None => Ok(0),
+        Some(saved) if !steps.is_empty() => {
+            let judged = card.judge_steps(&saved, steps, out)?;
+            Ok(Reported {
+                worse: judged.worse.len(),
+                steps: Some(judged.verdict),
+            })
+        }
+        Some(saved) => Ok(Reported {
+            worse: card.against(&saved, out)?,
+            steps: None,
+        }),
+        None => Ok(Reported {
+            worse: 0,
+            steps: None,
+        }),
     }
 }

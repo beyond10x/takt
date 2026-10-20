@@ -366,6 +366,7 @@ fn row(case: &str, outcome: &str) -> Row {
         held_out: None,
         opened_binary: None,
         completed: None,
+        step_tokens: Default::default(),
     }
 }
 

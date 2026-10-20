@@ -6,7 +6,22 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+### Added
+
+- `takt scorecard --against <saved> --steps <action>[,...]` judges the steps a candidate targets:
+  a step is better when every candidate case is below the saved side's cheapest such step, or a
+  one-sided exact Mann-Whitney U test (ties against the candidate, at least 5 cases a side) rejects
+  equality at p <= 1/20; the whole run must stay not worse. Better on its steps but worse on the
+  run is refused, exit 3; not worse but not better on a step is exit 4.
+- `takt run` and `takt scenario run` take `--active-seconds <n>`: a budget on a run's wall time
+  less its waits on the forge; over it the run stops `ActiveTime`, naming the budget, the active
+  time and the wait time, exit 3.
+
 ### Changed
+
+- The scorecard gains the metric `step_tokens` (version 1), each run's tokens by step action. A
+  scorecard saved before it lacks the metric, so the promoted baseline is judged again only after
+  `takt promote --rebaseline`.
 
 - `takt run --help`: `--forge none` names the `Unperformable` stop, exit 7, when only a forge
   action is left, instead of saying the harness takes them.

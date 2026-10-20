@@ -206,14 +206,31 @@ struct ScorecardArgs {
     /// of the medians.
     #[arg(long, value_name = "FILE")]
     against: Option<PathBuf>,
+    /// With --against, judge the candidate on the steps it targets, by action (the actions its
+    /// finding names), comma-separated: per scenario and action, each case's tokens at the step
+    /// on each side and the saved side's cheapest; a step is better when every candidate case is
+    /// below the saved cheapest, or a one-sided exact Mann-Whitney U test (a tie counts against
+    /// the candidate) rejects equality at p <= 1/20 with 5 cases a side or more. A case of
+    /// either side that took no step of the action is named and the step is not better. The
+    /// whole run is still judged as --against judges it: better on its steps but worse on the
+    /// run is refused, naming both. Both scorecards must be under the step_tokens definition.
+    #[arg(
+        long,
+        value_name = "ACTION",
+        value_delimiter = ',',
+        num_args = 1..,
+        requires = "against"
+    )]
+    steps: Vec<String>,
 }
 
 /// What `takt scorecard --help` says about the exit codes.
 const SCORECARD_EXIT_CODES: &str = "Exit codes:
-  0  printed (and saved); with --against, no scenario is worse than the saved one
-  1  refused: the repository, a case's events.jsonl, or the saved scorecard does not read (a binary.txt that does not read leaves its case's runs stating no binary, the case listed with the reason); a scenario case has no held-out.txt beside its record, or one that does not read or states no result (the case named); --save without --revision, or under a --revision that is not the full commit id (40 lower-case hex digits), onto a file that exists, or that cannot be written; --save with a run made with another binary than the --revision's (the run named; its `opened` line names another revision or the revision -dirty, or names none, no `binary` or `unknown revision`, beside runs that name one), nothing written; with --against, a scenario the saved scorecard has with fewer cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), or any scenario with fewer on this side, none included (`too few cases (<n> of <trials>)`), or a scenario the saved scorecard lacks, however many its cases here (`not in the saved scorecard`): no verdict given, as a promotion refuses; with --against, no scenario case on either side (`no scenario case`), nothing compared; a saved scorecard with a run whose outcome disagrees with its held-out result; the reason on stderr
+  0  printed (and saved); with --against, no scenario is worse than the saved one; with --steps too, better on every targeted step as well
+  1  refused: the repository, a case's events.jsonl, or the saved scorecard does not read (a binary.txt that does not read leaves its case's runs stating no binary, the case listed with the reason); a scenario case has no held-out.txt beside its record, or one that does not read or states no result (the case named); --save without --revision, or under a --revision that is not the full commit id (40 lower-case hex digits), onto a file that exists, or that cannot be written; --save with a run made with another binary than the --revision's (the run named; its `opened` line names another revision or the revision -dirty, or names none, no `binary` or `unknown revision`, beside runs that name one), nothing written; with --against, a scenario the saved scorecard has with fewer cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), or any scenario with fewer on this side, none included (`too few cases (<n> of <trials>)`), or a scenario the saved scorecard lacks, however many its cases here (`not in the saved scorecard`): no verdict given, as a promotion refuses; with --against, no scenario case on either side (`no scenario case`), nothing compared; a saved scorecard with a run whose outcome disagrees with its held-out result; with --steps, a saved scorecard with no step_tokens definition (saved before it) or under another version, or an empty action; the reason on stderr
   2  the arguments do not parse
-  3  with --against: a scenario is worse: at some outcome rank its cases at that rank or better fall short of the saved share by more than the rule's margin, or its median of tokens exceeds the saved maximum (a scenario with no run on this side is exit 1, too few cases)";
+  3  with --against: a scenario is worse: at some outcome rank its cases at that rank or better fall short of the saved share by more than the rule's margin, or its median of tokens exceeds the saved maximum (a scenario with no run on this side is exit 1, too few cases); with --steps, whatever the steps: refused, naming the steps' result and the scenarios worse on the run
+  4  with --steps: no scenario is worse on the run, but a targeted step is not better (or no case on either side took it)";
 
 #[derive(clap::Args)]
 struct TraceArgs {
@@ -408,6 +425,13 @@ struct LoopArgs {
     /// Stop once the harness reported this many tokens.
     #[arg(long)]
     tokens: Option<u64>,
+    /// Stop once the run's active time, its wall time less the time it waits on the forge
+    /// between two reads, reaches this many seconds; read before every step, so a step under way
+    /// runs to its end. The run stops `ActiveTime` naming the budget, the active time and the
+    /// time waited, exit 3. Waits on the forge spend none of it, and it bounds none: a run with
+    /// no --iterations or --hours still has nothing to wait in.
+    #[arg(long, value_name = "SECONDS")]
+    active_seconds: Option<u64>,
     /// The test command, split at white space, run without a shell.
     #[arg(long, default_value = "cargo test --quiet")]
     test_cmd: String,
@@ -519,7 +543,7 @@ const EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
   1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress; the case stays open
+  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused or NoProgress; the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and the next run resumes it
@@ -532,7 +556,7 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate)
   1  refused before the run (an argument, the repository, the scenario, its seed, its story not ready there, its trial base or its case); the reason on stderr, no step run
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress; the case stays open
+  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused or NoProgress; the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
@@ -611,15 +635,23 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             save,
             revision,
             against,
+            steps,
         }) => {
-            let worse = takt::scorecard::report(
+            let reported = takt::scorecard::report(
                 &repo,
                 save.as_deref(),
                 revision.as_deref(),
                 against.as_deref(),
+                &steps,
                 out,
             )?;
-            Ok(if worse > 0 { 3 } else { EXIT_DONE })
+            Ok(if reported.worse > 0 {
+                3
+            } else if reported.steps == Some(takt::scorecard::StepVerdict::NotBetter) {
+                4
+            } else {
+                EXIT_DONE
+            })
         }
         Commands::Trace(TraceArgs {
             case,
@@ -1065,6 +1097,11 @@ impl LoopArgs {
                 "--hours is {hours}: an hour budget is a finite number above 0"
             ));
         }
+        if self.active_seconds == Some(0) {
+            return Err(anyhow!(
+                "--active-seconds is 0: an active-time budget is a number of seconds above 0"
+            ));
+        }
         Ok(())
     }
 
@@ -1383,6 +1420,9 @@ fn finish(
         eprintln!("no step transcript is kept: {error:#}");
     }
     run.take_default_gate();
+    if let Some(seconds) = looping.active_seconds {
+        run.cap_active_time(seconds);
+    }
     run.stop_when_unperformable();
     run.stop_when_disk_below(
         looping.min_free_gib.saturating_mul(1 << 30),

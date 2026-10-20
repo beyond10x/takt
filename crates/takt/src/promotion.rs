@@ -1026,6 +1026,13 @@ fn runs_bound(
                     fields.push((field, figure.to_string(), stored_figure.to_string()));
                 }
             }
+            if unchanged("step_tokens") {
+                fields.push((
+                    "step_tokens",
+                    format!("{:?}", run.step_tokens),
+                    format!("{:?}", was.step_tokens),
+                ));
+            }
             let named = run
                 .opened_binary
                 .clone()
@@ -3164,6 +3171,52 @@ mod tests {
         ("errors", 1),
         ("wall", 1),
     ];
+
+    /// The metric definitions of takt 0.3.0, before the targeted steps had a definition of
+    /// their own.
+    const METRICS_BEFORE_STEP_TOKENS: [(&str, u32); 7] = [
+        ("outcome", 3),
+        ("steps", 1),
+        ("tokens", 1),
+        ("refusals", 1),
+        ("no_progress", 1),
+        ("errors", 1),
+        ("wall", 1),
+    ];
+
+    /// story:the-judge-compares-the-steps-a-candidate-targets, acceptance 4: the per-step rule
+    /// has a definition version of its own, `step_tokens` v1, saved with every scorecard, so a
+    /// takt that does not know it refuses the scorecard instead of judging it without the rule;
+    /// and a stored scorecard from before it is refused by this takt until a rebaseline.
+    #[test]
+    fn a_takt_not_knowing_step_tokens_refuses_a_scorecard_saved_under_it() {
+        let shown = Path::new(SAVED_V3);
+        let card = Scorecard::load(shown).expect("the fixture reads");
+        assert_eq!(card.metrics.get("step_tokens"), Some(&1));
+        known_metrics_of(&card, shown, &METRICS).expect("this takt reads it");
+        let refused = known_metrics_of(&card, shown, &METRICS_BEFORE_STEP_TOKENS)
+            .expect_err("a takt not knowing step_tokens refuses it")
+            .to_string();
+        assert!(
+            refused.contains(
+                "metric step_tokens is one this takt does not know; a scorecard with it is not compared"
+            ),
+            "{refused}"
+        );
+        let mut before = card.clone();
+        before.metrics.remove("step_tokens");
+        let refused = known_metrics_of(&before, shown, &METRICS)
+            .expect_err("this takt refuses a scorecard from before step_tokens")
+            .to_string();
+        assert!(
+            refused.contains("metric step_tokens has no definition version"),
+            "{refused}"
+        );
+        assert!(
+            newer_definition(&card, &before),
+            "a rebaseline under step_tokens starts a new series"
+        );
+    }
 
     /// story:outcome-metric-takes-version-3, acceptance 2: the fixture is what this takt saves,
     /// its outcome metric at version 3, and the reading of a takt that knows version 2 refuses it
