@@ -911,9 +911,9 @@ types:
   # `--test-cmd` split at white space; the `gate.run` validator over the gates document `--gates`
   # names, taken from the case's base commit; `pr.open`, `ci.read` and `repository.merge` through
   # the forge, the last admissible only under a recorded grant at the case's revision.
-  # read from: crates/takt/src/validator.rs:2193
-  # read from: crates/takt/src/validator.rs:1630
-  # read from: crates/takt/src/validator.rs:1986
+  # read from: crates/takt/src/validator.rs:2205
+  # read from: crates/takt/src/validator.rs:1642
+  # read from: crates/takt/src/validator.rs:1998
   # read from: crates/takt/src/validator.rs:780
   # read from: docs/design/takt.md:56
   # read from: crates/takt/src/validator.rs:486-488
@@ -1800,14 +1800,14 @@ types:
   # grants nothing at a judge-surface merge and reads as before on any other merge.
   # read from: .engineering/planning/story/judge-guard.md:145
   # read from: crates/takt/src/case.rs:999-1001
-  # read from: crates/takt/src/validator.rs:2711-2717
+  # read from: crates/takt/src/validator.rs:2723-2729
   # The same rule, through the same function, holds an improvement turn's
   # `candidate.merge_judge_surface`: the owner's grant, or an agent role's under an unrevoked
   # delegation in `.engineering/delegations.yaml` at the mainline's tip (the forge's `main`,
   # the local `main` under `--forge none`), never an agent's for a change to an owner-only
   # file; `takt approve` takes the grant, and `candidate.merge_judge_surface` records nothing
   # on any other (story:self-improvement-protocol, part 2, correction 2).
-  # read from: crates/takt/src/validator.rs:2697-2704
+  # read from: crates/takt/src/validator.rs:2709-2716
   # read from: crates/takt/src/improvement.rs:1294-1300
   # A turn's judge-surface grant authorises only a merge made after it: `takt approve` records
   # the mainline's tip with the grant, read once the grant's instant is taken through the forge
@@ -1841,7 +1841,7 @@ types:
   # holds no revocation.
   # read from: .engineering/planning/story/judge-guard.md:58-62
   # read from: .engineering/planning/design/recursive-self-improvement.md:54-58
-  # read from: crates/takt/src/validator.rs:2281-2301
+  # read from: crates/takt/src/validator.rs:2293-2313
   - name: takt.work.Delegation
     kind: struct
     fields:
@@ -2344,7 +2344,7 @@ entities:
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/authority.rs:7-21
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/mod.rs:359-365
       # read from: crates/takt/src/case.rs:2339-2340
-      # read from: crates/takt/src/validator.rs:2855
+      # read from: crates/takt/src/validator.rs:2867
       # read from: crates/takt/src/case.rs:543-549
       # read from: crates/takt/src/case.rs:1116-1121
       - name: authority
@@ -2992,7 +2992,7 @@ entities:
   # read from: crates/takt/src/run.rs:4921-4952
   # read from: crates/takt/src/run.rs:282-298
   # read from: crates/takt/src/run.rs:8813-8883
-  # read from: crates/takt/src/validator.rs:3094-3181
+  # read from: crates/takt/src/validator.rs:3106-3193
   # read from: crates/takt/src/run.rs:222-228
   # read from: crates/takt/src/run.rs:792-801
   # read from: crates/takt/src/run.rs:6439-6441
@@ -3134,7 +3134,7 @@ entities:
       # every observation, record or not.
       # read from: crates/takt/src/validator.rs:17-33
       # read from: crates/takt/src/run.rs:7996-8009
-      # read from: crates/takt/src/validator.rs:1523
+      # read from: crates/takt/src/validator.rs:1535
       - name: artifact
         type: Optional<String>
         summary: The retained file's name under the case's `artifacts/`.
@@ -3254,8 +3254,9 @@ entities:
   # certainty counts as changed), what Python loads from the tree for its commands and
   # providers, read as the step guard reads a test command, the binding's `env` before its
   # words and again from each word naming a Python: every module, compiled module, `*.pth` file
-  # and subdirectory holding a module directly, in a Python script's own directory or in the
-  # directory `python3 <dir>` runs; and what `-m a.b` runs (`a.py`, `a.*`, the package `a/`
+  # and subdirectory holding a module at any depth, in a Python script's own directory or in the
+  # directory `python3 <dir>` runs (a script at the root of the tree, where the gate runs, is
+  # compared as `-m` is: the script and the root `*.pth` files); and what `-m a.b` runs (`a.py`, `a.*`, the package `a/`
   # whole) and the `*.pth` files, in the directory the command runs in and in each `PYTHONPATH`
   # entry the binding sets, only those there, since those directories are as often the code the
   # gate checks (`src`) and comparing every module in them would leave every gate that runs
@@ -3348,62 +3349,62 @@ entities:
   # (story:self-improvement-protocol S1, part 2).
   # Each built-in validator defines its action and kind,
   # and the list the step choice reads is built from them.
-  # read from: crates/takt/src/validator.rs:2198-2202
+  # read from: crates/takt/src/validator.rs:2210-2214
   # read from: crates/takt/src/run.rs:218-220
-  # read from: crates/takt/src/validator.rs:1635-1639
-  # read from: crates/takt/src/validator.rs:1994-1998
+  # read from: crates/takt/src/validator.rs:1647-1651
+  # read from: crates/takt/src/validator.rs:2006-2010
   # read from: crates/takt/src/validator.rs:753-765
   # read from: crates/takt/src/validator.rs:797-801
-  # read from: crates/takt/src/validator.rs:1427
+  # read from: crates/takt/src/validator.rs:1439
   # read from: crates/takt/src/validator.rs:1-2
   # read from: crates/takt/src/validator.rs:46-100
   # read from: crates/takt/src/validator.rs:622-636
   # read from: crates/takt/src/validator.rs:476-478
   # read from: crates/takt/src/validator.rs:715-725
   # read from: crates/takt/src/forge.rs:996-1024
-  # read from: crates/takt/src/validator.rs:1853
-  # read from: crates/takt/src/validator.rs:2855
+  # read from: crates/takt/src/validator.rs:1865
+  # read from: crates/takt/src/validator.rs:2867
   # read from: docs/design/takt.md:47-49
   # read from: docs/design/takt.md:64-65
   # read from: crates/takt/src/forge.rs:1170-1194
   # read from: crates/takt/src/validator.rs:145-165
-  # read from: crates/takt/src/validator.rs:3195-3209
+  # read from: crates/takt/src/validator.rs:3207-3221
   # read from: crates/takt/src/git.rs:2887-2891
-  # read from: crates/takt/src/validator.rs:3237-3320
+  # read from: crates/takt/src/validator.rs:3249-3332
   # read from: crates/takt/src/git.rs:3328-3335
   # read from: crates/takt/src/validator.rs:647-655
   # read from: crates/takt/src/run.rs:7960-7983
   # read from: crates/takt/src/validator.rs:659-675
-  # read from: crates/takt/src/validator.rs:1336-1344
-  # read from: crates/takt/src/validator.rs:1482-1487
-  # read from: crates/takt/src/validator.rs:1887-1899
-  # read from: crates/takt/src/validator.rs:2915-2933
+  # read from: crates/takt/src/validator.rs:1348-1356
+  # read from: crates/takt/src/validator.rs:1494-1499
+  # read from: crates/takt/src/validator.rs:1899-1911
+  # read from: crates/takt/src/validator.rs:2927-2945
   # read from: crates/takt/src/validator.rs:440-465
   # read from: crates/takt/src/validator.rs:170
-  # read from: crates/takt/src/validator.rs:3131-3143
+  # read from: crates/takt/src/validator.rs:3143-3155
   # read from: crates/takt/src/forge.rs:562-575
   # read from: crates/takt/src/validator.rs:712-714
   # read from: crates/takt/src/improvement.rs:508-516
   # read from: crates/takt/src/improvement.rs:659-665
   # read from: crates/takt/src/improvement.rs:838-848
-  # read from: crates/takt/src/validator.rs:3146-3164
+  # read from: crates/takt/src/validator.rs:3158-3176
   # read from: crates/takt/src/improvement.rs:321-395
   # read from: crates/takt/src/improvement.rs:399-468
   # read from: crates/takt/src/forge.rs:580-598
   # read from: crates/takt/src/validator.rs:252-255
   # read from: crates/takt/src/validator.rs:320-331
   # read from: crates/takt/src/validator.rs:869-898
-  # read from: crates/takt/src/validator.rs:1084-1114
-  # read from: crates/takt/src/validator.rs:1384-1424
-  # read from: crates/takt/src/validator.rs:1178-1263
+  # read from: crates/takt/src/validator.rs:1096-1126
+  # read from: crates/takt/src/validator.rs:1396-1436
+  # read from: crates/takt/src/validator.rs:1190-1275
   # read from: crates/takt/src/validator.rs:223-235
   # read from: crates/takt/src/validator.rs:775-778
   # read from: crates/takt/src/validator.rs:174-205
   # read from: crates/takt/src/improvement.rs:1544-1545
   # read from: crates/takt/src/validator.rs:767-773
-  # read from: crates/takt/src/validator.rs:900-921
-  # read from: crates/takt/src/validator.rs:1048-1052
-  # read from: crates/takt/src/validator.rs:1404-1408
+  # read from: crates/takt/src/validator.rs:900-923
+  # read from: crates/takt/src/validator.rs:1060-1064
+  # read from: crates/takt/src/validator.rs:1416-1420
   - name: takt.work.EvidenceProducer
     naming:
       summary: >-
@@ -3449,8 +3450,8 @@ entities:
   # read from: crates/takt/src/case.rs:474-475
   # read from: crates/takt/src/case.rs:441-468
   # read from: crates/takt/src/case.rs:89-117
-  # read from: crates/takt/src/validator.rs:1708-1712
-  # read from: crates/takt/src/validator.rs:1804
+  # read from: crates/takt/src/validator.rs:1720-1724
+  # read from: crates/takt/src/validator.rs:1816
   - name: takt.work.CaseBranch
     naming:
       summary: >-
@@ -4072,8 +4073,8 @@ entities:
   # read from: .engineering/planning/story/judge-guard.md:122
   # Decided by the planner (story:judge-guard, D3, D7): both files are read at the merge target's
   # tip as the forge reports it; a forge that cannot report it merges nothing.
-  # read from: crates/takt/src/validator.rs:2215-2217
-  # read from: crates/takt/src/validator.rs:2729-2735
+  # read from: crates/takt/src/validator.rs:2227-2229
+  # read from: crates/takt/src/validator.rs:2741-2747
   # read from: crates/takt/src/forge.rs:346-349
   - name: takt.work.DelegationRecord
     naming:
@@ -4131,16 +4132,16 @@ entities:
   # read from: .engineering/planning/story/judge-guard.md:87
   # read from: .engineering/planning/story/judge-guard.md:122
   # read from: .engineering/judge-allow.yaml
-  # read from: crates/takt/src/validator.rs:2211-2213
+  # read from: crates/takt/src/validator.rs:2223-2225
   # read from: crates/takt/src/run.rs:4393-4401
-  # read from: crates/takt/src/validator.rs:2479-2483
-  # read from: crates/takt/src/validator.rs:2515
-  # read from: crates/takt/src/validator.rs:2597
-  # read from: crates/takt/src/validator.rs:2411
+  # read from: crates/takt/src/validator.rs:2491-2495
+  # read from: crates/takt/src/validator.rs:2527
+  # read from: crates/takt/src/validator.rs:2609
+  # read from: crates/takt/src/validator.rs:2423
   # read from: crates/takt/src/git.rs:3333-3334
-  # read from: crates/takt/src/validator.rs:2465
-  # read from: crates/takt/src/validator.rs:2611
-  # read from: crates/takt/src/validator.rs:2981
+  # read from: crates/takt/src/validator.rs:2477
+  # read from: crates/takt/src/validator.rs:2623
+  # read from: crates/takt/src/validator.rs:2993
   # read from: crates/takt/src/git.rs:3213
   - name: takt.work.JudgeAllowList
     naming:
