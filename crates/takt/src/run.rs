@@ -2594,6 +2594,81 @@ pub(crate) fn imports_of(text: &str) -> BTreeSet<String> {
     names
 }
 
+/// The forms in the Python `text` by which it imports what no import line names, which
+/// [`imports_of`] cannot follow: `importlib` in any use (`import importlib`, `from importlib`,
+/// `importlib.import_module(`, named as written), `__import__(`, and a call of `exec(` or
+/// `eval(`. Read as [`imports_of`] reads, line by line with a comment stripped; each form once,
+/// in the order found. A file holding one fails closed in the gate's comparison.
+pub(crate) fn dynamic_imports_of(text: &str) -> Vec<String> {
+    let is_identifier = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut forms: Vec<String> = Vec::new();
+    let statements = text.lines().flat_map(|line| {
+        let line = line.split_once('#').map_or(line, |(code, _)| code);
+        line.split(';')
+    });
+    for statement in statements {
+        let statement = statement.trim();
+        let chars: Vec<(usize, char)> = statement.char_indices().collect();
+        let end_of = |k: usize| chars.get(k).map_or(statement.len(), |(at, _)| *at);
+        let mut i = 0;
+        while i < chars.len() {
+            if !is_identifier(chars[i].1) {
+                i += 1;
+                continue;
+            }
+            let begin = chars[i].0;
+            let mut j = i;
+            while j < chars.len() && is_identifier(chars[j].1) {
+                j += 1;
+            }
+            let name = &statement[begin..end_of(j)];
+            let form = match name {
+                "importlib" if statement.starts_with("import ") => {
+                    Some("import importlib".to_owned())
+                }
+                "importlib"
+                    if statement
+                        .strip_prefix("from ")
+                        .and_then(|rest| rest.split_whitespace().next())
+                        .is_some_and(|module| module.split('.').next() == Some("importlib")) =>
+                {
+                    Some("from importlib".to_owned())
+                }
+                "importlib" => {
+                    // The attribute chain after it, and the call's parenthesis when one follows.
+                    let mut k = j;
+                    while chars.get(k).is_some_and(|(_, c)| *c == '.')
+                        && chars.get(k + 1).is_some_and(|(_, c)| is_identifier(*c))
+                    {
+                        k += 1;
+                        while k < chars.len() && is_identifier(chars[k].1) {
+                            k += 1;
+                        }
+                    }
+                    let chain = &statement[begin..end_of(k)];
+                    let called = statement[end_of(k)..].trim_start().starts_with('(');
+                    Some(if called {
+                        format!("{chain}(")
+                    } else {
+                        chain.to_owned()
+                    })
+                }
+                "__import__" | "exec" | "eval"
+                    if statement[end_of(j)..].trim_start().starts_with('(') =>
+                {
+                    Some(format!("{name}("))
+                }
+                _ => None,
+            };
+            if let Some(form) = form.filter(|form| !forms.contains(form)) {
+                forms.push(form);
+            }
+            i = j;
+        }
+    }
+    forms
+}
+
 /// Names, behind [`PYTHON_MARK`] alone (the gate's to compare, not the step guard's), what the
 /// top-level imports of the Python `code` load from each of `imports`, the directories Python
 /// imports from: `name.py`, a compiled `name.*` and the package `name/`, as `-m name` is named.

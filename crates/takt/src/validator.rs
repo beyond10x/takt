@@ -1043,10 +1043,11 @@ fn python_paths(
             // followed through the files it finds in the tree: in every directory the command's
             // Python imports from, `name.py`, a compiled `name.*` and the package `name/`, as
             // `-m name` is compared. Not every module of those directories (wave 18's rule).
-            let (imported_paths, imported_globs) =
+            let (imported_paths, imported_globs, imports_closed) =
                 python_imports(tree, at, revision, &python, &imports)?;
             scripts.extend(imported_paths);
             globs.extend(imported_globs);
+            closed.extend(imports_closed);
             let runs_python = !pythons.is_empty();
             for path in named.iter().filter(|path| !path.contains(['*', '?', '('])) {
                 let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
@@ -1094,7 +1095,7 @@ fn python_paths(
 }
 
 /// How many Python files of the tree the gate reads the imports of for one command
-/// ([`python_imports`]).
+/// ([`python_imports`]); a walk that reaches the cap fails closed.
 const IMPORTS_READ_AT_MOST: usize = 64;
 
 /// What the Python files `python` (relative to the tree; a glob among them is passed over)
@@ -1102,14 +1103,17 @@ const IMPORTS_READ_AT_MOST: usize = 64;
 /// directories the command's Python imports from (`""` the root): for each top-level name
 /// ([`crate::run::imports_of`]) in each directory, the path `name.py` and the globs `name.*`
 /// and `name/**`, what `-m name` would compare. A name found as a module or a package's
-/// `__init__.py` is read in turn, up to [`IMPORTS_READ_AT_MOST`] files.
+/// `__init__.py` is read in turn, up to [`IMPORTS_READ_AT_MOST`] files. What the walk cannot
+/// follow fails closed, as a shell line the reader cannot read does; the third of the result
+/// is why: a file past the cap, named, is not read, and a file read that imports by a form no
+/// import line names ([`crate::run::dynamic_imports_of`]) loads what the walk cannot see.
 fn python_imports(
     tree: &Path,
     at: &str,
     revision: &str,
     python: &[&str],
     dirs: &[&str],
-) -> Result<(Vec<String>, Vec<String>)> {
+) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
     let join = |dir: &str, name: &str| {
         if dir.is_empty() {
             name.to_owned()
@@ -1119,6 +1123,7 @@ fn python_imports(
     };
     let mut paths = Vec::new();
     let mut globs = Vec::new();
+    let mut closed = Vec::new();
     let mut queue: Vec<String> = python
         .iter()
         .filter(|path| !path.contains(['*', '?', '(']))
@@ -1130,12 +1135,22 @@ fn python_imports(
             continue;
         }
         if read.len() > IMPORTS_READ_AT_MOST {
+            closed.push(format!(
+                "`{path}` is imported deeper than the {IMPORTS_READ_AT_MOST} Python files the gate reads the imports of, so what it imports is not followed"
+            ));
             break;
         }
         let mut names = std::collections::BTreeSet::new();
         for commit in [at, revision] {
             if let Some(text) = file_at(tree, commit, Path::new(&path))? {
                 names.extend(crate::run::imports_of(&text));
+                closed.extend(
+                    crate::run::dynamic_imports_of(&text)
+                        .into_iter()
+                        .map(|form| {
+                            format!("`{path}` imports by `{form}`, which the gate does not follow")
+                        }),
+                );
             }
         }
         for name in names {
@@ -1155,7 +1170,7 @@ fn python_imports(
             }
         }
     }
-    Ok((paths, globs))
+    Ok((paths, globs, closed))
 }
 
 /// The directory Python imports from first when it runs `path` (relative to the tree), when the

@@ -1036,3 +1036,137 @@ fn an_unlisted_program_given_a_program_fails_closed() {
         Some("`doas` is given `python3`"),
     );
 }
+
+/// A gate running `scripts/check.py`, which imports `m1` from the `PYTHONPATH` entry `lib`,
+/// where only what is imported is compared; `lib/m<k>.py` imports `m<k+1>` up to
+/// `lib/m<length>.py`, which imports nothing. The gate passes at the base.
+fn chain(name: &str, length: usize) -> Scratch {
+    let mut files: Vec<(String, String)> = vec![(
+        "scripts/check.py".to_owned(),
+        "import sys\nimport m1\nsys.exit(m1.run())\n".to_owned(),
+    )];
+    for k in 1..=length {
+        let text = if k < length {
+            format!(
+                "import m{}\n\n\ndef run():\n    return m{}.run()\n",
+                k + 1,
+                k + 1
+            )
+        } else {
+            "def run():\n    return 0\n".to_owned()
+        };
+        files.push((format!("lib/m{k}.py"), text));
+    }
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect();
+    repository(
+        name,
+        &["scripts/check.py"],
+        &[("PYTHONPATH", "lib")],
+        &files,
+    )
+}
+
+/// The gate reads the imports of at most 64 Python files for a command (the script and the 63
+/// modules after it). Review of wave 22, unit A, condition 1: a chain that runs past the cap
+/// fails closed, naming the file at which the cap was reached, so every Python file of the
+/// tree is compared and a module past the cap, which the walk never reads, decides nothing.
+#[test]
+fn an_import_chain_past_the_cap_fails_closed_naming_where_it_was_reached() {
+    let tree = chain("cap", 70);
+    let observation = observed(
+        &tree,
+        "cap",
+        &[("lib/m70.py", "def run():\n    return 1\n")],
+    );
+    closed_naming(&observation, "lib/m70.py", "lib/m64.py");
+    assert!(
+        observation.summary.contains("64 Python files"),
+        "the summary does not name the cap: {}",
+        observation.summary
+    );
+}
+
+/// Review of wave 22, unit A, condition 2: a Python file the walk reads that imports by a form
+/// no import line names (`importlib` in any use, `__import__(`, a call of `exec(` or `eval(`)
+/// fails closed, naming the file and the form, so the module it loads is compared with every
+/// other Python file of the tree.
+#[test]
+fn a_dynamic_import_in_a_read_module_fails_closed_naming_the_file_and_form() {
+    for (name, lib, form) in [
+        (
+            "dyn-import-module",
+            "import importlib\n\n\ndef run():\n    return importlib.import_module(\"plugin\").run()\n",
+            "importlib.import_module(",
+        ),
+        (
+            "dyn-from",
+            "from importlib import import_module\n\n\ndef run():\n    return import_module(\"plugin\").run()\n",
+            "from importlib",
+        ),
+        (
+            "dyn-dunder",
+            "def run():\n    return __import__(\"plugin\").run()\n",
+            "__import__(",
+        ),
+        (
+            "dyn-exec",
+            "def run():\n    exec(\"import plugin\")\n    return 0\n",
+            "exec(",
+        ),
+        (
+            "dyn-eval",
+            "def run():\n    return eval(\"__import__('plugin').run()\")\n",
+            "eval(",
+        ),
+    ] {
+        let tree = repository(
+            name,
+            &["scripts/check.py"],
+            &[("PYTHONPATH", "lib")],
+            &[
+                (
+                    "scripts/check.py",
+                    "import sys\nimport checklib\nsys.exit(checklib.run())\n",
+                ),
+                ("lib/checklib.py", lib),
+                ("lib/plugin.py", "def run():\n    return 0\n"),
+            ],
+        );
+        let observation = observed(
+            &tree,
+            name,
+            &[("lib/plugin.py", "def run():\n    return 1\n")],
+        );
+        closed_naming(&observation, "lib/plugin.py", "lib/checklib.py");
+        assert!(
+            observation.summary.contains(form),
+            "the summary does not name the form {form}: {}",
+            observation.summary
+        );
+    }
+}
+
+/// The control: a chain under the cap with no dynamic import is read whole and nothing fails
+/// closed. A Python file outside what it imports lets the gate run and record; its last
+/// module is compared, and a change there keeps the gate from running, named.
+#[test]
+fn an_import_chain_under_the_cap_is_read_whole_and_the_gate_runs() {
+    let tree = chain("under-cap", 10);
+    let observation = observed(&tree, "under-cap", &[("src/app.py", "VALUE = 2\n")]);
+    recorded(&observation);
+    let tree = chain("under-cap-last", 10);
+    let observation = observed(
+        &tree,
+        "under-cap-last",
+        &[("lib/m10.py", "def run():\n    return 1\n")],
+    );
+    refused(&observation, "lib/m10.py");
+    assert!(
+        !observation.summary.contains("fail closed"),
+        "a chain under the cap fails closed: {}",
+        observation.summary
+    );
+}

@@ -16,7 +16,9 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   the shell's standard input for the commands after it; `taskset`, `chrt`, `unbuffer`,
   `script -c`, `uv run`, `env -S` and `pytest FILE` are read; `xargs` is read and fails closed
   on its input. The eleven shell forms 0.5.0 listed as slipping are closed
-  (story:the-gate-reads-every-shell-form).
+  (story:the-gate-reads-every-shell-form). The import walk reads at most 64 Python files per
+  command; reaching the cap, or a read file importing by `importlib`, `__import__(`, `exec(` or
+  `eval(`, fails closed, naming the file and the form.
 - The step guard reads the same forms and is stricter in five places: a shell reading the
   input a redirection-only `exec` set, `python -` with an unknown input, the wrappers above, an
   `env -S` string split into words, and a program the reader does not know given one it knows
