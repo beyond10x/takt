@@ -521,7 +521,7 @@ const PASSING: &str = "Release Bot <release@example.invalid>";
 /// What `b10x-gates` 0.1.21 says, exiting 1, when no policy file is given and its default one
 /// is not there.
 const NO_POLICY: &str =
-    "b10x-gates: protected file /home/nobody/.config/b10x/gates/policy.json unavailable: not found";
+    "b10x-gates: protected file /var/empty/.config/b10x/gates/policy.json unavailable: not found";
 
 /// How the scan double words a refusal, as `b10x-gates scan-text` does after the path.
 const RULE_BROKEN: &str =

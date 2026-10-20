@@ -56,9 +56,12 @@ fn scratch(name: &str) -> Scratch {
     Scratch(outer)
 }
 
+/// `git <args>` in `tree`, which must succeed. Automatic gc and maintenance are off, so an object
+/// a fixture commits stays loose where a test reads or plants it.
 fn git(tree: &Path, args: &[&str]) {
     let status = Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
+        .args(["-c", "gc.auto=0", "-c", "maintenance.auto=false"])
         .args(args)
         .current_dir(tree)
         .status()
@@ -75,6 +78,32 @@ fn git_out(tree: &Path, args: &[&str]) -> String {
         .expect("git runs");
     assert!(output.status.success(), "git {args:?}");
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// The bytes of object `id`'s loose file in `repo`. When the file is not there (seen once on
+/// CI, 2026-10-20, cause not traced), the panic says where the object is: what `git cat-file`
+/// says of it, the packs, and whether an alternates file exists.
+fn loose_bytes(repo: &Path, id: &str) -> Vec<u8> {
+    let path = repo.join(".git/objects").join(&id[..2]).join(&id[2..]);
+    fs::read(&path).unwrap_or_else(|error| {
+        let packs: Vec<String> = fs::read_dir(repo.join(".git/objects/pack"))
+            .map(|dir| {
+                dir.filter_map(|entry| entry.ok())
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let kind = Command::new("git")
+            .args(["cat-file", "-t", id])
+            .current_dir(repo)
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
+        panic!(
+            "object {id}'s loose file: {error}; git cat-file -t: {kind:?}; packs: {packs:?}; \
+             alternates file: {}",
+            repo.join(".git/objects/info/alternates").exists()
+        )
+    })
 }
 
 fn write(path: &Path, text: &str) {
@@ -2926,7 +2955,7 @@ fn a_poisoned_object_of_the_revision_fails_the_build_naming_it() {
             &["rev-parse", &format!("{}:{main}", world.defect)],
         );
         let target = loose(&world.takt, &blob);
-        let bytes = fs::read(loose(&world.takt, &other)).expect("the defect's object");
+        let bytes = loose_bytes(&world.takt, &other);
         fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).expect("writable");
         fs::write(&target, bytes).expect("poisoned");
         let lending = world.outer.0.join("template");
@@ -3062,7 +3091,7 @@ fn object_directories_in_the_callers_environment_reach_no_build() {
             &["rev-parse", &format!("{}:{main}", world.defect)],
         );
         let target = loose(&world.takt, &blob);
-        let bytes = fs::read(loose(&world.takt, &other)).expect("the defect's object");
+        let bytes = loose_bytes(&world.takt, &other);
         fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).expect("writable");
         fs::write(&target, bytes).expect("poisoned");
         let objects = world.takt.join(".git/objects");
