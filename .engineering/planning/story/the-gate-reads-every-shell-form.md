@@ -4,7 +4,7 @@ id: story:the-gate-reads-every-shell-form
 kind: story
 status: draft
 title: The gate reads or fails closed on every shell form that runs Python
-summary: five of 34 probed shell forms and several wrapper programs still let a change decide the gate
+summary: eleven probed shell forms and several wrapper programs still let a change decide the gate
 tags:
 - rsi
 relations:
@@ -13,7 +13,7 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/run.rs
-revision: 4
+revision: 5
 ---
 # Story: the-gate-reads-every-shell-form
 

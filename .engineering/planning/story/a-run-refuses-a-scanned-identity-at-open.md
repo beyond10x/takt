@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-run-refuses-a-scanned-identity-at-open
 kind: story
-status: draft
+status: implemented
 title: A run refuses a commit identity the forge's scan rejects when the run opens, not at pr.open
 summary: a trial set spent 368,818 tokens before the identity scan refused every run at pr.open
 tags:
@@ -10,7 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T04:01:42Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-20T04:01:42Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-20T05:16:25Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: a-run-refuses-a-scanned-identity-at-open
 

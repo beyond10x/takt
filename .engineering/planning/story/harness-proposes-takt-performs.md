@@ -11,7 +11,36 @@ relations:
 - decomposes: epic:takt-on-loom-sdk
 - serves: vision:safe-agentic-coding
 - depends_on: story:loom-sdk-pinned-with-evaluation-parity
-revision: 1
+scope:
+- confidence: inferred
+  path: AGENTS.md
+- confidence: cited
+  path: Cargo.lock
+- confidence: cited
+  path: Cargo.toml
+- confidence: inferred
+  path: crates/session-executor
+- confidence: cited
+  path: crates/takt-cli/src/main.rs
+- confidence: inferred
+  path: crates/takt/Cargo.toml
+- confidence: inferred
+  path: crates/takt/src/edit.rs
+- confidence: cited
+  path: crates/takt/src/harness.rs
+- confidence: inferred
+  path: crates/takt/src/lib.rs
+- confidence: cited
+  path: crates/takt/src/run.rs
+- confidence: cited
+  path: crates/takt/tests/harness_proposes.rs
+- confidence: cited
+  path: ess/domains/takt.citations.tsv
+- confidence: cited
+  path: ess/domains/takt.yaml
+- confidence: inferred
+  path: fuzz/Cargo.lock
+revision: 16
 ---
 # Story: harness-proposes-takt-performs
 
@@ -51,6 +80,14 @@ The judgement step's model works in a scratch copy of the case tree, never in th
 4. The environment and the prompt the executor hands metaharness carry none of the variables the run withholds from the harness today (`crates/takt/src/harness.rs:660-664`); a test reads them.
 5. On the scratch crate with one failing test, `takt run --harness claude --iterations 3` ends with `tests.pass` true and `repository.merge` waiting for its grant.
 6. `ess specify validate --path ess` and `python3 -I scripts/check-citations --require-digests` pass with the proposal declared.
+
+## Blocked by
+
+- metaharness 0.9.3 refuses `HermeticMode::Strict` with a working directory the embedder names
+  (`crates/metaharness/src/builder.rs:200-205` there; the Claude launch rows H7 and H11 are
+  unavailable), and this story runs the session under Strict in a scratch copy. metaharness must
+  accept Strict with an embedder's scratch working directory first; running under
+  `HermeticMode::On` instead would weaken isolation and is not taken.
 
 ## Out of Scope
 
