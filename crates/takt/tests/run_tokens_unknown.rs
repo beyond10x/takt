@@ -325,3 +325,38 @@ fn a_saved_run_with_an_unknown_step_and_known_tokens_is_not_read() {
         "{refused}"
     );
 }
+
+/// A copy saved under the tokens definition 1, which summed an untokened step as 0 beside a null
+/// step, still reads: a store holding one in its history stays readable, and the definition check
+/// refuses to compare it until a rebaseline.
+#[test]
+fn a_copy_saved_under_tokens_version_1_with_a_null_step_still_reads() {
+    let candidate = side("v1-copy", "candidate");
+    retokened(
+        &candidate,
+        "scenario-1-trial-97",
+        "implementation.edit",
+        None,
+    );
+    let card = Scorecard::read(&candidate).expect("the candidate's runs read");
+    let saves = scratch("v1-copy-dir");
+    let path = card
+        .save(
+            &saves,
+            "0c9311cb4b3ae6a432c2847982c252382e41dd3d",
+            takt::scorecard::Named::Build,
+        )
+        .expect("saved");
+    let mut json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("the file")).expect("json");
+    json["metrics"]["tokens"] = 1.into();
+    json["metrics"]["step_tokens"] = 1.into();
+    for row in json["rows"].as_array_mut().expect("rows") {
+        if row["case"] == "scenario-1-trial-97" {
+            row["tokens"] = 50_000.into();
+        }
+    }
+    fs::write(&path, json.to_string()).expect("the version 1 copy");
+    let read = Scorecard::load(&path).expect("a version 1 copy reads");
+    assert_eq!(read.metrics.get("tokens"), Some(&1));
+}

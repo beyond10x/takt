@@ -1246,7 +1246,13 @@ impl Scorecard {
                     scenario_of(&row.case).unwrap_or("none")
                 );
             }
-            if let Some(tokens) = row.tokens
+            // Under the tokens definition 1 a run summed an untokened step as 0 beside a null step:
+            // that copy reads, and the definition check refuses to compare it until a rebaseline.
+            if card
+                .metrics
+                .get("tokens")
+                .is_some_and(|version| *version >= 2)
+                && let Some(tokens) = row.tokens
                 && let Some((action, _)) = row.step_tokens.iter().find(|(_, at)| at.is_none())
             {
                 bail!(

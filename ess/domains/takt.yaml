@@ -445,7 +445,7 @@ types:
   # read from: crates/takt-cli/src/main.rs:1623-1625
   # read from: crates/takt-cli/src/main.rs:1655
   # read from: crates/takt/src/scorecard.rs:474-493
-  # read from: crates/takt/src/scorecard.rs:1390-1429
+  # read from: crates/takt/src/scorecard.rs:1396-1435
   # read from: crates/takt/src/promotion.rs:3126-3133
   # read from: crates/takt/src/run.rs:8624-8629
   # read from: crates/takt/src/run.rs:141
@@ -1182,7 +1182,7 @@ types:
   # read from: crates/takt/src/scorecard.rs:359-360
   # read from: crates/takt/src/scorecard.rs:663-678
   # read from: crates/takt/src/scorecard.rs:390-399
-  # read from: crates/takt/src/scorecard.rs:1641-1659
+  # read from: crates/takt/src/scorecard.rs:1647-1665
   # read from: crates/takt-cli/src/main.rs:413
   # read from: crates/takt/src/promotion.rs:790-797
   # read from: crates/takt/src/promotion.rs:1035-1041
@@ -1194,15 +1194,17 @@ types:
   # version 1 summed such a step as 0, and `step_tokens` at version 2, where version 1 counted a
   # harness step's 0: a takt that knows version 1 refuses a scorecard saved under version 2, and
   # a stored baseline saved under version 1 is compared only after `takt promote --rebaseline`
-  # (takt.work.PromotionKind). A saved row that gives its tokens beside an action whose tokens
-  # are unknown is refused on load, naming the run. Limit, stated with the decision: the record
+  # (takt.work.PromotionKind). Under the tokens definition 2, a saved row that gives its tokens
+  # beside an action whose tokens are unknown is refused on load, naming the run; a copy saved
+  # under definition 1, which summed such a step as 0, reads, so a store holding one stays
+  # readable and the definition check refuses to compare it until a rebaseline. Limit, stated with the decision: the record
   # cannot tell a harness step relabelled `by: validator` from a validator's, and reads it as
   # the validator's 0.
   # read from: crates/takt/src/scorecard.rs:49-54
   # read from: crates/takt/src/scorecard.rs:97-115
   # read from: crates/takt/src/scorecard.rs:157-161
   # read from: crates/takt/src/scorecard.rs:664-675
-  # read from: crates/takt/src/scorecard.rs:1249-1254
+  # read from: crates/takt/src/scorecard.rs:1249-1259
   - name: takt.work.ScorecardRow
     kind: struct
     fields:
@@ -1255,7 +1257,7 @@ types:
   # `scenario` is not the one its case id names, the scenario being derived from the case id.
   # read from: crates/takt/src/scorecard.rs:69-77
   # read from: crates/takt/src/scorecard.rs:238-265
-  # read from: crates/takt/src/scorecard.rs:1220-1290
+  # read from: crates/takt/src/scorecard.rs:1220-1296
   - name: takt.work.HeldOut
     kind: struct
     fields:
@@ -1737,17 +1739,17 @@ types:
   # promote` refuses it on the candidate's side and on each stored scorecard it compares with
   # (takt.work.Promotion).
   # read from: .engineering/planning/design/recursive-self-improvement.md:135-143
-  # read from: crates/takt/src/scorecard.rs:1293-1320
-  # read from: crates/takt/src/scorecard.rs:1482-1506
-  # read from: crates/takt/src/scorecard.rs:1529-1557
-  # read from: crates/takt/src/scorecard.rs:1431-1455
-  # read from: crates/takt/src/scorecard.rs:1562-1583
-  # read from: crates/takt/src/scorecard.rs:1356-1360
-  # read from: crates/takt/src/scorecard.rs:1456-1460
-  # read from: crates/takt/src/scorecard.rs:1390-1429
+  # read from: crates/takt/src/scorecard.rs:1299-1326
+  # read from: crates/takt/src/scorecard.rs:1488-1512
+  # read from: crates/takt/src/scorecard.rs:1535-1563
+  # read from: crates/takt/src/scorecard.rs:1437-1461
+  # read from: crates/takt/src/scorecard.rs:1568-1589
+  # read from: crates/takt/src/scorecard.rs:1362-1366
+  # read from: crates/takt/src/scorecard.rs:1462-1466
+  # read from: crates/takt/src/scorecard.rs:1396-1435
   # read from: crates/takt/src/promotion.rs:3126-3133
   # read from: crates/takt/src/scorecard.rs:793-816
-  # read from: crates/takt/src/scorecard.rs:1326-1327
+  # read from: crates/takt/src/scorecard.rs:1332-1333
   # read from: crates/takt/src/improvement.rs:958-963
   - name: takt.work.Comparison
     kind: enum
@@ -1782,8 +1784,8 @@ types:
   # read from: crates/takt/src/scorecard.rs:120-123
   # read from: crates/takt/src/scorecard.rs:818-891
   # read from: crates/takt/src/scorecard.rs:914-924
-  # read from: crates/takt/src/scorecard.rs:1587-1805
-  # read from: crates/takt/src/scorecard.rs:1829-1857
+  # read from: crates/takt/src/scorecard.rs:1593-1811
+  # read from: crates/takt/src/scorecard.rs:1835-1863
   # read from: crates/takt-cli/src/main.rs:390-407
   # read from: crates/takt-cli/src/main.rs:411-416
   # read from: crates/takt-cli/src/main.rs:832-838
@@ -3766,7 +3768,7 @@ entities:
   # read from: crates/takt/src/scorecard.rs:1-37
   # read from: crates/takt/src/scorecard.rs:66-115
   # read from: crates/takt/src/scorecard.rs:441-464
-  # read from: crates/takt/src/scorecard.rs:1293-1584
+  # read from: crates/takt/src/scorecard.rs:1299-1590
   - name: takt.work.Scorecard
     naming:
       summary: >-

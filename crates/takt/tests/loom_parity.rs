@@ -235,17 +235,50 @@ fn unexplained(fixture: &Fixture) -> Vec<String> {
             ));
             continue;
         }
-        if at[0] == "actions" {
-            let takt = &fixture.takt["actions"][&at[1]]["status"];
-            let loom = &fixture.loom["actions"][&at[1]]["status"];
-            if takt != "admissible" || loom != "approval-required" {
-                problems.push(format!(
-                    "{}: actions.{}: takt {takt} / loom {loom}, not admissible / approval-required",
-                    fixture.name, at[1]
-                ));
-            }
+        let action = match at.as_slice() {
+            [actions, action, ..] if actions == "actions" => action,
+            [e, actions, action, ..] if e == "explanation" && actions == "actions" => action,
+            _ => continue,
+        };
+        let loom_action = &fixture.loom["actions"][action];
+        let takt = &fixture.takt["actions"][action]["status"];
+        if takt != "admissible" || loom_action["status"] != "approval-required" {
+            problems.push(format!(
+                "{}: actions.{action}: takt {takt} / loom {}, not admissible / approval-required",
+                fixture.name, loom_action["status"]
+            ));
+        }
+        // The governor's reasons are exactly one `none` decision per capability the action
+        // requires, as a set, and its explanation holds the same status and reasons.
+        let mut expected: Vec<String> = fixture.requires[action]
+            .iter()
+            .map(|c| serde_json::json!({"capability": c, "decision": "none"}).to_string())
+            .collect();
+        expected.sort();
+        let mut given: Vec<String> = loom_action["reasons"]
+            .as_array()
+            .map(|reasons| reasons.iter().map(Value::to_string).collect())
+            .unwrap_or_default();
+        given.sort();
+        if given != expected {
+            problems.push(format!(
+                "{}: actions.{action}.reasons: loom {}, not a none decision per required capability",
+                fixture.name, loom_action["reasons"]
+            ));
+        }
+        let explained = serde_json::json!({
+            "status": loom_action["status"],
+            "because": loom_action["reasons"],
+        });
+        if fixture.loom["explanation"]["actions"][action] != explained {
+            problems.push(format!(
+                "{}: explanation.actions.{action}: loom {}, not its action's status and reasons",
+                fixture.name, fixture.loom["explanation"]["actions"][action]
+            ));
         }
     }
+    problems.sort();
+    problems.dedup();
     problems
 }
 
@@ -391,5 +424,49 @@ fn a_planted_difference_elsewhere_goes_red() {
                 "{suffix}: a planted {what} is not caught"
             );
         }
+    }
+}
+
+/// The governor's side of a granted action may differ only by the missing grant: an extra member
+/// in its explanation, or a reason other than a `none` decision per required capability, goes red.
+#[test]
+fn a_planted_difference_in_a_granted_action_goes_red() {
+    let fixtures = fixtures();
+    let fixture = fixtures
+        .iter()
+        .find(|f| f.name.ends_with("turn-1-scenario-help/decisions/0007.json"))
+        .expect("fixture");
+    let granted = fixture
+        .requires
+        .iter()
+        .find(|(_, requires)| {
+            !requires.is_empty() && requires.iter().all(|c| fixture.granted.contains(c))
+        })
+        .map(|(action, _)| action.clone())
+        .expect("a granted action");
+    type Plant = fn(&mut Value, &str);
+    let plants: [(&str, Plant); 2] = [
+        ("an extra member in its explanation", |d, action| {
+            d["explanation"]["actions"][action]["extra"] = Value::from(1);
+        }),
+        ("an unrelated reason", |d, action| {
+            d["actions"][action]["reasons"] = serde_json::json!(["planted unrelated reason"]);
+        }),
+    ];
+    assert!(unexplained(fixture).is_empty(), "the fixture itself passes");
+    for (what, plant) in plants {
+        let mut loom = fixture.loom.clone();
+        plant(&mut loom, &granted);
+        let planted = Fixture {
+            name: fixture.name.clone(),
+            takt: fixture.takt.clone(),
+            loom,
+            granted: fixture.granted.clone(),
+            requires: fixture.requires.clone(),
+        };
+        assert!(
+            !unexplained(&planted).is_empty(),
+            "{granted}: a planted {what} is not caught"
+        );
     }
 }
