@@ -92,23 +92,41 @@ fn options(id: &str) -> RunOptions {
     }
 }
 
-/// Every file under `dir` but `.git/`, by path relative to it, a link as `-> <target>`.
+/// Every file under `dir` but `.git/`, by path relative to it, a link as `-> <target>`. An
+/// entry that is gone between the listing and the read (a file something else removes while
+/// the walk runs) is left out; any other error names the path.
 fn files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    fn gone<T>(read: std::io::Result<T>, path: &Path, what: &str) -> Option<T> {
+        match read {
+            Ok(value) => Some(value),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("files: {} vanished during the walk", path.display());
+                None
+            }
+            Err(error) => panic!("{what} of {}: {error}", path.display()),
+        }
+    }
     fn walk(root: &Path, dir: &Path, into: &mut BTreeMap<PathBuf, Vec<u8>>) {
-        for entry in fs::read_dir(dir).expect("a readable directory") {
+        let Some(entries) = gone(fs::read_dir(dir), dir, "the listing") else {
+            return;
+        };
+        for entry in entries {
             let path = entry.expect("an entry").path();
             let relative = path.strip_prefix(root).expect("under").to_path_buf();
             if relative == Path::new(".git") {
                 continue;
             }
-            let meta = fs::symlink_metadata(&path).expect("metadata");
+            let Some(meta) = gone(fs::symlink_metadata(&path), &path, "the metadata") else {
+                continue;
+            };
             if meta.file_type().is_symlink() {
-                let target = fs::read_link(&path).expect("a link");
-                into.insert(relative, format!("-> {}", target.display()).into_bytes());
+                if let Some(target) = gone(fs::read_link(&path), &path, "the link") {
+                    into.insert(relative, format!("-> {}", target.display()).into_bytes());
+                }
             } else if meta.is_dir() {
                 walk(root, &path, into);
-            } else {
-                into.insert(relative, fs::read(&path).expect("a file"));
+            } else if let Some(bytes) = gone(fs::read(&path), &path, "the file") {
+                into.insert(relative, bytes);
             }
         }
     }
