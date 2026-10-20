@@ -60,8 +60,8 @@ One open-source binary, Apache-2.0. Site: <https://beyond10x.github.io/takt/>.
 
 ## Status
 
-0.2.2 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
-`scorecard`, `trace`, `report` and `promote`, with `story.delivery/1` and `self.improvement/1`
+0.6.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+`scorecard`, `trace`, `report`, `view`, `promote` and `replay`, with `story.delivery/1` and `self.improvement/1`
 embedded, and prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64). Since 0.1.0 it
 has gained the judge guard and the self-improvement protocol. A scorecard is now bound to the
 binary that made its runs, and the promotion chain is anchored. A finding's check runs confined.
@@ -136,5 +136,8 @@ child process started in the child's process group only; on Linux takt also adop
 what the child orphaned outside it. No command sandboxes the harness or the test command on
 either system yet (`story:confinement-seam`).
 
-Built on [Canon](https://github.com/beyond10x/canon) and
-[Engineering protocols](https://github.com/beyond10x/engineering-protocols). Licence: Apache-2.0.
+Built on [Canon](https://github.com/beyond10x/canon),
+[Engineering protocols](https://github.com/beyond10x/engineering-protocols) and
+[Loom](https://github.com/beyond10x/loom): `b10x-loom-sdk` is pinned in `Cargo.toml`, its
+governor decides takt's recorded cases as takt does (`crates/takt/tests/loom_parity.rs`), and
+ADR 0099 makes it the runtime takt runs on (`epic:takt-on-loom-sdk`). Licence: Apache-2.0.

@@ -14,6 +14,7 @@ every step validated by Canon over evidence. This file is for agents working on 
 | `.agents/dispatcher-agent.md`, `.agents/trial-agent.md` | the two sessions' profiles a fresh session starts from: the dispatcher's wave loop, the trial agent's cycle |
 | `.agents/planner-agent.md`, `.agents/developer-agent.md`, `.agents/reviewer-agent.md`, `.agents/doc-writer-agent.md` | the four agent roles' profiles: what each reads, owns, watches and never does |
 | `design:continuous-orchestration` | continuous work and orchestration: planning as a unit, a tree of cases, one deterministic dispatcher, build steps |
+| ADR 0099 (atlas, `architecture/adr/0099-takt-is-an-application-on-loom-sdk.md`), `epic:takt-on-loom-sdk` | takt as an application on loom-sdk: Commission's runtime drives the case, the governor decides, the harness proposes; the epic's stories S1–S5 and the seams, with their gaps in Loom |
 | `aep plan artifact waves --kind story --status draft` | what can be worked next |
 
 ## Layout
@@ -39,7 +40,7 @@ task build
 task site-build                 # the documentation site into website/build
 task site-check                 # site-build, then every page at 1440 and 390 px in headless Chrome (website/.site-check/)
 aep plan artifact validate
-python3 -I scripts/check-citations --require-digests [dump | fix | accept <doc>:<line>...]   # each ess/ `read from:` against its needles and digest (ess/domains/<doc>.citations.tsv); accept records a digest after a person read the lines
+python3 -I scripts/check-citations --require-digests [dump | fix | accept <doc>:<line>...]   # each ess/ `read from:` against its needles and digest (ess/domains/<doc>.citations.tsv); accept records a digest after a person or an agent read the lines, and the commit names the lines
 git add <paths> && b10x-gates bot -- commit -F <file>   # staging is plain git; the route refuses add
 b10x-gates scan-text --policy <file> <path>...           # or B10X_GATES_POLICY; no policy found is "not scanned", never "passed"
 cargo run -p b10x-takt-cli -- run --repo <path> --intent "<text>" --iterations 1
