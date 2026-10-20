@@ -2643,20 +2643,101 @@ fn changed_dir(tree: &Path, dir: Option<&str>, to: &str) -> Option<String> {
     landing(tree, dir, to)
 }
 
+/// What starts a redirection among the words [`shell_words`] splits a line into: a character no
+/// word of a command line holds, so a quoted `"2>"` stays a word.
+const REDIRECT: char = '\u{0}';
+
+/// The redirection `word` is ([`shell_words`]): the descriptor written before its operator (`""`
+/// for none) and the operator; `None` for any other word.
+fn redirection(word: &str) -> Option<(&str, &str)> {
+    let rest = word.strip_prefix(REDIRECT)?;
+    Some(rest.split_at(rest.find(['<', '>', '&']).unwrap_or(rest.len())))
+}
+
+/// `words` as a shell line shows them: each redirection's operator without its [`REDIRECT`].
+fn shown(words: &[impl AsRef<str>]) -> String {
+    words
+        .iter()
+        .map(|word| word.as_ref().trim_start_matches(REDIRECT))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// `line` split into words as a POSIX shell splits a command line: white space between words,
 /// `'…'` taken as it is, `"…"` with `\` escaping `"`, `\`, `$` and a backquote, `\` outside quotes
-/// escaping the next character, and each of `;`, `&`, `|`, `(`, `)`, `<`, `>` a word by itself,
-/// so the commands of a list are told apart. Expansions are not made; an unclosed quote ends at
-/// the end of the line.
+/// escaping the next character, and each of `;`, `&`, `|`, `(`, `)` a word by itself, so the
+/// commands of a list are told apart. A redirection is one word, behind [`REDIRECT`]: its
+/// operator (`<`, `>`, `>>`, `<>`, `>|`, `<&`, `>&`, `<<`, `<<-`, `<<<`, `&>`, `&>>`) with the
+/// descriptor an unquoted run of digits (or bash's `{NAME}`) right before it names, so neither
+/// `2>&1` is split at `&` nor its `2` left as a word; one followed at once by another `<` or `>`
+/// is kept whole, a form [`redirection`] does not know. Its target is the next word. Expansions
+/// are not made; an unclosed quote ends at the end of the line.
 fn shell_words(line: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut started = false;
-    let mut chars = line.chars().peekable();
+    // Whether the word so far is unquoted characters only, so it may be a descriptor.
+    let mut bare = true;
+    // A shell drops a null byte of its input, and no other word starts with [`REDIRECT`].
+    let mut chars = line.chars().filter(|c| *c != REDIRECT).peekable();
     while let Some(c) = chars.next() {
         match c {
+            '<' | '>' => {
+                let descriptor = started
+                    && bare
+                    && (word.chars().all(|c| c.is_ascii_digit())
+                        || word
+                            .strip_prefix('{')
+                            .and_then(|name| name.strip_suffix('}'))
+                            .is_some_and(|name| {
+                                name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                            }));
+                let mut op = String::from(REDIRECT);
+                if descriptor {
+                    op.push_str(&std::mem::take(&mut word));
+                } else if started {
+                    words.push(std::mem::take(&mut word));
+                }
+                started = false;
+                bare = true;
+                op.push(c);
+                match (c, chars.peek()) {
+                    ('<', Some('<')) => {
+                        op.extend(chars.next());
+                        if matches!(chars.peek(), Some('<' | '-')) {
+                            op.extend(chars.next());
+                        }
+                    }
+                    ('<', Some('>' | '&')) | ('>', Some('>' | '|' | '&')) => {
+                        op.extend(chars.next());
+                    }
+                    _ => {}
+                }
+                while let Some(&more) = chars.peek().filter(|c| matches!(c, '<' | '>')) {
+                    op.push(more);
+                    chars.next();
+                }
+                words.push(op);
+            }
+            '&' if chars.peek() == Some(&'>') => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                    bare = true;
+                }
+                let mut op = String::from(REDIRECT);
+                op.push('&');
+                op.extend(chars.next());
+                while let Some(&more) = chars.peek().filter(|c| matches!(c, '<' | '>')) {
+                    op.push(more);
+                    chars.next();
+                }
+                words.push(op);
+            }
             '\'' => {
                 started = true;
+                bare = false;
                 for c in chars.by_ref() {
                     if c == '\'' {
                         break;
@@ -2666,6 +2747,7 @@ fn shell_words(line: &str) -> Vec<String> {
             }
             '"' => {
                 started = true;
+                bare = false;
                 while let Some(c) = chars.next() {
                     match c {
                         '"' => break,
@@ -2678,12 +2760,14 @@ fn shell_words(line: &str) -> Vec<String> {
             }
             '\\' => {
                 started = true;
+                bare = false;
                 word.extend(chars.next());
             }
-            ';' | '&' | '|' | '(' | ')' | '<' | '>' => {
+            ';' | '&' | '|' | '(' | ')' => {
                 if started {
                     words.push(std::mem::take(&mut word));
                     started = false;
+                    bare = true;
                 }
                 words.push(c.to_string());
             }
@@ -2691,6 +2775,7 @@ fn shell_words(line: &str) -> Vec<String> {
                 if started {
                     words.push(std::mem::take(&mut word));
                     started = false;
+                    bare = true;
                 }
             }
             c => {
@@ -2769,11 +2854,12 @@ fn piped_from(producer: &[String]) -> Result<String, String> {
         [cat, file] | [cat, _, file]
             if cat == "cat"
                 && !file.starts_with('-')
+                && redirection(file).is_none()
                 && (producer.len() == 2 || producer[1] == "--") =>
         {
             Ok(file.clone())
         }
-        _ => Err(producer.join(" ")),
+        _ => Err(shown(producer)),
     }
 }
 
@@ -3429,8 +3515,8 @@ fn read_line(
         || line.contains('`')
         || words.iter().any(|word| word == "(" || word == ")")
         || words
-            .windows(2)
-            .any(|pair| pair[0] == "<" && pair[1] == "<")
+            .iter()
+            .any(|word| redirection(word).is_some_and(|(_, operator)| operator.starts_with("<<")))
     {
         fail_closed(
             named,
@@ -3442,7 +3528,7 @@ fn read_line(
     }
     if every_word {
         for dir in &shell.dirs {
-            for word in &words {
+            for word in words.iter().filter(|word| redirection(word).is_none()) {
                 let word =
                     expand(tree, word, dir.as_deref(), &shell.env).unwrap_or_else(|| word.clone());
                 named.extend(named_from(tree, dir.as_deref(), &word));
@@ -3494,31 +3580,78 @@ fn statement(
 ) {
     let dirs = shell.dirs.clone();
     let mut words: Vec<&str> = Vec::new();
-    let mut input: Option<&String> = None;
+    // What a redirection gives the command's standard input, the last one winning: a file
+    // (`Ok`), or what the guard knows of it otherwise (`Err`).
+    let mut input: Option<Result<String, Stdin>> = None;
     let mut at = 0;
     while let Some(word) = command.get(at) {
         at += 1;
-        if word == "<" || word == ">" {
-            while command
-                .get(at)
-                .is_some_and(|next| next == "<" || next == ">")
-            {
-                at += 1;
+        let Some((descriptor, operator)) = redirection(word) else {
+            words.push(word);
+            continue;
+        };
+        // A redirection's target is a word: another redirection (`< <(…)`) is read as itself.
+        let target = command
+            .get(at)
+            .filter(|target| redirection(target).is_none());
+        if target.is_some() {
+            at += 1;
+        }
+        let shown_redirection = || {
+            quoted(&format!(
+                "{descriptor}{operator}{}",
+                target.map_or("", String::as_str)
+            ))
+        };
+        // The descriptor it names; none is 0 for `<`, 1 for `>`, both 1 and 2 for `&>`.
+        let fd: Option<u32> = if descriptor.is_empty() {
+            Some(if operator.starts_with('<') { 0 } else { 1 })
+        } else {
+            descriptor.parse().ok()
+        };
+        let known = matches!(
+            operator,
+            "<" | "<>" | "<&" | "<<" | "<<-" | "<<<" | ">" | ">>" | ">|" | ">&"
+        ) || (descriptor.is_empty() && matches!(operator, "&>" | "&>>"));
+        let (Some(fd), true, Some(target)) = (fd, known, target) else {
+            fail_closed(
+                named,
+                format!(
+                    "the redirection {} in {} is a form the guard does not know",
+                    shown_redirection(),
+                    quoted(&shown(command))
+                ),
+            );
+            continue;
+        };
+        // A file opened for reading is one the command may read: guarded, whatever descriptor.
+        if matches!(operator, "<" | "<>") {
+            for dir in &dirs {
+                let target = expand(tree, target, dir.as_deref(), &shell.env)
+                    .unwrap_or_else(|| target.clone());
+                named.extend(named_from(tree, dir.as_deref(), &target));
             }
-            if let Some(target) = command.get(at) {
-                if word == "<" {
-                    input = Some(target);
-                    for dir in &dirs {
-                        let target = expand(tree, target, dir.as_deref(), &shell.env)
-                            .unwrap_or_else(|| target.clone());
-                        named.extend(named_from(tree, dir.as_deref(), &target));
-                    }
-                }
-                at += 1;
-            }
+        }
+        if fd != 0 {
             continue;
         }
-        words.push(word);
+        input = Some(match operator {
+            "<" | "<>" => Ok(target.clone()),
+            "<&" | ">&" if target == "0" => continue,
+            "<&" | ">&" if target == "-" => Err(Stdin::Empty),
+            "<&" | ">&" => Err(Stdin::Unknown(format!(
+                "{}, a descriptor the guard does not follow",
+                shown_redirection()
+            ))),
+            "<<" | "<<-" | "<<<" => Err(Stdin::Unknown(format!(
+                "{}, a here-document",
+                shown_redirection()
+            ))),
+            _ => Err(Stdin::Unknown(format!(
+                "{}, opened for writing",
+                shown_redirection()
+            ))),
+        });
     }
     let mut at = 0;
     while words
@@ -3530,7 +3663,7 @@ fn statement(
                 named,
                 format!(
                     "the command {} opens or closes a compound command (`{}`), which the guard does not follow",
-                    quoted(&command.join(" ")),
+                    quoted(&shown(command)),
                     words[at]
                 ),
             );
@@ -3576,7 +3709,7 @@ fn statement(
                         named,
                         format!(
                             "`{builtin}` takes an option the guard does not know, `-{c}`, in {}",
-                            quoted(&command.join(" "))
+                            quoted(&shown(command))
                         ),
                     );
                     break;
@@ -3723,10 +3856,11 @@ fn statement(
             for dir in &dirs {
                 let mut env = shell.env.clone();
                 // A redirection wins over the pipe; with neither, the shell's own input.
-                match (input, &piped) {
-                    (Some(target), _) | (None, Some(Ok(target))) => {
+                match (&input, &piped) {
+                    (Some(Ok(target)), _) | (None, Some(Ok(target))) => {
                         env.stdin = Some(stdin_of(tree, target, dir.as_deref(), &shell.env));
                     }
+                    (Some(Err(stdin)), _) => env.stdin = Some(stdin.clone()),
                     (None, Some(Err(producer))) => {
                         env.stdin = Some(Stdin::Unknown(format!(
                             "the output of {}",
@@ -4332,7 +4466,10 @@ fn command_paths(
                 word
             };
             named.extend(named_from(tree, dir.as_deref(), word));
-            for unquoted in shell_words(word) {
+            for unquoted in shell_words(word)
+                .into_iter()
+                .filter(|word| redirection(word).is_none())
+            {
                 named.extend(named_from(tree, dir.as_deref(), &unquoted));
             }
         }

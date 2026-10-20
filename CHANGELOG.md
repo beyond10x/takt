@@ -24,9 +24,14 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   `cd dir && python3 -m x`; a script named on `xargs`'s input), each an ignored test, until
   story:the-gate-reads-every-shell-form, which also lists the other forms known to slip: wrapper
   programs the reader does not know (`taskset`, `chrt`, `unbuffer`, `script -qec`, `uv run`,
-  `env -S`, `pytest`) and `env PYTHONPATH=…`. A line the reader cannot read with certainty (a glob or
+  `env -S`, `pytest`), `env PYTHONPATH=…`, and `cd dir && python3 -c …` or
+  `cd dir && python3 - < x.py` importing from that directory. A descriptor before a redirection
+  (`2>`, `0<`) and `>&N`, `<&N`, `&>`, `&>>`, `>|` are read as one redirection, so
+  `sh < run.sh 2>&1`, `cat run.sh | sh 2>&1`, `sh 0< run.sh` and `python3 2>/dev/null check.py`
+  have their script read; of 22 further forms the confirm review probed, 20 are closed. A line the reader cannot read with certainty (a glob or
   brace word where it names what runs, an option it does not know, another input a shell reads
-  as its script) makes the gate compare every Python file, shell file and program, and the
+  as its script, standard input from a duplicated descriptor, a redirection form it does not
+  know) makes the gate compare every Python file, shell file and program, and the
   summary names why. takt's own gates run through `scripts/gate-exec`, whose lines the reader
   cannot follow, so a delivery that changes a `.py`, `.sh` or program file stops takt's own
   gates until story:gate-exec-is-readable-by-the-gate.

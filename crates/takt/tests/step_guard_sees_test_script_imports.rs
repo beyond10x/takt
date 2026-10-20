@@ -1770,3 +1770,92 @@ fn globs_exec_options_and_a_shell_reading_standard_input_are_read() {
         }
     }
 }
+
+/// Fix round 2 of wave 19, finding 1, as the step guard reads a test script: a descriptor before
+/// a redirection (`2>`, `0<`) is not a word and `2>&1` is not split at `&`, so the shell or the
+/// Python before it keeps its script: `sh < tools/run.sh 2>&1` reads `tools/run.sh`, and
+/// `python3 2>/dev/null tools/run.py` runs `tools/run.py`. Output redirections are read as before;
+/// standard input taken from a duplicated descriptor and a redirection form the reader does not
+/// know fail closed.
+#[test]
+fn a_descriptor_before_a_redirection_is_not_a_word() {
+    let run_sh = ("tools/run.sh", "python3 tools/run.py\n", false);
+    let both = &["tools/run.sh", "tools/run.py"][..];
+    let py = &["tools/run.py"][..];
+    for (script, closed, says, names) in [
+        ("#!/bin/sh\nsh < tools/run.sh 2>&1\n", false, "", both),
+        (
+            "#!/bin/sh\nsh < tools/run.sh 2>/dev/null\n",
+            false,
+            "",
+            both,
+        ),
+        ("#!/bin/sh\ncat tools/run.sh | sh 2>&1\n", false, "", both),
+        ("#!/bin/sh\nsh 0< tools/run.sh\n", false, "", both),
+        (
+            "#!/bin/sh\npython3 2>/dev/null tools/run.py\n",
+            false,
+            "",
+            py,
+        ),
+        (
+            "#!/bin/sh\npython3 tools/run.py >/dev/null 2>&1\n",
+            false,
+            "",
+            py,
+        ),
+        (
+            "#!/bin/bash\npython3 &>/dev/null tools/run.py\n",
+            false,
+            "",
+            py,
+        ),
+        (
+            "#!/bin/sh\npython3 >|/dev/null tools/run.py\n",
+            false,
+            "",
+            py,
+        ),
+        ("#!/bin/sh\npython3 tools/run.py 2>&-\n", false, "", py),
+        ("#!/bin/sh\nsh <&3\n", true, "standard input", &[][..]),
+        (
+            "#!/bin/bash\npython3 tools/run.py {fd}>/dev/null\n",
+            true,
+            "{fd}>",
+            py,
+        ),
+        (
+            "#!/bin/bash\nbash < <(cat tools/run.sh)\n",
+            true,
+            "subshell",
+            &[][..],
+        ),
+        ("#!/bin/sh\ncat > | sh\n", true, "standard input", &[][..]),
+        ("#!/bin/sh\npython3 tools/run.py >\n", true, ">", py),
+    ] {
+        let tree = repository("fd-redirect", &[("check.sh", script, true), run_sh]);
+        let named = takt::run::scripts_of(&["./check.sh".to_owned()], &tree);
+        assert!(
+            named.iter().all(|path| !path.contains('\u{0}')),
+            "{script:?}: a redirection is named as a path: {named:?}"
+        );
+        let reasons = fails_closed_reasons(&named);
+        assert_eq!(
+            named.iter().any(|path| path == "**/*.py"),
+            closed,
+            "{script:?} names {named:?}"
+        );
+        if closed {
+            assert!(
+                reasons.iter().any(|reason| reason.contains(says)),
+                "{script:?}: no reason naming {says:?}: {reasons:?}"
+            );
+        }
+        for path in names {
+            assert!(
+                named.iter().any(|named| named == path),
+                "{script:?}: {path} not in {named:?}"
+            );
+        }
+    }
+}

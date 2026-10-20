@@ -687,6 +687,106 @@ fn a_shell_reading_its_script_from_standard_input_reads_that_file() {
     closed_naming(&observation, "src/app.py", "standard input");
 }
 
+/// Fix round 2 of wave 19, finding 1: a descriptor before a redirection (`2>`, `0<`) was left as
+/// a word and `2>&1` was split at `&`, so the reader took `2` (or `0`) as the script of the shell
+/// or the Python before it: `sh < scripts/check.sh 2>&1` read no script and the stdin rule never
+/// fired. A hand commit to the module the script imports must leave the gate not run, and a
+/// change outside it must let the gate run and record: the line is read, not failed closed.
+fn read_through_a_redirection(name: &str, shell: &str, line: &str) {
+    let tree = through(shell, name, &["-c", line]);
+    let observation = observed(&tree, name, &[("scripts/checklib.py", HAND)]);
+    refused(&observation, "scripts/checklib.py");
+    let outside = format!("{name}-outside");
+    let tree = through(shell, &outside, &["-c", line]);
+    let observation = observed(&tree, &outside, &[("src/app.py", "VALUE = 2\n")]);
+    recorded(&observation);
+}
+
+/// The probe `shin21`: `sh < FILE 2>&1`.
+#[test]
+fn a_shell_reading_standard_input_with_stderr_on_stdout_reads_that_file() {
+    read_through_a_redirection("fd-shin21", SHELL, "sh < scripts/check.sh 2>&1");
+}
+
+/// The probe `shin2null`: `sh < FILE 2>/dev/null`.
+#[test]
+fn a_shell_reading_standard_input_with_stderr_to_null_reads_that_file() {
+    read_through_a_redirection("fd-shin2null", SHELL, "sh < scripts/check.sh 2>/dev/null");
+}
+
+/// The probe `shpipe2`: `cat FILE | sh 2>&1`.
+#[test]
+fn a_shell_piped_its_script_with_stderr_on_stdout_reads_that_file() {
+    read_through_a_redirection("fd-shpipe2", SHELL, "cat scripts/check.sh | sh 2>&1");
+}
+
+/// `sh 0< FILE`: descriptor 0 is standard input.
+#[test]
+fn a_shell_reading_descriptor_zero_from_a_file_reads_that_file() {
+    read_through_a_redirection("fd-shin0", SHELL, "sh 0< scripts/check.sh");
+}
+
+/// The probe `py2null`, which slipped at main too: `python3 2>/dev/null SCRIPT`.
+#[test]
+fn python_with_a_redirection_before_its_script_runs_that_script() {
+    read_through_a_redirection("fd-py2null", SHELL, "python3 2>/dev/null scripts/check.py");
+}
+
+/// The redirections that only move output (`>&2`, `2>&-`, `&>`, `&>>`, `>|`, `>>`) take their
+/// target and leave the program and its script where they were.
+#[test]
+fn output_redirections_leave_the_script_read() {
+    for (name, shell, line) in [
+        ("fd-dup-out", SHELL, "python3 scripts/check.py >&2 2>&-"),
+        ("fd-amp-out", BASH, "python3 &>/dev/null scripts/check.py"),
+        (
+            "fd-amp-append",
+            BASH,
+            "python3 &>>/dev/null scripts/check.py",
+        ),
+        ("fd-clobber", SHELL, "python3 >|/dev/null scripts/check.py"),
+        ("fd-append", SHELL, "python3 1>>/dev/null scripts/check.py"),
+    ] {
+        read_through_a_redirection(name, shell, line);
+    }
+}
+
+/// What a shell reads on a duplicated descriptor (`sh <&3`) is not a file the reader can name, and
+/// a redirection form it does not know (bash's `{fd}>`, `>>>`) fails closed, naming why.
+#[test]
+fn a_redirection_the_reader_cannot_follow_fails_closed() {
+    for (name, shell, line, why) in [
+        (
+            "fd-dup-in",
+            BASH,
+            "exec 3< scripts/check.sh; sh <&3",
+            "standard input",
+        ),
+        (
+            "fd-named",
+            BASH,
+            "python3 scripts/check.py {fd}>/dev/null",
+            "{fd}>",
+        ),
+        (
+            "fd-unknown",
+            SHELL,
+            "python3 scripts/check.py >>> /dev/null",
+            ">>>",
+        ),
+        (
+            "fd-procsub",
+            BASH,
+            "bash < <(cat scripts/check.sh)",
+            "subshell",
+        ),
+    ] {
+        let tree = through(shell, name, &["-c", line]);
+        let observation = observed(&tree, name, &[("src/app.py", "VALUE = 2\n")]);
+        closed_naming(&observation, "src/app.py", why);
+    }
+}
+
 /// The script of the review's probes: it imports `checklib` and exits with what it returns.
 const MAIN: &str = "import sys\nimport checklib\nsys.exit(checklib.run())\n";
 
