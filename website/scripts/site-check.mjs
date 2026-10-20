@@ -1,6 +1,7 @@
 // Screenshots every page of the built site at 1440 and 390 px wide with headless Chrome, and fails
-// when a page scrolls horizontally, when any HTML or SVG text renders below 11 px, or when two
-// text boxes of one chart intersect.
+// when a page scrolls horizontally, when any HTML or SVG text renders below 11 px, when two
+// text boxes of one chart intersect, when a page logs a console error or a request of it fails,
+// or when a page does not follow the reader's colour mode choice stored by the site.
 //
 //   node website/scripts/site-check.mjs [--out <dir>]
 //
@@ -164,14 +165,21 @@ async function main() {
       const context = await browser.newContext({viewport: {width, height: 900}, colorScheme: 'light'});
       const page = await context.newPage();
       const errors = [];
-      page.on('pageerror', (e) => errors.push(String(e)));
+      page.on('pageerror', (e) => errors.push(`page error: ${String(e)}`));
+      page.on('console', (m) => {
+        if (m.type() === 'error') errors.push(`console error: ${m.text()}`);
+      });
+      page.on('requestfailed', (r) => errors.push(`request failed: ${r.url()}`));
+      page.on('response', (r) => {
+        if (r.status() >= 400) errors.push(`answered ${r.status()}: ${r.url()}`);
+      });
       for (const path of list) {
         errors.length = 0;
         const response = await page.goto(origin + path, {waitUntil: 'networkidle'});
         await page.evaluate(() => document.fonts.ready);
         await page.waitForTimeout(300);
         const failures = response && response.ok() ? await page.evaluate(inspect, MIN_PX) : [`answered ${response ? response.status() : 'nothing'}`];
-        for (const e of errors) failures.push(`page error: ${e.slice(0, 120)}`);
+        for (const e of errors) failures.push(e.slice(0, 160));
         const slug = path.slice(BASE.length).replace(/\/$/, '').replace(/\//g, '__') || 'index';
         await page.screenshot({path: join(dir, `${slug}.png`), fullPage: true, timeout: 180000});
         if (failures.length) {
@@ -180,6 +188,28 @@ async function main() {
           for (const f of failures) console.log(`  - ${f}`);
         } else {
           console.log(`ok   ${width} ${path}`);
+        }
+      }
+      await context.close();
+    }
+    // The reader's choice on the site, stored under the site's key, wins over the system's scheme
+    // on every page, the protocol viewer's too (it is not a Docusaurus page and reads the key
+    // itself, docs/site/protocols/src/theme.js).
+    const key = readFileSync(join(build, 'index.html'), 'utf8').match(/localStorage\.getItem\("(theme[^"]*)"\)/)?.[1];
+    if (!key) {
+      failed += 1;
+      console.log('FAIL colour mode: no theme key in the inline script of index.html');
+    } else {
+      const context = await browser.newContext({viewport: {width: WIDTHS[0], height: 900}, colorScheme: 'light'});
+      await context.addInitScript(([k]) => localStorage.setItem(k, 'dark'), [key]);
+      const page = await context.newPage();
+      for (const path of list) {
+        await page.goto(origin + path, {waitUntil: 'load'});
+        const theme = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+        if (theme !== 'dark') {
+          failed += 1;
+          console.log(`FAIL colour mode ${path}`);
+          console.log(`  - the site's choice is dark (${key}) and the system's light; the page is ${theme ?? 'unthemed'}`);
         }
       }
       await context.close();
