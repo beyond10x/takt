@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:step-prompt-omits-the-change-so-far
 kind: story
-status: draft
+status: implemented
 title: A judgement step's prompt omits the change its case has made, so the handover step re-reads the files to learn it
 tags:
 - finding
@@ -13,7 +13,11 @@ refs:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T14:29:00Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-20T14:29:00Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-20T14:29:00Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # A judgement step's prompt omits the change its case has made, so the handover step re-reads the files to learn it
 
@@ -74,48 +78,48 @@ not as fixed. Checked at bee77822 outside the confinement: the defect branch gav
 `prompt-omits-the-change-so-far`; a fake whose second call answers `repository.merge`
 unconditionally gave exit 4, `stopped: ApprovalRequired (repository.merge)`.
 
+## Scope
 
-## Trial result: candidate rejected after 2 of 3 re-trials
+- `crates/takt/src/harness.rs`: `StepContext` gains the change so far; `ClaudeCode::prompt`
+  prints it in one block after the obligations and before the offered actions, so takt's own
+  text ends the prompt. The block is fenced as data with a backtick run longer than any inside
+  the diff and labelled as the case's change, not as instructions.
+- `crates/takt/src/run.rs`: fills it before each judgement step from `base_commit`
+  (`crates/takt/src/case.rs:418`) and `HEAD`, over the paths the case's accepted judgement steps
+  committed, read from their `effect` events (`"paths": [...]`) and passed to git as the
+  pathspec, so a commit on the branch by anything else stays out of the prompt; `.engineering/`
+  excluded. Three texts: the diff; no
+  change has been made yet; the change so far is not known (a case with no `base_commit`,
+  `crates/takt/src/case.rs:412-416`, resumed).
+- `crates/takt/src/git.rs`: a bounded diff reader that runs no configured code and gives the same
+  bytes on every host: through the isolated path `trees_differ_outside` uses
+  (`crates/takt/src/git.rs:2733-2773`: no config, no attributes, `--no-ext-diff --no-textconv`),
+  with `--no-color` and fixed `-U`, diff-algorithm and rename options. `run_bounded`
+  (`crates/takt/src/git.rs:102`) keeps the user's global and system config (`diff.external`,
+  textconv, `color.*`) and is not used for it.
+- Bounds: the diff is shown up to about 8 KiB; past it the block says the change is N bytes and is
+  not shown. NUL and the other C0 controls but `\n` and `\t` are replaced, or the file shown as
+  binary: the prompt is one argument (`crates/takt/src/harness.rs:612-613`), which cannot hold NUL
+  and is refused at 131,072 bytes. With `B10X_GATES_POLICY` set, the diff passes
+  `b10x-gates scan-text` first. The scan fails closed: a refused scan, and a scan that cannot run
+  (`b10x-gates` not found, a policy that does not load, any non-zero exit), print "not shown" (as
+  the push scan does, `crates/takt/src/forge.rs:2011-2042`; no policy found is "not scanned",
+  never "passed", `AGENTS.md` § Commands): credentials never enter a prompt (`AGENTS.md` § Rules).
+  The prompt stays in argv; moving it to standard input is another change.
+- `crates/takt/tests/`: a fake harness's second prompt holds the first step's committed line, fenced;
+  a first step's prompt says no change yet; a case without `base_commit` says not known; a change
+  past the bound says not shown with its size; a configured `diff.external` and `color.ui=always`
+  change nothing in the block; a NUL past byte 8000 of a committed file does not stop the next step;
+  a commit on the branch that no accepted step made stays out of the block; with the policy set, a
+  scan that refuses and a scan that cannot run both give "not shown".
 
-Candidate branch `trial-cand/2026-10-20-bee77822-1`, cut from bee77822 (0.3.0): `a26735b9` (the
-diff as `-U3` hunks), then `0c9311cb` (non-test files whole, tests as hunks, the block labelled as
-the complete change). The Scope above held in both: the isolated bounded reader, the 8 KiB bound,
-NUL handling, the fail-closed scan, the effect-event pathspec, the three texts, the fenced block
-before the offered actions. `cargo test -p b10x-takt` at `0c9311cb`: 933 passed, 0 failed. Not
-checked by `scripts/check-finding` at either candidate sha; the predicate run against the
-candidate's debug build outside the confinement gave exit 4, its healthy exit.
+## Acceptance
 
-The step it targets moved. At `0c9311cb` the `change.handover` step handed over in one model
-request in 5 of 5 runs, 8,405 to 8,588 tokens, against two requests and 15,875 to 15,962 tokens
-in 5 of 5 runs at bee77822 (`takt report` step rows). At `a26735b9` it did so in 1 of 5: the model
-still read `todo.py` to see the whole implementation.
+Revised by the step-6 review of the 0.5.0 cycle (its condition 1), because takt 0.5.0 judges the
+steps a candidate targets:
 
-The scenario did not. Re-trial 2 (`0c9311cb`), as `takt scorecard --against` printed it:
-
-```
-against 7ae5b05b63971efa76c1e8bb9acfc1e8f390b56e (the revision of takt under test)
-rule  trials 5 a scenario  margin 1 case  tokens worse when the median exceeds the saved maximum
-scenario 1  saved      n 5  tokens min 66319 median 66421 max 83589
-scenario 1  candidate  n 5  tokens min 58707 median 67628 max 71082
-scenario 1  median tokens +1207
-scenario 1  outcomes by rank held  tokens held  not worse
-```
-
-```
-scenario 1  saved      n 5  tokens min 66674 median 67030 max 84088
-scenario 1  candidate  n 5  tokens min 58707 median 67628 max 71082
-scenario 1  median tokens +598
-scenario 1  outcomes by rank held  tokens held  not worse
-```
-
-Re-trial 1 (`a26735b9`) against the promoted baseline: median 75938, +9517, not worse.
-
-Reason: no scenario is worse, but the target scenario is not better on tokens (median 67,628
-against 66,421 and 67,030). The shortfall comes from steps the candidate does not change: in
-re-trial 2, `tests.write` took an extra request in 2 of 5 runs (36,301 and 36,924 tokens, with a
-`Glob **/*` among its reads) and `implementation.edit` in 1 of 5 (34,606). bee77822 had extra
-requests in the same two steps in 2 of 5 runs. The two runs with none came to 58,707 and
-59,627 tokens. No change inside this Scope moves those requests, so a third re-trial was not run:
-it would have measured the model's variance in steps 3 and 6, not the change.
-
-The trial's figures and rollouts are in the trial agent's cycle record, outside this repository.
+- `scripts/check-finding` gives `not_reproduced` at the candidate's sha (the predicate exits 4).
+- `takt scorecard --against <the trigger's saved scorecard> --steps change.handover` exits 0:
+  better on `change.handover`, not worse on the run.
+- Plain `takt scorecard --against` the promoted baseline's scorecard: not worse.
+- Five scenario-1 trials keep the outcome: 5 of 5 `ApprovalRequired`, held-out acceptance passing.

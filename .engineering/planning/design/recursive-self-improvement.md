@@ -8,7 +8,7 @@ summary: Three levels (work, takt, the loop), four agent roles, a pinned judge, 
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 19
+revision: 20
 ---
 # Design: recursive self-improvement of takt
 
@@ -68,10 +68,14 @@ reviewer and doc-writer (2026-10-18).
 The store carries the content. Inside the dispatcher's session a sub-agent's return is the message;
 between the dispatcher and the trial agent four hand-overs carry a fixed first line:
 `[TRIAL takt] <tag> <sha>` from the dispatcher after a release that touches code,
-`[CANDIDATE takt] <branch> <sha> <verdict> <scorecard>` from the trial agent for an accepted
-candidate, `[REJECTED takt] <branch> <sha>` from the trial agent for a rejected one, its finding
-for the dispatcher to file, and `[MERGED takt] <branch> <sha>` from the dispatcher once the wave
-carrying a candidate is merged and pushed. `AGENTS.md` § Messages holds them as a table.
+`[CANDIDATE <repository>] <branch> <sha> <verdict> <scorecard>` from the trial agent for an
+accepted candidate, `[REJECTED <repository>] <branch> <sha>` from the trial agent for a rejected
+one, its finding for the dispatcher to file, and `[MERGED takt] <branch> <sha>` from the
+dispatcher once the wave carrying a candidate is merged and pushed. A candidate in takt goes to
+the dispatcher; one in another layer's repository goes to that repository's delivery session
+through the monitor, with a copy to the dispatcher (ADR 0101,
+story:a-trial-candidate-lands-in-the-repository-of-its-layer). `AGENTS.md` § Messages holds
+them as a table.
 
 ## One improvement turn
 

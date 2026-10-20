@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:harness-proposes-takt-performs
 kind: story
-status: draft
+status: implemented
 title: Claude Code proposes through a metaharness session executor, and the edit effect of takt applies it under the step guard
 summary: A standalone session-executor crate implements AgentExecutor over metaharness (Kind::Claude, hermetic Strict, native tools, cwd a scratch copy)
 tags:
@@ -40,7 +40,11 @@ scope:
   path: ess/domains/takt.yaml
 - confidence: inferred
   path: fuzz/Cargo.lock
-revision: 16
+revision: 19
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T14:29:02Z", actor: "human:timo", revision: 17}
+- {from: "proposed", to: "active", at: "2026-10-20T14:29:02Z", actor: "human:timo", revision: 18}
+- {from: "active", to: "implemented", at: "2026-10-20T14:29:02Z", actor: "human:timo", revision: 19, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: harness-proposes-takt-performs
 

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-handed-off-command-is-read-with-the-wrappers-environment
 kind: story
-status: draft
+status: implemented
 title: A command handed off from a file of the tree is read with the environment and directory that file sets, and from the program word, not an option's value
 summary: 'Review of 7bf9ebb F2/F3: a tree Python wrapper setting PYTHONPATH before exec let a hand commit to the imported module pass the gate; an option''s value taken as the program'
 tags:
@@ -11,7 +11,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T14:29:01Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-20T14:29:01Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-20T14:29:01Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: a-handed-off-command-is-read-with-the-wrappers-environment
 
