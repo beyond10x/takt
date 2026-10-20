@@ -1320,3 +1320,150 @@ fn binary_promote_observes_only_a_promotion_of_the_candidate_that_is_installed()
     let (results, waiting, summary) = observed(&validator, &turn);
     assert!(results.is_empty() && waiting, "the baseline's: {summary}");
 }
+
+/// A forge whose report of every branch's tip fails, as the bot route's does when the route or
+/// the network is down; nothing else of it is called while a turn opens.
+struct RouteDown;
+
+impl takt::forge::Forge for RouteDown {
+    fn name(&self) -> &str {
+        "route-down"
+    }
+    fn scan_outgoing(
+        &self,
+        _: &Path,
+        _: &Path,
+        _: &takt::forge::Outgoing<'_>,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("the route is down")
+    }
+    fn push(&self, _: &Path, _: &str) -> anyhow::Result<()> {
+        anyhow::bail!("the route is down")
+    }
+    fn open_pull_request(
+        &self,
+        _: &Path,
+        _: &Path,
+        _: &takt::forge::PullRequest,
+    ) -> anyhow::Result<u64> {
+        anyhow::bail!("the route is down")
+    }
+    fn pull_request(&self, _: &Path, _: u64) -> anyhow::Result<takt::forge::PullRequestView> {
+        anyhow::bail!("the route is down")
+    }
+    fn checks(&self, _: &Path, _: u64) -> anyhow::Result<takt::forge::Checks> {
+        anyhow::bail!("the route is down")
+    }
+    fn merge(&self, _: &Path, _: &Path, _: u64, _: &str) -> anyhow::Result<()> {
+        anyhow::bail!("the route is down")
+    }
+    fn target_tip(&self, _: &Path, base: &str) -> anyhow::Result<String> {
+        anyhow::bail!("the route is down; no tip of {base} was read")
+    }
+}
+
+/// [`takt::case::turn_opening`] on a repository like [`turn`]'s, no case opened, whose promotion
+/// store holds the baseline, through `mainline`; the tree's status and its cases directory
+/// after it.
+fn opened_through(
+    name: &str,
+    mainline: &takt::improvement::Mainline,
+    no_main: bool,
+) -> (anyhow::Result<TurnOpening>, String, bool) {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("self-improvement-{}-{name}", std::process::id()));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
+    }
+    let _scratch = Scratch(dir.clone());
+    let tree = dir.join("takt");
+    for script in ["check-finding", "file-finding"] {
+        let path = tree.join("scripts").join(script);
+        write(
+            &path,
+            &fs::read_to_string(Path::new(SCRIPTS).join(script)).expect("the script"),
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable");
+    }
+    write(
+        &tree.join(".engineering/planning/story/probe-shows-the-defect.md"),
+        &finding("docs/runs/trial-1.md"),
+    );
+    git(&tree, &["init", "-q", "-b", "main"]);
+    git(&tree, &["add", "-A"]);
+    git(&tree, &["commit", "-q", "-m", "base"]);
+    let baseline = git(&tree, &["rev-parse", "HEAD"]);
+    git(&tree, &["checkout", "-q", "-b", "fix"]);
+    write(&tree.join("fix.txt"), "the fix\n");
+    git(&tree, &["add", "-A"]);
+    git(&tree, &["commit", "-q", "-m", "fix"]);
+    let candidate = git(&tree, &["rev-parse", "HEAD"]);
+    git(&tree, &["checkout", "-q", "main"]);
+    if no_main {
+        git(&tree, &["branch", "-m", "main", "trunk"]);
+    }
+    let state = dir.join("state");
+    promoted(
+        &state,
+        &baseline,
+        &tree,
+        &scorecard(&baseline, "accepted", &baseline),
+    );
+    let binary = tree.join("scripts/check-finding");
+    let opened = takt::case::turn_opening(
+        &tree,
+        Some(FINDING),
+        Some(&candidate),
+        None,
+        &state.join("takt/promotions"),
+        &takt::case::Judge {
+            revision: &baseline,
+            binary: &binary,
+        },
+        mainline,
+    );
+    let status = git(&tree, &["status", "--porcelain", "--untracked-files=all"]);
+    let cases = tree.join(".engineering/cases").exists();
+    (opened, status, cases)
+}
+
+/// story:a-turn-does-not-open-when-the-mainline-tip-cannot-be-read: an opening whose forge
+/// cannot report the mainline's tip is refused, naming the forge, the read's error and the
+/// remedy, and writes nothing; the same opening through a forge that reports the tip (the
+/// in-memory double, whose `main` is the tree's) opens. With no `main` for either the local
+/// mainline or the double to read, the opening is refused the same way.
+#[test]
+fn an_opening_whose_mainline_tip_cannot_be_read_is_refused() {
+    let down = takt::improvement::Mainline::Forge(std::rc::Rc::new(RouteDown));
+    let (opened, status, cases) = opened_through("tip-down", &down, false);
+    let error = format!("{:#}", opened.expect_err("an unreadable tip opens no turn"));
+    assert!(error.contains("(forge: route-down)"), "{error}");
+    assert!(error.contains("the route is down"), "{error}");
+    assert!(
+        error.contains("open the turn again once the tip can be read"),
+        "{error}"
+    );
+    assert!(error.contains("nothing was written"), "{error}");
+    assert_eq!(status, "", "{error}");
+    assert!(!cases, "{error}");
+
+    let memory =
+        takt::improvement::Mainline::Forge(std::rc::Rc::new(takt::forge::Memory::default()));
+    let (opened, _, _) = opened_through("tip-read", &memory, false);
+    let opened = opened.expect("a readable tip that does not hold the candidate opens the turn");
+    assert_eq!(opened.forge.as_deref(), Some("memory"));
+
+    for (name, mainline, forge) in [
+        ("no-main-memory", memory, "memory"),
+        ("no-main-local", takt::improvement::Mainline::Local, "none"),
+    ] {
+        let (opened, status, _) = opened_through(name, &mainline, true);
+        let error = format!("{:#}", opened.expect_err("no main opens no turn"));
+        assert!(error.contains(&format!("(forge: {forge})")), "{error}");
+        assert!(
+            error.contains("open the turn again once the tip can be read"),
+            "{error}"
+        );
+        assert_eq!(status, "", "{error}");
+    }
+}

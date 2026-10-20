@@ -388,6 +388,21 @@ pub fn keep_transcript(
     step: u64,
     bytes: &[u8],
 ) -> Result<std::path::PathBuf> {
+    keep_transcript_making(root, repo, case, run, step, bytes, &mut Vec::new())
+}
+
+/// [`keep_transcript`], each directory it made and the file it created put in `made` as it is
+/// made, in order from `/`, whether or not it ends in an error: the exact paths takt itself
+/// wrote, which [`crate::run::Run`] takes as found so no step is charged with them.
+fn keep_transcript_making(
+    root: &Path,
+    repo: &str,
+    case: &str,
+    run: u64,
+    step: u64,
+    bytes: &[u8],
+    made: &mut Vec<std::path::PathBuf>,
+) -> Result<std::path::PathBuf> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
     use std::path::Component;
@@ -406,13 +421,15 @@ pub fn keep_transcript(
             bail!("the {what} {name:?} is not one plain name; no transcript is written for it");
         }
     }
-    make_transcripts_root(root)?;
+    make_transcripts_root(root, made)?;
     let repo_dir = root.join(repo);
-    plain_dir(&repo_dir, Some(0o700))?;
     let case_dir = repo_dir.join(case);
-    plain_dir(&case_dir, Some(0o700))?;
     let dir = case_dir.join(format!("run-{run}"));
-    plain_dir(&dir, Some(0o700))?;
+    for part in [&repo_dir, &case_dir, &dir] {
+        if plain_dir(part, Some(0o700))? {
+            made.push(part.clone());
+        }
+    }
     let path = dir.join(format!("step-{step}.jsonl"));
     let mut file = match std::fs::OpenOptions::new()
         .write(true)
@@ -428,6 +445,7 @@ pub fn keep_transcript(
         ),
         Err(error) => return Err(error).with_context(|| format!("create {}", path.display())),
     };
+    made.push(path.clone());
     file.write_all(bytes)
         .with_context(|| format!("write {}", path.display()))?;
     Ok(path)
@@ -464,11 +482,13 @@ pub(crate) fn run_number(record: &Path) -> Result<u64> {
 
 /// Makes the transcripts directory `root` ([`keep_transcript`]) and every part of the way to it
 /// from `/`, each a directory that is no link: a part that is not there is made (`0700`), one
-/// that is there is kept as it is, and a link or a file on the way is refused. The parts it
-/// made, in order from `/`; none when all were there. `takt run` makes it when the run opens
-/// ([`crate::run::Run::transcripts_in`]), before any step, so no step is charged with a
-/// directory (`~/.local` on an empty home) takt made to keep its transcript.
-pub fn make_transcripts_root(root: &Path) -> Result<Vec<std::path::PathBuf>> {
+/// that is there is kept as it is, and a link or a file on the way is refused. Each part it
+/// made is put in `made` as it is made, in order from `/`, so a part that fails after one was
+/// made (a name too long below `~/.local`) leaves those in `made` beside the error. `takt run`
+/// makes it when the run opens ([`crate::run::Run::transcripts_in`]), before any step, so no
+/// step is charged with a directory (`~/.local` on an empty home) takt made to keep its
+/// transcript.
+pub fn make_transcripts_root(root: &Path, made: &mut Vec<std::path::PathBuf>) -> Result<()> {
     if !root.is_absolute() {
         bail!(
             "the transcripts directory {} is not absolute",
@@ -477,13 +497,66 @@ pub fn make_transcripts_root(root: &Path) -> Result<Vec<std::path::PathBuf>> {
     }
     let mut way: Vec<&Path> = root.ancestors().collect();
     way.reverse();
-    let mut made = Vec::new();
     for part in way {
         if plain_dir(part, None)? {
             made.push(part.to_path_buf());
         }
     }
-    Ok(made)
+    Ok(())
+}
+
+/// `dir` resolved, when it can be the transcripts directory: absolute, outside `tree` (through
+/// any link on the way to either), and with a directory, not a file, where its way ends among
+/// what exists. Every link on the way that exists now is resolved, so the path returned holds
+/// none. Nothing is made; the error names the transcripts directory and says which it is not.
+pub fn transcripts_root(dir: &Path, tree: &Path) -> Result<std::path::PathBuf> {
+    if !dir.is_absolute() {
+        bail!(
+            "the transcripts directory {} is not an absolute path",
+            dir.display()
+        );
+    }
+    // The longest part of the way that exists, and the rest as it is.
+    let mut rest = std::path::PathBuf::new();
+    let mut base = dir;
+    while std::fs::symlink_metadata(base).is_err() {
+        match (base.parent(), base.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest = if rest.as_os_str().is_empty() {
+                    std::path::PathBuf::from(name)
+                } else {
+                    Path::new(name).join(rest)
+                };
+                base = parent;
+            }
+            _ => break,
+        }
+    }
+    if !std::fs::metadata(base).is_ok_and(|meta| meta.is_dir()) {
+        bail!(
+            "the transcripts directory {} cannot be made: {} is not a directory",
+            dir.display(),
+            base.display()
+        );
+    }
+    let resolved = std::fs::canonicalize(base)
+        .with_context(|| {
+            format!(
+                "the transcripts directory {} cannot be made: resolve {}",
+                dir.display(),
+                base.display()
+            )
+        })?
+        .join(rest);
+    let tree_resolved = std::fs::canonicalize(tree).unwrap_or_else(|_| tree.to_path_buf());
+    if resolved.starts_with(&tree_resolved) || dir.starts_with(tree) {
+        bail!(
+            "the transcripts directory {} is inside the tree {}, where a step's change is judged",
+            dir.display(),
+            tree.display()
+        );
+    }
+    Ok(resolved)
 }
 
 /// Makes `dir` a directory of its own, never through a link: one there is kept, given `mode`
@@ -527,26 +600,37 @@ pub(crate) fn keep_step_transcript(
     step: u64,
 ) -> Option<KeptTranscript> {
     let ((root, repo), bytes) = root.zip(harness.last_transcript())?;
-    let kept = keep_transcript(root, repo, case, run, step, &bytes).map_err(|error| {
-        let why = format!("{error:#}");
-        eprintln!("step {step}: its transcript was not kept: {why}");
-        why
-    });
+    let mut made = Vec::new();
+    let kept =
+        keep_transcript_making(root, repo, case, run, step, &bytes, &mut made).map_err(|error| {
+            let why = format!("{error:#}");
+            eprintln!("step {step}: its transcript was not kept: {why}");
+            why
+        });
     Some(KeptTranscript {
         root: root.to_path_buf(),
         kept,
+        made,
     })
 }
 
 /// What [`keep_step_transcript`] did with a step's transcript: the file it wrote, or why it
-/// wrote none, under the transcripts directory `root`.
+/// wrote none, under the transcripts directory `root`; and each path it made on the way, the
+/// file among them once created, kept or not.
 #[derive(Debug, Clone)]
 pub(crate) struct KeptTranscript {
     root: std::path::PathBuf,
     kept: std::result::Result<std::path::PathBuf, String>,
+    made: Vec<std::path::PathBuf>,
 }
 
 impl KeptTranscript {
+    /// Each directory takt made to keep the transcript and the file it created, exact paths in
+    /// order from `/`: what takt itself wrote, never a step.
+    pub(crate) fn made(&self) -> &[std::path::PathBuf] {
+        &self.made
+    }
+
     /// As the run record names it: the file's path relative to the transcripts directory
     /// (`<repo-key>/<case>/run-<r>/step-<n>.jsonl`), or why none was kept, every path under
     /// that directory in it relative too; so no record carries the directory's own path.

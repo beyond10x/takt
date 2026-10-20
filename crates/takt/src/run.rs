@@ -1184,7 +1184,7 @@ const SCRIPTS_AT_MOST: usize = 2;
 /// What a line the guard cannot read guards ([`fail_closed`]), since what it runs, and from
 /// where, is unknown: every Python module, compiled module and path file of the tree, every
 /// shell file, and every program ([`PROGRAMS`]: a file starting with `#!` or with an exec bit).
-const FAIL_CLOSED: &[&str] = &[
+pub(crate) const FAIL_CLOSED: &[&str] = &[
     "**/*.py",
     "**/*.pyc",
     "**/*.pth",
@@ -1220,7 +1220,7 @@ const PROGRAMS: &str = "**/(programs)";
 /// The last part of what [`scripts_of`] names for a directory Python imports from: in it, a
 /// module, compiled module or package with a name the Python imports from outside the tree
 /// ([`Modules`]) is guarded, since Python finds it there before the installed one.
-const IMPORTS: &str = "(imports)";
+pub(crate) const IMPORTS: &str = "(imports)";
 
 /// The last part of what [`scripts_of`] names for a directory of the tree on `PATH`: every
 /// entry directly in it is guarded, since a program run by its name may be found there.
@@ -1544,7 +1544,7 @@ const STDLIB_MODULES: &[&str] = &[
 
 /// The module the file `name` in an import directory loads as: `m.py`, `m.pyc`, `m.pyw`, `m.pyd`,
 /// `m.so` and `m.<tag>.so` are `m`, and a name with no suffix (a package) is itself.
-fn module_of(name: &str) -> Option<&str> {
+pub(crate) fn module_of(name: &str) -> Option<&str> {
     let Some((stem, suffix)) = name.split_once('.') else {
         return Some(name);
     };
@@ -1590,7 +1590,7 @@ fn shebang_of(full: &Path) -> Option<String> {
 }
 
 /// The interpreter a `#!` line (after the `#!`) names, `env` and its options skipped.
-fn interpreter_of(shebang: &str) -> Option<String> {
+pub(crate) fn interpreter_of(shebang: &str) -> Option<String> {
     let line = shebang.lines().next().unwrap_or_default();
     let mut words = shell_words(line).into_iter().map(|word| program_of(&word));
     let interpreter = words.next()?;
@@ -1824,7 +1824,7 @@ impl Default for Modules {
 }
 
 /// Whether `name`, a program's name without its directory, is a Python ([`INTERPRETERS`]).
-fn python_like(name: &str) -> bool {
+pub(crate) fn python_like(name: &str) -> bool {
     spec_of(INTERPRETERS, &program_of(name)).is_some_and(|spec| !spec.short_module.is_empty())
 }
 
@@ -5250,21 +5250,44 @@ impl Outside {
         Ok(Self(entries))
     }
 
-    /// Takes each of the directories `made`, which takt made itself before any step (the
-    /// transcripts directory's way, [`Run::transcripts_in`]), as it is now, where this reads
-    /// it: a directory is found as one. A path this does not read is passed over, and so is one
-    /// that is no longer a directory, which stays as this found it and is charged to whatever
-    /// step comes next.
-    fn found_made(&mut self, made: &[PathBuf]) -> Result<()> {
+    /// Takes each of the paths `made`, exactly those, which takt itself made or wrote for the
+    /// transcripts (the transcripts directory's way when the run opens, [`Run::transcripts_in`];
+    /// a step's transcript and the directories made for it, [`crate::harness::keep_transcript`]),
+    /// as it is now, as if this had read it so: a directory as one, a file by its
+    /// [`fingerprint`]. A path this reads already takes what is there now, when that is a
+    /// directory; a path this does not hold is taken only where [`Self::read`] would read it,
+    /// under a directory Python imports from (`PYTHONUSERBASE` at `~/.local`). Anything else is
+    /// passed over: a path this neither reads nor would read, one that cannot be read, one no
+    /// longer as takt made it. What a step writes beside them, under the same directory, is
+    /// still charged to it.
+    fn took(&mut self, made: &[PathBuf], tree: &Path, extra: &OutsideDirs) {
+        let trees: Vec<PathBuf> = [
+            std::path::absolute(tree).ok(),
+            std::fs::canonicalize(tree).ok(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let imports: Vec<PathBuf> = writable_outside(tree, extra.imports.iter().cloned(), true)
+            .into_iter()
+            .map(|(dir, _)| dir)
+            .collect();
         for path in made {
             if let Some((_, entry, _)) = self.0.get_mut(path) {
-                let now = Self::entry_at(path)?;
-                if now == Some(Entry::Other("directory")) {
+                if let Ok(now @ Some(Entry::Other("directory"))) = Self::entry_at(path) {
                     *entry = now;
                 }
+                continue;
+            }
+            let read = !trees.iter().any(|tree| path.starts_with(tree))
+                && imports.iter().any(|dir| path.starts_with(dir));
+            if let (true, Some(anchor), Ok(now @ Some(_))) =
+                (read, path.parent(), Self::entry_at_with(path, false))
+            {
+                self.0
+                    .insert(path.clone(), (anchor.to_path_buf(), now, true));
             }
         }
-        Ok(())
     }
 
     /// What is at `path` now, `None` for nothing; a link is not followed.
@@ -6663,21 +6686,25 @@ impl<'a> Run<'a> {
 
     /// Keeps each harness step's transcript under `dir`, in the tree's own segment
     /// ([`crate::harness::keep_transcript`], [`crate::harness::repo_key`]), once `dir` is
-    /// accepted as a set-aside root is ([`crate::git::set_aside_root`]): absolute, outside the
-    /// tree, and makeable, every link on the way resolved now; else the error, and the run
-    /// keeps what it had. The directory is made now, with every part of the way to it that is
-    /// not there (`0700`, a link or a file on the way refused:
-    /// [`crate::harness::make_transcripts_root`]), and what the run found outside the tree when
-    /// it began ([`Outside`]) takes the parts it made as they are now: they are takt's, made
-    /// before any step, so no step is charged with them (`~/.local` on an empty home, on the
-    /// way to `~/.local/bin` or the user site). Nothing else the run found is read again.
+    /// accepted ([`crate::harness::transcripts_root`]): absolute, outside the tree, and
+    /// makeable, every link on the way resolved now; else the error, which names the
+    /// transcripts directory, and the run keeps what it had. The directory is made now, with
+    /// every part of the way to it that is not there (`0700`, a link or a file on the way
+    /// refused: [`crate::harness::make_transcripts_root`]), and what the run found outside the
+    /// tree when it began ([`Outside`]) takes the parts it made as they are now, those made
+    /// before a part that failed too: they are takt's, made before any step, so no step is
+    /// charged with them (`~/.local` on an empty home, on the way to `~/.local/bin` or the user
+    /// site; `~/.local/state` under a `PYTHONUSERBASE` of `~/.local`). Nothing else the run
+    /// found is read again.
     pub fn transcripts_in(&mut self, dir: PathBuf) -> Result<()> {
-        let root = crate::git::set_aside_root(&dir, &self.tree)
-            .with_context(|| format!("the transcripts directory {}", dir.display()))?;
+        let root = crate::harness::transcripts_root(&dir, &self.tree)?;
         let key = crate::harness::repo_key(&self.tree)?;
-        let made = crate::harness::make_transcripts_root(&root)
-            .with_context(|| format!("the transcripts directory {}", dir.display()))?;
-        self.outside.found_made(&made)?;
+        let mut made = Vec::new();
+        let making = crate::harness::make_transcripts_root(&root, &mut made);
+        self.outside.took(&made, &self.tree, &self.outside_dirs);
+        making.with_context(|| {
+            format!("the transcripts directory {} cannot be made", dir.display())
+        })?;
         self.transcripts = Some((root, key));
         Ok(())
     }
@@ -8232,7 +8259,7 @@ impl<'a> Run<'a> {
             let cargo_before = cargo_builds(&self.tree);
             // What cargo and rustup read outside the tree ([`Outside`]), put back with the rest
             // of a step that is discarded.
-            let outside_before = Outside::read(&self.tree, &self.outside_dirs)?;
+            let mut outside_before = Outside::read(&self.tree, &self.outside_dirs)?;
             let outside_dirs = self.outside_dirs.clone();
             // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
             // base, and a sibling case's branch, which a step could otherwise move under it; a
@@ -8266,6 +8293,14 @@ impl<'a> Run<'a> {
                 run_number,
                 self.steps,
             );
+            // What takt wrote for the transcript, each exact path, is takt's: taken as found
+            // before the step and when the run began ([`Outside::took`]), so neither this step
+            // nor a later observation is charged with it (the transcripts directory under a
+            // `PYTHONUSERBASE` of `~/.local`); what the step wrote beside it still is.
+            if let Some(kept) = &kept_transcript {
+                outside_before.took(kept.made(), &self.tree, &outside_dirs);
+                self.outside.took(kept.made(), &self.tree, &outside_dirs);
+            }
             let transcript = kept_transcript
                 .as_ref()
                 .map(crate::harness::KeptTranscript::recorded);

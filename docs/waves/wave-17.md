@@ -1,6 +1,6 @@
 # Wave 17: an outcome metric that names its stops, a turn that refuses a merged candidate, the dispatcher and trial profiles, a run viewer
 
-Stage: **closing**, the merge into `main` waits for the owner's grant. Shape: one checkout, one wave branch `wave/17` cut from `main`, implementor
+Stage: **closed**. Shape: one checkout, one wave branch `wave/17` cut from `main`, implementor
 sub-agents in the shared tree, units committed by the dispatcher, one adversarial review and one
 full gate before the close. The wave's merge into `main` is granted by the owner: two units add
 agent roles and widen one role's authority.
@@ -33,3 +33,4 @@ subcommand is wired after C's commit. D after A, B and C return.
 - 2026-10-20: `cargo build --workspace` exit 0; `cargo test --workspace --no-fail-fast` at cae76cb8: 1396 passed, 0 failed.
 - 2026-10-20: adversarial review at ef8609da: needs-revision. `scripts/check-finding`: A and C reproduced at 37e7c71d, not_reproduced at ef8609da. Fix round 1: 33dd0398 (the transcripts directory is made when the run opens; the defect 2802f440 only hid in the tests), 91acce18 (the profiles: the close grants the sha it merges, one owner of `takt promote`, five trials per side, `check-finding` before hand-over), 44c4f7a7 (ESS).
 - 2026-10-20: `task check` at 44c4f7a7: exit 0, 1397 passed, 0 failed. The six stories moved to implemented. The wave changes agent authority (one dispatcher grants its own waves and tags releases; the trial agent runs `takt promote`), so its merge into `main` is the owner's grant.
+- 2026-10-20: the reviewer's confirm at 00a900ac: approve. The owner granted the merge and confirmed waves 15 and 16; merged into `main` as 3913af6a.

@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "b10x-takt"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "b10x-canon",

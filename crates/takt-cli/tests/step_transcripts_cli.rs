@@ -311,3 +311,267 @@ fn takt_run_on_an_empty_home_keeps_the_transcript_and_refuses_no_step() {
     );
     drop(scratch);
 }
+
+/// A repository whose test command fails, a program directory `bin` with a `claude` double in
+/// it, and a home that holds nothing, under a scratch directory of its own named `name`.
+struct Home {
+    scratch: Scratch,
+    repo: PathBuf,
+    bin: PathBuf,
+    home: PathBuf,
+}
+
+impl Home {
+    fn new(name: &str) -> Self {
+        let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("step-transcripts-{name}-{}", std::process::id()));
+        if outer.exists() {
+            fs::remove_dir_all(&outer).expect("a stale scratch tree is removed");
+        }
+        let scratch = Scratch(outer.clone());
+        let repo = outer.join("repo");
+        let bin = outer.join("bin");
+        let home = outer.join("home");
+        fs::create_dir_all(&repo).expect("a repository");
+        fs::create_dir_all(&bin).expect("a program directory");
+        fs::create_dir_all(&home).expect("an empty home");
+        fs::write(repo.join("README.md"), "a story\n").expect("a file");
+        executable(&repo.join("check.sh"), "#!/bin/sh\nexit 1\n");
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "start"]);
+        fake_claude(&bin.join("claude"), &outer.join("printed"));
+        let home = fs::canonicalize(&home).expect("the home resolves");
+        Self {
+            scratch,
+            repo,
+            bin,
+            home,
+        }
+    }
+
+    /// `takt run` on the repository with `harness` for `iterations` steps, `HOME` the empty
+    /// home, `bin` and `~/.local/bin` first on `PATH`, no `XDG_STATE_HOME` and no variable of
+    /// Python's but `env`: its standard output and standard error.
+    fn run(&self, harness: &str, iterations: &str, env: &[(&str, String)]) -> (String, String) {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
+        command
+            .args([
+                "run",
+                "--repo",
+                self.repo.to_str().expect("utf-8"),
+                "--intent",
+                "probe",
+                "--harness",
+                harness,
+                "--forge",
+                "none",
+                "--iterations",
+                iterations,
+                "--test-cmd",
+                "./check.sh",
+            ])
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}:{}",
+                    self.bin.display(),
+                    self.home.join(".local/bin").display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env("HOME", &self.home)
+            .env_remove("B10X_GATES_POLICY");
+        for name in [
+            "XDG_STATE_HOME",
+            "PYTHONPATH",
+            "PYTHONHOME",
+            "PYTHONUSERBASE",
+            "PYTHONPYCACHEPREFIX",
+            "PYTHONSTARTUP",
+        ] {
+            command.env_remove(name);
+        }
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        let output = command.output().expect("takt runs");
+        (
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    }
+
+    /// The transcript of step `step` of the first run of the repository's one case, under
+    /// `root`, the transcripts directory.
+    fn transcript(&self, root: &Path, step: u64) -> PathBuf {
+        let cases: Vec<PathBuf> = fs::read_dir(self.repo.join(".engineering/cases"))
+            .expect("the cases directory")
+            .map(|entry| entry.expect("an entry").path())
+            .collect();
+        assert_eq!(cases.len(), 1, "one case");
+        let real_repo = fs::canonicalize(&self.repo).expect("the repository resolves");
+        let digest = Command::new("sh")
+            .args(["-c", "printf '%s' \"$1\" | sha256sum", "sh"])
+            .arg(&real_repo)
+            .output()
+            .expect("sha256sum runs");
+        let repo_key = String::from_utf8_lossy(&digest.stdout)[..16].to_owned();
+        root.join(repo_key)
+            .join(cases[0].file_name().expect("a name"))
+            .join("run-1")
+            .join(format!("step-{step}.jsonl"))
+    }
+}
+
+/// story:transcripts-root-failures-name-it-and-charge-no-step, acceptance 1: a transcripts
+/// directory that cannot be made, a file or a dangling link at its path, is named on standard
+/// error as the transcripts directory, never as the set-aside directory (`~/.local/state/takt/
+/// set-aside` beside it, which is fine), and the run goes on.
+#[test]
+fn a_transcripts_directory_that_cannot_be_made_is_named_as_such() {
+    for (name, plant) in [
+        ("file", "a file at the transcripts directory's path"),
+        (
+            "link",
+            "a dangling link at the transcripts directory's path",
+        ),
+    ] {
+        let home = Home::new(&format!("unmakeable-{name}"));
+        let takt = home.home.join(".local/state/takt");
+        fs::create_dir_all(&takt).expect("the way");
+        if name == "file" {
+            fs::write(takt.join("transcripts"), "").expect("a file in the way");
+        } else {
+            std::os::unix::fs::symlink(home.home.join("nowhere"), takt.join("transcripts"))
+                .expect("a link");
+        }
+        let (stdout, stderr) = home.run("none", "1", &[]);
+        let said = format!("{plant}\n{stdout}\n{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "no step transcript is kept: the transcripts directory {}",
+                takt.join("transcripts").display()
+            )),
+            "{said}"
+        );
+        assert!(stderr.contains("cannot be made"), "{said}");
+        assert!(!stderr.contains("set-aside"), "{said}");
+        assert!(
+            stdout.contains("step 1: tests.run"),
+            "the run goes on\n{said}"
+        );
+        drop(home.scratch);
+    }
+}
+
+/// story:transcripts-root-failures-name-it-and-charge-no-step, acceptances 1 and 2: on an
+/// empty home with `~/.local/bin` on `PATH`, an `XDG_STATE_HOME` of `~/.local/` and a name too
+/// long for the file system: takt makes `~/.local`, then fails. The failure names the
+/// transcripts directory, and `~/.local`, which takt made, is taken as the run found it, so
+/// neither the harness's step nor the test command's after it is refused for it.
+#[test]
+fn a_transcripts_directory_made_part_way_charges_no_step() {
+    let home = Home::new("part-way");
+    let long = "x".repeat(300);
+    let state = home.home.join(".local").join(&long);
+    let (stdout, stderr) = home.run(
+        "claude",
+        "3",
+        &[("XDG_STATE_HOME", state.display().to_string())],
+    );
+    let said = format!("{stdout}\n{stderr}").replace(&long, "<300 x>");
+    assert!(
+        stderr.contains(&format!(
+            "no step transcript is kept: the transcripts directory {}",
+            state.join("takt/transcripts").display()
+        )),
+        "{said}"
+    );
+    assert!(!stderr.contains("set-aside"), "{said}");
+    assert!(
+        home.home.join(".local").is_dir(),
+        "takt made ~/.local\n{said}"
+    );
+    assert!(
+        !stdout.contains("refused:") && !stdout.contains("StepRefused"),
+        "no step is charged with the ~/.local takt made\n{said}"
+    );
+    assert!(stdout.contains("step 3: tests.run"), "{said}");
+    drop(home.scratch);
+}
+
+/// story:transcripts-under-a-python-dir-charge-no-step, acceptances 1 and 2: the transcripts
+/// directory inside a directory Python imports from (`PYTHONUSERBASE` or a `PYTHONPATH` entry
+/// at `~/.local`, or `XDG_STATE_HOME` inside a `PYTHONPATH` entry), on an empty home: the
+/// directory takt made when the run opened, and the transcript it wrote after the harness's
+/// step 2, charge neither that step nor the test command's step 3 after it; the transcript is
+/// kept.
+#[test]
+fn transcripts_under_a_python_import_directory_charge_no_step() {
+    for (name, guarded, state) in [
+        ("userbase", "PYTHONUSERBASE", None),
+        ("pythonpath", "PYTHONPATH", None),
+        ("xdg", "PYTHONPATH", Some("py/state")),
+    ] {
+        let home = Home::new(&format!("python-{name}"));
+        let mut env = Vec::new();
+        let root = match state {
+            None => {
+                env.push((guarded, home.home.join(".local").display().to_string()));
+                home.home.join(".local/state/takt/transcripts")
+            }
+            Some(state) => {
+                env.push((guarded, home.home.join("py").display().to_string()));
+                env.push((
+                    "XDG_STATE_HOME",
+                    home.home.join(state).display().to_string(),
+                ));
+                home.home.join(state).join("takt/transcripts")
+            }
+        };
+        let (stdout, stderr) = home.run("claude", "3", &env);
+        let said = format!("{name}\n{stdout}\n{stderr}");
+        assert!(
+            !stdout.contains("refused:") && !stdout.contains("StepRefused"),
+            "no step is charged with the transcripts takt keeps\n{said}"
+        );
+        assert!(stdout.contains("step 3: tests.run"), "{said}");
+        let path = home.transcript(&root, 2);
+        assert!(path.is_file(), "{} is kept\n{said}", path.display());
+        drop(home.scratch);
+    }
+}
+
+/// story:transcripts-under-a-python-dir-charge-no-step, acceptance 3: with `PYTHONUSERBASE` at
+/// `~/.local`, a harness step that writes a module into `~/.local`, beside the transcripts
+/// directory, is still refused for it.
+#[test]
+fn a_module_written_beside_the_transcripts_is_still_refused() {
+    let home = Home::new("python-module");
+    let module = home.home.join(".local/planted.py");
+    let script = format!(
+        "#!/bin/sh\nprintf 'x = 1\\n' > '{}'\nmkdir -p tests\necho work >> tests/work.txt\nprintf '%s\\n' '{}'\n",
+        module.display(),
+        r#"{"type":"result","subtype":"success","result":"{\"action\": \"tests.write\", \"summary\": \"wrote a test\"}","usage":{"input_tokens":3,"output_tokens":4}}"#
+    );
+    executable(&home.bin.join("claude"), &script);
+    let (stdout, stderr) = home.run(
+        "claude",
+        "3",
+        &[(
+            "PYTHONUSERBASE",
+            home.home.join(".local").display().to_string(),
+        )],
+    );
+    let said = format!("{stdout}\n{stderr}");
+    let refused = stdout
+        .lines()
+        .find(|line| line.contains("refused:"))
+        .unwrap_or_else(|| panic!("the step that planted a module is refused\n{said}"));
+    assert!(refused.contains(&module.display().to_string()), "{said}");
+    assert!(
+        !refused.contains(".local/state"),
+        "the refusal names the module, not the transcripts\n{said}"
+    );
+}

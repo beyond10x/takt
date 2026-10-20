@@ -6,72 +6,131 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-10-20
+
+The minor version moves because a `DiskLow` stop exits 8, a 0.3.x baseline is judged again only
+after `takt promote --rebaseline`, and a run that pushes is refused without a commit identity.
+
 ### Changed
 
-- The scorecard's outcome metric is at definition version 3: `Unperformable` and `DiskLow`
-  changed what its ranks mean. A takt that knows version 2 refuses a version 3 scorecard, and a
-  stored version 2 baseline meets a version 3 candidate only after `takt promote --rebaseline`.
-- A run that stops `DiskLow` exits 8, for `takt run` and `takt scenario run`, not 3: a runner that
-  resumes a stopped case on 3 no longer resumes a trial that ran out of disk.
-
+- A run that stops `DiskLow` exits 8, not 3, for `takt run` and `takt scenario run`, so a
+  runner that resumes a case stopped with 3 no longer resumes a trial that ran out of disk. Its
+  case stays open; a trial runner discards it rather than resume it.
 - Every commit takt makes (the take, the store's writes on the case's branch, an approval's
-  record, a step's change) carries one identity as author and committer: `--commit-identity
-  '<name> <email>'`, else the one `.engineering/commit-identity.conf` names at the commit the case
-  forks from, else `takt <takt@localhost>`. The case records it when it opens and a resume keeps
-  it. Neither the operator's git configuration nor the identity variables in takt's environment
-  reach a commit. A run whose commits leave the machine (the bot route) is refused at open, exit
-  1, when no identity is configured; a run under `--forge none` is not.
+  record, a step's change, a candidate's replay) carries one identity as author and committer:
+  `--commit-identity '<name> <email>'`, else the one `.engineering/commit-identity.conf`
+  (`[identity]` `name` and `email`) names at the commit the case forks from (for
+  `takt scenario run`, at `--declared-on`), else `takt <takt@localhost>`. Neither the operator's
+  git configuration nor the identity variables in takt's environment reach a commit. The case
+  records the identity when it opens; a resume and `takt approve` commit with it, and a resume
+  given another one is refused, exit 1.
+- A run whose commits leave the machine (the bot route) is refused at open, exit 1, before
+  anything is written, when no identity is given or configured; a run under `--forge none` is
+  not. A case opened with no identity, which every case opened by 0.3.x is, is refused the same
+  way when resumed through the bot route; the refusal names the way past (finish it with
+  `--forge none`, or drop its branch and directory).
+- The scorecard's outcome metric is at definition version 3: `Unperformable` ranks with the
+  budget stops and a `DiskLow` trial takes no rank. A takt that knows version 2 refuses a
+  version 3 scorecard, and a baseline stored under version 2 (any 0.3.x baseline) meets a
+  version 3 candidate only after `takt promote --rebaseline`.
+- A self-improvement turn is refused at open, exit 1, before anything is written, when the
+  mainline's tip already holds its candidate (the candidate or a descendant of it), naming the
+  candidate and the tip; open it on a fresh candidate. It is refused the same way when the tip
+  cannot be read (the bot route or the network down, no `main`) or whether the tip holds the
+  candidate cannot be read, naming the forge and the read's error; open it again once the tip can
+  be read. A resumed turn reads no tip at open, and one whose candidate reaches the mainline after
+  it opened still resumes.
+- A turn resumed through another forge than the one it recorded when it opened is refused, exit
+  1, before anything is written, naming both and `--forge <recorded>` as the way past.
+- `candidate.merge_judge_surface` records `merged` only for a candidate that reached the mainline
+  after the grant. `takt approve` records the mainline's tip with a turn's judge-surface grant,
+  read through the forge the turn recorded when it opened; a tip that cannot be read refuses the
+  grant with nothing written. A candidate that tip already holds is refused, decided by ancestry,
+  not by a committer date; the refusal names the commit where the candidate reached the mainline,
+  its committer date and the grant's time. A grant that records no tip, whose tip cannot be
+  fetched, or whose tip is not on the mainline now is refused too. A turn opened by 0.3.x recorded
+  no forge, so its grant records no tip and its judge-surface merge is refused.
+- `gate.run` with a project file compares at the case's pinned base, besides the executables and
+  catalogs it admits: every file a gate command takes as an argument; the tool configuration
+  (`.cargo/config`, `.cargo/config.toml`, `clippy.toml`, `.clippy.toml`, `rustfmt.toml`,
+  `.rustfmt.toml`, `Taskfile.yml`, `Taskfile.yaml`, `Taskfile.dist.yml`, `Taskfile.dist.yaml`, by
+  file name at any depth); the `[lints]` and `[workspace.lints]` entries of every `Cargo.toml`;
+  and the judge surface `tests.run` is compared on, `rust-toolchain*` and the repository's own
+  `.engineering/judge-surface.yaml` included. One that differs, was added or was deleted runs
+  nothing and writes no record, and the summary names it. A directory the base holds where an
+  argument points is the data a command checks and is not compared.
+- `gate.run` also compares at the base what Python loads for a gate's commands: every module,
+  compiled module, `*.pth` file and package in a script's own directory or the directory
+  `python3 <dir>` runs, and the module and package `python -m a.b` runs, with the `*.pth` files
+  beside it, from the directory the command runs in and each `PYTHONPATH` entry the binding sets.
+  No other module of the run directory or a `PYTHONPATH` entry is compared: those often hold the
+  code the gate checks. A script at the root of the tree, where the gate runs, is compared as `-m`
+  is (the script and the root `*.pth` files), and a subdirectory of a script's directory that
+  holds a module at any depth is compared whole.
 
 ### Added
 
-- `takt view <dir> [--output <file>]` writes one offline HTML page of the `takt-trace/1` runs under
-  a directory: one lane per run on a shared time axis, each operation a mark naming its step,
-  action and outcome, a click opening the step's transcript (its head and tail past 256 KiB). A
-  directory with no trace is refused, exit 1. The page's style and layout derive from the
-  MIT-licensed Context Lens dashboard; its notice is in `viewer/`.
-
-- A delivery under `--forge none` that stops at `pr.opened` hands its change over as a candidate:
-  its code commits are replayed on the base under the configured identity, kept under
-  `refs/takt/candidates/<case-id>`, and the run prints `candidate: <id>`, which a
-  `self.improvement/1` turn opens on. With no configured identity, or when the replay conflicts,
-  it prints `candidate: none:` and why, and a candidate an earlier run of the case made is no
-  longer named by the ref.
-
-### Gates
-
-- `gate.run` with a project file compares at the case's pinned base, besides the executables and
-  catalogs it admits, every file a gate command takes as an argument, the tool configuration
-  (`.cargo/config`, `.cargo/config.toml`, `clippy.toml`, `.clippy.toml`, `rustfmt.toml`,
-  `.rustfmt.toml`, `Taskfile.yml`, `Taskfile.yaml`, `Taskfile.dist.yml`, `Taskfile.dist.yaml`, by
-  file name at any depth), the `[lints]` and `[workspace.lints]` entries of
-  every `Cargo.toml`, and the judge surface `tests.run` is compared on, `rust-toolchain*` and the
-  repository's own `.engineering/judge-surface.yaml` included. One that differs, was added or was
-  deleted runs nothing and writes no record, and the summary names it. A directory the base holds
-  where an argument points is the data a command checks and is not compared. Build-time code (a
-  build script, a procedural macro) is not closed by comparison: `gate.green` does not vouch for
-  it, and the merge stays owner-granted. takt's repository lists `scripts/**` on its judge
-  surface.
-
-### Improvement turns
-
-- `candidate.merge_judge_surface` records `merged` only for a candidate that reached the mainline
-  after the grant. `takt approve` records the mainline's tip with a turn's judge-surface grant,
-  read through the forge the turn recorded when it opened. A candidate that tip already holds is
-  refused, decided by ancestry, not by a committer date. The refusal names the merge commit with
-  its committer date and the grant's time. A grant that records no tip (a turn opened before
-  the forge was recorded), whose tip cannot be fetched, or whose tip is not on the mainline now
-  is refused too.
-- A turn is refused at open, exit 1, when the mainline's tip already holds its candidate (the
-  candidate or a descendant of it), naming both ids; open it on a fresh candidate. A turn whose
-  candidate reaches the mainline after it opened still resumes.
-- A turn resumed through another forge than the one it recorded when it opened is refused, exit
-  1, before anything is written, naming both and `--forge <recorded>` as the way past.
+- A delivery under `--forge none` that stops `Unperformable` at `pr.opened` hands its change over
+  as a candidate: its code commits, without takt's take, record and approval commits, are
+  replayed on the base branch's tip under the case's identity, kept under
+  `refs/takt/candidates/<case-id>`, and the run prints `candidate: <full commit id>`, which a
+  `self.improvement/1` turn opens on (`--input candidate=<id>`). With no identity configured, a
+  case with no code commit, or a replay that conflicts, it prints `candidate: none:` and why, and
+  the ref no longer names a candidate an earlier run of the case made.
+- `takt view <dir> [--output <file>]` writes one offline HTML page of the `takt-trace/1` runs
+  under a directory (`takt-view.html` in the current directory by default): one lane per run on
+  a shared time axis, each operation a mark naming its step, action and outcome, a click opening
+  the step's transcript (its head and tail past 256 KiB). The page holds its style, script and
+  data inline and fetches nothing. A directory with no trace is refused, exit 1, and nothing is
+  written. The page's style and layout derive from the MIT-licensed Context Lens dashboard,
+  notice in `viewer/LICENSE-context-lens`; it embeds Vue, MIT, notice in
+  `viewer/vendor/VUE-LICENSE`.
 
 ### Fixed
 
-- `takt run` on an empty home (a CI runner, a container, a new machine) no longer has its first
-  harness step refused for `~/.local`: the transcripts directory is made when the run opens, and
-  a run that cannot make it keeps no transcript and says so.
+- `takt run` and `takt scenario run` on an empty home (a CI runner, a container, a new machine)
+  no longer have their first harness step refused for `~/.local`: the transcripts directory is
+  made when the run opens, and a run that cannot make it keeps no transcript and says so on
+  standard error.
+- With `PYTHONUSERBASE`, a `PYTHONPATH` entry or `XDG_STATE_HOME` placing the transcripts inside a
+  Python import directory, no step is refused for the transcripts takt writes; a step that writes
+  anything else there still is.
+- A file or a link where the transcripts directory goes is named as the transcripts directory,
+  not as the set-aside directory, and the directories takt made before such a failure no longer
+  get the next step refused.
+
+### Repository
+
+- takt's repository configures the identity its commits carry in
+  `.engineering/commit-identity.conf`, and lists `scripts/**` on its judge surface.
+- The agent profiles describe one dispatcher session that runs the waves and one trial agent
+  that runs the trials (`.agents/dispatcher-agent.md`, `.agents/trial-agent.md`).
+
+### Known limits
+
+- Build-time code (a build script, a procedural macro) is not closed by comparing files:
+  `gate.green` does not vouch for it, and the merge of such a change stays the owner's to grant.
+- A candidate squashed, rebased or cherry-picked onto `main` before the grant is not seen by the
+  ancestry check, so a later merge of the candidate commit can be recorded `merged`
+  (story:a-squash-merge-before-the-grant-is-refused).
+- A turn records its forge by name only, and the bot route reads whatever `origin` names when it
+  is called, so a grant's tip and the merge can be read from two repositories
+  (story:a-turn-pins-the-repository-of-its-forge).
+- A judge-surface merge refused because its grant records no tip names no way past, and the
+  grant given again is refused (story:a-tipless-judge-grant-names-its-way-past).
+- A resume that cannot make a candidate deletes the case's candidate ref, and nothing else keeps
+  the commit an open turn was opened on, so `git gc` can remove it
+  (story:a-candidate-stays-reachable-while-a-turn-names-it).
+- `takt view` joins a transcript by path suffix, so an empty or bare `transcript` field can show
+  another case's transcript; a page written over an existing file keeps that file's mode, and a
+  linked `--output` is written through
+  (story:view-joins-own-transcripts-and-writes-a-private-page).
+- A step refused for writing `.engineering/commit-identity.conf` is told it wrote into the
+  planning store (story:commit-identity-refusal-names-the-identity-file).
+- A gate that runs Python through a shell (`sh -c "python3 …"`, or a shell script that runs it)
+  has neither the script nor what it imports compared at the base, so a change to them does not
+  stop the gate (story:gate-compares-python-run-through-a-shell). The same holds for a module
+  `python3 -c` imports from the directory the command runs in.
 
 ## [0.3.0] — 2026-10-20
 

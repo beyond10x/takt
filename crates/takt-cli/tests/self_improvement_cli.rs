@@ -799,6 +799,129 @@ fn a_candidate_the_mainline_already_holds_is_refused_at_open() {
     refused(&ancestor, &ran, "open the turn on a fresh candidate");
 }
 
+/// story:a-turn-does-not-open-when-the-mainline-tip-cannot-be-read: with no local `main` under
+/// `--forge none` the mainline's tip cannot be read, so whether it holds the candidate is not
+/// known, and the turn is refused before anything is written, naming the forge, why the read
+/// failed and the remedy.
+#[test]
+fn a_turn_whose_mainline_tip_cannot_be_read_is_refused_at_open() {
+    let world = world("no-tip", true, false);
+    git(&world.repo, &["branch", "-m", "main", "trunk"]);
+    let ran = run(&world, &opening(&world));
+    refused(&world, &ran, "(forge: none)");
+    refused(&world, &ran, "read main, the mainline with no forge");
+    refused(&world, &ran, "open the turn again once the tip can be read");
+}
+
+/// The finding's predicate: a candidate the local `main` holds, opened through the bot route
+/// while the route's programs fail, is refused for the unreadable tip before the opening reads
+/// anything after it (the promotion store), naming the forge and the route's own error.
+#[test]
+fn a_turn_whose_forge_cannot_report_the_tip_is_refused_at_open() {
+    let world = world("route-down", true, false);
+    let bin = world.repo.parent().expect("a parent").join("bin");
+    for program in ["b10x-gates", "gh"] {
+        executable(
+            &bin.join(program),
+            "#!/bin/sh\necho \"the route is down\" >&2\nexit 1\n",
+        );
+    }
+    git(
+        &world.repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/todo-app.git",
+        ],
+    );
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").expect("a PATH")
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args([
+            "run",
+            "--repo",
+            world.repo.to_str().expect("utf-8"),
+            "--protocol",
+            PROTOCOL,
+            "--install-root",
+            world.install.to_str().expect("utf-8"),
+            "--case-id",
+            "turn-1",
+            "--harness",
+            "none",
+            "--forge",
+            "bot",
+            "--test-cmd",
+            "true",
+            "--iterations",
+            "0",
+            "--scenarios",
+            world.scenarios.to_str().expect("utf-8"),
+            "--intent",
+            "the probe no longer shows the defect",
+            "--commit-identity",
+            "t <t@localhost>",
+        ])
+        .args(opening(&world).iter().flat_map(|input| ["--input", input]))
+        .env("PATH", path)
+        .env("XDG_STATE_HOME", &world.state)
+        .env("XDG_CACHE_HOME", &world.cache)
+        .env("CARGO_INSTALL_ROOT", decoy(&world))
+        .env_remove("B10X_GATES_POLICY")
+        .output()
+        .expect("takt runs");
+    let ran = (
+        output.status.code().expect("an exit code"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    );
+    refused(&world, &ran, "(forge: bot)");
+    refused(&world, &ran, "the route is down");
+    refused(&world, &ran, "open the turn again once the tip can be read");
+}
+
+/// Only an opening reads the tip this way: a turn opened while `main` could be read resumes
+/// once it cannot, and its next step records.
+#[test]
+fn a_turn_resumes_when_the_mainline_tip_cannot_be_read() {
+    let world = world("resume-no-tip", true, false);
+    let mut opened: Vec<&str> = vec![
+        "run",
+        "--protocol",
+        PROTOCOL,
+        "--intent",
+        "the probe no longer shows the defect",
+        "--case-id",
+        "turn-1",
+        "--iterations",
+        "2",
+    ];
+    let inputs = opening(&world);
+    for input in &inputs {
+        opened.extend(["--input", input.as_str()]);
+    }
+    let (code, out, err) = takt_in(&world, &opened);
+    assert_eq!(code, 3, "{out}\n{err}");
+    assert_eq!(records(&world.repo).len(), 2, "{out}\n{err}");
+    git(&world.repo, &["branch", "-m", "main", "trunk"]);
+    let (_, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--iterations", "1"]);
+    assert!(!err.contains("once the tip can be read"), "{out}\n{err}");
+    assert_eq!(
+        shown(&records(&world.repo))[2],
+        row(
+            "scenario_result",
+            "candidate",
+            "not_reproduced",
+            "takt.scenario-verify"
+        ),
+        "{out}\n{err}"
+    );
+}
+
 /// The finding is read on the mainline, local `main` under `--forge none`, at the commit the
 /// case forks from, and its file is no part of the candidate's comparison with the baseline: a
 /// candidate that rewrites the finding opens a turn (on a judge surface, the planning store)
@@ -1016,12 +1139,13 @@ fn a_build_planted_before_the_turn_is_not_judged() {
 /// A binary planted over a build the turn made and recorded, between that build and the next
 /// check of the same revision, is rebuilt: the turn recorded the build's sha256 in the case when
 /// `scenario.reproduce` built it, and `scenario.verify` (the candidate is the baseline here) runs
-/// the kept build only while it hashes to that record. The repository has no `main`, the
-/// mainline, which would hold the baseline and so refuse it as the candidate.
+/// the kept build only while it hashes to that record. The repository's `main`, the mainline,
+/// is another history ([`another_mainline`]): one that holds the baseline would refuse it as the
+/// candidate, and with no `main` no turn opens.
 #[test]
 fn a_build_planted_between_the_build_and_verify_is_rebuilt() {
     let world = world("planted-between", true, true);
-    git(&world.repo, &["branch", "-m", "main", "trunk"]);
+    another_mainline(&world);
     let inputs = [
         "surface=non_judge".to_owned(),
         format!("finding={FINDING}"),
@@ -1881,10 +2005,24 @@ fn approving_a_turn_in_a_repository_with_a_planning_store_writes_nothing_there()
     );
 }
 
-/// With no `main` to read the mainline from, the finding is read off the mainline: the part-1
-/// rule holds, and a candidate that rewrites the finding's body is refused, naming its file.
+/// Moves the operator's branch, `HEAD`, from `main` to `trunk`, and points `main`, the
+/// mainline, at a commit with no parent, which holds neither the baseline nor the candidate:
+/// the tip is read, the case forks off the mainline, and the candidate is no merged one.
+fn another_mainline(world: &World) {
+    git(&world.repo, &["branch", "-m", "main", "trunk"]);
+    let tree = git(&world.repo, &["rev-parse", "HEAD^{tree}"]);
+    let other = git(
+        &world.repo,
+        &["commit-tree", "-m", "another mainline", tree.as_str()],
+    );
+    git(&world.repo, &["branch", "main", other.as_str()]);
+}
+
+/// With the case forking off the mainline (`main` another history), the finding is read off
+/// the mainline: the part-1 rule holds, and a candidate that rewrites the finding's body is
+/// refused, naming its file.
 #[test]
-fn without_a_mainline_a_candidate_rewriting_the_finding_is_refused() {
+fn off_the_mainline_a_candidate_rewriting_the_finding_is_refused() {
     let world = world_with(
         "no-main",
         &Setup {
@@ -1892,7 +2030,7 @@ fn without_a_mainline_a_candidate_rewriting_the_finding_is_refused() {
             ..Setup::plain(true, true)
         },
     );
-    git(&world.repo, &["branch", "-m", "main", "trunk"]);
+    another_mainline(&world);
     let inputs = [
         "surface=judge".to_owned(),
         format!("finding={FINDING}"),

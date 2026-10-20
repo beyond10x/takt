@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-gate-compares-python-entry-points
 kind: story
-status: draft
+status: implemented
 title: The gate compares the Python files a directory or module argument runs
 summary: python3 <dir> runs <dir>/__main__.py and python3 -m a.b runs a/b.py; neither was compared
 tags:
@@ -10,7 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T00:48:39Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-20T00:48:39Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-20T01:41:21Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: the-gate-compares-python-entry-points
 
@@ -28,6 +32,8 @@ pass. takt's own gates document is not affected; any repository whose gate runs 
 
 ## Acceptance
 
-- A step that edits `<dir>/__main__.py` for a gate command `python3 <dir>` is refused, naming the
-  file: a test.
+- After a step edits `<dir>/__main__.py` for a gate command `python3 <dir>`, `gate.run` runs nothing
+  and writes no record, naming the file: a test. (Reworded by the dispatcher, wave 18, as for
+  story:the-gate-compares-its-scripts-and-tool-config-at-the-base: the gate does not run; the step
+  guard is not changed.)
 - The same for each file `-m a.b` resolves to: a test.
