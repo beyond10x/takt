@@ -6,6 +6,16 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+### Changed
+
+- A run whose harness step recorded no tokens, or 0, has unknown tokens, never a sum counting
+  the step 0; `takt scorecard --against` and `takt promote` (with `--baseline-only` and
+  `--rebaseline`) refuse such a set, exit 1, naming the case and the step, before anything is
+  judged or recorded. The metric definitions `tokens` and `step_tokens` move to version 2: a
+  baseline saved by 0.5.0 or earlier is compared only after `takt promote --rebaseline`, which
+  refuses a stored run whose tokens are now unknown; such a store starts a new series with
+  `--baseline-only`.
+
 ### Repository
 
 - `b10x-loom-sdk` 0.27.0 is a dev-dependency of `b10x-takt` (one copy each of Canon and

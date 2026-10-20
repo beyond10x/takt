@@ -324,7 +324,7 @@ fn an_unperformable_stop_is_no_completion() {
             result: "fail".to_owned(),
         }),
         steps: 3,
-        tokens: 0,
+        tokens: Some(0),
         refusals: 0,
         no_progress: 0,
         errors: 0,

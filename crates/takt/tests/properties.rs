@@ -217,7 +217,7 @@ fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
                 scenario: Some("s".to_owned()),
                 outcome: (*outcome).to_owned(),
                 steps: 0,
-                tokens: *tokens,
+                tokens: Some(*tokens),
                 refusals: 0,
                 no_progress: 0,
                 errors: 0,

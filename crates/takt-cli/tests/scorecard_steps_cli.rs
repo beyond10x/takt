@@ -273,3 +273,54 @@ fn a_saved_step_without_tokens_is_refused_exit_1() {
         "{stderr}"
     );
 }
+
+/// story:run-tokens-unknown-is-not-zero, acceptances 2 and 4: `takt scorecard --against`
+/// without `--steps`, candidate 1 of the 0.3.0 cycle with one step's tokens removed, is refused,
+/// exit 1, the case and the step named, nothing judged; before, the step read as 0 and the
+/// candidate's median read 7403 below the saved one's.
+#[test]
+fn a_run_with_unknown_tokens_is_refused_by_the_run_level_comparison_exit_1() {
+    let saves = scratch("run-unknown-saves");
+    let saved = saved_trigger("run-unknown", &saves);
+    let candidate = side("run-unknown", "candidate");
+    untokened(&candidate, "scenario-1-trial-97", "implementation.edit");
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &candidate.display().to_string(),
+        "--against",
+        &saved.display().to_string(),
+    ]);
+    assert_eq!(code, 1, "{text}{stderr}");
+    assert!(
+        stderr.contains("scenario-1-trial-97") && stderr.contains("implementation.edit"),
+        "{stderr}"
+    );
+    assert!(!text.contains("median tokens"), "nothing judged: {text}");
+    assert!(!text.contains("not worse"), "nothing judged: {text}");
+}
+
+/// The same with `--steps` on an action the unknown step is not: the run's tokens are unknown,
+/// so the run is not judged, and with it not the steps.
+#[test]
+fn a_run_with_unknown_tokens_is_refused_whatever_steps_are_targeted() {
+    let saves = scratch("run-unknown-steps-saves");
+    let saved = saved_trigger("run-unknown-steps", &saves);
+    let candidate = side("run-unknown-steps", "candidate");
+    untokened(&candidate, "scenario-1-trial-97", "implementation.edit");
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &candidate.display().to_string(),
+        "--against",
+        &saved.display().to_string(),
+        "--steps",
+        "change.handover",
+    ]);
+    assert_eq!(code, 1, "{text}{stderr}");
+    assert!(
+        stderr.contains("scenario-1-trial-97") && stderr.contains("implementation.edit"),
+        "{stderr}"
+    );
+    assert!(!text.contains("verdict"), "{text}");
+}

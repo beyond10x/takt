@@ -442,7 +442,7 @@ fn huge_reported_tokens_do_not_panic_or_wrap() {
     let read = std::panic::catch_unwind(|| Scorecard::read(&repo));
     let read = read.expect("the reader does not panic on the record");
     if let Ok(card) = read {
-        assert_eq!(card.rows[0].tokens, u64::MAX, "{:?}", card.rows[0]);
+        assert_eq!(card.rows[0].tokens, Some(u64::MAX), "{:?}", card.rows[0]);
     }
 }
 

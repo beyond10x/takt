@@ -304,7 +304,7 @@ fn a_row_per_run_with_every_figure() {
                 row.scenario.as_deref(),
                 row.outcome.as_str(),
                 row.steps,
-                row.tokens,
+                row.tokens.expect("the run's tokens are known"),
                 row.refusals,
                 row.no_progress,
                 row.errors,
@@ -438,7 +438,7 @@ fn a_record_without_the_new_fields_reads() {
     fs::write(dir.join(takt::events::EVENTS_FILE), text).expect("the record");
     let card = Scorecard::read(&repo).expect("the scorecard reads");
     assert_eq!(card.rows.len(), 1);
-    assert_eq!(card.rows[0].tokens, 26);
+    assert_eq!(card.rows[0].tokens, Some(26));
     assert_eq!(card.rows[0].outcome, "accepted");
 }
 
@@ -1331,7 +1331,7 @@ fn a_saturated_sum_is_flagged_in_the_row() {
         ],
     );
     let card = Scorecard::read(&repo).expect("the scorecard reads");
-    assert_eq!(card.rows[0].tokens, u64::MAX);
+    assert_eq!(card.rows[0].tokens, Some(u64::MAX));
     assert!(card.rows[0].saturated, "{:?}", card.rows[0]);
     assert!(!card.rows[1].saturated, "{:?}", card.rows[1]);
     let case = &card.cases()[0];
