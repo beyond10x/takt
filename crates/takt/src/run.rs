@@ -2545,7 +2545,9 @@ const WRAPPERS: &[(&[&str], Spec)] = &[
 /// ([`INTERPRETERS`]), a wrapper ([`WRAPPERS`]), a build tool ([`BUILD_TOOLS`]), `env` or
 /// `pytest`. A program the reader does not know that takes one as an argument may run it, which
 /// the reader cannot see: a file in the tree, compared whole at the base, is read as running
-/// that program with the words after it; any other fails the line closed ([`command_paths`]).
+/// that program with the words after it, and fails the line closed besides when a word stands
+/// before that program or the file sets what it runs with ([`hand_off_unread`]); any other
+/// fails the line closed ([`command_paths`]).
 fn known_program(word: &str) -> bool {
     let name = program_of(word);
     name == "env"
@@ -2556,6 +2558,233 @@ fn known_program(word: &str) -> bool {
         || BUILD_TOOLS
             .iter()
             .any(|(names, _, _, _)| names.contains(&name.as_str()))
+}
+
+/// Why the line fails closed when the program of the tree at `path` is given the program `given`
+/// and hands the command off to it ([`command_paths`]): what the file sets before it runs that
+/// program is not read. A Python file is read for the forms [`python_hand_off_form`] names; a
+/// script a shell reads was read line by line ([`script_paths`]), and an expansion of the words
+/// it is given (`"$@"`) failed closed there; any other program is not read. `None` when the file
+/// is read and sets nothing the reader does not follow.
+fn hand_off_unread(tree: &Path, path: &str, given: &str) -> Option<String> {
+    use std::io::Read as _;
+    let full = tree.join(path);
+    let python = shebang_of(&full).is_some_and(|interpreter| {
+        spec_of(INTERPRETERS, &interpreter).is_some_and(|spec| !spec.short_module.is_empty())
+    });
+    if !python {
+        if shell_text(&full, false, &mut Vec::new()).is_some() {
+            return None;
+        }
+        return Some(format!(
+            "`{path}` runs {}, and the guard does not read what `{path}` sets before it does",
+            quoted(given)
+        ));
+    }
+    let mut bytes = Vec::new();
+    let read = std::fs::File::open(&full)
+        .and_then(|file| file.take(SCRIPT_BYTES_AT_MOST + 1).read_to_end(&mut bytes));
+    if read.is_err() || bytes.len() as u64 > SCRIPT_BYTES_AT_MOST {
+        return Some(format!(
+            "`{path}` runs {}, and cannot be read or is larger than {SCRIPT_BYTES_AT_MOST} bytes",
+            quoted(given)
+        ));
+    }
+    python_hand_off_form(&String::from_utf8_lossy(&bytes)).map(|form| {
+        format!(
+            "`{path}` sets {} before it runs {}, which the guard does not follow",
+            quoted(&form),
+            quoted(given)
+        )
+    })
+}
+
+/// The first form in the Python `text` of a program of the tree that hands off the command it
+/// is given (`os.execvp(sys.argv[1], sys.argv[1:])`) by which it sets what that command runs
+/// with, as the text writes it: the environment (a write to `os.environ` or `os.environb`, or a
+/// `putenv(` or `setenv(`, of a variable whose name is not a string literal or is one Python
+/// reads, `PYTHON…`; any other call on the mapping than a read, such as `.update(`; a whole
+/// environment given, `env=`, `os.execve(` and the other `e` calls of `exec*` and `spawn*`,
+/// `posix_spawn(`; any `PYTHON…` name at all), the directory (`chdir(`, `cwd=`), the import path
+/// (`sys.path`, `sys.meta_path`, `addsitedir(`), and a name that hides one (`from sys import
+/// path`, `from os import … as`, `import sys as`, `getattr(`, `__import__(`, `exec(`). The text
+/// is read whole, white space between words kept and the rest removed, comments and strings
+/// among it: a form a comment names counts as well. A write of another variable, `PATH` among
+/// them, is none: the shell reader follows only `PYTHONPATH`, `PATH` and [`PYTHON_DIRS`] in an
+/// assignment ([`assign`]), and `PATH` decides which program runs, not what it imports.
+fn python_hand_off_form(text: &str) -> Option<String> {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let text = text.replace("\\\n", " ");
+    let mut compact = String::new();
+    let mut spaced = false;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            spaced = true;
+            continue;
+        }
+        if spaced && compact.ends_with(ident) && ident(c) {
+            compact.push(' ');
+        }
+        spaced = false;
+        compact.push(c);
+    }
+    // The dotted name before `at` as written: `os.` of `os.environ`.
+    let prefix = |at: usize| {
+        let start = compact[..at]
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| ident(*c) || *c == '.')
+            .last()
+            .map_or(at, |(k, _)| k);
+        compact[start..at].to_owned()
+    };
+    let literal = |key: &str| {
+        let key = key.strip_prefix('b').unwrap_or(key);
+        ['\'', '"']
+            .into_iter()
+            .find_map(|quote| key.strip_prefix(quote)?.strip_suffix(quote))
+            .filter(|name| name.chars().all(ident))
+            .map(str::to_owned)
+    };
+    let unfollowed = |key: &str| literal(key).is_none_or(|name| name.starts_with("PYTHON"));
+    let assigns = |after: &str| {
+        (after.starts_with('=') && !after.starts_with("=="))
+            || [
+                "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "@=", "//=", "**=", "<<=", ">>=",
+            ]
+            .iter()
+            .any(|op| after.starts_with(op))
+    };
+    // The environment.
+    for (at, _) in compact.match_indices("environ") {
+        if compact[..at].ends_with(ident) {
+            continue;
+        }
+        let (name, rest) = match compact[at + "environ".len()..].strip_prefix('b') {
+            Some(rest) => ("environb", rest),
+            None => ("environ", &compact[at + "environ".len()..]),
+        };
+        if rest.starts_with(ident) {
+            continue;
+        }
+        let shown = format!("{}{name}", prefix(at));
+        if let Some(inside) = rest.strip_prefix('[') {
+            let (key, after) = inside.split_once(']').unwrap_or((inside, ""));
+            if assigns(after) && unfollowed(key) {
+                return Some(format!("{shown}[{key}] ="));
+            }
+        } else if let Some(call) = rest.strip_prefix('.') {
+            let method: String = call.chars().take_while(|c| ident(*c)).collect();
+            if ![
+                "get",
+                "copy",
+                "items",
+                "keys",
+                "values",
+                "__getitem__",
+                "__contains__",
+            ]
+            .contains(&method.as_str())
+            {
+                return Some(format!("{shown}.{method}("));
+            }
+        } else if assigns(rest) {
+            return Some(format!("{shown} ="));
+        }
+    }
+    for call in ["putenv(", "setenv("] {
+        for (at, _) in compact.match_indices(call) {
+            let key = compact[at + call.len()..]
+                .split([',', ')'])
+                .next()
+                .unwrap_or_default();
+            if unfollowed(key) {
+                return Some(format!("{}{call}", prefix(at)));
+            }
+        }
+    }
+    // A whole environment given to the program it runs.
+    for call in [
+        "execve(",
+        "execle(",
+        "execlpe(",
+        "execvpe(",
+        "spawnve(",
+        "spawnle(",
+        "spawnlpe(",
+        "spawnvpe(",
+        "posix_spawn(",
+        "posix_spawnp(",
+    ] {
+        if let Some(at) = compact.find(call) {
+            return Some(format!("{}{call}", prefix(at)));
+        }
+    }
+    // A keyword of `subprocess`: its environment, the directory it runs in.
+    for keyword in ["env=", "cwd="] {
+        for (at, _) in compact.match_indices(keyword) {
+            if compact[..at].ends_with(['(', ','])
+                && !compact[at + keyword.len()..].starts_with('=')
+            {
+                return Some(keyword.to_owned());
+            }
+        }
+    }
+    // The directory, the import path, and a name that hides one of them.
+    for form in [
+        "chdir(",
+        "sys.path",
+        "sys.meta_path",
+        "addsitedir(",
+        "getattr(",
+        "setattr(",
+        "__dict__",
+        "vars(",
+        "__import__(",
+        "importlib",
+        "exec(",
+        "eval(",
+    ] {
+        if let Some(at) = compact.find(form) {
+            return Some(format!("{}{form}", prefix(at)));
+        }
+    }
+    for (at, _) in text.match_indices("import") {
+        let line = text[..at].rsplit('\n').next().unwrap_or_default();
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let names = &text[at + "import".len()..];
+        let names = match names.trim_start().strip_prefix('(') {
+            Some(inside) => inside.split(')').next().unwrap_or_default(),
+            None => names.split(['\n', ';']).next().unwrap_or_default(),
+        };
+        let names: Vec<&str> = names
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|name| !name.is_empty())
+            .collect();
+        match words.as_slice() {
+            ["from", module] if ["os", "sys", "posix", "nt", "site"].contains(module) => {
+                if names.iter().any(|name| {
+                    ["*", "as"].contains(name)
+                        || (*module == "sys" && ["path", "meta_path", "path_hooks"].contains(name))
+                }) {
+                    return Some(format!("from {module} import"));
+                }
+            }
+            [] if names.windows(2).any(|pair| pair == ["sys", "as"]) => {
+                return Some("import sys as".to_owned());
+            }
+            _ => {}
+        }
+    }
+    // A name of the variables Python reads, wherever it stands: `env={"PYTHONPATH": …}`.
+    for (at, _) in compact.match_indices("PYTHON") {
+        if compact[at + "PYTHON".len()..].starts_with(|c: char| c.is_ascii_uppercase() || c == '_')
+        {
+            let name: String = compact[at..].chars().take_while(|c| ident(*c)).collect();
+            return Some(name);
+        }
+    }
+    None
 }
 
 /// The top-level names the Python `text` imports: `import a.b as c, d` names `a` and `d`,
@@ -4850,32 +5079,48 @@ fn command_paths(
         // see. A file in the tree is named above, so the gate compares it whole at the base
         // (`scripts/gate-exec python3 -I scripts/check-citations`, which runs what it is given,
         // and a file a step made is a change): the most it runs is that program with the words
-        // after it, read as a command from here. One the tree does not hold, which the guard
-        // has not read: the line fails closed, naming both.
+        // after it, read as a command from here with the line's environment and directory. A
+        // word before that program, which the file may take as an option's value
+        // (`--interpreter sh`) or for anything else, and a form by which the file sets the
+        // environment, directory or import path of what it runs ([`hand_off_unread`]) fail the
+        // line closed, naming them; the command is read besides. One the tree does not hold,
+        // which the guard has not read: the line fails closed, naming both.
         if let Some(position) = words[at..]
             .iter()
             .position(|word| !word.starts_with('-') && known_program(word))
         {
-            if in_tree
-                .as_ref()
-                .is_some_and(|path| tree.join(path).is_file())
-            {
-                command_paths(
-                    tree,
-                    &words[at + position..],
-                    dir.clone(),
-                    named,
-                    depth + 1,
-                    &env,
-                );
-            } else {
-                fail_closed(
+            let given = words[at + position];
+            match in_tree.as_ref().filter(|path| tree.join(path).is_file()) {
+                Some(path) => {
+                    if position > 0 {
+                        fail_closed(
+                            named,
+                            format!(
+                                "`{path}` is given {} before {}, a program, and the guard does not know what `{path}` takes it for",
+                                quoted(&words[at..at + position].join(" ")),
+                                quoted(given)
+                            ),
+                        );
+                    }
+                    if let Some(why) = hand_off_unread(tree, path, given) {
+                        fail_closed(named, why);
+                    }
+                    command_paths(
+                        tree,
+                        &words[at + position..],
+                        dir.clone(),
+                        named,
+                        depth + 1,
+                        &env,
+                    );
+                }
+                None => fail_closed(
                     named,
                     format!(
                         "`{name}` is given {}, a program, and the guard does not know how `{name}` runs it",
-                        quoted(words[at + position])
+                        quoted(given)
                     ),
-                );
+                ),
             }
         }
         // A program in none of the tables: what it reads is not known, so every word of the
