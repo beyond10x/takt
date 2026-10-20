@@ -12,6 +12,9 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   action is left, instead of saying the harness takes them.
 - A step that writes `.engineering/commit-identity.conf` is refused naming the commit identity
   file, no longer as a write into the planning store.
+- `scripts/check-finding` builds and runs one check at a time per cache directory under a `flock`
+  on `takt/check-finding/lock`, says when it waits, and refuses, exit 1, before building when that
+  file system has less than `CHECK_FINDING_MIN_FREE_GIB` GiB free (20 by default; CI sets 0).
 
 ## [0.4.0] — 2026-10-20
 
