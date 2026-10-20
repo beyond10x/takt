@@ -42,7 +42,9 @@
 //! better when every candidate case's tokens at it are below the saved side's cheapest, or a
 //! one-sided exact Mann-Whitney U test at five cases a side or more rejects equality at 1 in 20
 //! ([`rank_test`]). The whole run is still judged as above, and a candidate better on its steps
-//! but worse on the run is refused, naming both.
+//! but worse on the run is refused, naming both. A harness step that recorded no tokens leaves
+//! its action's tokens unknown for the run, never 0, and a targeted step unknown in a case of
+//! either side refuses the judgement, naming the case and the step.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -85,9 +87,10 @@ pub const BINARY_FILE: &str = "binary.txt";
 /// version, so a comparison with a scorecard saved under the previous one prints both figures.
 /// The outcome is at version 3: `Unperformable` ranks with the budget stops and a [`DISK_LOW`]
 /// trial takes no rank, so a takt that knows version 2 refuses a scorecard saved under it.
-/// `step_tokens` is a run's tokens by the action of its `step` lines ([`Row::step_tokens`]) and
-/// the rule that judges the steps a candidate targets with them ([`Scorecard::judge_steps`]); a
-/// takt that does not know it refuses a scorecard saved under it.
+/// `step_tokens` is a run's tokens by the action of its `step` lines ([`Row::step_tokens`], an
+/// action unknown when a harness step of it recorded no tokens) and the rule that judges the
+/// steps a candidate targets with them ([`Scorecard::judge_steps`]); a takt that does not know
+/// it refuses a scorecard saved under it.
 pub const METRICS: [(&str, u32); 8] = [
     ("outcome", 3),
     ("steps", 1),
@@ -169,10 +172,12 @@ pub struct Row {
     pub completed: Option<bool>,
     /// The tokens of the run's `step` lines by their action, each summed over the run's steps
     /// of that action (at most `u64::MAX`, the run then `saturated`); an action with no
-    /// harness step reads 0. Empty on a file saved before it had the field (metric
-    /// `step_tokens`).
+    /// harness step reads 0, a validator reporting none. Unknown (none, saved as `null`) when a
+    /// harness step of the action recorded no `tokens`: a missing record is never read as 0,
+    /// which would read as a saving ([`Scorecard::judge_steps`] refuses it). Empty on a file
+    /// saved before it had the field (metric `step_tokens`).
     #[serde(default)]
-    pub step_tokens: BTreeMap<String, u64>,
+    pub step_tokens: BTreeMap<String, Option<u64>>,
 }
 
 impl Row {
@@ -313,8 +318,8 @@ pub struct Case {
     pub wall_ms: u64,
     /// A sum, the case's or a run's, stopped at `u64::MAX`.
     pub saturated: bool,
-    /// Its runs' tokens by action ([`Row::step_tokens`]), summed.
-    pub step_tokens: BTreeMap<String, u64>,
+    /// Its runs' tokens by action ([`Row::step_tokens`]), summed; unknown when any run's is.
+    pub step_tokens: BTreeMap<String, Option<u64>>,
 }
 
 impl Case {
@@ -344,13 +349,16 @@ impl Case {
             sum(|run| run.errors),
             sum(|run| run.wall_ms),
         );
-        let mut step_tokens: BTreeMap<String, u64> = BTreeMap::new();
+        let mut step_tokens: BTreeMap<String, Option<u64>> = BTreeMap::new();
         for (action, tokens) in runs.iter().flat_map(|run| &run.step_tokens) {
-            let sum = step_tokens.entry(action.clone()).or_insert(0);
-            *sum = sum.checked_add(*tokens).unwrap_or_else(|| {
-                saturated = true;
-                u64::MAX
-            });
+            let sum = step_tokens.entry(action.clone()).or_insert(Some(0));
+            *sum = match (*sum, *tokens) {
+                (Some(sum), Some(tokens)) => Some(sum.checked_add(tokens).unwrap_or_else(|| {
+                    saturated = true;
+                    u64::MAX
+                })),
+                _ => None,
+            };
         }
         Some(Self {
             case: last.case.clone(),
@@ -534,7 +542,7 @@ struct Span {
     stop: Option<String>,
     completed: Option<bool>,
     binary: Option<String>,
-    step_tokens: BTreeMap<String, u64>,
+    step_tokens: BTreeMap<String, Option<u64>>,
 }
 
 /// A run's outcome from its stop: a `Completed` stop's outcome (`accepted`), else the stop's
@@ -612,11 +620,19 @@ fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
         };
         match line["event"].as_str() {
             Some("step") => {
-                let tokens = line["tokens"].as_u64().unwrap_or(0);
+                let reported = line["tokens"].as_u64();
+                let tokens = reported.unwrap_or(0);
                 count(&mut span.tokens, tokens, &mut span.saturated);
                 if let Some(action) = line["action"].as_str() {
-                    let at = span.step_tokens.entry(action.to_owned()).or_insert(0);
-                    count(at, tokens, &mut span.saturated);
+                    // A validator reports no tokens and spends none; a harness step (every step
+                    // but a validator's) without a count leaves its action unknown, never 0.
+                    let unknown = reported.is_none() && line["by"] != "validator";
+                    let at = span.step_tokens.entry(action.to_owned()).or_insert(Some(0));
+                    match at {
+                        Some(_) if unknown => *at = None,
+                        Some(sum) => count(sum, tokens, &mut span.saturated),
+                        None => {}
+                    }
                 }
             }
             Some("refusal") => count(&mut span.refusals, 1, &mut span.saturated),
@@ -1499,7 +1515,10 @@ impl Scorecard {
     /// ([`StepVerdict`]) is printed last: better on its steps and not worse on the run; not
     /// better; or, a scenario worse on the run, refused naming both the steps' result and the
     /// scenarios. Both sides must be under this takt's `step_tokens` definition, else refused
-    /// naming it: a scorecard saved without it has no figure a step to judge.
+    /// naming it: a scorecard saved without it has no figure a step to judge. A scenario case of
+    /// either side whose tokens at a targeted step are unknown (a harness step of it recorded no
+    /// tokens, [`Row::step_tokens`]) refuses the judgement before anything is printed, naming
+    /// the case and the step: a missing record read as 0 would read as a saving.
     pub fn judge_steps(
         &self,
         saved: &Scorecard,
@@ -1536,13 +1555,32 @@ impl Scorecard {
                 ),
             }
         }
+        let (candidates, baselines) = (self.cases(), saved.cases());
+        let mut unknown: Vec<String> = Vec::new();
+        for (cases, side) in [
+            (&candidates, "this scorecard"),
+            (&baselines, "the saved scorecard"),
+        ] {
+            for case in cases.iter().filter(|case| case.scenario.is_some()) {
+                for &action in &targeted {
+                    if case.step_tokens.get(action) == Some(&None) {
+                        unknown.push(format!("{} step {action} ({side})", case.case));
+                    }
+                }
+            }
+        }
+        if !unknown.is_empty() {
+            bail!(
+                "the tokens of a targeted step are unknown in {}: a harness step of it recorded no tokens, and a missing record is never read as 0, so the steps are not judged",
+                unknown.join(", ")
+            );
+        }
         let worse = self.worse_against(saved, out)?;
         writeln!(
             out,
             "rule  step_tokens v{known}  a targeted step is better when every candidate case's tokens at it are below the saved side's cheapest, or a one-sided exact Mann-Whitney U test (a tie counts against the candidate) rejects equality at p <= {}/{} with {RANK_TEST_CASES} cases a side or more",
             RANK_TEST_ALPHA.0, RANK_TEST_ALPHA.1
         )?;
-        let (candidates, baselines) = (self.cases(), saved.cases());
         let scenarios: BTreeSet<&str> = candidates
             .iter()
             .chain(&baselines)
@@ -1557,9 +1595,10 @@ impl Scorecard {
                         .iter()
                         .filter(|case| case.scenario.as_deref() == Some(scenario))
                     {
+                        // An unknown was refused above; none reaches here.
                         match case.step_tokens.get(action) {
-                            Some(tokens) => took.push((case.case.clone(), *tokens)),
-                            None => missing.push(case.case.clone()),
+                            Some(Some(tokens)) => took.push((case.case.clone(), *tokens)),
+                            _ => missing.push(case.case.clone()),
                         }
                     }
                     (took, missing)

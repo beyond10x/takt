@@ -187,3 +187,89 @@ fn a_saved_scorecard_without_step_tokens_is_refused() {
     assert_eq!(code, 1, "{text}{stderr}");
     assert!(stderr.contains("step_tokens"), "{stderr}");
 }
+
+/// Removes `tokens` and `usage` from the first harness step of `action` in `case`'s record
+/// under `repo`: a step the harness reported no tokens for.
+fn untokened(repo: &Path, case: &str, action: &str) {
+    let path = repo.join(CASES_DIR).join(case).join("events.jsonl");
+    let text = fs::read_to_string(&path).expect("the record");
+    let mut done = false;
+    let lines: Vec<String> = text
+        .lines()
+        .map(|line| {
+            let mut value: serde_json::Value = serde_json::from_str(line).expect("a line");
+            if !done
+                && value["event"] == "step"
+                && value["by"] == "harness"
+                && value["action"] == action
+            {
+                let object = value.as_object_mut().expect("an object");
+                assert!(object.remove("tokens").is_some(), "the step had tokens");
+                object.remove("usage");
+                done = true;
+            }
+            value.to_string()
+        })
+        .collect();
+    assert!(done, "{case} has a harness step of {action}");
+    fs::write(&path, lines.join("\n") + "\n").expect("written");
+}
+
+/// C1: a candidate case whose targeted step recorded no tokens is refused, exit 1, the case and
+/// the step named: a missing record is never read as a saving.
+#[test]
+fn a_candidate_step_without_tokens_is_refused_exit_1() {
+    let saves = scratch("unknown-mine-saves");
+    let saved = saved_trigger("unknown-mine", &saves);
+    let candidate = side("unknown-mine", "candidate");
+    untokened(&candidate, "scenario-1-trial-97", "change.handover");
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &candidate.display().to_string(),
+        "--against",
+        &saved.display().to_string(),
+        "--steps",
+        "change.handover",
+    ]);
+    assert_eq!(code, 1, "{text}{stderr}");
+    assert!(
+        stderr.contains("scenario-1-trial-97") && stderr.contains("change.handover"),
+        "{stderr}"
+    );
+    assert!(!text.contains("verdict"), "{text}");
+}
+
+/// C1: the same on the saved side, its unknown saved with the scorecard and read back.
+#[test]
+fn a_saved_step_without_tokens_is_refused_exit_1() {
+    let saves = scratch("unknown-theirs-saves");
+    let baseline = side("unknown-theirs", "baseline");
+    untokened(&baseline, "scenario-1-trial-88", "change.handover");
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &baseline.display().to_string(),
+        "--save",
+        &saves.display().to_string(),
+        "--revision",
+        TRIGGER,
+    ]);
+    assert_eq!(code, 0, "{text}{stderr}");
+    let saved = saves.join(format!("scorecard-{TRIGGER}.json"));
+    let candidate = side("unknown-theirs", "candidate");
+    let (code, text, stderr) = takt(&[
+        "scorecard",
+        "--repo",
+        &candidate.display().to_string(),
+        "--against",
+        &saved.display().to_string(),
+        "--steps",
+        "change.handover",
+    ]);
+    assert_eq!(code, 1, "{text}{stderr}");
+    assert!(
+        stderr.contains("scenario-1-trial-88") && stderr.contains("change.handover"),
+        "{stderr}"
+    );
+}

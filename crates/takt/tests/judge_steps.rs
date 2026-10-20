@@ -169,7 +169,7 @@ fn row(n: usize, outcome: &str, tokens: u64, steps: &[(&str, u64)]) -> Row {
         completed: None,
         step_tokens: steps
             .iter()
-            .map(|(action, tokens)| ((*action).to_owned(), *tokens))
+            .map(|(action, tokens)| ((*action).to_owned(), Some(*tokens)))
             .collect(),
     }
 }
@@ -363,7 +363,142 @@ fn step_tokens_has_a_definition_version_and_survives_a_save() {
     let handover: Vec<u64> = loaded
         .rows
         .iter()
-        .map(|row| row.step_tokens["change.handover"])
+        .map(|row| row.step_tokens["change.handover"].expect("recorded"))
         .collect();
     assert_eq!(handover, [8405, 8588, 8528, 8562, 8481]);
+}
+
+/// Removes `tokens` and `usage` from the first harness step of `action` in `case`'s record
+/// under `repo`: a step the harness reported no tokens for.
+fn untokened(repo: &Path, case: &str, action: &str) {
+    let path = repo.join(CASES_DIR).join(case).join("events.jsonl");
+    let text = fs::read_to_string(&path).expect("the record");
+    let mut done = false;
+    let lines: Vec<String> = text
+        .lines()
+        .map(|line| {
+            let mut value: serde_json::Value = serde_json::from_str(line).expect("a line");
+            if !done
+                && value["event"] == "step"
+                && value["by"] == "harness"
+                && value["action"] == action
+            {
+                let object = value.as_object_mut().expect("an object");
+                assert!(object.remove("tokens").is_some(), "the step had tokens");
+                object.remove("usage");
+                done = true;
+            }
+            value.to_string()
+        })
+        .collect();
+    assert!(done, "{case} has a harness step of {action}");
+    fs::write(&path, lines.join("\n") + "\n").expect("written");
+}
+
+/// C1: a harness step that recorded no tokens leaves its action's tokens unknown for the run,
+/// never 0; a validator step, which reports none, stays 0.
+#[test]
+fn a_harness_step_without_tokens_is_unknown_not_zero() {
+    let candidate = side("unknown-read", "candidate");
+    untokened(&candidate, "scenario-1-trial-97", "change.handover");
+    let card = Scorecard::read(&candidate).expect("the candidate's runs read");
+    let run = card
+        .rows
+        .iter()
+        .find(|row| row.case == "scenario-1-trial-97")
+        .expect("the case's run");
+    assert_eq!(
+        run.step_tokens.get("change.handover"),
+        Some(&None),
+        "{run:?}"
+    );
+    assert_eq!(run.step_tokens.get("tests.run"), Some(&Some(0)), "{run:?}");
+    let saves = scratch("unknown-save");
+    let path = card
+        .clone()
+        .save(
+            &saves,
+            "0c9311cb4b3ae6a432c2847982c252382e41dd3d",
+            takt::scorecard::Named::Build,
+        )
+        .expect("saved");
+    assert_eq!(
+        Scorecard::load(&path).expect("loaded").rows,
+        card.rows,
+        "an unknown survives a save"
+    );
+}
+
+/// C1: a targeted step whose tokens are unknown in a candidate case is no saving: the judgement
+/// is refused, naming the case and the step, not judged better on a 0.
+#[test]
+fn a_targeted_step_without_tokens_on_the_candidate_side_is_refused() {
+    let (baseline, candidate) = (
+        side("unknown-mine", "baseline"),
+        side("unknown-mine", "candidate"),
+    );
+    untokened(&candidate, "scenario-1-trial-97", "change.handover");
+    let saved = Scorecard::read(&baseline).expect("the trigger's runs read");
+    let card = Scorecard::read(&candidate).expect("the candidate's runs read");
+    let mut out = Vec::new();
+    let refused = card
+        .judge_steps(&saved, &actions(&["change.handover"]), &mut out)
+        .expect_err("refused")
+        .to_string();
+    assert!(refused.contains("scenario-1-trial-97"), "{refused}");
+    assert!(refused.contains("change.handover"), "{refused}");
+    assert!(refused.contains("unknown"), "{refused}");
+    let text = String::from_utf8(out).expect("utf-8");
+    assert!(!text.contains("verdict"), "no verdict printed: {text}");
+}
+
+/// C1: the same on the saved side: an unknown there is no cheapest to be below.
+#[test]
+fn a_targeted_step_without_tokens_on_the_saved_side_is_refused() {
+    let (baseline, candidate) = (
+        side("unknown-theirs", "baseline"),
+        side("unknown-theirs", "candidate"),
+    );
+    untokened(&baseline, "scenario-1-trial-88", "change.handover");
+    let saved = Scorecard::read(&baseline).expect("the trigger's runs read");
+    let card = Scorecard::read(&candidate).expect("the candidate's runs read");
+    let refused = card
+        .judge_steps(&saved, &actions(&["change.handover"]), &mut Vec::new())
+        .expect_err("refused")
+        .to_string();
+    assert!(refused.contains("scenario-1-trial-88"), "{refused}");
+    assert!(refused.contains("change.handover"), "{refused}");
+}
+
+/// C1: an unknown at an action the candidate does not target refuses nothing; one run of a case
+/// unknown at the targeted action makes the case's figure unknown, whatever its other runs.
+#[test]
+fn an_unknown_refuses_only_a_targeted_step_and_absorbs_the_case() {
+    let candidate = |unknown_at: &str| {
+        let mut rows: Vec<Row> = (0..5)
+            .map(|n| row(n, "accepted", 90, &[("a.step", 10), ("b.step", 5)]))
+            .collect();
+        let mut again = row(4, "accepted", 0, &[("a.step", 10), ("b.step", 5)]);
+        again.step_tokens.insert(unknown_at.to_owned(), None);
+        rows.push(again);
+        card(rows)
+    };
+    let mut out = Vec::new();
+    let judged = candidate("b.step")
+        .judge_steps(&saved(), &actions(&["a.step"]), &mut out)
+        .expect("an unknown at an untargeted step refuses nothing");
+    assert_eq!(
+        judged.verdict,
+        StepVerdict::Better,
+        "{}",
+        String::from_utf8_lossy(&out)
+    );
+    let refused = candidate("a.step")
+        .judge_steps(&saved(), &actions(&["a.step"]), &mut Vec::new())
+        .expect_err("refused")
+        .to_string();
+    assert!(
+        refused.contains("scenario-s-trial-4") && refused.contains("a.step"),
+        "{refused}"
+    );
 }

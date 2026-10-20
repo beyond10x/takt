@@ -73,6 +73,9 @@ open, and a gate line the reader cannot read fails closed.
 
 ### Fixed
 
+- `takt scorecard --steps`: a harness step that recorded no tokens is unknown, not 0. A targeted
+  step unknown on either side is refused, exit 1, naming the case and the step, so a missing
+  record no longer judges a candidate better; a saved scorecard records it as `null`.
 - `takt run --help`: `--forge none` names the `Unperformable` stop, exit 7, when only a forge
   action is left, instead of saying the harness takes them.
 - A step that writes `.engineering/commit-identity.conf` is refused naming the commit identity
@@ -88,6 +91,9 @@ open, and a gate line the reader cannot read fails closed.
 
 ### Known limits
 
+- Run-level tokens still read a harness step that recorded no tokens as 0, so a missing record
+  reads as a saving; promotions wait for story:run-tokens-unknown-is-not-zero, and no promotion
+  is made on 0.5.0.
 - These 11 shell forms still let a change decide the gate, each an ignored test naming
   story:the-gate-reads-every-shell-form: `PYTHONPATH` set in the line, by `export` or in a sourced
   file; `cd dir && python3 -m x`; `env -C dir python3 -m x`; a script named on `xargs`'s input;
