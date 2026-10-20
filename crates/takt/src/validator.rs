@@ -1027,6 +1027,26 @@ fn python_paths(
                         .cloned(),
                 );
             }
+            // What the reader marked as code a Python loads and named nowhere else (what a
+            // `-c` string imports, the script Python reads from its standard input): compared
+            // as the script is.
+            for path in python
+                .iter()
+                .filter(|path| !path.contains(['*', '?', '(']))
+                .filter(|path| !named.iter().any(|name| name == *path))
+            {
+                if !object_at(tree, at, path)?.is_some_and(|o| o.starts_with("040000 ")) {
+                    scripts.push((*path).to_owned());
+                }
+            }
+            // What each Python file the reader marked imports, at the base or at the revision,
+            // followed through the files it finds in the tree: in every directory the command's
+            // Python imports from, `name.py`, a compiled `name.*` and the package `name/`, as
+            // `-m name` is compared. Not every module of those directories (wave 18's rule).
+            let (imported_paths, imported_globs) =
+                python_imports(tree, at, revision, &python, &imports)?;
+            scripts.extend(imported_paths);
+            globs.extend(imported_globs);
             let runs_python = !pythons.is_empty();
             for path in named.iter().filter(|path| !path.contains(['*', '?', '('])) {
                 let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
@@ -1071,6 +1091,71 @@ fn python_paths(
     closed.sort();
     closed.dedup();
     Ok((paths, globs, closed))
+}
+
+/// How many Python files of the tree the gate reads the imports of for one command
+/// ([`python_imports`]).
+const IMPORTS_READ_AT_MOST: usize = 64;
+
+/// What the Python files `python` (relative to the tree; a glob among them is passed over)
+/// import at the base `at` or at `revision`, followed through the files found in `dirs`, the
+/// directories the command's Python imports from (`""` the root): for each top-level name
+/// ([`crate::run::imports_of`]) in each directory, the path `name.py` and the globs `name.*`
+/// and `name/**`, what `-m name` would compare. A name found as a module or a package's
+/// `__init__.py` is read in turn, up to [`IMPORTS_READ_AT_MOST`] files.
+fn python_imports(
+    tree: &Path,
+    at: &str,
+    revision: &str,
+    python: &[&str],
+    dirs: &[&str],
+) -> Result<(Vec<String>, Vec<String>)> {
+    let join = |dir: &str, name: &str| {
+        if dir.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{dir}/{name}")
+        }
+    };
+    let mut paths = Vec::new();
+    let mut globs = Vec::new();
+    let mut queue: Vec<String> = python
+        .iter()
+        .filter(|path| !path.contains(['*', '?', '(']))
+        .map(|path| (*path).to_owned())
+        .collect();
+    let mut read = std::collections::BTreeSet::new();
+    while let Some(path) = queue.pop() {
+        if !read.insert(path.clone()) {
+            continue;
+        }
+        if read.len() > IMPORTS_READ_AT_MOST {
+            break;
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for commit in [at, revision] {
+            if let Some(text) = file_at(tree, commit, Path::new(&path))? {
+                names.extend(crate::run::imports_of(&text));
+            }
+        }
+        for name in names {
+            for dir in dirs {
+                let module = join(dir, &format!("{name}.py"));
+                let init = join(dir, &format!("{name}/__init__.py"));
+                for found in [&module, &init] {
+                    if object_at(tree, at, found)?.is_some()
+                        || object_at(tree, revision, found)?.is_some()
+                    {
+                        queue.push(found.clone());
+                    }
+                }
+                paths.push(module);
+                globs.push(join(dir, &format!("{name}.*")));
+                globs.push(join(dir, &format!("{name}/**")));
+            }
+        }
+    }
+    Ok((paths, globs))
 }
 
 /// The directory Python imports from first when it runs `path` (relative to the tree), when the

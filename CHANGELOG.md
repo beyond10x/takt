@@ -8,6 +8,20 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ### Changed
 
+- `gate.run` compares, for every Python file a gate's command names, what its top-level imports
+  load from each directory that Python imports from (`name.py`, `name.*`, `name/**`, followed
+  through the tree's files, at most 64), whether a `PYTHONPATH` entry was set in the binding's
+  `env`, on the line, by `export`, in a sourced file or by `env`; a `-c` string's imports the
+  same. `cd` and `env -C` move the directory a command runs in; a redirection-only `exec` sets
+  the shell's standard input for the commands after it; `taskset`, `chrt`, `unbuffer`,
+  `script -c`, `uv run`, `env -S` and `pytest FILE` are read; `xargs` is read and fails closed
+  on its input. The eleven shell forms 0.5.0 listed as slipping are closed
+  (story:the-gate-reads-every-shell-form).
+- The step guard reads the same forms and is stricter in five places: a shell reading the
+  input a redirection-only `exec` set, `python -` with an unknown input, the wrappers above, an
+  `env -S` string split into words, and a program the reader does not know given one it knows
+  (`doas python3 …`), which fails closed naming both.
+
 - A run whose harness step recorded no tokens, or 0, has unknown tokens, never a sum counting
   the step 0; `takt scorecard --against` and `takt promote` (with `--baseline-only` and
   `--rebaseline`) refuse such a set, exit 1, naming the case and the step, before anything is
