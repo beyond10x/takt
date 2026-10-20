@@ -8971,27 +8971,45 @@ impl<'a> Run<'a> {
 
     /// Why the step guard refuses `proposal` on its face, before the edit effect writes a byte
     /// of it to `tree`: an action neither `offered` nor among the `approvals`; a file changed
-    /// for an approval or `repository.inspect`, which change none; a path that is no plain
-    /// path of the tree (absolute, with a `.` or `..` part, a part named `.git`); a path in
-    /// the cases directory or on the judge `surface`; a non-test path for `tests.write`; a
-    /// path reached through a link, or one at which the tree holds no regular file but
-    /// something else. None when it passes.
+    /// for an approval, `repository.inspect` or an action that records a choice (`shape`),
+    /// which change none, each file named; a path that is no plain path of the tree (absolute,
+    /// with a `.` or `..` part, a part named `.git`); a path in the cases directory or on the
+    /// judge `surface`; a non-test path for `tests.write`; a path reached through a link, or
+    /// one at which the tree holds no regular file but something else; a path git ignores
+    /// ([`crate::git::ignored_among`]), each named, which no commit would carry and the scratch
+    /// copy never held, so what the tree holds there is the operator's and is never written,
+    /// or the proposal whole when what git ignores could not be read. None when it passes.
     fn proposal_refusal(
         tree: &Path,
         proposal: &crate::harness::Proposal,
         offered: &[String],
         approvals: &[String],
         surface: &JudgeSurface,
+        shape: &Shape,
     ) -> Option<String> {
         let action = &proposal.action;
         let approval = approvals.contains(action);
         if !offered.contains(action) && !approval {
             return Some(format!("{action} was not offered"));
         }
-        if (approval || action == "repository.inspect") && !proposal.files.is_empty() {
+        let records_choice = !shape.choices_of(action).is_empty();
+        if (approval || records_choice || action == "repository.inspect")
+            && !proposal.files.is_empty()
+        {
+            let named: Vec<std::ffi::OsString> = proposal
+                .files
+                .iter()
+                .map(|file| file.path.clone().into())
+                .collect();
             return Some(format!(
-                "{action} proposes {} changed path(s), and it changes none",
-                proposal.files.len()
+                "{action}{} proposes {} changed path(s), and it changes none: {}",
+                if records_choice {
+                    " records a choice and"
+                } else {
+                    ""
+                },
+                proposal.files.len(),
+                crate::git::paths_named(&named)
             ));
         }
         let cases = format!("{CASES_DIR}/");
@@ -9025,7 +9043,26 @@ impl<'a> Run<'a> {
                 ));
             }
         }
-        None
+        let paths: Vec<&str> = proposal
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect();
+        match crate::git::ignored_among(tree, &paths) {
+            Ok(ignored) if ignored.is_empty() => None,
+            Ok(ignored) => {
+                let named: Vec<std::ffi::OsString> = ignored.into_iter().map(Into::into).collect();
+                Some(format!(
+                    "{action} proposes {} ignored by git, which no commit would carry and the scratch copy did not hold: {}",
+                    if named.len() == 1 { "a path" } else { "paths" },
+                    crate::git::paths_named(&named)
+                ))
+            }
+            Err(error) => Some(format!(
+                "{action} proposes {} path(s), and which of them git ignores could not be read: {error:#}",
+                paths.len()
+            )),
+        }
     }
 
     /// The edit effect: writes each file of `proposal` to `tree`, its content whole, never
@@ -9858,16 +9895,17 @@ impl<'a> Run<'a> {
             // ([`Harness::take_proposal`]) hands its change over as a proposal, and takt writes
             // it here, after the checkpoint and before the step is judged. A proposal the guard
             // refuses on its face (an action not offered, a file changed for an action that
-            // changes none, a path that is no plain path of the tree, under `.git`, in the cases
-            // directory, on the judge surface, a non-test path for `tests.write`, a path reached
-            // through a link) is refused before a byte of it reaches the tree; one that passes
-            // is written, and judged below as any step's change.
+            // changes none or records a choice, a path that is no plain path of the tree, under
+            // `.git`, in the cases directory, on the judge surface, a non-test path for
+            // `tests.write`, a path reached through a link, a path git ignores) is refused before
+            // a byte of it reaches the tree; one that passes is written, and judged below as any
+            // step's change.
             let stepped = match stepped {
                 Ok(report) => match self.harness.take_proposal() {
                     None => Ok(report),
                     Some(proposal) => {
                         match Self::proposal_refusal(
-                            &self.tree, &proposal, &offered, &approvals, &surface,
+                            &self.tree, &proposal, &offered, &approvals, &surface, &shape,
                         ) {
                             Some(why) => {
                                 let moved = undo()?;

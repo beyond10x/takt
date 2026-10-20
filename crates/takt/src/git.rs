@@ -2884,6 +2884,68 @@ impl Checkpoint {
     }
 }
 
+/// The paths of `paths` (each a plain path relative to the tree) that git ignores in `tree` as it
+/// stands, in the order given: `git check-ignore`, by the rules [`status`] reads (a `.gitignore`
+/// in any directory, `info/exclude`, `core.excludesFile`), a path inside an ignored directory
+/// among them and a tracked path never (git ignores no tracked file), with no code from
+/// configuration ([`NO_CONFIGURED_CODE`]). Each path goes to git as `./<path>`, so none reads as
+/// pathspec magic, on its standard input, written beside the read so that no number of paths
+/// stalls git. Exit 0 names some, 1 none; any other exit, or a path not handed over whole, is an
+/// error naming what git said.
+pub fn ignored_among(tree: &Path, paths: &[&str]) -> Result<Vec<String>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut input = Vec::new();
+    for path in paths {
+        input.extend_from_slice(b"./");
+        input.extend_from_slice(path.as_bytes());
+        input.push(0);
+    }
+    let args = ["check-ignore", "-z", "--stdin"];
+    let mut child = command(tree, &args)?
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("git {} took no standard input", args.join(" ")))?;
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let output = child
+        .wait_with_output()
+        .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
+    let written = writer
+        .join()
+        .map_err(|_| anyhow!("the writer of git {}'s input panicked", args.join(" ")))?;
+    if !matches!(output.status.code(), Some(0 | 1)) {
+        bail!(
+            "git {} in {} exited {}: {}",
+            args.join(" "),
+            tree.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    written.with_context(|| format!("write the paths to git {}", args.join(" ")))?;
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .map(|field| {
+            let path = String::from_utf8(field.to_vec()).map_err(|_| {
+                anyhow!(
+                    "git check-ignore named a path that is not UTF-8: {}",
+                    String::from_utf8_lossy(field)
+                )
+            })?;
+            Ok(path.strip_prefix("./").unwrap_or(&path).to_owned())
+        })
+        .collect()
+}
+
 /// Whether the trees of the commits `from` and `to` differ at any path outside the directory
 /// `outside` (relative to the tree): `git diff --quiet`, with no external diff and no text
 /// conversion, and no code from configuration ([`NO_CONFIGURED_CODE`]). Exit 0 is no

@@ -505,6 +505,192 @@ fn a_scripted_proposal_of_a_refused_path_leaves_the_tree_unchanged() {
     }
 }
 
+/// The operator's ignored file: `ignore` committed as the tree's `.gitignore`, then `path`
+/// written with `bytes`, which git ignores and no commit holds.
+fn with_ignored(tree: &Path, ignore: &str, path: &str, bytes: &str) {
+    fs::write(tree.join(".gitignore"), format!("{ignore}\n")).expect("a file");
+    git(tree, &["add", ".gitignore"]);
+    git(tree, &["commit", "-q", "-m", "ignore"]);
+    let at = tree.join(path);
+    fs::create_dir_all(at.parent().expect("a parent")).expect("a directory");
+    fs::write(&at, bytes).expect("the operator's file");
+}
+
+/// A harness whose one step proposes `files` (a path, and its content or none to remove it)
+/// under `action`.
+fn proposing(action: &str, files: &[(&str, Option<&str>)]) -> Proposing {
+    Proposing(RefCell::new(Some(Proposal {
+        action: action.to_owned(),
+        summary: "scripted".to_owned(),
+        files: files
+            .iter()
+            .map(|(path, content)| ProposedFile {
+                path: (*path).to_owned(),
+                content: content.map(str::to_owned),
+            })
+            .collect(),
+    })))
+}
+
+/// What says a file was never written, renamed or replaced: its inode and the time its status
+/// last changed.
+fn stamp(path: &Path) -> (u64, i64, i64) {
+    use std::os::unix::fs::MetadataExt as _;
+    let meta = fs::symlink_metadata(path).expect("the file");
+    (meta.ino(), meta.ctime(), meta.ctime_nsec())
+}
+
+/// The tree as a refused proposal must leave it: its work, ignored files among it, `HEAD`, and
+/// the stamps of the files a proposal names that are there before it.
+struct Kept {
+    work: BTreeMap<PathBuf, Vec<u8>>,
+    head: String,
+    stamps: Vec<(PathBuf, (u64, i64, i64))>,
+}
+
+impl Kept {
+    fn of(tree: &Path, watched: &[&str]) -> Self {
+        Self {
+            work: work(tree),
+            head: git(tree, &["rev-parse", "HEAD"]),
+            stamps: watched
+                .iter()
+                .map(|path| (tree.join(path), stamp(&tree.join(path))))
+                .collect(),
+        }
+    }
+
+    /// Runs `harness` on `tree` once, discarding into `aside`; asserts the step was refused
+    /// before the edit effect, naming each of `paths`, and that the tree is as it was: its work
+    /// byte for byte, the operator's ignored files among it, `HEAD`, every watched file never
+    /// written, and nothing set aside.
+    fn refused(&self, tree: &Path, id: &str, harness: &dyn Harness, aside: &Path, paths: &[&str]) {
+        let validators = validators();
+        let mut run = Run::open(tree, options(id), harness, &validators).expect("opens");
+        run.set_aside_in(aside.to_path_buf())
+            .expect("a set-aside root");
+        let mut out = Vec::new();
+        let stop = run.run(&mut out);
+        let text = String::from_utf8_lossy(&out).into_owned();
+        let Ok(Stop::StepRefused(why)) = &stop else {
+            panic!("{id}: refused, not {stop:?}\n{text}");
+        };
+        assert!(
+            text.contains("refused before the edit effect"),
+            "{id}: before the edit effect: {why}\n{text}"
+        );
+        for path in paths {
+            assert!(why.contains(path), "{id}: the refusal names {path}: {why}");
+        }
+        assert_eq!(work(tree), self.work, "{id}: the tree is unchanged\n{text}");
+        assert_eq!(
+            git(tree, &["rev-parse", "HEAD"]),
+            self.head,
+            "{id}: HEAD\n{text}"
+        );
+        for (path, before) in &self.stamps {
+            assert_eq!(
+                &stamp(path),
+                before,
+                "{id}: {} was never written\n{text}",
+                path.display()
+            );
+        }
+        assert!(
+            !aside.exists() || files(aside).is_empty(),
+            "{id}: nothing set aside: {:?}\n{text}",
+            files(aside).keys().collect::<Vec<_>>()
+        );
+    }
+}
+
+/// Acceptance 3, by what git ignores: the scratch copy holds no ignored file, so a session that
+/// writes one inside an ignored directory proposes it as new; that proposal, and one that removes
+/// the operator's file there, is refused before the edit effect, and the operator's file keeps its
+/// bytes, was never written, and is not set aside.
+#[test]
+fn a_proposal_into_an_ignored_directory_is_refused_before_it_is_written() {
+    const OPERATOR: &str = "the operator's build output\n";
+    for (name, removes) in [("write", false), ("remove", true)] {
+        let scratch = repository(&format!("ignored-dir-{name}"));
+        let tree = scratch.tree();
+        with_ignored(&tree, "target/", "target/kept.txt", OPERATOR);
+        let kept = Kept::of(&tree, &["target/kept.txt"]);
+        let aside = scratch.0.join("set-aside");
+        let id = format!("proposes-ignored-dir-{name}");
+        if removes {
+            let harness = proposing("implementation.edit", &[("target/kept.txt", None)]);
+            kept.refused(&tree, &id, &harness, &aside, &["target/kept.txt"]);
+        } else {
+            let (session, _) = harness(
+                &tree,
+                &[("target/kept.txt", "planted\n")],
+                "implementation.edit",
+            );
+            kept.refused(&tree, &id, &session, &aside, &["target/kept.txt"]);
+        }
+        assert_eq!(
+            fs::read_to_string(tree.join("target/kept.txt")).expect("the operator's file"),
+            OPERATOR,
+            "{name}"
+        );
+    }
+}
+
+/// Acceptance 3, by what git ignores at the root: a session that writes `.env`, which the tree's
+/// `.gitignore` names and the scratch copy did not hold, is refused before the edit effect, and
+/// the operator's `.env` is never written, not even to be put back.
+#[test]
+fn a_proposal_of_an_ignored_root_file_is_refused_before_it_is_written() {
+    const OPERATOR: &str = "OPERATOR_SETTING=kept\n";
+    let scratch = repository("ignored-root");
+    let tree = scratch.tree();
+    with_ignored(&tree, ".env", ".env", OPERATOR);
+    let kept = Kept::of(&tree, &[".env"]);
+    let (session, _) = harness(
+        &tree,
+        &[(".env", "OPERATOR_SETTING=planted\n")],
+        "implementation.edit",
+    );
+    let aside = scratch.0.join("set-aside");
+    kept.refused(&tree, "proposes-ignored-root", &session, &aside, &[".env"]);
+    assert_eq!(
+        fs::read_to_string(tree.join(".env")).expect("the operator's file"),
+        OPERATOR
+    );
+}
+
+/// Acceptance 3, by an action that records a choice (`change.handover`): takt writes its record
+/// for a step that changed no file, so a proposal that changes files under it is refused before
+/// the edit effect, naming each, with the tracked file never written and the operator's ignored
+/// file as it was.
+#[test]
+fn a_proposal_with_files_for_an_action_that_records_a_choice_is_refused_before_it_is_written() {
+    let scratch = repository("choice");
+    let tree = scratch.tree();
+    with_ignored(
+        &tree,
+        "target/",
+        "target/kept.txt",
+        "the operator's build output\n",
+    );
+    let kept = Kept::of(&tree, &["src/lib.rs", "target/kept.txt"]);
+    let (session, _) = harness(
+        &tree,
+        &[("src/lib.rs", FIXED), ("notes.txt", "planted\n")],
+        "change.handover",
+    );
+    let aside = scratch.0.join("set-aside");
+    kept.refused(
+        &tree,
+        "proposes-choice",
+        &session,
+        &aside,
+        &["records a choice", "src/lib.rs", "notes.txt"],
+    );
+    assert!(!tree.join("notes.txt").exists(), "nothing planted");
+}
+
 /// The variables the run withholds from a harness: credentials by takt's rule, Claude Code's
 /// own session variables and the API key.
 const WITHHELD: [(&str, &str); 8] = [
