@@ -15,6 +15,11 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 - `scripts/check-finding` builds and runs one check at a time per cache directory under a `flock`
   on `takt/check-finding/lock`, says when it waits, and refuses, exit 1, before building when that
   file system has less than `CHECK_FINDING_MIN_FREE_GIB` GiB free (20 by default; CI sets 0).
+- `gate.run` compares a Python script run through `sh -c` or a shell script, and what it imports,
+  as it compares one run directly (0.4.0's known limit, story:gate-compares-python-run-through-a-shell).
+  A shell line takt cannot read fails closed: every Python file, shell file and program is
+  compared, and the summary names why. takt's own gates run through `scripts/gate-exec`, whose
+  lines the reader cannot follow, so a change to any of those files stops takt's gates.
 
 ## [0.4.0] — 2026-10-20
 

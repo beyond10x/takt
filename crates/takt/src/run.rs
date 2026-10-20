@@ -1622,7 +1622,20 @@ const OUTSIDE_IMPORTS_MARK: &str = "(outside imports) ";
 
 /// What [`scripts_of`] names, beside failing closed, for why a script fails closed at open: the
 /// refusal names it ([`JudgeSurface::modules_note`]).
-const FAILS_CLOSED_MARK: &str = "(fails closed) ";
+pub(crate) const FAILS_CLOSED_MARK: &str = "(fails closed) ";
+
+/// What [`read_command`] names, beside the path itself, for what a Python loads as code: a
+/// script a Python runs (`python3 check.py`, a file whose `#!` line names a Python), and what
+/// `python -m` runs and the `*.pth` files beside it. The gate compares them at the base
+/// ([`crate::validator::GateRun`]) wherever they were named, in a `sh -c` string or a shell
+/// script as well; [`scripts_of`] leaves the mark out.
+pub(crate) const PYTHON_MARK: &str = "(python) ";
+
+/// `path` named with [`PYTHON_MARK`] as well as by itself.
+fn python_named(named: &mut Vec<String>, path: String) {
+    named.push(format!("{PYTHON_MARK}{path}"));
+    named.push(path);
+}
 
 /// What [`scripts_of`] names for the program `word` run from `dir` with `env` ([`PROGRAM_MARK`]):
 /// the program (a bare name, an absolute path, or `tree:` and its path in the tree), then the
@@ -3833,6 +3846,7 @@ fn command_paths(
                     .is_some_and(|spec| !spec.short_module.is_empty())
             }) {
                 named.push(marked(parent_of(&path), IMPORTS));
+                named.push(format!("{PYTHON_MARK}{path}"));
             }
             named.push(path);
         }
@@ -4009,15 +4023,20 @@ fn command_paths(
                     }
                     for import in &imports {
                         let import = Some(import.as_str());
-                        named.extend(named_from(tree, import, &format!("{first}.py")));
-                        named.extend(named_from(tree, import, &format!("{first}.*")));
-                        named.extend(
+                        let loads = [
+                            named_from(tree, import, &format!("{first}.py")),
+                            named_from(tree, import, &format!("{first}.*")),
                             named_from(tree, import, first).map(|package| format!("{package}/**")),
-                        );
+                        ];
+                        for path in loads.into_iter().flatten() {
+                            python_named(named, path);
+                        }
                     }
                 }
                 for import in &imports {
-                    named.extend(named_from(tree, Some(import.as_str()), "*.pth"));
+                    if let Some(path) = named_from(tree, Some(import.as_str()), "*.pth") {
+                        python_named(named, path);
+                    }
                 }
             }
             match scanned.end {
@@ -4070,6 +4089,7 @@ fn command_paths(
                             }
                             if !spec.short_module.is_empty() {
                                 named.push(marked(parent_of(&path), IMPORTS));
+                                named.push(format!("{PYTHON_MARK}{path}"));
                             }
                             named.push(path);
                         }
@@ -4193,6 +4213,16 @@ fn command_line(
 /// ([`FAIL_CLOSED`]), which [`JudgeSurface`] guards whole.
 #[must_use]
 pub fn scripts_of(words: &[String], tree: &Path) -> Vec<String> {
+    read_command(words, tree)
+        .into_iter()
+        .filter(|path| !path.starts_with(PYTHON_MARK))
+        .collect()
+}
+
+/// What [`scripts_of`] names for the command `words`, with what a Python loads as code named
+/// once more behind [`PYTHON_MARK`]: one reader for the step guard and the gate.
+#[must_use]
+pub(crate) fn read_command(words: &[String], tree: &Path) -> Vec<String> {
     let words: Vec<&str> = words.iter().map(String::as_str).collect();
     let mut named = Vec::new();
     // The `PATH` takt runs the command with, which it inherits: an entry that resolves inside

@@ -768,7 +768,9 @@ pub const DEFAULT_PROJECT: &str = ".engineering/assertions-project.yaml";
 /// agree on it: with a project file, the executables and catalogs it admits, every file its
 /// commands take as an argument, the tool configuration ([`GATE_TOOL_CONFIG`]), the `[lints]`
 /// and `[workspace.lints]` tables of every cargo manifest ([`lint_changes`]), what Python loads
-/// from the tree for its commands ([`python_paths`]) and the judge surface the test command's is
+/// from the tree for its commands, a `sh -c` string or shell script of theirs among them, and the
+/// paths such a string or script names ([`python_paths`]; every Python file, shell file and program
+/// while one cannot be read with certainty) and the judge surface the test command's is
 /// compared on. One that differs, was added or was deleted runs
 /// nothing and writes no record; the summary names it.
 ///
@@ -919,14 +921,20 @@ fn argument_paths(project: &str) -> Result<Vec<String>> {
 ///   over that code not run once a step changed it. A name the Python imports from outside the
 ///   tree stays the step guard's to refuse there.
 ///
-/// What a line the guard cannot read would guard ([`crate::run::FAIL_CLOSED`]) is not taken:
-/// the gate compares what its commands name, as it did.
+/// The reader is the step guard's whole ([`crate::run::read_command`]): a Python run through a
+/// shell (`sh -c "python3 check.py"`, a shell script the binding runs, a `sh -c` string running
+/// one) is a Python script as one the binding runs directly is, and what its `-m` runs is
+/// compared as above, the shell script and every path the string names besides.
+///
+/// What cannot be read with certainty fails closed, as in the step guard: the third of the
+/// result is why ([`crate::run::FAIL_CLOSED`]'s reasons), and while there is one the caller
+/// compares every Python file, shell file and program of the tree.
 fn python_paths(
     tree: &Path,
     at: &str,
     revision: &str,
     project: &str,
-) -> Result<(Vec<String>, Vec<String>)> {
+) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
     let doc: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(project).context("read the project file")?;
     let mut bindings: Vec<&serde_yaml_ng::Value> = Vec::new();
@@ -939,6 +947,7 @@ fn python_paths(
     let mut dirs: Vec<String> = Vec::new();
     let mut scripts: Vec<String> = Vec::new();
     let mut globs: Vec<String> = Vec::new();
+    let mut closed: Vec<String> = Vec::new();
     for binding in bindings {
         let Some(executable) = binding["executable"].as_str() else {
             continue;
@@ -969,7 +978,40 @@ fn python_paths(
                 .map(|&k| [env.clone(), words[k..].to_vec()].concat()),
         );
         for (k, command) in commands.iter().enumerate() {
-            let named = crate::run::scripts_of(command, tree);
+            let read = crate::run::read_command(command, tree);
+            // What a Python loads as code, wherever the reader found it: in the binding's words,
+            // a `sh -c` string or a shell script it runs.
+            let python: Vec<&str> = read
+                .iter()
+                .filter_map(|path| path.strip_prefix(crate::run::PYTHON_MARK))
+                .collect();
+            closed.extend(
+                read.iter()
+                    .filter_map(|path| path.strip_prefix(crate::run::FAILS_CLOSED_MARK))
+                    .map(str::to_owned),
+            );
+            let named: Vec<String> = read
+                .iter()
+                .filter(|path| !path.starts_with(crate::run::PYTHON_MARK))
+                .cloned()
+                .collect();
+            // A path a `sh -c` string or a shell script names (a shell script it runs, the
+            // Python script), compared as an argument of the binding is; not a directory the
+            // base holds, which is the data a command checks.
+            for path in named.iter().filter(|path| !path.starts_with('(')) {
+                if path.contains(['*', '?']) || path.contains("/(") {
+                    continue;
+                }
+                if !object_at(tree, at, path)?.is_some_and(|o| o.starts_with("040000 ")) {
+                    scripts.push(path.clone());
+                }
+            }
+            globs.extend(
+                python
+                    .iter()
+                    .filter(|path| path.contains('*'))
+                    .map(|path| (*path).to_owned()),
+            );
             let imports: Vec<&str> = named
                 .iter()
                 .filter_map(|path| path.strip_suffix(crate::run::IMPORTS))
@@ -996,7 +1038,14 @@ fn python_paths(
                 if !imports.contains(&parent) || module {
                     continue;
                 }
-                match python_script(tree, at, revision, path, runs_python)? {
+                match python_script(
+                    tree,
+                    at,
+                    revision,
+                    path,
+                    runs_python,
+                    python.contains(&path.as_str()),
+                )? {
                     // The directory the gate runs in, the tree's root, holds the code the gate
                     // checks: as for `-m`, the script itself and the `*.pth` files there.
                     Some(dir) if dir.is_empty() => {
@@ -1019,19 +1068,24 @@ fn python_paths(
     paths.dedup();
     globs.sort();
     globs.dedup();
-    Ok((paths, globs))
+    closed.sort();
+    closed.dedup();
+    Ok((paths, globs, closed))
 }
 
 /// The directory Python imports from first when it runs `path` (relative to the tree), when the
 /// base `at` or `revision` holds it as a Python script ([`python_paths`]): the script's own
 /// directory, or the directory itself when it holds a `__main__.py`. With `runs_python`, a
-/// Python runs the command, and a file whose `#!` line names no other program is its script.
+/// Python runs the command, and a file whose `#!` line names no other program is its script;
+/// with `run_by_python`, the reader saw a Python run it ([`crate::run::PYTHON_MARK`]), and a
+/// file at the path is its script whatever its first line.
 fn python_script(
     tree: &Path,
     at: &str,
     revision: &str,
     path: &str,
     runs_python: bool,
+    run_by_python: bool,
 ) -> Result<Option<String>> {
     let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
     let mut script = false;
@@ -1048,11 +1102,12 @@ fn python_script(
             continue;
         }
         let text = file_at(tree, commit, Path::new(path))?.unwrap_or_default();
-        script |= match text.strip_prefix("#!") {
-            Some(line) => crate::run::interpreter_of(line)
-                .is_some_and(|interpreter| crate::run::python_like(&interpreter)),
-            None => runs_python,
-        };
+        script |= run_by_python
+            || match text.strip_prefix("#!") {
+                Some(line) => crate::run::interpreter_of(line)
+                    .is_some_and(|interpreter| crate::run::python_like(&interpreter)),
+                None => runs_python,
+            };
     }
     Ok(script.then(|| parent.to_owned()))
 }
@@ -1414,10 +1469,39 @@ impl GateRun {
                 }
             }
             // What Python loads from the tree for the gate's commands ([`python_paths`]).
-            let (python, python_globs) =
+            let (python, python_globs, closed) =
                 python_paths(tree, &at, revision, text).with_context(read)?;
             files.extend(python);
             globs.extend(python_globs);
+            // A line the reader cannot read with certainty fails closed, as in the step guard:
+            // every Python file and shell file by its glob, and every program, a file the base
+            // or the revision holds with an exec bit or a `#!` line.
+            if !closed.is_empty() {
+                globs.extend(
+                    crate::run::FAIL_CLOSED
+                        .iter()
+                        .filter(|glob| !glob.contains('('))
+                        .map(|glob| (*glob).to_owned()),
+                );
+                let diff = crate::git::bytes(
+                    tree,
+                    &[
+                        "diff-tree",
+                        "-r",
+                        "-z",
+                        "--no-renames",
+                        "--name-only",
+                        &at,
+                        revision,
+                        "--",
+                    ],
+                )?;
+                for path in nul_fields(&diff, "diff-tree", false)? {
+                    if program_at(tree, &at, path)? || program_at(tree, revision, path)? {
+                        changed.push(path.to_owned());
+                    }
+                }
+            }
             for file in files {
                 if file.contains(['*', '?', '\\']) || file.trim() != file {
                     if object_at(tree, &at, &file)? != object_at(tree, revision, &file)? {
@@ -1435,8 +1519,18 @@ impl GateRun {
                 Judged::Changed { paths, .. } => changed.extend(paths),
             }
             if !changed.is_empty() {
+                let mut seen = std::collections::BTreeSet::new();
+                changed.retain(|path| seen.insert(path.clone()));
+                let why = if closed.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "; its commands fail closed, so every Python file, shell file and program of the tree is compared: {}",
+                        closed.join("; ")
+                    )
+                };
                 return Ok(nothing_recorded(format!(
-                    "the gates document {document}: not run; what its commands run or read from the tree differs from the base revision at {}: {}; no record, the claim stays unknown",
+                    "the gates document {document}: not run; what its commands run or read from the tree differs from the base revision at {}: {}{why}; no record, the claim stays unknown",
                     short(revision),
                     changed.join(", ")
                 )));

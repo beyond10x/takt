@@ -8,6 +8,10 @@
 //! sets, as the step guard names them. A file there that differs, is added or is deleted: not
 //! run, no record, the path named. The changes are commits made on the case's branch outside the
 //! loop.
+//!
+//! story:gate-compares-python-run-through-a-shell: the same holds for a Python run through a
+//! shell, by a `sh -c` string or a shell script the gate runs; a shell line the step guard's
+//! reader cannot read with certainty fails closed, naming why.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -69,6 +73,17 @@ const PYTHON: &str = "/usr/bin/python3";
 /// A committed repository whose one gate runs `PYTHON` with `args` and the binding's `env`
 /// (name, value), with `files` (path, text) besides; the gate passes at the base.
 fn repository(name: &str, args: &[&str], env: &[(&str, &str)], files: &[(&str, &str)]) -> Scratch {
+    repository_running(name, PYTHON, args, env, files)
+}
+
+/// [`repository`] with the gate running `executable` rather than `PYTHON`.
+fn repository_running(
+    name: &str,
+    executable: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    files: &[(&str, &str)],
+) -> Scratch {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("gate-imports-{}-{name}", std::process::id()));
     if dir.exists() {
@@ -84,7 +99,7 @@ fn repository(name: &str, args: &[&str], env: &[(&str, &str)], files: &[(&str, &
          text: The check holds.\n    assertions:\n      - 'process.succeeded(\"check\")'\n",
     );
     let mut project = format!(
-        "format: engineering-assertions-project/1\ncommands:\n  check:\n    executable: {PYTHON}\n    args:\n"
+        "format: engineering-assertions-project/1\ncommands:\n  check:\n    executable: {executable}\n    args:\n"
     );
     for arg in args {
         project.push_str(&format!("      - '{arg}'\n"));
@@ -384,5 +399,118 @@ fn code_beside_a_module_the_gate_runs_lets_it_run_and_record() {
         ],
     );
     let observation = observed(&tree, "module-beside", &[("app/core.py", "VALUE = 2\n")]);
+    recorded(&observation);
+}
+
+/// The shell every test of story:gate-compares-python-run-through-a-shell runs its gate with.
+const SHELL: &str = "/bin/sh";
+
+/// The review's repository ([`citations`]) with the gate running `args` under [`SHELL`] and
+/// `scripts/check.sh` running the Python script besides.
+fn through_a_shell(name: &str, args: &[&str]) -> Scratch {
+    repository_running(
+        name,
+        SHELL,
+        args,
+        &[],
+        &[
+            (
+                "scripts/check.py",
+                "import sys\nimport checklib\nsys.exit(checklib.run())\n",
+            ),
+            ("scripts/checklib.py", "def run():\n    return 0\n"),
+            (
+                "scripts/check.sh",
+                "#!/bin/sh\nexec python3 scripts/check.py\n",
+            ),
+            ("scripts/data.txt", "one\n"),
+            ("src/app.py", "VALUE = 1\n"),
+        ],
+    )
+}
+
+/// story:gate-compares-python-run-through-a-shell, acceptance 1 (the review's probes `shc` and
+/// `shcself`): `sh -c "python3 scripts/check.py"` runs the script with its own directory first
+/// on the import path, as `python3 scripts/check.py` does; the script and the module beside it
+/// are compared at the base. Code outside that directory, and data beside it, are not.
+#[test]
+fn python_run_through_sh_c_is_compared_at_the_base() {
+    let args = ["-c", "python3 scripts/check.py"];
+    for (name, changed) in [
+        ("shc-lib", "scripts/checklib.py"),
+        ("shc-self", "scripts/check.py"),
+        ("shc-added", "scripts/json.py"),
+    ] {
+        let tree = through_a_shell(name, &args);
+        let observation = observed(&tree, name, &[(changed, "raise SystemExit(0)  # x\n")]);
+        refused(&observation, changed);
+    }
+    let tree = through_a_shell("shc-outside", &args);
+    let observation = observed(
+        &tree,
+        "shc-outside",
+        &[("src/app.py", "VALUE = 2\n"), ("scripts/data.txt", "two\n")],
+    );
+    recorded(&observation);
+}
+
+/// Acceptance 2 (the probes `shscript` and `shscriptself`): a shell script the gate runs whose
+/// line runs Python, run by the shell as the gate's argument or from a `sh -c` string; the
+/// shell script itself is compared too when the string names it.
+#[test]
+fn python_a_shell_script_runs_is_compared_at_the_base() {
+    for (name, args, changed) in [
+        ("shs-lib", &["scripts/check.sh"][..], "scripts/checklib.py"),
+        ("shs-self", &["scripts/check.sh"][..], "scripts/check.py"),
+        (
+            "shs-c-lib",
+            &["-c", "sh scripts/check.sh"][..],
+            "scripts/checklib.py",
+        ),
+        (
+            "shs-c-script",
+            &["-c", "sh scripts/check.sh"][..],
+            "scripts/check.sh",
+        ),
+    ] {
+        let tree = through_a_shell(name, args);
+        let observation = observed(&tree, name, &[(changed, "raise SystemExit(0)  # x\n")]);
+        refused(&observation, changed);
+    }
+    let tree = through_a_shell("shs-outside", &["scripts/check.sh"]);
+    let observation = observed(&tree, "shs-outside", &[("src/app.py", "VALUE = 2\n")]);
+    recorded(&observation);
+}
+
+/// Acceptance 3: a shell line the step guard cannot read with certainty (`eval`, a loop) fails
+/// closed in the gate as in the guard: every Python file, shell file and program of the tree is
+/// compared, and the summary names the path and why. A change to anything else lets it run.
+#[test]
+fn a_shell_line_the_gate_cannot_read_fails_closed_naming_it() {
+    for (name, args, changed, why) in [
+        (
+            "closed-eval",
+            &["-c", "eval python3 scripts/check.py"][..],
+            "src/app.py",
+            "eval",
+        ),
+        (
+            "closed-loop",
+            &["-c", "for f in x; do python3 scripts/check.py; done"][..],
+            "src/app.py",
+            "compound command",
+        ),
+    ] {
+        let tree = through_a_shell(name, args);
+        let observation = observed(&tree, name, &[(changed, "VALUE = 2\n")]);
+        refused(&observation, changed);
+        assert!(
+            observation.summary.contains(why),
+            "the summary does not say why the gate fails closed ({why}): {}",
+            observation.summary
+        );
+    }
+    let tree = through_a_shell("closed-data", &["-c", "eval python3 scripts/check.py"]);
+    let observation = observed(&tree, "closed-data", &[("README.md", "another story\n")]);
     recorded(&observation);
 }
