@@ -2243,8 +2243,8 @@ fn a_scorecard_under_another_rule_or_definition_is_refused() {
     );
     let card = world.candidate_card("metric", BASELINE_TOKENS, FIVE_APPROVALS);
     let text = fs::read_to_string(&card).expect("the card");
-    assert!(text.contains("\"tokens\": 1"), "{text}");
-    fs::write(&card, text.replace("\"tokens\": 1", "\"tokens\": 9")).expect("rewritten");
+    assert!(text.contains("\"tokens\": 2"), "{text}");
+    fs::write(&card, text.replace("\"tokens\": 2", "\"tokens\": 9")).expect("rewritten");
     let (code, out, err) = world.promote(&card, &[]);
     assert_eq!(code, 1, "{out}{err}");
     assert!(
@@ -3790,13 +3790,13 @@ fn a_rebaseline_with_an_older_metric_definition_is_refused_naming_it() {
         &world,
         &world.baseline,
         "v1",
-        &[("\"tokens\": 1,", "\"tokens\": 2,")],
+        &[("\"tokens\": 2,", "\"tokens\": 3,")],
     );
     world.record_baseline_of(&stored);
     let (code, out, err) = rebaseline(&world, &world.baseline);
     assert_eq!(code, 1, "{out}{err}");
     assert!(
-        err.contains("metric tokens is at definition version 1, below the stored 2"),
+        err.contains("metric tokens is at definition version 2, below the stored 3"),
         "{err}"
     );
     assert_eq!(world.records(), baseline_files(), "nothing recorded");
@@ -4443,4 +4443,161 @@ fn a_rebaseline_of_rows_saved_without_opened_binary_is_accepted() {
         out.contains(&format!("against baseline {BASELINE_REVISION}")),
         "{out}"
     );
+}
+
+/// Removes `tokens` and `usage` from every harness step line of `case`'s record under `cases`:
+/// a run whose harness reported no tokens.
+fn untoken(cases: &Path, case: &str) {
+    let path = cases.join(CASES_DIR).join(case).join("events.jsonl");
+    let text = fs::read_to_string(&path).expect("the record");
+    let mut stripped = 0;
+    let lines: Vec<String> = text
+        .lines()
+        .map(|line| {
+            let mut value: serde_json::Value = serde_json::from_str(line).expect("a line");
+            if value["event"] == "step" && value["by"] == "harness" {
+                let object = value.as_object_mut().expect("an object");
+                object.remove("tokens");
+                object.remove("usage");
+                stripped += 1;
+            }
+            value.to_string()
+        })
+        .collect();
+    assert!(stripped > 0, "{case} has a harness step");
+    fs::write(&path, lines.join("\n") + "\n").expect("written");
+}
+
+/// Five scenario 1 cases, trials 11 to 15, at the approval with [`BASELINE_TOKENS`], made with
+/// the binary of `revision`, case `scenario-1-trial-<unknown>`'s harness step recording no
+/// tokens; saved under `revision` in a directory of its own named by `label`.
+fn untokened_card(world: &World, label: &str, revision: &str, unknown: usize) -> PathBuf {
+    let cases = world.outer.join(format!("cases-{label}"));
+    for (n, tokens) in BASELINE_TOKENS.iter().enumerate() {
+        run(
+            &cases,
+            &format!("scenario-1-trial-{}", n + 11),
+            *tokens,
+            APPROVAL,
+            Some(revision),
+        );
+    }
+    untoken(&cases, &format!("scenario-1-trial-{unknown}"));
+    World::save(
+        &cases,
+        &world.outer.join(format!("saves-{label}")),
+        revision,
+    )
+}
+
+/// story:run-tokens-unknown-is-not-zero, acceptance 2: a candidate with a case whose harness
+/// step recorded no tokens is refused, exit 1, before anything is judged, naming the case and
+/// the step; nothing recorded or installed, a dry run alike. Its tokens would otherwise read as
+/// a saving of the whole step.
+#[test]
+fn a_candidate_with_unknown_run_tokens_is_refused_before_judging() {
+    let world = World::new("unknown-candidate", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = untokened_card(&world, "unknown", &world.revision, 13);
+    for extra in [&["--dry-run"][..], &[]] {
+        let (code, out, err) = world.promote(&card, extra);
+        assert_eq!(code, 1, "{extra:?}: {out}{err}");
+        assert!(
+            err.contains("scenario-1-trial-13") && err.contains("implementation.edit"),
+            "{extra:?}: the case and the step named: {err}"
+        );
+        assert!(err.contains("unknown"), "{err}");
+        assert!(!out.contains("verdict"), "nothing judged: {out}");
+        assert!(!out.contains("median tokens"), "nothing judged: {out}");
+    }
+    world.assert_untouched();
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// Acceptance 2, the stored side: a baseline whose scorecard holds a run of unknown tokens
+/// judges no candidate; refused, exit 1, naming the baseline's case and step, nothing recorded.
+/// And `--baseline-only` does not record such a baseline.
+#[test]
+fn a_baseline_with_unknown_run_tokens_judges_nothing_and_is_not_recorded() {
+    let world = World::new("unknown-baseline", BASELINE_TOKENS, FIVE_APPROVALS);
+    let stored = untokened_card(&world, "stored", BASELINE_REVISION, 12);
+    world.record_baseline_of(&stored);
+    let card = world.candidate_card("candidate", BASELINE_TOKENS, FIVE_APPROVALS);
+    let (code, out, err) = world.promote(&card, &[]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("scenario-1-trial-12") && err.contains("implementation.edit"),
+        "{err}"
+    );
+    assert!(!out.contains("verdict"), "nothing judged: {out}");
+    world.assert_untouched();
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+
+    let world = World::new("unknown-baseline-only", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.install_stand_in(&world.revision);
+    let card = untokened_card(&world, "base", &world.revision, 14);
+    let (code, out, err) = world.promote(&card, &["--baseline-only"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("scenario-1-trial-14") && err.contains("implementation.edit"),
+        "{err}"
+    );
+    assert_eq!(world.records(), Vec::<String>::new(), "nothing recorded");
+}
+
+/// Acceptance 3: a baseline saved under tokens definition 1, which read a harness step that
+/// recorded no tokens as 0, is compared only after `--rebaseline`; the rebaseline re-reads its
+/// runs, and one whose run tokens are now unknown is refused, exit 1, naming the case and the
+/// step, nothing recorded: the stored figure counted the step 0 and is not carried over.
+#[test]
+fn a_tokens_v1_baseline_is_compared_only_after_a_rebaseline_which_refuses_an_unknown() {
+    let world = World::new("tokens-v1", BASELINE_TOKENS, FIVE_APPROVALS);
+    let v1 = tokens_v1(&world, &world.baseline, "v1");
+    world.record_baseline_of(&v1);
+    let card = world.candidate_card("candidate", BASELINE_TOKENS, FIVE_APPROVALS);
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("metric tokens is at definition version 1"),
+        "{err}"
+    );
+    let (code, out, err) = rebaseline(&world, &world.baseline);
+    assert_eq!(code, 0, "{out}{err}");
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 0, "judged after the rebaseline: {out}{err}");
+
+    let world = World::new("tokens-v1-unknown", BASELINE_TOKENS, FIVE_APPROVALS);
+    let unknown = untokened_card(&world, "stored", BASELINE_REVISION, 12);
+    let v1 = tokens_v1(&world, &unknown, "v1");
+    world.record_baseline_of(&v1);
+    let (code, out, err) = rebaseline(&world, &unknown);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("scenario-1-trial-12") && err.contains("implementation.edit"),
+        "{err}"
+    );
+    assert_eq!(world.records(), baseline_files(), "nothing recorded");
+}
+
+/// `scorecard` as a takt knowing tokens definition 1 saved it: the definition at 1, every run's
+/// unknown tokens read as the sum of the steps that recorded some (none here: 0), written in a
+/// directory of its own named by `label`; the file.
+fn tokens_v1(world: &World, scorecard: &Path, label: &str) -> PathBuf {
+    let mut file: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(scorecard).expect("the scorecard")).expect("json");
+    file["metrics"]["tokens"] = 1.into();
+    for row in file["rows"].as_array_mut().expect("rows") {
+        if row["tokens"].is_null() {
+            row["tokens"] = 0.into();
+        }
+    }
+    let path = world
+        .outer
+        .join(format!("saves-{label}"))
+        .join(scorecard.file_name().expect("a file name"));
+    write(
+        &path,
+        &(serde_json::to_string_pretty(&file).expect("json") + "\n"),
+    );
+    path
 }

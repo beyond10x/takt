@@ -158,7 +158,7 @@ fn row(n: usize, outcome: &str, tokens: u64, steps: &[(&str, u64)]) -> Row {
         stop: outcome.to_owned(),
         held_out: None,
         steps: steps.len() as u64,
-        tokens,
+        tokens: Some(tokens),
         refusals: 0,
         no_progress: 0,
         errors: 0,
@@ -345,10 +345,10 @@ fn a_saved_scorecard_without_the_step_tokens_metric_is_refused() {
 /// with every scorecard, and a run's tokens by action are saved and read back.
 #[test]
 fn step_tokens_has_a_definition_version_and_survives_a_save() {
-    assert!(METRICS.contains(&("step_tokens", 1)), "{METRICS:?}");
+    assert!(METRICS.contains(&("step_tokens", 2)), "{METRICS:?}");
     let candidate = side("save", "candidate");
     let card = Scorecard::read(&candidate).expect("the candidate's runs read");
-    assert_eq!(card.metrics.get("step_tokens"), Some(&1));
+    assert_eq!(card.metrics.get("step_tokens"), Some(&2));
     let saves = scratch("save-dir");
     let path = card
         .clone()
@@ -470,27 +470,34 @@ fn a_targeted_step_without_tokens_on_the_saved_side_is_refused() {
     assert!(refused.contains("change.handover"), "{refused}");
 }
 
-/// C1: an unknown at an action the candidate does not target refuses nothing; one run of a case
-/// unknown at the targeted action makes the case's figure unknown, whatever its other runs.
+/// C1: one run of a case unknown at the targeted action makes the case's figure unknown,
+/// whatever its other runs. An unknown at an action the candidate does not target leaves the
+/// run's tokens unknown (story:run-tokens-unknown-is-not-zero): the run is not judged, and with
+/// it not the steps, the case and the step named, nothing printed.
 #[test]
-fn an_unknown_refuses_only_a_targeted_step_and_absorbs_the_case() {
+fn an_unknown_at_any_step_refuses_and_absorbs_the_case() {
     let candidate = |unknown_at: &str| {
         let mut rows: Vec<Row> = (0..5)
             .map(|n| row(n, "accepted", 90, &[("a.step", 10), ("b.step", 5)]))
             .collect();
         let mut again = row(4, "accepted", 0, &[("a.step", 10), ("b.step", 5)]);
         again.step_tokens.insert(unknown_at.to_owned(), None);
+        again.tokens = None;
         rows.push(again);
         card(rows)
     };
     let mut out = Vec::new();
-    let judged = candidate("b.step")
+    let refused = candidate("b.step")
         .judge_steps(&saved(), &actions(&["a.step"]), &mut out)
-        .expect("an unknown at an untargeted step refuses nothing");
-    assert_eq!(
-        judged.verdict,
-        StepVerdict::Better,
-        "{}",
+        .expect_err("an unknown at an untargeted step leaves the run unjudged")
+        .to_string();
+    assert!(
+        refused.contains("scenario-s-trial-4 step b.step") && refused.contains("run tokens"),
+        "{refused}"
+    );
+    assert!(
+        out.is_empty(),
+        "nothing printed: {}",
         String::from_utf8_lossy(&out)
     );
     let refused = candidate("a.step")

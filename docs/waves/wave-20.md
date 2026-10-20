@@ -1,6 +1,6 @@
 # Wave 20: takt's gate readable to itself, trials that stop early, a judge on targeted steps
 
-Stage: **closing**. Shape: one dispatcher in one checkout, one wave branch `wave/20` cut from
+Stage: **closed**. Shape: one dispatcher in one checkout, one wave branch `wave/20` cut from
 `main`, implementor sub-agents in the shared tree, one adversarial review and one full gate before
 the close. Every unit is a judge surface. The close carries release 0.5.0.
 
@@ -32,3 +32,4 @@ commit. B holds every `.agents/trial-agent.md` change of the wave, C's parking r
 - 2026-10-20: adversarial review at d7d4989d: needs-revision; `task check` there exit 0. Fix round 1: a938b960 (`takt replay` never follows a link into a case; `--out` outside the case's tree), 404de157 (the identity-scan call order asserted; `ActiveTime` named at rank 1, the outcome metric staying at version 3). Fix round 2, on the owner's delegate's call: a89a4ece (a step that recorded no tokens is unknown to the step judge, never 0); the same defect at run level is a 0.5.0 known limit and wave 21's first unit.
 - 2026-10-20: `task check` at a89a4ece: exit 0, 1478 passed, 0 failed, 17 ignored. The five stories moved to implemented.
 - 2026-10-20: the confirm at 3ed68989: needs-revision, one medium in unit D (a relative `takt replay --out` resolved inside the repository by git). Fix round 3, granted once by the owner's delegate because it was a one-line fix of a medium finding: c6f9172a. `task check` at c6f9172a: exit 0, 1479 passed, 0 failed, 17 ignored.
+- 2026-10-20: the confirm scoped to unit D at e0bd3ca2: approve; granted under the owner's standing exception; merged into `main` as 81f34956 (`task check` on the merge: exit 0, 1479 passed); check.yml green; tagged and released 0.5.0.

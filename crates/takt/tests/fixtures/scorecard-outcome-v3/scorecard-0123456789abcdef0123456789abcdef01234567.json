@@ -7,9 +7,9 @@
     "no_progress": 1,
     "outcome": 3,
     "refusals": 1,
-    "step_tokens": 1,
+    "step_tokens": 2,
     "steps": 1,
-    "tokens": 1,
+    "tokens": 2,
     "wall": 1
   },
   "rule": {

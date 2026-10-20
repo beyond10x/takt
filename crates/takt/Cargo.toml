@@ -28,5 +28,6 @@ unsafe-libyaml = { workspace = true }
 libc = "0.2.191"
 
 [dev-dependencies]
+b10x-loom-sdk = { workspace = true }
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 serde_json = { workspace = true }

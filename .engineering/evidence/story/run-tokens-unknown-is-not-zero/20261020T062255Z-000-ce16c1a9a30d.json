@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-20T06:22:55Z",
+  "actor": "human:timo",
+  "artifact": "story:run-tokens-unknown-is-not-zero",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check on wave/21 at 3cdf8c6: 1496 passed, 0 failed, 17 ignored"
+  }
+}

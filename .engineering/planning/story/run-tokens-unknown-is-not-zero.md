@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-tokens-unknown-is-not-zero
 kind: story
-status: draft
+status: implemented
 title: A run whose harness step recorded no tokens has unknown tokens, never a sum counting it 0
 summary: the run-level tokens metric reads a missing step token record as 0, a saving a promotion can trust
 tags:
@@ -10,7 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T05:46:16Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-20T05:46:17Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-20T06:22:55Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: run-tokens-unknown-is-not-zero
 

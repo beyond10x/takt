@@ -304,7 +304,7 @@ fn the_token_sum_equals_the_scorecards() {
             .expect("the held-out result");
         let card = Scorecard::read(&repo).expect("the scorecard reads");
         assert_eq!(card.rows.len(), 1, "{name}: {card:?}");
-        assert_eq!(Some(card.rows[0].tokens), trace.header.tokens.sum, "{name}");
+        assert_eq!(card.rows[0].tokens, trace.header.tokens.sum, "{name}");
         assert_eq!(card.rows[0].steps, trace.header.steps, "{name}");
         assert_eq!(card.rows[0].outcome, trace.header.outcome, "{name}");
         let wall = trace.header.wall_s.expect("a wall time");

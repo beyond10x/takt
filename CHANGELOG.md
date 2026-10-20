@@ -6,6 +6,24 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+### Changed
+
+- A run whose harness step recorded no tokens, or 0, has unknown tokens, never a sum counting
+  the step 0; `takt scorecard --against` and `takt promote` (with `--baseline-only` and
+  `--rebaseline`) refuse such a set, exit 1, naming the case and the step, before anything is
+  judged or recorded. The metric definitions `tokens` and `step_tokens` move to version 2: a
+  baseline saved by 0.5.0 or earlier is compared only after `takt promote --rebaseline`, which
+  refuses a stored run whose tokens are now unknown, naming it; `--baseline-only` refuses a store
+  that already holds a baseline, so such a store is judged again only from a new store.
+
+### Repository
+
+- `b10x-loom-sdk` 0.27.0 is a dev-dependency of `b10x-takt` (one copy each of Canon and
+  engineering-protocols). `tests/loom_parity.rs` shows Loom's governor decides takt's 30 recorded
+  case decisions as takt did: the 17 that read no grant are equal, and the 13 that read one differ
+  only where the grant is missing (the granted action's status and reasons, and
+  `computed_from.authority`). No run behaviour changes.
+
 ## [0.5.0] — 2026-10-20
 
 The minor version moves because a run can stop `ActiveTime`, a stored baseline is judged again

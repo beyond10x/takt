@@ -45,6 +45,13 @@
 //! but worse on the run is refused, naming both. A harness step that recorded no tokens leaves
 //! its action's tokens unknown for the run, never 0, and a targeted step unknown in a case of
 //! either side refuses the judgement, naming the case and the step.
+//!
+//! A harness step (every step but a validator's) that recorded no tokens, or 0, which takt never
+//! writes, leaves the run's tokens unknown too, never a sum that counts it 0, which would read
+//! as a saving; a validator step reports none and counts 0. A comparison with a scenario case of
+//! unknown run tokens on either side is refused before anything is judged or printed, naming
+//! the case and the step ([`refuse_unknown_tokens`]). The record cannot tell a harness step
+//! relabelled `validator` from a validator's: it is read as the validator's 0.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -87,19 +94,24 @@ pub const BINARY_FILE: &str = "binary.txt";
 /// version, so a comparison with a scorecard saved under the previous one prints both figures.
 /// The outcome is at version 3: `Unperformable` ranks with the budget stops and a [`DISK_LOW`]
 /// trial takes no rank, so a takt that knows version 2 refuses a scorecard saved under it.
-/// `step_tokens` is a run's tokens by the action of its `step` lines ([`Row::step_tokens`], an
-/// action unknown when a harness step of it recorded no tokens) and the rule that judges the
-/// steps a candidate targets with them ([`Scorecard::judge_steps`]); a takt that does not know
-/// it refuses a scorecard saved under it.
+/// `tokens` is at version 2: a run whose harness step recorded no tokens, or 0, has unknown
+/// tokens (`null`), where version 1 summed the step as 0; a takt that knows version 1 refuses
+/// a scorecard saved under it, and a baseline saved under it is compared only after
+/// `takt promote --rebaseline`. `step_tokens` is a run's tokens by the action of its `step`
+/// lines ([`Row::step_tokens`], an action unknown when a harness step of it recorded no tokens)
+/// and the rule that judges the steps a candidate targets with them
+/// ([`Scorecard::judge_steps`]); a takt that does not know it refuses a scorecard saved under
+/// it. At version 2 a harness step that recorded 0 leaves its action unknown too, where version
+/// 1 counted the 0.
 pub const METRICS: [(&str, u32); 8] = [
     ("outcome", 3),
     ("steps", 1),
-    ("tokens", 1),
+    ("tokens", 2),
     ("refusals", 1),
     ("no_progress", 1),
     ("errors", 1),
     ("wall", 1),
-    ("step_tokens", 1),
+    ("step_tokens", 2),
 ];
 
 /// The cases a side needs for the rank test of a targeted step ([`rank_test`]): five, the
@@ -142,8 +154,11 @@ pub struct Row {
     pub held_out: Option<HeldOut>,
     /// The highest step number of the run's lines: the steps it took.
     pub steps: u64,
-    /// The sum of the tokens the harness reported on the run's `step` lines.
-    pub tokens: u64,
+    /// The sum of the tokens reported on the run's `step` lines, a validator's that reports
+    /// none counting 0; unknown (none, saved as `null`) when a harness step of the run recorded
+    /// no tokens, or 0, which takt never writes: a missing record is never read as 0, which
+    /// would read as a saving (metric `tokens` version 2).
+    pub tokens: Option<u64>,
     /// The run's `refusal` lines.
     pub refusals: u64,
     /// 1 when the run stopped `NoProgress`, else 0.
@@ -173,7 +188,7 @@ pub struct Row {
     /// The tokens of the run's `step` lines by their action, each summed over the run's steps
     /// of that action (at most `u64::MAX`, the run then `saturated`); an action with no
     /// harness step reads 0, a validator reporting none. Unknown (none, saved as `null`) when a
-    /// harness step of the action recorded no `tokens`: a missing record is never read as 0,
+    /// harness step of the action recorded no `tokens`, or 0: a missing record is never read as 0,
     /// which would read as a saving ([`Scorecard::judge_steps`] refuses it). Empty on a file
     /// saved before it had the field (metric `step_tokens`).
     #[serde(default)]
@@ -181,6 +196,24 @@ pub struct Row {
 }
 
 impl Row {
+    /// The steps that leave the run's tokens unknown, each named by its action, in action
+    /// order: every action whose tokens are unknown ([`Row::step_tokens`]), or, for a run of
+    /// unknown tokens with none such (a step line without an action), `a step without an
+    /// action`; empty when the run's tokens are known.
+    #[must_use]
+    pub fn unknown_steps(&self) -> Vec<String> {
+        let unknown: Vec<String> = self
+            .step_tokens
+            .iter()
+            .filter(|(_, tokens)| tokens.is_none())
+            .map(|(action, _)| action.clone())
+            .collect();
+        if unknown.is_empty() && self.tokens.is_none() {
+            return vec!["a step without an action".to_owned()];
+        }
+        unknown
+    }
+
     /// Whether the run's own stop claims a completion while its held-out check did not pass:
     /// its stop line says it completed, or its stop is one a `Completed` stop named. Either
     /// claim is enough: a run's `completed: false` beside `Completed (accepted)` does not take
@@ -306,8 +339,13 @@ pub struct Case {
     pub runs: u64,
     /// Its runs' steps, summed.
     pub steps: u64,
-    /// Its runs' tokens, summed.
+    /// Its runs' tokens, summed over the runs whose tokens are known; no figure when
+    /// `unknown_steps` names a step, which a comparison refuses before reading it
+    /// ([`refuse_unknown_tokens`]).
     pub tokens: u64,
+    /// The steps, by action, that leave a run's tokens unknown ([`Row::unknown_steps`]), over
+    /// its runs; empty when every run's tokens are known.
+    pub unknown_steps: BTreeSet<String>,
     /// Its runs' refusals, summed.
     pub refusals: u64,
     /// 1 when its outcome is `NoProgress`, else 0.
@@ -344,7 +382,7 @@ impl Case {
         };
         let (steps, tokens, refusals, errors, wall_ms) = (
             sum(|run| run.steps),
-            sum(|run| run.tokens),
+            sum(|run| run.tokens.unwrap_or(0)),
             sum(|run| run.refusals),
             sum(|run| run.errors),
             sum(|run| run.wall_ms),
@@ -368,6 +406,7 @@ impl Case {
             runs: runs.len() as u64,
             steps,
             tokens,
+            unknown_steps: runs.iter().flat_map(|run| run.unknown_steps()).collect(),
             refusals,
             errors,
             wall_ms,
@@ -536,6 +575,8 @@ struct Span {
     last: Option<i128>,
     steps: u64,
     tokens: u64,
+    /// A harness step recorded no tokens, or 0: the run's tokens are unknown ([`Row::tokens`]).
+    tokens_unknown: bool,
     refusals: u64,
     errors: u64,
     saturated: bool,
@@ -575,7 +616,7 @@ impl Span {
             outcome,
             held_out: None,
             steps: self.steps,
-            tokens: self.tokens,
+            tokens: (!self.tokens_unknown).then_some(self.tokens),
             refusals: self.refusals,
             errors: self.errors,
             wall_ms,
@@ -622,11 +663,13 @@ fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
             Some("step") => {
                 let reported = line["tokens"].as_u64();
                 let tokens = reported.unwrap_or(0);
+                // A validator reports no tokens and spends none; a harness step (every step but
+                // a validator's) without a count, or with 0, which takt never writes, leaves the
+                // run's tokens and its action's unknown, never 0.
+                let unknown = line["by"] != "validator" && reported.is_none_or(|n| n == 0);
+                span.tokens_unknown |= unknown;
                 count(&mut span.tokens, tokens, &mut span.saturated);
                 if let Some(action) = line["action"].as_str() {
-                    // A validator reports no tokens and spends none; a harness step (every step
-                    // but a validator's) without a count leaves its action unknown, never 0.
-                    let unknown = reported.is_none() && line["by"] != "validator";
                     let at = span.step_tokens.entry(action.to_owned()).or_insert(Some(0));
                     match at {
                         Some(_) if unknown => *at = None,
@@ -653,6 +696,7 @@ fn figure(case: &Case, metric: &str) -> String {
     match metric {
         "outcome" => case.outcome.clone(),
         "steps" => case.steps.to_string(),
+        "tokens" if !case.unknown_steps.is_empty() => "unknown".to_owned(),
         "tokens" => case.tokens.to_string(),
         "refusals" => case.refusals.to_string(),
         "no_progress" => case.no_progress.to_string(),
@@ -744,6 +788,31 @@ pub fn unnamed_in_a_mix(rows: &[Row]) -> Option<(String, &Row)> {
         }
     }
     None
+}
+
+/// Refuses a comparison of `sides`, each a scorecard with the name a refusal gives it, when a
+/// scenario case of any of them has unknown run tokens ([`Row::tokens`]), naming each such case
+/// and step as `<case> step <action> (<side>)`: a harness step that recorded no tokens is no
+/// saving, and nothing is judged on it. A case of no scenario is compared with nothing and
+/// refuses nothing.
+pub fn refuse_unknown_tokens(sides: &[(&Scorecard, &str)]) -> Result<()> {
+    let mut unknown: Vec<String> = Vec::new();
+    for (card, side) in sides {
+        for case in card.cases() {
+            if case.scenario.is_some() {
+                for step in &case.unknown_steps {
+                    unknown.push(format!("{} step {step} ({side})", case.case));
+                }
+            }
+        }
+    }
+    if !unknown.is_empty() {
+        bail!(
+            "the run tokens are unknown in {}: a harness step of it recorded no tokens, or 0, and a missing record is never read as 0, which would read as a saving, so nothing is judged",
+            unknown.join(", ")
+        );
+    }
+    Ok(())
 }
 
 /// The one-sided exact Mann-Whitney U test of a targeted step: whether the candidate's tokens at
@@ -1177,6 +1246,21 @@ impl Scorecard {
                     scenario_of(&row.case).unwrap_or("none")
                 );
             }
+            // Under the tokens definition 1 a run summed an untokened step as 0 beside a null step:
+            // that copy reads, and the definition check refuses to compare it until a rebaseline.
+            if card
+                .metrics
+                .get("tokens")
+                .is_some_and(|version| *version >= 2)
+                && let Some(tokens) = row.tokens
+                && let Some((action, _)) = row.step_tokens.iter().find(|(_, at)| at.is_none())
+            {
+                bail!(
+                    "{}: run {}#{n} gives the tokens {tokens}, but its step {action} recorded none; a run's tokens are unknown when a step's are, so the scorecard is not read",
+                    path.display(),
+                    row.case
+                );
+            }
             let Some(held) = &row.held_out else {
                 continue;
             };
@@ -1235,7 +1319,9 @@ impl Scorecard {
     /// DiskLow trials (...)` naming them, and the error names them too: the scenario is run
     /// again as a fresh set without them, not topped up; a side that has no case of such a
     /// scenario is named as well, as above, so neither refusal hides the other. A case a run of
-    /// which disagrees with its held-out check is named so beside its outcome. The number of
+    /// which disagrees with its held-out check is named so beside its outcome. A scenario case
+    /// of either side whose run tokens are unknown refuses the comparison before anything is
+    /// printed, naming the case and the step ([`refuse_unknown_tokens`]). The number of
     /// scenarios marked worse.
     pub fn against(&self, saved: &Scorecard, out: &mut dyn Write) -> Result<usize> {
         Ok(self.worse_against(saved, out)?.len())
@@ -1244,6 +1330,7 @@ impl Scorecard {
     /// [`Scorecard::against`], the scenarios marked worse by name, in order, rather than their
     /// number.
     pub fn worse_against(&self, saved: &Scorecard, out: &mut dyn Write) -> Result<Vec<String>> {
+        refuse_unknown_tokens(&[(self, "this scorecard"), (saved, "the saved scorecard")])?;
         let version = |card: &Scorecard, metric: &str| {
             card.metrics
                 .get(metric)
@@ -1518,7 +1605,9 @@ impl Scorecard {
     /// naming it: a scorecard saved without it has no figure a step to judge. A scenario case of
     /// either side whose tokens at a targeted step are unknown (a harness step of it recorded no
     /// tokens, [`Row::step_tokens`]) refuses the judgement before anything is printed, naming
-    /// the case and the step: a missing record read as 0 would read as a saving.
+    /// the case and the step: a missing record read as 0 would read as a saving. So does one
+    /// whose run tokens are unknown at any step, targeted or not: the run is not judged, and
+    /// with it not the steps ([`refuse_unknown_tokens`]).
     pub fn judge_steps(
         &self,
         saved: &Scorecard,

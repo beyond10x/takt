@@ -355,7 +355,7 @@ fn row(case: &str, outcome: &str) -> Row {
         scenario: takt::scorecard::scenario_of(case).map(str::to_owned),
         outcome: outcome.to_owned(),
         steps: 1,
-        tokens: 100,
+        tokens: Some(100),
         refusals: 0,
         no_progress: u64::from(outcome == "NoProgress"),
         errors: u64::from(outcome == "error"),

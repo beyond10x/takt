@@ -28,7 +28,9 @@
 //! takt's own and whose metric definitions takt knows, every run of which was made with the
 //! binary of that revision, as its `opened` line names it, and every scenario run of which
 //! carries its held-out result), refuses a candidate with a scenario of fewer cases than the
-//! rule's trials, compares it with the baseline's copy in the store under takt's [`Rule`], and
+//! rule's trials, and before anything is judged a candidate or a stored scorecard with a scenario
+//! case of unknown run tokens (a harness step that recorded none, [`crate::scorecard::Row::tokens`]),
+//! naming the case and the step, as `--baseline-only` and `--rebaseline` refuse one; compares it with the baseline's copy in the store under takt's [`Rule`], and
 //! with the copy of the record that starts its series on that record's scenarios (`Series`),
 //! the latest baseline or rebaseline under a newer metric definition, so steps each within the
 //! rule against the one before cannot add up past it; a rebaseline that only adds a scenario
@@ -73,7 +75,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::scorecard::{
     BINARY_FILE, METRICS, Row, Rule, RunBinary, Scorecard, StatedBy, is_sha256, names_no_revision,
-    rank, unnamed_in_a_mix,
+    rank, refuse_unknown_tokens, unnamed_in_a_mix,
 };
 
 /// The promotion record's format.
@@ -1011,7 +1013,6 @@ fn runs_bound(
             }
             for (metric, field, figure, stored_figure) in [
                 ("steps", "steps", run.steps, was.steps),
-                ("tokens", "tokens", run.tokens, was.tokens),
                 ("refusals", "refusals", run.refusals, was.refusals),
                 (
                     "no_progress",
@@ -1025,6 +1026,11 @@ fn runs_bound(
                 if unchanged(metric) {
                     fields.push((field, figure.to_string(), stored_figure.to_string()));
                 }
+            }
+            if unchanged("tokens") {
+                let shown =
+                    |tokens: Option<u64>| tokens.map_or("unknown".to_owned(), |n| n.to_string());
+                fields.push(("tokens", shown(run.tokens), shown(was.tokens)));
             }
             if unchanged("step_tokens") {
                 fields.push((
@@ -2496,6 +2502,9 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         stated.is_none().then_some(revision.as_str()),
         request.scorecard,
     )?;
+    // A run of unknown tokens judges nothing, as a candidate or as a baseline every later
+    // candidate would be compared with: refused before the store is read.
+    refuse_unknown_tokens(&[(&card, &request.scorecard.display().to_string())])?;
     if request.rejudge && request.baseline_only {
         bail!(
             "--rejudge judges a refused candidate again and --baseline-only records a baseline, which is never refused; give one of them"
@@ -2684,8 +2693,12 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     };
     let start = existing[series.start].clone();
     let base_card = stored_card(store, &base, "baseline")?;
-    enough_trials(&card, &base_card, request.scorecard)?;
     let base_path = record_path(store, &base);
+    refuse_unknown_tokens(&[(
+        &base_card,
+        &format!("the baseline {} ({})", base.revision, base_path.display()),
+    )])?;
+    enough_trials(&card, &base_card, request.scorecard)?;
     let start_path = record_path(store, &start);
     record.series_start = Some(file_name(&start_path));
     // The series judges the candidate as well as the latest record: the start on its own
@@ -2730,7 +2743,8 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
             only(&adder_card, added),
         ));
     }
-    for (_, _, candidate, saved) in &judges {
+    for (_, what, candidate, saved) in &judges {
+        refuse_unknown_tokens(&[(saved, what.as_str())])?;
         enough_trials(candidate, saved, request.scorecard)?;
     }
     writeln!(
@@ -2941,6 +2955,10 @@ pub fn rebaseline(request: &Rebaseline<'_>, out: &mut dyn Write) -> Result<Outco
         );
     }
     known_metrics(&card, shown)?;
+    // The runs re-read under the newer definitions: one whose tokens are now unknown, which an
+    // older definition summed as 0, would make a baseline that judges no candidate, so it is
+    // refused here and the stored figure is not carried over.
+    refuse_unknown_tokens(&[(&card, &shown.display().to_string())])?;
     let Some(revision) = card.revision.clone() else {
         bail!(
             "{}: the scorecard names no revision; save it with `takt scorecard --save --revision`",
@@ -3184,6 +3202,51 @@ mod tests {
         ("wall", 1),
     ];
 
+    /// The metric definitions of takt 0.5.0, whose `tokens` read a harness step that recorded no
+    /// tokens as 0 and whose `step_tokens` read a harness step's 0 as a count.
+    const METRICS_TOKENS_V1: [(&str, u32); 8] = [
+        ("outcome", 3),
+        ("steps", 1),
+        ("tokens", 1),
+        ("refusals", 1),
+        ("no_progress", 1),
+        ("errors", 1),
+        ("wall", 1),
+        ("step_tokens", 1),
+    ];
+
+    /// story:run-tokens-unknown-is-not-zero, acceptance 3: the tokens definition moved, so a
+    /// takt that read a missing record as 0 refuses a scorecard that can hold an unknown, and
+    /// this takt refuses a scorecard saved under the definition before it until a rebaseline,
+    /// which starts a new series.
+    #[test]
+    fn a_takt_knowing_tokens_v1_refuses_a_scorecard_saved_under_v2() {
+        let shown = Path::new(SAVED_V3);
+        let card = Scorecard::load(shown).expect("the fixture reads");
+        assert_eq!(card.metrics.get("tokens"), Some(&2));
+        let refused = known_metrics_of(&card, shown, &METRICS_TOKENS_V1)
+            .expect_err("a takt knowing tokens v1 refuses it")
+            .to_string();
+        assert!(
+            refused.contains("metric tokens is at definition version 2; this takt knows version 1"),
+            "{refused}"
+        );
+        let mut before = card.clone();
+        before.metrics.insert("tokens".to_owned(), 1);
+        before.metrics.insert("step_tokens".to_owned(), 1);
+        let refused = known_metrics_of(&before, shown, &METRICS)
+            .expect_err("this takt refuses a scorecard under tokens v1")
+            .to_string();
+        assert!(
+            refused.contains("metric tokens is at definition version 1; this takt knows version 2"),
+            "{refused}"
+        );
+        assert!(
+            newer_definition(&card, &before),
+            "a rebaseline under tokens v2 starts a new series"
+        );
+    }
+
     /// story:the-judge-compares-the-steps-a-candidate-targets, acceptance 4: the per-step rule
     /// has a definition version of its own, `step_tokens` v1, saved with every scorecard, so a
     /// takt that does not know it refuses the scorecard instead of judging it without the rule;
@@ -3192,9 +3255,12 @@ mod tests {
     fn a_takt_not_knowing_step_tokens_refuses_a_scorecard_saved_under_it() {
         let shown = Path::new(SAVED_V3);
         let card = Scorecard::load(shown).expect("the fixture reads");
-        assert_eq!(card.metrics.get("step_tokens"), Some(&1));
+        assert_eq!(card.metrics.get("step_tokens"), Some(&2));
         known_metrics_of(&card, shown, &METRICS).expect("this takt reads it");
-        let refused = known_metrics_of(&card, shown, &METRICS_BEFORE_STEP_TOKENS)
+        // Its tokens at the version that takt knows, so step_tokens alone is the refusal.
+        let mut known_tokens = card.clone();
+        known_tokens.metrics.insert("tokens".to_owned(), 1);
+        let refused = known_metrics_of(&known_tokens, shown, &METRICS_BEFORE_STEP_TOKENS)
             .expect_err("a takt not knowing step_tokens refuses it")
             .to_string();
         assert!(
