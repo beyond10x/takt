@@ -1682,7 +1682,7 @@ pub fn current(tree: &Path) -> Result<PathBuf> {
 /// be anywhere, in the tree or out of it, and a run snapshots the cases directory without
 /// following one, so a case reached through a link would be read and written where no snapshot
 /// sees it. `what` says what the case is not: `opened`, `resumed`.
-fn refuse_link_on_the_way(tree: &Path, id: &str, what: &str) -> Result<()> {
+pub(crate) fn refuse_link_on_the_way(tree: &Path, id: &str, what: &str) -> Result<()> {
     let mut way = PathBuf::new();
     for part in Path::new(CASES_DIR).join(id).components() {
         way.push(part);

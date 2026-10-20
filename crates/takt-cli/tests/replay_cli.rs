@@ -445,6 +445,222 @@ fn a_prompt_that_differs_from_the_recorded_one_replays_nothing() {
     assert!(!out.exists(), "nothing written");
 }
 
+/// A copy of the case `case` at `<outer>/.engineering/cases/<id>`, made with `cp -a`.
+fn copy_case(case: &Path, outer: &Path) -> PathBuf {
+    let cases = outer.join(".engineering/cases");
+    fs::create_dir_all(&cases).expect("a cases directory");
+    let copy = cases.join(case.file_name().expect("a name"));
+    let status = Command::new("cp")
+        .arg("-a")
+        .arg(case)
+        .arg(&copy)
+        .status()
+        .expect("cp runs");
+    assert!(status.success(), "the case is copied");
+    copy
+}
+
+/// The revision the record of `case` names last before step `step`'s first line: the one a
+/// replay of that step starts at.
+fn start_revision(case: &Path, step: u64) -> String {
+    let events = fs::read_to_string(case.join("events.jsonl")).expect("the run record");
+    let lines: Vec<serde_json::Value> = events
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let index = lines
+        .iter()
+        .position(|line| line["step"].as_u64() == Some(step))
+        .expect("the step's line");
+    lines[..index]
+        .iter()
+        .rev()
+        .find_map(|line| match line["event"].as_str() {
+            Some("step" | "effect") => line["revision"].as_str(),
+            Some("store_evidence" | "store_move") => line["commit"].as_str(),
+            _ => None,
+        })
+        .expect("a revision before the step")
+        .to_owned()
+}
+
+/// A commit fetched into `repo` as `refs/heads/<name>` whose tree holds nothing but a link at
+/// `link` to `target` (and the directories on the way to it): made in a clone at `<outer>`.
+fn side_commit(repo: &Path, outer: &Path, name: &str, link: &str, target: &Path) -> String {
+    let status = Command::new("git")
+        .args(["clone", "-q"])
+        .arg(repo)
+        .arg(outer)
+        .status()
+        .expect("git clone runs");
+    assert!(status.success(), "the clone");
+    git(outer, &["rm", "-q", "-r", "--cached", "."]);
+    for entry in fs::read_dir(outer).expect("the clone") {
+        let path = entry.expect("an entry").path();
+        if path.file_name().is_some_and(|name| name == ".git") {
+            continue;
+        }
+        if fs::symlink_metadata(&path).expect("metadata").is_dir() {
+            fs::remove_dir_all(&path).expect("removed");
+        } else {
+            fs::remove_file(&path).expect("removed");
+        }
+    }
+    let at = outer.join(link);
+    fs::create_dir_all(at.parent().expect("a parent")).expect("the way to the link");
+    std::os::unix::fs::symlink(target, &at).expect("the link");
+    git(outer, &["add", "-A"]);
+    git(outer, &["commit", "-q", "-m", "side"]);
+    let side = git(outer, &["rev-parse", "HEAD"]).trim().to_owned();
+    git(
+        repo,
+        &[
+            "fetch",
+            "-q",
+            outer.to_str().expect("utf-8"),
+            &format!("HEAD:refs/heads/{name}"),
+        ],
+    );
+    side
+}
+
+/// A record naming a revision whose tree holds a link on the way to the rebuilt case (at
+/// `.engineering`) or inside it (at the case's `evidence`), each to the real case's: refused,
+/// exit 1, and the real case's files are byte-identical. The crafted copy's evidence differs
+/// from the real case's, so that a write through the link would show.
+#[test]
+fn a_link_in_the_revision_s_tree_is_refused_and_the_case_is_not_written() {
+    let scratch = Scratch::new("link-tree");
+    let rec = recorded(&scratch.0);
+    let id = rec
+        .case
+        .file_name()
+        .expect("a name")
+        .to_string_lossy()
+        .into_owned();
+    let case_before = files(&rec.case);
+    let revision = start_revision(&rec.case, 4);
+    let ways = [
+        (".engineering".to_owned(), rec.repo.join(".engineering")),
+        (
+            format!(".engineering/cases/{id}/evidence"),
+            rec.case.join("evidence"),
+        ),
+    ];
+    for (k, (link, target)) in ways.iter().enumerate() {
+        let side = side_commit(
+            &rec.repo,
+            &scratch.0.join(format!("side-{k}")),
+            &format!("side-{k}"),
+            link,
+            target,
+        );
+        let crafted = copy_case(&rec.case, &scratch.0.join(format!("crafted-{k}")));
+        let events = fs::read_to_string(crafted.join("events.jsonl")).expect("the copy's record");
+        assert!(events.contains(&revision), "the record names {revision}");
+        fs::write(
+            crafted.join("events.jsonl"),
+            events.replace(&revision, &side),
+        )
+        .expect("the copy's record rewritten");
+        for entry in fs::read_dir(crafted.join("evidence")).expect("the copy's evidence") {
+            let path = entry.expect("an entry").path();
+            let mut bytes = fs::read(&path).expect("evidence");
+            bytes.extend_from_slice(b"crafted\n");
+            fs::write(&path, bytes).expect("evidence rewritten");
+        }
+        let output = takt(&rec.bin, &rec.state)
+            .args(["replay", "--case"])
+            .arg(&crafted)
+            .arg("--repo")
+            .arg(&rec.repo)
+            .args(["--step", "4", "--out"])
+            .arg(scratch.0.join(format!("out-{k}")))
+            .arg("--transcripts")
+            .arg(scratch.0.join("none"))
+            .output()
+            .expect("takt replay runs");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert_eq!(output.status.code(), Some(1), "link at {link}\n{stderr}");
+        assert!(stderr.contains("link"), "link at {link}\n{stderr}");
+        assert_eq!(
+            files(&rec.case),
+            case_before,
+            "the real case is byte-identical after a link at {link}"
+        );
+    }
+}
+
+/// With --repo, a record directory inside the tree the case directory lies in is refused too:
+/// exit 1, nothing run, nothing written there.
+#[test]
+fn a_record_directory_inside_the_case_s_tree_is_refused_with_repo() {
+    let scratch = Scratch::new("inside-tree");
+    let rec = recorded(&scratch.0);
+    let tree = scratch.0.join("copy");
+    let copy = copy_case(&rec.case, &tree);
+    let before_calls = fs::read_dir(&rec.calls).expect("calls").count();
+    let out = tree.join("inside-case-tree");
+    let output = takt(&rec.bin, &rec.state)
+        .args(["replay", "--case"])
+        .arg(&copy)
+        .arg("--repo")
+        .arg(&rec.repo)
+        .args(["--step", "4", "--out"])
+        .arg(&out)
+        .arg("--transcripts")
+        .arg(scratch.0.join("none"))
+        .output()
+        .expect("takt replay runs");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("case's tree"), "{stderr}");
+    assert_eq!(
+        fs::read_dir(&rec.calls).expect("calls").count(),
+        before_calls
+    );
+    assert!(!out.exists(), "nothing written");
+}
+
+/// An evidence record or a decision of the case that is a link (to a copy of itself outside
+/// the case) is refused, not read through: exit 1, nothing run.
+#[test]
+fn a_link_among_the_case_s_evidence_or_decisions_is_refused() {
+    let scratch = Scratch::new("link-source");
+    let rec = recorded(&scratch.0);
+    let before_calls = fs::read_dir(&rec.calls).expect("calls").count();
+    for (k, sub) in ["evidence", "decisions"].iter().enumerate() {
+        let copy = copy_case(&rec.case, &scratch.0.join(format!("copy-{k}")));
+        let outside = scratch.0.join(format!("outside-{k}"));
+        fs::create_dir_all(&outside).expect("a directory");
+        for entry in fs::read_dir(copy.join(sub)).expect("the copy's files") {
+            let path = entry.expect("an entry").path();
+            let aside = outside.join(path.file_name().expect("a name"));
+            fs::rename(&path, &aside).expect("moved aside");
+            std::os::unix::fs::symlink(&aside, &path).expect("the link");
+        }
+        let output = takt(&rec.bin, &rec.state)
+            .args(["replay", "--case"])
+            .arg(&copy)
+            .arg("--repo")
+            .arg(&rec.repo)
+            .args(["--step", "4", "--out"])
+            .arg(scratch.0.join(format!("out-{k}")))
+            .arg("--transcripts")
+            .arg(scratch.0.join("none"))
+            .output()
+            .expect("takt replay runs");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert_eq!(output.status.code(), Some(1), "links in {sub}\n{stderr}");
+        assert!(stderr.contains("link"), "links in {sub}\n{stderr}");
+        assert_eq!(
+            fs::read_dir(&rec.calls).expect("calls").count(),
+            before_calls,
+            "nothing run with links in {sub}"
+        );
+    }
+}
+
 /// `takt replay --help` prints its usage, exit 0: the story's predicate.
 #[test]
 fn replay_help_exits_zero() {

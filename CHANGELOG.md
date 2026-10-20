@@ -68,6 +68,8 @@ open, and a gate line the reader cannot read fails closed.
   rebuilt prompt against the recorded transcript first, when one is found (a mismatch exits 3 and
   runs nothing), records each replay as `takt-replay/1` outside the case and the tree, and leaves
   the case untouched. A replay whose harness failed exits 5, the error in its record.
+  A link in the revision's tree or among the case's files is refused, never followed, and
+  `--out` inside the tree the case lies in is refused even with `--repo`.
 
 ### Fixed
 

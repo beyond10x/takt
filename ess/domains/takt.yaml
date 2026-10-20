@@ -427,7 +427,7 @@ types:
   # read from: crates/takt/src/run.rs:861-868
   # read from: crates/takt-cli/src/main.rs:1651
   # read from: crates/takt-cli/src/main.rs:730
-  # read from: crates/takt/src/scorecard.rs:452-465
+  # read from: crates/takt/src/scorecard.rs:453-466
   # read from: crates/takt-cli/src/main.rs:1619
   # read from: crates/takt/src/run.rs:7530-7536
   # read from: crates/takt/src/run.rs:8522-8532
@@ -445,7 +445,7 @@ types:
   # read from: crates/takt-cli/src/main.rs:1620-1622
   # read from: crates/takt-cli/src/main.rs:1652
   # read from: crates/takt/src/scorecard.rs:427-446
-  # read from: crates/takt/src/scorecard.rs:1292-1331
+  # read from: crates/takt/src/scorecard.rs:1293-1332
   # read from: crates/takt/src/promotion.rs:3108-3115
   # read from: crates/takt/src/run.rs:8624-8629
   # read from: crates/takt/src/run.rs:141
@@ -1084,7 +1084,7 @@ types:
   # A saved scorecard's id: the revision of takt under test that names its file,
   # `scorecard-<revision>.json`, a commit id; a file there already is not overwritten.
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
-  # read from: crates/takt/src/scorecard.rs:1064-1100
+  # read from: crates/takt/src/scorecard.rs:1065-1101
   # Decided 2026-10-19 (story:scorecard-save-checks-binary): a save, by any caller, is named by
   # the full commit id, 40 lower-case hex digits, checked before anything else; and it is refused
   # naming the run and both revisions, writing nothing, unless every run's `opened` line names the
@@ -1092,10 +1092,10 @@ types:
   # mix is refused. A line names no revision when it has no `binary`, says `unknown revision` or
   # is empty: one predicate and one mix rule the save, a stated baseline (`takt promote
   # --binary-sha256`) and a trace's revision share; the planner's ruling of 2026-10-19.
-  # read from: crates/takt/src/scorecard.rs:1102-1132
+  # read from: crates/takt/src/scorecard.rs:1103-1133
   # read from: .engineering/planning/story/scorecard-save-checks-binary.md (§ Acceptance)
-  # read from: crates/takt/src/scorecard.rs:699-730
-  # read from: crates/takt/src/scorecard.rs:681-687
+  # read from: crates/takt/src/scorecard.rs:700-731
+  # read from: crates/takt/src/scorecard.rs:682-688
   - name: takt.work.ScorecardId
     kind: newtype
     of: String
@@ -1137,7 +1137,7 @@ types:
   # run of a case whose directory holds a `binary.txt`; absent otherwise.
   # read from: crates/takt/src/scorecard.rs:121-169
   # read from: crates/takt/src/scorecard.rs:420-425
-  # read from: crates/takt/src/scorecard.rs:582-631
+  # read from: crates/takt/src/scorecard.rs:583-632
   # Decided 2026-10-19 (story:scorecard-outcome-from-held-out-check): a scenario run's outcome
   # comes from the held-out check the runner wrote beside its record (takt.work.HeldOut), never
   # from the run's own record. Every run of a scenario case carries the case's result; one that
@@ -1170,7 +1170,7 @@ types:
   # (takt.work.PromotionKind). A rebaseline binds a run's `step_tokens` to the stored run's
   # while the definition is unchanged.
   # read from: crates/takt/src/scorecard.rs:178-226
-  # read from: crates/takt/src/scorecard.rs:850-932
+  # read from: crates/takt/src/scorecard.rs:851-933
   # read from: crates/takt/src/scorecard.rs:84-92
   # read from: crates/takt/src/promotion.rs:1971-1985
   # read from: crates/takt/src/promotion.rs:2871-2896
@@ -1231,7 +1231,7 @@ types:
   # `scenario` is not the one its case id names, the scenario being derived from the case id.
   # read from: crates/takt/src/scorecard.rs:60-68
   # read from: crates/takt/src/scorecard.rs:200-227
-  # read from: crates/takt/src/scorecard.rs:1134-1196
+  # read from: crates/takt/src/scorecard.rs:1135-1197
   - name: takt.work.HeldOut
     kind: struct
     fields:
@@ -1263,7 +1263,7 @@ types:
   # read from: crates/takt/src/scorecard.rs:78-82
   # read from: crates/takt/src/scorecard.rs:239-248
   # read from: crates/takt/src/scorecard.rs:259-285
-  # read from: crates/takt/src/scorecard.rs:850-932
+  # read from: crates/takt/src/scorecard.rs:851-933
   - name: takt.work.RunBinary
     kind: struct
     fields:
@@ -1321,9 +1321,9 @@ types:
   # `disk_low` trial: it stays in its scenario, and that scenario gets no verdict on either
   # side, whatever its count (the planner's ruling; takt.work.Stop, takt.work.Comparison).
   # read from: crates/takt/src/scorecard.rs:287-370
-  # read from: crates/takt/src/scorecard.rs:950-964
+  # read from: crates/takt/src/scorecard.rs:951-965
   # read from: crates/takt/src/scorecard.rs:70-76
-  # read from: crates/takt/src/scorecard.rs:935-948
+  # read from: crates/takt/src/scorecard.rs:936-949
   - name: takt.work.ScorecardCase
     kind: struct
     fields:
@@ -1697,14 +1697,14 @@ types:
   # the other, and the refusals join. A promotion's trial count refuses such a set on either
   # side before it compares, so it never becomes a baseline.
   # read from: .engineering/planning/design/recursive-self-improvement.md:135-143
-  # read from: crates/takt/src/scorecard.rs:1198-1223
-  # read from: crates/takt/src/scorecard.rs:1384-1408
-  # read from: crates/takt/src/scorecard.rs:1431-1459
-  # read from: crates/takt/src/scorecard.rs:1333-1357
-  # read from: crates/takt/src/scorecard.rs:1464-1485
-  # read from: crates/takt/src/scorecard.rs:1258-1262
-  # read from: crates/takt/src/scorecard.rs:1358-1362
-  # read from: crates/takt/src/scorecard.rs:1292-1331
+  # read from: crates/takt/src/scorecard.rs:1199-1224
+  # read from: crates/takt/src/scorecard.rs:1385-1409
+  # read from: crates/takt/src/scorecard.rs:1432-1460
+  # read from: crates/takt/src/scorecard.rs:1334-1358
+  # read from: crates/takt/src/scorecard.rs:1465-1486
+  # read from: crates/takt/src/scorecard.rs:1259-1263
+  # read from: crates/takt/src/scorecard.rs:1359-1363
+  # read from: crates/takt/src/scorecard.rs:1293-1332
   # read from: crates/takt/src/promotion.rs:3108-3115
   - name: takt.work.Comparison
     kind: enum
@@ -1733,10 +1733,10 @@ types:
   # it, an empty action, or any refusal of the run's comparison; `--steps` without `--against`
   # does not parse (exit 2). `takt promote` judges the run alone, as before.
   # read from: crates/takt/src/scorecard.rs:105-108
-  # read from: crates/takt/src/scorecard.rs:732-805
-  # read from: crates/takt/src/scorecard.rs:828-838
-  # read from: crates/takt/src/scorecard.rs:1489-1683
-  # read from: crates/takt/src/scorecard.rs:1706-1734
+  # read from: crates/takt/src/scorecard.rs:733-806
+  # read from: crates/takt/src/scorecard.rs:829-839
+  # read from: crates/takt/src/scorecard.rs:1490-1684
+  # read from: crates/takt/src/scorecard.rs:1707-1735
   # read from: crates/takt-cli/src/main.rs:389-404
   # read from: crates/takt-cli/src/main.rs:408-413
   # read from: crates/takt-cli/src/main.rs:829-835
@@ -2274,7 +2274,7 @@ types:
   # record holds the last component (`replay`). A replay's case, run and step do not identify
   # it, since every `takt replay` of a step numbers its replays from 1.
   # read from: crates/takt-cli/src/main.rs:232-253
-  # read from: crates/takt/src/replay.rs:477-480
+  # read from: crates/takt/src/replay.rs:555-558
   - name: takt.work.StepReplayId
     kind: newtype
     of: String
@@ -2328,7 +2328,7 @@ entities:
   # A case is neither opened nor resumed while a link stands on the way to its directory
   # (`.engineering`, the cases directory or the case's own directory): refused naming the link,
   # before anything is read through it or written.
-  # read from: crates/takt/src/case.rs:1680-1701
+  # read from: crates/takt/src/case.rs:1680-1700
   # Each harness step's transcript is kept outside the case and every repository, when the run
   # is given a transcripts directory (`takt run` gives `$XDG_STATE_HOME/takt/transcripts`,
   # `~/.local/state/takt/transcripts` without it; a run that is given none keeps none): at
@@ -3711,7 +3711,7 @@ entities:
   # read from: crates/takt/src/scorecard.rs:1-37
   # read from: crates/takt/src/scorecard.rs:57-100
   # read from: crates/takt/src/scorecard.rs:394-417
-  # read from: crates/takt/src/scorecard.rs:1198-1487
+  # read from: crates/takt/src/scorecard.rs:1199-1488
   - name: takt.work.Scorecard
     naming:
       summary: >-
@@ -4599,8 +4599,11 @@ entities:
   # default; the worktree is removed whatever the step did. Each replay is recorded as
   # `<replays>/replay-<k>/replay.json` (format `takt-replay/1`) beside its transcript
   # `transcript.jsonl`, both created new and readable by their owner only, outside the case
-  # directory and the repository's tree: a replays directory inside either, through any link,
-  # is refused, exit 1. Without `--out` the replays directory is
+  # directory, the tree it lies in and the repository's tree: a replays directory inside any of
+  # them, through any link, is refused, exit 1. The case is rebuilt without following a link: a
+  # link on the way to the case directory in the revision's tree, at its `evidence/` or
+  # `decisions/`, at a file written there, or a file of the case that is a link, is refused, exit
+  # 1. Without `--out` the replays directory is
   # `$XDG_STATE_HOME/takt/replays/<repo-key>/<case>/run-<r>/step-<n>/<instant>`
   # (`~/.local/state` without `XDG_STATE_HOME`). The case directory is only read. A replay whose
   # harness failed is recorded with its error, the others still run, and the command exits 5;
@@ -4612,12 +4615,12 @@ entities:
   # which no record holds), so that relation is stated here and not declared.
   # read from: crates/takt/src/replay.rs:1-14
   # read from: crates/takt/src/replay.rs:25-38
-  # read from: crates/takt/src/replay.rs:120-300
-  # read from: crates/takt/src/replay.rs:302-370
-  # read from: crates/takt/src/replay.rs:387-425
-  # read from: crates/takt/src/replay.rs:458-590
-  # read from: crates/takt/src/replay.rs:592-605
-  # read from: crates/takt/src/replay.rs:607-643
+  # read from: crates/takt/src/replay.rs:120-299
+  # read from: crates/takt/src/replay.rs:304-372
+  # read from: crates/takt/src/replay.rs:389-434
+  # read from: crates/takt/src/replay.rs:536-668
+  # read from: crates/takt/src/replay.rs:670-683
+  # read from: crates/takt/src/replay.rs:685-728
   # read from: crates/takt-cli/src/main.rs:103-112
   # read from: crates/takt-cli/src/main.rs:116-163
   # read from: crates/takt-cli/src/main.rs:165-283

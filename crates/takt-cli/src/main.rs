@@ -157,7 +157,7 @@ const EXIT_PROMPT_DIFFERS: u8 = 3;
 /// What `takt replay --help` says about the exit codes.
 const REPLAY_EXIT_CODES: &str = "Exit codes:
   0  replayed, each replay recorded; the prompt was the recorded one byte for byte, or no recorded transcript was found to compare with (said on stdout)
-  1  refused, nothing run and nothing written: the case or its record does not read, the record holds no such step or holds it in several runs (give --run), the step is not a judgement step (a validator's, or one that recorded no harness step line), the record names no revision or decision for it, the replays directory is inside the case or the repository's tree or a replay's directory is there already, or the scratch worktree cannot be made; the reason on stderr
+  1  refused, nothing run and nothing written: the case or its record does not read, the record holds no such step or holds it in several runs (give --run), the step is not a judgement step (a validator's, or one that recorded no harness step line), the record names no revision or decision for it, the replays directory is inside the case, the tree it lies in or the repository's tree, or a replay's directory is there already, a link stands on the way to or inside the rebuilt case or among the case's files (an empty replay directory may be left), or the scratch worktree cannot be made; the reason on stderr
   2  the arguments do not parse
   3  the prompt rebuilt from the record differs from the first line of the recorded step's transcript; nothing run
   5  replayed and recorded, but the harness failed in at least one replay; its error is in that replay's record";

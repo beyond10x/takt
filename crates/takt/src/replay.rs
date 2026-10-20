@@ -209,8 +209,10 @@ pub fn starting_state(case_dir: &Path, step: u64, run: Option<u64>) -> Result<St
         );
     }
     let decision_path = case_dir.join(&decision_file);
+    let decision_bytes = read_plain(&decision_path)?
+        .ok_or_else(|| anyhow!("{} is not in the case", decision_path.display()))?;
     let decision = Decision::from_json(
-        &std::fs::read_to_string(&decision_path)
+        &String::from_utf8(decision_bytes)
             .with_context(|| format!("read {}", decision_path.display()))?,
     )
     .with_context(|| format!("read {}", decision_path.display()))?;
@@ -390,38 +392,114 @@ fn context<'a>(start: &'a Start, tree: &'a Path, offer: &'a crate::run::Offer) -
 /// resolved), the evidence records written before the step, its decisions up to the step's,
 /// and its record up to the step's line. What the record cannot date is not written
 /// ([`NOT_REBUILT`]).
+///
+/// Nothing is read or written through a link: a link on the way to the case directory in the
+/// tree (`.engineering`, the cases directory, the case's own) or at its `evidence` or
+/// `decisions` is refused, each file is written without following a link at it (`O_NOFOLLOW`),
+/// and a file of the case that is a link is refused, never copied ([`read_plain`]). The
+/// revision is the record's to name, and its tree could put a link anywhere.
 pub fn rebuild_case(start: &Start, tree: &Path, revision: &str) -> Result<PathBuf> {
+    crate::case::refuse_link_on_the_way(tree, &start.case, "rebuilt for a replay")?;
     let dir = tree.join(crate::case::CASES_DIR).join(&start.case);
-    std::fs::create_dir_all(dir.join("evidence"))
-        .with_context(|| format!("create {}", dir.display()))?;
-    std::fs::create_dir_all(dir.join("decisions"))
-        .with_context(|| format!("create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    plain_dir(&dir.join("evidence"))?;
+    plain_dir(&dir.join("decisions"))?;
     for name in OPENING_FILES {
-        let from = start.case_dir.join(name);
-        if std::fs::symlink_metadata(&from).is_ok_and(|meta| meta.is_file()) {
-            std::fs::copy(&from, dir.join(name))
-                .with_context(|| format!("copy {}", from.display()))?;
+        if let Some(bytes) = read_plain(&start.case_dir.join(name))? {
+            write_plain(&dir.join(name), &bytes)?;
         }
     }
-    std::fs::write(
-        dir.join("case.yaml"),
-        crate::case::snapshot_at(&start.case_dir, revision)?,
+    write_plain(
+        &dir.join("case.yaml"),
+        crate::case::snapshot_at(&start.case_dir, revision)?.as_bytes(),
     )?;
     for name in &start.evidence {
         let from = start.case_dir.join("evidence").join(name);
-        std::fs::copy(&from, dir.join("evidence").join(name))
-            .with_context(|| format!("copy {}", from.display()))?;
+        let bytes = read_plain(&from)?.ok_or_else(|| {
+            anyhow!(
+                "the evidence record {} the record names before step {} is not in the case",
+                from.display(),
+                start.step
+            )
+        })?;
+        write_plain(&dir.join("evidence").join(name), &bytes)?;
     }
     for seq in 1..=start.decision_seq {
         let name = format!("{seq:04}.json");
-        let from = start.case_dir.join("decisions").join(&name);
-        if from.is_file() {
-            std::fs::copy(&from, dir.join("decisions").join(&name))
-                .with_context(|| format!("copy {}", from.display()))?;
+        if let Some(bytes) = read_plain(&start.case_dir.join("decisions").join(&name))? {
+            write_plain(&dir.join("decisions").join(&name), &bytes)?;
         }
     }
-    std::fs::write(dir.join(crate::events::EVENTS_FILE), &start.record)?;
+    write_plain(&dir.join(crate::events::EVENTS_FILE), &start.record)?;
     Ok(dir)
+}
+
+/// The bytes of the regular file at `path`, read without following a link at it
+/// (`O_NOFOLLOW`); none when nothing is there. A link there, or anything but a regular file, is
+/// refused: a case is never read through a link.
+fn read_plain(path: &Path) -> Result<Option<Vec<u8>>> {
+    use std::io::Read as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+        Ok(meta) if meta.file_type().is_symlink() => bail!(
+            "{} is a link; a case is never read or written through a link",
+            path.display()
+        ),
+        Ok(meta) if !meta.is_file() => bail!("{} is not a file", path.display()),
+        Ok(_) => {}
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .with_context(|| format!("open {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .with_context(|| format!("read {}", path.display()))?;
+    Ok(Some(bytes))
+}
+
+/// Writes `bytes` to the file at `path`, made or emptied first, without following a link at
+/// it (`O_NOFOLLOW`): a link there is refused.
+fn write_plain(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|error| {
+            if error.raw_os_error() == Some(libc::ELOOP) {
+                anyhow!(
+                    "{} is a link in the revision's tree; a case is never read or written through a link",
+                    path.display()
+                )
+            } else {
+                anyhow::Error::new(error).context(format!("create {}", path.display()))
+            }
+        })?;
+    file.write_all(bytes)
+        .with_context(|| format!("write {}", path.display()))
+}
+
+/// The directory `path`, made when nothing is there; a link there, or anything but a
+/// directory, is refused.
+fn plain_dir(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => Ok(()),
+        Ok(meta) if meta.file_type().is_symlink() => bail!(
+            "{} is a link in the revision's tree; a case is never read or written through a link",
+            path.display()
+        ),
+        Ok(_) => bail!("{} is not a directory", path.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(path).with_context(|| format!("create {}", path.display()))
+        }
+        Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
+    }
 }
 
 /// What one replay did.
@@ -605,8 +683,9 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 /// Refuses `out` as the directory replays are recorded in when it is, or would be once made,
-/// inside the case directory or the repository's tree (through any link on the way): a replay is
-/// recorded beside the case, never in it, and leaves the tree as it was.
+/// inside the case directory, the tree the case directory lies in ([`tree_of`], when it lies in
+/// one) or the repository's tree (through any link on the way): a replay is recorded beside the
+/// case, never in it, and leaves both trees as they were.
 pub fn check_out_dir(out: &Path, case_dir: &Path, repo: &Path) -> Result<()> {
     let absolute = if out.is_absolute() {
         out.to_path_buf()
@@ -629,7 +708,14 @@ pub fn check_out_dir(out: &Path, case_dir: &Path, repo: &Path) -> Result<()> {
     let resolved = std::fs::canonicalize(base)
         .with_context(|| format!("resolve {}", base.display()))?
         .join(rest);
-    for (what, inside) in [("case directory", case_dir), ("repository's tree", repo)] {
+    let case_tree = tree_of(case_dir)
+        .ok()
+        .filter(|tree| !tree.as_os_str().is_empty());
+    let mut insides = vec![("case directory", case_dir), ("repository's tree", repo)];
+    if let Some(tree) = &case_tree {
+        insides.push(("case's tree", tree.as_path()));
+    }
+    for (what, inside) in insides {
         let inside = std::fs::canonicalize(inside).unwrap_or_else(|_| inside.to_path_buf());
         if resolved.starts_with(&inside) {
             bail!(
