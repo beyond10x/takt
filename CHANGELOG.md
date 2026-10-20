@@ -6,6 +6,13 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+### Changed
+
+- `takt run --help`: `--forge none` names the `Unperformable` stop, exit 7, when only a forge
+  action is left, instead of saying the harness takes them.
+- A step that writes `.engineering/commit-identity.conf` is refused naming the commit identity
+  file, no longer as a write into the planning store.
+
 ## [0.4.0] — 2026-10-20
 
 The minor version moves because a `DiskLow` stop exits 8, a 0.3.x baseline is judged again only

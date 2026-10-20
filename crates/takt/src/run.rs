@@ -5916,11 +5916,15 @@ pub fn is_manifest(path: &str) -> bool {
     fold(path.rsplit('/').next().unwrap_or(path)) == "cargo.toml"
 }
 
-/// How a refusal names what a step changed on the judge surface: the store first, as the store's,
+/// How a refusal names what a step changed on the judge surface: the commit identity file
+/// ([`crate::git::COMMIT_IDENTITY_FILE`]) first, as the identity, then the store, as the store's,
 /// then the rest.
 fn surface_refusal(action: &str, touched: &[String]) -> String {
+    let (identity, touched): (Vec<&String>, Vec<&String>) = touched.iter().partition(|path| {
+        fold(path.trim_end_matches('/')) == fold(crate::git::COMMIT_IDENTITY_FILE)
+    });
     let (store, other): (Vec<&String>, Vec<&String>) = touched
-        .iter()
+        .into_iter()
         .partition(|path| JudgeSurface::is_store(path));
     let join = |paths: &[&String]| {
         paths
@@ -5930,6 +5934,12 @@ fn surface_refusal(action: &str, touched: &[String]) -> String {
             .join(", ")
     };
     let mut parts = Vec::new();
+    if !identity.is_empty() {
+        parts.push(format!(
+            "changed the commit identity file, what decides whose name a candidate leaves the machine under, read at the base and on the judge surface: {}",
+            join(&identity)
+        ));
+    }
     if !store.is_empty() {
         parts.push(format!(
             "wrote into the planning store, which only takt writes, each write its own commit (the take when a case opens, a grant's record, the story's test result and its move to implemented): {}",
