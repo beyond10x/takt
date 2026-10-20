@@ -12,7 +12,7 @@
 //! | kind | harness | hermetic | calls |
 //! |---|---|---|---|
 //! | `Claude` | Claude Code | `Strict` | decided here (`Ask`): the file tools [`TOOLS`] on paths inside the copy |
-//! | `Codex` | Codex (`codex exec`) | `On`, H9 gating | decided here (`Ask`): `Bash` and `apply_patch` ([`CODEX_TOOLS`]) naming no path outside the copy; its own sandbox (`workspace-write` on the copy, no network) confines what a command writes |
+//! | `Codex` | Codex (`codex exec`) | `On`, H9 gating | decided here (`Ask`): `Bash` and `apply_patch` ([`CODEX_TOOLS`]) naming no path outside the copy; its own sandbox (`workspace-write` on the copy, no network) confines what a command writes; its home is its own ([`HOME_VARIABLES`]) |
 //! | `B10x` | b10x-harness | `On`, a gap holds the proposal | observed, never decided: metaharness's b10x adapter decides no call; the loop's toolset is what substrate confines to the copy |
 //!
 //! This crate depends on no crate of the application that embeds it, so it can move into Loom
@@ -321,16 +321,36 @@ impl SessionExecutor {
             Kind::Codex => Box::new(CodexSeams),
             Kind::B10x => Box::new(metaharness_b10x::B10xSeams::new(None, None, None)),
         };
-        // b10x-harness is the one metaharness resolves itself, on the `PATH` it gives its child
-        // (`$HOME/.local/bin` first), because the version it reads for H9 is that file's.
-        let started = match (self.runner.borrow_mut().as_mut(), &self.program) {
-            (Some(runner), _) => builder.start_with(Input::FromSpec, runner.as_mut(), &mut *seams),
-            (None, Some(program)) if self.kind != Kind::B10x => {
-                let mut named = Named::new(self.kind, program);
-                builder.start_with(Input::FromSpec, &mut named, &mut *seams)
+        // A Codex session's home is its own, in the scratch root ([`Homed`]).
+        let home = match self.kind {
+            Kind::Codex => Some(copy.home()?),
+            _ => None,
+        };
+        // The program: by path when the embedder names one; Codex's otherwise by name, found on
+        // the `PATH` metaharness gives its child (`$HOME/.local/bin` first) when it starts
+        // ([`Named`]), and b10x-harness's by metaharness itself on that same `PATH`, because the
+        // version H9 reads is that file's.
+        let mut supplied = self.runner.borrow_mut();
+        let mut named = match (supplied.is_some(), &self.program, self.kind) {
+            (true, _, _) | (false, _, Kind::B10x) | (false, None, Kind::Claude) => None,
+            (false, Some(program), kind) => Some(Named::new(kind, program.display().to_string())),
+            (false, None, Kind::Codex) => Some(Named::new(Kind::Codex, "codex".to_owned())),
+        };
+        let runner: Option<&mut dyn ProcessRunner> = match (supplied.as_mut(), named.as_mut()) {
+            (Some(runner), _) => Some(runner.as_mut()),
+            (None, Some(named)) => Some(named),
+            (None, None) => None,
+        };
+        let started = match (runner, &home) {
+            (Some(inner), Some(home)) => {
+                let mut homed = Homed { home, inner };
+                builder.start_with(Input::FromSpec, &mut homed, &mut *seams)
             }
+            (Some(runner), None) => builder.start_with(Input::FromSpec, runner, &mut *seams),
             (None, _) => builder.start(Input::FromSpec),
         };
+        drop(named);
+        drop(supplied);
         let mut run =
             started.map_err(|refusal| format!("metaharness refused the session: {refusal}"))?;
         let deadline = self
@@ -556,13 +576,74 @@ impl AgentExecutor for SessionExecutor {
 }
 
 /// metaharness's own spawn of the vendor program, the program named by path (the one the
-/// embedder resolved, never another found first on the `PATH` metaharness gives its child):
-/// Claude Code offered the file tools [`TOOLS`] and no other; Codex with its sandbox's network
-/// stated off and `/tmp` left out of what it may write ([`CODEX_SANDBOX`]).
+/// embedder resolved, never another found first on the `PATH` metaharness gives its child) or,
+/// named without a `/`, the first executable file of that name on that `PATH`, found when the
+/// child starts ([`on_path`]): the file that runs is the one whose version the session's opening
+/// record states and H9 reads. Claude Code offered the file tools [`TOOLS`] and no other; Codex
+/// with its sandbox's network stated off and `/tmp` left out of what it may write
+/// ([`CODEX_SANDBOX`]).
 struct Named {
     kind: Kind,
     program: String,
     inner: Box<dyn ProcessRunner>,
+}
+
+/// The variables a Codex session's child is given that say where its home is, each as a path
+/// under the session's own home ([`Homed`]), the empty one the home itself.
+pub const HOME_VARIABLES: [(&str, &str); 5] = [
+    ("HOME", ""),
+    ("XDG_CONFIG_HOME", ".config"),
+    ("XDG_DATA_HOME", ".local/share"),
+    ("XDG_STATE_HOME", ".local/state"),
+    ("XDG_CACHE_HOME", ".cache"),
+];
+
+/// The runner a Codex session starts through: its child's home is `home`, an empty directory in
+/// the session's scratch root beside the copy, and the XDG base directories lie under it
+/// ([`HOME_VARIABLES`]), so `~`, `$HOME` or a lookup of the user's configuration in the child
+/// reaches nothing of the user's. `PATH` stays the one metaharness built from the user's home,
+/// so the codex installed there is still the one found; `CODEX_HOME` stays metaharness's, which
+/// holds what Codex needs to log in. An absolute path into the user's home is still read where
+/// Codex's sandbox grants reading; what the session proposes is scanned before the embedder
+/// writes it.
+struct Homed<'a> {
+    home: &'a Path,
+    inner: &'a mut dyn ProcessRunner,
+}
+
+impl ProcessRunner for Homed<'_> {
+    fn requires_executable(&self) -> bool {
+        self.inner.requires_executable()
+    }
+
+    fn start(
+        &mut self,
+        plan: &metaharness::LaunchPlanView,
+    ) -> std::io::Result<Box<dyn metaharness::HarnessProcess>> {
+        let mut env = plan.env.clone();
+        for (name, under) in HOME_VARIABLES {
+            let at = if under.is_empty() {
+                self.home.to_path_buf()
+            } else {
+                self.home.join(under)
+            };
+            env.insert(name.to_owned(), at.display().to_string());
+        }
+        let homed = metaharness::LaunchPlanView { env: &env, ..*plan };
+        self.inner.start(&homed)
+    }
+}
+
+/// The first executable regular file named `name` in a directory of `path`, a `PATH` value.
+fn on_path(name: &str, path: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt as _;
+    path.split(':')
+        .filter(|dir| !dir.is_empty())
+        .map(|dir| Path::new(dir).join(name))
+        .find(|candidate| {
+            std::fs::metadata(candidate)
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        })
 }
 
 /// What a Codex session's own sandbox is told beside metaharness's `sandbox_mode =
@@ -577,14 +658,14 @@ pub const CODEX_SANDBOX: [&str; 4] = [
 ];
 
 impl Named {
-    fn new(kind: Kind, program: &Path) -> Self {
+    fn new(kind: Kind, program: String) -> Self {
         let inner: Box<dyn ProcessRunner> = match kind {
             Kind::Codex => Box::new(metaharness::CodexSpawnRunner::new()),
             _ => Box::new(metaharness::SpawnRunner::new()),
         };
         Self {
             kind,
-            program: program.display().to_string(),
+            program,
             inner,
         }
     }
@@ -599,6 +680,23 @@ impl ProcessRunner for Named {
         // it had to fork), so whatever the program leaves running is in that session and an
         // embedder that sweeps what left its own session finds it; the program as is where
         // there is no `setsid`.
+        let resolved = if self.program.contains('/') {
+            self.program.clone()
+        } else {
+            let path = plan.env.get("PATH").map_or("", String::as_str);
+            on_path(&self.program, path)
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!(
+                            "{} is not on the PATH metaharness gives its child ({path})",
+                            self.program
+                        ),
+                    )
+                })?
+                .display()
+                .to_string()
+        };
         let setsid = ["/usr/bin/setsid", "/bin/setsid"]
             .into_iter()
             .find(|path| Path::new(path).is_file());
@@ -606,10 +704,10 @@ impl ProcessRunner for Named {
         let program = match setsid {
             Some(setsid) => {
                 args.push("--wait".to_owned());
-                args.push(self.program.clone());
+                args.push(resolved.clone());
                 setsid
             }
-            None => self.program.as_str(),
+            None => resolved.as_str(),
         };
         match self.kind {
             // `codex exec`, then the sandbox's settings, then the rest as metaharness planned it.
@@ -933,6 +1031,18 @@ impl ScratchCopy {
         }
         copy.carry_git(workspace)?;
         Ok(copy)
+    }
+
+    /// The session's home ([`Homed`]): `home` beside the copy, made empty and `0700`, removed
+    /// with the copy.
+    fn home(&self) -> Result<PathBuf, String> {
+        use std::os::unix::fs::DirBuilderExt as _;
+        let home = self.dir.with_file_name("home");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&home)
+            .map_err(|error| format!("make the session's home {}: {error}", home.display()))?;
+        Ok(home)
     }
 
     /// Gives the copy `workspace`'s git state with no git directory inside it, so a session's

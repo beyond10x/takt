@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
@@ -16,6 +17,7 @@ use session_executor::metaharness::{
 };
 use session_executor::{CredentialSource, Endpoint, Kind};
 use takt::harness::{Harness, SessionHarness};
+use takt::run::{CREDENTIAL_SHAPES, ChangeScan, PROPOSAL_NOT_RECORDED, credential_shape};
 use takt::validator::{TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
@@ -129,10 +131,20 @@ struct Seen {
 }
 
 /// What a scripted session of each kind prints, in that kind's own record: its opening record
-/// (Codex's naming `version`), a reply ending in the JSON line naming `action`, the tokens when
-/// `tokens` is set, and its end.
-fn record(kind: Kind, cwd: &Path, action: &str, tokens: bool, version: &str) -> Vec<String> {
-    let reply = format!("Done.\n{{\"action\": \"{action}\", \"summary\": \"scripted\"}}");
+/// (Codex's naming `version`), a reply ending in the JSON line naming `action` and `summary`,
+/// the tokens when `tokens` is set, and its end.
+fn record(
+    kind: Kind,
+    cwd: &Path,
+    action: &str,
+    summary: &str,
+    tokens: bool,
+    version: &str,
+) -> Vec<String> {
+    let reply = format!(
+        "Done.\n{}",
+        serde_json::json!({"action": action, "summary": summary})
+    );
     let cwd = cwd.display().to_string();
     let lines = match kind {
         Kind::Claude => {
@@ -220,6 +232,7 @@ struct Session {
     kind: Kind,
     writes: Vec<(String, String)>,
     action: String,
+    summary: String,
     tokens: bool,
     version: String,
     seen: Rc<RefCell<Seen>>,
@@ -247,6 +260,7 @@ impl ProcessRunner for Session {
             self.kind,
             plan.cwd,
             &self.action,
+            &self.summary,
             self.tokens,
             &self.version,
         );
@@ -258,6 +272,7 @@ impl ProcessRunner for Session {
 struct Script<'a> {
     writes: &'a [(&'a str, &'a str)],
     action: &'a str,
+    summary: &'a str,
     tokens: bool,
     version: &'a str,
 }
@@ -267,6 +282,7 @@ impl Script<'_> {
         Script {
             writes: &[("src/lib.rs", FIXED)],
             action: "implementation.edit",
+            summary: "scripted",
             tokens: true,
             version: CODEX_PIN,
         }
@@ -282,8 +298,9 @@ fn harness(kind: Kind, script: &Script<'_>) -> (SessionHarness, Rc<RefCell<Seen>
         .iter()
         .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
         .collect();
-    let (action, tokens, version) = (
+    let (action, summary, tokens, version) = (
         script.action.to_owned(),
+        script.summary.to_owned(),
         script.tokens,
         script.version.to_owned(),
     );
@@ -303,6 +320,7 @@ fn harness(kind: Kind, script: &Script<'_>) -> (SessionHarness, Rc<RefCell<Seen>
             kind,
             writes: writes.clone(),
             action: action.clone(),
+            summary: summary.clone(),
             tokens,
             version: version.clone(),
             seen: Rc::clone(&shared),
@@ -311,18 +329,64 @@ fn harness(kind: Kind, script: &Script<'_>) -> (SessionHarness, Rc<RefCell<Seen>
     (harness, seen)
 }
 
-/// The run of `harness` on `tree` for `iterations` steps: its stop and what it printed.
+/// The run of `harness` on `tree` for `iterations` steps under a gates scan that passes what it
+/// is given ([`scanner`] `pass`): its stop and what it printed.
 fn run(
     tree: &Path,
     id: &str,
     iterations: u64,
     harness: &dyn Harness,
 ) -> (anyhow::Result<Stop>, String) {
+    let scan = scanner(tree, "pass");
+    run_scanned(tree, id, iterations, harness, Some(scan))
+}
+
+/// [`run`] under the gates scan `scan`, or none.
+fn run_scanned(
+    tree: &Path,
+    id: &str,
+    iterations: u64,
+    harness: &dyn Harness,
+    scan: Option<ChangeScan>,
+) -> (anyhow::Result<Stop>, String) {
     let validators = validators();
     let mut run = Run::open(tree, options(id, iterations), harness, &validators).expect("opens");
+    run.scan_change_with(scan);
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     (stop, String::from_utf8_lossy(&out).into_owned())
+}
+
+/// The text a fake gates policy refuses: [`scanner`] `policy` exits 1 on a file holding it.
+const POLICY_MARK: &str = "POLICY-RULE-MATCHED";
+
+/// A stand-in for `b10x-gates` beside `tree` (outside it), run as `scan-text --repo <tree>
+/// --policy <policy> <file>...`: `pass` exits 0; `policy` appends each scanned file to `log`
+/// and exits 1 when one holds [`POLICY_MARK`], as a policy rule's match does; `missing` names a
+/// program that is not there, a scan that cannot run.
+fn scanner(tree: &Path, kind: &str) -> ChangeScan {
+    let dir = tree.with_file_name(format!("scanner-{kind}"));
+    fs::create_dir_all(&dir).expect("the scanner's directory");
+    let policy = dir.join("policy.json");
+    fs::write(&policy, "{}\n").expect("a policy");
+    let body = match kind {
+        "pass" => "exit 0".to_owned(),
+        "policy" => format!(
+            "for f; do case \"$f\" in /*) if [ -f \"$f\" ]; then cat \"$f\" >> '{log}'; if grep -q {POLICY_MARK} \"$f\"; then exit 1; fi; fi;; esac; done\nexit 0",
+            log = dir.join("log").display()
+        ),
+        "missing" => {
+            return ChangeScan {
+                program: dir.join("not-there"),
+                policy,
+            };
+        }
+        other => panic!("no scanner {other}"),
+    };
+    let program = dir.join("b10x-gates");
+    fs::write(&program, format!("#!/bin/sh\n{body}\n")).expect("a scanner");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("exec bit");
+    ChangeScan { program, policy }
 }
 
 /// The case directory of `id` in `tree`.
@@ -654,6 +718,449 @@ fn a_codex_session_on_another_version_proposes_nothing() {
     for row in ["H1a", "H2", "H3", "H7", "H8", "H9 ok", "H11"] {
         assert!(summary.contains(row), "{row} in the summary: {summary}");
     }
+}
+
+/// `n` characters of a fixed pseudo-random sequence over `alphabet`: the body of a fake
+/// credential, built at run time so that no credential-shaped literal stands in this file.
+fn filler(seed: u64, n: usize, alphabet: &[u8]) -> String {
+    let mut state = seed;
+    (0..n)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let at = usize::try_from(state >> 33).expect("fits") % alphabet.len();
+            char::from(alphabet[at])
+        })
+        .collect()
+}
+
+const ALNUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+const URLSAFE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/// The three logins a session could read in the user's home, each fake and shaped as the file
+/// holds it: its name, the file's text, and the credential in it that must never be printed.
+/// Codex's `auth.json` (its tokens, the access token a JWT), Claude Code's `.credentials.json`
+/// (`claudeAiOauth` with its access and refresh tokens) and gh's `hosts.yml` (`oauth_token`).
+fn planted() -> Vec<(&'static str, String, String)> {
+    let jwt = |seed| {
+        format!(
+            "eyJ{}.eyJ{}.{}",
+            filler(seed, 30, ALNUM),
+            filler(seed + 1, 64, ALNUM),
+            filler(seed + 2, 43, URLSAFE)
+        )
+    };
+    let access = jwt(10);
+    let codex = serde_json::json!({
+        "OPENAI_API_KEY": null,
+        "tokens": {
+            "id_token": jwt(20),
+            "access_token": access,
+            "refresh_token": filler(30, 64, ALNUM),
+            "account_id": "00000000-0000-0000-0000-000000000000",
+        },
+        "last_refresh": "2026-10-20T00:00:00Z",
+    });
+    let oauth = format!("sk-ant-oat01-{}AA", filler(40, 93, URLSAFE));
+    let claude = serde_json::json!({
+        "claudeAiOauth": {
+            "accessToken": oauth,
+            "refreshToken": format!("sk-ant-ort01-{}AA", filler(50, 93, URLSAFE)),
+            "expiresAt": 1_790_000_000_000_u64,
+            "scopes": ["user:inference", "user:profile"],
+            "subscriptionType": "max",
+        },
+    });
+    let gh = format!("gho_{}", filler(60, 36, ALNUM));
+    let hosts = format!(
+        "github.com:\n    users:\n        someone:\n            oauth_token: {gh}\n    git_protocol: https\n    oauth_token: {gh}\n    user: someone\n"
+    );
+    vec![
+        ("codex-auth", format!("{codex:#}\n"), access),
+        ("claude-credentials", format!("{claude:#}\n"), oauth),
+        ("gh-hosts", hosts, gh),
+    ]
+}
+
+/// Every shape takt checks a proposal for ([`CREDENTIAL_SHAPES`]) is matched by a fake of it,
+/// each the shape it is named for, and ordinary code that names tokens matches none: a shape
+/// added to the list without a sample here, or one that no longer matches its sample, fails.
+#[test]
+fn every_credential_shape_takt_lists_matches_its_fake() {
+    let samples: Vec<(&str, String)> = vec![
+        (
+            "private-key",
+            format!(
+                "{dashes}BEGIN OPENSSH PRIVATE KEY{dashes}\n{}\n{dashes}END OPENSSH PRIVATE KEY{dashes}\n",
+                filler(70, 64, ALNUM),
+                dashes = "-".repeat(5)
+            ),
+        ),
+        (
+            "jwt",
+            format!(
+                "token = \"eyJ{}.eyJ{}.{}\"",
+                filler(71, 20, ALNUM),
+                filler(72, 30, ALNUM),
+                filler(73, 30, URLSAFE)
+            ),
+        ),
+        (
+            "anthropic-token",
+            format!("key: sk-ant-api03-{}", filler(74, 60, URLSAFE)),
+        ),
+        ("github-token", format!("ghp_{}", filler(75, 36, ALNUM))),
+        (
+            "github-token",
+            format!("github_pat_{}", filler(76, 40, ALNUM)),
+        ),
+        ("openai-key", format!("sk-proj-{}", filler(77, 40, ALNUM))),
+        (
+            "token-field",
+            format!("\"refresh_token\": \"{}9\"", filler(78, 40, ALNUM)),
+        ),
+    ];
+    for shape in CREDENTIAL_SHAPES {
+        assert!(
+            samples.iter().any(|(named, _)| *named == shape),
+            "{shape} has no sample here"
+        );
+    }
+    for (shape, text) in &samples {
+        assert_eq!(
+            credential_shape(text),
+            Some(*shape),
+            "the sample of {shape}"
+        );
+    }
+    for clean in [
+        FIXED,
+        "let refresh_token = read_token_from_disk();\npub access_token: String,\n",
+        "# The OAuth access_token and refresh_token are read from the login file.\n",
+        "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n",
+        "risk-assessment-of-the-whole-repository-in-bytes-per-file",
+    ] {
+        assert_eq!(credential_shape(clean), None, "{clean}");
+    }
+}
+
+/// F-A1, layer 1: a session of any kind that read a login of the user's (Codex's, Claude
+/// Code's, gh's, each fake) and proposes it, in a file or in its summary, is refused before the
+/// edit effect under a gates policy that passes it, as the repository's own policy does (it holds
+/// no rule for these shapes; takt's own list of credential shapes refuses them): the tree and
+/// `HEAD` as they were, the file named, the step's summary in the record the fixed line, and the
+/// credential nowhere in what the run printed, its refusal or its record.
+#[test]
+fn a_planted_credential_is_refused_under_every_kind() {
+    for kind in KINDS {
+        for (login, text, secret) in planted() {
+            for place in ["file", "summary"] {
+                let name = format!("planted-{}-{login}-{place}", kind.as_str());
+                let scratch = repository(&name);
+                let tree = scratch.tree();
+                let before = work(&tree);
+                let head = git(&tree, &["rev-parse", "HEAD"]);
+                let summary = format!("copied the login: {}", text.replace('\n', " "));
+                let in_file = [("src/lib.rs", FIXED), ("config/login.txt", text.as_str())];
+                let script = match place {
+                    "file" => Script {
+                        writes: &in_file,
+                        ..Script::fixing()
+                    },
+                    _ => Script {
+                        summary: &summary,
+                        ..Script::fixing()
+                    },
+                };
+                let (harness, _) = harness(kind, &script);
+                let id = "parity-planted";
+                let (stop, said) = run(&tree, id, 2, &harness);
+                let Ok(Stop::StepRefused(why)) = &stop else {
+                    panic!("{name}: refused, not {stop:?}");
+                };
+                assert!(said.contains("before the edit effect"), "{name}: {why}");
+                let named = if place == "file" {
+                    "config/login.txt"
+                } else {
+                    "summary"
+                };
+                assert!(
+                    why.contains(named),
+                    "{name}: the refusal names {named}: {why}"
+                );
+                assert_eq!(work(&tree), before, "{name}: the tree is unchanged");
+                assert_eq!(git(&tree, &["rev-parse", "HEAD"]), head, "{name}: HEAD");
+                let record = fs::read_to_string(case_dir(&tree, id).join("events.jsonl"))
+                    .expect("events.jsonl");
+                for (what, text) in [("output", &said), ("refusal", why), ("record", &record)] {
+                    assert!(
+                        !text.contains(&secret),
+                        "{name}: the credential is in the run's {what}"
+                    );
+                }
+                let steps = harness_steps(&tree, id);
+                assert_eq!(steps.len(), 1, "{name}");
+                assert_eq!(steps[0]["summary"], PROPOSAL_NOT_RECORDED, "{name}");
+            }
+        }
+    }
+}
+
+/// F-A1, layer 1: under every kind a proposal the gates policy refuses (a file, or the summary,
+/// holding what a rule matches) and one whose scan cannot run are refused before the edit
+/// effect, naming the file and never what matched, the tree unchanged and the summary not
+/// recorded. With no policy set, a Codex or b10x-harness proposal is refused (not scanned is no
+/// pass) and a Claude Code one is applied as before.
+#[test]
+fn a_policy_refusal_or_a_scan_that_cannot_run_refuses_the_proposal() {
+    let marked = format!("{FIXED}// {POLICY_MARK}\n");
+    let marked_summary = format!("made add add {POLICY_MARK}");
+    for kind in KINDS {
+        let unset = (kind != Kind::Claude).then_some("not scanned");
+        for (case, scan, file, summary, refused) in [
+            (
+                "file",
+                Some("policy"),
+                marked.as_str(),
+                "scripted",
+                Some("src/lib.rs"),
+            ),
+            (
+                "summary",
+                Some("policy"),
+                FIXED,
+                marked_summary.as_str(),
+                Some("summary"),
+            ),
+            (
+                "missing",
+                Some("missing"),
+                FIXED,
+                "scripted",
+                Some("could not run"),
+            ),
+            ("unset", None, FIXED, "scripted", unset),
+        ] {
+            let name = format!("policy-{}-{case}", kind.as_str());
+            let scratch = repository(&name);
+            let tree = scratch.tree();
+            let before = work(&tree);
+            let writes = [("src/lib.rs", file)];
+            let script = Script {
+                writes: &writes,
+                summary,
+                ..Script::fixing()
+            };
+            let (harness, _) = harness(kind, &script);
+            let id = "parity-policy";
+            let scan = scan.map(|scan| scanner(&tree, scan));
+            let (stop, said) = run_scanned(&tree, id, 2, &harness, scan);
+            let Some(named) = refused else {
+                assert!(stop.is_ok(), "{name}: {stop:?}\n{said}");
+                assert_eq!(
+                    fs::read_to_string(tree.join("src/lib.rs")).expect("the file"),
+                    FIXED,
+                    "{name}: applied as before\n{said}"
+                );
+                continue;
+            };
+            let Ok(Stop::StepRefused(why)) = &stop else {
+                panic!("{name}: refused, not {stop:?}\n{said}");
+            };
+            assert!(said.contains("before the edit effect"), "{name}: {why}");
+            assert!(
+                why.contains(named),
+                "{name}: the refusal names {named}: {why}"
+            );
+            let record =
+                fs::read_to_string(case_dir(&tree, id).join("events.jsonl")).expect("events");
+            for (what, text) in [("output", &said), ("refusal", why), ("record", &record)] {
+                assert!(
+                    !text.contains(POLICY_MARK),
+                    "{name}: what the rule matched is in the run's {what}"
+                );
+            }
+            assert_eq!(work(&tree), before, "{name}: the tree is unchanged\n{said}");
+            let steps = harness_steps(&tree, id);
+            assert_eq!(steps.len(), 1, "{name}\n{said}");
+            assert_eq!(steps[0]["summary"], PROPOSAL_NOT_RECORDED, "{name}");
+        }
+    }
+}
+
+/// F-A1, layer 1: a clean proposal passes the gates scan under every kind and is applied; the
+/// scan was given its file's content and the session's summary.
+#[test]
+fn a_clean_proposal_passes_the_scan_under_every_kind() {
+    for kind in KINDS {
+        let name = format!("clean-{}", kind.as_str());
+        let scratch = repository(&name);
+        let tree = scratch.tree();
+        let scan = scanner(&tree, "policy");
+        let log = scan.program.with_file_name("log");
+        let script = Script {
+            summary: "made add add",
+            ..Script::fixing()
+        };
+        let (harness, _) = harness(kind, &script);
+        let id = "parity-clean";
+        let (stop, said) = run_scanned(&tree, id, 2, &harness, Some(scan));
+        assert!(stop.is_ok(), "{name}: {stop:?}\n{said}");
+        assert_eq!(
+            fs::read_to_string(tree.join("src/lib.rs")).expect("the file"),
+            FIXED,
+            "{name}\n{said}"
+        );
+        let scanned = fs::read_to_string(&log).expect("the scan ran");
+        assert!(scanned.contains(FIXED), "{name}: the file was scanned");
+        assert!(
+            scanned.contains("made add add"),
+            "{name}: the summary was scanned"
+        );
+        let steps = harness_steps(&tree, id);
+        let recorded = steps[0]["summary"].as_str().expect("a summary");
+        assert!(recorded.starts_with("made add add"), "{name}: {recorded}");
+    }
+}
+
+/// F-A1, layer 2: the Codex session's home is not the user's. Its `HOME` and the four XDG base
+/// directories lie in the session's scratch root beside its copy, so `~` reaches nothing of the
+/// user's; `CODEX_HOME` is metaharness's, and `PATH` is metaharness's, built from the user's
+/// home, so the codex installed there is still the one found.
+#[test]
+fn the_codex_session_has_a_home_of_its_own() {
+    let scratch = repository("home");
+    let tree = scratch.tree();
+    let (harness, seen) = harness(Kind::Codex, &Script::fixing());
+    let (stop, said) = run(&tree, "parity-home", 2, &harness);
+    assert!(stop.is_ok(), "{stop:?}\n{said}");
+    let seen = seen.borrow();
+    let env = &seen.env[0];
+    let copy = &seen.cwd[0];
+    let root = copy.parent().expect("the scratch root");
+    let home = PathBuf::from(env.get("HOME").expect("a HOME"));
+    assert!(home.starts_with(root), "{home:?} in {root:?}");
+    assert!(!home.starts_with(copy), "{home:?} is outside the copy");
+    if let Some(user) = std::env::var_os("HOME") {
+        assert_ne!(home, PathBuf::from(&user), "the user's own home");
+        let bin = format!("{}/.local/bin:", user.to_string_lossy());
+        assert!(env["PATH"].starts_with(&bin), "{}", env["PATH"]);
+    }
+    for xdg in [
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+    ] {
+        let at = PathBuf::from(env.get(xdg).unwrap_or_else(|| panic!("{xdg} is set")));
+        assert!(at.starts_with(&home), "{xdg}: {at:?}");
+    }
+    assert!(env.contains_key("CODEX_HOME"), "{env:?}");
+    assert!(!home.exists(), "removed with the scratch copy");
+}
+
+/// F-A2: a Codex session that H9 holds back (a codex other than the pinned one) proposes
+/// nothing, and the tokens it reported are still charged: its step line carries them, their
+/// components and the version that ran; the tree is as it was.
+#[test]
+fn a_codex_session_held_back_by_h9_charges_its_tokens() {
+    let scratch = repository("held");
+    let tree = scratch.tree();
+    let before = work(&tree);
+    let script = Script {
+        version: "0.160.0",
+        ..Script::fixing()
+    };
+    let (harness, _) = harness(Kind::Codex, &script);
+    let id = "parity-held";
+    let (stop, said) = run(&tree, id, 2, &harness);
+    let ended = match &stop {
+        Err(error) => format!("{error:#}"),
+        Ok(stop) => format!("{stop:?}"),
+    };
+    assert!(ended.contains("H9"), "{ended}\n{said}");
+    assert_eq!(work(&tree), before, "the tree is unchanged\n{said}");
+    let steps = harness_steps(&tree, id);
+    assert_eq!(steps.len(), 1, "the held step is recorded\n{said}");
+    assert_eq!(steps[0]["tokens"].as_u64(), Some(120), "{:?}", steps[0]);
+    assert_eq!(steps[0]["usage"]["input"], 60, "{:?}", steps[0]);
+    assert_eq!(steps[0]["usage"]["cache_read"], 40, "{:?}", steps[0]);
+    assert_eq!(steps[0]["version"], "0.160.0", "{:?}", steps[0]);
+}
+
+const RESOLVE_CHILD: &str = "TAKT_HARNESS_PARITY_RESOLVE";
+
+/// F-A2: `--harness codex` runs the codex on the `PATH` metaharness gives its child (the user's
+/// `~/.local/bin` first), the file whose version H9 reads, never the first on takt's own `PATH`.
+/// Run in a child of this test binary whose `HOME` holds one fake codex in `.local/bin` and
+/// whose `PATH` puts another first: only the one in `HOME` runs.
+#[test]
+fn codex_is_the_one_on_the_childs_path() {
+    if let Some(dir) = std::env::var_os(RESOLVE_CHILD) {
+        let dir = PathBuf::from(dir);
+        let scratch = repository("resolve-run");
+        let tree = scratch.tree();
+        let mut harness = SessionHarness::of(Kind::Codex);
+        harness.credentials = CredentialSource::None;
+        harness.timeout = std::time::Duration::from_secs(60);
+        let (stop, said) = run(&tree, "parity-resolve", 2, &harness);
+        assert!(stop.is_err(), "the fake proposes nothing: {stop:?}\n{said}");
+        assert!(
+            dir.join("ran-child-path").exists(),
+            "the codex in HOME ran: {stop:?}\n{said}"
+        );
+        assert!(
+            !dir.join("ran-takt-path").exists(),
+            "the codex first on takt's PATH did not"
+        );
+        return;
+    }
+    let base = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("parity-{}-resolve", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let wrong = base.join("wrong");
+    for (dir, marker) in [
+        (home.join(".local/bin"), "ran-child-path"),
+        (wrong.clone(), "ran-takt-path"),
+    ] {
+        fs::create_dir_all(&dir).expect("a directory");
+        let program = dir.join("codex");
+        fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\necho \"$@\" > '{}'\nexit 1\n",
+                base.join(marker).display()
+            ),
+        )
+        .expect("a fake codex");
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("exec bit");
+    }
+    let path = format!(
+        "{}:{}",
+        wrong.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new(std::env::current_exe().expect("this test binary"))
+        .args([
+            "--exact",
+            "codex_is_the_one_on_the_childs_path",
+            "--nocapture",
+        ])
+        .env(RESOLVE_CHILD, &base)
+        .env("HOME", &home)
+        .env("PATH", path)
+        .output()
+        .expect("the child runs");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = fs::remove_dir_all(&base);
+    assert!(output.status.success(), "{said}");
+    assert!(said.contains("1 passed"), "the child ran the case: {said}");
 }
 
 /// Acceptance 5: the session executor's dependency tree holds no crate of this repository but

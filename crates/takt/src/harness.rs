@@ -109,6 +109,16 @@ pub trait Harness {
     fn take_proposal(&self) -> Option<Proposal> {
         None
     }
+    /// Whether the session behind a proposal may have read outside its scratch copy, so that what
+    /// it proposes may hold what it read there: its proposal is then refused unless a gates
+    /// policy scanned it (`B10X_GATES_POLICY`; not scanned is never passed). Every proposal is
+    /// checked for the shape of a credential, and scanned under a policy when one is set,
+    /// whatever this says ([`crate::run::credential_shape`]). True by default; false only for a
+    /// session whose every read is decided inside its copy (Claude Code's, file tools on paths
+    /// in it).
+    fn reads_outside_its_copy(&self) -> bool {
+        true
+    }
 }
 
 pub use session_executor::{Endpoint, Proposal, ProposedFile};
@@ -135,9 +145,10 @@ pub struct SessionHarness {
     pub timeout: std::time::Duration,
     /// Where the session's credential comes from: the user's login.
     pub credentials: session_executor::CredentialSource,
-    /// The harness program (`claude`, `codex`), found on takt's own `PATH` as [`ClaudeCode`]
-    /// finds it, or by path. b10x-harness is the one metaharness finds itself, on the `PATH` it
-    /// gives its child.
+    /// The harness program: `claude` found on takt's own `PATH` as [`ClaudeCode`] finds it, or by
+    /// path; `codex` by path, or by name found on the `PATH` metaharness gives its child
+    /// (`$HOME/.local/bin` first), the file whose version H9 reads; b10x-harness the one
+    /// metaharness finds itself, on that same `PATH`.
     pub program: String,
     /// For `Kind::B10x`, the endpoint its loop is pointed at and the subscription token it
     /// reads.
@@ -381,6 +392,13 @@ impl Harness for SessionHarness {
         self.proposal.borrow_mut().take()
     }
 
+    /// Codex's shell reads where its sandbox grants reading, the whole file system;
+    /// b10x-harness's calls are observed and decided by none: both may have read outside the
+    /// copy. Claude Code's every call is decided inside it.
+    fn reads_outside_its_copy(&self) -> bool {
+        self.kind != Kind::Claude
+    }
+
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport> {
         use loom_sdk::commission::ports::executor::AgentExecutor as _;
         self.reported.set(None);
@@ -432,10 +450,16 @@ impl Harness for SessionHarness {
                 .time_left
                 .map_or(self.timeout, |left| left.min(self.timeout)),
         );
+        // Claude Code's program is the `claude` on takt's own `PATH`; Codex's, unless named by
+        // path, and b10x-harness's are found on the `PATH` metaharness gives its child
+        // (`$HOME/.local/bin` first), the file whose version H9 reads.
         match &self.runner {
             Some(runner) => executor = executor.with_runner(runner()),
-            None if self.kind != Kind::B10x => {
+            None if self.kind == Kind::Claude => {
                 executor.program = Some(Self::resolved(&self.program)?);
+            }
+            None if self.kind == Kind::Codex && self.program.contains('/') => {
+                executor.program = Some(std::path::PathBuf::from(&self.program));
             }
             None => {}
         }
@@ -451,6 +475,18 @@ impl Harness for SessionHarness {
             cache_creation: report.cache_creation.unwrap_or(0),
         };
         let usage = (usage.total() > 0).then_some(usage);
+        // What the session reported is kept whether or not it proposed: a session the floor held
+        // back spent its tokens all the same, and the run charges them.
+        self.reported.set(usage);
+        *self.call.borrow_mut() = Some(CallReport {
+            model: report.model.clone(),
+            version: report.version.clone(),
+            cost_usd: report.cost_usd,
+            duration_ms: report.duration_ms,
+            api_ms: report.api_ms,
+            turns: report.turns,
+            started_at: Some(started_at),
+        });
         let proposal = match session_executor::Proposal::from_outcome(&outcome) {
             Some(Ok(proposal)) => proposal,
             Some(Err(why)) => bail!("the session's proposal does not read: {why}"),
@@ -462,16 +498,6 @@ impl Harness for SessionHarness {
                     .unwrap_or("its outcome names no action")
             ),
         };
-        self.reported.set(usage);
-        *self.call.borrow_mut() = Some(CallReport {
-            model: report.model.clone(),
-            version: report.version.clone(),
-            cost_usd: report.cost_usd,
-            duration_ms: report.duration_ms,
-            api_ms: report.api_ms,
-            turns: report.turns,
-            started_at: Some(started_at),
-        });
         // Claude Code's: the gating rows of metaharness's floor that were not `ok`, by row and
         // verdict only: their details name the scratch paths, which no record carries. Codex's
         // and b10x-harness's, under `HermeticMode::On`: the verdict whole, every row with its
