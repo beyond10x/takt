@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:disk-low-exits-with-its-own-code
 kind: story
-status: draft
+status: implemented
 title: A run that stops DiskLow exits 8, not the 3 that NoProgress and the budget stops give
 summary: DiskLow exits 3 like NoProgress, so runners resume a trial they should discard
 tags:
@@ -14,7 +14,11 @@ refs:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T23:24:02Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-19T23:24:02Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-20T00:08:23Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: disk-low-exits-with-its-own-code
 
