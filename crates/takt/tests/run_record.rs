@@ -1188,6 +1188,67 @@ fn a_judgement_step_that_edits_the_planning_store_is_refused_and_put_back() {
     assert_eq!(lines.last().expect("a line")["event"], "stop");
 }
 
+/// A judgement step that writes the commit identity file
+/// ([`takt::git::COMMIT_IDENTITY_FILE`]) is refused and put back, and the refusal names the file
+/// as the commit identity, never as the planning store, whose sentence names takt's own writes
+/// (story:commit-identity-refusal-names-the-identity-file).
+struct WritesTheIdentity;
+
+impl Harness for WritesTheIdentity {
+    fn name(&self) -> &str {
+        "writes-the-identity"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
+        fs::write(
+            context.tree.join(takt::git::COMMIT_IDENTITY_FILE),
+            "[identity]\n\tname = step\n\temail = step@localhost\n",
+        )?;
+        Ok(StepReport {
+            action: "implementation.edit".to_owned(),
+            summary: "an identity".to_owned(),
+            tokens: None,
+        })
+    }
+}
+
+#[test]
+fn a_judgement_step_that_writes_the_commit_identity_is_refused_as_the_identity() {
+    let repo = repository("writes-identity");
+    let validators: Vec<Box<dyn Validator>> =
+        vec![Box::new(TestsRun::new("false").expect("a command"))];
+    let store = Aep::default();
+    let mut out = Vec::new();
+    let mut run = Run::open_next(
+        &repo,
+        options(DELIVERY, 3),
+        &store,
+        &WritesTheIdentity,
+        &validators,
+        &mut out,
+    )
+    .expect("the frontier answers")
+    .expect("story:ready-one is taken");
+    run.record_on(&store);
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let stop = run.run(&mut out).expect("the run stops without an error");
+    let text = String::from_utf8_lossy(&out).into_owned();
+    drop(run);
+    let Stop::StepRefused(why) = &stop else {
+        panic!("{stop:?}\n{text}");
+    };
+    assert!(
+        why.contains("commit identity") && why.contains(takt::git::COMMIT_IDENTITY_FILE),
+        "{why}"
+    );
+    assert!(!why.contains("planning store"), "{why}");
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
+    assert!(
+        !repo.join(takt::git::COMMIT_IDENTITY_FILE).exists(),
+        "{text}"
+    );
+}
+
 /// A line of the record that does not read and was not cut short (a hand edit in the middle of
 /// the file) does not turn an accepted case into a run that errs: the store's writes are not
 /// made, an `error` line says why, and the stop is the one the case reached, recorded last.

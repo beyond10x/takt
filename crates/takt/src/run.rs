@@ -1622,7 +1622,20 @@ const OUTSIDE_IMPORTS_MARK: &str = "(outside imports) ";
 
 /// What [`scripts_of`] names, beside failing closed, for why a script fails closed at open: the
 /// refusal names it ([`JudgeSurface::modules_note`]).
-const FAILS_CLOSED_MARK: &str = "(fails closed) ";
+pub(crate) const FAILS_CLOSED_MARK: &str = "(fails closed) ";
+
+/// What [`read_command`] names, beside the path itself, for what a Python loads as code: a
+/// script a Python runs (`python3 check.py`, a file whose `#!` line names a Python), and what
+/// `python -m` runs and the `*.pth` files beside it. The gate compares them at the base
+/// ([`crate::validator::GateRun`]) wherever they were named, in a `sh -c` string or a shell
+/// script as well; [`scripts_of`] leaves the mark out.
+pub(crate) const PYTHON_MARK: &str = "(python) ";
+
+/// `path` named with [`PYTHON_MARK`] as well as by itself.
+fn python_named(named: &mut Vec<String>, path: String) {
+    named.push(format!("{PYTHON_MARK}{path}"));
+    named.push(path);
+}
 
 /// What [`scripts_of`] names for the program `word` run from `dir` with `env` ([`PROGRAM_MARK`]):
 /// the program (a bare name, an absolute path, or `tree:` and its path in the tree), then the
@@ -2630,20 +2643,101 @@ fn changed_dir(tree: &Path, dir: Option<&str>, to: &str) -> Option<String> {
     landing(tree, dir, to)
 }
 
+/// What starts a redirection among the words [`shell_words`] splits a line into: a character no
+/// word of a command line holds, so a quoted `"2>"` stays a word.
+const REDIRECT: char = '\u{0}';
+
+/// The redirection `word` is ([`shell_words`]): the descriptor written before its operator (`""`
+/// for none) and the operator; `None` for any other word.
+fn redirection(word: &str) -> Option<(&str, &str)> {
+    let rest = word.strip_prefix(REDIRECT)?;
+    Some(rest.split_at(rest.find(['<', '>', '&']).unwrap_or(rest.len())))
+}
+
+/// `words` as a shell line shows them: each redirection's operator without its [`REDIRECT`].
+fn shown(words: &[impl AsRef<str>]) -> String {
+    words
+        .iter()
+        .map(|word| word.as_ref().trim_start_matches(REDIRECT))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// `line` split into words as a POSIX shell splits a command line: white space between words,
 /// `'…'` taken as it is, `"…"` with `\` escaping `"`, `\`, `$` and a backquote, `\` outside quotes
-/// escaping the next character, and each of `;`, `&`, `|`, `(`, `)`, `<`, `>` a word by itself,
-/// so the commands of a list are told apart. Expansions are not made; an unclosed quote ends at
-/// the end of the line.
+/// escaping the next character, and each of `;`, `&`, `|`, `(`, `)` a word by itself, so the
+/// commands of a list are told apart. A redirection is one word, behind [`REDIRECT`]: its
+/// operator (`<`, `>`, `>>`, `<>`, `>|`, `<&`, `>&`, `<<`, `<<-`, `<<<`, `&>`, `&>>`) with the
+/// descriptor an unquoted run of digits (or bash's `{NAME}`) right before it names, so neither
+/// `2>&1` is split at `&` nor its `2` left as a word; one followed at once by another `<` or `>`
+/// is kept whole, a form [`redirection`] does not know. Its target is the next word. Expansions
+/// are not made; an unclosed quote ends at the end of the line.
 fn shell_words(line: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut started = false;
-    let mut chars = line.chars().peekable();
+    // Whether the word so far is unquoted characters only, so it may be a descriptor.
+    let mut bare = true;
+    // A shell drops a null byte of its input, and no other word starts with [`REDIRECT`].
+    let mut chars = line.chars().filter(|c| *c != REDIRECT).peekable();
     while let Some(c) = chars.next() {
         match c {
+            '<' | '>' => {
+                let descriptor = started
+                    && bare
+                    && (word.chars().all(|c| c.is_ascii_digit())
+                        || word
+                            .strip_prefix('{')
+                            .and_then(|name| name.strip_suffix('}'))
+                            .is_some_and(|name| {
+                                name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                            }));
+                let mut op = String::from(REDIRECT);
+                if descriptor {
+                    op.push_str(&std::mem::take(&mut word));
+                } else if started {
+                    words.push(std::mem::take(&mut word));
+                }
+                started = false;
+                bare = true;
+                op.push(c);
+                match (c, chars.peek()) {
+                    ('<', Some('<')) => {
+                        op.extend(chars.next());
+                        if matches!(chars.peek(), Some('<' | '-')) {
+                            op.extend(chars.next());
+                        }
+                    }
+                    ('<', Some('>' | '&')) | ('>', Some('>' | '|' | '&')) => {
+                        op.extend(chars.next());
+                    }
+                    _ => {}
+                }
+                while let Some(&more) = chars.peek().filter(|c| matches!(c, '<' | '>')) {
+                    op.push(more);
+                    chars.next();
+                }
+                words.push(op);
+            }
+            '&' if chars.peek() == Some(&'>') => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                    bare = true;
+                }
+                let mut op = String::from(REDIRECT);
+                op.push('&');
+                op.extend(chars.next());
+                while let Some(&more) = chars.peek().filter(|c| matches!(c, '<' | '>')) {
+                    op.push(more);
+                    chars.next();
+                }
+                words.push(op);
+            }
             '\'' => {
                 started = true;
+                bare = false;
                 for c in chars.by_ref() {
                     if c == '\'' {
                         break;
@@ -2653,6 +2747,7 @@ fn shell_words(line: &str) -> Vec<String> {
             }
             '"' => {
                 started = true;
+                bare = false;
                 while let Some(c) = chars.next() {
                     match c {
                         '"' => break,
@@ -2665,12 +2760,14 @@ fn shell_words(line: &str) -> Vec<String> {
             }
             '\\' => {
                 started = true;
+                bare = false;
                 word.extend(chars.next());
             }
-            ';' | '&' | '|' | '(' | ')' | '<' | '>' => {
+            ';' | '&' | '|' | '(' | ')' => {
                 if started {
                     words.push(std::mem::take(&mut word));
                     started = false;
+                    bare = true;
                 }
                 words.push(c.to_string());
             }
@@ -2678,6 +2775,7 @@ fn shell_words(line: &str) -> Vec<String> {
                 if started {
                     words.push(std::mem::take(&mut word));
                     started = false;
+                    bare = true;
                 }
             }
             c => {
@@ -2713,6 +2811,79 @@ struct Env {
     path_prefix: Vec<String>,
     /// How many scripts deep the guard is ([`SCRIPTS_AT_MOST`]).
     level: usize,
+    /// What the command reads on its standard input, when a redirection or a pipe of the line
+    /// set it: what a shell given no script reads as its script ([`stdin_script`]). `None` is
+    /// the test command's own.
+    stdin: Option<Stdin>,
+}
+
+/// What a command reads on its standard input ([`Env::stdin`]).
+#[derive(Debug, Clone)]
+enum Stdin {
+    /// A file of the tree, relative to it: `< FILE`, or `cat FILE |`.
+    File(String),
+    /// Nothing: `< /dev/null`.
+    Empty,
+    /// What the guard cannot name, and why.
+    Unknown(String),
+}
+
+/// What `word`, the file a redirection or `cat` feeds a command, read from `dir`, gives it on
+/// its standard input ([`Stdin`]).
+fn stdin_of(tree: &Path, word: &str, dir: Option<&str>, env: &Env) -> Stdin {
+    let Some(file) = expand(tree, word, dir, env).filter(|file| !globbed(file)) else {
+        return Stdin::Unknown(format!(
+            "{} holds what the guard cannot expand",
+            quoted(word)
+        ));
+    };
+    if file == "/dev/null" {
+        return Stdin::Empty;
+    }
+    match named_from(tree, dir, &file) {
+        Some(path) => Stdin::File(path),
+        None => Stdin::Unknown(format!("{}, which is not a file of the tree", quoted(word))),
+    }
+}
+
+/// What the command `producer` of a pipeline writes to the next one's standard input, as far as
+/// the guard reads it: `cat FILE` feeds it `FILE` (`Ok`), as written; anything else is output the
+/// guard cannot name (`Err`, the command).
+fn piped_from(producer: &[String]) -> Result<String, String> {
+    match producer {
+        [cat, file] | [cat, _, file]
+            if cat == "cat"
+                && !file.starts_with('-')
+                && redirection(file).is_none()
+                && (producer.len() == 2 || producer[1] == "--") =>
+        {
+            Ok(file.clone())
+        }
+        _ => Err(shown(producer)),
+    }
+}
+
+/// A shell given no script, or `-s`, reads its script from its standard input ([`Env::stdin`]):
+/// a file of the tree is read as the script a shell runs ([`script_paths`]), nothing is nothing,
+/// and anything else fails closed. The test command's own input is not the line's to name.
+fn stdin_script(tree: &Path, dir: Option<&str>, env: &Env, named: &mut Vec<String>, depth: usize) {
+    match &env.stdin {
+        None | Some(Stdin::Empty) => {}
+        Some(Stdin::File(path)) => {
+            named.push(path.clone());
+            let env = Env {
+                stdin: None,
+                ..env.clone()
+            };
+            script_paths(tree, path, dir, &env, named, depth, true);
+        }
+        Some(Stdin::Unknown(why)) => fail_closed(
+            named,
+            format!(
+                "a shell reads its script from its standard input, {why}, which the guard cannot read"
+            ),
+        ),
+    }
 }
 
 /// A shell reading a script: the directories it may be in (a `cd` that fails leaves it where it
@@ -2786,9 +2957,21 @@ fn substituted(line: &str) -> String {
 }
 
 /// Whether `word` holds an expansion the guard could not make: a variable it does not know, a
-/// command substitution, a home directory.
+/// command substitution, a home directory, a glob or a brace expansion ([`globbed`]).
 fn opaque(word: &str) -> bool {
-    word.contains(['$', '`', '\u{1}', '\u{2}', '\u{3}'])
+    word.contains(['$', '`', '\u{1}', '\u{2}', '\u{3}']) || globbed(word)
+}
+
+/// Whether `word` holds what a shell expands into the names of files, which the guard does not
+/// expand: `*`, `?`, a bracket expression (`[` with a `]` after it), or a brace expansion (`{`
+/// with a `}` after it). A word the guard reads as a path is unquoted already, so a glob quoted
+/// to stand for itself counts too: the guard fails closed rather than guess.
+fn globbed(word: &str) -> bool {
+    let closes = |open: char, close: char| {
+        word.find(open)
+            .is_some_and(|at| word[at + open.len_utf8()..].contains(close))
+    };
+    word.contains(['*', '?']) || closes('[', ']') || closes('{', '}')
 }
 
 /// `word` with its expansions made, from the directory `dir` of the tree: `$PWD` and the
@@ -3332,8 +3515,8 @@ fn read_line(
         || line.contains('`')
         || words.iter().any(|word| word == "(" || word == ")")
         || words
-            .windows(2)
-            .any(|pair| pair[0] == "<" && pair[1] == "<")
+            .iter()
+            .any(|word| redirection(word).is_some_and(|(_, operator)| operator.starts_with("<<")))
     {
         fail_closed(
             named,
@@ -3345,15 +3528,36 @@ fn read_line(
     }
     if every_word {
         for dir in &shell.dirs {
-            for word in &words {
+            for word in words.iter().filter(|word| redirection(word).is_none()) {
                 let word =
                     expand(tree, word, dir.as_deref(), &shell.env).unwrap_or_else(|| word.clone());
                 named.extend(named_from(tree, dir.as_deref(), &word));
             }
         }
     }
-    for command in words.split(|word| [";", "&", "|", "(", ")"].contains(&word.as_str())) {
-        statement(tree, command, shell, named, depth);
+    // The commands of the line, each with what a pipe before it feeds its standard input: a
+    // `|` (or `|&`) alone, not one of `||`.
+    let mut piped: Option<Result<String, String>> = None;
+    let mut command: Vec<String> = Vec::new();
+    let mut k = 0;
+    while k <= words.len() {
+        match words.get(k) {
+            Some(word) if [";", "&", "|", "(", ")"].contains(&word.as_str()) => {
+                let pipe = word == "|"
+                    && words.get(k + 1).is_none_or(|next| next != "|")
+                    && (k == 0 || words[k - 1] != "|");
+                let next = pipe.then(|| piped_from(&command));
+                statement(tree, &command, shell, named, depth, piped.take());
+                piped = next;
+                command.clear();
+                if pipe && words.get(k + 1).is_some_and(|next| next == "&") {
+                    k += 1;
+                }
+            }
+            Some(word) => command.push(word.clone()),
+            None => statement(tree, &command, shell, named, depth, piped.take()),
+        }
+        k += 1;
     }
 }
 
@@ -3364,39 +3568,90 @@ fn read_line(
 /// level deeper; a compound command's word (`if`, `for`, `{`, [`COMPOUND`]) and code given as
 /// text (`eval`, `trap`, `alias`, [`OPAQUE`]) fail closed and the rest is read as a command; any
 /// other is a command line of its own, from every directory the shell may be in
-/// ([`command_paths`]).
+/// ([`command_paths`]), with what a `<` or the pipe before it (`piped`, [`piped_from`]) feeds its
+/// standard input ([`Env::stdin`]).
 fn statement(
     tree: &Path,
     command: &[String],
     shell: &mut Shell,
     named: &mut Vec<String>,
     depth: usize,
+    piped: Option<Result<String, String>>,
 ) {
     let dirs = shell.dirs.clone();
     let mut words: Vec<&str> = Vec::new();
+    // What a redirection gives the command's standard input, the last one winning: a file
+    // (`Ok`), or what the guard knows of it otherwise (`Err`).
+    let mut input: Option<Result<String, Stdin>> = None;
     let mut at = 0;
     while let Some(word) = command.get(at) {
         at += 1;
-        if word == "<" || word == ">" {
-            while command
-                .get(at)
-                .is_some_and(|next| next == "<" || next == ">")
-            {
-                at += 1;
+        let Some((descriptor, operator)) = redirection(word) else {
+            words.push(word);
+            continue;
+        };
+        // A redirection's target is a word: another redirection (`< <(…)`) is read as itself.
+        let target = command
+            .get(at)
+            .filter(|target| redirection(target).is_none());
+        if target.is_some() {
+            at += 1;
+        }
+        let shown_redirection = || {
+            quoted(&format!(
+                "{descriptor}{operator}{}",
+                target.map_or("", String::as_str)
+            ))
+        };
+        // The descriptor it names; none is 0 for `<`, 1 for `>`, both 1 and 2 for `&>`.
+        let fd: Option<u32> = if descriptor.is_empty() {
+            Some(if operator.starts_with('<') { 0 } else { 1 })
+        } else {
+            descriptor.parse().ok()
+        };
+        let known = matches!(
+            operator,
+            "<" | "<>" | "<&" | "<<" | "<<-" | "<<<" | ">" | ">>" | ">|" | ">&"
+        ) || (descriptor.is_empty() && matches!(operator, "&>" | "&>>"));
+        let (Some(fd), true, Some(target)) = (fd, known, target) else {
+            fail_closed(
+                named,
+                format!(
+                    "the redirection {} in {} is a form the guard does not know",
+                    shown_redirection(),
+                    quoted(&shown(command))
+                ),
+            );
+            continue;
+        };
+        // A file opened for reading is one the command may read: guarded, whatever descriptor.
+        if matches!(operator, "<" | "<>") {
+            for dir in &dirs {
+                let target = expand(tree, target, dir.as_deref(), &shell.env)
+                    .unwrap_or_else(|| target.clone());
+                named.extend(named_from(tree, dir.as_deref(), &target));
             }
-            if let Some(target) = command.get(at) {
-                if word == "<" {
-                    for dir in &dirs {
-                        let target = expand(tree, target, dir.as_deref(), &shell.env)
-                            .unwrap_or_else(|| target.clone());
-                        named.extend(named_from(tree, dir.as_deref(), &target));
-                    }
-                }
-                at += 1;
-            }
+        }
+        if fd != 0 {
             continue;
         }
-        words.push(word);
+        input = Some(match operator {
+            "<" | "<>" => Ok(target.clone()),
+            "<&" | ">&" if target == "0" => continue,
+            "<&" | ">&" if target == "-" => Err(Stdin::Empty),
+            "<&" | ">&" => Err(Stdin::Unknown(format!(
+                "{}, a descriptor the guard does not follow",
+                shown_redirection()
+            ))),
+            "<<" | "<<-" | "<<<" => Err(Stdin::Unknown(format!(
+                "{}, a here-document",
+                shown_redirection()
+            ))),
+            _ => Err(Stdin::Unknown(format!(
+                "{}, opened for writing",
+                shown_redirection()
+            ))),
+        });
     }
     let mut at = 0;
     while words
@@ -3408,7 +3663,7 @@ fn statement(
                 named,
                 format!(
                     "the command {} opens or closes a compound command (`{}`), which the guard does not follow",
-                    quoted(&command.join(" ")),
+                    quoted(&shown(command)),
                     words[at]
                 ),
             );
@@ -3420,10 +3675,46 @@ fn statement(
         assignments.push(pair);
         at += 1;
     }
-    while matches!(words.get(at), Some(&("exec" | "command" | "builtin"))) {
+    // `exec`, `command` and `builtin` run the program after their options: `exec -c`, `-l` and
+    // `-a NAME` (the name the program is given, not the program), `command -p`, `-v`, `-V`. An
+    // option the guard does not know fails closed: it cannot tell where the program is.
+    while let Some(&builtin) = words
+        .get(at)
+        .filter(|word| matches!(**word, "exec" | "command" | "builtin"))
+    {
         at += 1;
-        while words.get(at).is_some_and(|word| word.starts_with('-')) {
+        let (flags, with_argument) = match builtin {
+            "exec" => ("cl", "a"),
+            "command" => ("pvV", ""),
+            _ => ("", ""),
+        };
+        while let Some(word) = words.get(at) {
+            if *word == "--" {
+                at += 1;
+                break;
+            }
+            let Some(cluster) = word.strip_prefix('-').filter(|cluster| !cluster.is_empty()) else {
+                break;
+            };
             at += 1;
+            for (k, c) in cluster.char_indices() {
+                if with_argument.contains(c) {
+                    if cluster[k + c.len_utf8()..].is_empty() {
+                        at += 1;
+                    }
+                    break;
+                }
+                if !flags.contains(c) {
+                    fail_closed(
+                        named,
+                        format!(
+                            "`{builtin}` takes an option the guard does not know, `-{c}`, in {}",
+                            quoted(&shown(command))
+                        ),
+                    );
+                    break;
+                }
+            }
         }
     }
     let rest = &words[at..];
@@ -3445,7 +3736,9 @@ fn statement(
                     // a directory on the stack is one the shell may be in already.
                     None => to.push(None),
                     Some(target) if target.starts_with('~') => to.push(None),
-                    Some(target) => match expand(tree, target, dir.as_deref(), &shell.env) {
+                    Some(target) => match expand(tree, target, dir.as_deref(), &shell.env)
+                        .filter(|target| !globbed(target))
+                    {
                         Some(target) => to.push(changed_dir(tree, dir.as_deref(), &target)),
                         None => {
                             // Anywhere, and where the default (`${X:-dir}`) leads.
@@ -3487,6 +3780,16 @@ fn statement(
                 else {
                     continue;
                 };
+                if globbed(&target) {
+                    fail_closed(
+                        named,
+                        format!(
+                            "the file sourced, {}, is a pattern the guard does not expand",
+                            quoted(&target)
+                        ),
+                    );
+                    continue;
+                }
                 let Some(path) = named_from(tree, dir.as_deref(), &target) else {
                     // A file outside the tree is code the guard cannot see, and what it does to
                     // `PATH` or the environment it cannot follow: fail closed, and say why.
@@ -3552,6 +3855,20 @@ fn statement(
         _ => {
             for dir in &dirs {
                 let mut env = shell.env.clone();
+                // A redirection wins over the pipe; with neither, the shell's own input.
+                match (&input, &piped) {
+                    (Some(Ok(target)), _) | (None, Some(Ok(target))) => {
+                        env.stdin = Some(stdin_of(tree, target, dir.as_deref(), &shell.env));
+                    }
+                    (Some(Err(stdin)), _) => env.stdin = Some(stdin.clone()),
+                    (None, Some(Err(producer))) => {
+                        env.stdin = Some(Stdin::Unknown(format!(
+                            "the output of {}",
+                            quoted(producer)
+                        )));
+                    }
+                    (None, None) => {}
+                }
                 for (name, value) in &assignments {
                     assign(
                         tree,
@@ -3833,6 +4150,7 @@ fn command_paths(
                     .is_some_and(|spec| !spec.short_module.is_empty())
             }) {
                 named.push(marked(parent_of(&path), IMPORTS));
+                named.push(format!("{PYTHON_MARK}{path}"));
             }
             named.push(path);
         }
@@ -4009,15 +4327,20 @@ fn command_paths(
                     }
                     for import in &imports {
                         let import = Some(import.as_str());
-                        named.extend(named_from(tree, import, &format!("{first}.py")));
-                        named.extend(named_from(tree, import, &format!("{first}.*")));
-                        named.extend(
+                        let loads = [
+                            named_from(tree, import, &format!("{first}.py")),
+                            named_from(tree, import, &format!("{first}.*")),
                             named_from(tree, import, first).map(|package| format!("{package}/**")),
-                        );
+                        ];
+                        for path in loads.into_iter().flatten() {
+                            python_named(named, path);
+                        }
                     }
                 }
                 for import in &imports {
-                    named.extend(named_from(tree, Some(import.as_str()), "*.pth"));
+                    if let Some(path) = named_from(tree, Some(import.as_str()), "*.pth") {
+                        python_named(named, path);
+                    }
                 }
             }
             match scanned.end {
@@ -4027,6 +4350,17 @@ fn command_paths(
                 }
                 End::Operand => {
                     let mut script = scanned.at;
+                    // A shell given no script, `-` or `-s` reads it from its standard input.
+                    if SHELLS.contains(&name.as_str())
+                        && (words.get(script).is_none_or(|word| *word == "-")
+                            || words[at..script.min(words.len())].iter().any(|word| {
+                                word.strip_prefix('-').is_some_and(|cluster| {
+                                    !cluster.starts_with('-') && cluster.contains('s')
+                                })
+                            }))
+                    {
+                        stdin_script(tree, dir.as_deref(), &env, named, depth);
+                    }
                     // A subcommand (`deno run`) has options of its own before the script.
                     if words
                         .get(script)
@@ -4070,6 +4404,7 @@ fn command_paths(
                             }
                             if !spec.short_module.is_empty() {
                                 named.push(marked(parent_of(&path), IMPORTS));
+                                named.push(format!("{PYTHON_MARK}{path}"));
                             }
                             named.push(path);
                         }
@@ -4131,7 +4466,10 @@ fn command_paths(
                 word
             };
             named.extend(named_from(tree, dir.as_deref(), word));
-            for unquoted in shell_words(word) {
+            for unquoted in shell_words(word)
+                .into_iter()
+                .filter(|word| redirection(word).is_none())
+            {
                 named.extend(named_from(tree, dir.as_deref(), &unquoted));
             }
         }
@@ -4193,6 +4531,16 @@ fn command_line(
 /// ([`FAIL_CLOSED`]), which [`JudgeSurface`] guards whole.
 #[must_use]
 pub fn scripts_of(words: &[String], tree: &Path) -> Vec<String> {
+    read_command(words, tree)
+        .into_iter()
+        .filter(|path| !path.starts_with(PYTHON_MARK))
+        .collect()
+}
+
+/// What [`scripts_of`] names for the command `words`, with what a Python loads as code named
+/// once more behind [`PYTHON_MARK`]: one reader for the step guard and the gate.
+#[must_use]
+pub(crate) fn read_command(words: &[String], tree: &Path) -> Vec<String> {
     let words: Vec<&str> = words.iter().map(String::as_str).collect();
     let mut named = Vec::new();
     // The `PATH` takt runs the command with, which it inherits: an entry that resolves inside
@@ -5916,11 +6264,15 @@ pub fn is_manifest(path: &str) -> bool {
     fold(path.rsplit('/').next().unwrap_or(path)) == "cargo.toml"
 }
 
-/// How a refusal names what a step changed on the judge surface: the store first, as the store's,
+/// How a refusal names what a step changed on the judge surface: the commit identity file
+/// ([`crate::git::COMMIT_IDENTITY_FILE`]) first, as the identity, then the store, as the store's,
 /// then the rest.
 fn surface_refusal(action: &str, touched: &[String]) -> String {
+    let (identity, touched): (Vec<&String>, Vec<&String>) = touched.iter().partition(|path| {
+        fold(path.trim_end_matches('/')) == fold(crate::git::COMMIT_IDENTITY_FILE)
+    });
     let (store, other): (Vec<&String>, Vec<&String>) = touched
-        .iter()
+        .into_iter()
         .partition(|path| JudgeSurface::is_store(path));
     let join = |paths: &[&String]| {
         paths
@@ -5930,6 +6282,12 @@ fn surface_refusal(action: &str, touched: &[String]) -> String {
             .join(", ")
     };
     let mut parts = Vec::new();
+    if !identity.is_empty() {
+        parts.push(format!(
+            "changed the commit identity file, what decides whose name a candidate leaves the machine under, read at the base and on the judge surface: {}",
+            join(&identity)
+        ));
+    }
     if !store.is_empty() {
         parts.push(format!(
             "wrote into the planning store, which only takt writes, each write its own commit (the take when a case opens, a grant's record, the story's test result and its move to implemented): {}",

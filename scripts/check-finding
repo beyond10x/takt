@@ -86,6 +86,15 @@
 # `builds/<sha>/takt` and `builds/<sha>/revision`, and one directory per check under `runs/`
 # holding the finding, the clone, the predicate's home, the command's output and the result,
 # kept as the record of the check.
+# One check builds and runs at a time per cache directory, whichever session starts it: the
+# build and the predicate's run are made under an advisory lock (`flock`) on `lock` in that
+# directory, and a check that finds it held says it is waiting, naming it, and waits. The lock
+# is the open descriptor's, released when the check ends however it ends (a killed check leaves
+# none that blocks), and no build or command the check starts inherits it. Before the lock is
+# waited for, and again once it is taken, the check reads the free space of the file system
+# holding the cache directory (`df`) and refuses, before anything is built, when it is under
+# CHECK_FINDING_MIN_FREE_GIB GiB, 20 by default (0 checks nothing), naming the directory, its
+# free space and the threshold. The variable is there for tests, which need no full disk.
 #
 # Standard output is one line, the result of the `scenario_result` evidence kind
 # (protocols/self-improvement/1.yaml): `reproduced` when every expectation the predicate gives
@@ -100,8 +109,10 @@
 # declared, no bubblewrap or no toolchain for a build, a build that fails, a HOME that names
 # no directory to hide, a bubblewrap that did not run the command to its end, its error named
 # on standard error, its status pipe's last line not the exit it gave, a command past
-# CHECK_FINDING_TIMEOUT seconds, 900 by default) prints nothing on standard output and exits 1;
-# a usage error, a CHECK_FINDING_TIMEOUT that is no whole number of seconds among them, exits 64.
+# CHECK_FINDING_TIMEOUT seconds, 900 by default, a file system under the free-space threshold,
+# a lock that cannot be taken) prints nothing on standard output and exits 1; a usage error, a
+# CHECK_FINDING_TIMEOUT that is no whole number of seconds or a CHECK_FINDING_MIN_FREE_GIB that
+# is no whole number of GiB among them, exits 64.
 set -euo pipefail
 
 # The repositories this script reads and writes are the ones it names by path, as they hold
@@ -188,6 +199,9 @@ repo=$(cd "$repo" 2>/dev/null && pwd -P) || usage "--repo: no directory"
 limit=${CHECK_FINDING_TIMEOUT:-900}
 [[ $limit =~ ^[1-9][0-9]{0,5}$ ]] ||
     usage "CHECK_FINDING_TIMEOUT=$limit: give a whole number of seconds, 1 to 999999"
+min_free=${CHECK_FINDING_MIN_FREE_GIB-20}
+[[ $min_free =~ ^(0|[1-9][0-9]{0,5})$ ]] ||
+    usage "CHECK_FINDING_MIN_FREE_GIB=$min_free: give a whole number of GiB, 0 to 999999"
 [[ $finding =~ ^([a-z][a-z-]*):([a-z0-9]+(-[a-z0-9]+)*)$ ]] ||
     usage "$finding: a finding is an artifact id, \`<kind>:<name>\`"
 finding_file=$repo/.engineering/planning/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.md
@@ -328,6 +342,34 @@ toolchain_dir() {
 # Never unconfined: without bubblewrap nothing is built and no predicate runs.
 bwrap=$(command -v bwrap) ||
     fail "bubblewrap (\`bwrap\`) is not on PATH; check-finding builds the revision confined in it and runs the predicate under it, never without, so install bubblewrap first"
+
+# One check at a time per cache directory, and none on a file system short of space. Builds of
+# several checks in flight add up (each a full takt build in a directory of its own); the lock
+# makes them one after the other, whichever session starts them. The lock is held on the open
+# descriptor until the script ends, so a check killed while it holds the lock leaves none that
+# blocks; `close_inherited` closes it before bubblewrap starts, so a build or a command left
+# running does not hold it either. The free space is read before the lock is waited for and
+# again once it is taken after a wait, since another check's build may have used it meanwhile.
+enough_space() {
+    ((min_free > 0)) || return 0
+    local avail
+    avail=$(df -Pk -- "$root" 2>/dev/null | awk 'NR == 2 { print $4 }') && [[ $avail =~ ^[0-9]+$ ]] ||
+        fail "df names no free space for the file system of $root; nothing is built where the free space cannot be read"
+    ((avail >= min_free * 1048576)) ||
+        fail "the file system of $root has $((avail / 1048576)).$((avail % 1048576 * 10 / 1048576)) GiB free ($avail KiB), under the threshold of $min_free GiB (CHECK_FINDING_MIN_FREE_GIB); nothing is built"
+}
+enough_space
+command -v flock >/dev/null ||
+    fail "flock is not on PATH; check-finding builds and runs one check at a time under it, never without"
+lock=$root/lock
+exec {lock_fd}>>"$lock" || fail "open the lock $lock"
+if ! flock --nonblock "$lock_fd"; then
+    say "waiting for $lock: another check-finding builds or runs under it"
+    flock "$lock_fd" || fail "take the lock $lock"
+    say "took $lock"
+    enough_space
+fi
+
 takt=$root/builds/$sha/takt
 if [[ ! -x $takt || ! -f $root/builds/$sha/revision ]]; then
     # Without the toolchain nothing is built.

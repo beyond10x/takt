@@ -6,6 +6,37 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+### Changed
+
+- `takt run --help`: `--forge none` names the `Unperformable` stop, exit 7, when only a forge
+  action is left, instead of saying the harness takes them.
+- A step that writes `.engineering/commit-identity.conf` is refused naming the commit identity
+  file, no longer as a write into the planning store.
+- `scripts/check-finding` builds and runs one check at a time per cache directory under a `flock`
+  on `takt/check-finding/lock`, says when it waits, and refuses, exit 1, before building when that
+  file system has less than `CHECK_FINDING_MIN_FREE_GIB` GiB free (20 by default; CI sets 0).
+- `gate.run` compares a Python script run through `sh -c`, a shell script, `exec` (its options
+  read), or a shell whose standard input the same command redirects or pipes from a tree file
+  (`sh < FILE`, `cat FILE | sh`, a descriptor before a redirection read as part of it: `2>&1`,
+  `0<`), and what it imports, as it compares one run directly (0.4.0's known limit,
+  story:gate-compares-python-run-through-a-shell). Of the 34 shell forms the wave's review probed,
+  26 are closed and 3 run the code under work at the tree's root by decision; of 22 further forms
+  the confirm probed, 20 are closed; of 33 redirect forms, 30 are read or fail closed. These 11
+  forms still let a change decide the gate, each an ignored test naming
+  story:the-gate-reads-every-shell-form: `PYTHONPATH` set in the line, by `export` or in a sourced
+  file; `cd dir && python3 -m x`; `env -C dir python3 -m x`; a script named on `xargs`'s input;
+  `cd dir && python3 -c …` and `cd dir && python3 - < x.py`; and `exec 0< FILE; sh`,
+  `exec < FILE; sh`, `exec < FILE; bash`, where a redirection-only `exec` sets the shell's input
+  for the commands after it. Wrapper programs the reader does not know (`taskset`, `chrt`,
+  `unbuffer`, `script -qec`, `uv run`, `env -S`, `pytest`) and `env PYTHONPATH=…` slip too and are
+  listed in that story. A line the reader cannot read with certainty (a glob or brace word where it
+  names what runs, an option it does not know, another input a shell reads as its script on the
+  same command, standard input from a duplicated descriptor, a redirection form it does not know)
+  makes the gate compare every Python file, shell file and program, and the summary names why.
+  takt's own gates run through `scripts/gate-exec`, whose lines the reader cannot follow, so a
+  delivery that changes a `.py`, `.sh` or program file stops takt's own gates until
+  story:gate-exec-is-readable-by-the-gate.
+
 ## [0.4.0] — 2026-10-20
 
 The minor version moves because a `DiskLow` stop exits 8, a 0.3.x baseline is judged again only

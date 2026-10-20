@@ -22,6 +22,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  CHECK_FINDING_MIN_FREE_GIB: "0"
 
 jobs:
   check:

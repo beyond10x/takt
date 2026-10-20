@@ -434,8 +434,9 @@ struct LoopArgs {
     project: Option<PathBuf>,
     /// The forge: `bot` (the repository's bot route: `b10x-gates` pushes the case's branch,
     /// opens its pull request and merges it, `gh` reads the pull request's state and checks) or
-    /// `none` (no pull request is opened; `pr.open`, `ci.read` and `repository.merge` are left
-    /// to the harness). Not given, `bot` when the repository's `origin` is a repository on
+    /// `none` (no pull request is opened; when `pr.open`, `ci.read` or `repository.merge` is the
+    /// only action that decides what is left, nothing performs it: the run stops
+    /// `Unperformable`, exit 7, and the case stays open). Not given, `bot` when the repository's `origin` is a repository on
     /// github.com, the host the bot route serves, else `none`.
     #[arg(long)]
     forge: Option<String>,

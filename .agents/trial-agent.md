@@ -113,6 +113,22 @@ Each cycle has its own directory outside the repository, named `<YYYY-MM-DD>-<sh
       unpromoted, and the refusal goes to the dispatcher as a `[REJECTED takt]` hand-over. Exit 1
       or 5: nothing promoted; the reason on standard error goes to the owner.
 
+## Reports
+
+When the owner names a monitor, the session that watches this one, the trial agent reports to
+it:
+
+- **At each step boundary** of a cycle (§ The cycle, steps 1 to 10) and **on any deviation** (a
+  refusal, an error, a discarded trial, a stop, a limit reached): one message of at most five
+  lines, saying where the cycle stands and, for a deviation, what happened and what the trial
+  agent does next.
+- **A proposal that concerns another repository** (ADR 0101): sent to the monitor as one message,
+  the proposal and its evidence, and not acted on by the trial agent: no finding, no candidate,
+  no branch, no edit in that repository. What becomes of it is the monitor's to decide.
+
+With no monitor named, the hand-overs to the dispatcher and the lines to the owner in § The
+cycle are the only reports.
+
 ## Runs and measurement
 
 Trials, scenario runs and scorecard measurement are this role's; the reviewer keeps the
@@ -151,5 +167,6 @@ verification runs of a finding (`scripts/check-finding`), on request.
   without `scripts/check-finding` giving `not_reproduced` at its sha
 - resumes a `DiskLow` trial, or tops up a set that had one
 - writes to the planning store of a branch that is merged; the dispatcher files its findings
+- acts on a proposal that concerns another repository; it goes to the monitor (§ Reports)
 
 and nothing that breaks a rule in `AGENTS.md` § Rules.

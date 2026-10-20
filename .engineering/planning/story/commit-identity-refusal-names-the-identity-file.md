@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:commit-identity-refusal-names-the-identity-file
 kind: story
-status: draft
+status: implemented
 title: The commit identity refusal names .engineering/commit-identity.conf as what it is, not the planning store
 summary: the refusal calls the identity file part of the planning store
 tags:
@@ -14,7 +14,11 @@ refs:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T01:48:34Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-20T01:48:34Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-20T03:02:46Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: commit-identity-refusal-names-the-identity-file
 

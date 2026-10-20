@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:forge-none-help-names-the-unperformable-stop
 kind: story
-status: draft
+status: implemented
 title: takt run --help says a --forge none run stops Unperformable, exit 7, instead of leaving the forge actions to the harness
 summary: the --forge none help says pr.open, ci.read and repository.merge are left to the harness; the run stops exit 7
 tags:
@@ -14,7 +14,11 @@ refs:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T01:48:34Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-20T01:48:34Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-20T03:02:46Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: forge-none-help-names-the-unperformable-stop
 
