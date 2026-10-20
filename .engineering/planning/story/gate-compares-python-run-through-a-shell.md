@@ -13,7 +13,7 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/validator.rs
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-20T01:48:33Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-20T01:48:33Z", actor: "human:timo", revision: 4}
@@ -59,7 +59,10 @@ self-improvement work, so it carries `rsi`. The step guard reads test commands t
    story:the-gate-reads-every-shell-form. Fix round 2 reads a descriptor before a redirection as
    part of it (`sh < run.sh 2>&1`, `sh 0< run.sh`, `python3 2>/dev/null check.py`); of 22 further
    forms the confirm probed, 20 are closed and 2 (`cd dir && python3 -c …`,
-   `cd dir && python3 - < x.py`) are in that story.
+   `cd dir && python3 - < x.py`) are in that story. A shell's standard input is read only when
+   the same command redirects or pipes it from a tree file: `exec 0< FILE; sh` and its two
+   siblings, and `env -C dir python3 -m x`, slip and are ignored tests in that story (the final
+   confirm; corrected by the owner's delegate's ruling, A).
 
 ## Predicate
 

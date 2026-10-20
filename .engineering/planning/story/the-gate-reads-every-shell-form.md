@@ -13,7 +13,7 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/run.rs
-revision: 3
+revision: 4
 ---
 # Story: the-gate-reads-every-shell-form
 
@@ -36,6 +36,10 @@ naming this story:
 - `source`: a sourced file sets `PYTHONPATH` by assignment and `export`
 - `dashm`: `cd scripts && python3 -m check`, a module beside the one `-m` runs
 - `xargs`: `echo scripts/check.py | xargs python3`
+- `exec 0< FILE; sh`, `exec < FILE; sh`, `exec < FILE; bash`: a redirection-only `exec` sets the
+  shell's standard input for the commands after it, and the reader drops it (found by the wave 19
+  final confirm)
+- `env -C scripts python3 -m check`: as `dashm`
 - `cd scripts && python3 -c "import checklib…"` and `cd scripts && python3 - < check.py`: after a
   `cd`, the directory these forms import from is not compared (the root rule of wave 18 covers only
   the tree's root); found by the wave 19 confirm
@@ -53,7 +57,8 @@ reviewing self-improvement work, so it carries `rsi`.
 
 ## Acceptance
 
-1. The five ignored tests above pass without `#[ignore]`.
+1. The eleven ignored tests in `crates/takt/tests/gate_compares_imports.rs` marked for this story
+   pass without `#[ignore]`.
 2. A `PYTHONPATH` entry set in the line, by `export`, in a sourced file or by `env` is taken as the
    binding's own `PYTHONPATH` is: its `-m` modules and `*.pth` files compared.
 3. `cd` and `env -C` change the directory the reader takes a command to run in.

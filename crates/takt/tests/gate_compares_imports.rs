@@ -868,3 +868,85 @@ fn source() {
         "lib/checklib.py",
     );
 }
+
+/// The final confirm's probe `execin0`: `exec 0< FILE` before a shell that reads its script from
+/// standard input.
+#[test]
+#[ignore = "slips until story:the-gate-reads-every-shell-form"]
+fn exec_stdin_descriptor_then_sh() {
+    slipping_form(
+        "form-execin0",
+        "exec 0< scripts/check.sh; sh",
+        &[
+            ("scripts/check.sh", "python3 scripts/check.py\n"),
+            ("scripts/check.py", MAIN),
+        ],
+        "scripts/checklib.py",
+    );
+}
+
+/// The final confirm's probe `execin`: `exec < FILE` before `sh`.
+#[test]
+#[ignore = "slips until story:the-gate-reads-every-shell-form"]
+fn exec_stdin_then_sh() {
+    slipping_form(
+        "form-execin",
+        "exec < scripts/check.sh; sh",
+        &[
+            ("scripts/check.sh", "python3 scripts/check.py\n"),
+            ("scripts/check.py", MAIN),
+        ],
+        "scripts/checklib.py",
+    );
+}
+
+/// The final confirm's probe `execinbash`: `exec < FILE` before `bash`.
+#[test]
+#[ignore = "slips until story:the-gate-reads-every-shell-form"]
+fn exec_stdin_then_bash() {
+    slipping_form(
+        "form-execinbash",
+        "exec < scripts/check.sh; bash",
+        &[
+            ("scripts/check.sh", "python3 scripts/check.py\n"),
+            ("scripts/check.py", MAIN),
+        ],
+        "scripts/checklib.py",
+    );
+}
+
+/// The probe `envCm`: `env -C dir python3 -m x`, a module beside the one `-m` runs.
+#[test]
+#[ignore = "slips until story:the-gate-reads-every-shell-form"]
+fn env_chdir_dash_m() {
+    slipping_form(
+        "form-envcm",
+        "env -C scripts python3 -m check",
+        &[("scripts/check.py", MAIN)],
+        "scripts/checklib.py",
+    );
+}
+
+/// The confirm's probe `nestedcd`: `cd dir && python3 -c …` importing from that directory.
+#[test]
+#[ignore = "slips until story:the-gate-reads-every-shell-form"]
+fn cd_then_dash_c() {
+    slipping_form(
+        "form-nestedcd",
+        "cd scripts && python3 -c \"import sys, checklib; sys.exit(checklib.run())\"",
+        &[],
+        "scripts/checklib.py",
+    );
+}
+
+/// The confirm's probe `stdincd`: `cd dir && python3 - < x.py` importing from that directory.
+#[test]
+#[ignore = "slips until story:the-gate-reads-every-shell-form"]
+fn cd_then_stdin_script() {
+    slipping_form(
+        "form-stdincd",
+        "cd scripts && python3 - < check.py",
+        &[("scripts/check.py", MAIN)],
+        "scripts/checklib.py",
+    );
+}
