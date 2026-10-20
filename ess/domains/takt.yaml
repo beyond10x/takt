@@ -427,7 +427,7 @@ types:
   # read from: crates/takt/src/run.rs:861-868
   # read from: crates/takt-cli/src/main.rs:1654
   # read from: crates/takt-cli/src/main.rs:733
-  # read from: crates/takt/src/scorecard.rs:461-474
+  # read from: crates/takt/src/scorecard.rs:500-513
   # read from: crates/takt-cli/src/main.rs:1622
   # read from: crates/takt/src/run.rs:7530-7536
   # read from: crates/takt/src/run.rs:8522-8532
@@ -444,9 +444,9 @@ types:
   # read from: crates/takt-cli/src/main.rs:734
   # read from: crates/takt-cli/src/main.rs:1623-1625
   # read from: crates/takt-cli/src/main.rs:1655
-  # read from: crates/takt/src/scorecard.rs:435-454
-  # read from: crates/takt/src/scorecard.rs:1309-1348
-  # read from: crates/takt/src/promotion.rs:3108-3115
+  # read from: crates/takt/src/scorecard.rs:474-493
+  # read from: crates/takt/src/scorecard.rs:1390-1429
+  # read from: crates/takt/src/promotion.rs:3126-3133
   # read from: crates/takt/src/run.rs:8624-8629
   # read from: crates/takt/src/run.rs:141
   # read from: crates/takt/src/run.rs:7486-7495
@@ -456,7 +456,7 @@ types:
   # read from: crates/takt-cli/src/main.rs:611-617
   # read from: crates/takt-cli/src/main.rs:1296-1300
   # read from: crates/takt-cli/src/main.rs:1619-1621
-  # read from: crates/takt/src/scorecard.rs:450-458
+  # read from: crates/takt/src/scorecard.rs:489-497
   - name: takt.work.Stop
     kind: union
     tag: kind
@@ -1084,7 +1084,7 @@ types:
   # A saved scorecard's id: the revision of takt under test that names its file,
   # `scorecard-<revision>.json`, a commit id; a file there already is not overwritten.
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ Scorecard)
-  # read from: crates/takt/src/scorecard.rs:1081-1117
+  # read from: crates/takt/src/scorecard.rs:1150-1186
   # Decided 2026-10-19 (story:scorecard-save-checks-binary): a save, by any caller, is named by
   # the full commit id, 40 lower-case hex digits, checked before anything else; and it is refused
   # naming the run and both revisions, writing nothing, unless every run's `opened` line names the
@@ -1092,10 +1092,10 @@ types:
   # mix is refused. A line names no revision when it has no `binary`, says `unknown revision` or
   # is empty: one predicate and one mix rule the save, a stated baseline (`takt promote
   # --binary-sha256`) and a trace's revision share; the planner's ruling of 2026-10-19.
-  # read from: crates/takt/src/scorecard.rs:1119-1149
+  # read from: crates/takt/src/scorecard.rs:1188-1218
   # read from: .engineering/planning/story/scorecard-save-checks-binary.md (§ Acceptance)
-  # read from: crates/takt/src/scorecard.rs:716-747
-  # read from: crates/takt/src/scorecard.rs:698-704
+  # read from: crates/takt/src/scorecard.rs:760-791
+  # read from: crates/takt/src/scorecard.rs:742-748
   - name: takt.work.ScorecardId
     kind: newtype
     of: String
@@ -1106,8 +1106,8 @@ types:
   # rank before it is worse (`margin`, 1). Decided 2026-10-18 (design:recursive-self-improvement
   # § Scorecard); a file saved before the rule had fields reads with the default.
   # read from: .engineering/planning/design/recursive-self-improvement.md:135-143
-  # read from: crates/takt/src/scorecard.rs:380-397
-  # read from: crates/takt/src/scorecard.rs:413-416
+  # read from: crates/takt/src/scorecard.rs:419-436
+  # read from: crates/takt/src/scorecard.rs:452-455
   - name: takt.work.ScorecardRule
     kind: struct
     fields:
@@ -1119,7 +1119,7 @@ types:
   # What named a saved scorecard: the revision of takt under test, as the operator gave it
   # (`takt scorecard --save --revision`), or `HEAD` of a repository, as a caller of the library
   # gave it; `takt scorecard` never names a file by a repository's `HEAD`.
-  # read from: crates/takt/src/scorecard.rs:113-122
+  # read from: crates/takt/src/scorecard.rs:125-134
   - name: takt.work.ScorecardNaming
     kind: enum
     variants: [build, head]
@@ -1128,16 +1128,16 @@ types:
   # `scenario-<id>-trial-<n>` only; the outcome (for a scenario run `failed` when its held-out
   # check did not pass, else its stop); its own stop (a `Completed` stop's outcome, else the
   # stop's kind, `error` for a run that ended on one, `unfinished` for one with neither); the steps, the
-  # highest step number of its lines; the tokens, the sum of those the harness reported on its
-  # `step` lines; its `refusal` lines; 1 when it stopped `NoProgress`; its `error` lines; the
+  # highest step number of its lines; the tokens, the sum of those reported on its `step` lines,
+  # unknown (`null`) when a harness step recorded none or 0; its `refusal` lines; 1 when it stopped `NoProgress`; its `error` lines; the
   # milliseconds from its first instant to its last; and whether a sum stopped at the largest
   # integer. A run spans one `opened` line to its `stop`, or to the next `opened` or the end of
   # the record; a `skipped` line is no instant of any run.
   # The binary the run was made with, as stated beside its record (takt.work.RunBinary), on each
   # run of a case whose directory holds a `binary.txt`; absent otherwise.
-  # read from: crates/takt/src/scorecard.rs:124-172
-  # read from: crates/takt/src/scorecard.rs:428-433
-  # read from: crates/takt/src/scorecard.rs:591-648
+  # read from: crates/takt/src/scorecard.rs:136-187
+  # read from: crates/takt/src/scorecard.rs:467-472
+  # read from: crates/takt/src/scorecard.rs:632-690
   # Decided 2026-10-19 (story:scorecard-outcome-from-held-out-check): a scenario run's outcome
   # comes from the held-out check the runner wrote beside its record (takt.work.HeldOut), never
   # from the run's own record. Every run of a scenario case carries the case's result; one that
@@ -1160,33 +1160,49 @@ types:
   # outcome is its stop is a completion by that word when it is there, else by the stops this
   # binary knows.
   # Decided 2026-10-20 (story:the-judge-compares-the-steps-a-candidate-targets): each run also
-  # carries its tokens by action (`step_tokens`, under the metric `step_tokens` at version 1):
-  # the tokens of its `step` lines summed by their action, a validator's step counting 0, a
-  # harness step that recorded no tokens making its action's tokens unknown (`null`), never 0,
+  # carries its tokens by action (`step_tokens`, under the metric `step_tokens`, at version 2
+  # since 2026-10-20 below): the tokens of its `step` lines summed by their action, a
+  # validator's step counting 0, a harness step that recorded no tokens, or 0, making its
+  # action's tokens unknown (`null`), never 0,
   # an action it took no step of absent, and empty on a file saved before it; a case sums its
   # runs', an unknown run making the case's tokens for that action unknown
   # (takt.work.ScorecardCase). `--steps` refuses, exit 1, when a targeted step is unknown in a
-  # scenario case of either side, naming the case and the step. The run-level `tokens` metric
-  # still counts a harness step without tokens as 0. A takt that does not know the
+  # scenario case of either side, naming the case and the step. A takt that does not know the
   # metric refuses a scorecard saved under it, and this takt refuses a scorecard saved without
   # it, a promotion's candidate and a stored baseline's copy alike, so a stored baseline from
   # before it is compared only after `takt promote --rebaseline`, which then starts a new series
   # (takt.work.PromotionKind). A rebaseline binds a run's `step_tokens` to the stored run's
   # while the definition is unchanged.
-  # read from: crates/takt/src/scorecard.rs:183-231
-  # read from: crates/takt/src/scorecard.rs:867-949
-  # read from: crates/takt/src/scorecard.rs:86-95
-  # read from: crates/takt/src/promotion.rs:1971-1985
-  # read from: crates/takt/src/promotion.rs:2871-2896
-  # read from: crates/takt/src/scorecard.rs:173-180
-  # read from: crates/takt/src/scorecard.rs:321-322
-  # read from: crates/takt/src/scorecard.rs:622-635
-  # read from: crates/takt/src/scorecard.rs:352-361
-  # read from: crates/takt/src/scorecard.rs:1558-1576
+  # read from: crates/takt/src/scorecard.rs:198-264
+  # read from: crates/takt/src/scorecard.rs:936-1018
+  # read from: crates/takt/src/scorecard.rs:93-107
+  # read from: crates/takt/src/promotion.rs:1977-1991
+  # read from: crates/takt/src/promotion.rs:2885-2910
+  # read from: crates/takt/src/scorecard.rs:188-195
+  # read from: crates/takt/src/scorecard.rs:359-360
+  # read from: crates/takt/src/scorecard.rs:663-678
+  # read from: crates/takt/src/scorecard.rs:390-399
+  # read from: crates/takt/src/scorecard.rs:1641-1659
   # read from: crates/takt-cli/src/main.rs:413
-  # read from: crates/takt/src/promotion.rs:788-795
-  # read from: crates/takt/src/promotion.rs:1029-1035
+  # read from: crates/takt/src/promotion.rs:790-797
+  # read from: crates/takt/src/promotion.rs:1035-1041
   # read from: .engineering/planning/story/scorecard-outcome-from-held-out-check.md (§ Outcome)
+  # Decided 2026-10-20 (story:run-tokens-unknown-is-not-zero): a run's `tokens` are unknown
+  # (`null`), never a sum that counts the step 0, which would read as a saving, when a harness
+  # step of it (every step but a validator's) recorded no tokens, or 0, which takt never writes;
+  # a validator's step that reports none counts 0. The metric `tokens` is at version 2, where
+  # version 1 summed such a step as 0, and `step_tokens` at version 2, where version 1 counted a
+  # harness step's 0: a takt that knows version 1 refuses a scorecard saved under version 2, and
+  # a stored baseline saved under version 1 is compared only after `takt promote --rebaseline`
+  # (takt.work.PromotionKind). A saved row that gives its tokens beside an action whose tokens
+  # are unknown is refused on load, naming the run. Limit, stated with the decision: the record
+  # cannot tell a harness step relabelled `by: validator` from a validator's, and reads it as
+  # the validator's 0.
+  # read from: crates/takt/src/scorecard.rs:49-54
+  # read from: crates/takt/src/scorecard.rs:97-115
+  # read from: crates/takt/src/scorecard.rs:157-161
+  # read from: crates/takt/src/scorecard.rs:664-675
+  # read from: crates/takt/src/scorecard.rs:1249-1254
   - name: takt.work.ScorecardRow
     kind: struct
     fields:
@@ -1199,7 +1215,7 @@ types:
       - name: steps
         type: Integer
       - name: tokens
-        type: Integer
+        type: Optional<Integer>
       - name: refusals
         type: Integer
       - name: no_progress
@@ -1237,9 +1253,9 @@ types:
   # load naming the run (review of 2026-10-19); whether a run passed is derived from its `result`,
   # and a saved `passed` that disagrees with it is refused the same way; so is a run whose
   # `scenario` is not the one its case id names, the scenario being derived from the case id.
-  # read from: crates/takt/src/scorecard.rs:62-70
-  # read from: crates/takt/src/scorecard.rs:205-232
-  # read from: crates/takt/src/scorecard.rs:1151-1213
+  # read from: crates/takt/src/scorecard.rs:69-77
+  # read from: crates/takt/src/scorecard.rs:238-265
+  # read from: crates/takt/src/scorecard.rs:1220-1290
   - name: takt.work.HeldOut
     kind: struct
     fields:
@@ -1252,7 +1268,7 @@ types:
   # in a `binary.txt` beside the run's record or by `takt promote --revision`, for a binary whose
   # `--version` names no revision; or the run's record itself, which no record does today. A
   # statement is marked as such wherever it is copied, so a reader tells it from a measurement.
-  # read from: crates/takt/src/scorecard.rs:234-242
+  # read from: crates/takt/src/scorecard.rs:267-275
   - name: takt.work.StatedBy
     kind: enum
     variants: [operator, record]
@@ -1268,10 +1284,10 @@ types:
   # onto each run of the case and saves it with the row, never a figure from it; `takt promote
   # --baseline-only --binary-sha256` checks each run's digest against the binary it hashes.
   # read from: crates/takt/src/scorecard.rs:1-37
-  # read from: crates/takt/src/scorecard.rs:80-84
-  # read from: crates/takt/src/scorecard.rs:244-253
-  # read from: crates/takt/src/scorecard.rs:264-290
-  # read from: crates/takt/src/scorecard.rs:867-949
+  # read from: crates/takt/src/scorecard.rs:87-91
+  # read from: crates/takt/src/scorecard.rs:277-286
+  # read from: crates/takt/src/scorecard.rs:297-323
+  # read from: crates/takt/src/scorecard.rs:936-1018
   - name: takt.work.RunBinary
     kind: struct
     fields:
@@ -1284,7 +1300,7 @@ types:
 
   # One run of the scorecard a stated baseline read, copied into the promotion record with the
   # binary it states (takt.work.RunBinary): the digest, who stated it and the operator's note.
-  # read from: crates/takt/src/promotion.rs:236-244
+  # read from: crates/takt/src/promotion.rs:238-246
   - name: takt.work.RecordedRun
     kind: struct
     fields:
@@ -1296,7 +1312,7 @@ types:
   # The refusal a candidate judged again on new runs (`takt promote --rejudge`) was refused by
   # before: that record's file name in the store and the sha256 of the file. Decided 2026-10-19
   # (story:promotion-refusal-is-not-final).
-  # read from: crates/takt/src/promotion.rs:228-234
+  # read from: crates/takt/src/promotion.rs:230-236
   - name: takt.work.Rejudged
     kind: struct
     fields:
@@ -1310,7 +1326,7 @@ types:
   # `<state>/takt/promotions.head`, outside it, and written with every record under the store's
   # lock. Decided 2026-10-19 (story:promotion-chain-head-anchored).
   # read from: .engineering/planning/story/promotion-chain-head-anchored.md:51
-  # read from: crates/takt/src/promotion.rs:218-226
+  # read from: crates/takt/src/promotion.rs:220-228
   - name: takt.work.PromotionHead
     kind: struct
     fields:
@@ -1322,16 +1338,22 @@ types:
   # One case's figures on a scorecard, the unit a comparison counts: its outcome, the best a run
   # of it completed with, else its last run's (a completed case is final: a merged case does not
   # reopen, so an `accepted` case stays `accepted` whatever a later run ended on); its runs, and
-  # its runs' steps, tokens, refusals, errors, wall times and tokens by action (each action's
-  # sum over the runs that took it, unknown when any of theirs is) summed, a sum stopping at
-  # the largest integer and flagged; 1 when its outcome is `NoProgress`. Derived from the runs, never saved
+  # its runs' steps, tokens (over the runs whose tokens are known), refusals, errors, wall times
+  # and tokens by action (each action's sum over the runs that took it, unknown when any of
+  # theirs is) summed, a sum stopping at the largest integer and flagged; the steps that leave a
+  # run's tokens unknown (`unknown_steps`, each its action, or `a step without an action` for a
+  # run of unknown tokens with no unknown action), empty when every run's are known, the case's
+  # tokens then printed `unknown` and never compared (takt.work.Comparison); 1 when its outcome
+  # is `NoProgress`. Derived from the runs, never saved
   # apart from them. Its scenario is its runs'. A case any run of which stopped `disk_low` is a
   # `disk_low` trial: it stays in its scenario, and that scenario gets no verdict on either
   # side, whatever its count (the planner's ruling; takt.work.Stop, takt.work.Comparison).
-  # read from: crates/takt/src/scorecard.rs:292-378
-  # read from: crates/takt/src/scorecard.rs:967-981
-  # read from: crates/takt/src/scorecard.rs:72-78
-  # read from: crates/takt/src/scorecard.rs:952-965
+  # read from: crates/takt/src/scorecard.rs:325-417
+  # read from: crates/takt/src/scorecard.rs:1036-1050
+  # read from: crates/takt/src/scorecard.rs:79-85
+  # read from: crates/takt/src/scorecard.rs:1021-1034
+  # read from: crates/takt/src/scorecard.rs:199-215
+  # read from: crates/takt/src/scorecard.rs:699
   - name: takt.work.ScorecardCase
     kind: struct
     fields:
@@ -1347,6 +1369,8 @@ types:
         type: Integer
       - name: tokens
         type: Integer
+      - name: unknown_steps
+        type: List<String>
       - name: refusals
         type: Integer
       - name: no_progress
@@ -1378,7 +1402,7 @@ types:
   # read from: .engineering/planning/story/loop-scorecard.md:34-37
   # read from: .engineering/planning/story/loop-scorecard.md:54-56
   # read from: .engineering/planning/design/recursive-self-improvement.md:190-192
-  # read from: crates/takt/src/scorecard.rs:124-161
+  # read from: crates/takt/src/scorecard.rs:136-176
   # read from: crates/takt/src/loop_scorecard.rs:52-82
   # read from: crates/takt/src/loop_scorecard.rs:923-1050
   - name: takt.work.LoopScorecardRow
@@ -1704,16 +1728,27 @@ types:
   # `not in the saved scorecard` or `too few cases (0 of <trials>)`, so neither refusal hides
   # the other, and the refusals join. A promotion's trial count refuses such a set on either
   # side before it compares, so it never becomes a baseline.
+  # Decided 2026-10-20 (story:run-tokens-unknown-is-not-zero): a scenario case of either side
+  # whose run tokens are unknown (takt.work.ScorecardRow `tokens`, takt.work.ScorecardCase
+  # `unknown_steps`) refuses the comparison before any scenario is compared, naming each such
+  # case and step as `<case> step <action> (<side>)`, so a missing record never reads as a
+  # saving; a case of no scenario refuses nothing. `takt scorecard --against`, with or without
+  # `--steps`, exits 1 on it, the `scorecard.compare` validator records nothing, and `takt
+  # promote` refuses it on the candidate's side and on each stored scorecard it compares with
+  # (takt.work.Promotion).
   # read from: .engineering/planning/design/recursive-self-improvement.md:135-143
-  # read from: crates/takt/src/scorecard.rs:1215-1240
-  # read from: crates/takt/src/scorecard.rs:1401-1425
-  # read from: crates/takt/src/scorecard.rs:1448-1476
-  # read from: crates/takt/src/scorecard.rs:1350-1374
-  # read from: crates/takt/src/scorecard.rs:1481-1502
-  # read from: crates/takt/src/scorecard.rs:1275-1279
-  # read from: crates/takt/src/scorecard.rs:1375-1379
-  # read from: crates/takt/src/scorecard.rs:1309-1348
-  # read from: crates/takt/src/promotion.rs:3108-3115
+  # read from: crates/takt/src/scorecard.rs:1293-1320
+  # read from: crates/takt/src/scorecard.rs:1482-1506
+  # read from: crates/takt/src/scorecard.rs:1529-1557
+  # read from: crates/takt/src/scorecard.rs:1431-1455
+  # read from: crates/takt/src/scorecard.rs:1562-1583
+  # read from: crates/takt/src/scorecard.rs:1356-1360
+  # read from: crates/takt/src/scorecard.rs:1456-1460
+  # read from: crates/takt/src/scorecard.rs:1390-1429
+  # read from: crates/takt/src/promotion.rs:3126-3133
+  # read from: crates/takt/src/scorecard.rs:793-816
+  # read from: crates/takt/src/scorecard.rs:1326-1327
+  # read from: crates/takt/src/improvement.rs:958-963
   - name: takt.work.Comparison
     kind: enum
     variants: [no_regression, regression]
@@ -1739,14 +1774,16 @@ types:
   # run, whatever the steps, refused naming the steps' result and those scenarios, exit 3. Exit
   # 1, no verdict: either side without the `step_tokens` definition or under another version of
   # it, an empty action, a targeted step whose tokens are unknown in a scenario case of either
-  # side (takt.work.ScorecardRow `step_tokens`), naming the case and the step, or any refusal of
-  # the run's comparison; `--steps` without `--against`
+  # side (takt.work.ScorecardRow `step_tokens`, a harness step of it having recorded no tokens,
+  # or 0), naming the case and the step, or any refusal of the run's comparison, among them a
+  # scenario case of unknown run tokens at any step, targeted or not (takt.work.Comparison);
+  # `--steps` without `--against`
   # does not parse (exit 2). `takt promote` judges the run alone, as before.
-  # read from: crates/takt/src/scorecard.rs:108-111
-  # read from: crates/takt/src/scorecard.rs:749-822
-  # read from: crates/takt/src/scorecard.rs:845-855
-  # read from: crates/takt/src/scorecard.rs:1506-1722
-  # read from: crates/takt/src/scorecard.rs:1746-1774
+  # read from: crates/takt/src/scorecard.rs:120-123
+  # read from: crates/takt/src/scorecard.rs:818-891
+  # read from: crates/takt/src/scorecard.rs:914-924
+  # read from: crates/takt/src/scorecard.rs:1587-1805
+  # read from: crates/takt/src/scorecard.rs:1829-1857
   # read from: crates/takt-cli/src/main.rs:390-407
   # read from: crates/takt-cli/src/main.rs:411-416
   # read from: crates/takt-cli/src/main.rs:832-838
@@ -1837,7 +1874,7 @@ types:
   # Decided 2026-10-18.
   # read from: .engineering/planning/story/promotion.md:95
   # read from: .engineering/planning/design/recursive-self-improvement.md:135-143
-  # read from: crates/takt/src/promotion.rs:135-145
+  # read from: crates/takt/src/promotion.rs:137-147
   # Decided 2026-10-19 (story:promotion-refusal-is-not-final): a refusal is final no longer. The
   # operator judges a refused candidate again with `--rejudge` on a scorecard of new runs, none
   # of whose case ids is in a scorecard it was refused on (each refusal records its scorecard's
@@ -1870,12 +1907,19 @@ types:
   # scenario's runs are checked as a baseline's are, the rule's trials included, and bound to no
   # stored run. A `baseline` (`--baseline-only`) whose scorecard holds no scenario case is
   # refused (`no scenario case`), since it would judge nothing.
+  # Decided 2026-10-20 (story:run-tokens-unknown-is-not-zero): a `baseline` or a `rebaseline`
+  # whose scorecard holds a scenario case of unknown run tokens (takt.work.ScorecardRow
+  # `tokens`) is refused, exit 1, naming the case and the step, nothing written, since it would
+  # judge no candidate; so a rebaseline under `tokens` version 2 whose re-read finds a run the
+  # stored scorecard summed as 0 is refused, and that stored figure is not carried over.
   # read from: .engineering/planning/story/promotion-refusal-is-not-final.md (§ Outcome)
-  # read from: crates/takt/src/promotion.rs:2905-3100
-  # read from: crates/takt/src/promotion.rs:950-1074
-  # read from: crates/takt/src/promotion.rs:745-784
-  # read from: crates/takt/src/promotion.rs:903-948
-  # read from: crates/takt/src/promotion.rs:2634-2639
+  # read from: crates/takt/src/promotion.rs:2919-3117
+  # read from: crates/takt/src/promotion.rs:952-1079
+  # read from: crates/takt/src/promotion.rs:747-786
+  # read from: crates/takt/src/promotion.rs:905-950
+  # read from: crates/takt/src/promotion.rs:2643-2648
+  # read from: crates/takt/src/promotion.rs:2505-2507
+  # read from: crates/takt/src/promotion.rs:2958-2961
   - name: takt.work.PromotionKind
     kind: enum
     variants: [baseline, promotion, refused, rebaseline]
@@ -2523,7 +2567,7 @@ entities:
       # operator runs, and what the operator's account can write, are trusted, as everything
       # under `--forge none` is (story:self-improvement-protocol, part 2, correction 2).
       # read from: crates/takt/src/case.rs:2842-2852
-      # read from: crates/takt/src/promotion.rs:2363-2368
+      # read from: crates/takt/src/promotion.rs:2369-2374
       # read from: crates/takt-cli/src/main.rs:1023-1032
       - name: judge
         type: Optional<String>
@@ -3325,7 +3369,7 @@ entities:
       # read from: crates/takt/src/forge.rs:1283-1288
       # read from: crates/takt/src/forge.rs:1653-1659
       # read from: crates/takt/src/forge.rs:2099-2147
-      # read from: crates/takt/src/promotion.rs:491-495
+      # read from: crates/takt/src/promotion.rs:493-497
       - name: committed
         type: Optional<takt.work.Revision>
     relations:
@@ -3705,7 +3749,8 @@ entities:
   # (takt.work.Comparison); a side with fewer cases than the rule's trials, none included, gets no
   # verdict, and so does a scenario the saved side lacks, and so does a scenario with a
   # `disk_low` trial on either side, whatever its count, and with no scenario case on either
-  # side nothing is compared; tokens are printed as n, minimum, median and maximum per scenario and
+  # side, or a scenario case of unknown run tokens on either side, nothing is compared; tokens
+  # are printed as n, minimum, median and maximum per scenario and
   # side with the difference of the medians, and never make a scenario worse; a metric whose
   # definition's version differs is printed with both figures. Which saved scorecard is the
   # promoted baseline is story:promotion's. A candidate that targets steps is judged on them
@@ -3719,9 +3764,9 @@ entities:
   # read from: .engineering/planning/story/scorecard-reader.md
   # read from: .engineering/planning/story/scorecard-reader.md:50-52
   # read from: crates/takt/src/scorecard.rs:1-37
-  # read from: crates/takt/src/scorecard.rs:59-103
-  # read from: crates/takt/src/scorecard.rs:402-425
-  # read from: crates/takt/src/scorecard.rs:1215-1504
+  # read from: crates/takt/src/scorecard.rs:66-115
+  # read from: crates/takt/src/scorecard.rs:441-464
+  # read from: crates/takt/src/scorecard.rs:1293-1584
   - name: takt.work.Scorecard
     naming:
       summary: >-
@@ -3778,7 +3823,7 @@ entities:
   # showed no regression (story:promotion, `takt promote`).
   # read from: .engineering/planning/design/recursive-self-improvement.md (§ The judge)
   # read from: .engineering/planning/story/promotion.md
-  # read from: crates/takt/src/promotion.rs:1-61
+  # read from: crates/takt/src/promotion.rs:1-63
   # The promotion record names the revision the binary embeds and the scorecard it read, and the
   # latest record that is no refusal names the promoted baseline the next candidate is compared
   # with; the first is written by `takt promote --baseline-only`, which installs nothing. A
@@ -3805,10 +3850,10 @@ entities:
   # read from: .engineering/planning/story/promotion.md:39-44
   # read from: .engineering/planning/story/promotion.md:52-54
   # read from: crates/takt-cli/tests/promote_cli.rs:1326-1331
-  # read from: crates/takt/src/promotion.rs:1209-1215
-  # read from: crates/takt/src/promotion.rs:1749-1860
-  # read from: crates/takt/src/promotion.rs:2243-2482
-  # read from: crates/takt/src/promotion.rs:2489-2868
+  # read from: crates/takt/src/promotion.rs:1215-1221
+  # read from: crates/takt/src/promotion.rs:1755-1866
+  # read from: crates/takt/src/promotion.rs:2249-2488
+  # read from: crates/takt/src/promotion.rs:2495-2882
   # Where it is kept, decided 2026-10-18: one JSON file per promotion at
   # `$XDG_STATE_HOME/takt/promotions/<revision>.json` (`~/.local/state/takt/promotions/` without
   # `XDG_STATE_HOME`; a refusal as `<revision>.refused.json`; the scorecard a baseline or a
@@ -3841,10 +3886,10 @@ entities:
   # read from: .engineering/planning/story/promotion.md:92-95
   # read from: .engineering/planning/story/promotion.md:116
   # read from: .engineering/planning/story/promotion.md:152
-  # read from: crates/takt/src/promotion.rs:324-327
-  # read from: crates/takt/src/promotion.rs:520-548
-  # read from: crates/takt/src/promotion.rs:568-738
-  # read from: crates/takt/src/promotion.rs:1328-1382
+  # read from: crates/takt/src/promotion.rs:326-329
+  # read from: crates/takt/src/promotion.rs:522-550
+  # read from: crates/takt/src/promotion.rs:570-740
+  # read from: crates/takt/src/promotion.rs:1334-1388
   # A baseline for a binary built before `--version` named its revision, decided 2026-10-19
   # (story:baseline-for-a-pre-revision-binary): the operator states both, `takt promote
   # --baseline-only --revision <sha> --binary-sha256 <hex>`. Either flag without
@@ -3871,10 +3916,10 @@ entities:
   # fail-closed reads are untouched. A run whose `opened` line names no revision (no `binary`, or
   # `unknown revision`) beside a run whose line names one is refused naming it, the mix a save
   # refuses (story:scorecard-save-checks-binary, decided 2026-10-19).
-  # read from: crates/takt/src/promotion.rs:2096-2131
-  # read from: crates/takt/src/promotion.rs:2133-2158
-  # read from: crates/takt/src/promotion.rs:2160-2216
-  # read from: crates/takt/src/promotion.rs:2004-2043
+  # read from: crates/takt/src/promotion.rs:2102-2137
+  # read from: crates/takt/src/promotion.rs:2139-2164
+  # read from: crates/takt/src/promotion.rs:2166-2222
+  # read from: crates/takt/src/promotion.rs:2010-2049
   # One scorecard backs at most one promotion, decided 2026-10-18: one-to-one, the promotion
   # referencing its scorecard. A relation entry carries no bound on the scorecard's side, so the
   # bound is stated here.
@@ -3882,7 +3927,7 @@ entities:
   # The rule's parameters, trials and margin, are recorded with the scorecard
   # (takt.work.ScorecardRule) and copied into the record that read it.
   # read from: .engineering/planning/design/recursive-self-improvement.md:137-143
-  # read from: crates/takt/src/promotion.rs:149-208
+  # read from: crates/takt/src/promotion.rs:151-210
   # Decided 2026-10-19 (story:promote-binds-scorecard-and-merge,
   # story:promotion-refusal-is-not-final): a promotion installs a merged revision only, an
   # ancestor of the tip of the checkout's remote-tracking `origin/main` as last fetched, which a
@@ -3906,10 +3951,10 @@ entities:
   # judged again.
   # read from: .engineering/planning/story/promote-binds-scorecard-and-merge.md (§ Outcome)
   # read from: .engineering/planning/story/promotion-refusal-is-not-final.md (§ Outcome)
-  # read from: crates/takt/src/promotion.rs:1863-1941
-  # read from: crates/takt/src/promotion.rs:2545-2611
-  # read from: crates/takt/src/promotion.rs:3102-3149
-  # read from: crates/takt/src/promotion.rs:1076-1109
+  # read from: crates/takt/src/promotion.rs:1869-1947
+  # read from: crates/takt/src/promotion.rs:2554-2620
+  # read from: crates/takt/src/promotion.rs:3120-3167
+  # read from: crates/takt/src/promotion.rs:1082-1115
   # Decided 2026-10-19 (story:promotion-chain-head-anchored): the chain's last record is anchored
   # by its head (takt.work.PromotionHead), written by every write of a record and pointed back by
   # the removal of one after a failed install. Every read checks it, `--dry-run` included: a
@@ -3923,9 +3968,9 @@ entities:
   # a store whose head was removed is read on trust again.
   # read from: .engineering/planning/story/promotion-chain-head-anchored.md:29
   # read from: .engineering/planning/story/promotion-chain-head-anchored.md:51-54
-  # read from: crates/takt/src/promotion.rs:329-473
-  # read from: crates/takt/src/promotion.rs:568-602
-  # read from: crates/takt/src/promotion.rs:1358-1410
+  # read from: crates/takt/src/promotion.rs:331-475
+  # read from: crates/takt/src/promotion.rs:570-604
+  # read from: crates/takt/src/promotion.rs:1364-1416
   # Decided 2026-10-19 (story:promotion-judged-against-the-series-baseline): a candidate is
   # judged against the latest record that is no refusal, over the whole corpus, and also against
   # the record that starts its series on that record's scenarios, each by the same comparison
@@ -3940,11 +3985,21 @@ entities:
   # record without it read; `worse` counts the scenarios any comparison marked worse, once each.
   # Amended 2026-10-19 (review F1): a rebaseline adding a scenario had started a new series.
   # read from: .engineering/planning/story/promotion-judged-against-the-series-baseline.md (§ Outcome)
-  # read from: crates/takt/src/promotion.rs:2678-2785
-  # read from: crates/takt/src/promotion.rs:209-215
+  # read from: crates/takt/src/promotion.rs:2687-2799
+  # read from: crates/takt/src/promotion.rs:211-217
   # read from: crates/takt-cli/src/main.rs:84-88
   # read from: crates/takt-cli/src/main.rs:358
-  # read from: crates/takt/src/promotion.rs:786-865
+  # read from: crates/takt/src/promotion.rs:788-867
+  # Decided 2026-10-20 (story:run-tokens-unknown-is-not-zero): a run of unknown tokens judges
+  # nothing (takt.work.Comparison). `takt promote` refuses a candidate's scorecard holding a
+  # scenario case of unknown run tokens before it reads the store, `--baseline-only` and
+  # `--rebaseline` alike (takt.work.PromotionKind); and, before anything is judged, a baseline's
+  # scorecard, a series start's or an adding rebaseline's that the candidate is compared with
+  # holding one, naming the record, the case and the step. Each is exit 1, nothing judged,
+  # recorded or installed.
+  # read from: crates/takt/src/promotion.rs:2697-2700
+  # read from: crates/takt/src/promotion.rs:2746-2747
+  # read from: crates/takt-cli/src/main.rs:356
   - name: takt.work.Promotion
     naming:
       summary: >-

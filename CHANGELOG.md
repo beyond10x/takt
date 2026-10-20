@@ -13,8 +13,8 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   `--rebaseline`) refuse such a set, exit 1, naming the case and the step, before anything is
   judged or recorded. The metric definitions `tokens` and `step_tokens` move to version 2: a
   baseline saved by 0.5.0 or earlier is compared only after `takt promote --rebaseline`, which
-  refuses a stored run whose tokens are now unknown; such a store starts a new series with
-  `--baseline-only`.
+  refuses a stored run whose tokens are now unknown, naming it; `--baseline-only` refuses a store
+  that already holds a baseline, so such a store is judged again only from a new store.
 
 ### Repository
 
