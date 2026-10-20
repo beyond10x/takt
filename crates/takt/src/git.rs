@@ -2997,6 +2997,32 @@ impl Isolated {
         args: &[&str],
         input: Option<&[u8]>,
     ) -> Result<Output> {
+        let mut command = self.command(extra, args);
+        let Some(input) = input else {
+            return command
+                .stdin(Stdio::null())
+                .output()
+                .with_context(|| format!("run git {} isolated", args.join(" ")));
+        };
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("run git {} isolated", args.join(" ")))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(input)
+                .with_context(|| format!("write to git {} isolated", args.join(" ")))?;
+        }
+        child
+            .wait_with_output()
+            .with_context(|| format!("run git {} isolated", args.join(" ")))
+    }
+
+    /// The `git <args>` [`Isolated::git_with`] runs, with `extra` set in its environment, not
+    /// yet started.
+    fn command(&self, extra: &[(&str, &OsStr)], args: &[&str]) -> Command {
         let mut command = Command::new("git");
         crate::forge::without_credentials(&mut command, |_| false);
         for name in REDIRECTING_ENV {
@@ -3025,26 +3051,7 @@ impl Isolated {
             ])
             .args(args)
             .current_dir(&self.dir);
-        let Some(input) = input else {
-            return command
-                .stdin(Stdio::null())
-                .output()
-                .with_context(|| format!("run git {} isolated", args.join(" ")));
-        };
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("run git {} isolated", args.join(" ")))?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(input)
-                .with_context(|| format!("write to git {} isolated", args.join(" ")))?;
-        }
-        child
-            .wait_with_output()
-            .with_context(|| format!("run git {} isolated", args.join(" ")))
+        command
     }
 
     /// Runs `git <args>` for the repository of `tree`, whose object directory is `objects`, as
@@ -3082,6 +3089,160 @@ fn objects_of(tree: &Path) -> Result<PathBuf> {
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
     )?)
     .join("objects"))
+}
+
+/// What [`diff_bounded`] read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoundedDiff {
+    /// The whole diff, byte for byte, no more than the bound.
+    Within(Vec<u8>),
+    /// More than the bound: the bytes git printed, all of them (`whole`) or as many as were
+    /// counted before git was stopped ([`DIFF_COUNTED_BYTES`]).
+    Past { bytes: u64, whole: bool },
+}
+
+/// The most bytes of a diff past its bound [`diff_bounded`] counts, by default, before it stops
+/// git.
+pub const DIFF_COUNTED_BYTES: u64 = 64 << 20;
+
+/// How much of each file [`diff_bounded`] shows around its changed lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffContext {
+    /// 3 lines around each change (`-U3`).
+    Hunks,
+    /// The whole file: as many lines of context as the bound has bytes (`-U<limit>`). A context
+    /// line is at least 2 bytes, so a diff within the bound shows every line of each file it
+    /// names, and one that would leave a line out is past the bound.
+    Whole,
+}
+
+/// The patch from the commit `from` to the commit `to` (object ids) over each part's paths,
+/// each taken literally, every path under `outside` left out, the parts one after another, a
+/// part with no path left out (git never runs on the exclusion alone). Read the way
+/// [`trees_differ_outside`] reads, through an [`Isolated`] repository over the repository's own
+/// objects ([`objects_of`]): no code and no attributes from any configuration, no external
+/// diff, no text conversion; and so that it is the same bytes on every host, no color, the
+/// part's context ([`DiffContext`]), the Myers algorithm with the indent heuristic, no rename
+/// detection and the `a/` and `b/` prefixes, whatever any configuration says. At most `limit`
+/// bytes are kept in all; past it the bytes are counted, up to `count_to` (at least one past
+/// the bound), and then git is stopped. A git that exits non-zero is an error naming what it
+/// said.
+pub fn diff_bounded(
+    tree: &Path,
+    (from, to): (&str, &str),
+    parts: &[(&[String], DiffContext)],
+    outside: &str,
+    limit: usize,
+    count_to: u64,
+) -> Result<BoundedDiff> {
+    use std::io::Read as _;
+    if !crate::forge::is_object_id(from) || !crate::forge::is_object_id(to) {
+        bail!("a diff is read between object ids, not {from:?} and {to:?}");
+    }
+    let count_to = count_to.max(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1));
+    let objects = objects_of(tree)?;
+    let isolated = Isolated::new(tree)?;
+    let whole = format!("-U{limit}");
+    let mut kept = Vec::new();
+    let mut counted = 0u64;
+    for (paths, context) in parts {
+        if paths.is_empty() {
+            continue;
+        }
+        let pathspec: Vec<String> = paths
+            .iter()
+            .map(|path| format!(":(literal){path}"))
+            .chain([format!(":(exclude){outside}")])
+            .collect();
+        let mut args = vec![
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            match context {
+                DiffContext::Hunks => "-U3",
+                DiffContext::Whole => whole.as_str(),
+            },
+            "--diff-algorithm=myers",
+            "--indent-heuristic",
+            "--no-renames",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            from,
+            to,
+            "--",
+        ];
+        args.extend(pathspec.iter().map(String::as_str));
+        let mut child = isolated
+            .command(
+                &[
+                    ("GIT_DIR", isolated.repository.as_os_str()),
+                    ("GIT_OBJECT_DIRECTORY", objects.as_os_str()),
+                ],
+                &args,
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("run git {} isolated", args.join(" ")))?;
+        let stderr = child.stderr.take().map(|mut stream| {
+            std::thread::spawn(move || {
+                let mut said = Vec::new();
+                let _ = stream.by_ref().take(64 << 10).read_to_end(&mut said);
+                let _ = std::io::copy(&mut stream, &mut std::io::sink());
+                said
+            })
+        });
+        if let Some(stdout) = child.stdout.take() {
+            let mut stdout = stdout.take(count_to - counted);
+            let mut buffer = [0u8; 64 << 10];
+            loop {
+                let read = stdout
+                    .read(&mut buffer)
+                    .with_context(|| format!("read git {}", args.join(" ")))?;
+                if read == 0 {
+                    break;
+                }
+                counted += read as u64;
+                if kept.len() <= limit {
+                    kept.extend_from_slice(&buffer[..read.min(limit + 1 - kept.len())]);
+                }
+            }
+        }
+        let stopped = counted >= count_to;
+        if stopped {
+            let _ = child.kill();
+        }
+        let status = child
+            .wait()
+            .with_context(|| format!("run git {} isolated", args.join(" ")))?;
+        let said = stderr
+            .and_then(|reader| reader.join().ok())
+            .unwrap_or_default();
+        if stopped {
+            return Ok(BoundedDiff::Past {
+                bytes: counted,
+                whole: false,
+            });
+        }
+        if !status.success() {
+            bail!(
+                "git {} in {} exited {}: {}",
+                args.join(" "),
+                tree.display(),
+                status,
+                String::from_utf8_lossy(&said).trim()
+            );
+        }
+    }
+    if kept.len() > limit {
+        return Ok(BoundedDiff::Past {
+            bytes: counted,
+            whole: true,
+        });
+    }
+    Ok(BoundedDiff::Within(kept))
 }
 
 /// What [`replay`] made of a list of commits.

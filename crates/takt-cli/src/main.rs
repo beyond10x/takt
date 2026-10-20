@@ -193,7 +193,7 @@ fn replay(args: ReplayArgs, out: &mut dyn Write) -> Result<u8> {
         Some(root) => takt::replay::recorded_prompt_line(&start, &root, &repo)?,
         None => None,
     };
-    let rebuilt = takt::replay::rebuilt_prompt_line(&claude, &start, gate.as_deref())?;
+    let rebuilt = takt::replay::rebuilt_prompt_line(&claude, &start, gate.as_deref(), &repo)?;
     writeln!(
         out,
         "step {} of run {} of case {} ({} recorded): revision {} from {}; decision {}",
