@@ -673,3 +673,87 @@ fn replay_help_exits_zero() {
     assert!(stdout.contains("--step"), "{stdout}");
     assert!(stdout.contains("--times"), "{stdout}");
 }
+
+/// A relative `--out` is taken where takt checked it, the working directory takt runs in, and
+/// never inside the repository where git would resolve it: the replay runs at the revision step 4
+/// started at and leaves nothing in the repository; run from inside the repository's tree, the
+/// same relative `--out` is refused, exit 1, nothing left there.
+#[test]
+fn a_relative_record_directory_lands_where_takt_checked_it() {
+    let scratch = Scratch::new("relative-out");
+    let rec = recorded(&scratch.0);
+    let elsewhere = scratch.0.join("elsewhere");
+    fs::create_dir_all(&elsewhere).expect("a working directory outside the repository");
+    let status_before = git(&rec.repo, &["status", "--porcelain", "--ignored"]);
+    let worktrees_before = git(&rec.repo, &["worktree", "list", "--porcelain"]);
+    let case_before = files(&rec.case);
+    let step2_work = fs::read(rec.calls.join("2.work")).expect("what step 4 found");
+    let before_calls = fs::read_dir(&rec.calls).expect("calls").count();
+
+    let output = takt(&rec.bin, &rec.state)
+        .current_dir(&elsewhere)
+        .args([
+            "replay",
+            "--case",
+            rec.case.to_str().expect("utf-8"),
+            "--step",
+            "4",
+            "--out",
+            "rel-out",
+        ])
+        .output()
+        .expect("takt replay runs");
+    let said = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.status.code(), Some(0), "{said}");
+    assert!(
+        elsewhere.join("rel-out/replay-1/replay.json").is_file(),
+        "the record is under the working directory takt ran in\n{said}"
+    );
+    let call = before_calls / 4 + 1;
+    assert_eq!(
+        fs::read(rec.calls.join(format!("{call}.work"))).expect("what the replay found"),
+        step2_work,
+        "the replay ran at the revision step 4 started at\n{said}"
+    );
+    assert!(
+        !rec.repo.join("rel-out").exists(),
+        "nothing in the repository\n{said}"
+    );
+    assert_eq!(
+        git(&rec.repo, &["status", "--porcelain", "--ignored"]),
+        status_before
+    );
+    assert_eq!(
+        git(&rec.repo, &["worktree", "list", "--porcelain"]),
+        worktrees_before
+    );
+    assert_eq!(files(&rec.case), case_before);
+
+    let inside = takt(&rec.bin, &rec.state)
+        .current_dir(&rec.repo)
+        .args([
+            "replay",
+            "--case",
+            rec.case.to_str().expect("utf-8"),
+            "--step",
+            "4",
+            "--out",
+            "rel-in",
+        ])
+        .output()
+        .expect("takt replay runs");
+    let stderr = String::from_utf8_lossy(&inside.stderr).into_owned();
+    assert_eq!(inside.status.code(), Some(1), "{stderr}");
+    assert!(
+        !rec.repo.join("rel-in").exists(),
+        "nothing left in the repository: {stderr}"
+    );
+    assert_eq!(
+        git(&rec.repo, &["status", "--porcelain", "--ignored"]),
+        status_before
+    );
+}
