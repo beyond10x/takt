@@ -1037,6 +1037,55 @@ fn an_unlisted_program_given_a_program_fails_closed() {
     );
 }
 
+/// A program in the tree that is given a program the reader knows (`scripts/gate-exec python3
+/// -I scripts/check-citations` in takt's own gates document) is compared whole at the base, and
+/// the program it is given is read with the words after it as the command it runs: the module
+/// that command's Python imports is compared, and the line does not fail closed.
+#[test]
+fn an_in_tree_program_given_a_program_hands_it_off() {
+    let name = "wrap-in-tree";
+    let lib = "scripts/checklib.py";
+    let files = [
+        ("scripts/check.py", MAIN),
+        (lib, "def run():\n    return 0\n"),
+        (
+            "scripts/run",
+            "#!/usr/bin/python3 -I\nimport os\nimport sys\nos.execvp(sys.argv[1], sys.argv[1:])\n",
+        ),
+    ];
+    let tree = repository_running(
+        name,
+        SHELL,
+        &["-c", "scripts/run python3 scripts/check.py"],
+        &[],
+        &files,
+    );
+    let observation = observed(&tree, name, &[(lib, HAND)]);
+    refused(&observation, lib);
+    assert!(
+        !observation.summary.contains("fail closed"),
+        "the gate fails closed on a program of the tree it compares: {}",
+        observation.summary
+    );
+    // The program itself is compared: a hand commit to it stops the gate, naming it.
+    let tree = repository_running(
+        "wrap-in-tree-changed",
+        SHELL,
+        &["-c", "scripts/run python3 scripts/check.py"],
+        &[],
+        &files,
+    );
+    let observation = observed(
+        &tree,
+        "wrap-in-tree-changed",
+        &[(
+            "scripts/run",
+            "#!/usr/bin/python3 -I\nimport os\nimport sys\nos.execvp(sys.argv[1], sys.argv[1:])  # a hand commit\n",
+        )],
+    );
+    refused(&observation, "scripts/run");
+}
+
 /// A gate running `scripts/check.py`, which imports `m1` from the `PYTHONPATH` entry `lib`,
 /// where only what is imported is compared; `lib/m<k>.py` imports `m<k+1>` up to
 /// `lib/m<length>.py`, which imports nothing. The gate passes at the base.

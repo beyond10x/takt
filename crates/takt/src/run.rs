@@ -2543,7 +2543,8 @@ const WRAPPERS: &[(&[&str], Spec)] = &[
 /// Whether `word` names a program the reader knows how to read: a shell or interpreter
 /// ([`INTERPRETERS`]), a wrapper ([`WRAPPERS`]), a build tool ([`BUILD_TOOLS`]), `env` or
 /// `pytest`. A program the reader does not know that takes one as an argument may run it, which
-/// the reader cannot see: the line fails closed ([`command_paths`]).
+/// the reader cannot see: a file in the tree, compared whole at the base, is read as running
+/// that program with the words after it; any other fails the line closed ([`command_paths`]).
 fn known_program(word: &str) -> bool {
     let name = program_of(word);
     name == "env"
@@ -4424,7 +4425,8 @@ fn command_paths(
         }
         // A program in the tree that a shell reads is read line by line; one Python runs
         // imports from its own directory first.
-        if let Some(path) = named_from(tree, dir.as_deref(), program) {
+        let in_tree = named_from(tree, dir.as_deref(), program);
+        if let Some(path) = in_tree.clone() {
             script_paths(tree, &path, dir.as_deref(), &env, named, depth, false);
             if shebang_of(&tree.join(&path)).is_some_and(|interpreter| {
                 spec_of(INTERPRETERS, &interpreter)
@@ -4844,19 +4846,36 @@ fn command_paths(
         }
         // A program in none of the tables that is given a program the guard knows (`taskset 1
         // python3 check.py` before `taskset` was listed) may run it in a way the guard cannot
-        // see: the line fails closed, naming both.
-        if let Some(program) = words[at..]
+        // see. A file in the tree is named above, so the gate compares it whole at the base
+        // (`scripts/gate-exec python3 -I scripts/check-citations`, which runs what it is given,
+        // and a file a step made is a change): the most it runs is that program with the words
+        // after it, read as a command from here. One the tree does not hold, which the guard
+        // has not read: the line fails closed, naming both.
+        if let Some(position) = words[at..]
             .iter()
-            .filter(|word| !word.starts_with('-'))
-            .find(|word| known_program(word))
+            .position(|word| !word.starts_with('-') && known_program(word))
         {
-            fail_closed(
-                named,
-                format!(
-                    "`{name}` is given {}, a program, and the guard does not know how `{name}` runs it",
-                    quoted(program)
-                ),
-            );
+            if in_tree
+                .as_ref()
+                .is_some_and(|path| tree.join(path).is_file())
+            {
+                command_paths(
+                    tree,
+                    &words[at + position..],
+                    dir.clone(),
+                    named,
+                    depth + 1,
+                    &env,
+                );
+            } else {
+                fail_closed(
+                    named,
+                    format!(
+                        "`{name}` is given {}, a program, and the guard does not know how `{name}` runs it",
+                        quoted(words[at + position])
+                    ),
+                );
+            }
         }
         // A program in none of the tables: what it reads is not known, so every word of the
         // rest that names a path in the tree is guarded, as written and as a shell would unquote
