@@ -1148,6 +1148,55 @@ pub fn story_of(case_dir: &Path) -> Result<Option<String>> {
     Ok(Some(story.id))
 }
 
+/// The inputs of the case at `case_dir` as its `case.yaml` holds them, read without taking hold
+/// of the case or touching its tree, as [`CaseDir::inputs`] answers them: `name=value` pairs, a
+/// boolean as `true` or `false`; none for a protocol that declares no input. For `takt replay`
+/// ([`crate::replay`]), which only reads the case.
+pub fn inputs_of(case_dir: &Path) -> Result<Vec<(String, String)>> {
+    let path = case_dir.join("case.yaml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    Ok(doc["inputs"]
+        .as_mapping()
+        .map(|map| {
+            map.iter()
+                .filter_map(|(key, value)| {
+                    let value = match value {
+                        serde_yaml_ng::Value::Bool(flag) => flag.to_string(),
+                        serde_yaml_ng::Value::String(text) => text.clone(),
+                        other => serde_yaml_ng::to_string(other).ok()?.trim().to_owned(),
+                    };
+                    Some((key.as_str()?.to_owned(), value))
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// The case's `case.yaml` at `case_dir` with its `implementation` artifact at `revision`, the
+/// rest as it is: the snapshot a step that started at `revision` was taken against, for
+/// `takt replay` ([`crate::replay`]) to write into its scratch tree. The case's file is only
+/// read. A case whose protocol declares no `implementation` artifact is answered as it is.
+pub fn snapshot_at(case_dir: &Path, revision: &str) -> Result<String> {
+    let path = case_dir.join("case.yaml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let mut doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    match doc
+        .get_mut("artifacts")
+        .and_then(|artifacts| artifacts.get_mut("implementation"))
+    {
+        Some(entry) => {
+            entry["revision"] = revision.into();
+            serde_yaml_ng::to_string(&doc).context("write the case snapshot")
+        }
+        None => Ok(text),
+    }
+}
+
 /// The latest decision written under the case, the `decisions/<n>.json` with the highest
 /// sequence number `n`, read as a number, so `10000.json` comes after `9999.json`; a file whose
 /// name is not a number is no decision. `None` before the first evaluation.

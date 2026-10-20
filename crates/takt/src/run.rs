@@ -6534,6 +6534,69 @@ pub fn default_transcripts() -> Option<PathBuf> {
         .map(|dir| dir.join("takt").join("transcripts"))
 }
 
+/// Where `takt replay` records each replay of a step when it is given no directory
+/// ([`crate::replay`]), outside every repository and every case directory:
+/// `$XDG_STATE_HOME/takt/replays` (`~/.local/state/takt/replays` without it). None when
+/// neither is set.
+#[must_use]
+pub fn default_replays() -> Option<PathBuf> {
+    crate::promotion::state_dir()
+        .ok()
+        .map(|dir| dir.join("takt").join("replays"))
+}
+
+/// What a judgement step at one decision is offered, as [`Run::run`] offers it: the actions,
+/// the approval it may request, and the actions among them that record a choice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Offer {
+    /// The actions offered ([`StepContext::offered`]).
+    pub offered: Vec<String>,
+    /// The approval-required actions it may request ([`StepContext::approvals`]): the gate's,
+    /// when it needs an approval at the decision.
+    pub approvals: Vec<String>,
+    /// Of the offered actions, those that record a choice ([`StepContext::choices`]).
+    pub choices: Vec<String>,
+}
+
+/// The offer [`Run::run`] makes a judgement step at `decision` of a case under `protocol` with
+/// `inputs`, to a harness that keeps state between steps or not (`keeps_state`), with the
+/// approval gate `gate`: the admissible actions the harness may take ([`Shape::for_harness`],
+/// [`Shape::for_stateless`]), the gate when it is approval-required, and the choices among the
+/// offered. A run also leaves out the actions its validators own; every built-in validator's
+/// action produces a kind only a validator writes and is left out here too, but a run's own
+/// validator of another action is not known from the record, which is why `takt replay`
+/// compares the prompt it builds with the recorded one before it runs anything.
+pub fn judgement_offer(
+    protocol: &LoadedProtocol,
+    inputs: &[(String, String)],
+    decision: &crate::Decision,
+    keeps_state: bool,
+    gate: Option<&str>,
+) -> Result<Offer> {
+    let shape = Shape::of(protocol, inputs)?;
+    let offered: Vec<String> = decision
+        .admissible()
+        .into_iter()
+        .filter(|a| shape.for_harness(a))
+        .filter(|a| keeps_state || shape.for_stateless(a))
+        .collect();
+    let approvals = decision
+        .approval_required()
+        .into_iter()
+        .filter(|a| gate == Some(a.as_str()))
+        .collect();
+    let choices = offered
+        .iter()
+        .filter(|a| !shape.choices_of(a).is_empty())
+        .cloned()
+        .collect();
+    Ok(Offer {
+        offered,
+        approvals,
+        choices,
+    })
+}
+
 /// The subject of the commit that records a take on the case's branch: `takt: take <story>`.
 #[must_use]
 pub fn take_subject(story: &str) -> String {

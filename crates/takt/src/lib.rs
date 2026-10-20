@@ -18,6 +18,7 @@ pub mod improvement;
 pub mod loop_scorecard;
 pub mod promotion;
 pub mod protocol;
+pub mod replay;
 pub mod report;
 pub mod run;
 pub mod scorecard;

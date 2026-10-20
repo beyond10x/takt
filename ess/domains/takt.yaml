@@ -4441,3 +4441,49 @@ entities:
       initial: Recorded
       states: [Recorded]
       terminal: [Recorded]
+  # DRAFT (comment-level, story:a-step-replays-from-its-recorded-state, wave 20): the noun
+  # `takt replay --case <dir> --step <n> [--times <k>]` introduces, to become an entity once
+  # the planner accepts it.
+  #
+  # takt.work.StepReplay: one replay of one judgement step (takt.work.Step, by the harness) of a
+  # recorded case, from the state the step started from, rebuilt from the case's record (the
+  # revision it started at, the decision it was offered its actions at, the evidence and the
+  # record before it, the case's intent, protocol and inputs), run in a scratch worktree of the
+  # case's repository at that revision, detached, which is removed afterwards. Recorded as
+  # `<replays>/replay-<k>/replay.json` (format `takt-replay/1`) beside the step's transcript
+  # `transcript.jsonl`, outside the case directory and the repository's tree
+  # (`$XDG_STATE_HOME/takt/replays/<repo-key>/<case>/run-<r>/step-<n>/<instant>` without
+  # `--out`); the case directory is only read, and stays byte-identical.
+  # read from: crates/takt/src/replay.rs:125-295
+  # read from: crates/takt/src/replay.rs:465-475
+  # read from: crates/takt-cli/src/main.rs:116-166
+  #   identity: (case, run, step, replay), replay `replay-<k>` from 1
+  #   fields:
+  #     format: String, `takt-replay/1`
+  #     case: takt.work.CaseId
+  #     run: Integer, the run of the case the step is in, from 1
+  #     step: Integer, the step's number in its run as the record numbers it
+  #     revision: takt.work.Revision, the commit the step started at: the last the record names
+  #       before the step's line (a validator's observed revision, a step's committed effect, a
+  #       store write's commit), else the parent of the step's own commit
+  #     revision_from: String, which line named it
+  #     decision: String, `decisions/<seq>.json`, the last the step's run evaluated before it
+  #     offered: List<String>, approvals: List<String>, the offer the run made at that decision
+  #     evidence: List<String>, the evidence records written before the step
+  #     not_rebuilt: List<String>, what the record cannot date: authority.yaml, artifacts/,
+  #       riders/, run.lock
+  #     recorded_action: String, recorded_transcript: Optional<String>
+  #     harness: takt.work.HarnessName, started_at: Timestamp
+  #     prompt: one of `as recorded`, `differs`, `unrecorded`: the replay's transcript's first
+  #       line, the prompt, against the recorded step's, byte for byte
+  #     action: Optional<String>, summary: Optional<String>, error: Optional<String>
+  #     tokens, usage, model, cost_usd, duration_ms, turns: each only as the harness stated it
+  #     changed: List<String>, the paths the step changed in its scratch tree, the case
+  #       directory left out
+  #   relations: case references takt.work.Case (one, via case); the step it replays,
+  #     takt.work.Step (one, via case, run and step)
+  #   lifecycle: Recorded (initial and terminal)
+  #   rules: the prompt rebuilt from the record is compared with the recorded transcript's first
+  #     line before anything runs, and a prompt that differs replays nothing (exit 3); a step
+  #     that is not a harness step (a validator's, a refusal, an error) is refused (exit 1); a
+  #     replays directory inside the case or the repository's tree is refused (exit 1).

@@ -100,6 +100,186 @@ enum Commands {
     /// latest record's revision before anything is judged.
     #[command(after_help = PROMOTE_EXIT_CODES)]
     Promote(PromoteArgs),
+    /// Replay one judgement step of a recorded case from the state it started from: the
+    /// revision it started at, the case's evidence, decisions and record up to it, and the
+    /// prompt it was given, rebuilt from the case's record and compared byte for byte with the
+    /// first line of the step's recorded transcript before anything runs. Each replay runs the
+    /// harness (`claude`) once in a scratch worktree of the repository at that revision,
+    /// detached, removed afterwards, and is recorded outside the case and the repository's tree
+    /// as `replay.json` (`takt-replay/1`) and `transcript.jsonl`. The case directory is only
+    /// read.
+    #[command(after_help = REPLAY_EXIT_CODES)]
+    Replay(ReplayArgs),
+}
+
+#[derive(clap::Args)]
+struct ReplayArgs {
+    /// The case directory, `<repo>/.engineering/cases/<id>`; only read.
+    #[arg(long, value_name = "DIR")]
+    case: PathBuf,
+    /// The step to replay, as the case's record numbers it in its run: a judgement step, one
+    /// whose line is the harness's.
+    #[arg(long, value_name = "N")]
+    step: u64,
+    /// How many times the step is replayed, each in a scratch worktree of its own.
+    #[arg(long, value_name = "K", default_value_t = 1,
+          value_parser = clap::value_parser!(u32).range(1..))]
+    times: u32,
+    /// The run of the case the step is in, from 1 (the run that opened it); needed only when
+    /// several runs record a step of that number.
+    #[arg(long, value_name = "R")]
+    run: Option<u64>,
+    /// The repository that holds the case's commits; without it, the tree the case directory
+    /// lies in.
+    #[arg(long, value_name = "DIR")]
+    repo: Option<PathBuf>,
+    /// The transcripts directory the recorded step's transcript is read in; without it
+    /// `$XDG_STATE_HOME/takt/transcripts`, where `takt run` keeps them.
+    #[arg(long, value_name = "DIR")]
+    transcripts: Option<PathBuf>,
+    /// Where the replays are recorded, one directory `replay-<k>` each, none there yet;
+    /// outside the case directory and the repository's tree. Without it
+    /// `$XDG_STATE_HOME/takt/replays/<repo-key>/<case>/run-<r>/step-<n>/<instant>`.
+    #[arg(long, value_name = "DIR")]
+    out: Option<PathBuf>,
+    /// The harness's model, when it takes one.
+    #[arg(long)]
+    model: Option<String>,
+    /// The approval gate the recorded run was given (`takt run --gate`); without it, the
+    /// case's protocol's default, as `takt run` takes it.
+    #[arg(long)]
+    gate: Option<String>,
+}
+
+/// Exit 3 of `takt replay`: the prompt rebuilt from the record is not the recorded one.
+const EXIT_PROMPT_DIFFERS: u8 = 3;
+
+/// What `takt replay --help` says about the exit codes.
+const REPLAY_EXIT_CODES: &str = "Exit codes:
+  0  replayed, each replay recorded; the prompt was the recorded one byte for byte, or no recorded transcript was found to compare with (said on stdout)
+  1  refused, nothing run and nothing written: the case or its record does not read, the record holds no such step or holds it in several runs (give --run), the step is not a judgement step (a validator's, or one that recorded no harness step line), the record names no revision or decision for it, the replays directory is inside the case or the repository's tree or a replay's directory is there already, or the scratch worktree cannot be made; the reason on stderr
+  2  the arguments do not parse
+  3  the prompt rebuilt from the record differs from the first line of the recorded step's transcript; nothing run
+  5  replayed and recorded, but the harness failed in at least one replay; its error is in that replay's record";
+
+/// `takt replay`: the step's starting state read from the case's record, the rebuilt prompt
+/// compared with the recorded one, then each replay run and recorded
+/// ([`takt::replay::replay_once`]).
+fn replay(args: ReplayArgs, out: &mut dyn Write) -> Result<u8> {
+    let case_dir = args
+        .case
+        .canonicalize()
+        .with_context(|| format!("the case directory {}", args.case.display()))?;
+    let repo = match &args.repo {
+        Some(repo) => repo
+            .canonicalize()
+            .with_context(|| format!("the repository {}", repo.display()))?,
+        None => takt::replay::tree_of(&case_dir)?,
+    };
+    let start = takt::replay::starting_state(&case_dir, args.step, args.run)?;
+    let gate = args
+        .gate
+        .clone()
+        .or_else(|| start.protocol.default_gate(&start.inputs));
+    let claude = ClaudeCode {
+        model: args.model.clone(),
+        ..ClaudeCode::default()
+    };
+    let recorded = match args
+        .transcripts
+        .clone()
+        .or_else(takt::run::default_transcripts)
+    {
+        Some(root) => takt::replay::recorded_prompt_line(&start, &root, &repo)?,
+        None => None,
+    };
+    let rebuilt = takt::replay::rebuilt_prompt_line(&claude, &start, gate.as_deref())?;
+    writeln!(
+        out,
+        "step {} of run {} of case {} ({} recorded): revision {} from {}; decision {}",
+        start.step,
+        start.run,
+        start.case,
+        start.action,
+        start.revision,
+        start.revision_from,
+        start.decision_file
+    )?;
+    match &recorded {
+        Some((path, line)) if *line == rebuilt => {
+            writeln!(out, "prompt: as recorded in {}", path.display())?;
+        }
+        Some((path, line)) => {
+            let at = line
+                .iter()
+                .zip(&rebuilt)
+                .position(|(a, b)| a != b)
+                .unwrap_or_else(|| line.len().min(rebuilt.len()));
+            eprintln!(
+                "takt: the prompt rebuilt for step {} differs from the recorded one in {} from byte {at} ({} bytes recorded, {} rebuilt); nothing is replayed",
+                start.step,
+                path.display(),
+                line.len(),
+                rebuilt.len()
+            );
+            return Ok(EXIT_PROMPT_DIFFERS);
+        }
+        None => writeln!(
+            out,
+            "prompt: no recorded transcript of the step was found; not compared"
+        )?,
+    }
+    let base = match &args.out {
+        Some(dir) => dir.clone(),
+        None => takt::run::default_replays()
+            .ok_or_else(|| {
+                anyhow!("no replays directory: neither XDG_STATE_HOME nor HOME is set; give --out")
+            })?
+            .join(takt::harness::repo_key(&repo)?)
+            .join(&start.case)
+            .join(format!("run-{}", start.run))
+            .join(format!("step-{}", start.step))
+            .join(takt::events::instant().replace(':', "")),
+    };
+    takt::replay::check_out_dir(&base, &case_dir, &repo)?;
+    let recorded_line = recorded.as_ref().map(|(_, line)| line.as_slice());
+    let mut failed = false;
+    for k in 1..=args.times {
+        let replayed = takt::replay::replay_once(
+            &start,
+            &repo,
+            &claude,
+            gate.as_deref(),
+            &base.join(format!("replay-{k}")),
+            recorded_line,
+        )?;
+        let changed = if replayed.changed.is_empty() {
+            "nothing".to_owned()
+        } else {
+            replayed.changed.join(", ")
+        };
+        match &replayed.result {
+            Ok(action) => writeln!(
+                out,
+                "replay {k}: {action}; tokens {}; changed {changed}; prompt {}; recorded in {}",
+                replayed
+                    .tokens
+                    .map_or("not reported".to_owned(), |tokens| tokens.to_string()),
+                replayed.prompt,
+                replayed.dir.display()
+            )?,
+            Err(why) => {
+                failed = true;
+                writeln!(
+                    out,
+                    "replay {k}: error: {why}; prompt {}; recorded in {}",
+                    replayed.prompt,
+                    replayed.dir.display()
+                )?;
+            }
+        }
+    }
+    Ok(if failed { EXIT_ERROR } else { EXIT_DONE })
 }
 
 #[derive(clap::Args)]
@@ -630,6 +810,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             Ok(EXIT_DONE)
         }
         Commands::Scenario(ScenarioCommands::Run(args)) => scenario_run(*args, out),
+        Commands::Replay(args) => replay(args, out),
         Commands::Scorecard(ScorecardArgs {
             repo,
             save,
@@ -1010,6 +1191,18 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             validators.push(Box::new(takt::improvement::CandidateMerged::judge_surface(
                 mainline,
             )));
+            // Through the bot route the identity the run's commits carry is scanned, as the push
+            // would scan it, after every refusal of what was given and before the case opens or
+            // resumes: before step 1.
+            if let Some(forge) = &forge.forge
+                && let Some((identity, source)) = identity_at_open(
+                    &repo,
+                    looping.commit_identity.as_ref(),
+                    resuming.as_ref().map(|resuming| resuming.id.as_str()),
+                )?
+            {
+                scan_identity_at_open(forge.as_ref(), &repo, &identity, &source, out)?;
+            }
             let forge_line = forge.line;
             let store = Aep::default();
             // The unit: the case to resume, the intent given, or else the open case of an
@@ -1734,6 +1927,12 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         return Err(takt::git::no_identity(&declared_on))
             .with_context(|| format!("scenario {}", scenario.id));
     }
+    let identity_source = if looping.commit_identity.is_some() {
+        "--commit-identity".to_owned()
+    } else {
+        format!("{} at {declared_on}", takt::git::COMMIT_IDENTITY_FILE)
+    };
+    let scanned_identity = identity.clone();
     let commit_as = identity.map_or(takt::case::CommitAs::Takt, takt::case::CommitAs::Given);
     // The fetch is read-only and comes first, so the number is chosen and checked once, on
     // everything the checkout knows after it, and before anything is cut or pushed.
@@ -1806,6 +2005,12 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         let story = Aep::default().show(&repo, &scenario.story)?;
         let mut validators = validators_of(&repo, &looping, None)?;
         forge.register(&mut validators);
+        // Through the bot route the identity is scanned, as the push would scan it, before the
+        // trial base is pushed or any step is taken.
+        if let (Some(forge), Some(identity)) = (&forge.forge, &scanned_identity) {
+            scan_identity_at_open(forge.as_ref(), &repo, identity, &identity_source, out)
+                .with_context(|| format!("scenario {}", scenario.id))?;
+        }
         if let Some(trials) = &forge.trials {
             trials.create(&repo, &trial).with_context(|| {
                 format!(
@@ -2104,6 +2309,75 @@ fn refuse_identity_for_resume(
             dir.display(),
             takt::git::COMMIT_IDENTITY_FILE
         ));
+    }
+    Ok(())
+}
+
+/// The identity a `takt run` in `repo` commits with, and where it comes from: `given`
+/// (`--commit-identity`), else the one the resumed case `resuming` was opened with, else the one
+/// the repository configures at the commit a new case forks from (the base of the case whose
+/// branch the tree is on, or `HEAD`). `None` when there is none, or the commit is not found:
+/// opening the case then refuses or commits as takt's own, as it did before this scan.
+fn identity_at_open(
+    repo: &Path,
+    given: Option<&takt::git::CommitIdentity>,
+    resuming: Option<&str>,
+) -> Result<Option<(takt::git::CommitIdentity, String)>> {
+    if let Some(given) = given {
+        return Ok(Some((given.clone(), "--commit-identity".to_owned())));
+    }
+    if let Some(id) = resuming {
+        let recorded = takt::case::commit_identity_of(&repo.join(takt::case::CASES_DIR).join(id))?;
+        return Ok(recorded.map(|identity| (identity, format!("the case {id}"))));
+    }
+    let from = takt::git::current_branch(repo)?
+        .as_deref()
+        .and_then(|branch| branch.strip_prefix(takt::case::BRANCH_PREFIX))
+        .filter(|other| takt::case::check_id(other).is_ok())
+        .and_then(|other| {
+            takt::case::Branch::read(&repo.join(takt::case::CASES_DIR).join(other))
+                .ok()
+                .and_then(|branch| branch.base)
+        });
+    let Ok(base) = takt::git::run(
+        repo,
+        &["rev-parse", "--verify", from.as_deref().unwrap_or("HEAD")],
+    ) else {
+        return Ok(None);
+    };
+    let at = &base[..12.min(base.len())];
+    let source = format!("{} at {at}", takt::git::COMMIT_IDENTITY_FILE);
+    Ok(takt::git::configured_identity(repo, &base)?.map(|identity| (identity, source)))
+}
+
+/// Scans `identity`, which a run's commits carry off the machine, taken from `source`, with the
+/// scan `forge` runs before a push ([`Forge::scan_identity`]), when the run opens: before step
+/// 1, before its case opens or its trial base is cut. The text scanned is kept under the state
+/// directory while the scan runs, never in `repo`. A refusal ends the run, naming the scan's;
+/// a scan that cannot run (no policy) says "not scanned" on `out`, and the run opens.
+fn scan_identity_at_open(
+    forge: &dyn Forge,
+    repo: &Path,
+    identity: &takt::git::CommitIdentity,
+    source: &str,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let dir = takt::promotion::store()?
+        .with_file_name("identity-scans")
+        .join(std::process::id().to_string());
+    let scanned = forge.scan_identity(repo, &dir, identity);
+    let _ = std::fs::remove_dir_all(&dir);
+    let scanned = scanned.with_context(|| {
+        format!(
+            "{source} gives the commit identity {identity}, which this run's commits would carry off the machine, and it did not pass the bot route's scan; give an identity the scan passes (--commit-identity '<name> <email>', or `identity.name` and `identity.email` in {}); no step was taken, nothing was written or pushed",
+            takt::git::COMMIT_IDENTITY_FILE
+        )
+    })?;
+    if let takt::forge::IdentityScan::NotScanned(why) = scanned {
+        writeln!(
+            out,
+            "commit identity: {identity} from {source} not scanned ({why}); the scan before the push still applies"
+        )?;
     }
     Ok(())
 }
