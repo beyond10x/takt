@@ -807,7 +807,6 @@ fn slipping_form(name: &str, line: &str, files: &[(&str, &str)], lib: &str) {
 /// The review's probe `pypath`: a module the script imports from a `PYTHONPATH` entry the line
 /// sets before the program.
 #[test]
-#[ignore = "slips until story:the-gate-reads-every-shell-form"]
 fn pypath() {
     slipping_form(
         "form-pypath",
@@ -819,7 +818,6 @@ fn pypath() {
 
 /// The review's probe `exportpp`: the same `PYTHONPATH` entry set by `export`.
 #[test]
-#[ignore = "slips until story:the-gate-reads-every-shell-form"]
 fn exportpp() {
     slipping_form(
         "form-exportpp",
@@ -832,7 +830,6 @@ fn exportpp() {
 /// The review's probe `dashm`: `cd scripts && python3 -m check`, a module beside the one `-m`
 /// runs.
 #[test]
-#[ignore = "slips until story:the-gate-reads-every-shell-form"]
 fn dashm() {
     slipping_form(
         "form-dashm",
@@ -844,7 +841,6 @@ fn dashm() {
 
 /// The review's probe `xargs`: the script named on `xargs`'s standard input.
 #[test]
-#[ignore = "slips until story:the-gate-reads-every-shell-form"]
 fn xargs() {
     slipping_form(
         "form-xargs",
@@ -856,7 +852,6 @@ fn xargs() {
 
 /// The review's probe `source`: a sourced file sets `PYTHONPATH` by assignment and `export`.
 #[test]
-#[ignore = "slips until story:the-gate-reads-every-shell-form"]
 fn source() {
     slipping_form(
         "form-source",
@@ -872,7 +867,6 @@ fn source() {
 /// The final confirm's probe `execin0`: `exec 0< FILE` before a shell that reads its script from
 /// standard input.
 #[test]
-#[ignore = "slips until story:the-gate-reads-every-shell-form"]
 fn exec_stdin_descriptor_then_sh() {
     slipping_form(
         "form-execin0",
@@ -887,7 +881,6 @@ fn exec_stdin_descriptor_then_sh() {
 
 /// The final confirm's probe `execin`: `exec < FILE` before `sh`.
 #[test]
-#[ignore = "slips until story:the-gate-reads-every-shell-form"]
 fn exec_stdin_then_sh() {
     slipping_form(
         "form-execin",
@@ -902,7 +895,6 @@ fn exec_stdin_then_sh() {
 
 /// The final confirm's probe `execinbash`: `exec < FILE` before `bash`.
 #[test]
-#[ignore = "slips until story:the-gate-reads-every-shell-form"]
 fn exec_stdin_then_bash() {
     slipping_form(
         "form-execinbash",
@@ -917,7 +909,6 @@ fn exec_stdin_then_bash() {
 
 /// The probe `envCm`: `env -C dir python3 -m x`, a module beside the one `-m` runs.
 #[test]
-#[ignore = "slips until story:the-gate-reads-every-shell-form"]
 fn env_chdir_dash_m() {
     slipping_form(
         "form-envcm",
@@ -929,7 +920,6 @@ fn env_chdir_dash_m() {
 
 /// The confirm's probe `nestedcd`: `cd dir && python3 -c …` importing from that directory.
 #[test]
-#[ignore = "slips until story:the-gate-reads-every-shell-form"]
 fn cd_then_dash_c() {
     slipping_form(
         "form-nestedcd",
@@ -941,12 +931,291 @@ fn cd_then_dash_c() {
 
 /// The confirm's probe `stdincd`: `cd dir && python3 - < x.py` importing from that directory.
 #[test]
-#[ignore = "slips until story:the-gate-reads-every-shell-form"]
 fn cd_then_stdin_script() {
     slipping_form(
         "form-stdincd",
         "cd scripts && python3 - < check.py",
         &[("scripts/check.py", MAIN)],
         "scripts/checklib.py",
+    );
+}
+
+/// A review probe of a program that runs another program: `line` run by `/bin/sh -c` as
+/// [`slipping_form`] runs it, and the summary names `why` when `why` is given: the line fails
+/// closed, since the reader does not know how the program runs what it is given.
+fn wrapped_form(name: &str, line: &str, why: Option<&str>) {
+    let files = [("scripts/check.py", MAIN)];
+    let lib = "scripts/checklib.py";
+    let mut all = files.to_vec();
+    all.push((lib, "def run():\n    return 0\n"));
+    let tree = repository_running(name, SHELL, &["-c", line], &[], &all);
+    let observation = observed(&tree, name, &[(lib, HAND)]);
+    refused(&observation, lib);
+    match why {
+        Some(why) => assert!(
+            observation.summary.contains(why),
+            "the summary does not say why the gate fails closed ({why}): {}",
+            observation.summary
+        ),
+        None => assert!(
+            !observation.summary.contains("fail closed"),
+            "the gate fails closed on a wrapper it reads: {}",
+            observation.summary
+        ),
+    }
+}
+
+/// Acceptance 4: `taskset MASK CMD` is read.
+#[test]
+fn taskset_runs_the_program_after_its_mask() {
+    wrapped_form("wrap-taskset", "taskset 1 python3 scripts/check.py", None);
+}
+
+/// Acceptance 4: `chrt [policy] PRIORITY CMD` is read.
+#[test]
+fn chrt_runs_the_program_after_its_priority() {
+    wrapped_form("wrap-chrt", "chrt -f 10 python3 scripts/check.py", None);
+}
+
+/// Acceptance 4: `unbuffer CMD` is read.
+#[test]
+fn unbuffer_runs_the_program_after_it() {
+    wrapped_form("wrap-unbuffer", "unbuffer python3 scripts/check.py", None);
+}
+
+/// Acceptance 4: `script -qec CMD FILE` runs its command string through a shell, read as `sh -c`
+/// is.
+#[test]
+fn script_runs_its_command_string() {
+    wrapped_form(
+        "wrap-script",
+        "script -qec \"python3 scripts/check.py\" /dev/null",
+        None,
+    );
+}
+
+/// Acceptance 4: `uv run CMD` runs the program after its options; `uv run FILE.py` runs the
+/// file under the project's Python.
+#[test]
+fn uv_run_runs_the_program_or_script_after_its_options() {
+    wrapped_form("wrap-uv", "uv run --no-sync python3 scripts/check.py", None);
+    wrapped_form("wrap-uv-script", "uv run scripts/check.py", None);
+}
+
+/// Acceptance 4: `env -S STRING` runs the string's words.
+#[test]
+fn env_split_string_runs_its_words() {
+    wrapped_form("wrap-env-s", "env -S \"python3 scripts/check.py\"", None);
+}
+
+/// Acceptance 4: `pytest FILE` runs the file as a test module, its directory first on the
+/// import path.
+#[test]
+fn pytest_runs_the_files_it_is_given() {
+    wrapped_form("wrap-pytest", "pytest -q scripts/check.py", None);
+}
+
+/// Acceptance 4: `xargs CMD` runs the command with the words of its input appended, which the
+/// reader does not read: the command is read and the line fails closed, naming `xargs`.
+#[test]
+fn xargs_runs_its_command_and_fails_closed_on_its_input() {
+    wrapped_form(
+        "wrap-xargs",
+        "echo scripts/check.py | xargs python3",
+        Some("`xargs` runs"),
+    );
+}
+
+/// Acceptance 4: a program the reader does not know that is given a program it knows fails
+/// closed, naming both.
+#[test]
+fn an_unlisted_program_given_a_program_fails_closed() {
+    wrapped_form(
+        "wrap-unlisted",
+        "doas python3 scripts/check.py",
+        Some("`doas` is given `python3`"),
+    );
+}
+
+/// A program in the tree that is given a program the reader knows (`scripts/gate-exec python3
+/// -I scripts/check-citations` in takt's own gates document) is compared whole at the base, and
+/// the program it is given is read with the words after it as the command it runs: the module
+/// that command's Python imports is compared, and the line does not fail closed.
+#[test]
+fn an_in_tree_program_given_a_program_hands_it_off() {
+    let name = "wrap-in-tree";
+    let lib = "scripts/checklib.py";
+    let files = [
+        ("scripts/check.py", MAIN),
+        (lib, "def run():\n    return 0\n"),
+        (
+            "scripts/run",
+            "#!/usr/bin/python3 -I\nimport os\nimport sys\nos.execvp(sys.argv[1], sys.argv[1:])\n",
+        ),
+    ];
+    let tree = repository_running(
+        name,
+        SHELL,
+        &["-c", "scripts/run python3 scripts/check.py"],
+        &[],
+        &files,
+    );
+    let observation = observed(&tree, name, &[(lib, HAND)]);
+    refused(&observation, lib);
+    assert!(
+        !observation.summary.contains("fail closed"),
+        "the gate fails closed on a program of the tree it compares: {}",
+        observation.summary
+    );
+    // The program itself is compared: a hand commit to it stops the gate, naming it.
+    let tree = repository_running(
+        "wrap-in-tree-changed",
+        SHELL,
+        &["-c", "scripts/run python3 scripts/check.py"],
+        &[],
+        &files,
+    );
+    let observation = observed(
+        &tree,
+        "wrap-in-tree-changed",
+        &[(
+            "scripts/run",
+            "#!/usr/bin/python3 -I\nimport os\nimport sys\nos.execvp(sys.argv[1], sys.argv[1:])  # a hand commit\n",
+        )],
+    );
+    refused(&observation, "scripts/run");
+}
+
+/// A gate running `scripts/check.py`, which imports `m1` from the `PYTHONPATH` entry `lib`,
+/// where only what is imported is compared; `lib/m<k>.py` imports `m<k+1>` up to
+/// `lib/m<length>.py`, which imports nothing. The gate passes at the base.
+fn chain(name: &str, length: usize) -> Scratch {
+    let mut files: Vec<(String, String)> = vec![(
+        "scripts/check.py".to_owned(),
+        "import sys\nimport m1\nsys.exit(m1.run())\n".to_owned(),
+    )];
+    for k in 1..=length {
+        let text = if k < length {
+            format!(
+                "import m{}\n\n\ndef run():\n    return m{}.run()\n",
+                k + 1,
+                k + 1
+            )
+        } else {
+            "def run():\n    return 0\n".to_owned()
+        };
+        files.push((format!("lib/m{k}.py"), text));
+    }
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect();
+    repository(
+        name,
+        &["scripts/check.py"],
+        &[("PYTHONPATH", "lib")],
+        &files,
+    )
+}
+
+/// The gate reads the imports of at most 64 Python files for a command (the script and the 63
+/// modules after it). Review of wave 22, unit A, condition 1: a chain that runs past the cap
+/// fails closed, naming the file at which the cap was reached, so every Python file of the
+/// tree is compared and a module past the cap, which the walk never reads, decides nothing.
+#[test]
+fn an_import_chain_past_the_cap_fails_closed_naming_where_it_was_reached() {
+    let tree = chain("cap", 70);
+    let observation = observed(
+        &tree,
+        "cap",
+        &[("lib/m70.py", "def run():\n    return 1\n")],
+    );
+    closed_naming(&observation, "lib/m70.py", "lib/m64.py");
+    assert!(
+        observation.summary.contains("64 Python files"),
+        "the summary does not name the cap: {}",
+        observation.summary
+    );
+}
+
+/// Review of wave 22, unit A, condition 2: a Python file the walk reads that imports by a form
+/// no import line names (`importlib` in any use, `__import__(`, a call of `exec(` or `eval(`)
+/// fails closed, naming the file and the form, so the module it loads is compared with every
+/// other Python file of the tree.
+#[test]
+fn a_dynamic_import_in_a_read_module_fails_closed_naming_the_file_and_form() {
+    for (name, lib, form) in [
+        (
+            "dyn-import-module",
+            "import importlib\n\n\ndef run():\n    return importlib.import_module(\"plugin\").run()\n",
+            "importlib.import_module(",
+        ),
+        (
+            "dyn-from",
+            "from importlib import import_module\n\n\ndef run():\n    return import_module(\"plugin\").run()\n",
+            "from importlib",
+        ),
+        (
+            "dyn-dunder",
+            "def run():\n    return __import__(\"plugin\").run()\n",
+            "__import__(",
+        ),
+        (
+            "dyn-exec",
+            "def run():\n    exec(\"import plugin\")\n    return 0\n",
+            "exec(",
+        ),
+        (
+            "dyn-eval",
+            "def run():\n    return eval(\"__import__('plugin').run()\")\n",
+            "eval(",
+        ),
+    ] {
+        let tree = repository(
+            name,
+            &["scripts/check.py"],
+            &[("PYTHONPATH", "lib")],
+            &[
+                (
+                    "scripts/check.py",
+                    "import sys\nimport checklib\nsys.exit(checklib.run())\n",
+                ),
+                ("lib/checklib.py", lib),
+                ("lib/plugin.py", "def run():\n    return 0\n"),
+            ],
+        );
+        let observation = observed(
+            &tree,
+            name,
+            &[("lib/plugin.py", "def run():\n    return 1\n")],
+        );
+        closed_naming(&observation, "lib/plugin.py", "lib/checklib.py");
+        assert!(
+            observation.summary.contains(form),
+            "the summary does not name the form {form}: {}",
+            observation.summary
+        );
+    }
+}
+
+/// The control: a chain under the cap with no dynamic import is read whole and nothing fails
+/// closed. A Python file outside what it imports lets the gate run and record; its last
+/// module is compared, and a change there keeps the gate from running, named.
+#[test]
+fn an_import_chain_under_the_cap_is_read_whole_and_the_gate_runs() {
+    let tree = chain("under-cap", 10);
+    let observation = observed(&tree, "under-cap", &[("src/app.py", "VALUE = 2\n")]);
+    recorded(&observation);
+    let tree = chain("under-cap-last", 10);
+    let observation = observed(
+        &tree,
+        "under-cap-last",
+        &[("lib/m10.py", "def run():\n    return 1\n")],
+    );
+    refused(&observation, "lib/m10.py");
+    assert!(
+        !observation.summary.contains("fail closed"),
+        "a chain under the cap fails closed: {}",
+        observation.summary
     );
 }

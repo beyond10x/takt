@@ -48,6 +48,7 @@ fn opened(case: &str) -> Event {
         inputs: Vec::new(),
         base: None,
         binary: None,
+        layers: None,
     }
 }
 
@@ -61,6 +62,7 @@ fn judged(tokens: u64) -> Event {
         usage: None,
         revision: None,
         model: None,
+        version: None,
         cost_usd: None,
         duration_ms: None,
         api_ms: None,

@@ -75,6 +75,7 @@ fn scenario_one_with_its_grant(repo: &Path, case: &str) {
         inputs: Vec::new(),
         base: None,
         binary: None,
+        layers: None,
     };
     let step = |tokens: u64| Event::Step {
         by: "harness".to_owned(),
@@ -85,6 +86,7 @@ fn scenario_one_with_its_grant(repo: &Path, case: &str) {
         usage: None,
         revision: None,
         model: None,
+        version: None,
         cost_usd: None,
         duration_ms: None,
         api_ms: None,

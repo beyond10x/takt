@@ -10,6 +10,7 @@
 //! The file lies in the case directory, which a judgement step and a validator's command may
 //! not write: a line in it was written by the kernel.
 
+use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
@@ -64,6 +65,15 @@ pub enum Event {
     /// one, the inputs as `name=value`, the commit the case's branch forked from when the
     /// case recorded one, and the revision the running binary was built from when its caller
     /// gave one, as `takt --version` prints it: `<sha>`, `<sha>-dirty` or `unknown revision`.
+    /// The layers (ADR 0101): layer name to revision, each read from the binary or library
+    /// that ran, never typed: `takt`, the binary's revision as `binary` names it, when the
+    /// caller gave one. The harness and the model layers are not known when the run opens,
+    /// since takt runs the harness program in a judgement step and nowhere else: a reader
+    /// takes them from the run's harness `step` lines, whose `version` is the harness
+    /// program's own version and whose `model` is the model id, each as the harness's stream
+    /// stated it. A layer the run cannot read is absent, never guessed; the map is written,
+    /// empty or not, by every run of this takt, and absent on a line written before it, which
+    /// a reader reads as "layers not recorded", never as a revision.
     Opened {
         case: String,
         protocol: String,
@@ -74,6 +84,8 @@ pub enum Event {
         base: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         binary: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        layers: Option<BTreeMap<String, String>>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.
@@ -86,7 +98,9 @@ pub enum Event {
     /// tokens the harness reported when it reported any, and their four components when it
     /// reported those; a validator's, the revision it observed. A harness step's also carries
     /// what the harness reported about the call, each absent when it did not state it, never
-    /// 0: the model, the cost in dollars, the call's duration and its time in the API in
+    /// 0: the model, the harness program's own version as its stream stated it (the `harness`
+    /// layer's revision, ADR 0101; Claude Code: `claude_code_version` of its `system`/`init`
+    /// event), the cost in dollars, the call's duration and its time in the API in
     /// milliseconds, the turns, and the instant the call started, which precedes the line's
     /// `at`; and the path of its transcript relative to the transcripts directory,
     /// `<repo>/<case>/run-<r>/step-<n>.jsonl`, when takt kept one
@@ -106,6 +120,8 @@ pub enum Event {
         revision: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         cost_usd: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -309,6 +325,17 @@ impl Events {
     /// `store_evidence` line an earlier takt wrote carries the store's instant as a second
     /// `at`, which is read as `observed_at`. A symbolic link at the path is refused, never read through ([`Events::open`]).
     pub fn read(&self) -> Result<Vec<serde_json::Value>> {
+        Ok(self
+            .read_numbered()?
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect())
+    }
+
+    /// As [`Events::read`], each line with its number in the file, from 1, counting the
+    /// blank and the skipped lines it passes over: the line a report names as the record a
+    /// figure came from.
+    pub fn read_numbered(&self) -> Result<Vec<(usize, serde_json::Value)>> {
         let mut bytes = Vec::new();
         match self.open(std::fs::OpenOptions::new().read(true)) {
             Ok(mut file) => {
@@ -339,7 +366,7 @@ impl Events {
                 continue;
             }
             if let Some(value) = &parsed[n] {
-                read.push(value.clone());
+                read.push((n + 1, value.clone()));
                 n += 1;
                 continue;
             }

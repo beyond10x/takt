@@ -249,6 +249,7 @@ fn emit_run(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Option<&st
                 inputs: Vec::new(),
                 base: None,
                 binary: binary.map(str::to_owned),
+                layers: None,
             },
         ),
         (
@@ -262,6 +263,7 @@ fn emit_run(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Option<&st
                 usage: Some(usage),
                 revision: None,
                 model: None,
+                version: None,
                 cost_usd: None,
                 duration_ms: None,
                 api_ms: None,

@@ -59,6 +59,7 @@ fn opened(case: &str) -> Event {
         inputs: Vec::new(),
         base: Some("0123456789abcdef0123456789abcdef01234567".to_owned()),
         binary: None,
+        layers: None,
     }
 }
 
@@ -81,6 +82,7 @@ fn judged(usage: TokenUsage) -> Event {
         usage: Some(usage),
         revision: None,
         model: None,
+        version: None,
         cost_usd: None,
         duration_ms: None,
         api_ms: None,
@@ -101,6 +103,7 @@ fn observed() -> Event {
         usage: None,
         revision: Some("89abcdef0123456789abcdef0123456789abcdef".to_owned()),
         model: None,
+        version: None,
         cost_usd: None,
         duration_ms: None,
         api_ms: None,

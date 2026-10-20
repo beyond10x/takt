@@ -47,6 +47,7 @@ fn opened(case: &str) -> Event {
         inputs: Vec::new(),
         base: None,
         binary: None,
+        layers: None,
     }
 }
 
@@ -60,6 +61,7 @@ fn judged(tokens: u64) -> Event {
         usage: None,
         revision: None,
         model: None,
+        version: None,
         cost_usd: None,
         duration_ms: None,
         api_ms: None,
@@ -367,6 +369,7 @@ fn row(case: &str, outcome: &str) -> Row {
         opened_binary: None,
         completed: None,
         step_tokens: Default::default(),
+        layers: None,
     }
 }
 

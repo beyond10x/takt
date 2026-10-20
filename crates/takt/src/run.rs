@@ -260,7 +260,7 @@ enum SteppedBy<'r> {
     Harness(
         Option<u64>,
         Option<crate::events::TokenUsage>,
-        Option<crate::harness::CallReport>,
+        Option<Box<crate::harness::CallReport>>,
         Option<std::result::Result<String, String>>,
     ),
 }
@@ -2447,7 +2447,247 @@ const WRAPPERS: &[(&[&str], Spec)] = &[
             ..PLAIN
         },
     ),
+    // `taskset MASK CMD`, `chrt [-f|-r|…] PRIORITY CMD`: one operand before the command.
+    (
+        &["taskset"],
+        Spec {
+            operands: 1,
+            ..PLAIN
+        },
+    ),
+    (
+        &["chrt"],
+        Spec {
+            short_arg: "TPD",
+            long_arg: &["sched-runtime", "sched-period", "sched-deadline"],
+            operands: 1,
+            ..PLAIN
+        },
+    ),
+    (&["unbuffer"], PLAIN),
+    // `script -qec CMD FILE` runs the command string through a shell.
+    (
+        &["script"],
+        Spec {
+            short_arg: "TIOBEmo",
+            long_arg: &[
+                "log-timing",
+                "log-in",
+                "log-out",
+                "log-io",
+                "echo",
+                "logging-format",
+                "output-limit",
+            ],
+            short_command: "c",
+            long_command: &["command"],
+            ..PLAIN
+        },
+    ),
+    // `xargs [options] CMD` runs the command with the words of its standard input appended,
+    // which the guard does not read: the line fails closed besides ([`command_paths`]).
+    (
+        &["xargs"],
+        Spec {
+            short_arg: "adEILnPs",
+            long_arg: &[
+                "arg-file",
+                "delimiter",
+                "eof",
+                "replace",
+                "max-lines",
+                "max-args",
+                "max-procs",
+                "max-chars",
+                "process-slot-var",
+            ],
+            ..PLAIN
+        },
+    ),
+    // `uv run [options] CMD`, or a Python script or `-m MODULE` run by the project's Python
+    // ([`command_paths`]).
+    (
+        &["uv"],
+        Spec {
+            short_arg: "pw",
+            long_arg: &[
+                "python",
+                "with",
+                "with-editable",
+                "with-requirements",
+                "group",
+                "only-group",
+                "no-group",
+                "extra",
+                "package",
+                "env-file",
+                "project",
+                "index",
+                "default-index",
+                "find-links",
+                "cache-dir",
+                "config-file",
+                "exclude-newer",
+                "python-preference",
+                "link-mode",
+                "resolution",
+                "prerelease",
+            ],
+            long_chdir: &["directory"],
+            subcommands: &["run"],
+            ..PLAIN
+        },
+    ),
 ];
+
+/// Whether `word` names a program the reader knows how to read: a shell or interpreter
+/// ([`INTERPRETERS`]), a wrapper ([`WRAPPERS`]), a build tool ([`BUILD_TOOLS`]), `env` or
+/// `pytest`. A program the reader does not know that takes one as an argument may run it, which
+/// the reader cannot see: a file in the tree, compared whole at the base, is read as running
+/// that program with the words after it; any other fails the line closed ([`command_paths`]).
+fn known_program(word: &str) -> bool {
+    let name = program_of(word);
+    name == "env"
+        || name == "pytest"
+        || name == "py.test"
+        || spec_of(INTERPRETERS, &name).is_some()
+        || spec_of(WRAPPERS, &name).is_some()
+        || BUILD_TOOLS
+            .iter()
+            .any(|(names, _, _, _)| names.contains(&name.as_str()))
+}
+
+/// The top-level names the Python `text` imports: `import a.b as c, d` names `a` and `d`,
+/// `from a.b import c` names `a`; a relative import (`from . import x`) names nothing, and so
+/// does a line the reader cannot take as one statement (a parenthesised or continued list is
+/// read as far as its first line). A name is found in the directories Python imports from as
+/// `-m` finds its module ([`PYTHON_MARK`]).
+pub(crate) fn imports_of(text: &str) -> BTreeSet<String> {
+    let identifier = |name: &str| {
+        !name.is_empty()
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && !name.starts_with(|c: char| c.is_ascii_digit())
+    };
+    let mut names = BTreeSet::new();
+    let statements = text.lines().flat_map(|line| {
+        let line = line.split_once('#').map_or(line, |(code, _)| code);
+        line.split(';')
+    });
+    for line in statements {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("import ") {
+            for item in rest.split(',') {
+                let item = item.trim();
+                let name = item.split_whitespace().next().unwrap_or("");
+                let name = name.split('.').next().unwrap_or("");
+                if identifier(name) {
+                    names.insert(name.to_owned());
+                }
+            }
+        } else if let Some(rest) = line.strip_prefix("from ") {
+            let module = rest.split_whitespace().next().unwrap_or("");
+            let name = module.split('.').next().unwrap_or("");
+            if identifier(name) {
+                names.insert(name.to_owned());
+            }
+        }
+    }
+    names
+}
+
+/// The forms in the Python `text` by which it imports what no import line names, which
+/// [`imports_of`] cannot follow: `importlib` in any use (`import importlib`, `from importlib`,
+/// `importlib.import_module(`, named as written), `__import__(`, and a call of `exec(` or
+/// `eval(`. Read as [`imports_of`] reads, line by line with a comment stripped; each form once,
+/// in the order found. A file holding one fails closed in the gate's comparison.
+pub(crate) fn dynamic_imports_of(text: &str) -> Vec<String> {
+    let is_identifier = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut forms: Vec<String> = Vec::new();
+    let statements = text.lines().flat_map(|line| {
+        let line = line.split_once('#').map_or(line, |(code, _)| code);
+        line.split(';')
+    });
+    for statement in statements {
+        let statement = statement.trim();
+        let chars: Vec<(usize, char)> = statement.char_indices().collect();
+        let end_of = |k: usize| chars.get(k).map_or(statement.len(), |(at, _)| *at);
+        let mut i = 0;
+        while i < chars.len() {
+            if !is_identifier(chars[i].1) {
+                i += 1;
+                continue;
+            }
+            let begin = chars[i].0;
+            let mut j = i;
+            while j < chars.len() && is_identifier(chars[j].1) {
+                j += 1;
+            }
+            let name = &statement[begin..end_of(j)];
+            let form = match name {
+                "importlib" if statement.starts_with("import ") => {
+                    Some("import importlib".to_owned())
+                }
+                "importlib"
+                    if statement
+                        .strip_prefix("from ")
+                        .and_then(|rest| rest.split_whitespace().next())
+                        .is_some_and(|module| module.split('.').next() == Some("importlib")) =>
+                {
+                    Some("from importlib".to_owned())
+                }
+                "importlib" => {
+                    // The attribute chain after it, and the call's parenthesis when one follows.
+                    let mut k = j;
+                    while chars.get(k).is_some_and(|(_, c)| *c == '.')
+                        && chars.get(k + 1).is_some_and(|(_, c)| is_identifier(*c))
+                    {
+                        k += 1;
+                        while k < chars.len() && is_identifier(chars[k].1) {
+                            k += 1;
+                        }
+                    }
+                    let chain = &statement[begin..end_of(k)];
+                    let called = statement[end_of(k)..].trim_start().starts_with('(');
+                    Some(if called {
+                        format!("{chain}(")
+                    } else {
+                        chain.to_owned()
+                    })
+                }
+                "__import__" | "exec" | "eval"
+                    if statement[end_of(j)..].trim_start().starts_with('(') =>
+                {
+                    Some(format!("{name}("))
+                }
+                _ => None,
+            };
+            if let Some(form) = form.filter(|form| !forms.contains(form)) {
+                forms.push(form);
+            }
+            i = j;
+        }
+    }
+    forms
+}
+
+/// Names, behind [`PYTHON_MARK`] alone (the gate's to compare, not the step guard's), what the
+/// top-level imports of the Python `code` load from each of `imports`, the directories Python
+/// imports from: `name.py`, a compiled `name.*` and the package `name/`, as `-m name` is named.
+fn python_imports_named(tree: &Path, code: &str, imports: &[String], named: &mut Vec<String>) {
+    for name in imports_of(code) {
+        for import in imports {
+            let import = Some(import.as_str());
+            let loads = [
+                named_from(tree, import, &format!("{name}.py")),
+                named_from(tree, import, &format!("{name}.*")),
+                named_from(tree, import, &name).map(|package| format!("{package}/**")),
+            ];
+            for path in loads.into_iter().flatten() {
+                named.push(format!("{PYTHON_MARK}{path}"));
+            }
+        }
+    }
+}
 
 /// The build tools whose own file decides what their target runs: the files they read in the
 /// directory they run in, unless an option names another; and the configuration they read
@@ -3697,10 +3937,12 @@ fn statement(
     // `exec`, `command` and `builtin` run the program after their options: `exec -c`, `-l` and
     // `-a NAME` (the name the program is given, not the program), `command -p`, `-v`, `-V`. An
     // option the guard does not know fails closed: it cannot tell where the program is.
+    let mut exec = false;
     while let Some(&builtin) = words
         .get(at)
         .filter(|word| matches!(**word, "exec" | "command" | "builtin"))
     {
+        exec |= builtin == "exec";
         at += 1;
         let (flags, with_argument) = match builtin {
             "exec" => ("cl", "a"),
@@ -3740,6 +3982,27 @@ fn statement(
     let Some(&first) = rest.first() else {
         for (name, value) in assignments {
             assign(tree, &dirs, name, value, &mut shell.env, named);
+        }
+        // `exec < FILE` with no program: the shell's own standard input, which the commands
+        // after it read, is the file from then on; a shell among them given no script reads it
+        // as its script ([`stdin_script`]).
+        if exec && let Some(input) = input {
+            shell.env.stdin = Some(match input {
+                Ok(target) => {
+                    let mut stdins: Vec<Stdin> = dirs
+                        .iter()
+                        .map(|dir| stdin_of(tree, &target, dir.as_deref(), &shell.env))
+                        .collect();
+                    match stdins.len() {
+                        1 => stdins.remove(0),
+                        _ => Stdin::Unknown(format!(
+                            "{}, read from a directory the guard cannot name",
+                            quoted(&target)
+                        )),
+                    }
+                }
+                Err(stdin) => stdin,
+            });
         }
         return;
     };
@@ -4162,7 +4425,8 @@ fn command_paths(
         }
         // A program in the tree that a shell reads is read line by line; one Python runs
         // imports from its own directory first.
-        if let Some(path) = named_from(tree, dir.as_deref(), program) {
+        let in_tree = named_from(tree, dir.as_deref(), program);
+        if let Some(path) = in_tree.clone() {
             script_paths(tree, &path, dir.as_deref(), &env, named, depth, false);
             if shebang_of(&tree.join(&path)).is_some_and(|interpreter| {
                 spec_of(INTERPRETERS, &interpreter)
@@ -4205,13 +4469,22 @@ fn command_paths(
                             }
                         }
                         "split-string" => {
-                            let Some(value) = value else {
-                                at += 1;
-                                break;
+                            let (string, after) = match value {
+                                Some(value) => (Some(value), at + 1),
+                                None => (words.get(at + 1).copied(), at + 2),
                             };
-                            let mut rest = vec![value];
-                            rest.extend(&words[at + 1..]);
-                            return command_paths(tree, &rest, dir, named, depth + 1, &env);
+                            let Some(string) = string else {
+                                return;
+                            };
+                            return env_split(
+                                tree,
+                                string,
+                                &words[after.min(words.len())..],
+                                dir,
+                                named,
+                                depth,
+                                &env,
+                            );
                         }
                         _ => {}
                     }
@@ -4250,13 +4523,30 @@ fn command_paths(
                     }
                     match split {
                         Some("") => {
-                            at += 1;
-                            break;
+                            let Some(string) = words.get(at + 1).copied() else {
+                                return;
+                            };
+                            let after = (at + 2).min(words.len());
+                            return env_split(
+                                tree,
+                                string,
+                                &words[after..],
+                                dir,
+                                named,
+                                depth,
+                                &env,
+                            );
                         }
                         Some(rest) => {
-                            let mut words_of = vec![rest];
-                            words_of.extend(&words[at + 1..]);
-                            return command_paths(tree, &words_of, dir, named, depth + 1, &env);
+                            return env_split(
+                                tree,
+                                rest,
+                                &words[at + 1..],
+                                dir,
+                                named,
+                                depth,
+                                &env,
+                            );
                         }
                         None => {}
                     }
@@ -4282,6 +4572,45 @@ fn command_paths(
             continue;
         }
         if let Some(spec) = spec_of(WRAPPERS, &name) {
+            // `xargs` appends the words of its standard input (or of `-a FILE`) to the command
+            // it runs, which the guard does not read: the command is read, and the line fails
+            // closed for what it is given.
+            if name == "xargs" {
+                fail_closed(
+                    named,
+                    format!(
+                        "`xargs` runs {} with the words of its input appended, which the guard does not read",
+                        quoted(&words[at..].join(" "))
+                    ),
+                );
+            }
+            // `uv run` has options of its own before the command; a `*.py` operand or `-m
+            // MODULE` after them runs under the project's Python.
+            if name == "uv" {
+                if words.get(at) != Some(&"run") {
+                    return;
+                }
+                let scanned = scan(words, at + 1, &spec);
+                for to in scanned.chdirs {
+                    dir = changed_dir(tree, dir.as_deref(), to);
+                }
+                let End::Operand = scanned.end else {
+                    return;
+                };
+                let rest = &words[scanned.at.min(words.len())..];
+                let python = rest.first().is_some_and(|word| {
+                    word.ends_with(".py") || matches!(*word, "-m" | "--module")
+                });
+                if python {
+                    let mut under_python = vec!["python"];
+                    under_python.extend(
+                        rest.iter()
+                            .map(|word| if *word == "--module" { "-m" } else { word }),
+                    );
+                    return command_paths(tree, &under_python, dir, named, depth + 1, &env);
+                }
+                return command_paths(tree, rest, dir, named, depth + 1, &env);
+            }
             // Options may stand before the operands and after them (`flock FILE -c CMD`).
             let mut operands = spec.operands;
             loop {
@@ -4363,7 +4692,25 @@ fn command_paths(
                 }
             }
             match scanned.end {
-                End::Stop => {}
+                End::Stop => {
+                    // `python -c CODE`: what the code imports is loaded from the directories
+                    // Python imports from, as `-m` loads its module; the gate compares it.
+                    if !spec.short_module.is_empty()
+                        && let Some(word) = words.get(scanned.at)
+                        && let Some(cluster) = word.strip_prefix('-')
+                        && let Some((_, rest)) = cluster.split_once('c')
+                    {
+                        let code = if rest.is_empty() {
+                            words.get(scanned.at + 1).copied()
+                        } else {
+                            Some(rest)
+                        };
+                        if let Some(code) = code {
+                            let imports = import_dirs(tree, dir.as_deref(), &env);
+                            python_imports_named(tree, code, &imports, named);
+                        }
+                    }
+                }
                 End::Command(from) => {
                     command_line(tree, words, from, dir.as_deref(), named, depth, &env);
                 }
@@ -4379,6 +4726,23 @@ fn command_paths(
                             }))
                     {
                         stdin_script(tree, dir.as_deref(), &env, named, depth);
+                    }
+                    // A Python given no script or `-` reads it from its standard input: a file
+                    // of the tree is the script it runs (`python3 - < check.py`), with the
+                    // directory it runs in first on its import path, not the file's own.
+                    if !spec.short_module.is_empty()
+                        && words.get(script).is_none_or(|word| *word == "-")
+                    {
+                        match &env.stdin {
+                            Some(Stdin::File(path)) => python_named(named, path.clone()),
+                            Some(Stdin::Unknown(why)) => fail_closed(
+                                named,
+                                format!(
+                                    "a Python reads its script from its standard input, {why}, which the guard cannot read"
+                                ),
+                            ),
+                            None | Some(Stdin::Empty) => {}
+                        }
                     }
                     // A subcommand (`deno run`) has options of its own before the script.
                     if words
@@ -4408,7 +4772,7 @@ fn command_paths(
                             }
                         }
                     }
-                    if let Some(script) = words.get(script) {
+                    if let Some(script) = words.get(script).filter(|word| **word != "-") {
                         if opaque(script) {
                             fail_closed(
                                 named,
@@ -4466,6 +4830,53 @@ fn command_paths(
             }
             return;
         }
+        // `pytest FILE…`: each Python file given runs as a test module, its directory first on
+        // the import path; the gate compares it as a script a Python runs ([`PYTHON_MARK`]).
+        if name == "pytest" || name == "py.test" {
+            for word in words[at..].iter().filter(|word| !word.starts_with('-')) {
+                let file = word.split_once("::").map_or(*word, |(file, _)| file);
+                if !file.ends_with(".py") || opaque(file) {
+                    continue;
+                }
+                if let Some(path) = named_from(tree, dir.as_deref(), file) {
+                    named.push(marked(parent_of(&path), IMPORTS));
+                    named.push(format!("{PYTHON_MARK}{path}"));
+                }
+            }
+        }
+        // A program in none of the tables that is given a program the guard knows (`taskset 1
+        // python3 check.py` before `taskset` was listed) may run it in a way the guard cannot
+        // see. A file in the tree is named above, so the gate compares it whole at the base
+        // (`scripts/gate-exec python3 -I scripts/check-citations`, which runs what it is given,
+        // and a file a step made is a change): the most it runs is that program with the words
+        // after it, read as a command from here. One the tree does not hold, which the guard
+        // has not read: the line fails closed, naming both.
+        if let Some(position) = words[at..]
+            .iter()
+            .position(|word| !word.starts_with('-') && known_program(word))
+        {
+            if in_tree
+                .as_ref()
+                .is_some_and(|path| tree.join(path).is_file())
+            {
+                command_paths(
+                    tree,
+                    &words[at + position..],
+                    dir.clone(),
+                    named,
+                    depth + 1,
+                    &env,
+                );
+            } else {
+                fail_closed(
+                    named,
+                    format!(
+                        "`{name}` is given {}, a program, and the guard does not know how `{name}` runs it",
+                        quoted(words[at + position])
+                    ),
+                );
+            }
+        }
         // A program in none of the tables: what it reads is not known, so every word of the
         // rest that names a path in the tree is guarded, as written and as a shell would unquote
         // it, an option's value after `=` among them. Whether the path is there yet does not
@@ -4494,6 +4905,27 @@ fn command_paths(
         }
         return;
     }
+}
+
+/// The command `env -S STRING` runs: the string split into words as `env` splits it (at white
+/// space, quotes kept together), with the words after it, `rest`, appended, read as a command
+/// line from `dir` ([`command_paths`]).
+fn env_split(
+    tree: &Path,
+    string: &str,
+    rest: &[&str],
+    dir: Option<String>,
+    named: &mut Vec<String>,
+    depth: usize,
+    env: &Env,
+) {
+    let split: Vec<String> = shell_words(string)
+        .into_iter()
+        .map(|word| word.trim_start_matches(REDIRECT).to_owned())
+        .collect();
+    let mut words_of: Vec<&str> = split.iter().map(String::as_str).collect();
+    words_of.extend(rest);
+    command_paths(tree, &words_of, dir, named, depth + 1, env);
 }
 
 /// The command line an option such as `sh -c` or `flock -c` runs: the word at `from`, after a
@@ -8061,7 +8493,7 @@ impl<'a> Run<'a> {
             Some(Err(why)) => (None, Some(why)),
             None => (None, None),
         };
-        let call = call.unwrap_or_default();
+        let call = call.map(|call| *call).unwrap_or_default();
         events.emit(
             self.steps,
             &Event::Step {
@@ -8073,6 +8505,7 @@ impl<'a> Run<'a> {
                 usage,
                 revision: revision.map(str::to_owned),
                 model: call.model,
+                version: call.version,
                 cost_usd: call.cost_usd,
                 duration_ms: call.duration_ms,
                 api_ms: call.api_ms,
@@ -8095,6 +8528,14 @@ impl<'a> Run<'a> {
         // This run's number in the case, which names its step transcripts' directory: one
         // more than the `opened` lines the case's record holds before this run writes its own.
         let run_number = crate::harness::run_number(events.path())?;
+        // The layers the run can read as it opens (ADR 0101), each from what ran: takt's own
+        // revision as the caller gave it. The harness's version and the model are read from
+        // the harness's stream at each step, so their layers are on the step lines: takt runs
+        // the harness program in a judgement step and nowhere else, never for its version.
+        let mut layers = std::collections::BTreeMap::new();
+        if let Some(binary) = &self.binary {
+            layers.insert("takt".to_owned(), binary.clone());
+        }
         events.emit(
             self.steps,
             &Event::Opened {
@@ -8109,6 +8550,7 @@ impl<'a> Run<'a> {
                     .ok()
                     .and_then(|branch| branch.base_commit),
                 binary: self.binary.clone(),
+                layers: Some(layers),
             },
         )?;
         writeln!(
@@ -8931,7 +9373,7 @@ impl<'a> Run<'a> {
                         SteppedBy::Harness(
                             report.tokens,
                             self.harness.last_usage(),
-                            self.harness.last_call(),
+                            self.harness.last_call().map(Box::new),
                             transcript.clone(),
                         ),
                         self.harness.name(),
@@ -8972,7 +9414,7 @@ impl<'a> Run<'a> {
                     SteppedBy::Harness(
                         report.tokens,
                         harness.last_usage(),
-                        harness.last_call(),
+                        harness.last_call().map(Box::new),
                         transcript.clone(),
                     ),
                     harness.name(),

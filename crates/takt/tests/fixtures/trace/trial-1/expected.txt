@@ -1,6 +1,6 @@
-| run | protocol | story | outcome | wall s | steps | model calls | turns | tokens | cost $ | validator s | forge s | idle s | human s | harness s | api s | other s | ci reads | s per ci read |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| takt-20261018T205520Z | software.change/1 | - | ApprovalRequired | 242 | 6 | 3 | 33 | 592698 | 0.849 | 107 | 0 | 0 | 0 | 130 | 128 | 5 | 0 | - |
+| run | protocol | story | outcome | wall s | steps | model calls | turns | tokens | cost $ | validator s | forge s | idle s | human s | harness s | api s | other s | ci reads | s per ci read | layers |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| takt-20261018T205520Z | software.change/1 | - | ApprovalRequired | 242 | 6 | 3 | 33 | 592698 | 0.849 | 107 | 0 | 0 | 0 | 130 | 128 | 5 | 0 | - | not recorded |
 
 ### takt-20261018T205520Z
 
@@ -30,7 +30,26 @@ seconds per ci read: -; 0.0 s over 0 reads; waits on ci.read between them: 0, 0.
 | 5 | validator | tests.run | 62.0 | - | - | - | - |
 | 6 | harness | repository.merge | 25.0 | 23.6 | 7 | 113634 | 0.164 |
 
+| layer | revision | tokens | cost $ | wall s | failures | records |
+|---|---|---|---|---|---|---|
+| takt | not recorded | not reported | not reported | 112 | 0 | events.jsonl:3,9,15 |
+| harness | not recorded | not reported | not reported | 130 | not reported | events.jsonl:6,12,18 |
+| model | not recorded | 592698 | 0.849 | 128 | not reported | events.jsonl:6,12,18 |
+| runtime | not recorded | not reported | not reported | not reported | not reported | - |
+failures by layer: takt none; harness, model, runtime not reported
+
 defects:
 - step 6: approval-only call (25.0 s, 113634 tokens, $0.164)
 not recorded: acceptance; takt revision
 sources: events.jsonl (steps, times, tokens); steps.jsonl: model, cost_usd, turns, duration_ms, api_ms, token components for 3 of 3 calls
+
+## total by layer
+
+| layer | tokens | cost $ | wall s | failures | runs |
+|---|---|---|---|---|---|
+| takt | not reported | not reported | 112 | 0 | 1 |
+| harness | not reported | not reported | 130 | not reported | 1 |
+| model | 592698 | 0.849 | 128 | not reported | 1 |
+| runtime | not reported | not reported | not reported | not reported | 1 |
+
+layers reported today: model (tokens, cost and API seconds from the harness steps' lines, the stream's result the harness reported); harness (call durations from the same lines); takt (wall seconds from its validators' spans and its remainder; failures from its refusal, error and NoProgress lines). Not read yet, so not reported: the harness session layer's own trace (trace-ir/1), the model layer's own failures, and the runtime's decision records.

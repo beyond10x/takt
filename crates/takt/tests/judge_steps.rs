@@ -171,6 +171,7 @@ fn row(n: usize, outcome: &str, tokens: u64, steps: &[(&str, u64)]) -> Row {
             .iter()
             .map(|(action, tokens)| ((*action).to_owned(), Some(*tokens)))
             .collect(),
+        layers: None,
     }
 }
 

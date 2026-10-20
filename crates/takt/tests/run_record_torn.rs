@@ -201,6 +201,7 @@ fn the_scorecard_reads_a_record_cut_inside_a_character() {
         inputs: Vec::new(),
         base: None,
         binary: None,
+        layers: None,
     };
     events.emit(0, &opened).expect("the run opens");
     append(events.path(), CUT);

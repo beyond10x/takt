@@ -4,9 +4,51 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 `[workspace.package] version` in `Cargo.toml` and has a section `## [<version>] — <date>` here;
 `.github/workflows/release.yml` checks that, runs `task check` and publishes the binaries.
 
-## [Unreleased]
+## [0.6.0] — 2026-10-20
+
+The minor version moves because a run whose harness step recorded no tokens has unknown tokens
+(the `tokens` and `step_tokens` definitions move to version 2, so a stored baseline is judged
+again only after `takt promote --rebaseline`), a run records the layers it ran on, and the gate's
+reader fails closed on lines 0.5.0 read.
 
 ### Changed
+
+- `gate.run` compares, for every Python file a gate's command names, what its top-level imports
+  load from each directory that Python imports from (`name.py`, `name.*`, `name/**`, followed
+  through the tree's files, at most 64), whether a `PYTHONPATH` entry was set in the binding's
+  `env`, on the line, by `export`, in a sourced file or by `env`; a `-c` string's imports the
+  same. `cd` and `env -C` move the directory a command runs in; a redirection-only `exec` sets
+  the shell's standard input for the commands after it; `taskset`, `chrt`, `unbuffer`,
+  `script -c`, `uv run`, `env -S` and `pytest FILE` are read; `xargs` is read and fails closed
+  on its input. The eleven shell forms 0.5.0 listed as slipping are closed
+  (story:the-gate-reads-every-shell-form). The import walk reads at most 64 Python files per
+  command; reaching the cap, or a read file importing by `importlib`, `__import__(`, `exec(` or
+  `eval(`, fails closed, naming the file and the form.
+- The step guard reads the same forms and is stricter in five places: a shell reading the
+  input a redirection-only `exec` set, `python -` with an unknown input, the wrappers above, an
+  `env -S` string split into words, and a program the reader does not know given one it knows
+  (`doas python3 …`), which fails closed naming both; a file of the tree given one
+  (`scripts/gate-exec python3 …`) is compared whole at the base and read as running that
+  program with the words after it.
+
+### Added
+
+- A run records its layers, layer name to revision, read from what ran and never typed (ADR
+  0101): the `opened` line's `layers` names `takt` (the binary's revision); each harness step's
+  line names the harness program's own version as its stream stated it (`version`; Claude
+  Code's `claude_code_version` in the `system`/`init` event) and the model (`model`). takt runs
+  the harness program in a judgement step and nowhere else, never for its version. `takt
+  scorecard` joins the `harness` and `model` layers from the step lines, prints the layers of
+  the runs it scores and refuses to score runs whose layers differ, naming the layer, unless
+  `--across-layers`; a record without `layers` reads as not recorded, never as a revision.
+- `takt report` attributes tokens, cost, wall time and failures by layer, per run and in total,
+  each figure naming the record line it came from (`events.jsonl:<n>`); a figure a layer's
+  record does not state prints `not reported`, never 0; a run whose layers wrote no records is
+  reported as before with the layers column `not recorded`. Trace operations carry their
+  record line and the trace header the layers. Reported today: the model (tokens, cost, API
+  time), the harness (call durations) and takt (wall time, refusals and errors); the harness's
+  own trace, the model's own failures and the runtime's decision records have no reader yet
+  and print `not reported`.
 
 - A run whose harness step recorded no tokens, or 0, has unknown tokens, never a sum counting
   the step 0; `takt scorecard --against` and `takt promote` (with `--baseline-only` and

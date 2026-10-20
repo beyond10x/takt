@@ -193,6 +193,96 @@ pub struct Row {
     /// saved before it had the field (metric `step_tokens`).
     #[serde(default)]
     pub step_tokens: BTreeMap<String, Option<u64>>,
+    /// The run's layers (ADR 0101), layer name to revision: its `opened` line's `layers`, the
+    /// harness layer joined from the version its harness steps' lines state and the model
+    /// layer from the model they state (each several, distinct, in name order, joined by `+`);
+    /// none when the line has no `layers`, a record written before the field, which is "layers
+    /// not recorded", never a revision, whatever its steps say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<BTreeMap<String, String>>,
+}
+
+/// The layers of the stack a run ran on (ADR 0101), in the order the scorecard and the report
+/// list them: takt, the harness session layer, the model layer, the runtime; any other layer
+/// a record names follows in name order.
+pub const LAYERS: [&str; 4] = ["takt", "harness", "model", "runtime"];
+
+/// `layers` as the scorecard and the report print them: `<name> <revision>` per layer, in
+/// [`LAYERS`] order and then name order, joined by `; `; `not recorded` for none; `none
+/// readable` for an empty map.
+#[must_use]
+pub fn layers_text(layers: Option<&BTreeMap<String, String>>) -> String {
+    match layers {
+        None => "not recorded".to_owned(),
+        Some(layers) if layers.is_empty() => "none readable".to_owned(),
+        Some(layers) => {
+            let rank = |name: &str| LAYERS.iter().position(|known| *known == name);
+            let mut names: Vec<&String> = layers.keys().collect();
+            names.sort_by_key(|name| (rank(name).unwrap_or(LAYERS.len()), (*name).clone()));
+            names
+                .into_iter()
+                .map(|name| format!("{name} {}", layers[name]))
+                .collect::<Vec<_>>()
+                .join("; ")
+        }
+    }
+}
+
+/// The first difference between the layers of `rows`, as the refusal names it: the two runs
+/// (`<case>#<n>`), the layer, and each run's revision of it or that it recorded none. A run
+/// that recorded no layers beside one that did differs; so does a layer one run states and
+/// another does not. None when every run's layers are the same, or no run recorded any.
+#[must_use]
+pub fn layers_differ(rows: &[Row]) -> Option<String> {
+    let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut first: Option<(String, &Row)> = None;
+    for row in rows {
+        let n = counted.entry(row.case.as_str()).or_insert(0);
+        *n += 1;
+        let label = format!("{}#{n}", row.case);
+        let Some((label_a, a)) = &first else {
+            first = Some((label, row));
+            continue;
+        };
+        match (&a.layers, &row.layers) {
+            (None, None) => {}
+            (None, Some(_)) => {
+                return Some(format!(
+                    "run {label_a} recorded no layers (its `opened` line has no `layers`, so its layers are not recorded), run {label} recorded {}: the runs' layers differ; a scorecard scores runs of one stack, so nothing is scored (pass --across-layers to compare across them)",
+                    layers_text(row.layers.as_ref())
+                ));
+            }
+            (Some(_), None) => {
+                return Some(format!(
+                    "run {label} recorded no layers (its `opened` line has no `layers`, so its layers are not recorded), run {label_a} recorded {}: the runs' layers differ; a scorecard scores runs of one stack, so nothing is scored (pass --across-layers to compare across them)",
+                    layers_text(a.layers.as_ref())
+                ));
+            }
+            (Some(first_layers), Some(layers)) => {
+                let names: BTreeSet<&str> = first_layers
+                    .keys()
+                    .chain(layers.keys())
+                    .map(String::as_str)
+                    .collect();
+                for name in names {
+                    let (x, y) = (first_layers.get(name), layers.get(name));
+                    if x == y {
+                        continue;
+                    }
+                    let state = |revision: Option<&String>| {
+                        revision
+                            .map_or_else(|| "none".to_owned(), |revision| format!("`{revision}`"))
+                    };
+                    return Some(format!(
+                        "layer `{name}`: run {label_a} records {}, run {label} records {}: the runs' layers differ; a scorecard scores runs of one stack, so nothing is scored (pass --across-layers to compare across them)",
+                        state(x),
+                        state(y)
+                    ));
+                }
+            }
+        }
+    }
+    None
 }
 
 impl Row {
@@ -584,6 +674,12 @@ struct Span {
     completed: Option<bool>,
     binary: Option<String>,
     step_tokens: BTreeMap<String, Option<u64>>,
+    /// The `opened` line's `layers`; none when it has none.
+    layers: Option<BTreeMap<String, String>>,
+    /// The models the harness steps reported, distinct.
+    models: BTreeSet<String>,
+    /// The harness versions the harness steps reported, distinct.
+    versions: BTreeSet<String>,
 }
 
 /// A run's outcome from its stop: a `Completed` stop's outcome (`accepted`), else the stop's
@@ -625,8 +721,32 @@ impl Span {
             opened_binary: self.binary,
             completed: self.stop.and(self.completed),
             step_tokens: self.step_tokens,
+            layers: self.layers.map(|mut layers| {
+                if !self.versions.is_empty() {
+                    layers.entry("harness".to_owned()).or_insert_with(|| {
+                        self.versions.iter().cloned().collect::<Vec<_>>().join("+")
+                    });
+                }
+                if !self.models.is_empty() {
+                    layers.entry("model".to_owned()).or_insert_with(|| {
+                        self.models.iter().cloned().collect::<Vec<_>>().join("+")
+                    });
+                }
+                layers
+            }),
         }
     }
+}
+
+/// The `layers` of an `opened` line: its map's entries whose value is a text; none when the
+/// line has no `layers` object.
+pub(crate) fn opened_layers(line: &serde_json::Value) -> Option<BTreeMap<String, String>> {
+    line["layers"].as_object().map(|layers| {
+        layers
+            .iter()
+            .filter_map(|(name, revision)| Some((name.clone(), revision.as_str()?.to_owned())))
+            .collect()
+    })
 }
 
 /// The runs of one case's record, in the order they ran.
@@ -644,9 +764,18 @@ fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
         };
         if line["event"] == "opened" {
             span.binary = line["binary"].as_str().map(str::to_owned);
+            span.layers = opened_layers(line);
         }
         if span.stop.is_some() || line["event"] == "skipped" {
             continue;
+        }
+        if line["event"] == "step" && line["by"] == "harness" {
+            if let Some(model) = line["model"].as_str() {
+                span.models.insert(model.to_owned());
+            }
+            if let Some(version) = line["version"].as_str() {
+                span.versions.insert(version.to_owned());
+            }
         }
         if let Some(at) = line["at"].as_str().and_then(instant) {
             span.first = Some(span.first.map_or(at, |first| first.min(at)));
@@ -1137,6 +1266,23 @@ impl Scorecard {
         }
         for line in disagreements {
             writeln!(out, "{line}")?;
+        }
+        // The layers of the runs scored (ADR 0101): each distinct set once, with its runs'
+        // count, in the order the sets first appear; a run without `layers` is not recorded.
+        let mut sets: Vec<(String, u64)> = Vec::new();
+        for row in &self.rows {
+            let text = layers_text(row.layers.as_ref());
+            match sets.iter_mut().find(|(set, _)| *set == text) {
+                Some((_, n)) => *n += 1,
+                None => sets.push((text, 1)),
+            }
+        }
+        for (set, n) in sets {
+            writeln!(
+                out,
+                "layers  {set}  ({n} run{})",
+                if n == 1 { "" } else { "s" }
+            )?;
         }
         for case in &self.no_record {
             match self.unstated.get(case) {
@@ -1823,13 +1969,16 @@ pub struct Reported {
 /// `takt scorecard`: prints the scorecard of `repo`'s runs; with `save`, saves it there, named
 /// by `revision`, the revision of takt under test, which a save needs; with `against`,
 /// compares it with that saved scorecard, and with `steps` too, the actions a candidate targets,
-/// judges it on them ([`Scorecard::judge_steps`]), which needs `against`.
+/// judges it on them ([`Scorecard::judge_steps`]), which needs `against`. Runs whose layers
+/// differ ([`layers_differ`]) are refused before anything is printed or saved, naming the
+/// layer and the runs, unless `across_layers` asks to compare across them (ADR 0101).
 pub fn report(
     repo: &Path,
     save: Option<&Path>,
     revision: Option<&str>,
     against: Option<&Path>,
     steps: &[String],
+    across_layers: bool,
     out: &mut dyn Write,
 ) -> Result<Reported> {
     if !steps.is_empty() && against.is_none() {
@@ -1839,6 +1988,9 @@ pub fn report(
     }
     let saved = against.map(Scorecard::load).transpose()?;
     let card = Scorecard::read(repo)?;
+    if !across_layers && let Some(difference) = layers_differ(&card.rows) {
+        bail!("{difference}");
+    }
     let named = match (save, revision) {
         (Some(_), None) => bail!(
             "--save needs --revision <sha>, the revision of takt under test; a scorecard is never named by the scenario repository's HEAD"

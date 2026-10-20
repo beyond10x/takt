@@ -570,8 +570,11 @@ fn a_module_written_beside_the_transcripts_is_still_refused() {
         .find(|line| line.contains("refused:"))
         .unwrap_or_else(|| panic!("the step that planted a module is refused\n{said}"));
     assert!(refused.contains(&module.display().to_string()), "{said}");
+    // The transcripts directory itself, not the bare `.local/state`: a checkout under
+    // `~/.local/state` (a managed worktree) puts that substring in the module's own path.
+    let transcripts = home.home.join(".local/state/takt/transcripts");
     assert!(
-        !refused.contains(".local/state"),
+        !refused.contains(&transcripts.display().to_string()),
         "the refusal names the module, not the transcripts\n{said}"
     );
 }

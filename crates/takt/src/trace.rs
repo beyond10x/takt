@@ -229,6 +229,11 @@ pub struct Op {
     /// NoProgress`, `repeated failure (as step N)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// The line, from 1, of the case's `events.jsonl` the operation was read from, which a
+    /// report names as the record a figure came from; none for a trace built from lines
+    /// without their numbers ([`Trace::from_lines`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
 }
 
 impl Op {
@@ -299,6 +304,12 @@ pub struct Header {
     pub cost_usd: Option<f64>,
     /// The held-out check; never in the record.
     pub acceptance: Option<String>,
+    /// The run's layers (ADR 0101) as the scorecard reads them: the first `opened` line's
+    /// `layers`, the harness layer joined from the versions the harness steps' lines state and
+    /// the model layer from the models the calls reported; none when the record has no
+    /// `layers`, "layers not recorded".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<BTreeMap<String, String>>,
     /// The files the trace was read from, each relative to the case directory, or its file
     /// name alone when it lies elsewhere; never an absolute path.
     pub sources: Vec<String>,
@@ -576,6 +587,12 @@ struct Builder {
     pending_validator: Option<usize>,
     pending_idle: Option<usize>,
     pending_stop: Option<i128>,
+    /// The first `opened` line's `layers`.
+    layers: Option<BTreeMap<String, String>>,
+    /// The harness versions the harness steps' lines state, distinct.
+    versions: BTreeSet<String>,
+    /// The number of the record line being read, when known.
+    current_line: Option<usize>,
 }
 
 impl Builder {
@@ -599,6 +616,9 @@ impl Builder {
             pending_validator: None,
             pending_idle: None,
             pending_stop: None,
+            layers: None,
+            versions: BTreeSet::new(),
+            current_line: None,
         }
     }
 
@@ -636,6 +656,7 @@ impl Builder {
                 paths: Vec::new(),
                 evidence: None,
                 label: None,
+                line: self.current_line,
             },
             start,
             end,
@@ -649,7 +670,8 @@ impl Builder {
         line[key].as_str().map(escape)
     }
 
-    fn line(&mut self, line: &Value) {
+    fn line(&mut self, number: Option<usize>, line: &Value) {
+        self.current_line = number;
         let event = line["event"].as_str().unwrap_or("");
         if event == "skipped" {
             return;
@@ -692,6 +714,14 @@ impl Builder {
                     .or_else(|| Self::text(line, "protocol"));
                 self.story = self.story.take().or_else(|| Self::text(line, "story"));
                 self.binary = self.binary.take().or_else(|| Self::text(line, "binary"));
+                if self.invocations == 1 {
+                    self.layers = crate::scorecard::opened_layers(line).map(|layers| {
+                        layers
+                            .into_iter()
+                            .map(|(name, revision)| (escape(&name), escape(&revision)))
+                            .collect()
+                    });
+                }
                 self.pending_harness = None;
                 self.pending_validator = None;
             }
@@ -728,6 +758,9 @@ impl Builder {
                 self.run_steps = self.run_steps.max(step);
                 if by == "harness" {
                     self.harness = self.harness.take().or_else(|| Self::text(line, "name"));
+                    if let Some(version) = Self::text(line, "version") {
+                        self.versions.insert(version);
+                    }
                     self.pending_harness = Some(index);
                     self.pending_validator = None;
                 } else {
@@ -1097,6 +1130,25 @@ impl Builder {
             (Some((t0, _)), Some((last, _))) => Some(seconds(last - t0)),
             _ => None,
         };
+        // The layers as the scorecard reads them: the `opened` line's, the harness layer from
+        // the harness steps' stated versions and the model layer from the calls' reported
+        // models, each distinct, in name order, joined by `+`.
+        let versions = self.versions;
+        let layers = self.layers.map(|mut layers| {
+            if !versions.is_empty() {
+                layers
+                    .entry("harness".to_owned())
+                    .or_insert_with(|| versions.into_iter().collect::<Vec<_>>().join("+"));
+            }
+            let reported: BTreeSet<&str> =
+                calls.iter().filter_map(|op| op.model.as_deref()).collect();
+            if !reported.is_empty() {
+                layers
+                    .entry("model".to_owned())
+                    .or_insert_with(|| reported.into_iter().collect::<Vec<_>>().join("+"));
+            }
+            layers
+        });
         let header = Header {
             format: FORMAT.to_owned(),
             run: run.map_or_else(|| case.clone(), escape),
@@ -1120,6 +1172,7 @@ impl Builder {
             tokens,
             cost_usd,
             acceptance: None,
+            layers,
             sources,
             notes,
         };
@@ -1156,7 +1209,7 @@ impl Trace {
                 case_dir.display()
             );
         }
-        let lines = Events::new(case_dir).read()?;
+        let lines = Events::new(case_dir).read_numbered()?;
         let shim = steps.map(read_steps).transpose()?;
         let mut sources = vec![source_name(case_dir, &events)];
         if let Some(path) = steps {
@@ -1166,7 +1219,7 @@ impl Trace {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        Ok(Self::from_lines(
+        Ok(Self::from_numbered_lines(
             &lines,
             shim.as_deref(),
             &name,
@@ -1177,6 +1230,7 @@ impl Trace {
 
     /// The trace of a record's `lines`, as [`Events::read`] gives them, completed from the
     /// shim's `steps` when given; `case_dir_name` names the case when no `opened` line does.
+    /// The lines carry no numbers, so no operation names its line.
     #[must_use]
     pub fn from_lines(
         lines: &[Value],
@@ -1187,8 +1241,35 @@ impl Trace {
     ) -> Self {
         let mut builder = Builder::new();
         for line in lines {
-            builder.line(line);
+            builder.line(None, line);
         }
+        Self::build(builder, steps, case_dir_name, run, sources)
+    }
+
+    /// As [`Trace::from_lines`], the lines numbered as [`Events::read_numbered`] gives them,
+    /// so each operation names the record line it was read from.
+    #[must_use]
+    pub fn from_numbered_lines(
+        lines: &[(usize, Value)],
+        steps: Option<&[Value]>,
+        case_dir_name: &str,
+        run: Option<&str>,
+        sources: Vec<String>,
+    ) -> Self {
+        let mut builder = Builder::new();
+        for (number, line) in lines {
+            builder.line(Some(*number), line);
+        }
+        Self::build(builder, steps, case_dir_name, run, sources)
+    }
+
+    fn build(
+        mut builder: Builder,
+        steps: Option<&[Value]>,
+        case_dir_name: &str,
+        run: Option<&str>,
+        sources: Vec<String>,
+    ) -> Self {
         let mut notes = Vec::new();
         if let Some(steps) = steps {
             builder.merge_steps(steps, &mut notes);

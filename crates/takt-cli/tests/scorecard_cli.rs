@@ -102,6 +102,7 @@ fn run_made_with(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Optio
                 inputs: Vec::new(),
                 base: None,
                 binary: binary.map(str::to_owned),
+                layers: None,
             },
         ),
         (
@@ -115,6 +116,7 @@ fn run_made_with(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Optio
                 usage: Some(usage),
                 revision: None,
                 model: None,
+                version: None,
                 cost_usd: None,
                 duration_ms: None,
                 api_ms: None,
@@ -840,4 +842,109 @@ fn the_outcome_metric_is_printed_and_saved_at_definition_version_3() {
     let saves = scratch("outcome-v3-saves");
     let card = fs::read_to_string(saved(&repo, &saves)).expect("the saved scorecard");
     assert_eq!(card.matches("\"outcome\": 3,").count(), 1, "{card}");
+}
+
+/// As [`run_made_with`], the `opened` line carrying `layers` and the step reporting `model`.
+fn run_with_layers(repo: &Path, case: &str, layers: &[(&str, &str)], model: Option<&str>) {
+    let dir = repo.join(CASES_DIR).join(case);
+    fs::create_dir_all(&dir).expect("a case directory");
+    fs::write(dir.join(takt::scorecard::HELD_OUT_FILE), "PASS\n").expect("the held-out result");
+    let events = Events::new(&dir);
+    let usage = TokenUsage {
+        input: 100,
+        output: 0,
+        cache_read: 0,
+        cache_creation: 0,
+    };
+    let layers: std::collections::BTreeMap<String, String> = layers
+        .iter()
+        .map(|(name, revision)| ((*name).to_owned(), (*revision).to_owned()))
+        .collect();
+    for (step, event) in [
+        (
+            0,
+            Event::Opened {
+                case: case.to_owned(),
+                protocol: "story.delivery/1".to_owned(),
+                story: None,
+                inputs: Vec::new(),
+                base: None,
+                binary: layers.get("takt").cloned(),
+                layers: Some(layers),
+            },
+        ),
+        (
+            1,
+            Event::Step {
+                by: "harness".to_owned(),
+                name: "claude-code".to_owned(),
+                action: "implementation.edit".to_owned(),
+                summary: "edited".to_owned(),
+                tokens: Some(usage.total()),
+                usage: Some(usage),
+                revision: None,
+                model: model.map(str::to_owned),
+                version: None,
+                cost_usd: None,
+                duration_ms: None,
+                api_ms: None,
+                turns: None,
+                started_at: None,
+                transcript: None,
+                transcript_refused: None,
+            },
+        ),
+        (
+            1,
+            Event::Stop {
+                stop: "Completed (accepted)".to_owned(),
+                steps: 1,
+                tokens: usage.total(),
+                completed: Some(true),
+            },
+        ),
+    ] {
+        events.emit(step, &event).expect("the event is written");
+    }
+}
+
+/// story:a-trial-records-the-revision-of-each-layer (ADR 0101) through the binary: the
+/// scorecard prints the layers of the runs it scores; runs whose layers differ are refused,
+/// exit 1, naming the layer and the runs, unless `--across-layers` asks to compare across them.
+#[test]
+fn runs_whose_layers_differ_are_refused_unless_across_layers() {
+    let repo = repository("layers", &[]);
+    let takt_a = "0123456789abcdef0123456789abcdef01234567";
+    run_with_layers(
+        &repo,
+        "scenario-1-trial-1",
+        &[("takt", takt_a), ("harness", "2.1.304 (Claude Code)")],
+        Some("claude-opus-5-5"),
+    );
+    run_with_layers(
+        &repo,
+        "scenario-1-trial-2",
+        &[("takt", takt_a), ("harness", "2.1.305 (Claude Code)")],
+        Some("claude-opus-5-5"),
+    );
+    let path = repo.display().to_string();
+    let (code, stdout, stderr) = takt(&["scorecard", "--repo", &path]);
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(stderr.contains("layer `harness`"), "{stderr}");
+    assert!(stderr.contains("--across-layers"), "{stderr}");
+    assert!(
+        !stdout.contains("scenario-1-trial-1#1"),
+        "nothing scored: {stdout}"
+    );
+
+    let (code, stdout, stderr) = takt(&["scorecard", "--repo", &path, "--across-layers"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("2.1.304 (Claude Code)"), "{stdout}");
+    assert!(stdout.contains("2.1.305 (Claude Code)"), "{stdout}");
+    assert!(stdout.contains("model claude-opus-5-5"), "{stdout}");
+
+    let (code, text, stderr) = takt(&["scorecard", "--help"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(text.contains("--across-layers"), "{text}");
+    assert!(text.contains("layers differ"), "{text}");
 }
