@@ -1086,6 +1086,169 @@ fn an_in_tree_program_given_a_program_hands_it_off() {
     refused(&observation, "scripts/run");
 }
 
+/// story:a-handed-off-command-is-read-with-the-wrappers-environment: a program of the tree at
+/// `scripts/run`, written in Python with `body` after its imports, run by `/bin/sh -c line` in a
+/// tree where `scripts/check.py` imports `checklib` from `lib/`. A hand commit to
+/// `lib/checklib.py` leaves the gate not run, naming it, and the summary names `scripts/run`
+/// and `form`: the line fails closed, since the reader does not follow what the program sets
+/// before it runs the program it is given.
+fn wrapper_closed(name: &str, body: &str, line: &str, form: &str) {
+    let lib = "lib/checklib.py";
+    let wrapper = format!("#!/usr/bin/python3\nimport os\nimport subprocess\nimport sys\n{body}");
+    let files = [
+        ("scripts/check.py", MAIN),
+        (lib, "def run():\n    return 0\n"),
+        ("scripts/run", wrapper.as_str()),
+    ];
+    let tree = repository_running(name, SHELL, &["-c", line], &[], &files);
+    let observation = observed(&tree, name, &[(lib, HAND)]);
+    closed_naming(&observation, lib, "scripts/run");
+    assert!(
+        observation.summary.contains(form),
+        "{name}: the summary does not name the form {form}: {}",
+        observation.summary
+    );
+}
+
+/// Acceptance 1, the review's probe (wave 22 at 7bf9ebb, F2): `scripts/run` sets `PYTHONPATH`
+/// to `lib` before it runs the program it is given, so the module `check.py` imports from
+/// `lib/` is not the one the reader names; the line fails closed, naming `scripts/run` and
+/// `os.environ`. So does every other way the program sets the environment of what it runs.
+#[test]
+fn a_wrapper_setting_the_environment_before_it_hands_off_fails_closed_naming_it() {
+    let exec = "os.execvp(sys.argv[1], sys.argv[1:])\n";
+    for (name, body, form) in [
+        (
+            "env-probe",
+            format!("os.environ['PYTHONPATH']='lib'; {exec}"),
+            "os.environ",
+        ),
+        (
+            "env-spaced",
+            format!("os.environ [ \"PYTHONHOME\" ] = 'lib'\n{exec}"),
+            "os.environ",
+        ),
+        (
+            "env-name",
+            format!("name = 'PYTHON' + 'PATH'\nos.environ[name] = 'lib'\n{exec}"),
+            "os.environ",
+        ),
+        (
+            "env-update",
+            format!("os.environ.update({{'PYTHON' + 'PATH': 'lib'}})\n{exec}"),
+            "os.environ.update",
+        ),
+        (
+            "env-putenv",
+            format!("os.putenv('PYTHONPATH', 'lib')\n{exec}"),
+            "os.putenv",
+        ),
+        (
+            "env-keyword",
+            "env = dict(os.environ)\nenv['PYTHON' + 'PATH'] = 'lib'\nsys.exit(subprocess.run(sys.argv[1:], env=env).returncode)\n"
+                .to_owned(),
+            "env=",
+        ),
+        (
+            "env-execve",
+            "env = dict(os.environ)\nenv['PYTHON' + 'PATH'] = 'lib'\nos.execve('/usr/bin/' + sys.argv[1], sys.argv[1:], env)\n"
+                .to_owned(),
+            "os.execve",
+        ),
+    ] {
+        wrapper_closed(name, &body, "scripts/run python3 scripts/check.py", form);
+    }
+}
+
+/// Acceptance 2: a program of the tree that changes directory or writes the import path before
+/// it runs the program it is given fails the line closed, naming it and the form.
+#[test]
+fn a_wrapper_changing_directory_or_import_path_before_it_hands_off_fails_closed_naming_it() {
+    let exec = "os.execvp(sys.argv[1], sys.argv[1:])\n";
+    for (name, body, form) in [
+        ("dir-chdir", format!("os.chdir('.')\n{exec}"), "os.chdir("),
+        (
+            "dir-cwd",
+            "sys.exit(subprocess.run(sys.argv[1:], cwd='.').returncode)\n".to_owned(),
+            "cwd=",
+        ),
+        (
+            "path-insert",
+            format!("sys.path.insert(0, 'lib')\n{exec}"),
+            "sys.path",
+        ),
+        (
+            "path-assign",
+            format!("sys.path = ['lib'] + sys.path\n{exec}"),
+            "sys.path",
+        ),
+        (
+            "path-alias",
+            format!("from sys import path as where\nwhere.insert(0, 'lib')\n{exec}"),
+            "from sys import",
+        ),
+    ] {
+        wrapper_closed(name, &body, "scripts/run python3 scripts/check.py", form);
+    }
+}
+
+/// Acceptance 3 (wave 22 at 7bf9ebb, F3): `scripts/run --interpreter sh python3
+/// scripts/check.py` handed off `sh python3 scripts/check.py`, an option's value taken for the
+/// program. The reader does not know which words the program takes as its options' values: a
+/// word before the program it is given fails the line closed, naming it. A wrapper outside the
+/// script's directory, whose own directory mark names nothing the script imports, as well.
+#[test]
+fn a_word_before_the_program_a_wrapper_is_given_fails_closed_naming_it() {
+    let lib = "scripts/checklib.py";
+    let wrapper =
+        "#!/usr/bin/python3 -I\nimport os\nimport sys\nos.execvp(sys.argv[1], sys.argv[1:])\n";
+    for (name, at) in [
+        ("option-value", "scripts/run"),
+        ("option-tools", "tools/run"),
+    ] {
+        let files = [
+            ("scripts/check.py", MAIN),
+            (lib, "def run():\n    return 0\n"),
+            (at, wrapper),
+        ];
+        let line = format!("{at} --interpreter sh python3 scripts/check.py");
+        let tree = repository_running(name, SHELL, &["-c", &line], &[], &files);
+        let observation = observed(&tree, name, &[(lib, HAND)]);
+        closed_naming(&observation, lib, "--interpreter");
+        assert!(
+            observation.summary.contains(at),
+            "{name}: the summary does not name {at}: {}",
+            observation.summary
+        );
+    }
+}
+
+/// A program of the tree the reader reads neither as Python nor as a shell script (a `#!` line
+/// naming another interpreter) that is given a program fails the line closed, naming it: what
+/// it sets before it runs the program is not read.
+#[test]
+fn a_wrapper_the_reader_does_not_read_fails_closed_when_it_hands_off() {
+    let lib = "lib/checklib.py";
+    let files = [
+        ("scripts/check.py", MAIN),
+        (lib, "def run():\n    return 0\n"),
+        (
+            "scripts/run",
+            "#!/usr/bin/perl\n$ENV{'PYTHON' . 'PATH'} = 'lib';\nexec @ARGV;\n",
+        ),
+    ];
+    let name = "wrap-perl";
+    let tree = repository_running(
+        name,
+        SHELL,
+        &["-c", "scripts/run python3 scripts/check.py"],
+        &[],
+        &files,
+    );
+    let observation = observed(&tree, name, &[(lib, HAND)]);
+    closed_naming(&observation, lib, "scripts/run");
+}
+
 /// A gate running `scripts/check.py`, which imports `m1` from the `PYTHONPATH` entry `lib`,
 /// where only what is imported is compared; `lib/m<k>.py` imports `m<k+1>` up to
 /// `lib/m<length>.py`, which imports nothing. The gate passes at the base.

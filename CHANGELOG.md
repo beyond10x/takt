@@ -4,6 +4,38 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 `[workspace.package] version` in `Cargo.toml` and has a section `## [<version>] — <date>` here;
 `.github/workflows/release.yml` checks that, runs `task check` and publishes the binaries.
 
+## [Unreleased]
+
+### Changed
+
+- `--harness claude` runs Claude Code through a metaharness session (`b10x-session-executor`,
+  metaharness 0.10.1, `HermeticMode::Strict`) in a scratch copy of the case tree, offered only
+  the file tools; the session's change comes back as a proposal, and takt's edit effect writes it
+  to the case tree only after the step guard admits it. A proposal naming an action the frontier
+  did not offer, a path outside the tree, under `.git`, in the cases directory, on the judge
+  surface, reached through a link, or ignored by git, or a file for an action that changes none
+  or records a choice, ends the run `StepRefused` with the case tree unchanged. A gap the
+  hermetic floor reports holds the proposal back, but the vendor's version against the adapter's
+  pin (H9) and undeclared plugins that all ship inside Claude Code (H1a, `@builtin`) are reported
+  by row id in the step summary until metaharness declares Claude Code 2.1.304. `takt replay`
+  keeps the print-mode harness in its scratch worktree.
+- Each judgement step's prompt carries the change the case has made so far: the diff of its
+  accepted steps' paths from the base commit, bounded at about 8 KiB, fenced as data and scanned
+  when a gates policy is set; or a line that no change has been made, or that it is not known
+  (story:step-prompt-omits-the-change-so-far, the trial agent's candidate of the 0.5.0 cycle).
+- `takt scorecard --against` prints a `median <metric>` line only for a metric with a per-case
+  figure; against a changed `step_tokens` definition it printed the wall-time medians under that
+  name.
+- The gate's reader fails a line closed when a file of the tree that hands off to a known
+  program writes a `PYTHON*` variable, changes directory or writes `sys.path` before it runs
+  it, when a word stands between the file and the program, or when the file is neither Python
+  nor shell; a `PATH` write does not.
+
+### Repository
+
+- `b10x-loom-sdk` 0.27.0 → 0.28.0, now a dependency of `b10x-takt`; `metaharness` 0.10.1 through
+  the new crate `b10x-session-executor`, which depends on no takt crate.
+
 ## [0.6.0] — 2026-10-20
 
 The minor version moves because a run whose harness step recorded no tokens has unknown tokens

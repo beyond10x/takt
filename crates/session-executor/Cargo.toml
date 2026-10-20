@@ -1,0 +1,16 @@
+[package]
+name = "b10x-session-executor"
+description = "An AgentExecutor of loom-sdk over a metaharness session in a scratch copy: it proposes, it never performs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "session_executor"
+path = "src/lib.rs"
+
+[dependencies]
+b10x-loom-sdk = { workspace = true }
+metaharness = { workspace = true }
+serde_json = { workspace = true }

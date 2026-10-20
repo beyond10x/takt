@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 use takt::Frontier as _;
 use takt::forge::{BotRoute, Forge, Process, Runner, repository_of};
 use takt::frontier::Aep;
-use takt::harness::{ClaudeCode, Harness};
+use takt::harness::{ClaudeCode, ClaudeSession, Harness};
 use takt::validator::{
     ChangeRead, CiRead, DEFAULT_PROJECT, GateRun, PrMerged, PrOpen, TestsRun, Validator,
 };
@@ -193,7 +193,7 @@ fn replay(args: ReplayArgs, out: &mut dyn Write) -> Result<u8> {
         Some(root) => takt::replay::recorded_prompt_line(&start, &root, &repo)?,
         None => None,
     };
-    let rebuilt = takt::replay::rebuilt_prompt_line(&claude, &start, gate.as_deref())?;
+    let rebuilt = takt::replay::rebuilt_prompt_line(&claude, &start, gate.as_deref(), &repo)?;
     writeln!(
         out,
         "step {} of run {} of case {} ({} recorded): revision {} from {}; decision {}",
@@ -1333,12 +1333,13 @@ impl LoopArgs {
     }
 }
 
-/// The harness `--harness` names: `claude` with `--model`, or `none`.
+/// The harness `--harness` names: `claude`, Claude Code through the metaharness session executor,
+/// proposing from a scratch copy what takt's edit effect applies, with `--model`; or `none`.
 fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
     match looping.harness.as_str() {
-        "claude" => Ok(Box::new(ClaudeCode {
+        "claude" => Ok(Box::new(ClaudeSession {
             model: looping.model.clone(),
-            ..ClaudeCode::default()
+            ..ClaudeSession::default()
         })),
         "none" => Ok(Box::new(NoHarness)),
         other => Err(anyhow!("no harness `{other}`: claude or none")),

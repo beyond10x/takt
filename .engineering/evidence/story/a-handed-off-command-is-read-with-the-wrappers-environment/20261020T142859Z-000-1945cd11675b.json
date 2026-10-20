@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-20T14:28:59Z",
+  "actor": "human:timo",
+  "artifact": "story:a-handed-off-command-is-read-with-the-wrappers-environment",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check at df49698: cargo test --workspace --locked 1560 passed, 0 failed, 6 ignored; citations 1011/1011",
+    "reference": "https://github.com/beyond10x/takt/commit/df49698"
+  }
+}

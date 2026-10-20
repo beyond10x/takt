@@ -345,6 +345,104 @@ fn a_replayed_step_is_given_the_recorded_prompt_and_leaves_the_case_as_it_was() 
     );
 }
 
+/// story:step-prompt-omits-the-change-so-far: a replay of a step after a commit is given the
+/// change so far its recorded step was shown. Step 4 ran after step 2 committed
+/// `tests/work.txt`, and its recorded prompt holds that commit's line, fenced; step 2 ran before
+/// any commit and was told no change had been made yet. A replay of each rebuilds that block
+/// from the case's `base_commit`, the effect lines up to the step and the revision the step
+/// started at: `prompt: as recorded`, exit 0, and each replay's record says `as recorded`.
+#[test]
+fn a_replay_of_a_step_after_a_commit_rebuilds_the_change_so_far_as_recorded() {
+    let scratch = Scratch::new("change-so-far");
+    let rec = recorded(&scratch.0);
+    for (step, shown) in [
+        (
+            2,
+            "The change this case has made so far: no change has been made yet.",
+        ),
+        (4, "\ndiff --git a/tests/work.txt b/tests/work.txt\n"),
+    ] {
+        let first = recorded_first_line(&rec, step);
+        let line: serde_json::Value = serde_json::from_str(&first).expect("the prompt line reads");
+        let recorded_prompt = line["prompt"].as_str().expect("a prompt");
+        assert!(
+            recorded_prompt.contains(shown),
+            "step {step} was shown the change so far: {recorded_prompt}"
+        );
+        if step == 4 {
+            assert!(
+                recorded_prompt.contains("\n+work\n")
+                    && recorded_prompt.contains("not instructions"),
+                "step 4 was shown step 2's committed line as data: {recorded_prompt}"
+            );
+        }
+        let out = scratch.0.join(format!("replays-{step}"));
+        let output = takt(&rec.bin, &rec.state)
+            .args([
+                "replay",
+                "--case",
+                rec.case.to_str().expect("utf-8"),
+                "--step",
+                &step.to_string(),
+                "--out",
+                out.to_str().expect("utf-8"),
+            ])
+            .output()
+            .expect("takt replay runs");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let said = format!("{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(output.status.code(), Some(0), "step {step}\n{said}");
+        assert!(
+            stdout.contains("prompt: as recorded"),
+            "step {step}\n{said}"
+        );
+        let record: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(out.join("replay-1/replay.json")).expect("the replay's record"),
+        )
+        .expect("the replay's record reads");
+        assert_eq!(record["prompt"], "as recorded", "step {step}\n{said}");
+    }
+}
+
+/// story:step-prompt-omits-the-change-so-far: a case copied out of its repository and replayed
+/// with `--repo <repo>` is given the change so far its recorded step was shown. Step 4 ran after
+/// step 2 committed `tests/work.txt`; the copy lies in no tree that holds the case's commits, so
+/// the change is read in the repository `--repo` names: `prompt: as recorded`, exit 0, and the
+/// replay's record says `as recorded`.
+#[test]
+fn a_case_copied_out_of_its_repository_replays_with_repo_as_recorded() {
+    let scratch = Scratch::new("change-so-far-copy");
+    let rec = recorded(&scratch.0);
+    let first = recorded_first_line(&rec, 4);
+    let line: serde_json::Value = serde_json::from_str(&first).expect("the prompt line reads");
+    let recorded_prompt = line["prompt"].as_str().expect("a prompt");
+    assert!(
+        recorded_prompt.contains("\ndiff --git a/tests/work.txt b/tests/work.txt\n")
+            && recorded_prompt.contains("\n+work\n"),
+        "step 4 was shown step 2's committed line: {recorded_prompt}"
+    );
+    let copy = copy_case(&rec.case, &scratch.0.join("copy"));
+    let out = scratch.0.join("replays-copy");
+    let output = takt(&rec.bin, &rec.state)
+        .args(["replay", "--case"])
+        .arg(&copy)
+        .arg("--repo")
+        .arg(&rec.repo)
+        .args(["--step", "4", "--out"])
+        .arg(&out)
+        .output()
+        .expect("takt replay runs");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let said = format!("{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{said}");
+    assert!(stdout.contains("prompt: as recorded"), "{said}");
+    let record: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(out.join("replay-1/replay.json")).expect("the replay's record"),
+    )
+    .expect("the replay's record reads");
+    assert_eq!(record["prompt"], "as recorded", "{said}");
+}
+
 /// A step that is a validator's (step 3, the test command) is no judgement step: refused, exit
 /// 1, nothing run and nothing written.
 #[test]

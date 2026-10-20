@@ -22,7 +22,8 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use crate::case::{CASES_DIR, CaseDir, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT};
 use crate::events::{BY_STORE, BY_TAKT, Event, Events};
 use crate::frontier::{Frontier, IMPLEMENTED, Story, TEST_RESULT, Take, Unit};
-use crate::harness::{Harness, StepContext, is_test_path};
+use crate::git::{BoundedDiff, DiffContext};
+use crate::harness::{CHANGE_SHOWN_BYTES, ChangeSoFar, Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
 use crate::validator::Validator;
 
@@ -2544,7 +2545,9 @@ const WRAPPERS: &[(&[&str], Spec)] = &[
 /// ([`INTERPRETERS`]), a wrapper ([`WRAPPERS`]), a build tool ([`BUILD_TOOLS`]), `env` or
 /// `pytest`. A program the reader does not know that takes one as an argument may run it, which
 /// the reader cannot see: a file in the tree, compared whole at the base, is read as running
-/// that program with the words after it; any other fails the line closed ([`command_paths`]).
+/// that program with the words after it, and fails the line closed besides when a word stands
+/// before that program or the file sets what it runs with ([`hand_off_unread`]); any other
+/// fails the line closed ([`command_paths`]).
 fn known_program(word: &str) -> bool {
     let name = program_of(word);
     name == "env"
@@ -2555,6 +2558,233 @@ fn known_program(word: &str) -> bool {
         || BUILD_TOOLS
             .iter()
             .any(|(names, _, _, _)| names.contains(&name.as_str()))
+}
+
+/// Why the line fails closed when the program of the tree at `path` is given the program `given`
+/// and hands the command off to it ([`command_paths`]): what the file sets before it runs that
+/// program is not read. A Python file is read for the forms [`python_hand_off_form`] names; a
+/// script a shell reads was read line by line ([`script_paths`]), and an expansion of the words
+/// it is given (`"$@"`) failed closed there; any other program is not read. `None` when the file
+/// is read and sets nothing the reader does not follow.
+fn hand_off_unread(tree: &Path, path: &str, given: &str) -> Option<String> {
+    use std::io::Read as _;
+    let full = tree.join(path);
+    let python = shebang_of(&full).is_some_and(|interpreter| {
+        spec_of(INTERPRETERS, &interpreter).is_some_and(|spec| !spec.short_module.is_empty())
+    });
+    if !python {
+        if shell_text(&full, false, &mut Vec::new()).is_some() {
+            return None;
+        }
+        return Some(format!(
+            "`{path}` runs {}, and the guard does not read what `{path}` sets before it does",
+            quoted(given)
+        ));
+    }
+    let mut bytes = Vec::new();
+    let read = std::fs::File::open(&full)
+        .and_then(|file| file.take(SCRIPT_BYTES_AT_MOST + 1).read_to_end(&mut bytes));
+    if read.is_err() || bytes.len() as u64 > SCRIPT_BYTES_AT_MOST {
+        return Some(format!(
+            "`{path}` runs {}, and cannot be read or is larger than {SCRIPT_BYTES_AT_MOST} bytes",
+            quoted(given)
+        ));
+    }
+    python_hand_off_form(&String::from_utf8_lossy(&bytes)).map(|form| {
+        format!(
+            "`{path}` sets {} before it runs {}, which the guard does not follow",
+            quoted(&form),
+            quoted(given)
+        )
+    })
+}
+
+/// The first form in the Python `text` of a program of the tree that hands off the command it
+/// is given (`os.execvp(sys.argv[1], sys.argv[1:])`) by which it sets what that command runs
+/// with, as the text writes it: the environment (a write to `os.environ` or `os.environb`, or a
+/// `putenv(` or `setenv(`, of a variable whose name is not a string literal or is one Python
+/// reads, `PYTHON…`; any other call on the mapping than a read, such as `.update(`; a whole
+/// environment given, `env=`, `os.execve(` and the other `e` calls of `exec*` and `spawn*`,
+/// `posix_spawn(`; any `PYTHON…` name at all), the directory (`chdir(`, `cwd=`), the import path
+/// (`sys.path`, `sys.meta_path`, `addsitedir(`), and a name that hides one (`from sys import
+/// path`, `from os import … as`, `import sys as`, `getattr(`, `__import__(`, `exec(`). The text
+/// is read whole, white space between words kept and the rest removed, comments and strings
+/// among it: a form a comment names counts as well. A write of another variable, `PATH` among
+/// them, is none: the shell reader follows only `PYTHONPATH`, `PATH` and [`PYTHON_DIRS`] in an
+/// assignment ([`assign`]), and `PATH` decides which program runs, not what it imports.
+fn python_hand_off_form(text: &str) -> Option<String> {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let text = text.replace("\\\n", " ");
+    let mut compact = String::new();
+    let mut spaced = false;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            spaced = true;
+            continue;
+        }
+        if spaced && compact.ends_with(ident) && ident(c) {
+            compact.push(' ');
+        }
+        spaced = false;
+        compact.push(c);
+    }
+    // The dotted name before `at` as written: `os.` of `os.environ`.
+    let prefix = |at: usize| {
+        let start = compact[..at]
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| ident(*c) || *c == '.')
+            .last()
+            .map_or(at, |(k, _)| k);
+        compact[start..at].to_owned()
+    };
+    let literal = |key: &str| {
+        let key = key.strip_prefix('b').unwrap_or(key);
+        ['\'', '"']
+            .into_iter()
+            .find_map(|quote| key.strip_prefix(quote)?.strip_suffix(quote))
+            .filter(|name| name.chars().all(ident))
+            .map(str::to_owned)
+    };
+    let unfollowed = |key: &str| literal(key).is_none_or(|name| name.starts_with("PYTHON"));
+    let assigns = |after: &str| {
+        (after.starts_with('=') && !after.starts_with("=="))
+            || [
+                "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "@=", "//=", "**=", "<<=", ">>=",
+            ]
+            .iter()
+            .any(|op| after.starts_with(op))
+    };
+    // The environment.
+    for (at, _) in compact.match_indices("environ") {
+        if compact[..at].ends_with(ident) {
+            continue;
+        }
+        let (name, rest) = match compact[at + "environ".len()..].strip_prefix('b') {
+            Some(rest) => ("environb", rest),
+            None => ("environ", &compact[at + "environ".len()..]),
+        };
+        if rest.starts_with(ident) {
+            continue;
+        }
+        let shown = format!("{}{name}", prefix(at));
+        if let Some(inside) = rest.strip_prefix('[') {
+            let (key, after) = inside.split_once(']').unwrap_or((inside, ""));
+            if assigns(after) && unfollowed(key) {
+                return Some(format!("{shown}[{key}] ="));
+            }
+        } else if let Some(call) = rest.strip_prefix('.') {
+            let method: String = call.chars().take_while(|c| ident(*c)).collect();
+            if ![
+                "get",
+                "copy",
+                "items",
+                "keys",
+                "values",
+                "__getitem__",
+                "__contains__",
+            ]
+            .contains(&method.as_str())
+            {
+                return Some(format!("{shown}.{method}("));
+            }
+        } else if assigns(rest) {
+            return Some(format!("{shown} ="));
+        }
+    }
+    for call in ["putenv(", "setenv("] {
+        for (at, _) in compact.match_indices(call) {
+            let key = compact[at + call.len()..]
+                .split([',', ')'])
+                .next()
+                .unwrap_or_default();
+            if unfollowed(key) {
+                return Some(format!("{}{call}", prefix(at)));
+            }
+        }
+    }
+    // A whole environment given to the program it runs.
+    for call in [
+        "execve(",
+        "execle(",
+        "execlpe(",
+        "execvpe(",
+        "spawnve(",
+        "spawnle(",
+        "spawnlpe(",
+        "spawnvpe(",
+        "posix_spawn(",
+        "posix_spawnp(",
+    ] {
+        if let Some(at) = compact.find(call) {
+            return Some(format!("{}{call}", prefix(at)));
+        }
+    }
+    // A keyword of `subprocess`: its environment, the directory it runs in.
+    for keyword in ["env=", "cwd="] {
+        for (at, _) in compact.match_indices(keyword) {
+            if compact[..at].ends_with(['(', ','])
+                && !compact[at + keyword.len()..].starts_with('=')
+            {
+                return Some(keyword.to_owned());
+            }
+        }
+    }
+    // The directory, the import path, and a name that hides one of them.
+    for form in [
+        "chdir(",
+        "sys.path",
+        "sys.meta_path",
+        "addsitedir(",
+        "getattr(",
+        "setattr(",
+        "__dict__",
+        "vars(",
+        "__import__(",
+        "importlib",
+        "exec(",
+        "eval(",
+    ] {
+        if let Some(at) = compact.find(form) {
+            return Some(format!("{}{form}", prefix(at)));
+        }
+    }
+    for (at, _) in text.match_indices("import") {
+        let line = text[..at].rsplit('\n').next().unwrap_or_default();
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let names = &text[at + "import".len()..];
+        let names = match names.trim_start().strip_prefix('(') {
+            Some(inside) => inside.split(')').next().unwrap_or_default(),
+            None => names.split(['\n', ';']).next().unwrap_or_default(),
+        };
+        let names: Vec<&str> = names
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|name| !name.is_empty())
+            .collect();
+        match words.as_slice() {
+            ["from", module] if ["os", "sys", "posix", "nt", "site"].contains(module) => {
+                if names.iter().any(|name| {
+                    ["*", "as"].contains(name)
+                        || (*module == "sys" && ["path", "meta_path", "path_hooks"].contains(name))
+                }) {
+                    return Some(format!("from {module} import"));
+                }
+            }
+            [] if names.windows(2).any(|pair| pair == ["sys", "as"]) => {
+                return Some("import sys as".to_owned());
+            }
+            _ => {}
+        }
+    }
+    // A name of the variables Python reads, wherever it stands: `env={"PYTHONPATH": …}`.
+    for (at, _) in compact.match_indices("PYTHON") {
+        if compact[at + "PYTHON".len()..].starts_with(|c: char| c.is_ascii_uppercase() || c == '_')
+        {
+            let name: String = compact[at..].chars().take_while(|c| ident(*c)).collect();
+            return Some(name);
+        }
+    }
+    None
 }
 
 /// The top-level names the Python `text` imports: `import a.b as c, d` names `a` and `d`,
@@ -4849,32 +5079,48 @@ fn command_paths(
         // see. A file in the tree is named above, so the gate compares it whole at the base
         // (`scripts/gate-exec python3 -I scripts/check-citations`, which runs what it is given,
         // and a file a step made is a change): the most it runs is that program with the words
-        // after it, read as a command from here. One the tree does not hold, which the guard
-        // has not read: the line fails closed, naming both.
+        // after it, read as a command from here with the line's environment and directory. A
+        // word before that program, which the file may take as an option's value
+        // (`--interpreter sh`) or for anything else, and a form by which the file sets the
+        // environment, directory or import path of what it runs ([`hand_off_unread`]) fail the
+        // line closed, naming them; the command is read besides. One the tree does not hold,
+        // which the guard has not read: the line fails closed, naming both.
         if let Some(position) = words[at..]
             .iter()
             .position(|word| !word.starts_with('-') && known_program(word))
         {
-            if in_tree
-                .as_ref()
-                .is_some_and(|path| tree.join(path).is_file())
-            {
-                command_paths(
-                    tree,
-                    &words[at + position..],
-                    dir.clone(),
-                    named,
-                    depth + 1,
-                    &env,
-                );
-            } else {
-                fail_closed(
+            let given = words[at + position];
+            match in_tree.as_ref().filter(|path| tree.join(path).is_file()) {
+                Some(path) => {
+                    if position > 0 {
+                        fail_closed(
+                            named,
+                            format!(
+                                "`{path}` is given {} before {}, a program, and the guard does not know what `{path}` takes it for",
+                                quoted(&words[at..at + position].join(" ")),
+                                quoted(given)
+                            ),
+                        );
+                    }
+                    if let Some(why) = hand_off_unread(tree, path, given) {
+                        fail_closed(named, why);
+                    }
+                    command_paths(
+                        tree,
+                        &words[at + position..],
+                        dir.clone(),
+                        named,
+                        depth + 1,
+                        &env,
+                    );
+                }
+                None => fail_closed(
                     named,
                     format!(
                         "`{name}` is given {}, a program, and the guard does not know how `{name}` runs it",
-                        quoted(words[at + position])
+                        quoted(given)
                     ),
-                );
+                ),
             }
         }
         // A program in none of the tables: what it reads is not known, so every word of the
@@ -7183,6 +7429,201 @@ pub fn free_space(path: &Path) -> std::io::Result<FreeSpace> {
     }
 }
 
+/// What the change a case has made so far passes before a judgement step's prompt shows it
+/// ([`crate::harness::ChangeSoFar`]): `<program> scan-text --repo <tree> --policy <policy>
+/// <file>`, the diff written to `<file>` outside the tree. A scan that refuses or cannot run (the
+/// program not there, a policy that does not load, any exit but 0) shows nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeScan {
+    /// The `b10x-gates` program.
+    pub program: PathBuf,
+    /// The policy file.
+    pub policy: PathBuf,
+}
+
+impl ChangeScan {
+    /// The scan the environment names: `b10x-gates` under the policy `B10X_GATES_POLICY`
+    /// names, when it is set (empty or not); none when it is not, and then the change so far is
+    /// shown unscanned.
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        std::env::var_os(crate::forge::POLICY_VAR).map(|policy| Self {
+            program: PathBuf::from("b10x-gates"),
+            policy: PathBuf::from(policy),
+        })
+    }
+}
+
+/// How [`scan_change`] says a scan that never ran.
+const SCAN_DID_NOT_RUN: &str = "the scan could not run";
+
+/// Scans `diff` with `scan`: the diff written to a file of its own (`0600`, in a directory of
+/// its own, `0700`, under the temporary directory, outside the tree, removed after), then
+/// `<program> scan-text --repo <tree> --policy <policy> <file>` in the tree. `Ok` only when it
+/// exits 0; else why, naming its exit and never what it printed, which may quote the diff.
+fn scan_change(tree: &Path, scan: &ChangeScan, diff: &[u8]) -> std::result::Result<(), String> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+    static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    struct Removed(PathBuf);
+    impl Drop for Removed {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "takt-change-{}-{}",
+        std::process::id(),
+        MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&dir)
+        .map_err(|error| format!("{SCAN_DID_NOT_RUN}: make {}: {error}", dir.display()))?;
+    let dir = Removed(dir);
+    let file = dir.0.join("change.diff");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&file)
+        .and_then(|mut handle| handle.write_all(diff))
+        .map_err(|error| format!("{SCAN_DID_NOT_RUN}: write {}: {error}", file.display()))?;
+    let ran = std::process::Command::new(&scan.program)
+        .arg("scan-text")
+        .arg("--repo")
+        .arg(tree)
+        .arg("--policy")
+        .arg(&scan.policy)
+        .arg(&file)
+        .current_dir(tree)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|error| format!("{SCAN_DID_NOT_RUN}: {}: {error}", scan.program.display()))?;
+    if ran.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} scan-text exited {ran}: not passed",
+            scan.program.display()
+        ))
+    }
+}
+
+/// The change the case at `case_dir` has made so far, as a judgement step is shown it
+/// ([`ChangeSoFar`]), read in the repository of `tree` at the revision `at` (its `HEAD` when none
+/// is given): not known for a case with no `base_commit`; none yet while no accepted step has
+/// committed a path; else the diff from `base_commit` to that revision over the paths the
+/// `effect` lines of `record` (the case's record so far) name as committed, `.engineering/` left
+/// out, so a commit on the branch that no accepted step made stays out
+/// ([`crate::git::diff_bounded`]), shown up to [`CHANGE_SHOWN_BYTES`] and, under `scan`, only
+/// when the scan passes it. A diff that cannot be read and a scan that refuses or cannot run show
+/// nothing, and `out` says why, never what the scan said; neither is an error. A run reads it
+/// before each judgement step, under its scan ([`Run::scan_change_with`]); a replay reads it the
+/// same way for the step it rebuilds ([`crate::replay`]).
+pub fn change_so_far(
+    tree: &Path,
+    case_dir: &Path,
+    record: impl FnOnce() -> Result<Vec<serde_json::Value>>,
+    at: Option<&str>,
+    scan: Option<&ChangeScan>,
+    out: &mut dyn Write,
+) -> Result<ChangeSoFar> {
+    let read = |out: &mut dyn Write| -> Result<ChangeSoFar> {
+        let Some(base) = crate::case::Branch::read(case_dir)?.base_commit else {
+            return Ok(ChangeSoFar::NotKnown);
+        };
+        let mut paths = BTreeSet::new();
+        for line in record()? {
+            if line["event"] != "effect" || !line["revision"].is_string() {
+                continue;
+            }
+            for path in line["paths"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+            {
+                if path != ENGINEERING && !path.starts_with(&format!("{ENGINEERING}/")) {
+                    paths.insert(path.to_owned());
+                }
+            }
+        }
+        if paths.is_empty() {
+            return Ok(ChangeSoFar::NoneYet);
+        }
+        let paths: Vec<String> = paths.into_iter().collect();
+        let head = match at {
+            None => crate::git::head(tree)?,
+            Some(revision) => crate::git::run(
+                tree,
+                &["rev-parse", "--verify", &format!("{revision}^{{commit}}")],
+            )?,
+        };
+        let diff_of = |parts: &[(&[String], DiffContext)], count_to: u64| {
+            crate::git::diff_bounded(
+                tree,
+                (&base, &head),
+                parts,
+                ENGINEERING,
+                CHANGE_SHOWN_BYTES,
+                count_to,
+            )
+        };
+        // Each file that is not a test whole, each test file as its changed lines: a step
+        // that hands over reads the implementation for what the changed lines alone do not
+        // show (the rest of the path they are on, what calls them). Past the bound, every
+        // file as its changed lines; past that, the size alone.
+        let (tests, others): (Vec<String>, Vec<String>) =
+            paths.iter().cloned().partition(|path| is_test_path(path));
+        let mut whole = None;
+        if !others.is_empty()
+            && let BoundedDiff::Within(diff) = diff_of(
+                &[(&others, DiffContext::Whole), (&tests, DiffContext::Hunks)],
+                0,
+            )?
+        {
+            whole = Some(diff);
+        }
+        let shows_whole = whole.is_some();
+        let diff = match whole {
+            Some(diff) => BoundedDiff::Within(diff),
+            None => diff_of(
+                &[(&paths, DiffContext::Hunks)],
+                crate::git::DIFF_COUNTED_BYTES,
+            )?,
+        };
+        Ok(match diff {
+            BoundedDiff::Within(diff) if diff.is_empty() => ChangeSoFar::NoneYet,
+            BoundedDiff::Within(diff) => match scan {
+                None => ChangeSoFar::shown(&diff, shows_whole),
+                Some(scan) => match scan_change(tree, scan, &diff) {
+                    Ok(()) => ChangeSoFar::shown(&diff, shows_whole),
+                    Err(why) => {
+                        writeln!(out, "  the change so far is not shown: {why}")?;
+                        ChangeSoFar::NotShown(if why.starts_with(SCAN_DID_NOT_RUN) {
+                            "the secret scan could not run"
+                        } else {
+                            "it did not pass the secret scan"
+                        })
+                    }
+                },
+            },
+            BoundedDiff::Past { bytes, whole } => ChangeSoFar::TooLarge { bytes, whole },
+        })
+    };
+    Ok(match read(out) {
+        Ok(change) => change,
+        Err(error) => {
+            writeln!(out, "  the change so far is not shown: {error:#}")?;
+            ChangeSoFar::NotShown("it could not be read")
+        }
+    })
+}
+
 /// A run over one case. Its stop [`Stop::Unperformable`] is off by default in the library: a
 /// library caller opts in with [`Run::stop_when_unperformable`], and the CLI turns it on for
 /// every run in its `finish`, so the library's default is not the product's behaviour.
@@ -7257,6 +7698,9 @@ pub struct Run<'a> {
     /// The author and committer of every commit the run makes, the case's
     /// ([`CaseDir::committer`]), read when the run is opened or resumed.
     committer: crate::git::CommitIdentity,
+    /// What the change so far passes before a prompt shows it: [`ChangeScan::from_env`] when
+    /// the run opens, unless [`Run::scan_change_with`] gives another.
+    change_scan: Option<ChangeScan>,
 }
 
 impl<'a> Run<'a> {
@@ -7392,6 +7836,7 @@ impl<'a> Run<'a> {
             read_free: Box::new(free_space),
             free_unread_said: false,
             committer,
+            change_scan: ChangeScan::from_env(),
         })
     }
 
@@ -7587,6 +8032,12 @@ impl<'a> Run<'a> {
         Ok(())
     }
 
+    /// Scans the change so far with `scan` before a prompt shows it, or, given none, shows it
+    /// unscanned; the run opens with [`ChangeScan::from_env`].
+    pub fn scan_change_with(&mut self, scan: Option<ChangeScan>) {
+        self.change_scan = scan;
+    }
+
     /// Prepares a run on the case `id` a run before this one opened under `tree`: the case's
     /// files as they are, its `authority.yaml` read into every evaluation, its intent and inputs
     /// the run's. The unit is the story the case records, or the intent it was opened on.
@@ -7650,6 +8101,7 @@ impl<'a> Run<'a> {
             read_free: Box::new(free_space),
             free_unread_said: false,
             committer,
+            change_scan: ChangeScan::from_env(),
         })
     }
 
@@ -8517,6 +8969,139 @@ impl<'a> Run<'a> {
         )
     }
 
+    /// Why the step guard refuses `proposal` on its face, before the edit effect writes a byte
+    /// of it to `tree`: an action neither `offered` nor among the `approvals`; a file changed
+    /// for an approval, `repository.inspect` or an action that records a choice (`shape`),
+    /// which change none, each file named; a path that is no plain path of the tree (absolute,
+    /// with a `.` or `..` part, a part named `.git`); a path in the cases directory or on the
+    /// judge `surface`; a non-test path for `tests.write`; a path reached through a link, or
+    /// one at which the tree holds no regular file but something else; a path git ignores
+    /// ([`crate::git::ignored_among`]), each named, which no commit would carry and the scratch
+    /// copy never held, so what the tree holds there is the operator's and is never written,
+    /// or the proposal whole when what git ignores could not be read. None when it passes.
+    fn proposal_refusal(
+        tree: &Path,
+        proposal: &crate::harness::Proposal,
+        offered: &[String],
+        approvals: &[String],
+        surface: &JudgeSurface,
+        shape: &Shape,
+    ) -> Option<String> {
+        let action = &proposal.action;
+        let approval = approvals.contains(action);
+        if !offered.contains(action) && !approval {
+            return Some(format!("{action} was not offered"));
+        }
+        let records_choice = !shape.choices_of(action).is_empty();
+        if (approval || records_choice || action == "repository.inspect")
+            && !proposal.files.is_empty()
+        {
+            let named: Vec<std::ffi::OsString> = proposal
+                .files
+                .iter()
+                .map(|file| file.path.clone().into())
+                .collect();
+            return Some(format!(
+                "{action}{} proposes {} changed path(s), and it changes none: {}",
+                if records_choice {
+                    " records a choice and"
+                } else {
+                    ""
+                },
+                proposal.files.len(),
+                crate::git::paths_named(&named)
+            ));
+        }
+        let cases = format!("{CASES_DIR}/");
+        for file in &proposal.files {
+            let path = file.path.as_str();
+            if !session_executor::plain_relative(path) {
+                return Some(format!(
+                    "{action} proposes {path:?}, which is no plain path of the tree"
+                ));
+            }
+            if path == CASES_DIR || path.starts_with(&cases) {
+                return Some(format!(
+                    "{action} proposes a path in the cases directory: {path}"
+                ));
+            }
+            if surface.contains(path) {
+                return Some(surface_refusal(action, &[path.to_owned()]));
+            }
+            if action == "tests.write" && !is_test_path(path) {
+                return Some(format!("tests.write proposes a non-test path: {path}"));
+            }
+            let at = tree.join(path);
+            if let Err(why) = no_link_on_the_way(tree, &at) {
+                return Some(format!("{action} proposes {path}: {why:#}"));
+            }
+            if let Ok(meta) = std::fs::symlink_metadata(&at)
+                && !meta.is_file()
+            {
+                return Some(format!(
+                    "{action} proposes {path}, where the tree holds no regular file"
+                ));
+            }
+        }
+        let paths: Vec<&str> = proposal
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect();
+        match crate::git::ignored_among(tree, &paths) {
+            Ok(ignored) if ignored.is_empty() => None,
+            Ok(ignored) => {
+                let named: Vec<std::ffi::OsString> = ignored.into_iter().map(Into::into).collect();
+                Some(format!(
+                    "{action} proposes {} ignored by git, which no commit would carry and the scratch copy did not hold: {}",
+                    if named.len() == 1 { "a path" } else { "paths" },
+                    crate::git::paths_named(&named)
+                ))
+            }
+            Err(error) => Some(format!(
+                "{action} proposes {} path(s), and which of them git ignores could not be read: {error:#}",
+                paths.len()
+            )),
+        }
+    }
+
+    /// The edit effect: writes each file of `proposal` to `tree`, its content whole, never
+    /// through a link (`O_NOFOLLOW`), or removes it when the proposal carries none. Called
+    /// only on a proposal [`Self::proposal_refusal`] passed.
+    fn apply_proposal(tree: &Path, proposal: &crate::harness::Proposal) -> Result<()> {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        for file in &proposal.files {
+            let at = tree.join(&file.path);
+            match &file.content {
+                Some(text) => {
+                    if let Some(parent) = at.parent() {
+                        std::fs::create_dir_all(parent)
+                            .with_context(|| format!("create {}", parent.display()))?;
+                    }
+                    let mut written = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(true)
+                        .custom_flags(libc::O_NOFOLLOW)
+                        .open(&at)
+                        .with_context(|| format!("open {}", file.path))?;
+                    written
+                        .write_all(text.as_bytes())
+                        .with_context(|| format!("write {}", file.path))?;
+                }
+                None => match std::fs::remove_file(&at) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(error).with_context(|| format!("remove {}", file.path));
+                    }
+                },
+            }
+        }
+        Ok(())
+    }
+
     /// The loop, the case held.
     fn run_held(&mut self, events: &Events, out: &mut dyn Write) -> Result<Stop> {
         let inputs: Vec<String> = self
@@ -9080,6 +9665,14 @@ impl<'a> Run<'a> {
                 .filter(|a| !shape.choices_of(a).is_empty())
                 .cloned()
                 .collect();
+            let change = change_so_far(
+                &self.tree,
+                &self.case.dir,
+                || events.read(),
+                None,
+                self.change_scan.as_ref(),
+                out,
+            )?;
             let mut context = StepContext {
                 tree: &self.tree,
                 intent: &self.options.intent,
@@ -9090,6 +9683,7 @@ impl<'a> Run<'a> {
                 protocol: &self.case.protocol,
                 step: self.steps as usize,
                 time_left: None,
+                change: &change,
             };
             // The step is judged by what it did to the tree, against a checkpoint taken just
             // before it: `HEAD`, the index, every path already uncommitted (a validator's run
@@ -9297,6 +9891,63 @@ impl<'a> Run<'a> {
                     )),
                 });
             }
+            // The edit effect: a harness that works in a scratch copy and never in the tree
+            // ([`Harness::take_proposal`]) hands its change over as a proposal, and takt writes
+            // it here, after the checkpoint and before the step is judged. A proposal the guard
+            // refuses on its face (an action not offered, a file changed for an action that
+            // changes none or records a choice, a path that is no plain path of the tree, under
+            // `.git`, in the cases directory, on the judge surface, a non-test path for
+            // `tests.write`, a path reached through a link, a path git ignores) is refused before
+            // a byte of it reaches the tree; one that passes is written, and judged below as any
+            // step's change.
+            let stepped = match stepped {
+                Ok(report) => match self.harness.take_proposal() {
+                    None => Ok(report),
+                    Some(proposal) => {
+                        match Self::proposal_refusal(
+                            &self.tree, &proposal, &offered, &approvals, &surface, &shape,
+                        ) {
+                            Some(why) => {
+                                let moved = undo()?;
+                                let why = format!("{}{moved}", crate::trace::escape(&why));
+                                if let Some(tokens) = report.tokens {
+                                    self.tokens += tokens;
+                                }
+                                self.stepped(
+                                    events,
+                                    SteppedBy::Harness(
+                                        report.tokens,
+                                        self.harness.last_usage(),
+                                        self.harness.last_call().map(Box::new),
+                                        transcript.clone(),
+                                    ),
+                                    self.harness.name(),
+                                    &report.action,
+                                    &report.summary,
+                                )?;
+                                self.refused(events, BY_TAKT, &why)?;
+                                writeln!(
+                                    out,
+                                    "step {}: {} ({})",
+                                    self.steps,
+                                    report.action,
+                                    self.harness.name()
+                                )?;
+                                writeln!(
+                                    out,
+                                    "  refused before the edit effect: {why}; nothing of the proposal was written to the tree"
+                                )?;
+                                tell(out)?;
+                                return Ok(Stop::StepRefused(why));
+                            }
+                            None => Self::apply_proposal(&self.tree, &proposal)
+                                .map(|()| report)
+                                .context("the edit effect could not write the proposal"),
+                        }
+                    }
+                },
+                Err(error) => Err(error),
+            };
             // What the step left, read now; a read that fails (a file the run may not read)
             // discards the step before the run ends on the error.
             let seen =

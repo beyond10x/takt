@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-trial-candidate-lands-in-the-repository-of-its-layer
 kind: story
-status: draft
+status: implemented
 title: A trial candidate is built in the repository that owns its layer and re-trialled pinned
 summary: the trial agent profile still builds candidates in takt only; ADR 0101 points 3 and 4 move a candidate to its layer's repository and pin it for the re-trial
 tags:
@@ -12,9 +12,17 @@ relations:
 - serves: vision:safe-agentic-coding
 - depends_on: story:a-trial-records-the-revision-of-each-layer
 scope:
+- confidence: inferred
+  path: .agents/dispatcher-agent.md
 - confidence: cited
   path: .agents/trial-agent.md
-revision: 2
+- confidence: inferred
+  path: AGENTS.md
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T14:29:01Z", actor: "human:timo", revision: 6}
+- {from: "proposed", to: "active", at: "2026-10-20T14:29:01Z", actor: "human:timo", revision: 7}
+- {from: "active", to: "implemented", at: "2026-10-20T14:29:02Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: a-trial-candidate-lands-in-the-repository-of-its-layer
 
@@ -65,11 +73,13 @@ self-improvement work, so it carries `rsi`.
    is scanned before the commit, as takt's.
 3. Step 8, pinning: takt is built at the trigger's sha from its clean worktree, so `--version`
    names that sha and not `-dirty`. A binary layer's candidate is built from its clean worktree
-   and put first on the runs' `PATH`; a library layer's candidate is put in by a build-time
-   override that leaves takt's tree unchanged (a `cargo --config 'patch…'` on the command line).
-   Pre-flight item 5 checks both revisions: takt's `--version`, and the layer's revision as the
-   run record will name it. A run whose record names another revision of the pinned layer is
-   discarded and run again.
+   and put first on the runs' `PATH`. Pre-flight item 5 checks takt's `--version` before run 1;
+   the pinned layer's revision is read from run 1's record (for the harness, the `version` of its
+   first harness step's line, which exists only after a step ran), and a run whose record names
+   another revision of the pinned layer is discarded and run again. A library layer (a Loom
+   candidate through a `cargo --config 'patch…'`) is not pinned by this story: no record names a
+   `runtime` layer yet, so the discard rule cannot fire for it; that waits for
+   story:a-trial-pins-another-repositorys-candidate, and step 8 says so.
 4. The re-trial compares as today: step 2's saved scorecard and the promoted baseline's, no
    scenario worse, the target scenario better on the proposal's metric; the parking rule, the
    budgets and the early stop apply unchanged.
@@ -78,10 +88,21 @@ self-improvement work, so it carries `rsi`.
    A repository with no running delivery session holds the accepted candidate as a finding in its
    own planning store until one runs; the trial agent writes nothing to that store.
 6. Step 10, promotion: only after the candidate merged and released through its own repository's
-   process and takt moved its pin to that release; the promotion record names every pinned
-   layer's revision.
+   process and takt moved its pin to that release. That the promotion record names every pinned
+   layer's revision is story:takt-models-its-inner-workings-in-ess (`Promotion.layers`) and
+   story:a-trial-pins-another-repositorys-candidate, not this story; step 10 cites them.
 7. § Reports and the closing list no longer forbid acting on a proposal for another repository;
    they forbid editing a repository outside a managed worktree of the cycle, committing outside
    its bot route, and acting on a repository that is not public.
 8. § Limits: one build or `scripts/check-finding` at a time across all repositories of a cycle,
    each under the disk floor of § Limits.
+
+## Planner notes (2026-10-20, wave 23 scoping)
+
+- Scoped by a story-scoper at fd395d2: the story lands in `.agents/trial-agent.md` only (steps 5-10,
+  § Reports, § Runs and measurement, § Limits, § Never), with `AGENTS.md` § Messages and
+  `.agents/dispatcher-agent.md` § Self-improvement likely (`[CANDIDATE <repository>]` routing);
+  nothing executable reads the profile.
+- Acceptance 3 and 6 narrowed: the library-layer pin and the promotion's layers belong to
+  story:a-trial-pins-another-repositorys-candidate and story:takt-models-its-inner-workings-in-ess;
+  both edit step 8 and step 10 of the same profile, so they run in a later wave than this one.
