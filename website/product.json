@@ -58,8 +58,8 @@
         },
         {
           "title": "A measured self-improvement loop",
-          "description": "takt improves takt in turns. A fix counts when a check reproduced the defect before it and not after it. Three turns were recorded by hand; validators that drive a turn are not built.",
-          "status": "decided",
+          "description": "takt improves takt in turns. A fix counts when a check reproduced the defect before it and not after it. The first three turns were recorded by hand; since 0.2.2, validators drive a turn to accepted and takt promote installs its candidate.",
+          "status": "shipped",
           "icon": "obligation",
           "href": "/docs/self-improvement/the-loop"
         },

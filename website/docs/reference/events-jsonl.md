@@ -24,9 +24,9 @@ A field added to an event later is optional, so older lines still read.
 
 | `event` | fields | written when |
 |---|---|---|
-| `opened` | `case`, `protocol`, `story`?, `inputs` (`name=value`), `base`? (the commit the case's branch forked from), `binary`? (as `takt --version` prints it: `<sha>`, `<sha>-dirty` or `unknown revision`) | a run opened or resumed the case |
+| `opened` | `case`, `protocol`, `story`?, `inputs` (`name=value`), `base`? (the commit the case's branch forked from), `binary`? (as `takt --version` prints it: `<sha>`, `<sha>-dirty` or `unknown revision`), `layers`? (layer name to revision, read from what ran and never typed: `takt`, the binary's revision; written, empty or not, by every run from 0.6.0 on; a line without it reads as layers not recorded) | a run opened or resumed the case |
 | `decision` | `seq`, `file` (the decision file in the case), `frontier` | Canon evaluated the case |
-| `step` | `by` (`validator` or `harness`), `name`, `action`, `summary`, `tokens`?, `usage`? (`input`, `output`, `cache_read`, `cache_creation`), `revision`? (a validator's observed revision), `model`?, `cost_usd`?, `duration_ms`?, `api_ms`?, `turns`?, `started_at`? | a step ended |
+| `step` | `by` (`validator` or `harness`), `name`, `action`, `summary`, `tokens`?, `usage`? (`input`, `output`, `cache_read`, `cache_creation`), `revision`? (a validator's observed revision), `model`?, `version`? (the harness program's own version, as its stream stated it), `cost_usd`?, `duration_ms`?, `api_ms`?, `turns`?, `started_at`?, `transcript`? (the step's transcript, relative to the transcripts directory: `<repo>/<case>/run-<r>/step-<n>.jsonl`), `transcript_refused`? (why takt kept none, such as a file already at that path or a link on the way) | a step ended |
 | `effect` | `paths`, `revision`? | a judgement step committed files, or changed none |
 | `evidence` | `id`, `kind`, `result`?, `path` | a validator wrote an evidence record under the case |
 | `store_evidence` | `story`, `kind`, `reference`, `observed_at`, `commit`? | evidence was written on the story in the planning store |
@@ -35,7 +35,7 @@ A field added to an event later is optional, so older lines still read.
 | `waiting` | `on` (actions), `seconds` | the run paused on the forge before observing again |
 | `error` | `error` | the run ended on an error, or met one while recording an accepted case |
 | `skipped` | `line`, `reason` | an earlier line was cut short and is skipped on read |
-| `stop` | `stop`, `steps`, `tokens` | the run stopped |
+| `stop` | `stop`, `steps`, `tokens`, `completed`? (whether the stop is a completion, as the binary that stopped knows its stops; a reader that does not know the stop takes this word for it) | the run stopped |
 
 `?` marks a field that is absent, never 0, when its source did not state it.
 

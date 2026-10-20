@@ -33,7 +33,7 @@ named stops.
 
 ## Where to go next
 
-- [Getting started](./getting-started.md): install the 0.2.2 binary and run one step.
+- [Getting started](./getting-started.md): install a release binary and run one step.
 - [Protocol and case](./concepts/protocol-and-case.md): the two nouns everything else rests on.
 - [Status](./status.mdx): every implemented story, and what is in the open wave.
 - [The protocol viewer](pathname:///takt/protocols/): takt's protocols, drawn from their files.

@@ -13,3 +13,11 @@ html .b10x-flow__label,
 html .b10x-status-strip__group-title {
   font-size: 0.75rem;
 }
+
+/* An admonition's title is shown as written: Docusaurus capitalises it
+   (theme-classic Admonition/Layout/styles.module.css, .admonitionHeading), which turned
+   `:::warning[macOS]` into MACOS. Every admonition here therefore carries its own title. */
+html .theme-admonition [class*='admonitionHeading'] {
+  letter-spacing: 0;
+  text-transform: none;
+}

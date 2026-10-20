@@ -120,8 +120,6 @@ function charts() {
 
 // The CLI reference and the exit codes, from the binary's own help: built with cargo from this
 // checkout, or TAKT_BIN when it names a binary.
-const COMMANDS = [['run'], ['approve'], ['protocols'], ['scenario', 'run'], ['scorecard'], ['trace'], ['report'], ['promote']];
-
 function takt(args) {
   const bin = process.env.TAKT_BIN;
   const [program, argv] = bin ? [bin, args] : ['cargo', ['run', '--locked', '--quiet', '-p', 'b10x-takt-cli', '--', ...args]];
@@ -129,6 +127,21 @@ function takt(args) {
 }
 
 const help = (args) => takt([...args, '--help']);
+
+// Every command the help lists, in its order, and a command with commands of its own as each of
+// them (`scenario run`): a command added to the binary gets its section with no edit here.
+function commands(args = []) {
+  const text = help(args);
+  const at = text.indexOf('\nCommands:\n');
+  if (at < 0) return [args];
+  const names = [];
+  for (const line of text.slice(at + 11).split('\n')) {
+    if (!line.startsWith('  ')) break;
+    const m = /^  (\S+)\s/.exec(line);
+    if (m && m[1] !== 'help') names.push(m[1]);
+  }
+  return names.flatMap((name) => commands([...args, name]));
+}
 
 function exitCodes(text) {
   const at = text.indexOf('\nExit codes:\n');
@@ -153,7 +166,8 @@ function cli() {
   page += '```text\n' + help([]).trim() + '\n```\n';
   let codes = head('Exit codes', 'What each takt command\'s exit code means, from the binary\'s own help.');
   codes += `Generated from \`takt <command> --help\` of \`${version}\`. A run's outcome lives in files and the exit code, never only in a process, so a script or an orchestrator can drive takt from the code alone.\n`;
-  for (const args of COMMANDS) {
+  const all = commands();
+  for (const args of all) {
     const name = `takt ${args.join(' ')}`;
     const text = help(args).trim();
     page += `\n## ${name}\n\n\`\`\`text\n${text}\n\`\`\`\n`;
@@ -165,7 +179,7 @@ function cli() {
   const dir = join(website, 'docs', 'reference');
   writeFileSync(join(dir, 'cli.md'), page);
   writeFileSync(join(dir, 'exit-codes.md'), codes);
-  console.log(`cli: ${COMMANDS.length} commands from ${version}`);
+  console.log(`cli: ${all.length} commands (${all.map((a) => a.join(' ')).join(', ')}) from ${version}`);
 }
 
 function viewer() {

@@ -30,6 +30,7 @@ copied, so a trace carries no local path and can be published.
 | `tokens` | `input`, `output`, `cache_read`, `cache_write`, `sum`: each absent when some call cannot join it |
 | `cost_usd` | the calls' cost summed, when every call states one |
 | `acceptance` | the held-out check; never in the record |
+| `layers` | the run's layers as the scorecard reads them: the first `opened` line's `layers`, the `harness` layer from the versions the harness steps' lines state, the `model` layer from the models the calls reported; absent when the record has no `layers` (layers not recorded) |
 | `sources`, `notes` | the files read, relative to the case directory or by file name, never an absolute path; what a steps file supplied |
 
 ## Operation
@@ -47,6 +48,7 @@ copied, so a trace carries no local path and can be published.
 | `paths` | the paths a judgement step committed |
 | `evidence` | `observed` (a record or exit status a validator observed) or `declared` (the model's own text) |
 | `label` | a pattern mark: `approval-only call`, `seed pr.open`, `2nd CI`, `inspect, then NoProgress`, `repeated failure (as step N)` |
+| `line` | the line of the case's `events.jsonl`, from 1, the operation was read from: the record `takt report` names for a figure (`events.jsonl:<n>`) |
 
 A record written before takt recorded the model, cost, turns and durations per call can be
 completed from a runner shim's `steps.jsonl` (`--steps`); the header's notes say which fields it
