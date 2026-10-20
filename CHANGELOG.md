@@ -19,7 +19,8 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   as it compares one run directly (0.4.0's known limit, story:gate-compares-python-run-through-a-shell).
   A shell line takt cannot read fails closed: every Python file, shell file and program is
   compared, and the summary names why. takt's own gates run through `scripts/gate-exec`, whose
-  lines the reader cannot follow, so a change to any of those files stops takt's gates.
+  lines the reader cannot follow, so a delivery that changes a `.py`, `.sh` or program file stops
+  takt's own gates until story:gate-exec-is-readable-by-the-gate.
 
 ## [0.4.0] — 2026-10-20
 
