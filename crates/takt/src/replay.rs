@@ -10,7 +10,8 @@
 //! record up to it; the case's intent, protocol and inputs. In the scratch tree, at that
 //! revision, the case directory is rebuilt as the step found it ([`rebuild_case`]), and the
 //! harness is given the step's context ([`crate::StepContext`]) with the offer the run made at
-//! that decision ([`crate::run::judgement_offer`]). A replay records `replay.json`
+//! that decision ([`crate::run::judgement_offer`]) and the change so far read as the run read it
+//! ([`crate::run::change_so_far`]). A replay records `replay.json`
 //! ([`FORMAT`]) and the step's transcript beside it, and the scratch tree is removed.
 
 use std::io::Write as _;
@@ -19,8 +20,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, anyhow, bail};
 
 use crate::decision::Decision;
-use crate::harness::{ClaudeCode, Harness, StepContext};
+use crate::harness::{ChangeSoFar, ClaudeCode, Harness, StepContext};
 use crate::protocol::LoadedProtocol;
+use crate::run::ChangeScan;
 
 /// The format of a replay's record, `replay.json`.
 pub const FORMAT: &str = "takt-replay/1";
@@ -344,10 +346,12 @@ fn first_line(bytes: &[u8]) -> &[u8] {
 /// The first line of the transcript `claude` would write for the step `start` describes, the
 /// prompt it builds, without running anything: the step is asked of a copy whose program
 /// cannot start, and a step whose harness never started has that line alone as its transcript.
+/// The change so far is read in `repo`, the repository that holds the case's commits.
 pub fn rebuilt_prompt_line(
     claude: &ClaudeCode,
     start: &Start,
     gate: Option<&str>,
+    repo: &Path,
 ) -> Result<Vec<u8>> {
     let probe = ClaudeCode {
         program: String::new(),
@@ -363,7 +367,8 @@ pub fn rebuilt_prompt_line(
         probe.keeps_state(),
         gate,
     )?;
-    let context = context(start, &start.case_dir, &offer);
+    let change = change_of(start, &start.case_dir, repo, &start.revision)?;
+    let context = context(start, &start.case_dir, &offer, &change);
     let _ = probe.step(&context);
     let transcript = probe
         .last_transcript()
@@ -371,8 +376,38 @@ pub fn rebuilt_prompt_line(
     Ok(first_line(&transcript).to_vec())
 }
 
-/// The context the step `start` describes was given, in `tree`, with `offer`.
-fn context<'a>(start: &'a Start, tree: &'a Path, offer: &'a crate::run::Offer) -> StepContext<'a> {
+/// The change so far the step `start` describes was shown, read by the code a run reads it with
+/// ([`crate::run::change_so_far`]): the `base_commit` of the case's `branch.yaml` in `case_dir`,
+/// the paths the `effect` lines of its record up to the step name, the diff to `revision`, the
+/// revision the step started at, in the repository of `tree`, under the scan the environment
+/// names ([`ChangeScan::from_env`]), as a run under the same environment scans it. What a run
+/// would print of a change it could not show is not printed: the prompt says it is not shown.
+fn change_of(start: &Start, case_dir: &Path, tree: &Path, revision: &str) -> Result<ChangeSoFar> {
+    let record = || {
+        Ok(start
+            .record
+            .split(|byte| *byte == b'\n')
+            .filter_map(|line| serde_json::from_slice(line).ok())
+            .collect())
+    };
+    crate::run::change_so_far(
+        tree,
+        case_dir,
+        record,
+        Some(revision),
+        ChangeScan::from_env().as_ref(),
+        &mut std::io::sink(),
+    )
+}
+
+/// The context the step `start` describes was given, in `tree`, with `offer` and the change so
+/// far ([`change_of`]).
+fn context<'a>(
+    start: &'a Start,
+    tree: &'a Path,
+    offer: &'a crate::run::Offer,
+    change: &'a ChangeSoFar,
+) -> StepContext<'a> {
     StepContext {
         tree,
         intent: &start.intent,
@@ -383,6 +418,7 @@ fn context<'a>(start: &'a Start, tree: &'a Path, offer: &'a crate::run::Offer) -
         protocol: &start.protocol,
         step: usize::try_from(start.step).unwrap_or(usize::MAX),
         time_left: None,
+        change,
     }
 }
 
@@ -577,7 +613,7 @@ pub fn replay_once(
         repo: repo.to_path_buf(),
         tree: tree.clone(),
     };
-    rebuild_case(start, &tree, &revision)?;
+    let case_dir = rebuild_case(start, &tree, &revision)?;
     let offer = crate::run::judgement_offer(
         &start.protocol,
         &start.inputs,
@@ -586,7 +622,8 @@ pub fn replay_once(
         gate,
     )?;
     let started_at = crate::events::instant();
-    let stepped = harness.step(&context(start, &tree, &offer));
+    let change = change_of(start, &case_dir, &tree, &revision)?;
+    let stepped = harness.step(&context(start, &tree, &offer, &change));
     let transcript = harness.last_transcript();
     if let Some(bytes) = &transcript {
         write_private(&dir.join("transcript.jsonl"), bytes)?;

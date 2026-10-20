@@ -22,7 +22,8 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use crate::case::{CASES_DIR, CaseDir, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT};
 use crate::events::{BY_STORE, BY_TAKT, Event, Events};
 use crate::frontier::{Frontier, IMPLEMENTED, Story, TEST_RESULT, Take, Unit};
-use crate::harness::{Harness, StepContext, is_test_path};
+use crate::git::{BoundedDiff, DiffContext};
+use crate::harness::{CHANGE_SHOWN_BYTES, ChangeSoFar, Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
 use crate::validator::Validator;
 
@@ -6751,6 +6752,201 @@ pub fn free_space(path: &Path) -> std::io::Result<FreeSpace> {
     }
 }
 
+/// What the change a case has made so far passes before a judgement step's prompt shows it
+/// ([`crate::harness::ChangeSoFar`]): `<program> scan-text --repo <tree> --policy <policy>
+/// <file>`, the diff written to `<file>` outside the tree. A scan that refuses or cannot run (the
+/// program not there, a policy that does not load, any exit but 0) shows nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeScan {
+    /// The `b10x-gates` program.
+    pub program: PathBuf,
+    /// The policy file.
+    pub policy: PathBuf,
+}
+
+impl ChangeScan {
+    /// The scan the environment names: `b10x-gates` under the policy `B10X_GATES_POLICY`
+    /// names, when it is set (empty or not); none when it is not, and then the change so far is
+    /// shown unscanned.
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        std::env::var_os(crate::forge::POLICY_VAR).map(|policy| Self {
+            program: PathBuf::from("b10x-gates"),
+            policy: PathBuf::from(policy),
+        })
+    }
+}
+
+/// How [`scan_change`] says a scan that never ran.
+const SCAN_DID_NOT_RUN: &str = "the scan could not run";
+
+/// Scans `diff` with `scan`: the diff written to a file of its own (`0600`, in a directory of
+/// its own, `0700`, under the temporary directory, outside the tree, removed after), then
+/// `<program> scan-text --repo <tree> --policy <policy> <file>` in the tree. `Ok` only when it
+/// exits 0; else why, naming its exit and never what it printed, which may quote the diff.
+fn scan_change(tree: &Path, scan: &ChangeScan, diff: &[u8]) -> std::result::Result<(), String> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+    static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    struct Removed(PathBuf);
+    impl Drop for Removed {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "takt-change-{}-{}",
+        std::process::id(),
+        MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&dir)
+        .map_err(|error| format!("{SCAN_DID_NOT_RUN}: make {}: {error}", dir.display()))?;
+    let dir = Removed(dir);
+    let file = dir.0.join("change.diff");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&file)
+        .and_then(|mut handle| handle.write_all(diff))
+        .map_err(|error| format!("{SCAN_DID_NOT_RUN}: write {}: {error}", file.display()))?;
+    let ran = std::process::Command::new(&scan.program)
+        .arg("scan-text")
+        .arg("--repo")
+        .arg(tree)
+        .arg("--policy")
+        .arg(&scan.policy)
+        .arg(&file)
+        .current_dir(tree)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|error| format!("{SCAN_DID_NOT_RUN}: {}: {error}", scan.program.display()))?;
+    if ran.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} scan-text exited {ran}: not passed",
+            scan.program.display()
+        ))
+    }
+}
+
+/// The change the case at `case_dir` has made so far, as a judgement step is shown it
+/// ([`ChangeSoFar`]), read in the repository of `tree` at the revision `at` (its `HEAD` when none
+/// is given): not known for a case with no `base_commit`; none yet while no accepted step has
+/// committed a path; else the diff from `base_commit` to that revision over the paths the
+/// `effect` lines of `record` (the case's record so far) name as committed, `.engineering/` left
+/// out, so a commit on the branch that no accepted step made stays out
+/// ([`crate::git::diff_bounded`]), shown up to [`CHANGE_SHOWN_BYTES`] and, under `scan`, only
+/// when the scan passes it. A diff that cannot be read and a scan that refuses or cannot run show
+/// nothing, and `out` says why, never what the scan said; neither is an error. A run reads it
+/// before each judgement step, under its scan ([`Run::scan_change_with`]); a replay reads it the
+/// same way for the step it rebuilds ([`crate::replay`]).
+pub fn change_so_far(
+    tree: &Path,
+    case_dir: &Path,
+    record: impl FnOnce() -> Result<Vec<serde_json::Value>>,
+    at: Option<&str>,
+    scan: Option<&ChangeScan>,
+    out: &mut dyn Write,
+) -> Result<ChangeSoFar> {
+    let read = |out: &mut dyn Write| -> Result<ChangeSoFar> {
+        let Some(base) = crate::case::Branch::read(case_dir)?.base_commit else {
+            return Ok(ChangeSoFar::NotKnown);
+        };
+        let mut paths = BTreeSet::new();
+        for line in record()? {
+            if line["event"] != "effect" || !line["revision"].is_string() {
+                continue;
+            }
+            for path in line["paths"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+            {
+                if path != ENGINEERING && !path.starts_with(&format!("{ENGINEERING}/")) {
+                    paths.insert(path.to_owned());
+                }
+            }
+        }
+        if paths.is_empty() {
+            return Ok(ChangeSoFar::NoneYet);
+        }
+        let paths: Vec<String> = paths.into_iter().collect();
+        let head = match at {
+            None => crate::git::head(tree)?,
+            Some(revision) => crate::git::run(
+                tree,
+                &["rev-parse", "--verify", &format!("{revision}^{{commit}}")],
+            )?,
+        };
+        let diff_of = |parts: &[(&[String], DiffContext)], count_to: u64| {
+            crate::git::diff_bounded(
+                tree,
+                (&base, &head),
+                parts,
+                ENGINEERING,
+                CHANGE_SHOWN_BYTES,
+                count_to,
+            )
+        };
+        // Each file that is not a test whole, each test file as its changed lines: a step
+        // that hands over reads the implementation for what the changed lines alone do not
+        // show (the rest of the path they are on, what calls them). Past the bound, every
+        // file as its changed lines; past that, the size alone.
+        let (tests, others): (Vec<String>, Vec<String>) =
+            paths.iter().cloned().partition(|path| is_test_path(path));
+        let mut whole = None;
+        if !others.is_empty()
+            && let BoundedDiff::Within(diff) = diff_of(
+                &[(&others, DiffContext::Whole), (&tests, DiffContext::Hunks)],
+                0,
+            )?
+        {
+            whole = Some(diff);
+        }
+        let shows_whole = whole.is_some();
+        let diff = match whole {
+            Some(diff) => BoundedDiff::Within(diff),
+            None => diff_of(
+                &[(&paths, DiffContext::Hunks)],
+                crate::git::DIFF_COUNTED_BYTES,
+            )?,
+        };
+        Ok(match diff {
+            BoundedDiff::Within(diff) if diff.is_empty() => ChangeSoFar::NoneYet,
+            BoundedDiff::Within(diff) => match scan {
+                None => ChangeSoFar::shown(&diff, shows_whole),
+                Some(scan) => match scan_change(tree, scan, &diff) {
+                    Ok(()) => ChangeSoFar::shown(&diff, shows_whole),
+                    Err(why) => {
+                        writeln!(out, "  the change so far is not shown: {why}")?;
+                        ChangeSoFar::NotShown(if why.starts_with(SCAN_DID_NOT_RUN) {
+                            "the secret scan could not run"
+                        } else {
+                            "it did not pass the secret scan"
+                        })
+                    }
+                },
+            },
+            BoundedDiff::Past { bytes, whole } => ChangeSoFar::TooLarge { bytes, whole },
+        })
+    };
+    Ok(match read(out) {
+        Ok(change) => change,
+        Err(error) => {
+            writeln!(out, "  the change so far is not shown: {error:#}")?;
+            ChangeSoFar::NotShown("it could not be read")
+        }
+    })
+}
+
 /// A run over one case. Its stop [`Stop::Unperformable`] is off by default in the library: a
 /// library caller opts in with [`Run::stop_when_unperformable`], and the CLI turns it on for
 /// every run in its `finish`, so the library's default is not the product's behaviour.
@@ -6825,6 +7021,9 @@ pub struct Run<'a> {
     /// The author and committer of every commit the run makes, the case's
     /// ([`CaseDir::committer`]), read when the run is opened or resumed.
     committer: crate::git::CommitIdentity,
+    /// What the change so far passes before a prompt shows it: [`ChangeScan::from_env`] when
+    /// the run opens, unless [`Run::scan_change_with`] gives another.
+    change_scan: Option<ChangeScan>,
 }
 
 impl<'a> Run<'a> {
@@ -6960,6 +7159,7 @@ impl<'a> Run<'a> {
             read_free: Box::new(free_space),
             free_unread_said: false,
             committer,
+            change_scan: ChangeScan::from_env(),
         })
     }
 
@@ -7155,6 +7355,12 @@ impl<'a> Run<'a> {
         Ok(())
     }
 
+    /// Scans the change so far with `scan` before a prompt shows it, or, given none, shows it
+    /// unscanned; the run opens with [`ChangeScan::from_env`].
+    pub fn scan_change_with(&mut self, scan: Option<ChangeScan>) {
+        self.change_scan = scan;
+    }
+
     /// Prepares a run on the case `id` a run before this one opened under `tree`: the case's
     /// files as they are, its `authority.yaml` read into every evaluation, its intent and inputs
     /// the run's. The unit is the story the case records, or the intent it was opened on.
@@ -7218,6 +7424,7 @@ impl<'a> Run<'a> {
             read_free: Box::new(free_space),
             free_unread_said: false,
             committer,
+            change_scan: ChangeScan::from_env(),
         })
     }
 
@@ -8638,6 +8845,14 @@ impl<'a> Run<'a> {
                 .filter(|a| !shape.choices_of(a).is_empty())
                 .cloned()
                 .collect();
+            let change = change_so_far(
+                &self.tree,
+                &self.case.dir,
+                || events.read(),
+                None,
+                self.change_scan.as_ref(),
+                out,
+            )?;
             let mut context = StepContext {
                 tree: &self.tree,
                 intent: &self.options.intent,
@@ -8648,6 +8863,7 @@ impl<'a> Run<'a> {
                 protocol: &self.case.protocol,
                 step: self.steps as usize,
                 time_left: None,
+                change: &change,
             };
             // The step is judged by what it did to the tree, against a checkpoint taken just
             // before it: `HEAD`, the index, every path already uncommitted (a validator's run
