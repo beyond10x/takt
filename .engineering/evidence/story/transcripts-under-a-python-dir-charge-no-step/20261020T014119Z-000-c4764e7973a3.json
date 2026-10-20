@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-20T01:41:19Z",
+  "actor": "human:timo",
+  "artifact": "story:transcripts-under-a-python-dir-charge-no-step",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check on wave/18 at d1c62415: 1416 passed, 0 failed"
+  }
+}
