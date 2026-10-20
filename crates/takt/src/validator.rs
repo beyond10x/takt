@@ -767,8 +767,9 @@ pub const DEFAULT_PROJECT: &str = ".engineering/assertions-project.yaml";
 /// What the gates observe runs from the tree only while the base revision and the observed one
 /// agree on it: with a project file, the executables and catalogs it admits, every file its
 /// commands take as an argument, the tool configuration ([`GATE_TOOL_CONFIG`]), the `[lints]`
-/// and `[workspace.lints]` tables of every cargo manifest ([`lint_changes`]) and the judge
-/// surface the test command's is compared on. One that differs, was added or was deleted runs
+/// and `[workspace.lints]` tables of every cargo manifest ([`lint_changes`]), what Python loads
+/// from the tree for its commands ([`python_paths`]) and the judge surface the test command's is
+/// compared on. One that differs, was added or was deleted runs
 /// nothing and writes no record; the summary names it.
 ///
 /// Code that runs while cargo builds (a build script, a procedural macro, a dependency's) is
@@ -894,6 +895,190 @@ fn argument_paths(project: &str) -> Result<Vec<String>> {
         }
     }
     Ok(inside_tree(&paths))
+}
+
+/// What Python loads from the tree for the commands and providers a project file admits, read
+/// as the step guard reads a test command ([`crate::run::scripts_of`]): each binding's words,
+/// its `env` before them as `NAME=VALUE`, and again from each word that names a Python on (a
+/// wrapper's command). The first of the pair is paths, the second globs ([`crate::run::parse_judge_list`]):
+///
+/// - In the directory a Python script runs from, which Python puts first on its import path
+///   (the script's own directory; the directory itself for `python3 <dir>`, which runs its
+///   `__main__.py`): every module, compiled module and `*.pth` file directly in it, and every
+///   package, a directory there holding a module directly, whole ([`python_dir`]). A script is a
+///   path the guard names, in an import directory of its own, that the base or the revision
+///   holds as a file run by a Python (its `#!` line names one, or a Python runs the command and
+///   no other `#!` line does) or as a directory with a `__main__.py`.
+/// - What `python -m a.b` runs, in the directory the command runs in and in every `PYTHONPATH`
+///   entry the binding sets: `a.py`, `a.*` and the package `a/` whole, and the `*.pth` files
+///   there, the globs the guard names for it. Not every module of those directories: the
+///   directory a gate runs in is the tree's root and a `PYTHONPATH` entry is as often the code
+///   the gate checks (`src`), and comparing all of it would leave every gate that runs Python
+///   over that code not run once a step changed it. A name the Python imports from outside the
+///   tree stays the step guard's to refuse there.
+///
+/// What a line the guard cannot read would guard ([`crate::run::FAIL_CLOSED`]) is not taken:
+/// the gate compares what its commands name, as it did.
+fn python_paths(
+    tree: &Path,
+    at: &str,
+    revision: &str,
+    project: &str,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(project).context("read the project file")?;
+    let mut bindings: Vec<&serde_yaml_ng::Value> = Vec::new();
+    if let Some(commands) = doc["commands"].as_mapping() {
+        bindings.extend(commands.values());
+    }
+    if let Some(providers) = doc["providers"].as_mapping() {
+        bindings.extend(providers.values().map(|provider| &provider["command"]));
+    }
+    let mut dirs: Vec<String> = Vec::new();
+    let mut globs: Vec<String> = Vec::new();
+    for binding in bindings {
+        let Some(executable) = binding["executable"].as_str() else {
+            continue;
+        };
+        let mut words: Vec<String> = vec![executable.to_owned()];
+        words.extend(
+            binding["args"]
+                .as_sequence()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_yaml_ng::Value::as_str)
+                .map(str::to_owned),
+        );
+        let env: Vec<String> = binding["env"]
+            .as_mapping()
+            .into_iter()
+            .flatten()
+            .filter_map(|(name, value)| Some(format!("{}={}", name.as_str()?, value.as_str()?)))
+            .collect();
+        let pythons: Vec<usize> = (0..words.len())
+            .filter(|&k| crate::run::python_like(&words[k]))
+            .collect();
+        let mut commands: Vec<Vec<String>> = vec![[env.clone(), words.clone()].concat()];
+        commands.extend(
+            pythons
+                .iter()
+                .filter(|&&k| k > 0)
+                .map(|&k| [env.clone(), words[k..].to_vec()].concat()),
+        );
+        for (k, command) in commands.iter().enumerate() {
+            let named = crate::run::scripts_of(command, tree);
+            let imports: Vec<&str> = named
+                .iter()
+                .filter_map(|path| path.strip_suffix(crate::run::IMPORTS))
+                .map(|dir| dir.trim_end_matches('/'))
+                .collect();
+            // The globs of a command a Python runs: what `-m` runs and the start-up files.
+            if k > 0 || pythons.first() == Some(&0) {
+                globs.extend(
+                    named
+                        .iter()
+                        .filter(|path| path.contains('*') && !path.contains('('))
+                        .filter(|path| !crate::run::FAIL_CLOSED.contains(&path.as_str()))
+                        .cloned(),
+                );
+            }
+            let runs_python = !pythons.is_empty();
+            for path in named.iter().filter(|path| !path.contains(['*', '?', '('])) {
+                let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+                // What `-m` runs is named with its compiled forms beside it (`a.py`, `a.*`): a
+                // module the directory it runs in holds, not a script.
+                let module = path
+                    .strip_suffix(".py")
+                    .is_some_and(|stem| named.contains(&format!("{stem}.*")));
+                if !imports.contains(&parent) || module {
+                    continue;
+                }
+                if let Some(dir) = python_script(tree, at, revision, path, runs_python)? {
+                    dirs.push(dir);
+                }
+            }
+        }
+    }
+    dirs.sort();
+    dirs.dedup();
+    let mut paths = Vec::new();
+    for dir in dirs {
+        paths.extend(python_dir(tree, at, revision, &dir)?);
+    }
+    globs.sort();
+    globs.dedup();
+    Ok((paths, globs))
+}
+
+/// The directory Python imports from first when it runs `path` (relative to the tree), when the
+/// base `at` or `revision` holds it as a Python script ([`python_paths`]): the script's own
+/// directory, or the directory itself when it holds a `__main__.py`. With `runs_python`, a
+/// Python runs the command, and a file whose `#!` line names no other program is its script.
+fn python_script(
+    tree: &Path,
+    at: &str,
+    revision: &str,
+    path: &str,
+    runs_python: bool,
+) -> Result<Option<String>> {
+    let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+    let mut script = false;
+    for commit in [at, revision] {
+        let Some(object) = object_at(tree, commit, path)? else {
+            continue;
+        };
+        if object.starts_with("040000 ") {
+            for main in ["__main__.py", "__main__.pyc"] {
+                if object_at(tree, commit, &format!("{path}/{main}"))?.is_some() {
+                    return Ok(Some(path.to_owned()));
+                }
+            }
+            continue;
+        }
+        let text = file_at(tree, commit, Path::new(path))?.unwrap_or_default();
+        script |= match text.strip_prefix("#!") {
+            Some(line) => crate::run::interpreter_of(line)
+                .is_some_and(|interpreter| crate::run::python_like(&interpreter)),
+            None => runs_python,
+        };
+    }
+    Ok(script.then(|| parent.to_owned()))
+}
+
+/// What Python may import from `dir` (relative to the tree, `""` its root) at the base `at` or at
+/// `revision`: every module, compiled module and `*.pth` file directly in it, and every directory
+/// there that holds a module directly, a package (or a namespace package's part), by its path,
+/// which the comparison takes whole.
+fn python_dir(tree: &Path, at: &str, revision: &str, dir: &str) -> Result<Vec<String>> {
+    let prefix = if dir.is_empty() {
+        String::new()
+    } else {
+        format!("{dir}/")
+    };
+    let module = |name: &str| {
+        name.contains('.') && (name.ends_with(".pth") || crate::run::module_of(name).is_some())
+    };
+    let mut paths = Vec::new();
+    for commit in [at, revision] {
+        let mut args = vec!["ls-tree", "-r", "-z", "--name-only", "--full-tree", commit];
+        if !dir.is_empty() {
+            args.extend(["--", dir]);
+        }
+        let listed = crate::git::bytes(tree, &args)?;
+        for path in nul_fields(&listed, "ls-tree", false)? {
+            let Some(rest) = path.strip_prefix(&prefix) else {
+                continue;
+            };
+            match rest.split('/').collect::<Vec<_>>().as_slice() {
+                [name] if module(name) => paths.push(path.to_owned()),
+                [package, name] if module(name) => paths.push(format!("{prefix}{package}")),
+                _ => {}
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
 /// The tool configuration a gate's commands read from the tree, by file name at any depth:
@@ -1216,6 +1401,11 @@ impl GateRun {
                     files.push(argument);
                 }
             }
+            // What Python loads from the tree for the gate's commands ([`python_paths`]).
+            let (python, python_globs) =
+                python_paths(tree, &at, revision, text).with_context(read)?;
+            files.extend(python);
+            globs.extend(python_globs);
             for file in files {
                 if file.contains(['*', '?', '\\']) || file.trim() != file {
                     if object_at(tree, &at, &file)? != object_at(tree, revision, &file)? {

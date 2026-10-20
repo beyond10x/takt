@@ -39,6 +39,10 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ### Gates
 
+- `gate.run` compares at the base what Python loads for a gate's commands: every module, `*.pth`
+  file and package in a script's own directory or the directory `python3 <dir>` runs, and the
+  module and package `python -m a.b` runs, from the directory the command runs in and each
+  `PYTHONPATH` entry the binding sets.
 - `gate.run` with a project file compares at the case's pinned base, besides the executables and
   catalogs it admits, every file a gate command takes as an argument, the tool configuration
   (`.cargo/config`, `.cargo/config.toml`, `clippy.toml`, `.clippy.toml`, `rustfmt.toml`,
@@ -73,6 +77,11 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ### Fixed
 
+- A transcripts directory that cannot be made is named as the transcripts directory, and the
+  directories takt made before the failure get no step refused.
+- With `PYTHONUSERBASE`, a `PYTHONPATH` entry or `XDG_STATE_HOME` placing the transcripts inside a
+  Python import directory, no step is refused for the transcripts takt writes; a step that writes
+  anything else there still is.
 - `takt run` on an empty home (a CI runner, a container, a new machine) no longer has its first
   harness step refused for `~/.local`: the transcripts directory is made when the run opens, and
   a run that cannot make it keeps no transcript and says so.
