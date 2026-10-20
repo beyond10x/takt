@@ -56,14 +56,21 @@ const config: Config = {
   ],
 
   themeConfig: {
+    image: 'img/og.png',
+    metadata: [
+      {property: 'og:image:width', content: '1200'},
+      {property: 'og:image:height', content: '630'},
+      {property: 'og:image:alt', content: 'takt: the model does the work, a validator decides whether it counts.'},
+      {name: 'twitter:image:alt', content: 'takt: the model does the work, a validator decides whether it counts.'},
+    ],
     navbar: {
       title: 'takt',
       items: [
-        {to: '/docs/', label: 'Docs', position: 'left', activeBaseRegex: '^/takt/docs/$'},
-        {to: '/docs/concepts/protocol-and-case', label: 'Concepts', position: 'left'},
-        {to: '/docs/guides/run-a-story', label: 'Guides', position: 'left'},
-        {to: '/docs/self-improvement/the-loop', label: 'Self-improvement', position: 'left'},
-        {to: '/docs/reference/cli', label: 'Reference', position: 'left'},
+        {to: '/docs/', label: 'Docs', position: 'left', activeBasePath: '/docs'},
+        {to: '/docs/concepts/protocol-and-case', label: 'Concepts', position: 'left', activeBasePath: '/docs/concepts'},
+        {to: '/docs/guides/run-a-story', label: 'Guides', position: 'left', activeBasePath: '/docs/guides'},
+        {to: '/docs/self-improvement/the-loop', label: 'Self-improvement', position: 'left', activeBasePath: '/docs/self-improvement'},
+        {to: '/docs/reference/cli', label: 'Reference', position: 'left', activeBasePath: '/docs/reference'},
         {to: '/docs/status', label: 'Status', position: 'left'},
         {href: 'pathname:///takt/protocols/', label: 'Protocols', position: 'left'},
         {href: 'https://github.com/beyond10x/takt', label: 'GitHub', position: 'right'},

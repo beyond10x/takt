@@ -1,7 +1,8 @@
 // Screenshots every page of the built site at 1440 and 390 px wide with headless Chrome, and fails
-// when a page scrolls horizontally, when any HTML or SVG text renders below 11 px, when two
-// text boxes of one chart intersect, when a page logs a console error or a request of it fails,
-// or when a page does not follow the reader's colour mode choice stored by the site.
+// when a page scrolls horizontally, when any HTML text, a ::before's or ::after's included, renders
+// below 12 px or a chart's SVG text below 11 px, when two text boxes of one chart intersect, when
+// a page logs a console error or a request of it fails, or when a page does not follow the
+// reader's colour mode choice stored by the site.
 //
 //   node website/scripts/site-check.mjs [--out <dir>]
 //
@@ -21,7 +22,10 @@ const website = join(dirname(fileURLToPath(import.meta.url)), '..');
 const build = join(website, 'build');
 const BASE = '/takt/';
 const WIDTHS = [1440, 390];
+// A chart's text (SVG, scaled with its chart) and every other text: the floor custom.css raises
+// the docs-system's small labels to.
 const MIN_PX = 11;
+const MIN_TEXT_PX = 12;
 
 const outArg = process.argv.indexOf('--out');
 const out = resolve(outArg > 0 ? process.argv[outArg + 1] : join(website, '.site-check'));
@@ -73,7 +77,7 @@ function pages() {
 }
 
 // Runs in the page. Returns the page's failures as strings.
-function inspect(minPx) {
+function inspect(floors) {
   const failures = [];
   const doc = document.documentElement;
   if (doc.scrollWidth > window.innerWidth) {
@@ -101,6 +105,13 @@ function inspect(minPx) {
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   const small = new Map();
   const seen = new Set();
+  const note = (el, px, floor, text, part = '') => {
+    if (px >= floor) return;
+    const key = `${floor} px: ${selector(el)}${part} at ${px.toFixed(1)} px`;
+    const entry = small.get(key) ?? {n: 0, text};
+    entry.n += 1;
+    small.set(key, entry);
+  };
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const text = node.textContent.trim();
     if (!text) continue;
@@ -108,15 +119,21 @@ function inspect(minPx) {
     if (!el || seen.has(el) || ['TITLE', 'STYLE', 'SCRIPT', 'DESC'].includes(el.tagName.toUpperCase())) continue;
     seen.add(el);
     if (!visible(el)) continue;
-    const px = parseFloat(getComputedStyle(el).fontSize) * scaleOf(el);
-    if (px < minPx) {
-      const key = `${selector(el)} at ${px.toFixed(1)} px`;
-      const entry = small.get(key) ?? {n: 0, text};
-      entry.n += 1;
-      small.set(key, entry);
+    const chart = el instanceof SVGElement || Boolean(el.closest('foreignObject'));
+    note(el, parseFloat(getComputedStyle(el).fontSize) * scaleOf(el), chart ? floors.chart : floors.text, text);
+  }
+  // Text a stylesheet draws, a ::before's or ::after's content: a code block's language, a card's
+  // counter.
+  for (const el of document.body.querySelectorAll('*')) {
+    if (el instanceof SVGElement || !visible(el)) continue;
+    for (const part of ['::before', '::after']) {
+      const style = getComputedStyle(el, part);
+      if (style.display === 'none' || style.visibility === 'hidden') continue;
+      const drawn = (style.content === 'none' || style.content === 'normal' ? '' : style.content).replace(/url\([^)]*\)/g, '').replace(/["']/g, '').trim();
+      if (drawn) note(el, parseFloat(style.fontSize), floors.text, drawn, part);
     }
   }
-  for (const [key, {n, text}] of small) failures.push(`text below ${minPx} px: ${key}, ${n} element(s), e.g. "${text.slice(0, 40)}"`);
+  for (const [key, {n, text}] of small) failures.push(`text below ${key}, ${n} element(s), e.g. "${text.slice(0, 40)}"`);
   let chart = 0;
   for (const svg of document.querySelectorAll('svg')) {
     if (svg.parentElement && svg.parentElement.closest('svg')) continue;
@@ -178,7 +195,7 @@ async function main() {
         const response = await page.goto(origin + path, {waitUntil: 'networkidle'});
         await page.evaluate(() => document.fonts.ready);
         await page.waitForTimeout(300);
-        const failures = response && response.ok() ? await page.evaluate(inspect, MIN_PX) : [`answered ${response ? response.status() : 'nothing'}`];
+        const failures = response && response.ok() ? await page.evaluate(inspect, {chart: MIN_PX, text: MIN_TEXT_PX}) : [`answered ${response ? response.status() : 'nothing'}`];
         for (const e of errors) failures.push(e.slice(0, 160));
         const slug = path.slice(BASE.length).replace(/\/$/, '').replace(/\//g, '__') || 'index';
         await page.screenshot({path: join(dir, `${slug}.png`), fullPage: true, timeout: 180000});

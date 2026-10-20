@@ -3,7 +3,7 @@
   "product": {
     "name": "takt",
     "mark": "Tk",
-    "eyebrow": "Agentic coding under a protocol · early",
+    "eyebrow": "Agentic coding under a protocol\u00a0·\u00a0early",
     "promise": [
       "The model does the work.",
       "A validator decides whether it counts."
@@ -15,7 +15,7 @@
       {"label": "Measured results", "href": "/docs/self-improvement/runs"},
       {"label": "What exists today", "href": "/docs/status"}
     ],
-    "meta": "One Rust binary · Canon protocols · Claude Code harness · Apache-2.0",
+    "meta": "One Rust binary\u00a0·\u00a0Canon protocols\u00a0·\u00a0Claude Code harness\u00a0·\u00a0Apache-2.0",
     "kpis": [
       {"count": "shipped", "label": "stories implemented"},
       {"count": "decided", "label": "stories in an open wave"}
@@ -67,6 +67,7 @@
           "title": "An operating-system sandbox for every child process",
           "description": "The harness, the tests and the forge run as plain child processes today. The confinement seam is planned.",
           "status": "planned",
+          "icon": "action",
           "href": "/docs/status"
         }
       ]
