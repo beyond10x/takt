@@ -7,6 +7,12 @@
 //! command that fails holds `gate.green` false and opens no pull request. The tools are stubs
 //! (see [`World`]), the forge and the harness doubles on the program path; nothing reaches a
 //! network or a model, and takt's own tests are not run from here.
+//!
+//! story:gate-exec-is-readable-by-the-gate: `gate-exec` is a Python program, not a shell
+//! script, so the command reader the step guard and the gate share takes it whole and compared
+//! at the base instead of failing closed on its branches: a delivery changing a Python file, a
+//! shell file or a program no gate command runs is judged by the gate, and one changing a script
+//! a gate command runs still stops it, naming the script.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -206,6 +212,12 @@ struct World {
 
 /// The world `name`; the gate's `cargo` stub exits 1 when `clippy_fails`.
 fn world(name: &str, clippy_fails: bool) -> World {
+    world_editing(name, clippy_fails, "")
+}
+
+/// The world `name`, whose claude double runs the shell lines `edit` in the repository with
+/// each implementation step, beside its line in `work.txt`.
+fn world_editing(name: &str, clippy_fails: bool, edit: &str) -> World {
     let (scratch, outer) = scratch(name);
     let repo = outer.join("repo");
     copy_dir(&Path::new(FIXTURES).join("one-ready"), &repo);
@@ -252,7 +264,7 @@ fn world(name: &str, clippy_fails: bool) -> World {
         &["init", "-q", "-b", "main", "--bare", "remote.git"],
     );
     let bin = outer.join("stub-bin");
-    doubles(&bin, &state, &outer.join("remote.git"));
+    doubles(&bin, &state, &outer.join("remote.git"), edit);
     stub(&bin, "cargo", &outer.join("test-log"), 0);
     let tools = outer.join("cargo-home/bin");
     stub(&tools, "ess", &log, 0);
@@ -288,8 +300,8 @@ fn world(name: &str, clippy_fails: bool) -> World {
 /// answers pull request `k`. `gh pr view` reports it open at the commit last pushed for its
 /// head; `gh pr checks` one check, passing. `claude` appends a line to `work.txt` and answers
 /// `implementation.edit`, takes `change.handover` once `work.txt` exists, and answers
-/// `repository.merge` once an approval is offered.
-fn doubles(bin: &Path, state: &Path, remote: &Path) {
+/// `repository.merge` once an approval is offered; with each line it adds, it runs `edit`.
+fn doubles(bin: &Path, state: &Path, remote: &Path, edit: &str) {
     let state = state.display().to_string();
     let remote = remote.display().to_string();
     executable(
@@ -365,16 +377,22 @@ exit 2
     executable(
         bin,
         "claude",
-        r#"#!/bin/sh
+        &format!(
+            r#"#!/bin/sh
+work() {{
+  echo "the work" >> work.txt
+  {edit}
+}}
 case "$2" in
   *"These need an approval"*) action=repository.merge ;;
   *"- change.handover:"*)
     if [ -e work.txt ]; then action=change.handover;
-    else echo "the work" >> work.txt; action=implementation.edit; fi ;;
-  *) echo "the work" >> work.txt; action=implementation.edit ;;
+    else work; action=implementation.edit; fi ;;
+  *) work; action=implementation.edit ;;
 esac
-printf '{"result":"{\\"action\\": \\"%s\\", \\"summary\\": \\"the double\\"}","usage":{"input_tokens":1}}' "$action"
-"#,
+printf '{{"result":"{{\\"action\\": \\"%s\\", \\"summary\\": \\"the double\\"}}","usage":{{"input_tokens":1}}}}' "$action"
+"#
+        ),
     );
 }
 
@@ -597,6 +615,156 @@ fn a_failing_gate_command_holds_the_gate_red_and_opens_no_pull_request() {
         !out.contains("stopped: Completed") && !out.contains("ApprovalRequired"),
         "stdout {out} stderr {err}"
     );
+}
+
+/// The steps of a run's stdout, `step <n>: <action> …`, each with the effect line it wrote
+/// (`  effect: …`), in order.
+fn step_effects(out: &str) -> Vec<(String, Option<String>)> {
+    let mut steps: Vec<(String, Option<String>)> = Vec::new();
+    for line in out.lines() {
+        if let Some(effect) = line.strip_prefix("  effect: ") {
+            if let Some(last) = steps.last_mut() {
+                last.1 = Some(effect.to_owned());
+            }
+        } else if let Some((n, rest)) = line
+            .strip_prefix("step ")
+            .and_then(|rest| rest.split_once(": "))
+            && !n.is_empty()
+            && n.bytes().all(|b| b.is_ascii_digit())
+        {
+            let action = rest.split_whitespace().next().unwrap_or_default();
+            steps.push((action.to_owned(), None));
+        }
+    }
+    steps
+}
+
+/// The effect lines of a run's stdout for the steps of `action`, in order.
+fn effects(out: &str, action: &str) -> Vec<String> {
+    step_effects(out)
+        .into_iter()
+        .filter(|(step, _)| step == action)
+        .filter_map(|(_, effect)| effect)
+        .collect()
+}
+
+/// The paths the delivery's commits changed, on any branch of the scratch repository.
+fn delivered(world: &World) -> Vec<String> {
+    git(
+        &world.repo,
+        &["log", "--all", "--format=", "--name-only", "main.."],
+    )
+    .lines()
+    .filter(|line| !line.is_empty())
+    .map(str::to_owned)
+    .collect()
+}
+
+/// story:gate-exec-is-readable-by-the-gate: the command reader the step guard and the gate share
+/// reads every command of takt's gates document with certainty, so a delivery that changes a
+/// Python file, a shell file and a program no gate command runs is judged by its gate: each gate
+/// run's summary names no fail-closed reason, the gate runs its four commands and passes, and the
+/// run reaches `pr.open`.
+#[test]
+fn a_delivery_changing_an_unrelated_python_file_is_judged_by_takts_gate() {
+    let world = world_editing(
+        "unrelated-python",
+        false,
+        "mkdir -p tools && printf 'X = 1\\n' >> tools/unrelated.py && printf 'echo x\\n' >> tools/unrelated.sh && printf '#!/bin/sh\\n' > tools/run && chmod +x tools/run",
+    );
+    let (code, out, err) = world.deliver(&["--iterations", "20"]);
+    let changed = delivered(&world);
+    for path in ["tools/unrelated.py", "tools/unrelated.sh", "tools/run"] {
+        assert!(
+            changed.iter().any(|changed| changed == path),
+            "the delivery changes {path}: {changed:?}; stdout {out} stderr {err}"
+        );
+    }
+    let gate_effects = effects(&out, "gate.run");
+    assert!(
+        !gate_effects.is_empty(),
+        "the gate runs: exit {code} stdout {out} stderr {err}"
+    );
+    for effect in &gate_effects {
+        assert!(
+            !effect.contains("fail closed") && !effect.contains("not run"),
+            "no gate line of takt's fails closed, and the gate runs: {effect}"
+        );
+    }
+    let steps = steps(&out);
+    let gates: Vec<&Vec<String>> = steps
+        .iter()
+        .filter(|(action, _)| action == "gate.run")
+        .map(|(_, evidence)| evidence)
+        .collect();
+    assert!(
+        gates
+            .iter()
+            .all(|evidence| *evidence == &["gate_result pass"]),
+        "every gate run passes: stdout {out} stderr {err}"
+    );
+    let mut ran = world.log("gate-log");
+    ran.sort();
+    let mut expected: Vec<String> = gates.iter().flat_map(|_| gate_commands()).collect();
+    expected.sort();
+    assert_eq!(ran, expected, "stdout {out}");
+    assert!(
+        steps.iter().any(|(action, _)| action == "pr.open"),
+        "pr.open is reached: stdout {out} stderr {err}"
+    );
+    world.assert_no_planted_python();
+}
+
+/// A delivery that changes a script a gate command runs, `gate-exec` itself or the citations
+/// check it hands to `python3`, still stops the gate: from the implementation on, nothing is
+/// run, and each gate run's summary names the script and no fail-closed reason.
+#[test]
+fn a_delivery_changing_a_script_a_gate_runs_stops_the_gate_naming_it() {
+    for (name, script) in [
+        ("gate-exec-changed", GATE_EXEC),
+        ("citations-changed", "scripts/check-citations"),
+    ] {
+        let world = world_editing(name, false, &format!("printf '# the step\\n' >> {script}"));
+        let (code, out, err) = world.deliver(&["--iterations", "8"]);
+        assert!(
+            delivered(&world).iter().any(|changed| changed == script),
+            "the delivery changes {script}: exit {code} stdout {out} stderr {err}"
+        );
+        let steps = step_effects(&out);
+        let edit = steps
+            .iter()
+            .position(|(action, _)| action == "implementation.edit")
+            .unwrap_or_else(|| panic!("the implementation: stdout {out} stderr {err}"));
+        let gate_runs = |steps: &[(String, Option<String>)]| -> Vec<String> {
+            steps
+                .iter()
+                .filter(|(action, _)| action == "gate.run")
+                .map(|(_, effect)| effect.clone().unwrap_or_default())
+                .collect()
+        };
+        let after = gate_runs(&steps[edit..]);
+        assert!(
+            !after.is_empty()
+                && after.iter().all(|effect| {
+                    effect.contains("not run")
+                        && effect.contains(script)
+                        && !effect.contains("fail closed")
+                }),
+            "every gate run after the implementation stops, naming {script} and no fail-closed reason: stdout {out} stderr {err}"
+        );
+        // Only the gate runs before the implementation ran the gate's commands.
+        let before = gate_runs(&steps[..edit]).len();
+        assert_eq!(
+            world.log("gate-log").len(),
+            before * gate_commands().len(),
+            "no gate command ran after the implementation: stdout {out}"
+        );
+        assert!(
+            !out.lines().any(|line| line.contains(": pr.open")),
+            "no pull request is opened: stdout {out}"
+        );
+        assert_eq!(world.pull_requests(), 0, "stdout {out} stderr {err}");
+    }
 }
 
 /// Runs a copy of `gate-exec` at `<repo>/scripts/gate-exec` with `args`, the environment

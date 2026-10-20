@@ -228,6 +228,7 @@ fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
                 held_out: None,
                 opened_binary: None,
                 completed: None,
+                step_tokens: Default::default(),
             })
             .collect(),
         no_record: Vec::new(),

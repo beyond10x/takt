@@ -333,6 +333,7 @@ fn an_unperformable_stop_is_no_completion() {
         binary: None,
         opened_binary: None,
         completed: None,
+        step_tokens: Default::default(),
     };
     assert!(!row.disagrees());
 }

@@ -7,6 +7,7 @@
     "no_progress": 1,
     "outcome": 3,
     "refusals": 1,
+    "step_tokens": 1,
     "steps": 1,
     "tokens": 1,
     "wall": 1

@@ -65,6 +65,16 @@ pub enum Stop {
     Hours(f64),
     /// The token budget is spent.
     Tokens(u64),
+    /// The active-time budget is spent ([`Run::cap_active_time`]): the run's wall time less its
+    /// waits on the forge reached the budget, read before a step.
+    ActiveTime {
+        /// The budget, in seconds.
+        budget: u64,
+        /// The run's active time when it stopped, in seconds.
+        active: f64,
+        /// The time it waited on the forge, left out of the active time, in seconds.
+        waited: f64,
+    },
     /// The harness did something the frontier did not admit; its change was discarded.
     StepRefused(String),
     /// A judgement step changed no file and the decision did not move: another step would not either.
@@ -117,7 +127,7 @@ pub enum Stop {
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
 /// and fails to compile when one is added without its name here.
-pub const STOP_KINDS: [&str; 10] = [
+pub const STOP_KINDS: [&str; 11] = [
     "ApprovalRequired",
     "NothingAdmissible",
     "Iterations",
@@ -128,6 +138,7 @@ pub const STOP_KINDS: [&str; 10] = [
     "Waiting",
     "Unperformable",
     "DiskLow",
+    "ActiveTime",
 ];
 
 /// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
@@ -149,6 +160,14 @@ impl std::fmt::Display for Stop {
             Stop::Iterations(n) => write!(f, "Iterations ({n})"),
             Stop::Hours(h) => write!(f, "Hours ({h})"),
             Stop::Tokens(t) => write!(f, "Tokens ({t})"),
+            Stop::ActiveTime {
+                budget,
+                active,
+                waited,
+            } => write!(
+                f,
+                "ActiveTime ({budget} s; active {active:.1} s, waited {waited:.1} s on the forge)"
+            ),
             Stop::StepRefused(why) => write!(f, "StepRefused ({why})"),
             Stop::NoProgress => write!(f, "NoProgress"),
             Stop::Waiting { on, budget, local } => match budget {
@@ -6515,6 +6534,69 @@ pub fn default_transcripts() -> Option<PathBuf> {
         .map(|dir| dir.join("takt").join("transcripts"))
 }
 
+/// Where `takt replay` records each replay of a step when it is given no directory
+/// ([`crate::replay`]), outside every repository and every case directory:
+/// `$XDG_STATE_HOME/takt/replays` (`~/.local/state/takt/replays` without it). None when
+/// neither is set.
+#[must_use]
+pub fn default_replays() -> Option<PathBuf> {
+    crate::promotion::state_dir()
+        .ok()
+        .map(|dir| dir.join("takt").join("replays"))
+}
+
+/// What a judgement step at one decision is offered, as [`Run::run`] offers it: the actions,
+/// the approval it may request, and the actions among them that record a choice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Offer {
+    /// The actions offered ([`StepContext::offered`]).
+    pub offered: Vec<String>,
+    /// The approval-required actions it may request ([`StepContext::approvals`]): the gate's,
+    /// when it needs an approval at the decision.
+    pub approvals: Vec<String>,
+    /// Of the offered actions, those that record a choice ([`StepContext::choices`]).
+    pub choices: Vec<String>,
+}
+
+/// The offer [`Run::run`] makes a judgement step at `decision` of a case under `protocol` with
+/// `inputs`, to a harness that keeps state between steps or not (`keeps_state`), with the
+/// approval gate `gate`: the admissible actions the harness may take ([`Shape::for_harness`],
+/// [`Shape::for_stateless`]), the gate when it is approval-required, and the choices among the
+/// offered. A run also leaves out the actions its validators own; every built-in validator's
+/// action produces a kind only a validator writes and is left out here too, but a run's own
+/// validator of another action is not known from the record, which is why `takt replay`
+/// compares the prompt it builds with the recorded one before it runs anything.
+pub fn judgement_offer(
+    protocol: &LoadedProtocol,
+    inputs: &[(String, String)],
+    decision: &crate::Decision,
+    keeps_state: bool,
+    gate: Option<&str>,
+) -> Result<Offer> {
+    let shape = Shape::of(protocol, inputs)?;
+    let offered: Vec<String> = decision
+        .admissible()
+        .into_iter()
+        .filter(|a| shape.for_harness(a))
+        .filter(|a| keeps_state || shape.for_stateless(a))
+        .collect();
+    let approvals = decision
+        .approval_required()
+        .into_iter()
+        .filter(|a| gate == Some(a.as_str()))
+        .collect();
+    let choices = offered
+        .iter()
+        .filter(|a| !shape.choices_of(a).is_empty())
+        .cloned()
+        .collect();
+    Ok(Offer {
+        offered,
+        approvals,
+        choices,
+    })
+}
+
 /// The subject of the commit that records a take on the case's branch: `takt: take <story>`.
 #[must_use]
 pub fn take_subject(story: &str) -> String {
@@ -6714,6 +6796,10 @@ pub struct Run<'a> {
     /// [`Run::record_on`] gives one, and only a story's run writes to it.
     store: Option<&'a dyn Frontier>,
     started: Instant,
+    /// The active-time budget, in seconds: none until [`Run::cap_active_time`] gives one.
+    active_cap: Option<u64>,
+    /// How long the run has paused on the forge so far: the waits its active time leaves out.
+    waited: Duration,
     options: RunOptions,
     /// The files outside the tree that decide how cargo and rustup build and run the tests
     /// ([`Outside`]), as the run found them when it began.
@@ -6862,6 +6948,8 @@ impl<'a> Run<'a> {
             transcripts: None,
             store: None,
             started: Instant::now(),
+            active_cap: None,
+            waited: Duration::ZERO,
             outside: Outside::read(tree, &outside_dirs)?,
             outside_dirs,
             options,
@@ -7118,6 +7206,8 @@ impl<'a> Run<'a> {
             transcripts: None,
             store: None,
             started: Instant::now(),
+            active_cap: None,
+            waited: Duration::ZERO,
             outside: Outside::read(tree, &outside_dirs)?,
             outside_dirs,
             options,
@@ -7393,7 +7483,39 @@ impl<'a> Run<'a> {
         {
             return Some(Stop::Tokens(t));
         }
+        if let Some(budget) = self.active_cap {
+            let active = self.active_time();
+            if active.as_secs_f64() >= budget as f64 {
+                return Some(Stop::ActiveTime {
+                    budget,
+                    active: active.as_secs_f64(),
+                    waited: self.waited.as_secs_f64(),
+                });
+            }
+        }
         None
+    }
+
+    /// Caps the run's active time ([`Run::active_time`]) at `seconds`: read before every step,
+    /// as the token budget is, so a step under way runs to its end and the run stops
+    /// [`Stop::ActiveTime`] before the next. Waits on the forge spend none of it, and it is no
+    /// bound on them: a run with no step or hour budget still has nothing to wait in. Without
+    /// this call the run's active time is not capped. The CLI calls it with `--active-seconds`.
+    pub fn cap_active_time(&mut self, seconds: u64) {
+        self.active_cap = Some(seconds);
+    }
+
+    /// The run's active time: its wall time since it was opened or resumed, less the time it
+    /// paused on the forge.
+    #[must_use]
+    pub fn active_time(&self) -> Duration {
+        self.started.elapsed().saturating_sub(self.waited)
+    }
+
+    /// How long the run has paused on the forge since it was opened or resumed.
+    #[must_use]
+    pub fn waited(&self) -> Duration {
+        self.waited
     }
 
     /// For a run given no approval gate, the gate its case's protocol names for the case's
@@ -8458,7 +8580,9 @@ impl<'a> Run<'a> {
                     pause.as_secs_f64(),
                     on.join(", ")
                 )?;
+                let paused = Instant::now();
                 std::thread::sleep(pause);
+                self.waited += paused.elapsed();
                 for (name, _, revision, _) in &awaited {
                     observed_without_record.remove(&(name.clone(), revision.clone()));
                 }

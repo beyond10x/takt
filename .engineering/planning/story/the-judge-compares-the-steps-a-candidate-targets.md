@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-judge-compares-the-steps-a-candidate-targets
 kind: story
-status: draft
+status: implemented
 title: The judge compares the steps a candidate targets, with the whole run kept not worse
 summary: a candidate that halved its targeted step's tokens was rejected because unrelated steps moved the run median
 tags:
@@ -10,7 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T04:01:42Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-20T04:01:42Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-20T05:16:24Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: the-judge-compares-the-steps-a-candidate-targets
 

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:gate-exec-is-readable-by-the-gate
 kind: story
-status: draft
+status: implemented
 title: takt's own gate commands are readable by the gate's command reader
 summary: scripts/gate-exec's if/case lines make every takt gate fail closed on any Python or shell change
 tags:
@@ -10,7 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T04:01:41Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-20T04:01:41Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-20T05:16:23Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: gate-exec-is-readable-by-the-gate
 

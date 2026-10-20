@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-re-trial-stops-when-its-verdict-is-decided
 kind: story
-status: draft
+status: implemented
 title: A re-trial runs on after its verdict is decided, and no run's active time is capped
 tags:
 - finding
@@ -13,7 +13,11 @@ refs:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T04:01:42Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-20T04:01:42Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-20T05:16:23Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # A re-trial runs on after its verdict is decided, and no run's active time is capped
 

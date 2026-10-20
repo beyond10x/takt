@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-20T05:16:23Z",
+  "actor": "human:timo",
+  "artifact": "story:a-step-replays-from-its-recorded-state",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check on wave/20 at a89a4ece: 1478 passed, 0 failed, 17 ignored"
+  }
+}

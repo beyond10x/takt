@@ -1,54 +1,64 @@
-#!/bin/sh
-# gate-exec <tool> [<arg>...]: runs one command of takt's gates document
-# (.engineering/gates.yaml). The gate runs it with the environment cleared and no PATH;
-# takt's gate validator sets CARGO_HOME to the invoking user's Cargo home. The tool is looked
-# up on the system directories first, then that home's bin directory, so a file in the
-# user-writable Cargo bin cannot shadow python3 or another system tool; rustup's cargo proxy
-# in the system directories still resolves the toolchain, and ess is found in the Cargo bin.
-# A tool that resolves, after symlinks, inside this repository is refused. That is all this
-# script vouches for: cargo clippy compiles and runs build code the step wrote, so the gate
-# cannot vouch for code that runs at build time; the merge of such a change stays guarded by
-# the owner. Exits with the tool's status, or 2 for a usage error, 126 for a refused tool and
-# 127 for a tool not found.
-set -eu
+#!/usr/bin/python3 -I
+"""gate-exec <tool> [<arg>...]: runs one command of takt's gates document.
 
-if [ "$#" -eq 0 ]; then
-    echo "gate-exec: no tool named" >&2
-    exit 2
-fi
+The gates document is .engineering/gates.yaml. The gate runs this with the environment cleared
+and no PATH; takt's gate validator sets CARGO_HOME to the invoking user's Cargo home. The tool
+is looked up on the system directories first, then that home's bin directory, so a file in the
+user-writable Cargo bin cannot shadow python3 or another system tool; rustup's cargo proxy in
+the system directories still resolves the toolchain, and ess is found in the Cargo bin. A tool
+that resolves, after symlinks, inside this repository is refused. That is all this script
+vouches for: cargo clippy compiles and runs build code the step wrote, so the gate cannot vouch
+for code that runs at build time; the merge of such a change stays guarded by the owner.
 
-system=/usr/local/bin:/usr/bin:/bin
-case "${CARGO_HOME-}" in
-    "") PATH=$system ;;
-    /*) PATH=$system:$CARGO_HOME/bin ;;
-    *)
-        echo "gate-exec: CARGO_HOME is not an absolute path: $CARGO_HOME" >&2
-        exit 2
-        ;;
-esac
-export PATH
+Written in Python, not shell, so the command reader the step guard and the gate share takes it
+whole, compared at the base, instead of failing closed on the branches a shell script needs.
+Python runs isolated (-I): no PYTHON* variable, no user site, not this directory on the import
+path; it imports only from its standard library.
 
-root=$(cd -P "$(dirname "$0")/.." && pwd -P)
-name=$1
-shift
+Exits with the tool's status, or 2 for a usage error, 126 for a refused tool or one that
+cannot be run, and 127 for a tool not found.
+"""
 
-if ! tool=$(command -v "$name"); then
-    echo "gate-exec: $name: not found on $PATH" >&2
-    exit 127
-fi
-case "$tool" in
-    /*) ;;
-    *)
-        echo "gate-exec: $name: not a program on $PATH ($tool)" >&2
-        exit 126
-        ;;
-esac
-resolved=$(PATH=$system realpath "$tool")
-case "$resolved" in
-    "$root"/*)
-        echo "gate-exec: $name resolves inside the repository, refused: $resolved" >&2
-        exit 126
-        ;;
-esac
+import os
+import shutil
+import sys
 
-exec "$tool" "$@"
+SYSTEM = ("/usr/local/bin", "/usr/bin", "/bin")
+
+
+def fail(message: str, code: int) -> int:
+    print(f"gate-exec: {message}", file=sys.stderr)
+    return code
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2 or not argv[1]:
+        return fail("no tool named", 2)
+    cargo_home = os.environ.get("CARGO_HOME", "")
+    path = list(SYSTEM)
+    if cargo_home:
+        if not cargo_home.startswith("/"):
+            return fail(f"CARGO_HOME is not an absolute path: {cargo_home}", 2)
+        path.append(f"{cargo_home}/bin")
+    search = os.pathsep.join(path)
+    os.environ["PATH"] = search
+
+    root = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(argv[0])), ".."))
+    name = argv[1]
+    tool = shutil.which(name, path=search)
+    if tool is None:
+        return fail(f"{name}: not found on {search}", 127)
+    if not tool.startswith("/"):
+        return fail(f"{name}: not a program on {search} ({tool})", 126)
+    resolved = os.path.realpath(tool)
+    if resolved.startswith(root + "/"):
+        return fail(f"{name} resolves inside the repository, refused: {resolved}", 126)
+    try:
+        os.execv(tool, [tool, *argv[2:]])
+    except OSError as error:
+        return fail(f"{name}: {tool} cannot be run: {error.strerror}", 126)
+    return 126
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

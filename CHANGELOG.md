@@ -6,36 +6,108 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-20
+
+The minor version moves because a run can stop `ActiveTime`, a stored baseline is judged again
+only after `takt promote --rebaseline`, a commit identity the forge's scan refuses stops a run at
+open, and a gate line the reader cannot read fails closed.
+
 ### Changed
 
-- `takt run --help`: `--forge none` names the `Unperformable` stop, exit 7, when only a forge
-  action is left, instead of saying the harness takes them.
-- A step that writes `.engineering/commit-identity.conf` is refused naming the commit identity
-  file, no longer as a write into the planning store.
-- `scripts/check-finding` builds and runs one check at a time per cache directory under a `flock`
-  on `takt/check-finding/lock`, says when it waits, and refuses, exit 1, before building when that
-  file system has less than `CHECK_FINDING_MIN_FREE_GIB` GiB free (20 by default; CI sets 0).
+- `takt run` and `takt scenario run` through the bot route scan the commit identity with the
+  forge's scan when they open or resume a case, before step 1 (for a scenario run, before its
+  trial base is pushed): an identity the scan refuses exits 1, naming where the identity came
+  from and the refusal, with no step taken and nothing pushed. Before, the scan refused it only
+  at the first push. With no policy or no `b10x-gates` to scan with, the run prints
+  `not scanned` and opens; `--forge none` scans nothing.
+- The scorecard gains the metric `step_tokens` (definition version 1), each run's tokens by step
+  action. A baseline stored before it has no version for the metric and is refused, so the next
+  promotion needs `takt promote --rebaseline` first; a takt that does not know the metric (0.4.0)
+  refuses a scorecard saved under it.
+- `gate.run` fails closed on a line its reader cannot read with certainty (a glob or brace word
+  where it names what runs, an option it does not know, another input a shell reads as its
+  script on the same command, standard input from a duplicated descriptor, a redirection form it
+  does not know): the gate compares every Python file, shell file and program at the base, so a
+  change to any of them stops it, and the summary names why. A gate running a shell script with
+  such lines stops on every such change; takt's own `gate-exec` did, through its `if` and `case`
+  lines, until it became a Python program (below).
 - `gate.run` compares a Python script run through `sh -c`, a shell script, `exec` (its options
   read), or a shell whose standard input the same command redirects or pipes from a tree file
   (`sh < FILE`, `cat FILE | sh`, a descriptor before a redirection read as part of it: `2>&1`,
   `0<`), and what it imports, as it compares one run directly (0.4.0's known limit,
-  story:gate-compares-python-run-through-a-shell). Of the 34 shell forms the wave's review probed,
+  story:gate-compares-python-run-through-a-shell). Of the 34 shell forms wave 19's review probed,
   26 are closed and 3 run the code under work at the tree's root by decision; of 22 further forms
-  the confirm probed, 20 are closed; of 33 redirect forms, 30 are read or fail closed. These 11
-  forms still let a change decide the gate, each an ignored test naming
+  the confirm probed, 20 are closed; of 33 redirect forms, 30 are read or fail closed. The 11
+  forms that still let a change decide the gate are under Known limits.
+- takt's own gates run through `scripts/gate-exec`, now a Python program (`/usr/bin/python3 -I`,
+  standard library only) the gate compares whole at the base, so they need `/usr/bin/python3`.
+  A delivery changing a Python file, shell file or program no gate command runs is judged by
+  takt's gate; one changing `gate-exec` or `scripts/check-citations` still stops it, naming the
+  file (story:gate-exec-is-readable-by-the-gate).
+- `scripts/check-finding` builds and runs one check at a time per cache directory under a `flock`
+  on `takt/check-finding/lock`, says when it waits, and refuses, exit 1, before building when that
+  file system has less than `CHECK_FINDING_MIN_FREE_GIB` GiB free (20 by default; CI sets 0). It
+  reads the free space before it waits and again once it holds the lock.
+
+### Added
+
+- `takt run` and `takt scenario run` take `--active-seconds <n>`: a budget on a run's wall time
+  less its waits on the forge, read before each step, so a step under way runs to its end. Over
+  it the run stops `ActiveTime`, naming the budget, the active time and the wait time, exit 3,
+  and the case stays open. `ActiveTime` is a stop 0.4.0 does not have: a runner that resumes a
+  case stopped with 3 resumes this one too, and the resumed run's active time starts again from
+  0. A scorecard ranks `ActiveTime` with `NoProgress`, below the budget stops.
+- `takt scorecard --against <saved> --steps <action>[,...]` judges the steps a candidate targets:
+  a step is better when every candidate case is below the saved side's cheapest such step, or a
+  one-sided exact Mann-Whitney U test (ties against the candidate, at least 5 cases a side) rejects
+  equality at p <= 1/20; the whole run must stay not worse. Better on its steps but worse on the
+  run is refused, exit 3; not worse but not better on a step is exit 4. A saved scorecard without
+  the `step_tokens` metric is refused, exit 1.
+- `takt replay --case <dir> --step <n> [--times <k>]` runs one judgement step of a recorded case
+  again from its recorded state, in a scratch worktree at the revision it started at. It checks the
+  rebuilt prompt against the recorded transcript first, when one is found (a mismatch exits 3 and
+  runs nothing), records each replay as `takt-replay/1` outside the case and the tree, and leaves
+  the case untouched. A replay whose harness failed exits 5, the error in its record.
+  A link in the revision's tree, among the case's evidence or decisions, or at its `intent.md` or
+  `protocol.yaml` is refused, never followed; `--out` is taken as an absolute path, and inside the
+  tree the case lies in it is refused even with `--repo`.
+
+### Fixed
+
+- `takt scorecard --steps`: a harness step that recorded no tokens is unknown, not 0. A targeted
+  step unknown on either side is refused, exit 1, naming the case and the step, so a missing
+  record no longer judges a candidate better; a saved scorecard records it as `null`.
+- `takt run --help`: `--forge none` names the `Unperformable` stop, exit 7, when only a forge
+  action is left, instead of saying the harness takes them.
+- A step that writes `.engineering/commit-identity.conf` is refused naming the commit identity
+  file, no longer as a write into the planning store (0.4.0's known limit,
+  story:commit-identity-refusal-names-the-identity-file).
+
+### Repository
+
+- The trial agent's profile (`.agents/trial-agent.md`) adds a pre-flight before each set of runs,
+  a token and an active-time cap per run, an early stop once a set's verdict is decided, a rule
+  that parks a candidate for the per-step judge instead of re-trialling it, and reports to a
+  monitor the owner names.
+
+### Known limits
+
+- Run-level tokens still read a harness step that recorded no tokens as 0, so a missing record
+  reads as a saving; promotions wait for story:run-tokens-unknown-is-not-zero, and no promotion
+  is made on 0.5.0.
+- These 11 shell forms still let a change decide the gate, each an ignored test naming
   story:the-gate-reads-every-shell-form: `PYTHONPATH` set in the line, by `export` or in a sourced
   file; `cd dir && python3 -m x`; `env -C dir python3 -m x`; a script named on `xargs`'s input;
   `cd dir && python3 -c …` and `cd dir && python3 - < x.py`; and `exec 0< FILE; sh`,
   `exec < FILE; sh`, `exec < FILE; bash`, where a redirection-only `exec` sets the shell's input
   for the commands after it. Wrapper programs the reader does not know (`taskset`, `chrt`,
   `unbuffer`, `script -qec`, `uv run`, `env -S`, `pytest`) and `env PYTHONPATH=…` slip too and are
-  listed in that story. A line the reader cannot read with certainty (a glob or brace word where it
-  names what runs, an option it does not know, another input a shell reads as its script on the
-  same command, standard input from a duplicated descriptor, a redirection form it does not know)
-  makes the gate compare every Python file, shell file and program, and the summary names why.
-  takt's own gates run through `scripts/gate-exec`, whose lines the reader cannot follow, so a
-  delivery that changes a `.py`, `.sh` or program file stops takt's own gates until
-  story:gate-exec-is-readable-by-the-gate.
+  listed in that story.
+- 0.4.0's other known limits still hold: build-time code, and
+  story:a-squash-merge-before-the-grant-is-refused, story:a-turn-pins-the-repository-of-its-forge,
+  story:a-tipless-judge-grant-names-its-way-past,
+  story:a-candidate-stays-reachable-while-a-turn-names-it and
+  story:view-joins-own-transcripts-and-writes-a-private-page.
 
 ## [0.4.0] — 2026-10-20
 

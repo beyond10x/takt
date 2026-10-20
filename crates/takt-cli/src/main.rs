@@ -100,6 +100,187 @@ enum Commands {
     /// latest record's revision before anything is judged.
     #[command(after_help = PROMOTE_EXIT_CODES)]
     Promote(PromoteArgs),
+    /// Replay one judgement step of a recorded case from the state it started from: the
+    /// revision it started at, the case's evidence, decisions and record up to it, and the
+    /// prompt it was given, rebuilt from the case's record and compared byte for byte with the
+    /// first line of the step's recorded transcript before anything runs. Each replay runs the
+    /// harness (`claude`) once in a scratch worktree of the repository at that revision,
+    /// detached, removed afterwards, and is recorded outside the case and the repository's tree
+    /// as `replay.json` (`takt-replay/1`) and `transcript.jsonl`. The case directory is only
+    /// read.
+    #[command(after_help = REPLAY_EXIT_CODES)]
+    Replay(ReplayArgs),
+}
+
+#[derive(clap::Args)]
+struct ReplayArgs {
+    /// The case directory, `<repo>/.engineering/cases/<id>`; only read.
+    #[arg(long, value_name = "DIR")]
+    case: PathBuf,
+    /// The step to replay, as the case's record numbers it in its run: a judgement step, one
+    /// whose line is the harness's.
+    #[arg(long, value_name = "N")]
+    step: u64,
+    /// How many times the step is replayed, each in a scratch worktree of its own.
+    #[arg(long, value_name = "K", default_value_t = 1,
+          value_parser = clap::value_parser!(u32).range(1..))]
+    times: u32,
+    /// The run of the case the step is in, from 1 (the run that opened it); needed only when
+    /// several runs record a step of that number.
+    #[arg(long, value_name = "R")]
+    run: Option<u64>,
+    /// The repository that holds the case's commits; without it, the tree the case directory
+    /// lies in.
+    #[arg(long, value_name = "DIR")]
+    repo: Option<PathBuf>,
+    /// The transcripts directory the recorded step's transcript is read in; without it
+    /// `$XDG_STATE_HOME/takt/transcripts`, where `takt run` keeps them.
+    #[arg(long, value_name = "DIR")]
+    transcripts: Option<PathBuf>,
+    /// Where the replays are recorded, one directory `replay-<k>` each, none there yet;
+    /// outside the case directory and the repository's tree. Without it
+    /// `$XDG_STATE_HOME/takt/replays/<repo-key>/<case>/run-<r>/step-<n>/<instant>`.
+    #[arg(long, value_name = "DIR")]
+    out: Option<PathBuf>,
+    /// The harness's model, when it takes one.
+    #[arg(long)]
+    model: Option<String>,
+    /// The approval gate the recorded run was given (`takt run --gate`); without it, the
+    /// case's protocol's default, as `takt run` takes it.
+    #[arg(long)]
+    gate: Option<String>,
+}
+
+/// Exit 3 of `takt replay`: the prompt rebuilt from the record is not the recorded one.
+const EXIT_PROMPT_DIFFERS: u8 = 3;
+
+/// What `takt replay --help` says about the exit codes.
+const REPLAY_EXIT_CODES: &str = "Exit codes:
+  0  replayed, each replay recorded; the prompt was the recorded one byte for byte, or no recorded transcript was found to compare with (said on stdout)
+  1  refused, nothing run and nothing written: the case or its record does not read, the record holds no such step or holds it in several runs (give --run), the step is not a judgement step (a validator's, or one that recorded no harness step line), the record names no revision or decision for it, the replays directory is inside the case, the tree it lies in or the repository's tree, or a replay's directory is there already, a link stands on the way to or inside the rebuilt case, among its evidence or decisions, or at the case's intent.md or protocol.yaml (an empty replay directory may be left), or the scratch worktree cannot be made; the reason on stderr
+  2  the arguments do not parse
+  3  the prompt rebuilt from the record differs from the first line of the recorded step's transcript; nothing run
+  5  replayed and recorded, but the harness failed in at least one replay; its error is in that replay's record";
+
+/// `takt replay`: the step's starting state read from the case's record, the rebuilt prompt
+/// compared with the recorded one, then each replay run and recorded
+/// ([`takt::replay::replay_once`]).
+fn replay(args: ReplayArgs, out: &mut dyn Write) -> Result<u8> {
+    let case_dir = args
+        .case
+        .canonicalize()
+        .with_context(|| format!("the case directory {}", args.case.display()))?;
+    let repo = match &args.repo {
+        Some(repo) => repo
+            .canonicalize()
+            .with_context(|| format!("the repository {}", repo.display()))?,
+        None => takt::replay::tree_of(&case_dir)?,
+    };
+    let start = takt::replay::starting_state(&case_dir, args.step, args.run)?;
+    let gate = args
+        .gate
+        .clone()
+        .or_else(|| start.protocol.default_gate(&start.inputs));
+    let claude = ClaudeCode {
+        model: args.model.clone(),
+        ..ClaudeCode::default()
+    };
+    let recorded = match args
+        .transcripts
+        .clone()
+        .or_else(takt::run::default_transcripts)
+    {
+        Some(root) => takt::replay::recorded_prompt_line(&start, &root, &repo)?,
+        None => None,
+    };
+    let rebuilt = takt::replay::rebuilt_prompt_line(&claude, &start, gate.as_deref())?;
+    writeln!(
+        out,
+        "step {} of run {} of case {} ({} recorded): revision {} from {}; decision {}",
+        start.step,
+        start.run,
+        start.case,
+        start.action,
+        start.revision,
+        start.revision_from,
+        start.decision_file
+    )?;
+    match &recorded {
+        Some((path, line)) if *line == rebuilt => {
+            writeln!(out, "prompt: as recorded in {}", path.display())?;
+        }
+        Some((path, line)) => {
+            let at = line
+                .iter()
+                .zip(&rebuilt)
+                .position(|(a, b)| a != b)
+                .unwrap_or_else(|| line.len().min(rebuilt.len()));
+            eprintln!(
+                "takt: the prompt rebuilt for step {} differs from the recorded one in {} from byte {at} ({} bytes recorded, {} rebuilt); nothing is replayed",
+                start.step,
+                path.display(),
+                line.len(),
+                rebuilt.len()
+            );
+            return Ok(EXIT_PROMPT_DIFFERS);
+        }
+        None => writeln!(
+            out,
+            "prompt: no recorded transcript of the step was found; not compared"
+        )?,
+    }
+    let base = match &args.out {
+        // Absolute now: git resolves a relative path inside the repository, not where takt checked it.
+        Some(dir) => std::path::absolute(dir)?,
+        None => takt::run::default_replays()
+            .ok_or_else(|| {
+                anyhow!("no replays directory: neither XDG_STATE_HOME nor HOME is set; give --out")
+            })?
+            .join(takt::harness::repo_key(&repo)?)
+            .join(&start.case)
+            .join(format!("run-{}", start.run))
+            .join(format!("step-{}", start.step))
+            .join(takt::events::instant().replace(':', "")),
+    };
+    takt::replay::check_out_dir(&base, &case_dir, &repo)?;
+    let recorded_line = recorded.as_ref().map(|(_, line)| line.as_slice());
+    let mut failed = false;
+    for k in 1..=args.times {
+        let replayed = takt::replay::replay_once(
+            &start,
+            &repo,
+            &claude,
+            gate.as_deref(),
+            &base.join(format!("replay-{k}")),
+            recorded_line,
+        )?;
+        let changed = if replayed.changed.is_empty() {
+            "nothing".to_owned()
+        } else {
+            replayed.changed.join(", ")
+        };
+        match &replayed.result {
+            Ok(action) => writeln!(
+                out,
+                "replay {k}: {action}; tokens {}; changed {changed}; prompt {}; recorded in {}",
+                replayed
+                    .tokens
+                    .map_or("not reported".to_owned(), |tokens| tokens.to_string()),
+                replayed.prompt,
+                replayed.dir.display()
+            )?,
+            Err(why) => {
+                failed = true;
+                writeln!(
+                    out,
+                    "replay {k}: error: {why}; prompt {}; recorded in {}",
+                    replayed.prompt,
+                    replayed.dir.display()
+                )?;
+            }
+        }
+    }
+    Ok(if failed { EXIT_ERROR } else { EXIT_DONE })
 }
 
 #[derive(clap::Args)]
@@ -206,14 +387,33 @@ struct ScorecardArgs {
     /// of the medians.
     #[arg(long, value_name = "FILE")]
     against: Option<PathBuf>,
+    /// With --against, judge the candidate on the steps it targets, by action (the actions its
+    /// finding names), comma-separated: per scenario and action, each case's tokens at the step
+    /// on each side and the saved side's cheapest; a step is better when every candidate case is
+    /// below the saved cheapest, or a one-sided exact Mann-Whitney U test (a tie counts against
+    /// the candidate) rejects equality at p <= 1/20 with 5 cases a side or more. A case of
+    /// either side that took no step of the action is named and the step is not better. The
+    /// whole run is still judged as --against judges it: better on its steps but worse on the
+    /// run is refused, naming both. Both scorecards must be under the step_tokens definition. A
+    /// targeted step whose tokens a harness step did not record is unknown, never 0: it refuses
+    /// the judgement, naming the case and the step.
+    #[arg(
+        long,
+        value_name = "ACTION",
+        value_delimiter = ',',
+        num_args = 1..,
+        requires = "against"
+    )]
+    steps: Vec<String>,
 }
 
 /// What `takt scorecard --help` says about the exit codes.
 const SCORECARD_EXIT_CODES: &str = "Exit codes:
-  0  printed (and saved); with --against, no scenario is worse than the saved one
-  1  refused: the repository, a case's events.jsonl, or the saved scorecard does not read (a binary.txt that does not read leaves its case's runs stating no binary, the case listed with the reason); a scenario case has no held-out.txt beside its record, or one that does not read or states no result (the case named); --save without --revision, or under a --revision that is not the full commit id (40 lower-case hex digits), onto a file that exists, or that cannot be written; --save with a run made with another binary than the --revision's (the run named; its `opened` line names another revision or the revision -dirty, or names none, no `binary` or `unknown revision`, beside runs that name one), nothing written; with --against, a scenario the saved scorecard has with fewer cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), or any scenario with fewer on this side, none included (`too few cases (<n> of <trials>)`), or a scenario the saved scorecard lacks, however many its cases here (`not in the saved scorecard`): no verdict given, as a promotion refuses; with --against, no scenario case on either side (`no scenario case`), nothing compared; a saved scorecard with a run whose outcome disagrees with its held-out result; the reason on stderr
+  0  printed (and saved); with --against, no scenario is worse than the saved one; with --steps too, better on every targeted step as well
+  1  refused: the repository, a case's events.jsonl, or the saved scorecard does not read (a binary.txt that does not read leaves its case's runs stating no binary, the case listed with the reason); a scenario case has no held-out.txt beside its record, or one that does not read or states no result (the case named); --save without --revision, or under a --revision that is not the full commit id (40 lower-case hex digits), onto a file that exists, or that cannot be written; --save with a run made with another binary than the --revision's (the run named; its `opened` line names another revision or the revision -dirty, or names none, no `binary` or `unknown revision`, beside runs that name one), nothing written; with --against, a scenario the saved scorecard has with fewer cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), or any scenario with fewer on this side, none included (`too few cases (<n> of <trials>)`), or a scenario the saved scorecard lacks, however many its cases here (`not in the saved scorecard`): no verdict given, as a promotion refuses; with --against, no scenario case on either side (`no scenario case`), nothing compared; a saved scorecard with a run whose outcome disagrees with its held-out result; with --steps, a saved scorecard with no step_tokens definition (saved before it) or under another version, or an empty action; with --steps, a scenario case of either side whose tokens at a targeted step are unknown, a harness step of it having recorded no tokens (the case and the step named), nothing judged; the reason on stderr
   2  the arguments do not parse
-  3  with --against: a scenario is worse: at some outcome rank its cases at that rank or better fall short of the saved share by more than the rule's margin, or its median of tokens exceeds the saved maximum (a scenario with no run on this side is exit 1, too few cases)";
+  3  with --against: a scenario is worse: at some outcome rank its cases at that rank or better fall short of the saved share by more than the rule's margin, or its median of tokens exceeds the saved maximum (a scenario with no run on this side is exit 1, too few cases); with --steps, whatever the steps: refused, naming the steps' result and the scenarios worse on the run
+  4  with --steps: no scenario is worse on the run, but a targeted step is not better (or no case on either side took it)";
 
 #[derive(clap::Args)]
 struct TraceArgs {
@@ -408,6 +608,13 @@ struct LoopArgs {
     /// Stop once the harness reported this many tokens.
     #[arg(long)]
     tokens: Option<u64>,
+    /// Stop once the run's active time, its wall time less the time it waits on the forge
+    /// between two reads, reaches this many seconds; read before every step, so a step under way
+    /// runs to its end. The run stops `ActiveTime` naming the budget, the active time and the
+    /// time waited, exit 3. Waits on the forge spend none of it, and it bounds none: a run with
+    /// no --iterations or --hours still has nothing to wait in.
+    #[arg(long, value_name = "SECONDS")]
+    active_seconds: Option<u64>,
     /// The test command, split at white space, run without a shell.
     #[arg(long, default_value = "cargo test --quiet")]
     test_cmd: String,
@@ -519,7 +726,7 @@ const EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
   1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress; the case stays open
+  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused or NoProgress; the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and the next run resumes it
@@ -532,7 +739,7 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate)
   1  refused before the run (an argument, the repository, the scenario, its seed, its story not ready there, its trial base or its case); the reason on stderr, no step run
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress; the case stays open
+  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused or NoProgress; the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
@@ -606,20 +813,29 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             Ok(EXIT_DONE)
         }
         Commands::Scenario(ScenarioCommands::Run(args)) => scenario_run(*args, out),
+        Commands::Replay(args) => replay(args, out),
         Commands::Scorecard(ScorecardArgs {
             repo,
             save,
             revision,
             against,
+            steps,
         }) => {
-            let worse = takt::scorecard::report(
+            let reported = takt::scorecard::report(
                 &repo,
                 save.as_deref(),
                 revision.as_deref(),
                 against.as_deref(),
+                &steps,
                 out,
             )?;
-            Ok(if worse > 0 { 3 } else { EXIT_DONE })
+            Ok(if reported.worse > 0 {
+                3
+            } else if reported.steps == Some(takt::scorecard::StepVerdict::NotBetter) {
+                4
+            } else {
+                EXIT_DONE
+            })
         }
         Commands::Trace(TraceArgs {
             case,
@@ -978,6 +1194,18 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             validators.push(Box::new(takt::improvement::CandidateMerged::judge_surface(
                 mainline,
             )));
+            // Through the bot route the identity the run's commits carry is scanned, as the push
+            // would scan it, after every refusal of what was given and before the case opens or
+            // resumes: before step 1.
+            if let Some(forge) = &forge.forge
+                && let Some((identity, source)) = identity_at_open(
+                    &repo,
+                    looping.commit_identity.as_ref(),
+                    resuming.as_ref().map(|resuming| resuming.id.as_str()),
+                )?
+            {
+                scan_identity_at_open(forge.as_ref(), &repo, &identity, &source, out)?;
+            }
             let forge_line = forge.line;
             let store = Aep::default();
             // The unit: the case to resume, the intent given, or else the open case of an
@@ -1063,6 +1291,11 @@ impl LoopArgs {
         {
             return Err(anyhow!(
                 "--hours is {hours}: an hour budget is a finite number above 0"
+            ));
+        }
+        if self.active_seconds == Some(0) {
+            return Err(anyhow!(
+                "--active-seconds is 0: an active-time budget is a number of seconds above 0"
             ));
         }
         Ok(())
@@ -1383,6 +1616,9 @@ fn finish(
         eprintln!("no step transcript is kept: {error:#}");
     }
     run.take_default_gate();
+    if let Some(seconds) = looping.active_seconds {
+        run.cap_active_time(seconds);
+    }
     run.stop_when_unperformable();
     run.stop_when_disk_below(
         looping.min_free_gib.saturating_mul(1 << 30),
@@ -1694,6 +1930,12 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         return Err(takt::git::no_identity(&declared_on))
             .with_context(|| format!("scenario {}", scenario.id));
     }
+    let identity_source = if looping.commit_identity.is_some() {
+        "--commit-identity".to_owned()
+    } else {
+        format!("{} at {declared_on}", takt::git::COMMIT_IDENTITY_FILE)
+    };
+    let scanned_identity = identity.clone();
     let commit_as = identity.map_or(takt::case::CommitAs::Takt, takt::case::CommitAs::Given);
     // The fetch is read-only and comes first, so the number is chosen and checked once, on
     // everything the checkout knows after it, and before anything is cut or pushed.
@@ -1766,6 +2008,12 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         let story = Aep::default().show(&repo, &scenario.story)?;
         let mut validators = validators_of(&repo, &looping, None)?;
         forge.register(&mut validators);
+        // Through the bot route the identity is scanned, as the push would scan it, before the
+        // trial base is pushed or any step is taken.
+        if let (Some(forge), Some(identity)) = (&forge.forge, &scanned_identity) {
+            scan_identity_at_open(forge.as_ref(), &repo, identity, &identity_source, out)
+                .with_context(|| format!("scenario {}", scenario.id))?;
+        }
         if let Some(trials) = &forge.trials {
             trials.create(&repo, &trial).with_context(|| {
                 format!(
@@ -2064,6 +2312,75 @@ fn refuse_identity_for_resume(
             dir.display(),
             takt::git::COMMIT_IDENTITY_FILE
         ));
+    }
+    Ok(())
+}
+
+/// The identity a `takt run` in `repo` commits with, and where it comes from: `given`
+/// (`--commit-identity`), else the one the resumed case `resuming` was opened with, else the one
+/// the repository configures at the commit a new case forks from (the base of the case whose
+/// branch the tree is on, or `HEAD`). `None` when there is none, or the commit is not found:
+/// opening the case then refuses or commits as takt's own, as it did before this scan.
+fn identity_at_open(
+    repo: &Path,
+    given: Option<&takt::git::CommitIdentity>,
+    resuming: Option<&str>,
+) -> Result<Option<(takt::git::CommitIdentity, String)>> {
+    if let Some(given) = given {
+        return Ok(Some((given.clone(), "--commit-identity".to_owned())));
+    }
+    if let Some(id) = resuming {
+        let recorded = takt::case::commit_identity_of(&repo.join(takt::case::CASES_DIR).join(id))?;
+        return Ok(recorded.map(|identity| (identity, format!("the case {id}"))));
+    }
+    let from = takt::git::current_branch(repo)?
+        .as_deref()
+        .and_then(|branch| branch.strip_prefix(takt::case::BRANCH_PREFIX))
+        .filter(|other| takt::case::check_id(other).is_ok())
+        .and_then(|other| {
+            takt::case::Branch::read(&repo.join(takt::case::CASES_DIR).join(other))
+                .ok()
+                .and_then(|branch| branch.base)
+        });
+    let Ok(base) = takt::git::run(
+        repo,
+        &["rev-parse", "--verify", from.as_deref().unwrap_or("HEAD")],
+    ) else {
+        return Ok(None);
+    };
+    let at = &base[..12.min(base.len())];
+    let source = format!("{} at {at}", takt::git::COMMIT_IDENTITY_FILE);
+    Ok(takt::git::configured_identity(repo, &base)?.map(|identity| (identity, source)))
+}
+
+/// Scans `identity`, which a run's commits carry off the machine, taken from `source`, with the
+/// scan `forge` runs before a push ([`Forge::scan_identity`]), when the run opens: before step
+/// 1, before its case opens or its trial base is cut. The text scanned is kept under the state
+/// directory while the scan runs, never in `repo`. A refusal ends the run, naming the scan's;
+/// a scan that cannot run (no policy) says "not scanned" on `out`, and the run opens.
+fn scan_identity_at_open(
+    forge: &dyn Forge,
+    repo: &Path,
+    identity: &takt::git::CommitIdentity,
+    source: &str,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let dir = takt::promotion::store()?
+        .with_file_name("identity-scans")
+        .join(std::process::id().to_string());
+    let scanned = forge.scan_identity(repo, &dir, identity);
+    let _ = std::fs::remove_dir_all(&dir);
+    let scanned = scanned.with_context(|| {
+        format!(
+            "{source} gives the commit identity {identity}, which this run's commits would carry off the machine, and it did not pass the bot route's scan; give an identity the scan passes (--commit-identity '<name> <email>', or `identity.name` and `identity.email` in {}); no step was taken, nothing was written or pushed",
+            takt::git::COMMIT_IDENTITY_FILE
+        )
+    })?;
+    if let takt::forge::IdentityScan::NotScanned(why) = scanned {
+        writeln!(
+            out,
+            "commit identity: {identity} from {source} not scanned ({why}); the scan before the push still applies"
+        )?;
     }
     Ok(())
 }

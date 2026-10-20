@@ -1,6 +1,6 @@
 # Wave 19: the gate reads Python through a shell, check-finding runs one at a time, the trial agent reports
 
-Stage: **closing**. Shape: one dispatcher in one checkout, one wave branch `wave/19` cut from
+Stage: **closed**. Shape: one dispatcher in one checkout, one wave branch `wave/19` cut from
 `main`, implementor sub-agents in the shared tree, one adversarial review and one full gate before
 the close. Every unit is a judge surface.
 
@@ -26,3 +26,4 @@ the close. Every unit is a judge surface.
 - 2026-10-20: `task check` at e28ac930: exit 0, 1429 passed, 0 failed, 11 ignored. The five stories moved to implemented. A delivery on takt that changes a `.py`, `.sh` or program file stops takt's own gates until story:gate-exec-is-readable-by-the-gate, wave 20's first unit.
 - 2026-10-20: the confirm at 5159fe81: needs-revision; a descriptor before a redirection (`sh < FILE 2>&1`, `sh 0< FILE`) let a change decide the gate. Fix round 2: 126498f7 reads it as part of the redirection; of 22 further probed forms 20 are closed, 2 (`cd` forms) filed. `task check` at 126498f7: exit 0, 1437 passed, 0 failed, 11 ignored.
 - 2026-10-20: the final confirm at 2984e771: the redirect forms hold; `exec 0< FILE; sh` (and two siblings) and `env -C dir python3 -m x` slip, at `main` too, while the changelog claimed the class closed. Corrected by documentation, not code: the four forms and the two `cd` forms are ignored tests naming story:the-gate-reads-every-shell-form (eleven in all), and the changelog states the counts.
+- 2026-10-20: the confirm at e6098140: approve; granted under the owner's standing exception; merged into `main` as 78205d97. check.yml on 78205d97 failed one CLI unit test (`.local` made by a parallel run); fixed on `main` as acdee7ba, green.
