@@ -443,31 +443,22 @@ fn two_scenario_runs_in_a_row_each_open_their_pull_request_against_their_own_tri
         world.pushed("trial/0").as_deref(),
         Some(world.seed.as_str())
     );
-    // The commit identity is scanned at open, between the fetch and the push; its path names
-    // the process, so it is matched by its start.
-    let calls: Vec<String> = world
-        .calls()
-        .into_iter()
-        .filter(|call| !call.starts_with("scan-text --repository owner/repo "))
-        .collect();
+    // The remote's trial branches are fetched, then the commit identity is scanned at open, then
+    // the base is pushed, before anything else. The scan's path names the process, so it is matched
+    // by its start and its end.
+    let calls = world.calls();
+    assert_eq!(calls.first(), Some(&FETCH_TRIALS.to_owned()), "{calls:?}");
     assert!(
-        world.calls().iter().any(
+        calls.get(1).is_some_and(
             |call| call.starts_with("scan-text --repository owner/repo ")
                 && call.ends_with("/commit-identity.txt")
         ),
-        "the commit identity is scanned at open: {:?}",
-        world.calls()
+        "the commit identity is scanned right after the fetch: {calls:?}"
     );
     assert_eq!(
-        calls.get(..2),
-        Some(
-            &[
-                FETCH_TRIALS.to_owned(),
-                "bot -- push --porcelain --force-with-lease=refs/heads/trial/0: origin refs/heads/trial/0:refs/heads/trial/0".to_owned(),
-            ][..]
-        ),
-        "the remote's trial branches are fetched, then the base is pushed, before anything else: {:?}",
-        world.calls()
+        calls.get(2),
+        Some(&"bot -- push --porcelain --force-with-lease=refs/heads/trial/0: origin refs/heads/trial/0:refs/heads/trial/0".to_owned()),
+        "the base is pushed right after the scan: {calls:?}"
     );
     assert_eq!(
         git_out(&world.remote, &["rev-parse", "refs/heads/trial/0"]),

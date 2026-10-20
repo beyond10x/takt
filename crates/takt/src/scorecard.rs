@@ -445,6 +445,7 @@ pub fn rank(outcome: &str) -> u8 {
         "ApprovalRequired" | "Waiting" => 3,
         "Iterations" | "Hours" | "Tokens" | "Unperformable" => 2,
         "error" | "unfinished" | FAILED => 0,
+        "NoProgress" | "ActiveTime" => 1,
         _ => 1,
     }
 }
@@ -477,7 +478,7 @@ const RANKS: [(u8, &str); 4] = [
     (4, "accepted"),
     (3, "ApprovalRequired or Waiting"),
     (2, "a budget stop or Unperformable"),
-    (1, "NoProgress or another stop"),
+    (1, "NoProgress, ActiveTime or another stop"),
 ];
 
 /// An event line's instant as nanoseconds since the epoch: `YYYY-MM-DDTHH:MM:SS[.f...]Z`,
