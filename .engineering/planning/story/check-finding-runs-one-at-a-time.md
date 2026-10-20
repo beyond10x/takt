@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:check-finding-runs-one-at-a-time
 kind: story
-status: draft
+status: implemented
 title: check-finding runs one build at a time per machine and refuses under 20 GiB free
 summary: parallel check-finding builds from two sessions took the root file system from 69 GiB free to under 1 GiB
 tags:
@@ -13,7 +13,11 @@ relations:
 scope:
 - confidence: cited
   path: scripts/check-finding
-revision: 3
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T01:48:34Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-20T01:48:34Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-20T03:02:45Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: check-finding-runs-one-at-a-time
 

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:trial-agent-reports-to-the-monitor
 kind: story
-status: draft
+status: implemented
 title: The trial agent reports to the owner's monitor and hands it proposals for other repositories
 summary: the trial profile lost its reporting line; ADR 0101 adds that a proposal for another repository goes to the monitor
 tags:
@@ -14,7 +14,11 @@ relations:
 scope:
 - confidence: cited
   path: .agents/trial-agent.md
-revision: 3
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T01:48:34Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-20T01:48:34Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-20T03:02:45Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: trial-agent-reports-to-the-monitor
 
