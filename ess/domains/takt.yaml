@@ -2436,7 +2436,7 @@ types:
   # tree, and the proposal that names one is refused.
   # read from: Loom 0.28.0, crates/loom-commission/src/ports/executor.rs:1-5
   # read from: crates/session-executor/src/lib.rs:40-46
-  # read from: crates/session-executor/src/lib.rs:574-583
+  # read from: crates/session-executor/src/lib.rs:587-596
   - name: takt.work.ProposedFile
     kind: struct
     fields:

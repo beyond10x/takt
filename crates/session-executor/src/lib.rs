@@ -491,8 +491,9 @@ fn result_of(printed: &str) -> Option<String> {
         .and_then(|doc| doc["result"].as_str().map(str::to_owned))
 }
 
-/// Whether a tool call is allowed: one of [`TOOLS`], every path it names inside `copy`; else
-/// the reason the model is told.
+/// Whether a tool call is allowed: one of [`TOOLS`], every path it names inside `copy`, and an
+/// Edit or Write on no path with a part named `.git` (the copy's git state, or a git directory
+/// planted in it); else the reason the model is told.
 fn decide(name: &str, input: &serde_json::Value, copy: &Path) -> Result<(), String> {
     if !TOOLS.contains(&name) {
         return Err(format!(
@@ -508,6 +509,18 @@ fn decide(name: &str, input: &serde_json::Value, copy: &Path) -> Result<(), Stri
                 "{path} is outside this directory; work only on its files"
             ));
         }
+    }
+    if matches!(name, "Edit" | "Write")
+        && let Some(path) = input.get("file_path").and_then(serde_json::Value::as_str)
+        && Path::new(path)
+            .strip_prefix(copy)
+            .unwrap_or(Path::new(path))
+            .components()
+            .any(|part| part == Component::Normal(".git".as_ref()))
+    {
+        return Err(format!(
+            "{path} is git's; work only on the files of this directory"
+        ));
     }
     if let Some(pattern) = input.get("pattern").and_then(serde_json::Value::as_str)
         && name == "Glob"
@@ -582,8 +595,9 @@ pub fn plain_relative(path: &str) -> bool {
             .all(|part| matches!(part, Component::Normal(name) if name != ".git"))
 }
 
-/// The scratch copy a session works in: `<scratch>/session-<pid>-<n>/copy`, removed when
-/// dropped.
+/// The scratch copy a session works in: `<scratch>/session-<pid>-<n>/copy`, and beside it
+/// `git`, the git directory the copy's `.git` names when the workspace has one; both removed
+/// when dropped.
 struct ScratchCopy {
     root: PathBuf,
     dir: PathBuf,
@@ -591,7 +605,8 @@ struct ScratchCopy {
 
 impl ScratchCopy {
     /// Makes the copy of `files` of `workspace` under `scratch`: each regular file with its
-    /// bytes and its executable bit; a link, a directory or a path that is not plain is left out.
+    /// bytes and its executable bit; a link, a directory or a path that is not plain is left out;
+    /// then the workspace's git state ([`Self::carry_git`]).
     fn make(scratch: &Path, workspace: &Path, files: &[String]) -> Result<Self, String> {
         use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -638,15 +653,91 @@ impl ScratchCopy {
             std::fs::set_permissions(&to, std::fs::Permissions::from_mode(mode))
                 .map_err(|error| format!("set the mode of {}: {error}", to.display()))?;
         }
+        copy.carry_git(workspace)?;
         Ok(copy)
     }
 
+    /// Gives the copy `workspace`'s git state with no git directory inside it, so a session's
+    /// Glob and Grep list one `.git` file there and never git's own files: the copy's `.git`
+    /// names `git` beside it, which holds the workspace's `HEAD`, index, refs, `packed-refs`,
+    /// `shallow` and `info/exclude`, reads its objects through `objects/info/alternates` (git
+    /// reads an alternate and writes new objects to its own directory), has an empty `hooks/`,
+    /// and a `config` of the repository format, `bare = false` and the workspace's object and
+    /// ref formats: no remote, include, hook path or monitor. Nothing of the workspace's git
+    /// directory is written. A workspace with no git directory, no `HEAD` or no objects there,
+    /// or a path git would not read back from one line, gives the copy no git state.
+    fn carry_git(&self, workspace: &Path) -> Result<(), String> {
+        use std::os::unix::ffi::OsStrExt as _;
+        let Some((own, common)) = git_dirs(workspace) else {
+            return Ok(());
+        };
+        let Ok(objects) = std::fs::canonicalize(common.join("objects")) else {
+            return Ok(());
+        };
+        let git = self.dir.with_file_name("git");
+        let one_line = |path: &Path| {
+            let bytes = path.as_os_str().as_bytes();
+            !bytes.contains(&b'\n') && !bytes.starts_with(b"\"")
+        };
+        let file = |path: &Path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file());
+        if !file(&own.join("HEAD")) || !one_line(&objects) || !one_line(&git) {
+            return Ok(());
+        }
+        for dir in ["objects/info", "refs", "hooks", "info"] {
+            let dir = git.join(dir);
+            std::fs::create_dir_all(&dir).map_err(|error| git_state_failed(&dir, &error))?;
+        }
+        for (from, name) in [
+            (&own, "HEAD"),
+            (&own, "index"),
+            (&common, "packed-refs"),
+            (&common, "shallow"),
+            (&common, "info/exclude"),
+        ] {
+            let from = from.join(name);
+            if file(&from) {
+                std::fs::copy(&from, git.join(name))
+                    .map_err(|error| git_state_failed(&from, &error))?;
+            }
+        }
+        let formats = formats(&std::fs::read_to_string(common.join("config")).unwrap_or_default());
+        copy_tree(&common.join("refs"), &git.join("refs"))?;
+        if formats.contains(&("refstorage", "reftable")) {
+            copy_tree(&common.join("reftable"), &git.join("reftable"))?;
+        }
+        let mut alternates = objects.as_os_str().as_bytes().to_vec();
+        alternates.push(b'\n');
+        let mut config = format!(
+            "[core]\n\trepositoryformatversion = {}\n\tbare = false\n",
+            u8::from(!formats.is_empty())
+        );
+        if !formats.is_empty() {
+            config.push_str("[extensions]\n");
+            for (key, value) in &formats {
+                config.push_str(&format!("\t{key} = {value}\n"));
+            }
+        }
+        let mut link = b"gitdir: ".to_vec();
+        link.extend_from_slice(git.as_os_str().as_bytes());
+        link.push(b'\n');
+        for (path, bytes) in [
+            (git.join("objects/info/alternates"), alternates),
+            (git.join("config"), config.into_bytes()),
+            (self.dir.join(".git"), link),
+        ] {
+            std::fs::write(&path, bytes).map_err(|error| git_state_failed(&path, &error))?;
+        }
+        Ok(())
+    }
+
     /// Every file of the copy that differs from `workspace`: a file `files` named whose bytes
-    /// differ or that is gone, and any file the session added. Content that is not UTF-8, or a
-    /// link the session left, is an error: a proposal carries text files only.
+    /// differ or that is gone, and any file the session added; never `.git` or a path under it,
+    /// the copy's git state, which no proposal carries. Content that is not UTF-8, or a link the
+    /// session left, is an error: a proposal carries text files only.
     fn changes(&self, workspace: &Path, files: &[String]) -> Result<Vec<ProposedFile>, String> {
         let mut found = Vec::new();
         walk(&self.dir, &self.dir, &mut found)?;
+        found.retain(|path| !Path::new(path).starts_with(".git"));
         let listed: std::collections::BTreeSet<&str> = files
             .iter()
             .filter(|file| plain_relative(file))
@@ -723,6 +814,99 @@ fn walk(root: &Path, dir: &Path, into: &mut Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// The git directory of `workspace` and its common directory: its `.git` directory, as both;
+/// for a linked work tree, the directory its `.git` file names, and the one that directory's
+/// `commondir` names. None when `.git` is neither.
+fn git_dirs(workspace: &Path) -> Option<(PathBuf, PathBuf)> {
+    let dot_git = workspace.join(".git");
+    let meta = std::fs::symlink_metadata(&dot_git).ok()?;
+    let own = if meta.is_dir() {
+        dot_git
+    } else if meta.is_file() {
+        let named = std::fs::read_to_string(&dot_git).ok()?;
+        workspace.join(named.lines().next()?.strip_prefix("gitdir:")?.trim())
+    } else {
+        return None;
+    };
+    let common = match std::fs::read_to_string(own.join("commondir")) {
+        Ok(named) => own.join(named.trim_end_matches(['\n', '\r'])),
+        Err(_) => own.clone(),
+    };
+    Some((own, common))
+}
+
+/// The formats a repository's `config` declares that decide how its files read, as git spells
+/// them: `extensions.objectformat` `sha1` or `sha256`, `extensions.refstorage` `files` or
+/// `reftable`, the last of each; any other key or value is left out.
+fn formats(config: &str) -> Vec<(&'static str, &'static str)> {
+    const KNOWN: [(&str, &str); 4] = [
+        ("objectformat", "sha1"),
+        ("objectformat", "sha256"),
+        ("refstorage", "files"),
+        ("refstorage", "reftable"),
+    ];
+    let mut section = String::new();
+    let mut found: Vec<(&'static str, &'static str)> = Vec::new();
+    for line in config.lines().map(str::trim) {
+        if let Some(header) = line.strip_prefix('[') {
+            section = header
+                .split([']', ' ', '\t', '"'])
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let value = value.split(['#', ';']).next().unwrap_or_default();
+        let value = value.trim().trim_matches('"').to_ascii_lowercase();
+        if section == "extensions"
+            && let Some(known) = KNOWN.iter().find(|(k, v)| *k == key && *v == value)
+        {
+            found.retain(|(k, _)| *k != known.0);
+            found.push(*known);
+        }
+    }
+    found
+}
+
+/// Copies every regular file under `from` to the same path under `to`, making directories as
+/// it goes; a link is left out, and a `from` that is not there copies nothing.
+fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
+    let entries = match std::fs::read_dir(from) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(git_state_failed(from, &error)),
+    };
+    std::fs::create_dir_all(to).map_err(|error| git_state_failed(to, &error))?;
+    for entry in entries {
+        let path = entry
+            .map_err(|error| git_state_failed(from, &error))?
+            .path();
+        let meta =
+            std::fs::symlink_metadata(&path).map_err(|error| git_state_failed(&path, &error))?;
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        if meta.is_dir() {
+            copy_tree(&path, &to.join(name))?;
+        } else if meta.is_file() {
+            std::fs::copy(&path, to.join(name)).map_err(|error| git_state_failed(&path, &error))?;
+        }
+    }
+    Ok(())
+}
+
+/// What failed at `path` as the scratch copy was given its git state.
+fn git_state_failed(path: &Path, error: &std::io::Error) -> String {
+    format!(
+        "give the scratch copy its git state, {}: {error}",
+        path.display()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -772,5 +956,358 @@ mod tests {
         assert!(decide("Bash", &serde_json::json!({"command": "ls"}), copy).is_err());
         let outside = serde_json::json!({"file_path": "/home/u/.bashrc"});
         assert!(decide("Write", &outside, copy).is_err());
+    }
+
+    /// A session's Edit or Write never reaches the copy's git state, nor a git directory it
+    /// would plant anywhere in the copy; reading the `.git` file, and writing `.gitignore`, is
+    /// allowed.
+    #[test]
+    fn no_file_tool_writes_a_path_under_git() {
+        let copy = Path::new("/s/copy");
+        for (name, path) in [
+            ("Write", "/s/copy/.git"),
+            ("Edit", ".git"),
+            ("Write", ".git/config"),
+            ("Write", "sub/.git/hooks/pre-commit"),
+            ("Edit", "./a/../.git/HEAD"),
+        ] {
+            let input = serde_json::json!({ "file_path": path });
+            assert!(decide(name, &input, copy).is_err(), "{name} {path}");
+        }
+        for (name, path) in [
+            ("Read", "/s/copy/.git"),
+            ("Write", ".gitignore"),
+            ("Edit", "/s/copy/.github/workflows/check.yml"),
+        ] {
+            let input = serde_json::json!({ "file_path": path });
+            assert!(decide(name, &input, copy).is_ok(), "{name} {path}");
+        }
+    }
+
+    /// `git` with `args` in `dir`, as a fixed identity and never signing; its standard output.
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
+            .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git runs");
+        assert!(
+            output.status.success(),
+            "git {args:?} in {}: {}",
+            dir.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("utf-8")
+    }
+
+    /// A directory of the test's own under the system's temporary directory, with `scratch/`
+    /// in it for the copies; removed when dropped.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("session-executor-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("scratch")).expect("a scratch directory");
+            Self(dir)
+        }
+
+        /// A copy of `tree` made as a session's is, of the files git lists there.
+        fn copy(&self, tree: &Path) -> (ScratchCopy, Vec<String>) {
+            let files = listed(tree);
+            let copy = ScratchCopy::make(&self.0.join("scratch"), tree, &files).expect("the copy");
+            (copy, files)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// The files of `tree` a session's copy holds: tracked, and untracked but not ignored.
+    fn listed(tree: &Path) -> Vec<String> {
+        git(
+            tree,
+            &[
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+            ],
+        )
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
+        .collect()
+    }
+
+    /// A repository at `dir` in the object format `objects` and the ref format `refs`: two
+    /// commits on `work`, a tag, refs packed between them; a config naming a remote, a hook path
+    /// and an include, and a hook; a change staged, one not, a tracked file removed, a file
+    /// untracked and one ignored.
+    fn repository(dir: &Path, objects: &str, refs: &str) {
+        let write = |path: &str, text: &str| {
+            let at = dir.join(path);
+            std::fs::create_dir_all(at.parent().expect("a parent")).expect("a directory");
+            std::fs::write(at, text).expect("a file");
+        };
+        std::fs::create_dir_all(dir).expect("the tree");
+        git(
+            dir,
+            &[
+                "init",
+                "-q",
+                "-b",
+                "work",
+                &format!("--object-format={objects}"),
+                &format!("--ref-format={refs}"),
+            ],
+        );
+        write(".gitignore", "target/\n");
+        write("README.md", "a story\n");
+        write("src/lib.rs", "pub fn a() {}\n");
+        write("tests/t.rs", "#[test]\nfn t() {}\n");
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-q", "-m", "start"]);
+        git(dir, &["tag", "v1"]);
+        git(dir, &["pack-refs", "--all"]);
+        write("src/lib.rs", "pub fn a() -> i32 {\n    1\n}\n");
+        git(dir, &["commit", "-q", "-am", "second"]);
+        for (key, value) in [
+            ("remote.origin.url", "https://example.invalid/r.git"),
+            ("core.hooksPath", "hooks-elsewhere"),
+            ("include.path", "nowhere.inc"),
+        ] {
+            git(dir, &["config", key, value]);
+        }
+        write(".git/hooks/pre-commit", "#!/bin/sh\nexit 1\n");
+        write("README.md", "a story, changed\n");
+        write("staged.txt", "staged\n");
+        git(dir, &["add", "staged.txt"]);
+        std::fs::remove_file(dir.join("tests/t.rs")).expect("removed");
+        write("notes.txt", "untracked\n");
+        write("target/out", "ignored\n");
+    }
+
+    /// Every file under `dir` by its path relative to it, with its bytes and the time it was
+    /// last written.
+    fn stamped(dir: &Path) -> std::collections::BTreeMap<String, (Vec<u8>, std::time::SystemTime)> {
+        let mut found = Vec::new();
+        walk(dir, dir, &mut found).expect("the directory reads");
+        found
+            .into_iter()
+            .map(|path| {
+                let at = dir.join(&path);
+                let written = std::fs::metadata(&at)
+                    .and_then(|meta| meta.modified())
+                    .expect("a time");
+                (path, (std::fs::read(&at).expect("the file"), written))
+            })
+            .collect()
+    }
+
+    /// Acceptance 2: the copy is a git work tree, the copy its top, at the workspace's `HEAD`,
+    /// on its branch, with its status, staged and unstaged diff and log, in either object format
+    /// and either ref format.
+    #[test]
+    fn the_copy_is_a_work_tree_at_the_workspaces_head() {
+        for (objects, refs) in [("sha1", "files"), ("sha256", "files"), ("sha1", "reftable")] {
+            let scratch = Scratch::new(&format!("head-{objects}-{refs}"));
+            let tree = scratch.0.join("tree");
+            repository(&tree, objects, refs);
+            let (copy, _) = scratch.copy(&tree);
+            let case = format!("{objects} {refs}");
+            assert_eq!(
+                git(&copy.dir, &["rev-parse", "--is-inside-work-tree"]),
+                "true\n",
+                "{case}"
+            );
+            assert_eq!(
+                git(&copy.dir, &["rev-parse", "--show-toplevel"]).trim_end(),
+                copy.dir.to_str().expect("utf-8"),
+                "{case}"
+            );
+            assert_eq!(
+                git(&copy.dir, &["log", "-1", "--format=%H"]).trim_end(),
+                git(&tree, &["rev-parse", "HEAD"]).trim_end(),
+                "{case}"
+            );
+            let status = git(&tree, &["status", "--porcelain"]);
+            for line in [" M README.md", "A  staged.txt", " D tests/t.rs"] {
+                assert!(status.contains(line), "{case}: the tree's status: {status}");
+            }
+            for args in [
+                &["status", "--porcelain"][..],
+                &["branch", "--show-current"],
+                &["log", "--oneline", "-n", "5"],
+                &["tag", "--list"],
+                &["diff"],
+                &["diff", "--cached"],
+            ] {
+                assert_eq!(
+                    git(&copy.dir, args),
+                    git(&tree, args),
+                    "{case}: git {args:?} in the copy and in the tree"
+                );
+            }
+        }
+    }
+
+    /// A linked work tree's copy is at that work tree's own `HEAD` and status, its refs and
+    /// objects read from the repository it belongs to.
+    #[test]
+    fn a_linked_work_trees_copy_is_at_its_own_head() {
+        let scratch = Scratch::new("linked");
+        let main = scratch.0.join("tree");
+        repository(&main, "sha1", "files");
+        let linked = scratch.0.join("linked");
+        let at = linked.to_str().expect("utf-8");
+        git(&main, &["worktree", "add", "-q", "-b", "side", at]);
+        std::fs::write(linked.join("side.txt"), "side\n").expect("a file");
+        git(&linked, &["add", "side.txt"]);
+        git(&linked, &["commit", "-q", "-m", "side"]);
+        std::fs::write(linked.join("README.md"), "changed on the side\n").expect("a file");
+        let (copy, _) = scratch.copy(&linked);
+        for args in [
+            &["status", "--porcelain"][..],
+            &["branch", "--show-current"],
+            &["log", "-1", "--format=%H"],
+        ] {
+            assert_eq!(git(&copy.dir, args), git(&linked, args), "git {args:?}");
+        }
+        assert_ne!(
+            git(&copy.dir, &["log", "-1", "--format=%H"]),
+            git(&main, &["rev-parse", "HEAD"])
+        );
+    }
+
+    /// The copy's `.git` is one file naming a git directory beside the copy, outside it, so a
+    /// session's Glob or Grep there lists that file and never git's own files; the directory has
+    /// an empty `hooks/`, the workspace's `info/exclude`, its objects as an alternate, and a
+    /// config naming no remote, include, hook path or monitor; it goes with the copy.
+    #[test]
+    fn the_copys_git_state_is_one_file_naming_a_directory_outside_it() {
+        let scratch = Scratch::new("shape");
+        let tree = scratch.0.join("tree");
+        repository(&tree, "sha1", "files");
+        let (copy, _) = scratch.copy(&tree);
+        let mut found = Vec::new();
+        walk(&copy.dir, &copy.dir, &mut found).expect("the copy reads");
+        let under: Vec<&str> = found
+            .iter()
+            .map(String::as_str)
+            .filter(|path| Path::new(path).starts_with(".git"))
+            .collect();
+        assert_eq!(under, [".git"]);
+        let link = std::fs::read_to_string(copy.dir.join(".git")).expect("a file");
+        let named = PathBuf::from(
+            link.strip_prefix("gitdir: ")
+                .and_then(|rest| rest.strip_suffix('\n'))
+                .expect("a gitlink"),
+        );
+        assert_eq!(named, copy.dir.with_file_name("git"));
+        assert!(!named.starts_with(&copy.dir));
+        assert_eq!(
+            std::fs::read_dir(named.join("hooks"))
+                .expect("hooks")
+                .count(),
+            0
+        );
+        assert!(git(&tree, &["config", "--list", "--local"]).contains("remote.origin.url="));
+        assert_eq!(
+            std::fs::read_to_string(named.join("config")).expect("a config"),
+            "[core]\n\trepositoryformatversion = 0\n\tbare = false\n"
+        );
+        let objects = std::fs::canonicalize(tree.join(".git/objects")).expect("the objects");
+        assert_eq!(
+            std::fs::read_to_string(named.join("objects/info/alternates")).expect("alternates"),
+            format!("{}\n", objects.display())
+        );
+        assert_eq!(
+            std::fs::read(named.join("info/exclude")).expect("an exclude"),
+            std::fs::read(tree.join(".git/info/exclude")).expect("the tree's")
+        );
+        drop(copy);
+        assert!(!named.exists(), "removed with the copy");
+    }
+
+    /// git run in the copy (a status that may refresh the index, a log, diffs, the branch)
+    /// writes nothing of the workspace's git directory: every file of it, the index, refs and
+    /// `HEAD` among them, keeps its bytes and its time of last write.
+    #[test]
+    fn git_in_the_copy_never_writes_the_workspaces_git_directory() {
+        for refs in ["files", "reftable"] {
+            let scratch = Scratch::new(&format!("unwritten-{refs}"));
+            let tree = scratch.0.join("tree");
+            repository(&tree, "sha1", refs);
+            let before = stamped(&tree.join(".git"));
+            for path in ["HEAD", "index", "config"] {
+                assert!(before.contains_key(path), "{refs}: {path}");
+            }
+            let (copy, _) = scratch.copy(&tree);
+            std::fs::write(copy.dir.join("src/lib.rs"), "changed in the copy\n").expect("a file");
+            for args in [
+                &["status"][..],
+                &["status", "--porcelain"],
+                &["--no-optional-locks", "status", "--short"],
+                &["log", "--oneline", "-n", "5"],
+                &["diff"],
+                &["diff", "--cached"],
+                &["branch", "--show-current"],
+                &["config", "user.name"],
+            ] {
+                let _ = std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&copy.dir)
+                    .output()
+                    .expect("git runs");
+            }
+            drop(copy);
+            assert_eq!(stamped(&tree.join(".git")), before, "{refs}");
+        }
+    }
+
+    /// What a session writes into the copy's git state is no proposal's: a `.git` file
+    /// rewritten, or replaced by a directory with a hook and a config, proposes nothing under
+    /// `.git`, beside the file the session did change.
+    #[test]
+    fn a_change_to_the_copys_git_state_is_left_out_of_the_proposal() {
+        let scratch = Scratch::new("changes");
+        let tree = scratch.0.join("tree");
+        repository(&tree, "sha1", "files");
+        let (copy, files) = scratch.copy(&tree);
+        std::fs::write(copy.dir.join("src/lib.rs"), "changed\n").expect("a file");
+        let expected = vec![ProposedFile {
+            path: "src/lib.rs".to_owned(),
+            content: Some("changed\n".to_owned()),
+        }];
+        let planted = format!("gitdir: {}\n", tree.join(".git").display());
+        std::fs::write(copy.dir.join(".git"), planted).expect("the gitlink rewritten");
+        assert_eq!(copy.changes(&tree, &files), Ok(expected.clone()));
+        std::fs::remove_file(copy.dir.join(".git")).expect("the gitlink removed");
+        std::fs::create_dir_all(copy.dir.join(".git/hooks")).expect("a directory");
+        std::fs::write(copy.dir.join(".git/hooks/pre-commit"), "#!/bin/sh\n").expect("a hook");
+        std::fs::write(copy.dir.join(".git/config"), "[core]\n\tfsmonitor = x\n").expect("a file");
+        assert_eq!(copy.changes(&tree, &files), Ok(expected));
+    }
+
+    /// A workspace with no git directory gives a copy with none.
+    #[test]
+    fn a_workspace_without_git_gives_a_copy_without_it() {
+        let scratch = Scratch::new("plain");
+        let tree = scratch.0.join("tree");
+        std::fs::create_dir_all(&tree).expect("the tree");
+        std::fs::write(tree.join("a.txt"), "a\n").expect("a file");
+        let copy = ScratchCopy::make(&scratch.0.join("scratch"), &tree, &["a.txt".to_owned()])
+            .expect("the copy");
+        assert!(copy.dir.join("a.txt").is_file());
+        assert!(std::fs::symlink_metadata(copy.dir.join(".git")).is_err());
+        assert!(std::fs::symlink_metadata(copy.dir.with_file_name("git")).is_err());
     }
 }
