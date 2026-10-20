@@ -1959,7 +1959,7 @@ fn a_series_start_copy_of_another_revision_rule_or_definition_is_refused_naming_
         ),
         (
             "definition",
-            "\"outcome\": 2,".to_owned(),
+            "\"outcome\": 3,".to_owned(),
             "\"outcome\": 1,".to_owned(),
             "metric outcome is at definition version 1".to_owned(),
         ),
@@ -3594,8 +3594,22 @@ fn a_rejudge_sharing_a_case_with_a_refused_scorecard_is_refused_naming_the_case(
 /// check saved it, and with `edits` applied, written in a directory of its own named by
 /// `label`; the file.
 fn outcome_v1(world: &World, scorecard: &Path, label: &str, edits: &[(&str, &str)]) -> PathBuf {
+    outcome_at(world, scorecard, label, 1, edits)
+}
+
+/// `scorecard` with its outcome metric at definition `version`, as a takt knowing that version
+/// saved it, and with `edits` applied, written in a directory of its own named by `label`; the
+/// file.
+fn outcome_at(
+    world: &World,
+    scorecard: &Path,
+    label: &str,
+    version: u32,
+    edits: &[(&str, &str)],
+) -> PathBuf {
     let mut text = fs::read_to_string(scorecard).expect("the scorecard");
-    for (from, to) in [("\"outcome\": 2,", "\"outcome\": 1,")].iter().chain(edits) {
+    let to = format!("\"outcome\": {version},");
+    for (from, to) in [("\"outcome\": 3,", to.as_str())].iter().chain(edits) {
         assert_eq!(text.matches(from).count(), 1, "{from} in {text}");
         text = text.replace(from, to);
     }
@@ -3662,6 +3676,46 @@ fn a_v1_outcome_baseline_is_rebaselined_and_a_candidate_judged_against_it() {
         assert!(record.contains(&line), "{line} in {record}");
     }
     world.assert_untouched();
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(&format!("against baseline {BASELINE_REVISION}")) && out.contains("not worse"),
+        "{out}"
+    );
+}
+
+/// story:outcome-metric-takes-version-3, acceptance 3: a baseline saved under the outcome
+/// definition of version 2, before `Unperformable` and `DiskLow` changed what the ranks mean,
+/// judges no candidate under version 3; after `--rebaseline` with the baseline revision's
+/// scorecard under version 3 a candidate is judged against it.
+#[test]
+fn a_v2_outcome_baseline_is_compared_with_a_v3_candidate_only_after_a_rebaseline() {
+    let world = World::new("rebaseline-v2", BASELINE_TOKENS, FIVE_APPROVALS);
+    let v2 = outcome_at(&world, &world.baseline, "v2", 2, &[]);
+    world.record_baseline_of(&v2);
+    let card = world.candidate_card("candidate", BASELINE_TOKENS, FIVE_APPROVALS);
+    let text = fs::read_to_string(&card).expect("the candidate");
+    assert_eq!(text.matches("\"outcome\": 3,").count(), 1, "{text}");
+    let (code, out, err) = world.promote(&card, &["--dry-run"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("metric outcome is at definition version 2; this takt knows version 3"),
+        "{err}"
+    );
+    let (code, out, err) = rebaseline(&world, &world.baseline);
+    assert_eq!(code, 0, "{out}{err}");
+    let name = world
+        .records()
+        .into_iter()
+        .find(|name| name.contains(".rebaseline-") && !name.ends_with(".scorecard.json"))
+        .expect("the rebaseline record");
+    let record = world.record(&name);
+    for line in [
+        format!("\"replaces_sha256\": \"{}\"", sha256(&v2)),
+        format!("\"scorecard_sha256\": \"{}\"", sha256(&world.baseline)),
+    ] {
+        assert!(record.contains(&line), "{line} in {record}");
+    }
     let (code, out, err) = world.promote(&card, &["--dry-run"]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(
@@ -4334,7 +4388,7 @@ fn as_saved_before(world: &World, scorecard: &Path, label: &str) -> PathBuf {
             in_held = key.ends_with('{');
             continue;
         }
-        kept.push(line.replace("\"outcome\": 2,", "\"outcome\": 1,"));
+        kept.push(line.replace("\"outcome\": 3,", "\"outcome\": 1,"));
     }
     let mut joined = kept.join("\n") + "\n";
     while joined.contains(",\n    }") {

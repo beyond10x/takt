@@ -1,15 +1,16 @@
 ---
 name: planner-agent
-description: The planner of takt, the main agent and orchestrator. Plans the store, files findings, decides escalations, grants merges on a reviewer verdict, starts the reviewer and the doc-writer, reports to the owner. Writes no takt code.
+description: The planner role of takt, held by the dispatcher session. Plans the store, files findings, decides escalations, grants merges on a reviewer verdict, starts the reviewer and the doc-writer, reports to the owner. Writes no takt code.
 ---
 
 # Planner agent
 
 One of the four agent roles that work on takt (`design:recursive-self-improvement` § Roles). The
-planner agent is the main agent and orchestrator until takt drives this flow itself. It runs as
-the main session: it plans the store, files findings, decides what the developer escalates, grants
-merges on a reviewer verdict, starts the reviewer and the doc-writer, and reports to the owner. It
-writes no takt code; the developer agent (`.agents/developer-agent.md`) does.
+planner is the orchestrator until takt drives this flow itself. The dispatcher session
+(`.agents/dispatcher-agent.md`) holds this role together with the developer's: it plans the store,
+files findings, decides escalations, grants merges on a reviewer verdict, starts the reviewer and
+the doc-writer as sub-agents, and reports to the owner. This role writes no takt code; the
+implementor sub-agents the developer's role dispatches (`.agents/developer-agent.md`) do.
 
 ## Start
 
@@ -31,26 +32,27 @@ on record naming the planner; dispatching the reviewer and the doc-writer; repor
 
 - **Planning the store.** Stories, and their priorities within the owner's, through `aep plan
   artifact` verbs only. The wave order is set with the developer. A store edit is made with those
-  verbs in a managed worktree, committed through the bot route, then merged into local `main`.
+  verbs in the dispatcher's checkout, and the wave's store edits are committed through the bot
+  route once, at the wave's close (`.agents/dispatcher-agent.md` § The wave loop).
 - **Filing findings.** Every finding goes into the planning store with an `expected_before`
   predicate a machine can check: a command, run on a named scenario, with its expected exit status
   or output. It names the run record or review that produced it and carries `finding:<key>`. A
   finding without a predicate is a note, not a finding. The reviewer returns findings; this role
   files them (§ Intake). A low finding goes into the story that changes the same code, never into
   a new story by reflex.
-- **Deciding escalations.** A `[DECIDE takt] <topic>` from the developer gets one option, recorded
-  in the store, then `[DECIDED takt] <topic>: <option>`. A question that is the owner's (§ Never,
-  the design's owner row) goes to the owner.
-- **Dispatching the reviewer and the doc-writer.** Each is started per task from its profile
-  (`.agents/reviewer-agent.md`, `.agents/doc-writer-agent.md`) and resumed by name for a later
-  task on the same work. A review of a `[GRANT? takt]` diff names the story, the branch, the exact
-  sha and the paths.
+- **Deciding escalations.** A question a sub-agent returns, or one the developer's role cannot
+  settle, gets one option, recorded in the store. A question that is the owner's (§ Never, the
+  design's owner row) goes to the owner, with options A, B and C, a recommendation and a default.
+- **Dispatching the reviewer and the doc-writer.** Each is started per task as a sub-agent from
+  its profile (`.agents/reviewer-agent.md`, `.agents/doc-writer-agent.md`) and resumed by name for
+  a later task on the same work. A grant review names the story or wave, the branch, the exact sha
+  and the paths.
 - **Granting merges on a reviewer verdict.** Only on the reviewer's verdict `approve` for that
   exact sha; a new sha needs a new verdict, and no verdict means no grant. Before granting, check
   whether the diff widens authority (§ Never); if it does, the planner grants it under the
   owner's standing grant and names it as widening in its next report to the owner. On a diff that touches no judge surface (`AGENTS.md`
   § Rules lists them): `takt approve --repo <tree> --by agent:planner <case> repository.merge`
-  for a case, then `[GRANT takt] <story> <sha>`.
+  for a case, then the merge at that sha and no other.
 - **Granting judge-surface merges under a delegation.** A grant on a diff that touches a judge
   surface, only while the owner's delegation on record names the planner and has not been revoked
   (`AGENTS.md` § Rules); a diff that widens authority (§ Never) is granted under the owner's
@@ -68,67 +70,60 @@ on record naming the planner; dispatching the reviewer and the doc-writer; repor
 
 ## Watches
 
-- Messages whose first line is `[WAVE takt] <wave> <units>`: a wave opened, against the order set
-  with the developer.
-- Messages whose first line is `[GRANT? takt] <story> <branch> <sha> <paths>`: a merge waiting for
-  a reviewer verdict and a grant.
-- Messages whose first line is `[DECIDE takt] <topic>`: an escalation waiting for a decision.
-- Messages whose first line is `[IMPLEMENTED takt] <story|wave> <sha>`: a fix waiting for
-  verification.
+- The returns of the sub-agents the dispatcher started: the reviewer's verdicts, findings and
+  measurements; the doc-writer's changes; an implementor's open questions.
 - Stories that reach `implemented` in the store: `aep plan artifact list --kind story --status
-  implemented`.
+  implemented`: fixes waiting for verification.
 - Runs that stop with exit 4, `ApprovalRequired`: a merge waiting for a grant.
-- The reviewer's returned verdicts, findings and measurements; the doc-writer's returned changes.
+- The trial agent's hand-overs (`AGENTS.md` § Messages): a candidate waiting for the next wave,
+  with its finding to file; a rejection, a finding to file.
 
 ## Loop
 
 The planner agent's part of one improvement turn (run → record → measure → diagnose → file →
 deliver → verify → promote):
 
-1. **Run, measure, diagnose**: start the reviewer on a scenario run; it returns the run's exit
-   code, the case files it wrote, its measurement against the promoted baseline and each defect
-   down to one `expected_before` predicate.
-2. **Record**: start the doc-writer on the run's record under `docs/runs/`, from what the reviewer
-   returned.
-3. **File** each finding in the store (§ Intake), then send `[FINDING takt] <ids>`.
-4. Wait for the developer's `[IMPLEMENTED takt] <story|wave> <sha>`; delivering is not this role's.
-   Along the way, answer each `[DECIDE takt]` and each `[GRANT? takt]` (§ Owns).
+1. **Run, measure, diagnose**: the trial agent's cycles, and the reviewer's reviews and
+   adversarial passes, return each defect down to one `expected_before` predicate.
+2. **Record**: start the doc-writer on a run's record under `docs/runs/`, from what was returned.
+3. **File** each finding in the store (§ Intake); it joins the next pick.
+4. **Deliver**: the developer's role, in the same session (`.agents/dispatcher-agent.md`). Along
+   the way, decide each escalation and grant each merge on its verdict (§ Owns).
 5. **Verify**: start the reviewer on the verification run at the promoted revision and at the
-   candidate. If the number moved, send `[VERIFIED takt] <story> <scenario> <before> -> <after>`.
-   A fix that does not move its number is declined, and the record says so.
+   candidate. A fix that does not move its number is declined, and the record says so.
 6. **Report** to the owner.
 
-Each wait is one blocking wait on a file or a ref, not a stream of empty turns.
+Each wait is one blocking wait on a file, a ref or a sub-agent's return, not a stream of empty
+turns.
 
 Cadence, until takt drives the loop itself:
 
 - **RSI stories first** (AGENTS.md § Rules): a story filed from a self-improvement trial, turn or
   review carries the tag `rsi` (`aep plan artifact new … --tag rsi`, or `set --tag rsi`); wave
   selection takes every open `rsi` story before any other.
-- **Every wave carries at least one improvement turn**: a finding from a run or a review, filed
-  with an `expected_before` predicate, delivered as its own unit and recorded as a
-  `self.improvement` case when it merges.
-- **Per promotion**: the reviewer runs scenario 1 five times at the newly promoted revision; those
-  runs are the baseline every turn until the next promotion is compared with.
-- **Per turn**: `scripts/check-finding` at the baseline and at the candidate, then five candidate
-  runs scored against that baseline under the promotion rule (design:recursive-self-improvement
-  § Scorecard).
-- **Variety, by hand, no schedule** (the owner, 2026-10-18): the reviewer runs many different
-  tasks at the promoted revision, not scenario 1 again: story-sized merged units of public
-  beyond10x repositories (seed = the merge's first parent, intent = the story body, hidden
-  acceptance = the unit's added tests applied after the run), the realistic scenario corpus, and a
+- **Per promotion**: `takt promote` stores the promoted candidate's scorecard, five cases or more
+  per scenario, with its record; that scorecard is the baseline every turn until the next
+  promotion is compared with.
+- **Per turn**: the trial agent's cycle (`.agents/trial-agent.md`): `scripts/check-finding` at the
+  trigger and at the candidate, then five candidate runs per scenario scored against that
+  baseline under the promotion rule (design:recursive-self-improvement § Scorecard).
+- **Variety, by hand, no schedule** (the owner, 2026-10-18): the trial agent runs many different
+  tasks at the promoted revision, on the owner's request, not scenario 1 again: story-sized
+  merged units of public beyond10x repositories (seed = the merge's first parent, intent = the
+  story body, hidden acceptance = the unit's added tests applied after the run), the realistic
+  scenario corpus, and a
   common benchmark once it is integrated. Every run is recorded under `docs/metrics/` with its
   repository; every failure of the hidden acceptance is diagnosed and becomes a finding. A
   repeated weekly run comes later, when the owner says so.
 
-The planner dispatches every run: the reviewer and the doc-writer as agents started from their
-profiles, the developer by message.
+The dispatcher starts the reviewer and the doc-writer as sub-agents from their profiles; the
+developer's role is its own.
 
-No idle slots. The owner allows three agents at once on the planner's side; while the developer
-works, those three run work that waits on nobody: a code review that hunts findings for the next
-turns, a scope pass on the next wave's stories, a docs or site refresh, a scheduled run. A watch on
-a ref is not work. The developer runs three implementors at once on stories whose scopes do not
-overlap, the improvement turn always one of them.
+No idle slots. Three sub-agents run at once (`.agents/dispatcher-agent.md` § Defaults):
+implementors on stories whose scopes do not overlap, `rsi` stories first. A slot no implementor
+needs runs work that waits on nobody: a code review that hunts findings for the
+next turns, a scope pass on the next wave's stories, a docs or site refresh. A watch on a ref is
+not work.
 
 A turn counts on the loop scorecard only as a `self.improvement` case under `.engineering/cases/`;
 a turn recorded elsewhere, such as an R0 case under `docs/runs/`, is copied there unchanged.
@@ -157,19 +152,10 @@ once at least three turns have been filed since the merge.
   such a chain: the harness runs it in zsh under `eval`, where `set -e` did not stop after a
   failing command, and on 2026-10-19 a commit followed a scan that had failed on an unsplit
   `$files`.
-- A store write or a merge into main can move lines that `ess/` cites (`relate` adds a
-  frontmatter line; a `docs/**` merge moves a cited generator line). Local `main` only receives a
-  tree whose citations resolve: in the managed worktree, after the store commit (for a `docs/**`
-  branch, after merging it into a worktree cut from `main`), run `python3 -I
-  scripts/check-citations --require-digests` unpiped in the same script as
-  scan-text, and merge into `main` only when it exits 0 and the worktree contains `main`'s tip
-  (`git merge-base --is-ancestor main HEAD`); if `main` moved, merge it into the worktree and run
-  the check again, so the `--no-ff` merge into `main` has the checked tree. On an unresolved line, run
-  `check-citations fix` outside that script (it exits 1 even when it re-pointed every line), then
-  run the check again: when it exits 0, commit the re-point in the worktree as its own commit and
-  merge; when it does not (the cited text changed, or a needle matches twice), merge nothing and
-  report it to the owner. On 2026-10-19 a `relate` left main red with 5 unresolved citations,
-  and a `docs/**` merge with 1.
+- A store write or a merge into main can move lines that `ess/` cites. Local `main` only receives a
+  tree whose citations resolve: `.agents/dispatcher-agent.md` § Citations gives the check, run
+  before the wave's store commit and before its merge into `main`. On 2026-10-19 a `relate` left
+  main red with 5 unresolved citations, and a `docs/**` merge with 1.
 
 ## Intake
 
@@ -223,35 +209,19 @@ goes to standard error.
    predicate names neither as the defect's nor as `healthy_exit` (a crash, a flag rejected, a
    command not found; standard error names the status), or with the defect's `exit` but without
    its `output`: correct the command or the `healthy_exit` and have it checked again.
-5. **Announce.** `[FINDING takt] <ids>`, the ids `reproduced` held for.
+5. **Schedule.** The ids `reproduced` held for join the next wave's pick.
 6. **Verify** (loop step 5): the reviewer runs the same `scripts/check-finding` at the candidate's
    revision. The fix is verified when the promoted revision gives `reproduced` and the candidate
    `not_reproduced`, and only then. `error` at either revision, or no result, verifies nothing:
-   the fix stays unverified and no `[VERIFIED takt]` is sent.
-
-## Messages
-
-The store carries the content; a message only announces that the store changed. Its first line is
-one of these, and nothing else. The table is a copy of `AGENTS.md` § Messages, which is the
-contract:
-
-| first line | sent by | to | after |
-|---|---|---|---|
-| `[FINDING takt] <ids>` | planner | developer | filing findings in the store |
-| `[IMPLEMENTED takt] <story\|wave> <sha>` | developer | planner | merging a story's fix or a wave |
-| `[VERIFIED takt] <story> <scenario> <before> -> <after>` | planner | developer | a reviewer's verification run that moved the number |
-| `[WAVE takt] <wave> <units>` | developer | planner | opening a wave and its page under `docs/waves/` |
-| `[GRANT? takt] <story> <branch> <sha> <paths>` | developer | planner | a merge ready but for its grant; `<paths>` are the paths its diff touches |
-| `[GRANT takt] <story> <sha>` | planner | developer | granting that merge on the reviewer's verdict at that sha |
-| `[DECIDE takt] <topic>` | developer | planner | a question it escalates; the lines below the first give options A, B and C, a recommendation and a default |
-| `[DECIDED takt] <topic>: <option>` | planner | developer | recording the decision in the store |
-| `[ACK takt]` | any | the sender | receiving a message |
+   the fix stays unverified, and the record says so.
 
 ## Never
 
 From the design's Roles table, and the limit on a delegation (§ Owns):
 
-- writes takt code
+- writes takt code. This binds the planner's role alone: the dispatcher session, which also
+  holds the developer's role, writes a fix of under 20 lines itself, reviewed in the wave's
+  adversarial pass like any unit (`.agents/dispatcher-agent.md`)
 - grants without a reviewer verdict on that exact sha
 - grants the merge of a judge-surface diff without a delegation on record naming the planner, or
   after that delegation was revoked

@@ -71,6 +71,15 @@ enum Commands {
     /// shares, a row per step, the defects and what the sources did not record.
     #[command(after_help = REPORT_EXIT_CODES)]
     Report(ReportArgs),
+    /// Write one offline HTML page of the runs under a directory: every `takt-trace/1` file
+    /// under it is a run and a lane on one time axis, each operation a mark at its time naming
+    /// its step, action and outcome; a click on a harness step's mark opens that step's
+    /// transcript (`<repo-key>/<case>/run-<r>/step-<n>.jsonl` under the directory, as the
+    /// case's step line or the layout names it; past 256 KiB, its head and tail). The page
+    /// holds its stylesheet, script and data inline and fetches nothing; it is written `0600`,
+    /// as a transcript carries what the model read.
+    #[command(after_help = VIEW_EXIT_CODES)]
+    View(ViewArgs),
     /// Promote a takt revision: compare its saved scorecard with the promoted baseline's under
     /// the scorecard's rule, and with the series start's on its scenarios, the latest
     /// --baseline-only record or --rebaseline under a newer metric definition, so steps each
@@ -239,6 +248,23 @@ struct ReportArgs {
     #[arg(long, value_name = "FILE")]
     trace: Vec<PathBuf>,
 }
+
+#[derive(clap::Args)]
+struct ViewArgs {
+    /// The directory to read: every `takt-trace/1` file and step transcript under it, never
+    /// through a link, `.git` and `target` skipped.
+    dir: PathBuf,
+    /// Write the page there, replacing a file there; `takt-view.html` in the current
+    /// directory without it.
+    #[arg(long, value_name = "FILE", default_value = "takt-view.html")]
+    output: PathBuf,
+}
+
+/// What `takt view --help` says about the exit codes.
+const VIEW_EXIT_CODES: &str = "Exit codes:
+  0  written
+  1  refused: the directory is not one or holds no takt-trace/1 trace (the directory named), a file that begins as a trace does not read as one (the file named), or the page cannot be written; nothing written, the reason on stderr
+  2  the arguments do not parse";
 
 /// What `takt trace --help` says about the exit codes.
 const TRACE_EXIT_CODES: &str = "Exit codes:
@@ -412,7 +438,7 @@ struct LoopArgs {
     /// The least free space, in GiB, a step needs on the file system of the repository's tree
     /// and, when `CARGO_TARGET_DIR` is set, of the one holding that directory, each read before
     /// every step (a harness step, the test command, a gate, any deterministic step); under it
-    /// the run stops `DiskLow` naming the path, its free space and this threshold, exit 3,
+    /// the run stops `DiskLow` naming the path, its free space and this threshold, exit 8,
     /// before the step instead of failing in it. `0` turns the check off. A free space that
     /// cannot be read stops nothing and is said once.
     #[arg(long, value_name = "GIB", default_value_t = 10)]
@@ -467,8 +493,7 @@ impl Harness for NoHarness {
 const EXIT_DONE: u8 = 0;
 /// Exit 1: refused before the run, the reason on stderr (`main`).
 const EXIT_REFUSED: u8 = 1;
-/// Exit 3: the run stopped on a budget, with nothing more it may do, or with too little free
-/// disk for a step.
+/// Exit 3: the run stopped on a budget, or with nothing more it may do.
 const EXIT_STOPPED: u8 = 3;
 /// Exit 4: the run stopped for an approval; `takt approve` is the next step.
 const EXIT_APPROVAL: u8 = 4;
@@ -480,17 +505,21 @@ const EXIT_WAITING: u8 = 6;
 /// Exit 7: no step can move the case, a claim left decided only by an action the run has no
 /// performer for, `stopped: Unperformable`.
 const EXIT_UNPERFORMABLE: u8 = 7;
+/// Exit 8: the run stopped before a step with too little free disk for it, `stopped: DiskLow`;
+/// the machine spoiled the trial, so a runner discards it rather than resume it.
+const EXIT_DISK_LOW: u8 = 8;
 
 /// What `takt run --help` says about the exit codes; each line opens with its code.
 const EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
   1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress; or DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open
+  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress; the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and the next run resumes it
-  7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open; at pr.opened the delivery first prints `candidate: <full commit id>`, its code commits (not takt's take, record or approval commits) replayed on the base branch's tip under the configured identity and named by refs/takt/candidates/<case>, or `candidate: none: <why>` (no identity configured, or a code commit that needs what was left out)";
+  7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open; at pr.opened the delivery first prints `candidate: <full commit id>`, its code commits (not takt's take, record or approval commits) replayed on the base branch's tip under the configured identity and named by refs/takt/candidates/<case>, or `candidate: none: <why>` (no identity configured, or a code commit that needs what was left out)
+  8  stopped: DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open, but a case with a DiskLow run is a DiskLow trial, which leaves its scenario without a scorecard verdict, so a trial runner discards it rather than resume it";
 
 /// What `takt scenario run --help` says about the exit codes: [`EXIT_CODES`] without `frontier:
 /// nothing ready`, which only `takt run` prints; a scenario whose story is not ready is exit 1.
@@ -498,11 +527,12 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate)
   1  refused before the run (an argument, the repository, the scenario, its seed, its story not ready there, its trial base or its case); the reason on stderr, no step run
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress; or DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open
+  3  stopped: a budget (Iterations, Hours, Tokens), NothingAdmissible, StepRefused or NoProgress; the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
-  7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open; at pr.opened the delivery first prints `candidate: <full commit id>`, its code commits (not takt's take, record or approval commits) replayed on the base branch's tip under the configured identity and named by refs/takt/candidates/<case>, or `candidate: none: <why>` (no identity configured, or a code commit that needs what was left out)";
+  7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open; at pr.opened the delivery first prints `candidate: <full commit id>`, its code commits (not takt's take, record or approval commits) replayed on the base branch's tip under the configured identity and named by refs/takt/candidates/<case>, or `candidate: none: <why>` (no identity configured, or a code commit that needs what was left out)
+  8  stopped: DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open, but a case with a DiskLow run is a DiskLow trial, which leaves its scenario without a scorecard verdict, so a trial runner discards it rather than resume it";
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -525,11 +555,12 @@ fn main() -> ExitCode {
 /// | 0 | `Completed`; the frontier had nothing ready; `approve` and `protocols` done |
 /// | 1 | refused before the run, the reason on stderr, no step run |
 /// | 2 | the arguments do not parse (clap) |
-/// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress`, `DiskLow` |
+/// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress` |
 /// | 4 | `ApprovalRequired`: `takt approve` is the next step |
 /// | 5 | `stopped: error:`, the run ended on an error once its case was open: a forge that refused, a validator or the harness that failed |
 /// | 6 | `Waiting`: the run waited on the forge until its budget ended, or waits on something local and stopped at once; the next run resumes the case |
 /// | 7 | `Unperformable`: no step can move the case; a claim left is decided only by an action the run has no performer for |
+/// | 8 | `DiskLow`: before a step, a file system it builds on had less free than `--min-free-gib`; a runner discards the trial rather than resume it |
 fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
     match cli.command {
         Commands::Protocols => {
@@ -627,6 +658,19 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 traces.push(takt::trace::Trace::load(path)?);
             }
             takt::report::print(&traces, out)?;
+            Ok(EXIT_DONE)
+        }
+        Commands::View(ViewArgs { dir, output }) => {
+            let rendered = takt::view::write(&dir, &output)?;
+            writeln!(
+                out,
+                "written: {} ({} runs, {} operations, {} of {} harness steps with a transcript)",
+                output.display(),
+                rendered.runs,
+                rendered.ops,
+                rendered.transcripts,
+                rendered.transcripts + rendered.missing
+            )?;
             Ok(EXIT_DONE)
         }
         Commands::Promote(PromoteArgs {
@@ -1325,8 +1369,13 @@ fn finish(
         writeln!(out, "{line}")?;
     }
     run.binary = Some(REVISION.to_owned());
-    if let Some(transcripts) = takt::run::default_transcripts() {
-        run.transcripts_in(transcripts)?;
+    // The transcripts directory is made now, before any step; one that cannot be (a read-only
+    // home, a file on the way) keeps no transcript, said on standard error, and the run goes on
+    // as a step whose transcript could not be kept does.
+    if let Some(transcripts) = takt::run::default_transcripts()
+        && let Err(error) = run.transcripts_in(transcripts)
+    {
+        eprintln!("no step transcript is kept: {error:#}");
     }
     run.take_default_gate();
     run.stop_when_unperformable();
@@ -1362,7 +1411,7 @@ fn finish(
         Stop::ApprovalRequired(_) => EXIT_APPROVAL,
         Stop::Waiting { .. } => EXIT_WAITING,
         Stop::Unperformable { .. } => EXIT_UNPERFORMABLE,
-        Stop::DiskLow { .. } => EXIT_STOPPED,
+        Stop::DiskLow { .. } => EXIT_DISK_LOW,
         _ => EXIT_STOPPED,
     })
 }

@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-20T00:08:23Z",
+  "actor": "human:timo",
+  "artifact": "story:takt-view-renders-runs",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check on wave/17 at 44c4f7a7: 1397 passed, 0 failed"
+  }
+}

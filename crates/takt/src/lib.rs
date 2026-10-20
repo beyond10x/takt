@@ -23,6 +23,7 @@ pub mod run;
 pub mod scorecard;
 pub mod trace;
 pub mod validator;
+pub mod view;
 
 pub use case::CaseDir;
 pub use decision::Decision;

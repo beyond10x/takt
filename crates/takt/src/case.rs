@@ -2529,7 +2529,10 @@ pub struct Judge<'a> {
 /// ([`crate::improvement::judge_surfaces`]). A missing or wrong value, a store with no such
 /// record, or a given `surface` that is not the computed one (naming the first judge-surface
 /// path) is refused, naming why, before anything is written. The candidate is delivered outside
-/// the case, so it is given here.
+/// the case, so it is given here. A candidate `mainline`'s tip already holds (the tip or an
+/// ancestor of it) was merged before a turn could grant it and is refused, naming both full ids
+/// and the remedy, a fresh candidate; a tip that cannot be read refuses nothing here. Only an
+/// opening reads this: a turn whose candidate reaches the mainline after it opened resumes.
 ///
 /// What judges the turn is never the candidate's, nor the tree's: the finding scripts are read
 /// at the baseline ([`crate::improvement`]), and a candidate whose tree differs from the
@@ -2602,6 +2605,20 @@ pub fn turn_opening(
             tree.display()
         );
     }
+    // A candidate the mainline already holds was merged before the turn could grant it, so no
+    // turn opens on it. A tip that cannot be read refuses nothing here: the finding is then read
+    // off the mainline, below.
+    let tip = mainline.tip(tree);
+    if let Ok(tip) = &tip
+        && let Ok(true) = crate::improvement::Mainline::holds(tree, tip, candidate)?
+    {
+        bail!(
+            "--input {TURN_CANDIDATE}={candidate}: {}, the mainline (forge: {}), is at {tip}, which holds the candidate already, so it was merged before a turn could grant it; open the turn on a fresh candidate, one {} does not hold; nothing was written",
+            crate::promotion::MAINLINE,
+            mainline.forge(),
+            crate::promotion::MAINLINE
+        );
+    }
     let Some(promoted) = crate::promotion::baseline(store, &crate::now())
         .with_context(|| format!("the promotion store {}", store.display()))?
     else {
@@ -2641,9 +2658,9 @@ pub fn turn_opening(
     // the check: what the candidate holds at its path judges nothing. Off the mainline (or with
     // no tip to read), the finding's body must be the baseline's, where the case forks from and
     // in the candidate alike.
-    let on_mainline = match mainline.tip(tree) {
+    let on_mainline = match &tip {
         Ok(tip) => matches!(
-            crate::improvement::Mainline::holds(tree, &tip, &at)?,
+            crate::improvement::Mainline::holds(tree, tip, &at)?,
             Ok(true)
         ),
         Err(_) => false,

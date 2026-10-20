@@ -8,6 +8,12 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 
 ### Changed
 
+- The scorecard's outcome metric is at definition version 3: `Unperformable` and `DiskLow`
+  changed what its ranks mean. A takt that knows version 2 refuses a version 3 scorecard, and a
+  stored version 2 baseline meets a version 3 candidate only after `takt promote --rebaseline`.
+- A run that stops `DiskLow` exits 8, for `takt run` and `takt scenario run`, not 3: a runner that
+  resumes a stopped case on 3 no longer resumes a trial that ran out of disk.
+
 - Every commit takt makes (the take, the store's writes on the case's branch, an approval's
   record, a step's change) carries one identity as author and committer: `--commit-identity
   '<name> <email>'`, else the one `.engineering/commit-identity.conf` names at the commit the case
@@ -17,6 +23,12 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   1, when no identity is configured; a run under `--forge none` is not.
 
 ### Added
+
+- `takt view <dir> [--output <file>]` writes one offline HTML page of the `takt-trace/1` runs under
+  a directory: one lane per run on a shared time axis, each operation a mark naming its step,
+  action and outcome, a click opening the step's transcript (its head and tail past 256 KiB). A
+  directory with no trace is refused, exit 1. The page's style and layout derive from the
+  MIT-licensed Context Lens dashboard; its notice is in `viewer/`.
 
 - A delivery under `--forge none` that stops at `pr.opened` hands its change over as a candidate:
   its code commits are replayed on the base under the configured identity, kept under
@@ -49,8 +61,17 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
   its committer date and the grant's time. A grant that records no tip (a turn opened before
   the forge was recorded), whose tip cannot be fetched, or whose tip is not on the mainline now
   is refused too.
+- A turn is refused at open, exit 1, when the mainline's tip already holds its candidate (the
+  candidate or a descendant of it), naming both ids; open it on a fresh candidate. A turn whose
+  candidate reaches the mainline after it opened still resumes.
 - A turn resumed through another forge than the one it recorded when it opened is refused, exit
   1, before anything is written, naming both and `--forge <recorded>` as the way past.
+
+### Fixed
+
+- `takt run` on an empty home (a CI runner, a container, a new machine) no longer has its first
+  harness step refused for `~/.local`: the transcripts directory is made when the run opens, and
+  a run that cannot make it keeps no transcript and says so.
 
 ## [0.3.0] — 2026-10-20
 

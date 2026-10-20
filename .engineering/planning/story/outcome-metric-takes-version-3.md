@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:outcome-metric-takes-version-3
 kind: story
-status: draft
+status: implemented
 title: The scorecard's outcome metric is at definition version 3, so a takt that knows version 2 refuses a newer scorecard
 summary: Unperformable and DiskLow changed what the outcome ranks mean but the metric version stayed at 2
 tags:
@@ -14,7 +14,11 @@ refs:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T23:24:02Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-19T23:24:02Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-20T00:08:23Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: outcome-metric-takes-version-3
 

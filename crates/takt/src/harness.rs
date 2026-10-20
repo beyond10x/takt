@@ -406,11 +406,7 @@ pub fn keep_transcript(
             bail!("the {what} {name:?} is not one plain name; no transcript is written for it");
         }
     }
-    let mut way: Vec<&Path> = root.ancestors().collect();
-    way.reverse();
-    for part in way {
-        plain_dir(part, None)?;
-    }
+    make_transcripts_root(root)?;
     let repo_dir = root.join(repo);
     plain_dir(&repo_dir, Some(0o700))?;
     let case_dir = repo_dir.join(case);
@@ -466,10 +462,34 @@ pub(crate) fn run_number(record: &Path) -> Result<u64> {
     Ok(1 + opened as u64)
 }
 
+/// Makes the transcripts directory `root` ([`keep_transcript`]) and every part of the way to it
+/// from `/`, each a directory that is no link: a part that is not there is made (`0700`), one
+/// that is there is kept as it is, and a link or a file on the way is refused. The parts it
+/// made, in order from `/`; none when all were there. `takt run` makes it when the run opens
+/// ([`crate::run::Run::transcripts_in`]), before any step, so no step is charged with a
+/// directory (`~/.local` on an empty home) takt made to keep its transcript.
+pub fn make_transcripts_root(root: &Path) -> Result<Vec<std::path::PathBuf>> {
+    if !root.is_absolute() {
+        bail!(
+            "the transcripts directory {} is not absolute",
+            root.display()
+        );
+    }
+    let mut way: Vec<&Path> = root.ancestors().collect();
+    way.reverse();
+    let mut made = Vec::new();
+    for part in way {
+        if plain_dir(part, None)? {
+            made.push(part.to_path_buf());
+        }
+    }
+    Ok(made)
+}
+
 /// Makes `dir` a directory of its own, never through a link: one there is kept, given `mode`
 /// when one is named; none there is created, with `mode` or else `0700`; anything else there
-/// (a link, a file) is refused.
-fn plain_dir(dir: &Path, mode: Option<u32>) -> Result<()> {
+/// (a link, a file) is refused. Whether it made it.
+fn plain_dir(dir: &Path, mode: Option<u32>) -> Result<bool> {
     use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
     match std::fs::symlink_metadata(dir) {
         Ok(meta) if meta.is_dir() => {
@@ -479,7 +499,7 @@ fn plain_dir(dir: &Path, mode: Option<u32>) -> Result<()> {
                 std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode))
                     .with_context(|| format!("set the mode of {}", dir.display()))?;
             }
-            Ok(())
+            Ok(false)
         }
         Ok(_) => bail!(
             "{} is not a directory; no transcript is written through it",
@@ -488,6 +508,7 @@ fn plain_dir(dir: &Path, mode: Option<u32>) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => std::fs::DirBuilder::new()
             .mode(mode.unwrap_or(0o700))
             .create(dir)
+            .map(|()| true)
             .with_context(|| format!("create {}", dir.display())),
         Err(error) => Err(error).with_context(|| format!("read {}", dir.display())),
     }

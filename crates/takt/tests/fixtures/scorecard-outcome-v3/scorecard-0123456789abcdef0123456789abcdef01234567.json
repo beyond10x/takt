@@ -1,0 +1,42 @@
+{
+  "format": "takt-scorecard/1",
+  "revision": "0123456789abcdef0123456789abcdef01234567",
+  "named_by": "build",
+  "metrics": {
+    "errors": 1,
+    "no_progress": 1,
+    "outcome": 3,
+    "refusals": 1,
+    "steps": 1,
+    "tokens": 1,
+    "wall": 1
+  },
+  "rule": {
+    "trials": 5,
+    "margin": 1
+  },
+  "rows": [
+    {
+      "case": "scenario-1-trial-1",
+      "scenario": "1",
+      "outcome": "DiskLow",
+      "stop": "DiskLow",
+      "held_out": {
+        "passed": true,
+        "result": "PASS"
+      },
+      "steps": 1,
+      "tokens": 0,
+      "refusals": 0,
+      "no_progress": 0,
+      "errors": 0,
+      "wall_ms": 1000,
+      "saturated": false,
+      "binary": null,
+      "opened_binary": null,
+      "completed": null
+    }
+  ],
+  "no_record": [],
+  "unstated": {}
+}

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:one-session-dispatches-the-waves
 kind: story
-status: draft
+status: implemented
 title: One dispatcher session plans and delivers takt's waves from one checkout
 summary: 'the owner''s process change of 2026-10-20: one session, waves of 3-5 stories, sub-agents in a shared tree, one review and one gate per wave'
 tags:
@@ -10,7 +10,11 @@ tags:
 relations:
 - decomposes: epic:continuous-orchestration
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T23:24:02Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-19T23:24:02Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-20T00:08:23Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: one-session-dispatches-the-waves
 

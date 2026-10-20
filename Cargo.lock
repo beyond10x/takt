@@ -180,6 +180,7 @@ dependencies = [
  "b10x-canon-engineering-assertions",
  "b10x-takt",
  "clap",
+ "serde_json",
  "serde_yaml_ng",
 ]
 

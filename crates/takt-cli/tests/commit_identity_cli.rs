@@ -172,6 +172,7 @@ impl World {
             .args(args)
             .envs(OPERATOR_ENV)
             .env_remove("B10X_GATES_POLICY")
+            .env("XDG_STATE_HOME", self.repo.with_file_name("xdg-state"))
             .env(
                 "PATH",
                 format!(

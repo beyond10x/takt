@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-turn-refuses-a-candidate-main-already-holds
 kind: story
-status: active
+status: implemented
 title: A self-improvement turn refuses at open a candidate the mainline already holds
 summary: the first real turn's candidate was merged before its grant and the turn still opened on it
 tags:
@@ -21,16 +21,17 @@ scope:
   path: ess/domains/takt.citations.tsv
 - confidence: cited
   path: ess/domains/takt.yaml
-revision: 8
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T22:44:32Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T22:44:33Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-20T00:08:23Z", actor: "human:timo", revision: 10, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: a-turn-refuses-a-candidate-main-already-holds
 
 ## Outcome
 
-`takt improve` refuses to open a turn on a candidate revision the mainline's tip already contains,
+`takt run --protocol self.improvement/1` refuses to open a turn on a candidate revision the mainline's tip already contains,
 naming the revision and what to do instead, so a candidate merged before its grant is caught at open.
 
 ## Context

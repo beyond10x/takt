@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:one-session-runs-the-trials
 kind: story
-status: draft
+status: implemented
 title: One trial session runs takt's trials, proposes and re-trials candidates, and promotes
 summary: 'the owner''s process change of 2026-10-20: trials, scorecards and promotions move to one trial session triggered by a release or a person'
 tags:
@@ -10,7 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-19T23:24:02Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-19T23:24:03Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-20T00:08:24Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: one-session-runs-the-trials
 

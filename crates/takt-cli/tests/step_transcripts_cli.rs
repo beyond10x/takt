@@ -1,7 +1,8 @@
 //! story:step-transcripts-are-kept, where `takt run` keeps them: each harness step's transcript
 //! under `$XDG_STATE_HOME/takt/transcripts/<repo-key>/<case>/run-<r>/step-<n>.jsonl`, outside
 //! the repository and its cases directory, its directories `0700` and the file `0600`, and the
-//! step's line in the run record naming it. The test gives takt its own `XDG_STATE_HOME`. The
+//! step's line in the run record naming it. The first test gives takt its own `XDG_STATE_HOME`;
+//! the second an empty `HOME` and no `XDG_STATE_HOME`, as on a runner or a new machine. The
 //! `claude` is a double; nothing reaches a model.
 
 use std::fs;
@@ -200,6 +201,113 @@ fn takt_run_keeps_each_step_transcript_under_the_state_home() {
     assert!(
         !events.contains(real_state.to_str().expect("utf-8")),
         "no line of the run record names the state home:\n{events}"
+    );
+    drop(scratch);
+}
+
+/// `takt run --harness claude` on a home that holds nothing, `XDG_STATE_HOME` unset and
+/// `~/.local/bin` on `PATH` (a runner's, a container's, a new machine's): the transcripts
+/// directory `~/.local/state/takt/transcripts` is made when the run opens, each part takt made
+/// `0700`, so the harness's step is not charged with the `~/.local` takt made for it. The step
+/// is taken, not refused, and its transcript kept under `~/.local/state`.
+#[test]
+fn takt_run_on_an_empty_home_keeps_the_transcript_and_refuses_no_step() {
+    let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("step-transcripts-home-{}", std::process::id()));
+    if outer.exists() {
+        fs::remove_dir_all(&outer).expect("a stale scratch tree is removed");
+    }
+    let scratch = Scratch(outer.clone());
+    let repo = outer.join("repo");
+    let bin = outer.join("bin");
+    let home = outer.join("home");
+    fs::create_dir_all(&repo).expect("a repository");
+    fs::create_dir_all(&bin).expect("a program directory");
+    fs::create_dir_all(&home).expect("an empty home");
+    fs::write(repo.join("README.md"), "a story\n").expect("a file");
+    executable(&repo.join("check.sh"), "#!/bin/sh\nexit 1\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "start"]);
+    let printed = outer.join("printed");
+    fake_claude(&bin.join("claude"), &printed);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args([
+            "run",
+            "--repo",
+            repo.to_str().expect("utf-8"),
+            "--intent",
+            "probe",
+            "--harness",
+            "claude",
+            "--forge",
+            "none",
+            "--iterations",
+            "2",
+            "--test-cmd",
+            "./check.sh",
+        ])
+        .env(
+            "PATH",
+            format!(
+                "{}:{}:{}",
+                bin.display(),
+                home.join(".local/bin").display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("HOME", &home)
+        .env_remove("XDG_STATE_HOME")
+        .env_remove("B10X_GATES_POLICY")
+        .output()
+        .expect("takt runs");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let said = format!("{stdout}\n{stderr}");
+    assert!(
+        !stdout.contains("refused:") && !stdout.contains("StepRefused"),
+        "no step is refused on an empty home\n{said}"
+    );
+    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".engineering/cases"))
+        .expect("the cases directory")
+        .map(|entry| entry.expect("an entry").path())
+        .collect();
+    assert_eq!(cases.len(), 1, "{said}");
+    let case = cases[0].file_name().expect("a name").to_owned();
+    let real_home = fs::canonicalize(&home).expect("the home resolves");
+    let real_repo = fs::canonicalize(&repo).expect("the repository resolves");
+    let digest = Command::new("sh")
+        .args(["-c", "printf '%s' \"$1\" | sha256sum", "sh"])
+        .arg(&real_repo)
+        .output()
+        .expect("sha256sum runs");
+    let repo_key = String::from_utf8_lossy(&digest.stdout)[..16].to_owned();
+    let root = real_home.join(".local/state/takt/transcripts");
+    let path = root
+        .join(&repo_key)
+        .join(&case)
+        .join("run-1")
+        .join("step-2.jsonl");
+    assert!(
+        path.is_file(),
+        "{} holds the harness's step 2 transcript\n{said}",
+        path.display()
+    );
+    for made in [
+        ".local",
+        ".local/state",
+        ".local/state/takt",
+        ".local/state/takt/transcripts",
+    ] {
+        assert_eq!(mode(&real_home.join(made)), 0o700, "~/{made}");
+    }
+    let events = fs::read_to_string(cases[0].join("events.jsonl")).expect("the run record");
+    assert!(
+        events
+            .lines()
+            .any(|line| line.contains("\"event\":\"step\"") && line.contains("\"by\":\"harness\"")),
+        "the harness's step is recorded\n{events}"
     );
     drop(scratch);
 }

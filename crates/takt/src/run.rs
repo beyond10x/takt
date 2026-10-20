@@ -5250,6 +5250,23 @@ impl Outside {
         Ok(Self(entries))
     }
 
+    /// Takes each of the directories `made`, which takt made itself before any step (the
+    /// transcripts directory's way, [`Run::transcripts_in`]), as it is now, where this reads
+    /// it: a directory is found as one. A path this does not read is passed over, and so is one
+    /// that is no longer a directory, which stays as this found it and is charged to whatever
+    /// step comes next.
+    fn found_made(&mut self, made: &[PathBuf]) -> Result<()> {
+        for path in made {
+            if let Some((_, entry, _)) = self.0.get_mut(path) {
+                let now = Self::entry_at(path)?;
+                if now == Some(Entry::Other("directory")) {
+                    *entry = now;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// What is at `path` now, `None` for nothing; a link is not followed.
     fn entry_at(path: &Path) -> Result<Option<Entry>> {
         Self::entry_at_with(path, true)
@@ -6648,11 +6665,19 @@ impl<'a> Run<'a> {
     /// ([`crate::harness::keep_transcript`], [`crate::harness::repo_key`]), once `dir` is
     /// accepted as a set-aside root is ([`crate::git::set_aside_root`]): absolute, outside the
     /// tree, and makeable, every link on the way resolved now; else the error, and the run
-    /// keeps what it had.
+    /// keeps what it had. The directory is made now, with every part of the way to it that is
+    /// not there (`0700`, a link or a file on the way refused:
+    /// [`crate::harness::make_transcripts_root`]), and what the run found outside the tree when
+    /// it began ([`Outside`]) takes the parts it made as they are now: they are takt's, made
+    /// before any step, so no step is charged with them (`~/.local` on an empty home, on the
+    /// way to `~/.local/bin` or the user site). Nothing else the run found is read again.
     pub fn transcripts_in(&mut self, dir: PathBuf) -> Result<()> {
         let root = crate::git::set_aside_root(&dir, &self.tree)
             .with_context(|| format!("the transcripts directory {}", dir.display()))?;
         let key = crate::harness::repo_key(&self.tree)?;
+        let made = crate::harness::make_transcripts_root(&root)
+            .with_context(|| format!("the transcripts directory {}", dir.display()))?;
+        self.outside.found_made(&made)?;
         self.transcripts = Some((root, key));
         Ok(())
     }
