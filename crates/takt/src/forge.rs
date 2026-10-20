@@ -304,6 +304,16 @@ pub struct Outgoing<'a> {
     pub request: Option<&'a PullRequest>,
 }
 
+/// What the scan of a commit identity found when a run opened ([`Forge::scan_identity`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdentityScan {
+    /// The scan read the identity and refused nothing.
+    Passed,
+    /// No scan read the identity, and why: no policy found, no scanner to run, a forge that has
+    /// none. Not a pass: the scan before the push still applies.
+    NotScanned(String),
+}
+
 /// The repository host: pushes a branch, opens its pull request, reports the pull request's
 /// state and head and the checks on its head, and merges it.
 pub trait Forge {
@@ -343,6 +353,23 @@ pub trait Forge {
     /// came back, when it keeps anything. What the merge made of the pull request is read back
     /// through [`Self::pull_request`]; the merge itself answers nothing a validator records.
     fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()>;
+    /// Scans the commit identity `identity`, as a commit object would carry it, with the scan
+    /// [`Self::scan_outgoing`] applies before a push, when a run whose commits leave the machine
+    /// opens; `dir` is where the adapter keeps the text it scanned. A refusal is an error naming
+    /// the scan's; a scan that cannot run (no policy, no scanner) is [`IdentityScan::NotScanned`],
+    /// never a pass. By default an adapter has no such scan and says so.
+    fn scan_identity(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        identity: &crate::git::CommitIdentity,
+    ) -> Result<IdentityScan> {
+        let _ = (tree, dir, identity);
+        Ok(IdentityScan::NotScanned(format!(
+            "the forge {} has no scan for a commit identity",
+            self.name()
+        )))
+    }
     /// The commit the branch `base`, a merge's target, is at as the repository reports it when
     /// the merge is decided: where `repository.merge` reads the judge allow-list and the
     /// delegation record from, never the case's tree. Refused by default, so an adapter that
@@ -1253,6 +1280,12 @@ impl BotRoute {
     pub const FILES: &str = "push.files.txt";
     /// The most bytes of messages and files one scan before a push is given by default.
     pub const SCAN_LIMIT: usize = 32 << 20;
+    /// The file under the directory `scan_identity` is given that holds the commit identity as
+    /// a commit object carries it ([`identity_headers`]).
+    pub const IDENTITY: &str = "commit-identity.txt";
+    /// What `b10x-gates` 0.1.21 says, exiting 1, when it finds no policy file, the one
+    /// `--policy` names or its default: it then scanned nothing.
+    pub const NO_POLICY: &str = "unavailable: not found";
     /// What a push's child is started with beyond every forge child's: git may push over HTTPS
     /// alone, whatever URL the remote or the repository's configuration names.
     pub const PUSH_ENV: [(&str, &str); 1] = [("GIT_ALLOW_PROTOCOL", "https")];
@@ -1617,6 +1650,14 @@ fn refused_transport(stderr: &str) -> Option<&str> {
 /// Writes the pull request `request` into `dir`: the JSON the API write sends as
 /// [`BotRoute::REQUEST`], and the title and body as they are published, decoded, as
 /// [`BotRoute::PUBLISHED`]. Both paths.
+/// The commit identity `identity` as a commit object carries it, the text the scan before a
+/// push reads for each commit: an `author` and a `committer` header, `<name> <<email>>`, a time
+/// and a zone after it.
+#[must_use]
+pub fn identity_headers(identity: &crate::git::CommitIdentity) -> String {
+    format!("author {identity} 0 +0000\ncommitter {identity} 0 +0000\n")
+}
+
 fn write_request(dir: &Path, request: &PullRequest) -> Result<(PathBuf, PathBuf)> {
     let input = dir.join(BotRoute::REQUEST);
     let document = serde_json::json!({
@@ -2055,6 +2096,56 @@ impl Forge for BotRoute {
         Ok(())
     }
 
+    /// One `scan-text` line, under the repository and policy of the scan before a push
+    /// ([`Self::scan_argv`]), over [`Self::IDENTITY`] written under `dir`: the identity as the
+    /// `author` and `committer` headers of a commit object ([`identity_headers`]). A
+    /// `b10x-gates` that is not on the program path, or that finds no policy file
+    /// ([`Self::NO_POLICY`]), scanned nothing: [`IdentityScan::NotScanned`], naming what it said.
+    fn scan_identity(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        identity: &crate::git::CommitIdentity,
+    ) -> Result<IdentityScan> {
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        let path = dir.join(Self::IDENTITY);
+        std::fs::write(&path, identity_headers(identity))
+            .with_context(|| format!("write {}", path.display()))?;
+        let argv = self.scan_argv(&path);
+        let exit = match self.runner.run(tree, &argv) {
+            Ok(exit) => exit,
+            Err(error)
+                if error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                }) =>
+            {
+                return Ok(IdentityScan::NotScanned(format!("{error:#}")));
+            }
+            Err(error) => return Err(error),
+        };
+        if exit.success() {
+            return Ok(IdentityScan::Passed);
+        }
+        let said = exit.stderr.trim();
+        if said.contains(Self::NO_POLICY) {
+            return Ok(IdentityScan::NotScanned(
+                said.lines().collect::<Vec<_>>().join(" | "),
+            ));
+        }
+        Err(anyhow::Error::new(Failed {
+            line: argv.join(" "),
+            code: exit.code,
+            stderr: said.to_owned(),
+        }))
+        .with_context(|| {
+            format!(
+                "the commit identity {identity} did not pass scan-text, the scan the bot route runs over every commit before a push"
+            )
+        })
+    }
+
     fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64> {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         let output = fresh(dir.join(Self::RESPONSE))?;
@@ -2397,5 +2488,143 @@ impl Forge for Memory {
             ],
         )
         .with_context(|| format!("the double's {base} is not a branch of the tree"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+    use std::rc::Rc;
+
+    use anyhow::Result;
+
+    use super::{BotRoute, Exit, Forge as _, IdentityScan, Runner};
+    use crate::git::CommitIdentity;
+
+    /// What the scan double answers.
+    #[derive(Clone, Copy)]
+    enum Answer {
+        Pass,
+        Refuse,
+        NoPolicy,
+        NotInstalled,
+    }
+
+    /// Records each line and the text of the file it names last, and answers `answer`.
+    struct Scan {
+        answer: Answer,
+        seen: Rc<RefCell<Vec<(String, String)>>>,
+    }
+
+    impl Runner for Scan {
+        fn run(&self, _: &Path, argv: &[String]) -> Result<Exit> {
+            let read = argv
+                .last()
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .unwrap_or_default();
+            self.seen.borrow_mut().push((argv.join(" "), read));
+            let exit = |code, stderr: &str| Exit {
+                code: Some(code),
+                stdout: String::new(),
+                stderr: stderr.to_owned(),
+            };
+            match self.answer {
+                Answer::Pass => Ok(exit(0, "")),
+                Answer::Refuse => Ok(exit(
+                    1,
+                    "b10x-gates: commit-identity.txt breaks 1 private rule(s): line 1 person-name; private details remain local\n",
+                )),
+                Answer::NoPolicy => Ok(exit(
+                    1,
+                    "b10x-gates: protected file /home/nobody/.config/b10x/gates/policy.json unavailable: not found\n",
+                )),
+                Answer::NotInstalled => Err(anyhow::Error::new(std::io::Error::from(
+                    std::io::ErrorKind::NotFound,
+                ))
+                .context("run b10x-gates")),
+            }
+        }
+
+        fn run_env(&self, tree: &Path, argv: &[String], _: &[(&str, &str)]) -> Result<Exit> {
+            self.run(tree, argv)
+        }
+    }
+
+    /// A scratch directory of this test's own, removed on drop.
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scan(name: &str, answer: Answer) -> (Result<IdentityScan>, Vec<(String, String)>, Scratch) {
+        let dir = std::env::temp_dir().join(format!("takt-forge-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let route = BotRoute::new(
+            "owner/repo",
+            Some(PathBuf::from("/policies/gates.json")),
+            Box::new(Scan {
+                answer,
+                seen: Rc::clone(&seen),
+            }),
+        );
+        let identity = CommitIdentity::new("Some One", "one@example.invalid").expect("an identity");
+        let scanned = route.scan_identity(Path::new("."), &dir, &identity);
+        let seen = seen.borrow().clone();
+        (scanned, seen, Scratch(dir))
+    }
+
+    /// The identity is scanned by one `scan-text` line under the push scan's repository and
+    /// policy, over the identity as a commit object's `author` and `committer` headers; a scan
+    /// that exits 0 passes it.
+    #[test]
+    fn an_identity_is_scanned_as_a_commit_carries_it() {
+        let (scanned, seen, scratch) = scan("pass", Answer::Pass);
+        assert_eq!(scanned.expect("scanned"), IdentityScan::Passed);
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert_eq!(
+            seen[0].0,
+            format!(
+                "b10x-gates scan-text --repository owner/repo --policy /policies/gates.json {}",
+                scratch.0.join(BotRoute::IDENTITY).display()
+            )
+        );
+        assert_eq!(
+            seen[0].1,
+            "author Some One <one@example.invalid> 0 +0000\ncommitter Some One <one@example.invalid> 0 +0000\n"
+        );
+    }
+
+    /// A refusal is an error naming the identity and the scan's own words.
+    #[test]
+    fn a_refused_identity_is_an_error_naming_the_scans_refusal() {
+        let (scanned, _, _scratch) = scan("refuse", Answer::Refuse);
+        let error = format!("{:#}", scanned.expect_err("refused"));
+        for named in [
+            "Some One <one@example.invalid>",
+            "did not pass scan-text",
+            "breaks 1 private rule(s): line 1 person-name",
+        ] {
+            assert!(error.contains(named), "{named}: {error}");
+        }
+    }
+
+    /// No policy file, or no `b10x-gates` to run, scanned nothing: not scanned, never passed.
+    #[test]
+    fn no_policy_or_no_scanner_is_not_scanned() {
+        for (name, answer, said) in [
+            ("no-policy", Answer::NoPolicy, "unavailable: not found"),
+            ("not-installed", Answer::NotInstalled, "run b10x-gates"),
+        ] {
+            let (scanned, _, _scratch) = scan(name, answer);
+            match scanned.expect(name) {
+                IdentityScan::NotScanned(why) => assert!(why.contains(said), "{name}: {why}"),
+                IdentityScan::Passed => panic!("{name}: reported as passed"),
+            }
+        }
     }
 }

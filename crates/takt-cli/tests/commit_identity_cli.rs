@@ -505,3 +505,294 @@ fn a_scenario_run_through_the_bot_route_with_no_identity_is_refused_before_anyth
     assert!(!world.repo.join(".engineering/cases").exists(), "{said}");
     assert_eq!(world.route_calls(), "", "{said}");
 }
+
+// story:a-run-refuses-a-scanned-identity-at-open: a run whose commits leave the machine scans
+// its commit identity with the bot route's own `scan-text` when it opens, before step 1.
+
+/// The name the scan double refuses wherever a file it scans holds it.
+const REFUSED_NAME: &str = "Refused Person";
+
+/// An identity the scan double refuses.
+const REFUSED: &str = "Refused Person <refused@example.invalid>";
+
+/// An identity the scan double passes.
+const PASSING: &str = "Release Bot <release@example.invalid>";
+
+/// What `b10x-gates` 0.1.21 says, exiting 1, when no policy file is given and its default one
+/// is not there.
+const NO_POLICY: &str =
+    "b10x-gates: protected file /home/nobody/.config/b10x/gates/policy.json unavailable: not found";
+
+/// How the scan double words a refusal, as `b10x-gates scan-text` does after the path.
+const RULE_BROKEN: &str =
+    "breaks 1 private rule(s): line 1 person-name; private details remain local";
+
+impl World {
+    /// Replaces the `b10x-gates` double with one whose `scan-text` appends every file it is
+    /// given to `scanned` and refuses one holding [`REFUSED_NAME`] ([`RULE_BROKEN`]), passing the
+    /// rest; with `no_policy`, every `scan-text` says [`NO_POLICY`] and fails, scanning nothing.
+    /// Every call is logged as before; a `bot -- fetch` (the scenario run's read of the
+    /// remote's trial branches) passes, fetching nothing; every other line is refused.
+    fn scanning_gates(&self, no_policy: bool) {
+        let scanned = self.scanned_path();
+        let policy = if no_policy {
+            format!("echo '{NO_POLICY}' >&2\nexit 1\n")
+        } else {
+            String::new()
+        };
+        let script = format!(
+            "#!/bin/sh\necho \"$0 $*\" >> '{calls}'\nif [ \"$1 $3\" = \"bot fetch\" ]; then\n  exit 0\nfi\nif [ \"$1\" != scan-text ]; then\n  echo 'the route double refuses' >&2\n  exit 1\nfi\n{policy}for arg in \"$@\"; do\n  if [ -f \"$arg\" ]; then\n    cat \"$arg\" >> '{scanned}'\n    if grep -q '{REFUSED_NAME}' \"$arg\"; then\n      echo \"$arg {RULE_BROKEN}\" >&2\n      exit 1\n    fi\n  fi\ndone\necho \"$# file(s) carry no private rule\"\nexit 0\n",
+            calls = self.calls.display(),
+            scanned = scanned.display(),
+        );
+        let path = self.bin.join("b10x-gates");
+        fs::write(&path, script).expect("the double is written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable");
+        }
+    }
+
+    fn scanned_path(&self) -> PathBuf {
+        self.calls.with_file_name("scanned")
+    }
+
+    /// Everything the scan double was given to read.
+    fn scanned(&self) -> String {
+        fs::read_to_string(self.scanned_path()).unwrap_or_default()
+    }
+
+    /// An `origin` on github.com: the forge is the bot route by default.
+    fn with_origin(&self) {
+        git(
+            &self.repo,
+            &["remote", "add", "origin", "git@github.com:owner/repo.git"],
+        );
+    }
+
+    /// Declares scenario `1` on story:ready-one, seeded at the current commit, and commits it.
+    fn declare_scenario(&self) {
+        let seed = git(&self.repo, &["rev-parse", "HEAD"]);
+        fs::write(
+            self.repo.join(".engineering/scenarios.conf"),
+            format!("[scenario \"1\"]\n\tstory = story:ready-one\n\tseed = {seed}\n"),
+        )
+        .expect("a file");
+        git(&self.repo, &["add", "-A"]);
+        git(&self.repo, &["commit", "-q", "-m", "declare"]);
+    }
+
+    /// `takt scenario run --repo <repo> 1 --test-cmd true --harness claude`, `extra` after it.
+    fn scenario_run(&self, extra: &[&str]) -> (i32, String, String) {
+        let repo = self.repo.to_str().expect("utf-8");
+        let mut args = vec![
+            "scenario",
+            "run",
+            "--repo",
+            repo,
+            "1",
+            "--test-cmd",
+            "true",
+            "--harness",
+            "claude",
+        ];
+        args.extend_from_slice(extra);
+        self.takt(&args)
+    }
+
+    /// Asserts nothing was opened, committed or pushed, no trial base is left, and the route ran
+    /// one `scan-text`, which read `identity` as a commit object carries it, and no line but it
+    /// and the read of the trial branches.
+    fn refused_at_open(&self, start: &str, identity: &str, said: &str) {
+        assert_eq!(git(&self.repo, &["rev-parse", "HEAD"]), start, "{said}");
+        assert_eq!(
+            git(&self.repo, &["branch", "--show-current"]),
+            "main",
+            "{said}"
+        );
+        assert_eq!(
+            git(
+                &self.repo,
+                &[
+                    "for-each-ref",
+                    "--format=%(refname)",
+                    "refs/heads/trial/",
+                    "refs/heads/takt/"
+                ]
+            ),
+            "",
+            "{said}"
+        );
+        assert_eq!(git(&self.repo, &["status", "--porcelain"]), "", "{said}");
+        assert!(!self.repo.join(".engineering/cases").exists(), "{said}");
+        assert!(!self.repo.join("work.txt").exists(), "{said}");
+        let calls = self.route_calls();
+        let scans: Vec<&str> = calls
+            .lines()
+            .filter(|line| line.contains("b10x-gates scan-text "))
+            .collect();
+        assert_eq!(scans.len(), 1, "one scan: {calls}\n{said}");
+        assert!(
+            scans[0].contains("b10x-gates scan-text --repository owner/repo "),
+            "{calls}\n{said}"
+        );
+        for line in calls.lines() {
+            assert!(
+                line.contains("b10x-gates scan-text ") || line.contains("b10x-gates bot -- fetch "),
+                "nothing but the scan and a read: {calls}\n{said}"
+            );
+        }
+        let scanned = self.scanned();
+        for side in ["author", "committer"] {
+            assert!(
+                scanned.contains(&format!("{side} {identity}")),
+                "the scan read the identity as a commit's {side}: {scanned}\n{said}"
+            );
+        }
+    }
+}
+
+/// Acceptance 1 and 2 for `takt run`: through the bot route, an identity the scan refuses,
+/// given by `--commit-identity` or read from `.engineering/commit-identity.conf`, ends the run
+/// with exit 1 before step 1, naming the scan's refusal and where the identity came from: no
+/// case, no branch, no commit, the harness never called, nothing pushed.
+#[test]
+fn a_run_through_the_bot_route_refuses_an_identity_the_scan_refuses_before_step_one() {
+    let file = identity_file(REFUSED_NAME, "refused@example.invalid");
+    for (name, configured, flag, source) in [
+        ("scan-flag", None, Some(REFUSED), "--commit-identity"),
+        ("scan-file", Some(file.as_str()), None, IDENTITY_FILE),
+    ] {
+        let world = world(name, configured);
+        world.with_origin();
+        world.scanning_gates(false);
+        let start = git(&world.repo, &["rev-parse", "HEAD"]);
+        let mut args = vec!["--harness", "claude", "--iterations", "3"];
+        if let Some(flag) = flag {
+            args.extend(["--commit-identity", flag]);
+        }
+        let (code, out, err) = world.run(&args);
+        let said = format!("{name}: stdout {out} stderr {err}");
+        assert_eq!(code, 1, "{said}");
+        for named in [RULE_BROKEN, "scan-text", REFUSED, source] {
+            assert!(err.contains(named), "{named}: {said}");
+        }
+        assert!(!out.contains("frontier: took"), "{said}");
+        world.refused_at_open(&start, REFUSED, &said);
+    }
+}
+
+/// Acceptance 1 and 2 for `takt scenario run`: the same refusal before the trial base is pushed
+/// or any step taken; the trial base cut locally is removed again.
+#[test]
+fn a_scenario_run_through_the_bot_route_refuses_an_identity_the_scan_refuses() {
+    let file = identity_file(REFUSED_NAME, "refused@example.invalid");
+    for (name, configured, flag, source) in [
+        (
+            "scan-scenario-flag",
+            None,
+            Some(REFUSED),
+            "--commit-identity",
+        ),
+        (
+            "scan-scenario-file",
+            Some(file.as_str()),
+            None,
+            IDENTITY_FILE,
+        ),
+    ] {
+        let world = world(name, configured);
+        world.declare_scenario();
+        world.with_origin();
+        world.scanning_gates(false);
+        let start = git(&world.repo, &["rev-parse", "HEAD"]);
+        let mut args = Vec::new();
+        if let Some(flag) = flag {
+            args.extend(["--commit-identity", flag]);
+        }
+        let (code, out, err) = world.scenario_run(&args);
+        let said = format!("{name}: stdout {out} stderr {err}");
+        assert_eq!(code, 1, "{said}");
+        for named in [RULE_BROKEN, "scan-text", REFUSED, source] {
+            assert!(err.contains(named), "{named}: {said}");
+        }
+        world.refused_at_open(&start, REFUSED, &said);
+    }
+}
+
+/// Acceptance 3: an identity the scan passes opens the run as before, the scan its first route
+/// line; under `--forge none` an identity the scan would refuse opens the run and no scan runs.
+#[test]
+fn an_identity_the_scan_passes_opens_and_forge_none_scans_nothing() {
+    let passing = world("scan-passes", None);
+    passing.with_origin();
+    passing.scanning_gates(false);
+    let (_, out, err) = passing.run(&[
+        "--harness",
+        "none",
+        "--iterations",
+        "0",
+        "--commit-identity",
+        PASSING,
+    ]);
+    let said = format!("stdout {out} stderr {err}");
+    assert!(out.contains("frontier: took story:ready-one"), "{said}");
+    passing.all_by(PASSING, 1, &said);
+    let calls = passing.route_calls();
+    assert!(
+        calls
+            .lines()
+            .next()
+            .is_some_and(|line| line.contains("b10x-gates scan-text ")),
+        "{calls}\n{said}"
+    );
+    assert!(
+        passing.scanned().contains(&format!("author {PASSING}")),
+        "{said}"
+    );
+    assert!(!format!("{out}{err}").contains("not scanned"), "{said}");
+
+    let unscanned = world("scan-none", None);
+    unscanned.with_origin();
+    unscanned.scanning_gates(false);
+    let (_, out, err) = unscanned.run(&[
+        "--harness",
+        "none",
+        "--forge",
+        "none",
+        "--iterations",
+        "0",
+        "--commit-identity",
+        REFUSED,
+    ]);
+    let said = format!("stdout {out} stderr {err}");
+    assert!(out.contains("frontier: took story:ready-one"), "{said}");
+    unscanned.all_by(REFUSED, 1, &said);
+    assert_eq!(unscanned.route_calls(), "", "{said}");
+}
+
+/// Acceptance 4: with no policy the scan cannot run; the run says "not scanned", never that the
+/// identity passed, and opens as it does today, its scan left to `pr.open`.
+#[test]
+fn with_no_policy_the_identity_is_not_scanned_and_the_run_opens() {
+    let world = world("scan-no-policy", None);
+    world.with_origin();
+    world.scanning_gates(true);
+    let (_, out, err) = world.run(&[
+        "--harness",
+        "none",
+        "--iterations",
+        "0",
+        "--commit-identity",
+        REFUSED,
+    ]);
+    let said = format!("stdout {out} stderr {err}");
+    assert!(out.contains("frontier: took story:ready-one"), "{said}");
+    world.all_by(REFUSED, 1, &said);
+    let both = format!("{out}{err}");
+    assert!(both.contains("not scanned"), "{said}");
+    assert!(both.contains("unavailable: not found"), "{said}");
+    assert!(!both.contains("passed"), "{said}");
+    assert_eq!(world.scanned(), "", "{said}");
+}

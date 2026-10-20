@@ -16,9 +16,18 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 - `takt run` and `takt scenario run` take `--active-seconds <n>`: a budget on a run's wall time
   less its waits on the forge; over it the run stops `ActiveTime`, naming the budget, the active
   time and the wait time, exit 3.
+- `takt replay --case <dir> --step <n> [--times <k>]` runs one judgement step of a recorded case
+  again from its recorded state, in a scratch worktree at the revision it started at. It checks the
+  rebuilt prompt against the recorded transcript first (a mismatch exits 3 and runs nothing),
+  records each replay as `takt-replay/1` outside the case and the tree, and leaves the case
+  untouched.
 
 ### Changed
 
+- `takt run` and `takt scenario run` through the bot route scan the commit identity with the
+  forge's scan when they open, before step 1: an identity the scan refuses exits 1 naming the
+  refusal, with no step taken and nothing pushed; with no policy the run prints `not scanned` and
+  opens; `--forge none` scans nothing.
 - The scorecard gains the metric `step_tokens` (version 1), each run's tokens by step action. A
   scorecard saved before it lacks the metric, so the promoted baseline is judged again only after
   `takt promote --rebaseline`.
