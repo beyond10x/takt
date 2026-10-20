@@ -15,6 +15,8 @@ b10x-canon = { workspace = true }
 b10x-canon-engineering = { workspace = true }
 b10x-canon-engineering-assertions = { workspace = true }
 b10x-canon-expr = { workspace = true }
+b10x-loom-sdk = { workspace = true }
+b10x-session-executor = { path = "../session-executor" }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -28,6 +30,5 @@ unsafe-libyaml = { workspace = true }
 libc = "0.2.191"
 
 [dev-dependencies]
-b10x-loom-sdk = { workspace = true }
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 serde_json = { workspace = true }

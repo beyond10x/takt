@@ -8969,6 +8969,102 @@ impl<'a> Run<'a> {
         )
     }
 
+    /// Why the step guard refuses `proposal` on its face, before the edit effect writes a byte
+    /// of it to `tree`: an action neither `offered` nor among the `approvals`; a file changed
+    /// for an approval or `repository.inspect`, which change none; a path that is no plain
+    /// path of the tree (absolute, with a `.` or `..` part, a part named `.git`); a path in
+    /// the cases directory or on the judge `surface`; a non-test path for `tests.write`; a
+    /// path reached through a link, or one at which the tree holds no regular file but
+    /// something else. None when it passes.
+    fn proposal_refusal(
+        tree: &Path,
+        proposal: &crate::harness::Proposal,
+        offered: &[String],
+        approvals: &[String],
+        surface: &JudgeSurface,
+    ) -> Option<String> {
+        let action = &proposal.action;
+        let approval = approvals.contains(action);
+        if !offered.contains(action) && !approval {
+            return Some(format!("{action} was not offered"));
+        }
+        if (approval || action == "repository.inspect") && !proposal.files.is_empty() {
+            return Some(format!(
+                "{action} proposes {} changed path(s), and it changes none",
+                proposal.files.len()
+            ));
+        }
+        let cases = format!("{CASES_DIR}/");
+        for file in &proposal.files {
+            let path = file.path.as_str();
+            if !session_executor::plain_relative(path) {
+                return Some(format!(
+                    "{action} proposes {path:?}, which is no plain path of the tree"
+                ));
+            }
+            if path == CASES_DIR || path.starts_with(&cases) {
+                return Some(format!(
+                    "{action} proposes a path in the cases directory: {path}"
+                ));
+            }
+            if surface.contains(path) {
+                return Some(surface_refusal(action, &[path.to_owned()]));
+            }
+            if action == "tests.write" && !is_test_path(path) {
+                return Some(format!("tests.write proposes a non-test path: {path}"));
+            }
+            let at = tree.join(path);
+            if let Err(why) = no_link_on_the_way(tree, &at) {
+                return Some(format!("{action} proposes {path}: {why:#}"));
+            }
+            if let Ok(meta) = std::fs::symlink_metadata(&at)
+                && !meta.is_file()
+            {
+                return Some(format!(
+                    "{action} proposes {path}, where the tree holds no regular file"
+                ));
+            }
+        }
+        None
+    }
+
+    /// The edit effect: writes each file of `proposal` to `tree`, its content whole, never
+    /// through a link (`O_NOFOLLOW`), or removes it when the proposal carries none. Called
+    /// only on a proposal [`Self::proposal_refusal`] passed.
+    fn apply_proposal(tree: &Path, proposal: &crate::harness::Proposal) -> Result<()> {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        for file in &proposal.files {
+            let at = tree.join(&file.path);
+            match &file.content {
+                Some(text) => {
+                    if let Some(parent) = at.parent() {
+                        std::fs::create_dir_all(parent)
+                            .with_context(|| format!("create {}", parent.display()))?;
+                    }
+                    let mut written = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(true)
+                        .custom_flags(libc::O_NOFOLLOW)
+                        .open(&at)
+                        .with_context(|| format!("open {}", file.path))?;
+                    written
+                        .write_all(text.as_bytes())
+                        .with_context(|| format!("write {}", file.path))?;
+                }
+                None => match std::fs::remove_file(&at) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(error).with_context(|| format!("remove {}", file.path));
+                    }
+                },
+            }
+        }
+        Ok(())
+    }
+
     /// The loop, the case held.
     fn run_held(&mut self, events: &Events, out: &mut dyn Write) -> Result<Stop> {
         let inputs: Vec<String> = self
@@ -9758,6 +9854,62 @@ impl<'a> Run<'a> {
                     )),
                 });
             }
+            // The edit effect: a harness that works in a scratch copy and never in the tree
+            // ([`Harness::take_proposal`]) hands its change over as a proposal, and takt writes
+            // it here, after the checkpoint and before the step is judged. A proposal the guard
+            // refuses on its face (an action not offered, a file changed for an action that
+            // changes none, a path that is no plain path of the tree, under `.git`, in the cases
+            // directory, on the judge surface, a non-test path for `tests.write`, a path reached
+            // through a link) is refused before a byte of it reaches the tree; one that passes
+            // is written, and judged below as any step's change.
+            let stepped = match stepped {
+                Ok(report) => match self.harness.take_proposal() {
+                    None => Ok(report),
+                    Some(proposal) => {
+                        match Self::proposal_refusal(
+                            &self.tree, &proposal, &offered, &approvals, &surface,
+                        ) {
+                            Some(why) => {
+                                let moved = undo()?;
+                                let why = format!("{}{moved}", crate::trace::escape(&why));
+                                if let Some(tokens) = report.tokens {
+                                    self.tokens += tokens;
+                                }
+                                self.stepped(
+                                    events,
+                                    SteppedBy::Harness(
+                                        report.tokens,
+                                        self.harness.last_usage(),
+                                        self.harness.last_call().map(Box::new),
+                                        transcript.clone(),
+                                    ),
+                                    self.harness.name(),
+                                    &report.action,
+                                    &report.summary,
+                                )?;
+                                self.refused(events, BY_TAKT, &why)?;
+                                writeln!(
+                                    out,
+                                    "step {}: {} ({})",
+                                    self.steps,
+                                    report.action,
+                                    self.harness.name()
+                                )?;
+                                writeln!(
+                                    out,
+                                    "  refused before the edit effect: {why}; nothing of the proposal was written to the tree"
+                                )?;
+                                tell(out)?;
+                                return Ok(Stop::StepRefused(why));
+                            }
+                            None => Self::apply_proposal(&self.tree, &proposal)
+                                .map(|()| report)
+                                .context("the edit effect could not write the proposal"),
+                        }
+                    }
+                },
+                Err(error) => Err(error),
+            };
             // What the step left, read now; a read that fails (a file the run may not read)
             // discards the step before the run ends on the error.
             let seen =
