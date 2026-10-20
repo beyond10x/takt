@@ -11,8 +11,9 @@ rollouts and their rendering, the proposals, the candidates and their re-trials,
 promotion of a merged candidate: `takt promote`, which records the promotion and installs the
 binary, is this role's alone. It works only in managed worktrees (`worktree create --purpose
 <what>`), never in the dispatcher's checkout and never on a `wave/<NN>` branch; those are the
-dispatcher's (`.agents/dispatcher-agent.md`). An accepted candidate goes to the dispatcher, which
-merges it as a unit of its next wave.
+dispatcher's (`.agents/dispatcher-agent.md`). An accepted candidate in takt goes to the
+dispatcher, which merges it as a unit of its next wave; one in another layer's repository goes to
+that repository's delivery session through the monitor, with a copy to the dispatcher (step 9).
 
 ## Start
 
@@ -59,8 +60,9 @@ Each cycle has its own directory outside the repository, named `<YYYY-MM-DD>-<sh
         scenario's story;
      4. a bot-route `b10x-gates bot -- push --dry-run` of a `trial/<n>` branch from the scenario
         checkout;
-     5. the revision of the binary under test: its `--version` names the sha of step 1 (or of
-        the candidate, step 8), not `-dirty`.
+     5. the revision of takt under test: its `--version` names the sha of step 1 (or of a takt
+        candidate, step 8), not `-dirty`. A pinned layer's revision is not checked here: no
+        record names it before a step ran, so step 8 reads it from run 1's record.
 
      A failed check starts no run; it is a deviation (§ Reports), fixed before the set starts.
      Release 0.4.0's cycle discarded five runs (368,818 tokens), each refused at `pr.open` by the
@@ -95,18 +97,34 @@ Each cycle has its own directory outside the repository, named `<YYYY-MM-DD>-<sh
    per scenario against the baseline. Each returns at most two proposals: the change, the paths,
    the scenario it should move, and an `expected_before` predicate (`scripts/check-finding`,
    `.agents/planner-agent.md` § Intake) that is red at the trigger's sha.
+
+   Each proposal names its layer and the repository that owns it, by the table of ADR 0096
+   (atlas, `architecture/adr/0096-the-agent-stack-has-one-owner-per-layer.md`); its candidate
+   is built in that repository (ADR 0101, atlas,
+   `architecture/adr/0101-trials-measure-every-layer.md`). takt's own settings for a vendor
+   harness (its argv, its settings document) are takt's layer. A proposal for a layer that no
+   repository in that table owns (a vendor harness's own prompt or tool schemas, a provider),
+   or for a repository that is not public, goes to the monitor as one message (the layer, the
+   change, the scenario it should move, the evidence) and gets no finding, no candidate and no
+   branch (§ Reports).
 6. **Reviews, in parallel.** The trial agent writes each proposal's finding with
    `scripts/file-finding --repo <predicate tree>` into one managed worktree at the trigger's sha,
    the cycle's predicate tree, which is never committed and is finished after the cycle's last
    promotion or rejection. One reviewer sub-agent (`.agents/reviewer-agent.md`) per proposal runs
    `scripts/check-finding --repo <predicate tree> --scenarios <scratch checkout> <id> <trigger
    sha>` and rejects a proposal that does not give `reproduced` there, or whose paths overlap
-   another accepted proposal's. A rejected proposal is recorded with its reason in the cycle
+   another accepted proposal's in the same repository. For a proposal in another repository the
+   predicate is the same: takt at the trigger's sha, with that layer at the revision the trial
+   ran and nothing pinned. A rejected proposal is recorded with its reason in the cycle
    directory and not tried again; it has no branch, so no hand-over.
-7. **Candidate.** For each accepted proposal: a managed worktree on a branch
-   `trial-cand/<cycle>-<k>` cut from the trigger's sha, and one implementor sub-agent that applies
-   the proposal under the dispatcher's implementor brief (`.agents/dispatcher-agent.md`), its
-   Scope the proposal's paths. The trial agent commits through the bot route.
+7. **Candidate.** For each accepted proposal: a managed worktree of the repository that owns its
+   layer (step 5), on a branch `trial-cand/<cycle>-<k>` cut from the revision of that
+   repository the trial ran (for takt, the trigger's sha), never a branch or a tree another
+   session works in. One implementor sub-agent applies the proposal, its Scope the proposal's
+   paths: in takt under the dispatcher's implementor brief (`.agents/dispatcher-agent.md`), in
+   another repository under that repository's `AGENTS.md`. The trial agent commits through
+   that repository's bot route (for takt, `b10x-gates bot -- <git args>`), and the commit's
+   message passes `b10x-gates scan-text` before the commit, in takt as in any other repository.
 8. **Re-trial.** First the parking rule: sort the baseline set's runs of the target scenario by
    tokens, take the middle three (second to fourth) and lower each by the proposal's low
    estimate of tokens saved per run. When all three fall under the re-trial's "better"
@@ -117,10 +135,25 @@ Each cycle has its own directory outside the repository, named `<YYYY-MM-DD>-<sh
    66,929, 66,949 and 66,976 to 65,639 to 65,686, all under the median of 66,421, so it is
    re-trialled.
 
-   Build the binary of the candidate's committed sha from its clean worktree, so
-   every run's `opened` line names that sha and not `-dirty`. Run each scenario of step 2 five
-   times with it, under step 2's pre-flight, budgets and early stop: `takt promote` refuses a
-   scenario either side has with fewer than five cases on the candidate's side.
+   For a takt candidate, build the binary of the candidate's committed sha from its clean
+   worktree, so every run's `opened` line names that sha and not `-dirty`. For a candidate of
+   another repository, takt is step 1's binary, built at the trigger's sha from its clean
+   worktree, so its `--version` names that sha and not `-dirty` (pre-flight item 5), and the
+   candidate is pinned in place of its layer's release:
+   - **A binary layer**, a program the runs start from `PATH`: build the candidate's committed
+     sha from its clean worktree into `<cycle dir>/cand-<k>/bin`, first on the `PATH` of every
+     run of the set. The pinned layer's revision is read from each run's record, run 1's before
+     run 2 starts (for the harness, the `version` of the run's first harness step's line, which
+     exists only after a step ran). A run whose record names another revision of the pinned
+     layer than the candidate's is discarded and run again; it is a deviation (§ Reports).
+   - **A library layer**, a Loom candidate built into takt through a `cargo --config
+     'patch…'`, is not pinned by this profile: no record names a `runtime` layer yet, so the
+     discard rule above cannot hold for it. Such a candidate is parked, kept on its branch and
+     not re-trialled, until story:a-trial-pins-another-repositorys-candidate.
+
+   Run each scenario of step 2 five times with the candidate, built or pinned, under step 2's
+   pre-flight, budgets and early stop: `takt promote` refuses a scenario either side has with
+   fewer than five cases on the candidate's side.
    - **Stop when decided.** After each run, the set stops when no result of its remaining runs
      can change its verdict (better, not better, worse). At five runs: three at or over the
      baseline's median of the target scenario decide "not better" (a run stopped `Tokens`
@@ -137,21 +170,36 @@ Each cycle has its own directory outside the repository, named `<YYYY-MM-DD>-<sh
    either, and the target scenario better on the proposal's metric. A failed comparison gets one revision by the
    implementor, given the scorecard's numbers, then another re-trial of the new sha. Three
    re-trials per candidate at most, then it is rejected.
-9. **Hand-over or rejection.**
+
+   A candidate of another repository is compared by the same rule, against the same two
+   scorecards, under the same parking rule, budgets and early stop. Its runs ran takt at the
+   trigger's sha, so its scorecard is `takt scorecard --save <cycle dir>/cand-<k> --revision
+   <trigger sha>`: `--save` refuses a file that exists, and step 2's
+   `scorecard-<trigger sha>.json` is in `<cycle dir>` already.
+9. **Hand-over or rejection.** `<repository>` below is the repository that owns the candidate's
+   layer (step 5). takt's hand-over goes to the dispatcher. Another repository's goes to that
+   repository's delivery session through the monitor (§ Reports), and the dispatcher gets a copy,
+   which it neither files nor merges (`.agents/dispatcher-agent.md` § Self-improvement in this
+   loop). A repository with no running delivery session holds the accepted candidate as a
+   finding in its own planning store until one runs; the trial agent writes nothing to that
+   store.
    - Accepted: first the reviewer runs `scripts/check-finding --repo <predicate tree>
-     --scenarios <scratch checkout> <id> <candidate sha>`; anything but `not_reproduced` is a
-     failed re-trial (step 8). Then the reviewer's verdict on `git diff <trigger sha>...<branch>`
-     at the candidate's exact sha, then `[CANDIDATE takt] <branch> <sha> <verdict file>
-     <scorecard file>` to the dispatcher, with the proposal's finding body under that first line.
-     The dispatcher files the finding and merges the candidate as a unit of its next wave under
-     the grant any unit needs.
-   - Rejected: `[REJECTED takt] <branch> <sha>` to the dispatcher, with a finding body under that
-     first line (`.agents/planner-agent.md` § Intake): the predicate, the reason, and the
-     comparison's lines as `takt scorecard --against` printed them. The dispatcher files it,
-     tagged `rsi`; this session writes nothing to the store of any branch that is merged. The
-     branch is kept and the worktree finished (`worktree finish --discard-cache --archive
-     <tree>`).
-10. **Promotion.** On the dispatcher's `[MERGED takt] <branch> <merge sha>`:
+     --scenarios <scratch checkout> <id> <candidate sha>` (for a candidate of another
+     repository, `<trigger sha>` in place of `<candidate sha>`, with the candidate pinned as in
+     step 8); anything but `not_reproduced` is a failed re-trial (step 8). Then the reviewer's verdict on `git diff <base>...<branch>`, where
+     `<base>` is the revision the branch was cut from (step 7), at the candidate's exact sha,
+     then `[CANDIDATE <repository>] <branch> <sha> <verdict file> <scorecard file>`, with the
+     proposal's finding body under that first line. For takt the dispatcher files the finding
+     and merges the candidate as a unit of its next wave under the grant any unit needs; another
+     repository's candidate merges and releases through that repository's own process.
+   - Rejected: `[REJECTED <repository>] <branch> <sha>`, with a finding body under that first
+     line (`.agents/planner-agent.md` § Intake): the predicate, the reason, and the comparison's
+     lines as `takt scorecard --against` printed them. For takt the dispatcher files it, tagged
+     `rsi`; this session writes nothing to the store of any branch that is merged, nor to the
+     planning store of another repository. The branch is kept and the worktree finished
+     (`worktree finish --discard-cache --archive <tree>`).
+10. **Promotion.** For a takt candidate, on the dispatcher's `[MERGED takt] <branch> <merge
+    sha>`:
     - `git fetch`, then `git merge-base --is-ancestor <candidate sha> origin/main`: `takt
       promote` refuses a revision that is not an ancestor of `origin/main` as last fetched.
     - A clean managed worktree checked out at the candidate's sha, the one the `[CANDIDATE takt]`
@@ -166,6 +214,14 @@ Each cycle has its own directory outside the repository, named `<YYYY-MM-DD>-<sh
       unpromoted, and the refusal goes to the dispatcher as a `[REJECTED takt]` hand-over. Exit 1
       or 5: nothing promoted; the reason on standard error goes to the owner.
 
+    A candidate of another repository is promoted only after it merged and released through
+    that repository's own process and takt moved its pin to that release (ADR 0101, point 5).
+    That the promotion record names the revision of every pinned layer is
+    story:takt-models-its-inner-workings-in-ess (`Promotion.layers`) and
+    story:a-trial-pins-another-repositorys-candidate. Until both are implemented, the trial
+    agent promotes no candidate of another repository; the takt release that moves the pin
+    starts a cycle as any release does (§ Triggers).
+
 ## Reports
 
 When the owner names a monitor, the session that watches this one, the trial agent reports to
@@ -175,12 +231,18 @@ it:
   refusal, an error, a discarded trial, a stop, a limit reached): one message of at most five
   lines, saying where the cycle stands and, for a deviation, what happened and what the trial
   agent does next.
-- **A proposal that concerns another repository** (ADR 0101): sent to the monitor as one message,
-  the proposal and its evidence, and not acted on by the trial agent: no finding, no candidate,
-  no branch, no edit in that repository. What becomes of it is the monitor's to decide.
+- **A proposal with no repository to land in** (step 5: a layer no repository of ADR 0096's
+  table owns, or a repository that is not public): one message, the layer, the change, the
+  scenario it should move and the evidence. The trial agent acts on it no further; what becomes
+  of it is the monitor's to decide.
+- **A hand-over in another repository** (step 9): `[CANDIDATE <repository>]` or
+  `[REJECTED <repository>]` with its finding body, for that repository's delivery session.
 
+A proposal for another repository is acted on as takt's (ADR 0101, steps 6 to 10), with three
+bounds: the trial agent edits that repository only in a managed worktree of the cycle, commits
+there only through that repository's bot route, and acts on no repository that is not public.
 With no monitor named, the hand-overs to the dispatcher and the lines to the owner in § The
-cycle are the only reports.
+cycle are the only reports, and the last two messages above go to the owner.
 
 ## Runs and measurement
 
@@ -194,8 +256,8 @@ verification runs of a finding (`scripts/check-finding`), on request.
 - **Runs of other repositories**, on the owner's request: a story-sized merged unit of a public
   repository, seed = the merge's first parent, intent = the story body, hidden acceptance = the
   unit's added or changed test files, copied over the candidate's files after the run
-  (overwrite, never apply as a patch: the run may have edited the same test file). One build
-  directory per repository; stop below 15G free disk.
+  (overwrite, never apply as a patch: the run may have edited the same test file). Each tree
+  builds into its own `target/`, one build at a time (§ Limits); stop below 15G free disk.
 - **Measurement.** Per scenario: outcome, steps, tokens, refusals, `NoProgress`, errors and wall
   time, from `takt scorecard`, against the promoted baseline. A scenario whose outcome got worse,
   or whose tokens rose, is a finding for the cycle's proposals (step 5).
@@ -204,7 +266,12 @@ verification runs of a finding (`scripts/check-finding`), on request.
 
 - Sub-agents at once: three for scenario runs, three proposers, one reviewer per proposal, three
   implementors. Check the usage headroom, with the check the harness provides, before each batch.
-- `df -h /` before each build; under 10G free, stop and report.
+- One build or `scripts/check-finding` at a time across all the repositories of a cycle, takt's
+  and its candidates' alike. Every `cargo` this session or its sub-agents start runs through
+  `b10x-build-slot` (`b10x-build-slot cargo <args>`). Each tree builds into its own `target/`;
+  never a `CARGO_TARGET_DIR` shared between trees.
+- `df -h /` before each build and each `scripts/check-finding`, in any repository of the cycle;
+  under 10G free, stop and report.
 - Scenario runs push their `trial/<n>` branches to the scenario repository through the bot route
   only (`b10x-gates bot -- <git args>`).
 - Never use a person's personal token for an API call. Nothing private (no private repository,
@@ -213,13 +280,16 @@ verification runs of a finding (`scripts/check-finding`), on request.
 ## Never
 
 - edits the dispatcher's checkout, a `wave/<NN>` branch or `main`
-- merges its own candidate; the dispatcher merges it, on a grant
+- merges its own candidate; the dispatcher merges takt's, on a grant, and another repository's
+  merges through that repository's own process
 - reviews its own proposal or candidate; a reviewer sub-agent does
 - states a figure no command of this cycle printed
 - promotes a revision that is not merged into `main`, or hands over or promotes a candidate
   without `scripts/check-finding` giving `not_reproduced` at its sha
 - resumes a `DiskLow` trial, or tops up a set that had one
-- writes to the planning store of a branch that is merged; the dispatcher files its findings
-- acts on a proposal that concerns another repository; it goes to the monitor (§ Reports)
+- writes to the planning store of a branch that is merged, or to another repository's planning
+  store; the dispatcher files takt's findings
+- edits a repository outside a managed worktree of the cycle, commits outside that repository's
+  bot route, or acts on a repository that is not public (§ Reports)
 
 and nothing that breaks a rule in `AGENTS.md` § Rules.

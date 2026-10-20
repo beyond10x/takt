@@ -146,6 +146,10 @@ promotion are the trial agent's (`.agents/trial-agent.md`).
   verification can read it from the store.
 - A rejection the trial agent hands over (`[REJECTED takt] <branch> <sha>` and a finding body
   under it) is filed in the open wave with `scripts/file-finding`, tagged `rsi`, as any finding.
+- The dispatcher merges only takt's own candidates. A copy of another repository's hand-over
+  (`[CANDIDATE <repository>]` or `[REJECTED <repository>]`, `<repository>` not takt) is
+  information, not a unit: it is not merged, its finding body is not filed in takt's store, and
+  that repository's delivery session acts on it (`.agents/trial-agent.md` step 9).
 - `takt promote` accepts only a revision that is an ancestor of `origin/main` as last fetched. A
   wave that carries a candidate therefore pushes `main` through the bot route after its merge;
   then the dispatcher hands back `[MERGED takt] <branch> <sha>` with the merge's sha. The trial
