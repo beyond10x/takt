@@ -15,12 +15,21 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 - `scripts/check-finding` builds and runs one check at a time per cache directory under a `flock`
   on `takt/check-finding/lock`, says when it waits, and refuses, exit 1, before building when that
   file system has less than `CHECK_FINDING_MIN_FREE_GIB` GiB free (20 by default; CI sets 0).
-- `gate.run` compares a Python script run through `sh -c` or a shell script, and what it imports,
-  as it compares one run directly (0.4.0's known limit, story:gate-compares-python-run-through-a-shell).
-  A shell line takt cannot read fails closed: every Python file, shell file and program is
-  compared, and the summary names why. takt's own gates run through `scripts/gate-exec`, whose
-  lines the reader cannot follow, so a delivery that changes a `.py`, `.sh` or program file stops
-  takt's own gates until story:gate-exec-is-readable-by-the-gate.
+- `gate.run` compares a Python script run through `sh -c`, a shell script, `exec` (its options
+  read), or a shell reading its script from a tree file (`sh < FILE`, `cat FILE | sh`), and what it
+  imports, as it compares one run directly (0.4.0's known limit,
+  story:gate-compares-python-run-through-a-shell). Of the 34 shell forms the review probed, 26
+  are closed, 3 run the code under work at the tree's root by decision, and 5 still let a change
+  decide the gate (`PYTHONPATH` set in the line, by `export` or in a sourced file;
+  `cd dir && python3 -m x`; a script named on `xargs`'s input), each an ignored test, until
+  story:the-gate-reads-every-shell-form, which also lists the other forms known to slip: wrapper
+  programs the reader does not know (`taskset`, `chrt`, `unbuffer`, `script -qec`, `uv run`,
+  `env -S`, `pytest`) and `env PYTHONPATH=…`. A line the reader cannot read with certainty (a glob or
+  brace word where it names what runs, an option it does not know, another input a shell reads
+  as its script) makes the gate compare every Python file, shell file and program, and the
+  summary names why. takt's own gates run through `scripts/gate-exec`, whose lines the reader
+  cannot follow, so a delivery that changes a `.py`, `.sh` or program file stops takt's own
+  gates until story:gate-exec-is-readable-by-the-gate.
 
 ## [0.4.0] — 2026-10-20
 

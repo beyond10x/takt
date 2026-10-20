@@ -514,3 +514,257 @@ fn a_shell_line_the_gate_cannot_read_fails_closed_naming_it() {
     let observation = observed(&tree, "closed-data", &[("README.md", "another story\n")]);
     recorded(&observation);
 }
+
+/// The bash every test of a bash-only form runs its gate with.
+const BASH: &str = "/bin/bash";
+
+/// [`through_a_shell`] with the gate running `args` under `shell`.
+fn through(shell: &str, name: &str, args: &[&str]) -> Scratch {
+    repository_running(
+        name,
+        shell,
+        args,
+        &[],
+        &[
+            (
+                "scripts/check.py",
+                "import sys\nimport checklib\nsys.exit(checklib.run())\n",
+            ),
+            ("scripts/checklib.py", "def run():\n    return 0\n"),
+            (
+                "scripts/check.sh",
+                "#!/bin/sh\nexec python3 scripts/check.py\n",
+            ),
+            ("scripts/data.txt", "one\n"),
+            ("src/app.py", "VALUE = 1\n"),
+        ],
+    )
+}
+
+/// Not run, and the summary says why the gate's commands fail closed, quoting `why`.
+fn closed_naming(observation: &Observation, path: &str, why: &str) {
+    refused(observation, path);
+    assert!(
+        observation.summary.contains(why),
+        "the summary does not say why the gate fails closed ({why}): {}",
+        observation.summary
+    );
+}
+
+/// Review of wave 19, finding 1 (the probes `glob` and `brace`): a word holding a glob or a
+/// brace expansion where the reader names a script (`python3 scripts/chec?.py`, bash's
+/// `python3 scripts/{check,check}.py`) was read as the literal path, which names nothing, so a
+/// change to the module the script imports decided the gate. The reader does not expand them:
+/// the line fails closed, naming the word.
+#[test]
+fn a_glob_or_brace_word_the_reader_does_not_expand_fails_closed() {
+    for (name, shell, line, why) in [
+        (
+            "glob-q",
+            SHELL,
+            "python3 scripts/chec?.py",
+            "scripts/chec?.py",
+        ),
+        (
+            "glob-star",
+            SHELL,
+            "python3 scripts/check*.py",
+            "scripts/check*.py",
+        ),
+        (
+            "glob-class",
+            SHELL,
+            "python3 scripts/chec[k].py",
+            "scripts/chec[k].py",
+        ),
+        (
+            "brace",
+            BASH,
+            "python3 scripts/{check,check}.py",
+            "scripts/{check,check}.py",
+        ),
+        (
+            "glob-program",
+            SHELL,
+            "scripts/chec?.sh",
+            "scripts/chec?.sh",
+        ),
+    ] {
+        let tree = through(shell, name, &["-c", line]);
+        let observation = observed(
+            &tree,
+            name,
+            &[("scripts/checklib.py", "def run():\n    return 0  # x\n")],
+        );
+        closed_naming(&observation, "scripts/checklib.py", why);
+    }
+    // A glob among a program's data, not where the reader names what runs, is read as before.
+    let tree = through(
+        SHELL,
+        "glob-data",
+        &["-c", "python3 scripts/check.py scripts/*.txt"],
+    );
+    let observation = observed(&tree, "glob-data", &[("src/app.py", "VALUE = 2\n")]);
+    recorded(&observation);
+}
+
+/// Finding 2 (the probe `execa`): `exec -a NAME PROGRAM` was read with NAME as the program, so the
+/// Python it runs was not seen. `exec`'s options are read (`-a NAME`, `-c`, `-l`) and the next
+/// word is the program; an option the reader does not know fails closed.
+#[test]
+fn exec_and_its_options_run_the_program_after_them() {
+    for (name, line) in [
+        ("exec-a", "exec -a chk python3 scripts/check.py"),
+        ("exec-c", "exec -c python3 scripts/check.py"),
+        ("exec-cla", "exec -cla chk python3 scripts/check.py"),
+        ("exec-dashdash", "exec -l -- python3 scripts/check.py"),
+    ] {
+        let tree = through(BASH, name, &["-c", line]);
+        let observation = observed(
+            &tree,
+            name,
+            &[("scripts/checklib.py", "def run():\n    return 0  # x\n")],
+        );
+        refused(&observation, "scripts/checklib.py");
+    }
+    let tree = through(
+        BASH,
+        "exec-a-outside",
+        &["-c", "exec -a chk python3 scripts/check.py"],
+    );
+    let observation = observed(&tree, "exec-a-outside", &[("src/app.py", "VALUE = 2\n")]);
+    recorded(&observation);
+    let tree = through(
+        BASH,
+        "exec-unknown",
+        &["-c", "exec -z python3 scripts/check.py"],
+    );
+    let observation = observed(&tree, "exec-unknown", &[("src/app.py", "VALUE = 2\n")]);
+    closed_naming(&observation, "src/app.py", "-z");
+}
+
+/// Finding 3 (the probes `shstdin` and `shpipe`): a shell reading its script from its standard
+/// input, by a redirection (`sh < scripts/check.sh`) or a pipe (`cat scripts/check.sh | sh`), ran
+/// a script the reader neither read nor failed closed on. A plain file of the tree is read as the
+/// script the shell runs; any other input (`echo … | sh`) fails closed.
+#[test]
+fn a_shell_reading_its_script_from_standard_input_reads_that_file() {
+    for (name, line, changed) in [
+        (
+            "stdin-redirect",
+            "sh < scripts/check.sh",
+            "scripts/checklib.py",
+        ),
+        (
+            "stdin-redirect-s",
+            "sh -s < scripts/check.sh",
+            "scripts/checklib.py",
+        ),
+        (
+            "stdin-pipe",
+            "cat scripts/check.sh | sh",
+            "scripts/checklib.py",
+        ),
+        (
+            "stdin-pipe-self",
+            "cat scripts/check.sh | sh",
+            "scripts/check.py",
+        ),
+    ] {
+        let tree = through(SHELL, name, &["-c", line]);
+        let observation = observed(&tree, name, &[(changed, "raise SystemExit(0)  # x\n")]);
+        refused(&observation, changed);
+    }
+    let tree = through(SHELL, "stdin-outside", &["-c", "cat scripts/check.sh | sh"]);
+    let observation = observed(&tree, "stdin-outside", &[("src/app.py", "VALUE = 2\n")]);
+    recorded(&observation);
+    let tree = through(
+        SHELL,
+        "stdin-echo",
+        &["-c", "echo python3 scripts/check.py | sh"],
+    );
+    let observation = observed(&tree, "stdin-echo", &[("src/app.py", "VALUE = 2\n")]);
+    closed_naming(&observation, "src/app.py", "standard input");
+}
+
+/// The script of the review's probes: it imports `checklib` and exits with what it returns.
+const MAIN: &str = "import sys\nimport checklib\nsys.exit(checklib.run())\n";
+
+/// What the review's probes commit to the module the gate's Python imports.
+const HAND: &str = "def run():\n    return 0  # a hand commit\n";
+
+/// A review probe of a shell form the gate does not yet read: `line` run by `/bin/sh -c` in a
+/// tree holding `files` (path, text) and a `checklib` module at `lib`; a hand commit to `lib`
+/// must leave the gate not run, naming it.
+fn slipping_form(name: &str, line: &str, files: &[(&str, &str)], lib: &str) {
+    let mut all = files.to_vec();
+    all.push((lib, "def run():\n    return 0\n"));
+    let tree = repository_running(name, SHELL, &["-c", line], &[], &all);
+    let observation = observed(&tree, name, &[(lib, HAND)]);
+    refused(&observation, lib);
+}
+
+/// The review's probe `pypath`: a module the script imports from a `PYTHONPATH` entry the line
+/// sets before the program.
+#[test]
+#[ignore = "slips until story:the-gate-reads-every-shell-form"]
+fn pypath() {
+    slipping_form(
+        "form-pypath",
+        "PYTHONPATH=lib python3 scripts/check.py",
+        &[("scripts/check.py", MAIN)],
+        "lib/checklib.py",
+    );
+}
+
+/// The review's probe `exportpp`: the same `PYTHONPATH` entry set by `export`.
+#[test]
+#[ignore = "slips until story:the-gate-reads-every-shell-form"]
+fn exportpp() {
+    slipping_form(
+        "form-exportpp",
+        "export PYTHONPATH=lib; python3 scripts/check.py",
+        &[("scripts/check.py", MAIN)],
+        "lib/checklib.py",
+    );
+}
+
+/// The review's probe `dashm`: `cd scripts && python3 -m check`, a module beside the one `-m`
+/// runs.
+#[test]
+#[ignore = "slips until story:the-gate-reads-every-shell-form"]
+fn dashm() {
+    slipping_form(
+        "form-dashm",
+        "cd scripts && python3 -m check",
+        &[("scripts/check.py", MAIN)],
+        "scripts/checklib.py",
+    );
+}
+
+/// The review's probe `xargs`: the script named on `xargs`'s standard input.
+#[test]
+#[ignore = "slips until story:the-gate-reads-every-shell-form"]
+fn xargs() {
+    slipping_form(
+        "form-xargs",
+        "echo scripts/check.py | xargs python3",
+        &[("scripts/check.py", MAIN)],
+        "scripts/checklib.py",
+    );
+}
+
+/// The review's probe `source`: a sourced file sets `PYTHONPATH` by assignment and `export`.
+#[test]
+#[ignore = "slips until story:the-gate-reads-every-shell-form"]
+fn source() {
+    slipping_form(
+        "form-source",
+        ". scripts/env.sh && python3 scripts/check.py",
+        &[
+            ("scripts/check.py", MAIN),
+            ("scripts/env.sh", "PYTHONPATH=lib\nexport PYTHONPATH\n"),
+        ],
+        "lib/checklib.py",
+    );
+}

