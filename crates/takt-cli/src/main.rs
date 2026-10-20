@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 use takt::Frontier as _;
 use takt::forge::{BotRoute, Forge, Process, Runner, repository_of};
 use takt::frontier::Aep;
-use takt::harness::{ClaudeCode, ClaudeSession, Harness};
+use takt::harness::{ClaudeCode, Harness, Kind, SessionHarness};
 use takt::validator::{
     ChangeRead, CiRead, DEFAULT_PROJECT, GateRun, PrMerged, PrOpen, TestsRun, Validator,
 };
@@ -627,7 +627,8 @@ struct LoopArgs {
     /// The test command, split at white space, run without a shell.
     #[arg(long, default_value = "cargo test --quiet")]
     test_cmd: String,
-    /// The harness: `claude` or `none` (only validators run).
+    /// The harness, each through metaharness: `claude` (Claude Code), `codex` (Codex),
+    /// `harness` (b10x-harness), or `none` (only validators run).
     #[arg(long, default_value = "claude")]
     harness: String,
     /// The harness's model, when it takes one.
@@ -1333,16 +1334,39 @@ impl LoopArgs {
     }
 }
 
-/// The harness `--harness` names: `claude`, Claude Code through the metaharness session executor,
-/// proposing from a scratch copy what takt's edit effect applies, with `--model`; or `none`.
+/// The harness `--harness` names, each through the metaharness session executor, proposing from
+/// a scratch copy what takt's edit effect applies, with `--model`: `claude`, Claude Code on the
+/// user's claude.ai login; `codex`, Codex on the user's ChatGPT login (`~/.codex/auth.json`);
+/// `harness`, b10x-harness pointed at the Anthropic Messages API on the user's claude.ai
+/// subscription token (`~/.claude/.credentials.json`), the endpoint b10x-harness's own `claude`
+/// provider names; or `none`.
 fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
+    let session = |kind| {
+        let mut session = SessionHarness::of(kind);
+        session.model.clone_from(&looping.model);
+        session
+    };
     match looping.harness.as_str() {
-        "claude" => Ok(Box::new(ClaudeSession {
-            model: looping.model.clone(),
-            ..ClaudeSession::default()
-        })),
+        "claude" => Ok(Box::new(session(Kind::Claude))),
+        "codex" => Ok(Box::new(session(Kind::Codex))),
+        "harness" => {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow!("--harness harness reads its token under HOME; none set"))?;
+            let mut session = session(Kind::B10x);
+            session.endpoint = Some(takt::harness::Endpoint {
+                base_url: "https://api.anthropic.com/v1".to_owned(),
+                wire: "anthropic-messages".to_owned(),
+                model: "claude-opus-5".to_owned(),
+                token_file: home.join(".claude/.credentials.json"),
+                token_pointer: Some("/claudeAiOauth/accessToken".to_owned()),
+            });
+            Ok(Box::new(session))
+        }
         "none" => Ok(Box::new(NoHarness)),
-        other => Err(anyhow!("no harness `{other}`: claude or none")),
+        other => Err(anyhow!(
+            "no harness `{other}`: claude, codex, harness or none"
+        )),
     }
 }
 

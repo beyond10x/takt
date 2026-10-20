@@ -3,13 +3,17 @@
 //! there as a proposal ([`Proposal`]); it performs nothing. The embedder's edit effect applies
 //! a proposal, or refuses it, under its own guard.
 //!
-//! The session is Claude Code through the metaharness library: `Kind::Claude`,
-//! `HermeticMode::Strict`, Claude's native tools, the scratch copy as its working directory,
-//! declared as the embedder's scratch copy (`with_cwd` and `with_scratch_cwd`). The child's
-//! environment is metaharness's, constructed from an allowlist and never inherited, so no
-//! variable of the embedder's reaches it but those metaharness names. Each tool call is decided
-//! here (`DecisionMode::Ask`): the file tools ([`TOOLS`]) on paths inside the copy are allowed,
-//! everything else is denied with the reason.
+//! One executor, the harness its [`Kind`]: the same brief, the same scratch copy, the same
+//! proposal for each. The copy is the session's working directory, declared as the embedder's
+//! scratch copy (`with_cwd` and `with_scratch_cwd`); the child's environment is metaharness's,
+//! constructed from an allowlist and never inherited, so no variable of the embedder's reaches
+//! it but those metaharness names.
+//!
+//! | kind | harness | hermetic | calls |
+//! |---|---|---|---|
+//! | `Claude` | Claude Code | `Strict` | decided here (`Ask`): the file tools [`TOOLS`] on paths inside the copy |
+//! | `Codex` | Codex (`codex exec`) | `On`, H9 gating | decided here (`Ask`): `Bash` and `apply_patch` ([`CODEX_TOOLS`]) naming no path outside the copy; its own sandbox (`workspace-write` on the copy, no network) confines what a command writes |
+//! | `B10x` | b10x-harness | `On`, a gap holds the proposal | observed, never decided: metaharness's b10x adapter decides no call; the loop's toolset is what substrate confines to the copy |
 //!
 //! This crate depends on no crate of the application that embeds it, so it can move into Loom
 //! unchanged.
@@ -25,17 +29,38 @@ use loom_sdk::commission::model::responsibility::{
 };
 use loom_sdk::commission::ports::executor::AgentExecutor;
 use metaharness::protocol::{
-    Command, Decision, DecisionMode, Event, HermeticMode, HermeticRow, Kind, Severity, Verdict,
+    Command, Decision, DecisionMode, Event, HermeticMode, HermeticRow, RunSpec, SeamFactory,
+    Severity, Verdict,
 };
-use metaharness::{ClaudeSeams, EventPoll, Input, Metaharness};
+use metaharness::{ClaudeSeams, CodexSeams, EventPoll, Input, Metaharness};
 
 pub use metaharness;
 pub use metaharness::ProcessRunner;
-pub use metaharness::protocol::CredentialSource;
+pub use metaharness::protocol::{CredentialSource, Kind};
 
-/// The native tools a session may use, on paths inside its copy: read, edit, write, list and
-/// search the files, and nothing else.
+/// The native tools a Claude Code session may use, on paths inside its copy: read, edit, write,
+/// list and search the files, and nothing else.
 pub const TOOLS: [&str; 5] = ["Read", "Edit", "Write", "Glob", "Grep"];
+
+/// The tools a Codex session may use, as its `PreToolUse` hook names them: the shell, to read
+/// the copy, and `apply_patch`, to change it.
+pub const CODEX_TOOLS: [&str; 2] = ["Bash", "apply_patch"];
+
+/// The model endpoint a `Kind::B10x` session's loop is pointed at, and the subscription token
+/// it reads there: the loop reads the file itself, and metaharness copies nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Endpoint {
+    /// The endpoint origin plus its API prefix.
+    pub base_url: String,
+    /// The model API it speaks: `anthropic-messages` or `openai-responses`.
+    pub wire: String,
+    /// The model the endpoint serves.
+    pub model: String,
+    /// The file holding the subscription token.
+    pub token_file: PathBuf,
+    /// A JSON pointer to the token inside that file.
+    pub token_pointer: Option<String>,
+}
 
 /// One file a proposal changes: its path relative to the workspace, and its whole content after
 /// the change, absent when the change removes it.
@@ -147,6 +172,9 @@ pub struct SessionReport {
     /// Each gating row of metaharness's hermetic floor that was not `ok`, as
     /// `<row> <verdict>: <detail>`.
     pub floor: Vec<String>,
+    /// Every row of the floor, gating or advisory, as `<row> <verdict>`, in metaharness's
+    /// order: the hermetic verdict whole.
+    pub rows: Vec<String>,
     /// Why the call proposed nothing, when it did not.
     pub error: Option<String>,
 }
@@ -154,6 +182,8 @@ pub struct SessionReport {
 /// The executor: one call runs one session over a scratch copy of `workspace` holding the
 /// files `files` names, with `brief` as its prompt, and proposes what it changed there.
 pub struct SessionExecutor {
+    /// The harness the session runs: `Kind::Claude` by default.
+    pub kind: Kind,
     /// The workspace the copy is made from; never written.
     pub workspace: PathBuf,
     /// The files copied, by their paths relative to the workspace.
@@ -170,9 +200,11 @@ pub struct SessionExecutor {
     pub scratch: PathBuf,
     /// How long the session may run; it is halted past it.
     pub timeout: Option<Duration>,
-    /// The `claude` program the session runs, by path; none for the one metaharness finds on
-    /// the `PATH` it gives its child.
+    /// The harness program the session runs (`claude`, `codex`, `b10x-harness`), by path; none
+    /// for the one metaharness finds on the `PATH` it gives its child.
     pub program: Option<PathBuf>,
+    /// For `Kind::B10x`, the endpoint its loop is pointed at; the session is refused without one.
+    pub endpoint: Option<Endpoint>,
     runner: RefCell<Option<Box<dyn ProcessRunner>>>,
     last: RefCell<Option<SessionReport>>,
 }
@@ -180,6 +212,7 @@ pub struct SessionExecutor {
 impl std::fmt::Debug for SessionExecutor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SessionExecutor")
+            .field("kind", &self.kind)
             .field("workspace", &self.workspace)
             .field("files", &self.files.len())
             .field("model", &self.model)
@@ -198,6 +231,7 @@ impl SessionExecutor {
         brief: impl Into<String>,
     ) -> Self {
         Self {
+            kind: Kind::Claude,
             workspace: workspace.into(),
             files,
             brief: brief.into(),
@@ -207,12 +241,20 @@ impl SessionExecutor {
             scratch: std::env::temp_dir(),
             timeout: None,
             program: None,
+            endpoint: None,
             runner: RefCell::new(None),
             last: RefCell::new(None),
         }
     }
 
-    /// The same executor, whose session is started by `runner` instead of the real `claude`
+    /// The same executor, its session the harness `kind`.
+    #[must_use]
+    pub fn of_kind(mut self, kind: Kind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// The same executor, whose session is started by `runner` instead of the real program
     /// (metaharness's `ScriptedRunner`, or one that wraps it).
     #[must_use]
     pub fn with_runner(self, runner: Box<dyn ProcessRunner>) -> Self {
@@ -226,36 +268,68 @@ impl SessionExecutor {
         self.last.borrow().clone()
     }
 
+    /// The run metaharness is asked for, by kind: Claude Code `Strict` with every call decided
+    /// here; Codex `On` with every call decided here (its strict floor fails on four rows its
+    /// opening record does not carry, H1a, H1b, H4 and H5, which metaharness cannot decide for
+    /// it yet); b10x-harness `On`, observed, pointed at [`Self::endpoint`] with its subscription
+    /// token, confined by substrate in the loop's own process so its write tools reach the copy
+    /// and nothing else. Each with the copy as its declared scratch working directory.
+    fn spec(&self, copy: &Path) -> Result<RunSpec, String> {
+        let mut spec = RunSpec::new(self.kind);
+        spec.credentials = self.credentials;
+        spec.cwd = Some(copy.to_path_buf());
+        spec.scratch_cwd = true;
+        spec.prompt = Some(self.brief.clone());
+        spec.model.clone_from(&self.model);
+        match self.kind {
+            Kind::Claude => {
+                spec.hermetic = HermeticMode::Strict;
+                spec.decisions = DecisionMode::Ask;
+                spec.max_turns = self.max_turns;
+            }
+            Kind::Codex => {
+                spec.hermetic = HermeticMode::On;
+                spec.decisions = DecisionMode::Ask;
+            }
+            Kind::B10x => {
+                let endpoint = self.endpoint.as_ref().ok_or(
+                    "a b10x-harness session needs the endpoint its loop is pointed at; none given",
+                )?;
+                spec.hermetic = HermeticMode::On;
+                spec.decisions = DecisionMode::Observe;
+                spec.max_turns = self.max_turns;
+                spec.credentials = CredentialSource::None;
+                spec.model_endpoint = Some(endpoint.base_url.clone());
+                spec.model_wire = Some(endpoint.wire.clone());
+                spec.model = Some(self.model.clone().unwrap_or(endpoint.model.clone()));
+                spec.subscription_token_file = Some(endpoint.token_file.display().to_string());
+                spec.subscription_token_pointer
+                    .clone_from(&endpoint.token_pointer);
+                spec.substrate_embedded = true;
+            }
+        }
+        Ok(spec)
+    }
+
     /// One session: the copy made, the session run in it to its end, the proposal read.
     fn session(&self, report: &mut SessionReport) -> Result<Proposal, String> {
         let copy = ScratchCopy::make(&self.scratch, &self.workspace, &self.files)?;
         report.cwd = Some(copy.dir.clone());
-        let mut builder = Metaharness::new(Kind::Claude)
-            .with_hermetic(HermeticMode::Strict)
-            .with_decisions(DecisionMode::Ask)
-            .with_credentials(self.credentials)
-            .with_cwd(&copy.dir)
-            .with_scratch_cwd()
-            .with_prompt(self.brief.clone());
-        if let Some(model) = &self.model {
-            builder = builder.with_model(model.clone());
-        }
-        if let Some(turns) = self.max_turns {
-            builder = builder.with_max_turns(turns);
-        }
+        let builder = Metaharness::from_spec(self.spec(&copy.dir)?);
+        let mut seams: Box<dyn SeamFactory> = match self.kind {
+            Kind::Claude => Box::new(ClaudeSeams),
+            Kind::Codex => Box::new(CodexSeams),
+            Kind::B10x => Box::new(metaharness_b10x::B10xSeams::new(None, None, None)),
+        };
+        // b10x-harness is the one metaharness resolves itself, on the `PATH` it gives its child
+        // (`$HOME/.local/bin` first), because the version it reads for H9 is that file's.
         let started = match (self.runner.borrow_mut().as_mut(), &self.program) {
-            (Some(runner), _) => {
-                builder.start_with(Input::FromSpec, runner.as_mut(), &mut ClaudeSeams)
+            (Some(runner), _) => builder.start_with(Input::FromSpec, runner.as_mut(), &mut *seams),
+            (None, Some(program)) if self.kind != Kind::B10x => {
+                let mut named = Named::new(self.kind, program);
+                builder.start_with(Input::FromSpec, &mut named, &mut *seams)
             }
-            (None, Some(program)) => builder.start_with(
-                Input::FromSpec,
-                &mut Named {
-                    program: program.display().to_string(),
-                    inner: metaharness::SpawnRunner::new(),
-                },
-                &mut ClaudeSeams,
-            ),
-            (None, None) => builder.start(Input::FromSpec),
+            (None, _) => builder.start(Input::FromSpec),
         };
         let mut run =
             started.map_err(|refusal| format!("metaharness refused the session: {refusal}"))?;
@@ -263,6 +337,8 @@ impl SessionExecutor {
             .timeout
             .and_then(|left| Instant::now().checked_add(left));
         let mut said = Vec::new();
+        // The final answer the terminal record states, where it states one (Codex's).
+        let mut final_text: Option<String> = None;
         let mut halted = false;
         let mut ended_in_error = None;
         // Whether every plugin the opening record names ships inside the vendor program
@@ -311,7 +387,11 @@ impl SessionExecutor {
                     decision_required: true,
                     ..
                 } => {
-                    let decision = match decide(name, input, &copy.dir) {
+                    let decided = match self.kind {
+                        Kind::Codex => decide_codex(name, input, &copy.dir),
+                        _ => decide(name, input, &copy.dir),
+                    };
+                    let decision = match decided {
                         Ok(()) => Decision::Allow,
                         Err(reason) => Decision::Deny { reason },
                     };
@@ -321,6 +401,8 @@ impl SessionExecutor {
                     });
                 }
                 Event::SessionEnded {
+                    final_answer,
+                    observed_models,
                     is_error,
                     subtype,
                     num_turns,
@@ -343,30 +425,72 @@ impl SessionExecutor {
                         report.output_tokens = usage.output_tokens;
                         report.cache_read = usage.cache_read_input_tokens;
                         report.cache_creation = usage.cache_creation_input_tokens;
+                        // Codex's input figure, and the OpenAI Responses wire's, holds the cached
+                        // tokens it also states apart: the input charged is the rest, so no
+                        // token is counted twice.
+                        let responses = self.kind == Kind::Codex
+                            || self.endpoint.as_ref().is_some_and(|endpoint| {
+                                self.kind == Kind::B10x && endpoint.wire == "openai-responses"
+                            });
+                        if responses
+                            && let (Some(input), Some(cached)) =
+                                (usage.input_tokens, usage.cache_read_input_tokens)
+                        {
+                            report.input_tokens = Some(input.saturating_sub(cached));
+                        }
                     }
                     if let Some(models) = model_usage
                         && !models.is_empty()
                     {
                         report.model = Some(models.keys().cloned().collect::<Vec<_>>().join("+"));
+                    } else if let Some(models) = observed_models
+                        && !models.is_empty()
+                    {
+                        let mut names: Vec<String> = models
+                            .iter()
+                            .filter_map(|seen| seen.model.clone())
+                            .collect();
+                        names.dedup();
+                        report.model = Some(names.join("+"));
+                    }
+                    if let Some(answer) = final_answer {
+                        final_text = Some(answer.text.clone());
                     }
                 }
                 _ => {}
             }
         }
-        // Strict's floor: every gating row that is not `ok` is reported; a `gap` holds the
-        // proposal back, but two facts about the program installed and not about what the
-        // session was given: the vendor's version against the adapter's pin (H9), and plugins
-        // the session loaded that metaharness did not declare (H1a) when every one of them ships
-        // inside the vendor program (`<name>@builtin`, which a version newer than the pin adds).
+        // The floor: every gating row that is not `ok` is reported, and every row's verdict is
+        // kept. Under Claude Code's `Strict` a `gap` holds the proposal back, but two facts
+        // about the program installed and not about what the session was given: the vendor's
+        // version against the adapter's pin (H9), and plugins the session loaded that
+        // metaharness did not declare (H1a) when every one of them ships inside the vendor
+        // program (`<name>@builtin`, which a version newer than the pin adds). Under Codex's
+        // and b10x-harness's `On` any `gap` holds it back, and for Codex an H9 that is not `ok`
+        // does too: a codex other than the pinned one proposes nothing. An `unk` there is
+        // recorded and holds nothing back: Codex's opening record carries no plugins, output
+        // style, credential source or MCP servers (H1a, H1b, H4, H5).
         let mut held = Vec::new();
         for row in run.hermetic_floor() {
+            report.rows.push(format!(
+                "{} {}",
+                row.row.id(),
+                format!("{:?}", row.verdict).to_lowercase()
+            ));
             if row.row.severity() != Severity::Gating || row.verdict == Verdict::Ok {
                 continue;
             }
             let said = format!("{} {:?}: {}", row.row.id(), row.verdict, row.detail);
-            let installed =
-                row.row == HermeticRow::H9 || (row.row == HermeticRow::H1a && builtin_only);
-            if row.verdict == Verdict::Gap && !installed {
+            let holds = match self.kind {
+                Kind::Claude => {
+                    let installed =
+                        row.row == HermeticRow::H9 || (row.row == HermeticRow::H1a && builtin_only);
+                    row.verdict == Verdict::Gap && !installed
+                }
+                Kind::Codex => row.verdict == Verdict::Gap || row.row == HermeticRow::H9,
+                Kind::B10x => row.verdict == Verdict::Gap,
+            };
+            if holds {
                 held.push(said.clone());
             }
             report.floor.push(said);
@@ -397,6 +521,7 @@ impl SessionExecutor {
                 held.join("; ")
             ));
         }
+        let replied = replied.or(final_text);
         let (action, summary) = reply(&replied.unwrap_or_else(|| said.join("\n")))?;
         let files = copy.changes(&self.workspace, &self.files)?;
         Ok(Proposal {
@@ -431,11 +556,38 @@ impl AgentExecutor for SessionExecutor {
 }
 
 /// metaharness's own spawn of the vendor program, the program named by path (the one the
-/// embedder resolved, never another found first on the `PATH` metaharness gives its child),
-/// offered the file tools [`TOOLS`] and no other.
+/// embedder resolved, never another found first on the `PATH` metaharness gives its child):
+/// Claude Code offered the file tools [`TOOLS`] and no other; Codex with its sandbox's network
+/// stated off and `/tmp` left out of what it may write ([`CODEX_SANDBOX`]).
 struct Named {
+    kind: Kind,
     program: String,
-    inner: metaharness::SpawnRunner,
+    inner: Box<dyn ProcessRunner>,
+}
+
+/// What a Codex session's own sandbox is told beside metaharness's `sandbox_mode =
+/// "workspace-write"` on the copy: no network, stated rather than left to the vendor's default,
+/// and `/tmp` not writable, so what a command writes lands in the copy or in the child's own
+/// temporary directory under metaharness's scratch root, and nowhere else.
+pub const CODEX_SANDBOX: [&str; 4] = [
+    "-c",
+    "sandbox_workspace_write.network_access=false",
+    "-c",
+    "sandbox_workspace_write.exclude_slash_tmp=true",
+];
+
+impl Named {
+    fn new(kind: Kind, program: &Path) -> Self {
+        let inner: Box<dyn ProcessRunner> = match kind {
+            Kind::Codex => Box::new(metaharness::CodexSpawnRunner::new()),
+            _ => Box::new(metaharness::SpawnRunner::new()),
+        };
+        Self {
+            kind,
+            program: program.display().to_string(),
+            inner,
+        }
+    }
 }
 
 impl ProcessRunner for Named {
@@ -459,10 +611,21 @@ impl ProcessRunner for Named {
             }
             None => self.program.as_str(),
         };
-        args.extend(plan.args.iter().cloned());
-        // Offered only the file tools, so no other tool costs its schema in every call: each
-        // call of one is still decided at the seam ([`decide`]).
-        args.extend(["--tools".to_owned(), TOOLS.join(",")]);
+        match self.kind {
+            // `codex exec`, then the sandbox's settings, then the rest as metaharness planned it.
+            Kind::Codex => {
+                let mut planned = plan.args.iter().cloned();
+                args.extend(planned.next());
+                args.extend(CODEX_SANDBOX.iter().map(|arg| (*arg).to_owned()));
+                args.extend(planned);
+            }
+            _ => {
+                args.extend(plan.args.iter().cloned());
+                // Offered only the file tools, so no other tool costs its schema in every call:
+                // each call of one is still decided at the seam ([`decide`]).
+                args.extend(["--tools".to_owned(), TOOLS.join(",")]);
+            }
+        }
         let named = metaharness::LaunchPlanView {
             program,
             args: &args,
@@ -532,6 +695,121 @@ fn decide(name: &str, input: &serde_json::Value, copy: &Path) -> Result<(), Stri
         ));
     }
     Ok(())
+}
+
+/// Whether a Codex tool call is allowed: one of [`CODEX_TOOLS`]; a `Bash` command naming no
+/// place outside `copy` ([`outside_word`]); an `apply_patch` whose every file is a path inside
+/// `copy` with no part named `.git`; else the reason the model is told. What a command writes is
+/// confined by Codex's own sandbox (`workspace-write` on the copy, no network, [`CODEX_SANDBOX`]);
+/// this check keeps a command from reading or naming a place outside the copy, read lexically
+/// and so a floor, not a wall: a command that builds a path at run time is not read here.
+fn decide_codex(name: &str, input: &serde_json::Value, copy: &Path) -> Result<(), String> {
+    let text = |key: &str| match input.get(key) {
+        Some(serde_json::Value::String(text)) => Some(text.clone()),
+        Some(serde_json::Value::Array(words)) => Some(
+            words
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        _ => None,
+    };
+    match name {
+        "Bash" => {
+            let command = text("command").unwrap_or_default();
+            match outside_word(&command, copy) {
+                Some(word) => Err(format!(
+                    "`{word}` names a place outside this directory; read and change only its files"
+                )),
+                None => Ok(()),
+            }
+        }
+        "apply_patch" => {
+            let patch = text("patch")
+                .or_else(|| text("command"))
+                .or_else(|| text("input"))
+                .unwrap_or_else(|| input.to_string());
+            for line in patch.lines() {
+                let named = [
+                    "*** Add File: ",
+                    "*** Update File: ",
+                    "*** Delete File: ",
+                    "*** Move to: ",
+                ]
+                .iter()
+                .find_map(|prefix| line.strip_prefix(prefix));
+                let Some(path) = named.map(str::trim) else {
+                    continue;
+                };
+                if !inside(copy, path) {
+                    return Err(format!(
+                        "{path} is outside this directory; change only its files"
+                    ));
+                }
+                if Path::new(path)
+                    .strip_prefix(copy)
+                    .unwrap_or(Path::new(path))
+                    .components()
+                    .any(|part| part == Component::Normal(".git".as_ref()))
+                {
+                    return Err(format!(
+                        "{path} is git's; change only the files of this directory"
+                    ));
+                }
+            }
+            Ok(())
+        }
+        _ => Err(format!(
+            "{name} is not offered here: use the shell to read and apply_patch to change the \
+             files of this directory"
+        )),
+    }
+}
+
+/// The first word of a shell `command` that names a place outside `copy`, read lexically: a
+/// word that starts with `~` or expands a variable (`$HOME`, `${CODEX_HOME}`); an absolute path
+/// that is not inside the copy, a device stream (`/dev/null`, `/dev/stdout`, `/dev/stderr`,
+/// `/dev/stdin`) or under the system's program directories, and that is there or has two parts
+/// or more (a one-part word that is not there, such as a `sed` pattern `/^fn`, names no place);
+/// a relative path whose `..` leaves the copy. None when no word does.
+fn outside_word(command: &str, copy: &Path) -> Option<String> {
+    const STREAMS: [&str; 4] = ["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/stdin"];
+    const PROGRAMS: [&str; 5] = ["/usr/", "/bin/", "/sbin/", "/lib/", "/lib64/"];
+    let words = command
+        .split(|c: char| {
+            c.is_whitespace() || matches!(c, ';' | '|' | '&' | '<' | '>' | '(' | ')' | '`' | '=')
+        })
+        .map(|word| word.trim_matches(|c| c == '\'' || c == '"'))
+        .filter(|word| !word.is_empty());
+    for word in words {
+        let expands = word.match_indices('$').any(|(at, _)| {
+            word[at + 1..].starts_with(|c: char| c.is_ascii_alphabetic() || c == '{' || c == '_')
+        });
+        if word.starts_with('~') || expands {
+            return Some(word.to_owned());
+        }
+        if word.starts_with('/') {
+            if inside(copy, word)
+                || STREAMS.contains(&word)
+                || PROGRAMS.iter().any(|dir| word.starts_with(dir))
+            {
+                continue;
+            }
+            let parts = Path::new(word)
+                .components()
+                .filter(|part| matches!(part, Component::Normal(_)))
+                .count();
+            if parts >= 2 || std::fs::symlink_metadata(word).is_ok() {
+                return Some(word.to_owned());
+            }
+            continue;
+        }
+        if word.contains("..") && !inside(copy, word) {
+            return Some(word.to_owned());
+        }
+    }
+    None
 }
 
 /// Whether `path`, relative to `copy` or absolute, names a place inside it, read lexically:
@@ -956,6 +1234,60 @@ mod tests {
         assert!(decide("Bash", &serde_json::json!({"command": "ls"}), copy).is_err());
         let outside = serde_json::json!({"file_path": "/home/u/.bashrc"});
         assert!(decide("Write", &outside, copy).is_err());
+    }
+
+    /// A Codex session may run a shell command that names no place outside its copy and patch
+    /// files inside it; a command or a patch that names a place outside it, a patch of git's
+    /// files, and any other tool are denied.
+    #[test]
+    fn a_codex_call_is_allowed_only_inside_the_copy() {
+        let copy = Path::new("/s/copy");
+        let bash = |command: &str| serde_json::json!({ "command": command });
+        for command in [
+            "sed -n '1,120p' src/lib.rs",
+            "rg -n \"fn add\" src",
+            "sed -n '/^pub fn/,/^}/p' src/lib.rs",
+            "cat /s/copy/src/lib.rs 2>/dev/null",
+            "git status --short && git log --oneline -3",
+            "git diff HEAD~1..HEAD",
+            "/usr/bin/ls -la",
+        ] {
+            assert!(
+                decide_codex("Bash", &bash(command), copy).is_ok(),
+                "{command}"
+            );
+        }
+        for command in [
+            "cat ~/.ssh/id_ed25519",
+            "cat $HOME/.codex/auth.json",
+            "cat ${CODEX_HOME}/auth.json",
+            "cat /home/u/.config/secret",
+            "ls /etc",
+            "cd .. && ls",
+            "cat ../other/file",
+            "cat /proc/self/environ",
+        ] {
+            assert!(
+                decide_codex("Bash", &bash(command), copy).is_err(),
+                "{command}"
+            );
+        }
+        let patch = |path: &str| serde_json::json!({ "command": format!("*** Begin Patch\n*** Update File: {path}\n@@\n-a\n+b\n*** End Patch\n") });
+        assert!(decide_codex("apply_patch", &patch("src/lib.rs"), copy).is_ok());
+        assert!(decide_codex("apply_patch", &patch("/s/copy/src/lib.rs"), copy).is_ok());
+        for path in [
+            "../x.rs",
+            "/etc/hosts",
+            ".git/config",
+            "sub/.git/hooks/pre-commit",
+        ] {
+            assert!(
+                decide_codex("apply_patch", &patch(path), copy).is_err(),
+                "{path}"
+            );
+        }
+        assert!(decide_codex("WebFetch", &serde_json::json!({}), copy).is_err());
+        assert!(decide_codex("mcp__x__y", &serde_json::json!({}), copy).is_err());
     }
 
     /// A session's Edit or Write never reaches the copy's git state, nor a git directory it

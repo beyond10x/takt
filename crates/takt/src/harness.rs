@@ -111,27 +111,37 @@ pub trait Harness {
     }
 }
 
-pub use session_executor::{Proposal, ProposedFile};
+pub use session_executor::{Endpoint, Proposal, ProposedFile};
 
-/// Claude Code through the metaharness session executor (`--harness claude`): each step is one
-/// session of `Kind::Claude` under `HermeticMode::Strict`, its native file tools on a scratch
-/// copy of the tree's files (tracked and untracked but not ignored, and the cases directory
-/// whole) as its working directory, never the tree itself, on the user's claude.ai login. Its
-/// change comes back as a [`Proposal`] ([`Harness::take_proposal`]), which takt's edit effect
-/// applies. The prompt is [`ClaudeCode`]'s, the change so far with it; metaharness constructs
-/// the child's environment from its own allowlist, so no variable the run withholds from a
-/// harness reaches it.
-pub struct ClaudeSession {
+/// A harness through the metaharness session executor, its [`Kind`] a parameter: `--harness
+/// claude` (Claude Code, `HermeticMode::Strict`, on the user's claude.ai login), `--harness
+/// codex` (Codex, `HermeticMode::On` with H9 gating, on the user's ChatGPT login,
+/// `~/.codex/auth.json`) and `--harness harness` (b10x-harness, observed, pointed at
+/// [`Self::endpoint`]). Each step is one session on a scratch copy of the tree's files (tracked
+/// and untracked but not ignored, and the cases directory whole) as its working directory, never
+/// the tree itself; its change comes back as a [`Proposal`] ([`Harness::take_proposal`]), which
+/// takt's edit effect applies under the step guard whichever kind proposed it. The prompt is
+/// [`ClaudeCode`]'s for every kind, the change so far with it; metaharness constructs the
+/// child's environment from its own allowlist, so no variable the run withholds from a harness
+/// reaches it.
+pub struct SessionHarness {
+    /// The harness the sessions run.
+    pub kind: Kind,
     /// The model, when given.
     pub model: Option<String>,
-    /// The most turns one step may take.
+    /// The most turns one step may take; Codex takes no ceiling, so it is not given one.
     pub max_turns: u32,
     /// The longest one step may take, cut to what is left of the run's hour budget.
     pub timeout: std::time::Duration,
     /// Where the session's credential comes from: the user's login.
     pub credentials: session_executor::CredentialSource,
-    /// The `claude` program, found on takt's own `PATH` as [`ClaudeCode`] finds it, or by path.
+    /// The harness program (`claude`, `codex`), found on takt's own `PATH` as [`ClaudeCode`]
+    /// finds it, or by path. b10x-harness is the one metaharness finds itself, on the `PATH` it
+    /// gives its child.
     pub program: String,
+    /// For `Kind::B10x`, the endpoint its loop is pointed at and the subscription token it
+    /// reads.
+    pub endpoint: Option<session_executor::Endpoint>,
     /// What starts each step's session in place of the real `claude`; none for the real one.
     pub runner: Option<Box<RunnerFactory>>,
     /// The tokens by component the last step reported, set by each step.
@@ -144,12 +154,19 @@ pub struct ClaudeSession {
     pub proposal: std::cell::RefCell<Option<Proposal>>,
 }
 
+/// The harness kinds of [`SessionHarness`].
+pub use session_executor::Kind;
+
+/// `--harness claude`: Claude Code through the session executor.
+pub type ClaudeSession = SessionHarness;
+
 /// What starts each step's session in place of the real `claude`.
 pub type RunnerFactory = dyn Fn() -> Box<dyn session_executor::ProcessRunner>;
 
-impl std::fmt::Debug for ClaudeSession {
+impl std::fmt::Debug for SessionHarness {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClaudeSession")
+        f.debug_struct("SessionHarness")
+            .field("kind", &self.kind)
             .field("model", &self.model)
             .field("max_turns", &self.max_turns)
             .field("scripted", &self.runner.is_some())
@@ -157,14 +174,30 @@ impl std::fmt::Debug for ClaudeSession {
     }
 }
 
-impl Default for ClaudeSession {
+impl Default for SessionHarness {
     fn default() -> Self {
+        Self::of(Kind::Claude)
+    }
+}
+
+impl SessionHarness {
+    /// A harness of `kind`, its program the kind's own (`claude`, `codex`, `b10x-harness`), on
+    /// the user's login.
+    #[must_use]
+    pub fn of(kind: Kind) -> Self {
         Self {
+            kind,
             model: None,
             max_turns: 40,
             timeout: std::time::Duration::from_secs(1800),
             credentials: session_executor::CredentialSource::OperatorLogin,
-            program: "claude".to_owned(),
+            program: match kind {
+                Kind::Claude => "claude",
+                Kind::Codex => "codex",
+                Kind::B10x => "b10x-harness",
+            }
+            .to_owned(),
+            endpoint: None,
             runner: None,
             reported: std::cell::Cell::new(None),
             call: std::cell::RefCell::new(None),
@@ -172,9 +205,6 @@ impl Default for ClaudeSession {
             proposal: std::cell::RefCell::new(None),
         }
     }
-}
-
-impl ClaudeSession {
     /// The same harness, each step's session started by what `runner` makes (metaharness's
     /// scripted fake) instead of the real `claude`.
     #[must_use]
@@ -326,9 +356,13 @@ impl ClaudeSession {
     }
 }
 
-impl Harness for ClaudeSession {
+impl Harness for SessionHarness {
     fn name(&self) -> &str {
-        "claude-code"
+        match self.kind {
+            Kind::Claude => "claude-code",
+            Kind::Codex => "codex",
+            Kind::B10x => "b10x-harness",
+        }
     }
 
     fn last_usage(&self) -> Option<crate::events::TokenUsage> {
@@ -353,7 +387,13 @@ impl Harness for ClaudeSession {
         *self.call.borrow_mut() = None;
         *self.proposal.borrow_mut() = None;
         let started_at = crate::events::instant();
-        let prompt = ClaudeCode::prompt(context);
+        let prompt = ClaudeCode::prompt_with(
+            context,
+            match self.kind {
+                Kind::Codex => ClaudeCode::SHELL_RULE,
+                _ => ClaudeCode::FILE_TOOLS_RULE,
+            },
+        );
         let mut opening = serde_json::json!({
             "type": "takt.prompt",
             "step": context.step,
@@ -367,14 +407,20 @@ impl Harness for ClaudeSession {
             context.tree,
             Self::copied(context.tree)?,
             prompt,
-        );
+        )
+        .of_kind(self.kind);
         executor.model.clone_from(&self.model);
-        executor.max_turns = Some(self.max_turns);
-        // The user's login where there is one to copy (`~/.claude/.credentials.json`, the file
-        // metaharness copies); on a home with none, no credential, as `claude -p` there would
-        // have none.
+        executor.max_turns = (self.kind != Kind::Codex).then_some(self.max_turns);
+        executor.endpoint.clone_from(&self.endpoint);
+        // The user's login where there is one to copy (`~/.claude/.credentials.json`,
+        // `~/.codex/auth.json`, the file metaharness copies); on a home with none, no
+        // credential, as the program run there would have none.
+        let login_file = match self.kind {
+            Kind::Codex => ".codex/auth.json",
+            _ => ".claude/.credentials.json",
+        };
         let login = std::env::var_os("HOME")
-            .is_some_and(|home| Path::new(&home).join(".claude/.credentials.json").is_file());
+            .is_some_and(|home| Path::new(&home).join(login_file).is_file());
         executor.credentials =
             if self.credentials == session_executor::CredentialSource::OperatorLogin && !login {
                 session_executor::CredentialSource::None
@@ -388,7 +434,10 @@ impl Harness for ClaudeSession {
         );
         match &self.runner {
             Some(runner) => executor = executor.with_runner(runner()),
-            None => executor.program = Some(Self::resolved(&self.program)?),
+            None if self.kind != Kind::B10x => {
+                executor.program = Some(Self::resolved(&self.program)?);
+            }
+            None => {}
         }
         let (commission, frontier) = Self::frontier(context);
         let outcome = executor.run(&commission, &frontier);
@@ -423,10 +472,17 @@ impl Harness for ClaudeSession {
             turns: report.turns,
             started_at: Some(started_at),
         });
-        // The gating rows of metaharness's floor that were not `ok`, by row and verdict only:
-        // their details name the scratch paths, which no record carries.
+        // Claude Code's: the gating rows of metaharness's floor that were not `ok`, by row and
+        // verdict only: their details name the scratch paths, which no record carries. Codex's
+        // and b10x-harness's, under `HermeticMode::On`: the verdict whole, every row with its
+        // state.
         let mut summary = proposal.summary.clone();
-        if !report.floor.is_empty() {
+        if self.kind != Kind::Claude {
+            summary.push_str(&format!(
+                " [metaharness hermetic on: {}]",
+                report.rows.join(", ")
+            ));
+        } else if !report.floor.is_empty() {
             let rows: Vec<&str> = report
                 .floor
                 .iter()
@@ -627,6 +683,22 @@ impl ClaudeCode {
     ];
 
     fn prompt(context: &StepContext<'_>) -> String {
+        Self::prompt_with(context, Self::FILE_TOOLS_RULE)
+    }
+
+    /// How a harness with file tools works in the step: Claude Code's, and b10x-harness's.
+    const FILE_TOOLS_RULE: &str = "use only your file tools (read, edit, write) inside this \
+         directory. Do not run commands; takt runs the tests and records the evidence.";
+
+    /// How Codex works in the step: it has a shell and `apply_patch`, and no file tools.
+    const SHELL_RULE: &str = "read the files of this directory with shell commands that \
+         change nothing (cat, sed -n, rg, ls, git status, git diff) and change files only with \
+         apply_patch, inside this directory. Run no build, test or other command that writes; \
+         takt runs the tests and records the evidence.";
+
+    /// The prompt, its rules naming the tools of the harness that takes the step (`rule`);
+    /// everything else the same for every harness.
+    fn prompt_with(context: &StepContext<'_>, rule: &str) -> String {
         let mut text = String::new();
         text.push_str("You are the judgement step of a governed engineering run (takt).\n\n");
         text.push_str(&format!("Intent: {}\n\n", context.intent));
@@ -661,9 +733,9 @@ impl ClaudeCode {
                 text.push_str(&format!("- {action}\n"));
             }
         }
+        text.push_str(&format!("\nRules: {rule}"));
         text.push_str(
-            "\nRules: use only your file tools (read, edit, write) inside this directory. Do not run \
-             commands; takt runs the tests and records the evidence. Do not commit. If the action \
+            " Do not commit. If the action \
              you pick is `repository.inspect`, change no file. If it is `tests.write`, change test \
              files only. Keep the change minimal and complete for the action.\n\n\
              When done, end your reply with exactly one line of JSON and nothing after it:\n\
