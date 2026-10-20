@@ -21,3 +21,65 @@ html .theme-admonition [class*='admonitionHeading'] {
   letter-spacing: 0;
   text-transform: none;
 }
+
+/* A code block wraps instead of running past its box: the CLI reference's help blocks hold each
+   option's description on one line. A line that does not fit goes on indented, by the 10 columns
+   of a help description in plain text (4 on a phone), by 4 in a command. Only the display wraps:
+   the text, and what the copy button copies, are unchanged. */
+html .theme-code-block pre > code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+html .theme-code-block .token-line {
+  padding-inline-start: var(--takt-hang, 4ch);
+  text-indent: calc(-1 * var(--takt-hang, 4ch));
+}
+html .theme-code-block.language-text {
+  --takt-hang: 10ch;
+}
+@media (max-width: 600px) {
+  html .theme-code-block.language-text {
+    --takt-hang: 4ch;
+  }
+}
+
+/* A table's frame (scripts/rehype-layout.mjs) and a chart's (Chart.tsx) scroll sideways when what
+   they hold is wider than the column, and shade the edge that has more. The shade is drawn at
+   the frame's edge and covered by a band of the page's colour that moves with the content, so it
+   shows only where content is hidden. */
+html .takt-scroll,
+html .takt-chart {
+  overflow-x: auto;
+  background:
+    linear-gradient(to right, var(--b10x-color-canvas) 40%, transparent) left / 3rem 100% no-repeat local,
+    linear-gradient(to left, var(--b10x-color-canvas) 40%, transparent) right / 3rem 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--b10x-color-heading) 30%, transparent), transparent) left / 1.1rem 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--b10x-color-heading) 30%, transparent), transparent) right / 1.1rem 100% no-repeat scroll;
+}
+html .takt-scroll {
+  max-inline-size: 100%;
+  margin-bottom: var(--ifm-spacing-vertical);
+}
+html .takt-scroll > table {
+  margin-bottom: 0;
+}
+html .takt-chart > svg {
+  display: block;
+  inline-size: 100%;
+  min-inline-size: var(--takt-chart-min, 0);
+  max-inline-size: var(--takt-chart-width, none);
+  block-size: auto;
+}
+
+/* A word of code, of a table header or of a one-word table cell does not break at its own
+   hyphens or slashes (`--rejudge`, `held-out`, src/words.mjs); a long one still wraps when it is
+   wider than its line, without the hanging indent of the code line around it. */
+html .takt-word {
+  white-space: nowrap;
+}
+html .takt-word--long {
+  display: inline-block;
+  max-inline-size: 100%;
+  white-space: inherit;
+  text-indent: 0;
+}

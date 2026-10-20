@@ -3,6 +3,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 import path from 'node:path';
 import type {LoadContext, Plugin, PluginConfig, RouteConfig} from '@docusaurus/types';
 import {withProductSite} from '@beyond10x/docs-system/product-site';
+import rehypeLayout from './scripts/rehype-layout.mjs';
 
 const config: Config = {
   title: 'takt',
@@ -44,6 +45,7 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           routeBasePath: 'docs',
           editUrl: 'https://github.com/beyond10x/takt/tree/main/website/',
+          rehypePlugins: [rehypeLayout],
         },
         blog: false,
         theme: {

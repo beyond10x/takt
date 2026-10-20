@@ -155,7 +155,23 @@ function exitCodes(text) {
   return rows;
 }
 
-const cell = (s) => s.replace(/\|/g, '\\|').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// A table cell from help text. `|` is escaped everywhere, since the table splits its cells before
+// code spans are read. `<` and `>` are escaped outside code spans only: Markdown decodes no entity
+// inside one, which showed `&lt;case&gt;` on the page. A flag outside a code span becomes one, and
+// a table's code does not wrap, so `--baseline-only` never breaks after its `--`.
+const cell = (s) =>
+  s
+    .split(/(`[^`]*`)/)
+    .map((part, i) =>
+      i % 2
+        ? part
+        : part
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/(^|[\s(])(--[a-z][a-z0-9-]*)/g, '$1`$2`'),
+    )
+    .join('')
+    .replace(/\|/g, '\\|');
 
 function cli() {
   const version = takt(['--version']).trim();
