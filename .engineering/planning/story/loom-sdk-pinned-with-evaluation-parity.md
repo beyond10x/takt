@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:loom-sdk-pinned-with-evaluation-parity
 kind: story
-status: draft
+status: implemented
 title: takt depends on loom-sdk at a tag, and the Loom governor decides fixture cases as takt does
 summary: b10x-loom-sdk pinned at a Loom tag; governor::evaluate renders the same decision bytes on fixtures that read no grant, and the granted difference is asserted
 tags:
@@ -23,7 +23,11 @@ scope:
   path: crates/takt/tests/fixtures/loom-parity
 - confidence: cited
   path: crates/takt/tests/loom_parity.rs
-revision: 8
+revision: 12
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T05:46:17Z", actor: "human:timo", revision: 9}
+- {from: "proposed", to: "active", at: "2026-10-20T05:46:17Z", actor: "human:timo", revision: 10}
+- {from: "active", to: "implemented", at: "2026-10-20T06:22:55Z", actor: "human:timo", revision: 12, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: loom-sdk-pinned-with-evaluation-parity
 
@@ -61,7 +65,7 @@ revision: 8
 
 1. `cargo tree -p b10x-takt` lists `b10x-loom-sdk` at a Loom tag and exactly one copy each of `b10x-canon` and `b10x-canon-engineering`.
 2. `cargo test -p b10x-takt --test loom_parity` passes: for every fixture decision that reads no grant, the decision `loom_sdk::governor::evaluate` returns equals, as a parsed value, the one `CaseDir::evaluate` wrote for the same protocol, case and evidence, at the recorded instant.
-3. The same test holds one granted fixture: the decision of takt shows the action granted, the decision of the governor shows it `approval-required`, and the test asserts exactly that difference and no other.
+3. The same test holds one granted fixture: the decision of takt shows the action granted, the decision of the governor shows it `approval-required`, and the test asserts exactly the differences that follow from the missing grant (the action's status and reasons, and the decision's `explanation.computed_from.authority`) and no other.
 4. `task check` passes, and the diff changes no file under `crates/takt/src` or `crates/takt-cli/src`.
 
 ## Blocked by
