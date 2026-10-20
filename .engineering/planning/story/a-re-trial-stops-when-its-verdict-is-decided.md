@@ -13,7 +13,7 @@ refs:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 3
 ---
 # A re-trial runs on after its verdict is decided, and no run's active time is capped
 
@@ -49,6 +49,13 @@ Rules:
    (`--tokens`); a capped run is not resumed and counts as at least the cap.
 3. **Active time.** No cap on forge waits. A run's active time is capped at three times the
    baseline's longest active time; a run over it stops and counts as worse.
+4. **Every set stops early.** Every trial set, first sets included, stops after two runs with
+   the same worse outcome.
+5. **Pre-flight.** Before run 1 of a set, a check that calls no model: free disk, usage headroom,
+   `b10x-gates scan-text` over the configured commit identity and a sample commit message, a
+   bot-route `push --dry-run`, and the revision of the binary under test. A failed check starts no
+   run. Evidence: the trial cycle on release 0.4.0 discarded five runs (368,818 tokens), each
+   refused at `pr.open` by the identity scan, which a pre-flight would have caught before run 1.
 
 Rule 1 and the use of rules 2 and 3 are the trial agent's procedure (`.agents/trial-agent.md`
 § The cycle, step 8). Rule 3 needs a budget takt does not have.
@@ -70,11 +77,12 @@ runs one validator step and stops `Iterations (1)`, exit 3.
 - `crates/takt-cli/src/main.rs`, `crates/takt/src/run.rs`: `--active-seconds <n>` on `takt run`
   and `takt scenario run`, counting a run's time less its waits on the forge; over it the run stops
   on a budget, exit 3, naming the budget, the active time and the wait time.
-- `.agents/trial-agent.md` § The cycle, step 8: rules 1 to 3 as the re-trial's procedure.
+- `.agents/trial-agent.md` § The cycle, steps 2 and 8: rules 1 to 5 as the trial's procedure,
+  the pre-flight before run 1 of every set.
 - `crates/takt/tests/`: a run with a forge wait longer than its active budget is not stopped by
   the wait; a run whose steps pass the active budget stops on it.
 
 ## Acceptance
 
 At the candidate the predicate gives `not_reproduced` (exit 3), and the trial agent's profile names
-the three rules.
+the five rules, the pre-flight's checks named one by one.

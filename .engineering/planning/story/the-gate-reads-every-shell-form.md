@@ -13,7 +13,7 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/run.rs
-revision: 2
+revision: 3
 ---
 # Story: the-gate-reads-every-shell-form
 
@@ -36,6 +36,9 @@ naming this story:
 - `source`: a sourced file sets `PYTHONPATH` by assignment and `export`
 - `dashm`: `cd scripts && python3 -m check`, a module beside the one `-m` runs
 - `xargs`: `echo scripts/check.py | xargs python3`
+- `cd scripts && python3 -c "import checklib…"` and `cd scripts && python3 - < check.py`: after a
+  `cd`, the directory these forms import from is not compared (the root rule of wave 18 covers only
+  the tree's root); found by the wave 19 confirm
 
 The same review found, beyond the 34: wrapper programs the reader does not know run Python without
 failing closed (`taskset`, `chrt`, `unbuffer`, `script -qec`, `uv run`, `env -S`, `pytest`), and
