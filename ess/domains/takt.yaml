@@ -1173,7 +1173,7 @@ types:
   # needs on the candidate's side (`trials`, 5) and the cases it may fall short by at any outcome
   # rank before it is worse (`margin`, 1). Decided 2026-10-18 (design:recursive-self-improvement
   # § Scorecard); a file saved before the rule had fields reads with the default.
-  # read from: .engineering/planning/design/recursive-self-improvement.md:135-143
+  # read from: .engineering/planning/design/recursive-self-improvement.md:139-147
   # read from: crates/takt/src/scorecard.rs:510-527
   # read from: crates/takt/src/scorecard.rs:543-546
   - name: takt.work.ScorecardRule
@@ -1489,7 +1489,7 @@ types:
   # hand, has no run record and no story record, so no tokens, wall time, finding or filing.
   # read from: .engineering/planning/story/loop-scorecard.md:34-37
   # read from: .engineering/planning/story/loop-scorecard.md:54-56
-  # read from: .engineering/planning/design/recursive-self-improvement.md:190-192
+  # read from: .engineering/planning/design/recursive-self-improvement.md:194-196
   # read from: crates/takt/src/scorecard.rs:137-177
   # read from: crates/takt/src/loop_scorecard.rs:52-82
   # read from: crates/takt/src/loop_scorecard.rs:923-1050
@@ -1824,7 +1824,7 @@ types:
   # `--steps`, exits 1 on it, the `scorecard.compare` validator records nothing, and `takt
   # promote` refuses it on the candidate's side and on each stored scorecard it compares with
   # (takt.work.Promotion).
-  # read from: .engineering/planning/design/recursive-self-improvement.md:135-143
+  # read from: .engineering/planning/design/recursive-self-improvement.md:139-147
   # read from: crates/takt/src/scorecard.rs:1448-1476
   # read from: crates/takt/src/scorecard.rs:1639-1663
   # read from: crates/takt/src/scorecard.rs:1692-1720
@@ -1882,7 +1882,7 @@ types:
   # A finding's key, the `<key>` of its reference `finding:<key>` in the planning store:
   # lower-case letters and digits in words joined by `-`. One key is one finding: a filing of a
   # key the store holds already, under whatever kind, is refused.
-  # read from: .engineering/planning/design/recursive-self-improvement.md:83-84
+  # read from: .engineering/planning/design/recursive-self-improvement.md:87-88
   # read from: scripts/file-finding:267
   # read from: scripts/file-finding:283-306
   - name: takt.work.FindingKey
@@ -1961,7 +1961,7 @@ types:
   # not judged again until it changes (the design's "no re-run of an unchanged candidate").
   # Decided 2026-10-18.
   # read from: .engineering/planning/story/promotion.md:95
-  # read from: .engineering/planning/design/recursive-self-improvement.md:135-143
+  # read from: .engineering/planning/design/recursive-self-improvement.md:139-147
   # read from: crates/takt/src/promotion.rs:137-147
   # Decided 2026-10-19 (story:promotion-refusal-is-not-final): a refusal is final no longer. The
   # operator judges a refused candidate again with `--rejudge` on a scorecard of new runs, none
@@ -4097,7 +4097,7 @@ entities:
   # read from: .engineering/planning/story/promotion.md:90
   # The rule's parameters, trials and margin, are recorded with the scorecard
   # (takt.work.ScorecardRule) and copied into the record that read it.
-  # read from: .engineering/planning/design/recursive-self-improvement.md:137-143
+  # read from: .engineering/planning/design/recursive-self-improvement.md:141-147
   # read from: crates/takt/src/promotion.rs:151-210
   # Decided 2026-10-19 (story:promote-binds-scorecard-and-merge,
   # story:promotion-refusal-is-not-final): a promotion installs a merged revision only, an
@@ -4308,7 +4308,7 @@ entities:
   # and again once it is taken after a wait, a check whose cache directory's file system has
   # less than `CHECK_FINDING_MIN_FREE_GIB` GiB free (20 by default, 0 checks nothing) builds
   # nothing and exits 1, naming the directory, its free space and the threshold.
-  # read from: .engineering/planning/design/recursive-self-improvement.md:80-85
+  # read from: .engineering/planning/design/recursive-self-improvement.md:84-89
   # read from: .engineering/planning/story/finding-intake.md (§ Domain relations)
   # read from: .engineering/planning/story/finding-on-any-repository.md (§ Outcome)
   # read from: .engineering/planning/story/check-finding-builds-name-their-revision.md (§ Outcome)
@@ -4422,7 +4422,7 @@ entities:
   # read from: crates/takt-cli/src/main.rs:1761-1764
   # read from: crates/takt-cli/src/main.rs:1786-1792
   # read from: crates/takt-cli/src/main.rs:1962-1974
-  # read from: .engineering/planning/design/recursive-self-improvement.md:92-94
+  # read from: .engineering/planning/design/recursive-self-improvement.md:96-98
   # read from: crates/takt-cli/src/main.rs:1825-1827
   - name: takt.work.TrialBranch
     naming:
@@ -4528,7 +4528,7 @@ entities:
   # such path (story:self-improvement-protocol S5, 2026-10-19).
   # read from: protocols/self-improvement/1.yaml:18-22
   # read from: crates/takt/src/improvement.rs:1233-1243
-  # read from: .engineering/planning/design/recursive-self-improvement.md:108-109
+  # read from: .engineering/planning/design/recursive-self-improvement.md:112-113
   # read from: .engineering/planning/story/judge-guard.md:87
   # read from: .engineering/planning/story/judge-guard.md:122
   # read from: .engineering/judge-allow.yaml
