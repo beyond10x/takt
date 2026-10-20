@@ -51,6 +51,8 @@ stops! {
         Stop::Unperformable { claim: "pr.opened".to_owned(), performer: "the forge".to_owned() };
     Stop::DiskLow { .. } => Some(STOP_KINDS[9]),
         Stop::DiskLow { path: "/srv/tree".into(), free_bytes: 64 << 20, min_bytes: 10 << 30 };
+    Stop::ActiveTime { .. } => Some(STOP_KINDS[10]),
+        Stop::ActiveTime { budget: 600, active: 612.5, waited: 1140.0 };
 }
 
 /// A stop of every variant, one per row and each of its own row's variant; each display opens

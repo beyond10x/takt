@@ -65,6 +65,16 @@ pub enum Stop {
     Hours(f64),
     /// The token budget is spent.
     Tokens(u64),
+    /// The active-time budget is spent ([`Run::cap_active_time`]): the run's wall time less its
+    /// waits on the forge reached the budget, read before a step.
+    ActiveTime {
+        /// The budget, in seconds.
+        budget: u64,
+        /// The run's active time when it stopped, in seconds.
+        active: f64,
+        /// The time it waited on the forge, left out of the active time, in seconds.
+        waited: f64,
+    },
     /// The harness did something the frontier did not admit; its change was discarded.
     StepRefused(String),
     /// A judgement step changed no file and the decision did not move: another step would not either.
@@ -117,7 +127,7 @@ pub enum Stop {
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
 /// and fails to compile when one is added without its name here.
-pub const STOP_KINDS: [&str; 10] = [
+pub const STOP_KINDS: [&str; 11] = [
     "ApprovalRequired",
     "NothingAdmissible",
     "Iterations",
@@ -128,6 +138,7 @@ pub const STOP_KINDS: [&str; 10] = [
     "Waiting",
     "Unperformable",
     "DiskLow",
+    "ActiveTime",
 ];
 
 /// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
@@ -149,6 +160,14 @@ impl std::fmt::Display for Stop {
             Stop::Iterations(n) => write!(f, "Iterations ({n})"),
             Stop::Hours(h) => write!(f, "Hours ({h})"),
             Stop::Tokens(t) => write!(f, "Tokens ({t})"),
+            Stop::ActiveTime {
+                budget,
+                active,
+                waited,
+            } => write!(
+                f,
+                "ActiveTime ({budget} s; active {active:.1} s, waited {waited:.1} s on the forge)"
+            ),
             Stop::StepRefused(why) => write!(f, "StepRefused ({why})"),
             Stop::NoProgress => write!(f, "NoProgress"),
             Stop::Waiting { on, budget, local } => match budget {
@@ -6714,6 +6733,10 @@ pub struct Run<'a> {
     /// [`Run::record_on`] gives one, and only a story's run writes to it.
     store: Option<&'a dyn Frontier>,
     started: Instant,
+    /// The active-time budget, in seconds: none until [`Run::cap_active_time`] gives one.
+    active_cap: Option<u64>,
+    /// How long the run has paused on the forge so far: the waits its active time leaves out.
+    waited: Duration,
     options: RunOptions,
     /// The files outside the tree that decide how cargo and rustup build and run the tests
     /// ([`Outside`]), as the run found them when it began.
@@ -6862,6 +6885,8 @@ impl<'a> Run<'a> {
             transcripts: None,
             store: None,
             started: Instant::now(),
+            active_cap: None,
+            waited: Duration::ZERO,
             outside: Outside::read(tree, &outside_dirs)?,
             outside_dirs,
             options,
@@ -7118,6 +7143,8 @@ impl<'a> Run<'a> {
             transcripts: None,
             store: None,
             started: Instant::now(),
+            active_cap: None,
+            waited: Duration::ZERO,
             outside: Outside::read(tree, &outside_dirs)?,
             outside_dirs,
             options,
@@ -7393,7 +7420,39 @@ impl<'a> Run<'a> {
         {
             return Some(Stop::Tokens(t));
         }
+        if let Some(budget) = self.active_cap {
+            let active = self.active_time();
+            if active.as_secs_f64() >= budget as f64 {
+                return Some(Stop::ActiveTime {
+                    budget,
+                    active: active.as_secs_f64(),
+                    waited: self.waited.as_secs_f64(),
+                });
+            }
+        }
         None
+    }
+
+    /// Caps the run's active time ([`Run::active_time`]) at `seconds`: read before every step,
+    /// as the token budget is, so a step under way runs to its end and the run stops
+    /// [`Stop::ActiveTime`] before the next. Waits on the forge spend none of it, and it is no
+    /// bound on them: a run with no step or hour budget still has nothing to wait in. Without
+    /// this call the run's active time is not capped. The CLI calls it with `--active-seconds`.
+    pub fn cap_active_time(&mut self, seconds: u64) {
+        self.active_cap = Some(seconds);
+    }
+
+    /// The run's active time: its wall time since it was opened or resumed, less the time it
+    /// paused on the forge.
+    #[must_use]
+    pub fn active_time(&self) -> Duration {
+        self.started.elapsed().saturating_sub(self.waited)
+    }
+
+    /// How long the run has paused on the forge since it was opened or resumed.
+    #[must_use]
+    pub fn waited(&self) -> Duration {
+        self.waited
     }
 
     /// For a run given no approval gate, the gate its case's protocol names for the case's
@@ -8458,7 +8517,9 @@ impl<'a> Run<'a> {
                     pause.as_secs_f64(),
                     on.join(", ")
                 )?;
+                let paused = Instant::now();
                 std::thread::sleep(pause);
+                self.waited += paused.elapsed();
                 for (name, _, revision, _) in &awaited {
                     observed_without_record.remove(&(name.clone(), revision.clone()));
                 }

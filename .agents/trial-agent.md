@@ -47,6 +47,38 @@ Each cycle has its own directory outside the repository, named `<YYYY-MM-DD>-<sh
    comparison is wanted. `takt scenario run` per run, up to three at once (§ Limits). Then
    `takt scorecard --save <cycle dir> --revision <trigger sha>`, `takt trace` per case, and
    `takt report` across them. Every figure comes from these commands.
+   - **Pre-flight.** Before run 1 of every set (a scenario's runs at one binary, here and in
+     step 8), a check that calls no model, each item on its own:
+     1. free disk: `df -h /`, and the file system of `CARGO_TARGET_DIR` when set, at least the
+        10G of § Limits;
+     2. usage headroom, with the check the harness provides, for the set's runs at their token
+        cap;
+     3. `b10x-gates scan-text`, with `B10X_GATES_POLICY` set as for the runs, over the commit
+        identity the runs will commit as (`--commit-identity`, else
+        `.engineering/commit-identity.conf` at the seed) and over a sample commit message of the
+        scenario's story;
+     4. a bot-route `b10x-gates bot -- push --dry-run` of a `trial/<n>` branch from the scenario
+        checkout;
+     5. the revision of the binary under test: its `--version` names the sha of step 1 (or of
+        the candidate, step 8), not `-dirty`.
+
+     A failed check starts no run; it is a deviation (§ Reports), fixed before the set starts.
+     Release 0.4.0's cycle discarded five runs (368,818 tokens), each refused at `pr.open` by the
+     identity scan, which item 3 catches before run 1.
+   - **Budgets per run.** `--tokens` at the saved maximum, for that scenario, of the scorecard
+     the set is compared with (the promoted baseline's). A run stopped `Tokens` is not resumed
+     and counts as at least the cap. `--active-seconds` at three times the baseline's longest
+     active time, a run's wall time less the `seconds` of its `waiting` events
+     (`events.jsonl`), the longest over the baseline set's runs; a baseline with no rollouts to
+     read it from gives no active cap, and the report says so. A run over it stops `ActiveTime`
+     (exit 3), or `Waiting` naming `ActiveTime` (exit 6), and counts as worse. No `--hours`:
+     a wait on the forge is not capped by time (a queued check is not the candidate's cost);
+     `--iterations` stays the run's step budget.
+   - **Early stop.** Every set, first sets included, stops after two runs with the same outcome
+     ranked below the baseline's for that scenario (`takt scorecard`'s rank): at five runs and
+     a margin of one case, two decide "worse", and the rest are not run. A step 2 set stopped so
+     is a finding for step 5, and step 8 compares that scenario against the promoted baseline
+     only.
    - A run that exits 8 (`DiskLow`) measured the machine, not takt: that trial is discarded and
      run again, never resumed. A scenario with a `DiskLow` trial gets no verdict from
      `takt scorecard --against` and is refused by `takt promote`, so its set is run again as a
@@ -75,10 +107,31 @@ Each cycle has its own directory outside the repository, named `<YYYY-MM-DD>-<sh
    `trial-cand/<cycle>-<k>` cut from the trigger's sha, and one implementor sub-agent that applies
    the proposal under the dispatcher's implementor brief (`.agents/dispatcher-agent.md`), its
    Scope the proposal's paths. The trial agent commits through the bot route.
-8. **Re-trial.** Build the binary of the candidate's committed sha from its clean worktree, so
+8. **Re-trial.** First the parking rule: sort the baseline set's runs of the target scenario by
+   tokens, take the middle three (second to fourth) and lower each by the proposal's low
+   estimate of tokens saved per run. When all three fall under the re-trial's "better"
+   threshold (the baseline's median), the re-trial runs. Otherwise the candidate is still
+   reviewed and built, its probe kept in the cycle directory as evidence, and it is parked for
+   the per-step judge (story:the-judge-compares-the-steps-a-candidate-targets), not re-trialled.
+   Example, release 0.4.0's cycle: a low estimate of 1,290 tokens per run lowers middle runs of
+   66,929, 66,949 and 66,976 to 65,639 to 65,686, all under the median of 66,421, so it is
+   re-trialled.
+
+   Build the binary of the candidate's committed sha from its clean worktree, so
    every run's `opened` line names that sha and not `-dirty`. Run each scenario of step 2 five
-   times with it: `takt promote` refuses a scenario either side has with fewer than five cases on
-   the candidate's side. Then `takt scorecard --save <cycle dir> --revision <candidate sha>
+   times with it, under step 2's pre-flight, budgets and early stop: `takt promote` refuses a
+   scenario either side has with fewer than five cases on the candidate's side.
+   - **Stop when decided.** After each run, the set stops when no result of its remaining runs
+     can change its verdict (better, not better, worse). At five runs: three at or over the
+     baseline's median of the target scenario decide "not better" (a run stopped `Tokens`
+     counts as at least the cap); two with a worse outcome decide "worse", the rule's margin
+     being one case. Release 0.3.0's first re-trial was decided after its fourth run (three of
+     four above the median of 66,421 tokens); its fifth cost 88,252 tokens and changed nothing.
+   - A set stopped early has fewer than five cases, so `takt scorecard --against` gives it no
+     verdict: the decided verdict is the trial agent's, stated with each run's outcome and
+     tokens as `takt scorecard` printed them, and it is a failed comparison.
+
+   With all five run, `takt scorecard --save <cycle dir> --revision <candidate sha>
    --against` step 2's saved scorecard, and again `--against` the promoted baseline's (the
    promotion store's `<revision>.scorecard.json` of the latest record): no scenario worse against
    either, and the target scenario better on the proposal's metric. A failed comparison gets one revision by the
