@@ -98,10 +98,8 @@ Each cycle has its own directory outside the repository, named `<YYYY-MM-DD>-<sh
    the scenario it should move, and an `expected_before` predicate (`scripts/check-finding`,
    `.agents/planner-agent.md` § Intake) that is red at the trigger's sha.
 
-   Each proposal names its layer and the repository that owns it, by the table of ADR 0096
-   (atlas, `architecture/adr/0096-the-agent-stack-has-one-owner-per-layer.md`); its candidate
-   is built in that repository (ADR 0101, atlas,
-   `architecture/adr/0101-trials-measure-every-layer.md`). takt's own settings for a vendor
+   Each proposal names its layer and the repository that owns it, by the table of ADR 0096;
+   its candidate is built in that repository (ADR 0101). takt's own settings for a vendor
    harness (its argv, its settings document) are takt's layer. A proposal for a layer that no
    repository in that table owns (a vendor harness's own prompt or tool schemas, a provider),
    or for a repository that is not public, goes to the monitor as one message (the layer, the
