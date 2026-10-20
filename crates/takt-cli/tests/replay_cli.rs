@@ -114,6 +114,11 @@ struct Recorded {
 }
 
 fn recorded(outer: &Path) -> Recorded {
+    recorded_with(outer, "probe the replay", &[])
+}
+
+/// [`recorded`], the run opened for `intent` on a repository that also holds `files`.
+fn recorded_with(outer: &Path, intent: &str, files: &[(&str, &str)]) -> Recorded {
     let repo = outer.join("repo");
     let bin = outer.join("bin");
     let state = outer.join("state");
@@ -122,6 +127,9 @@ fn recorded(outer: &Path) -> Recorded {
         fs::create_dir_all(dir).expect("a directory");
     }
     fs::write(repo.join("README.md"), "a story\n").expect("a file");
+    for (path, text) in files {
+        fs::write(repo.join(path), text).expect("a file");
+    }
     executable(&repo.join("check.sh"), "#!/bin/sh\nexit 1\n");
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["add", "-A"]);
@@ -133,7 +141,7 @@ fn recorded(outer: &Path) -> Recorded {
             "--repo",
             repo.to_str().expect("utf-8"),
             "--intent",
-            "probe the replay",
+            intent,
             "--harness",
             "claude",
             "--forge",
@@ -441,6 +449,60 @@ fn a_case_copied_out_of_its_repository_replays_with_repo_as_recorded() {
     )
     .expect("the replay's record reads");
     assert_eq!(record["prompt"], "as recorded", "{said}");
+}
+
+/// story:step-spends-a-request-reading-its-scope-files: a replay of a step whose intent names
+/// scope files is given the files its recorded step was given, read in the tree as it was at
+/// the revision the step started at. Step 2 was given `notes.py`, step 4 `notes.py` and the
+/// `tests/work.txt` step 2 committed; `later.py` came after the run. A commit after the run
+/// removes `notes.py` and adds `later.py`, and a replay of each step is `as recorded`, exit 0,
+/// its record saying so.
+#[test]
+fn a_replay_after_a_commit_attaches_the_scope_files_as_recorded() {
+    let scratch = Scratch::new("scope-files");
+    let intent = "probe the replay\n\n## Scope\n\n- `notes.py` (the notes)\n- `tests/work.txt`\n- `later.py`\n";
+    let rec = recorded_with(&scratch.0, intent, &[("notes.py", "notes\n")]);
+    for (step, attached) in [
+        (2, "\n\nFiles in scope, attached: @notes.py\n\n"),
+        (
+            4,
+            "\n\nFiles in scope, attached: @notes.py @tests/work.txt\n\n",
+        ),
+    ] {
+        let first = recorded_first_line(&rec, step);
+        let line: serde_json::Value = serde_json::from_str(&first).expect("the prompt line reads");
+        let recorded_prompt = line["prompt"].as_str().expect("a prompt");
+        assert!(
+            recorded_prompt.contains(attached),
+            "step {step} was given its scope files: {recorded_prompt}"
+        );
+    }
+    git(&rec.repo, &["rm", "-q", "notes.py"]);
+    fs::write(rec.repo.join("later.py"), "later\n").expect("a file");
+    git(&rec.repo, &["add", "later.py"]);
+    git(&rec.repo, &["commit", "-q", "-m", "after the run"]);
+    for step in [2, 4] {
+        let out = scratch.0.join(format!("replays-scope-{step}"));
+        let output = takt(&rec.bin, &rec.state)
+            .args(["replay", "--case"])
+            .arg(&rec.case)
+            .args(["--step", &step.to_string(), "--out"])
+            .arg(&out)
+            .output()
+            .expect("takt replay runs");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let said = format!("{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(output.status.code(), Some(0), "step {step}\n{said}");
+        assert!(
+            stdout.contains("prompt: as recorded"),
+            "step {step}\n{said}"
+        );
+        let record: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(out.join("replay-1/replay.json")).expect("the replay's record"),
+        )
+        .expect("the replay's record reads");
+        assert_eq!(record["prompt"], "as recorded", "step {step}\n{said}");
+    }
 }
 
 /// A step that is a validator's (step 3, the test command) is no judgement step: refused, exit
