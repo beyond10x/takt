@@ -43,9 +43,9 @@ record in `run.rs`, `scorecard.rs`, `report.rs` and `trace.rs`. D after the tag.
   to it. ESS text and 31 re-pointed citations in 7bf9ebb.
 - 2026-10-20: gate at 7bf9ebb: `cargo fmt --all --check` clean, `cargo clippy --workspace
   --all-targets --locked -- -D warnings` clean (after boxing `SteppedBy::Harness`'s call
-  report), `cargo test --workspace --locked` 1531 passed, 0 failed, 6 ignored
-  (`~/.cache/takt-r0/w22/full-test.log`); citations 1001/1001 with digests. Adversarial review
-  started at 7bf9ebb.
+  report), `cargo test --workspace --locked` 1531 passed, 0 failed, 6 ignored; citations
+  995/1001 with digests (6 unresolved by the boxing, found by the review as F1). Adversarial
+  review started at 7bf9ebb.
 - 2026-10-20: D (S2) does not join: metaharness 0.10.0 (3d697011) tagged after the gate; S2
   opens wave 23. Filed from the trial agent and the orchestrator's survey, drafts:
   story:the-scorecard-names-no-metric-it-did-not-compute, story:takt-reads-harness-traces-as-
