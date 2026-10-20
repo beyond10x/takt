@@ -2,10 +2,12 @@
 //! `gate.run` compares at the case's pinned base what Python loads from the tree for a gate's
 //! commands, besides the files the project file names. In the directory a Python script runs
 //! from (its own, or the directory Python runs as `python3 <dir>`): every module, compiled
-//! module, `*.pth` file and package. For `python3 -m a.b`: the module and package `a` in the
-//! directory the command runs in and in every `PYTHONPATH` entry the binding sets, as the step
-//! guard names them. A file there that differs, is added or is deleted: not run, no record, the
-//! path named. The changes are commits made on the case's branch outside the loop.
+//! module, `*.pth` file and package, nested or not; for a script at the tree's root, where the
+//! command runs, the script and the `*.pth` files there. For `python3 -m a.b`: the module and
+//! package `a` in the directory the command runs in and in every `PYTHONPATH` entry the binding
+//! sets, as the step guard names them. A file there that differs, is added or is deleted: not
+//! run, no record, the path named. The changes are commits made on the case's branch outside the
+//! loop.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -259,6 +261,58 @@ fn a_change_outside_the_scripts_imports_lets_the_gate_run_and_record() {
         &[("src/app.py", "VALUE = 2\n"), ("scripts/data.txt", "two\n")],
     );
     recorded(&observation);
+}
+
+/// A namespace package nested below the script's directory, with no module directly in its
+/// first directory (`scripts/lib/core/util.py`), is compared whole as a package is.
+#[test]
+fn a_namespace_package_two_levels_below_the_script_is_compared_at_the_base() {
+    let tree = repository(
+        "nsdeep",
+        &["scripts/check.py"],
+        &[],
+        &[
+            (
+                "scripts/check.py",
+                "import sys\nfrom lib.core import util\nsys.exit(util.run())\n",
+            ),
+            ("scripts/lib/core/util.py", "def run():\n    return 0\n"),
+        ],
+    );
+    let observation = observed(
+        &tree,
+        "nsdeep",
+        &[(
+            "scripts/lib/core/util.py",
+            "def run():\n    return 0  # edited\n",
+        )],
+    );
+    refused(&observation, "scripts/lib");
+}
+
+/// A script at the tree's root runs from the directory the command runs in, which holds the code
+/// the gate checks: as for `-m`, its own file and the `*.pth` files there are compared, not every
+/// module and package beside it, and a change to that code lets the gate run and record.
+#[test]
+fn code_beside_a_script_at_the_root_lets_the_gate_run_and_record() {
+    let files = [
+        ("check_cit.py", "raise SystemExit(0)\n"),
+        ("todo.py", "VALUE = 1\n"),
+        ("app/__init__.py", ""),
+        ("app/core.py", "VALUE = 1\n"),
+    ];
+    let tree = repository("root-beside", &["check_cit.py"], &[], &files);
+    let observation = observed(
+        &tree,
+        "root-beside",
+        &[("todo.py", "VALUE = 2\n"), ("app/core.py", "VALUE = 2\n")],
+    );
+    recorded(&observation);
+    for (name, changed) in [("root-self", "check_cit.py"), ("root-pth", "extra.pth")] {
+        let tree = repository(name, &["check_cit.py"], &[], &files);
+        let observation = observed(&tree, name, &[(changed, "import os\n")]);
+        refused(&observation, changed);
+    }
 }
 
 /// `python3 tool` runs `tool/__main__.py`, with `tool` first on the import path.

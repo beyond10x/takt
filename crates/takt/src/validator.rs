@@ -905,10 +905,12 @@ fn argument_paths(project: &str) -> Result<Vec<String>> {
 /// - In the directory a Python script runs from, which Python puts first on its import path
 ///   (the script's own directory; the directory itself for `python3 <dir>`, which runs its
 ///   `__main__.py`): every module, compiled module and `*.pth` file directly in it, and every
-///   package, a directory there holding a module directly, whole ([`python_dir`]). A script is a
-///   path the guard names, in an import directory of its own, that the base or the revision
+///   package, a directory there holding a module at any depth, whole ([`python_dir`]). A script
+///   is a path the guard names, in an import directory of its own, that the base or the revision
 ///   holds as a file run by a Python (its `#!` line names one, or a Python runs the command and
-///   no other `#!` line does) or as a directory with a `__main__.py`.
+///   no other `#!` line does) or as a directory with a `__main__.py`. A script whose directory is
+///   the one the command runs in, the tree's root, is taken as `-m` is below: the script itself
+///   and the `*.pth` files there, not every module and package of the code the gate checks.
 /// - What `python -m a.b` runs, in the directory the command runs in and in every `PYTHONPATH`
 ///   entry the binding sets: `a.py`, `a.*` and the package `a/` whole, and the `*.pth` files
 ///   there, the globs the guard names for it. Not every module of those directories: the
@@ -935,6 +937,7 @@ fn python_paths(
         bindings.extend(providers.values().map(|provider| &provider["command"]));
     }
     let mut dirs: Vec<String> = Vec::new();
+    let mut scripts: Vec<String> = Vec::new();
     let mut globs: Vec<String> = Vec::new();
     for binding in bindings {
         let Some(executable) = binding["executable"].as_str() else {
@@ -993,18 +996,27 @@ fn python_paths(
                 if !imports.contains(&parent) || module {
                     continue;
                 }
-                if let Some(dir) = python_script(tree, at, revision, path, runs_python)? {
-                    dirs.push(dir);
+                match python_script(tree, at, revision, path, runs_python)? {
+                    // The directory the gate runs in, the tree's root, holds the code the gate
+                    // checks: as for `-m`, the script itself and the `*.pth` files there.
+                    Some(dir) if dir.is_empty() => {
+                        scripts.push(path.clone());
+                        globs.push("*.pth".to_owned());
+                    }
+                    Some(dir) => dirs.push(dir),
+                    None => {}
                 }
             }
         }
     }
     dirs.sort();
     dirs.dedup();
-    let mut paths = Vec::new();
+    let mut paths = scripts;
     for dir in dirs {
         paths.extend(python_dir(tree, at, revision, &dir)?);
     }
+    paths.sort();
+    paths.dedup();
     globs.sort();
     globs.dedup();
     Ok((paths, globs))
@@ -1047,8 +1059,8 @@ fn python_script(
 
 /// What Python may import from `dir` (relative to the tree, `""` its root) at the base `at` or at
 /// `revision`: every module, compiled module and `*.pth` file directly in it, and every directory
-/// there that holds a module directly, a package (or a namespace package's part), by its path,
-/// which the comparison takes whole.
+/// there that holds a module at any depth, a package (or a namespace package's part, nested or
+/// not), by its path, which the comparison takes whole.
 fn python_dir(tree: &Path, at: &str, revision: &str, dir: &str) -> Result<Vec<String>> {
     let prefix = if dir.is_empty() {
         String::new()
@@ -1071,7 +1083,7 @@ fn python_dir(tree: &Path, at: &str, revision: &str, dir: &str) -> Result<Vec<St
             };
             match rest.split('/').collect::<Vec<_>>().as_slice() {
                 [name] if module(name) => paths.push(path.to_owned()),
-                [package, name] if module(name) => paths.push(format!("{prefix}{package}")),
+                [package, .., name] if module(name) => paths.push(format!("{prefix}{package}")),
                 _ => {}
             }
         }

@@ -64,7 +64,9 @@ after `takt promote --rebaseline`, and a run that pushes is refused without a co
   `python3 <dir>` runs, and the module and package `python -m a.b` runs, with the `*.pth` files
   beside it, from the directory the command runs in and each `PYTHONPATH` entry the binding sets.
   No other module of the run directory or a `PYTHONPATH` entry is compared: those often hold the
-  code the gate checks.
+  code the gate checks. A script at the root of the tree, where the gate runs, is compared as `-m`
+  is (the script and the root `*.pth` files), and a subdirectory of a script's directory that
+  holds a module at any depth is compared whole.
 
 ### Added
 
@@ -125,6 +127,10 @@ after `takt promote --rebaseline`, and a run that pushes is refused without a co
   (story:view-joins-own-transcripts-and-writes-a-private-page).
 - A step refused for writing `.engineering/commit-identity.conf` is told it wrote into the
   planning store (story:commit-identity-refusal-names-the-identity-file).
+- A gate that runs Python through a shell (`sh -c "python3 …"`, or a shell script that runs it)
+  has neither the script nor what it imports compared at the base, so a change to them does not
+  stop the gate (story:gate-compares-python-run-through-a-shell). The same holds for a module
+  `python3 -c` imports from the directory the command runs in.
 
 ## [0.3.0] — 2026-10-20
 
