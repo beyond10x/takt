@@ -152,6 +152,64 @@ struct Seen {
     /// The case tree's work as it stood when the session started and when it ended.
     tree_at_start: Vec<BTreeMap<PathBuf, Vec<u8>>>,
     tree_at_end: Vec<BTreeMap<PathBuf, Vec<u8>>>,
+    /// What each of [`GIT_SEEN`] printed at the session's start, its exit status and standard
+    /// output: in the case tree, and in the copy with the session's own environment.
+    git_in_tree: Vec<Vec<(Option<i32>, String)>>,
+    git_in_copy: Vec<Vec<(Option<i32>, String)>>,
+    /// Every file of the case tree's `.git`, its bytes and time of last write, when the session
+    /// started (after the tree's own git above) and when it ended.
+    git_dir_at_start: Vec<BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime)>>,
+    git_dir_at_end: Vec<BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime)>>,
+}
+
+/// The git commands a scripted session runs at its start, in the case tree and in its copy.
+const GIT_SEEN: [&[&str]; 4] = [
+    &["rev-parse", "--is-inside-work-tree"],
+    &["status", "--porcelain"],
+    &["log", "-1", "--format=%H"],
+    &["branch", "--show-current"],
+];
+
+/// `git` with `args` in `dir`, its environment `env` when given, else this process's: its exit
+/// status and standard output, whatever the status.
+fn git_said(
+    dir: &Path,
+    env: Option<&BTreeMap<String, String>>,
+    args: &[&str],
+) -> (Option<i32>, String) {
+    let mut git = Command::new("git");
+    if let Some(env) = env {
+        git.env_clear().envs(env);
+    }
+    let output = git.args(args).current_dir(dir).output().expect("git runs");
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+    )
+}
+
+/// Every file under `dir`, its bytes and the time it was last written.
+fn stamped(dir: &Path) -> BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime)> {
+    fn walk(
+        root: &Path,
+        dir: &Path,
+        into: &mut BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime)>,
+    ) {
+        for entry in fs::read_dir(dir).expect("the listing") {
+            let path = entry.expect("an entry").path();
+            let meta = fs::symlink_metadata(&path).expect("the metadata");
+            if meta.is_dir() {
+                walk(root, &path, into);
+            } else {
+                let relative = path.strip_prefix(root).expect("under").to_path_buf();
+                let bytes = fs::read(&path).unwrap_or_default();
+                into.insert(relative, (bytes, meta.modified().expect("a time")));
+            }
+        }
+    }
+    let mut into = BTreeMap::new();
+    walk(dir, dir, &mut into);
+    into
 }
 
 /// A scripted Claude Code session: at its start it records the launch plan, writes `writes`
@@ -178,6 +236,23 @@ impl ProcessRunner for Session {
             seen.env.push(plan.env.clone());
             seen.args.push(plan.args.to_vec());
             seen.tree_at_start.push(work(&self.tree));
+            let in_tree = GIT_SEEN
+                .iter()
+                .map(|args| {
+                    git_said(
+                        &self.tree,
+                        None,
+                        &[&["--no-optional-locks"][..], args].concat(),
+                    )
+                })
+                .collect();
+            seen.git_in_tree.push(in_tree);
+            seen.git_dir_at_start.push(stamped(&self.tree.join(".git")));
+            let in_copy = GIT_SEEN
+                .iter()
+                .map(|args| git_said(plan.cwd, Some(plan.env), args))
+                .collect();
+            seen.git_in_copy.push(in_copy);
         }
         for (path, text) in &self.writes {
             let at = plan.cwd.join(path);
@@ -225,11 +300,20 @@ struct Ending {
     seen: Rc<RefCell<Seen>>,
 }
 
+impl Ending {
+    /// The case tree read once more as the stream ends.
+    fn ended(&self) {
+        let mut seen = self.seen.borrow_mut();
+        seen.tree_at_end.push(work(&self.tree));
+        seen.git_dir_at_end.push(stamped(&self.tree.join(".git")));
+    }
+}
+
 impl HarnessProcess for Ending {
     fn next_line(&mut self) -> std::io::Result<Option<String>> {
         let line = self.inner.next_line()?;
         if line.is_none() {
-            self.seen.borrow_mut().tree_at_end.push(work(&self.tree));
+            self.ended();
         }
         Ok(line)
     }
@@ -237,7 +321,7 @@ impl HarnessProcess for Ending {
     fn poll_line(&mut self) -> std::io::Result<ProcessPoll> {
         let polled = self.inner.poll_line()?;
         if matches!(polled, ProcessPoll::Ended) {
-            self.seen.borrow_mut().tree_at_end.push(work(&self.tree));
+            self.ended();
         }
         Ok(polled)
     }
@@ -395,6 +479,66 @@ fn the_session_works_in_a_copy_and_only_the_edit_effect_changes_the_tree() {
     );
 }
 
+/// story:a-session-step-sees-the-git-state-of-its-copy, acceptance 2: in the session's copy,
+/// git run with the session's own environment finds a work tree at the case tree's `HEAD`, on
+/// its branch, with its status; the `.git` the session rewrites is no part of its proposal, so
+/// the step is accepted and the tree's `.git` is still its directory; and every file of that
+/// directory keeps its bytes and its time of last write from the session's start to its end,
+/// git's status in the copy included.
+#[test]
+fn the_session_sees_the_trees_git_state_and_proposes_none_of_it() {
+    let scratch = repository("git-state");
+    let tree = scratch.tree();
+    let planted = format!("gitdir: {}\n", tree.join(".git").display());
+    let (harness, seen) = harness(
+        &tree,
+        &[("src/lib.rs", FIXED), (".git", &planted)],
+        "implementation.edit",
+    );
+    let validators = validators();
+    let mut run =
+        Run::open(&tree, options("proposes-git-state"), &harness, &validators).expect("opens");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    let seen = seen.borrow();
+    assert_eq!(seen.git_in_copy.len(), 1, "one session\n{text}");
+    let (in_tree, in_copy) = (&seen.git_in_tree[0], &seen.git_in_copy[0]);
+    assert_eq!(
+        in_copy[0],
+        (Some(0), "true\n".to_owned()),
+        "git rev-parse --is-inside-work-tree in the copy\n{text}"
+    );
+    assert_eq!(
+        in_tree[2].1.trim_end().len(),
+        40,
+        "the tree's HEAD when the session started: {:?}\n{text}",
+        in_tree[2]
+    );
+    for (args, (in_tree, in_copy)) in GIT_SEEN.iter().zip(in_tree.iter().zip(in_copy)) {
+        assert_eq!(in_tree.0, Some(0), "git {args:?} in the tree\n{text}");
+        assert_eq!(
+            in_copy, in_tree,
+            "git {args:?} in the copy and in the tree\n{text}"
+        );
+    }
+    assert_eq!(seen.git_dir_at_start.len(), 1, "{text}");
+    assert_eq!(
+        seen.git_dir_at_end, seen.git_dir_at_start,
+        "the tree's .git is never written while the session runs\n{text}"
+    );
+    assert!(
+        !matches!(stop, Ok(Stop::StepRefused(_)) | Err(_)),
+        "the step is accepted, its proposal naming no .git: {stop:?}\n{text}"
+    );
+    assert!(tree.join(".git").is_dir(), "{text}");
+    assert_eq!(
+        git(&tree, &["show", "HEAD:src/lib.rs"]),
+        FIXED.trim_end(),
+        "the step committed its change\n{text}"
+    );
+}
+
 /// Acceptance 3, by the session: a proposal naming an action the frontier did not offer, or
 /// changing the cases directory, ends the run `StepRefused` (exit 3) with the tree unchanged.
 #[test]
@@ -473,6 +617,7 @@ fn a_scripted_proposal_of_a_refused_path_leaves_the_tree_unchanged() {
         ("parent", "../outside.txt"),
         ("absolute", "/proposes-absolute.txt"),
         ("git", ".git/hooks/pre-commit"),
+        ("gitlink", ".git"),
         ("surface", ".cargo/config.toml"),
         ("link", "linked/x.txt"),
     ] {

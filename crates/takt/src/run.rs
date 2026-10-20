@@ -7457,11 +7457,193 @@ impl ChangeScan {
 /// How [`scan_change`] says a scan that never ran.
 const SCAN_DID_NOT_RUN: &str = "the scan could not run";
 
-/// Scans `diff` with `scan`: the diff written to a file of its own (`0600`, in a directory of
-/// its own, `0700`, under the temporary directory, outside the tree, removed after), then
-/// `<program> scan-text --repo <tree> --policy <policy> <file>` in the tree. `Ok` only when it
-/// exits 0; else why, naming its exit and never what it printed, which may quote the diff.
+/// The summary a harness step's line carries in place of the session's own when its proposal
+/// did not pass the content scan before the edit effect: what the session wrote is never
+/// recorded.
+pub const PROPOSAL_NOT_RECORDED: &str =
+    "not recorded: the step's proposal did not pass the secret scan";
+
+/// The summary of the step line that charges a harness step which failed and proposed nothing
+/// with the tokens its session reported ([`Run::charge_unproposed`]).
+pub const UNPROPOSED_SUMMARY: &str =
+    "the harness failed and proposed nothing; the tokens its session reported are charged";
+
+/// The shapes of a credential [`credential_shape`] knows, each a login a session could read in
+/// the user's home: a private key block (`~/.ssh`); a JWT (Codex's `auth.json` tokens); an
+/// Anthropic token (`sk-ant-`, Claude Code's `.credentials.json` OAuth tokens and API keys); a
+/// GitHub token (`gho_`, `ghp_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`; gh's `hosts.yml`); an
+/// OpenAI key (`sk-`); and a token field (`access_token`, `refresh_token`, `id_token`,
+/// `oauth_token`, `accessToken`, `refreshToken`, `idToken`) set to a value of 20 token
+/// characters or more holding a letter and a digit. Checked beside the gates policy's scan,
+/// which holds no rule for them.
+pub const CREDENTIAL_SHAPES: [&str; 6] = [
+    "private-key",
+    "jwt",
+    "anthropic-token",
+    "github-token",
+    "openai-key",
+    "token-field",
+];
+
+/// The first of [`CREDENTIAL_SHAPES`] `text` holds, by its name; none when it holds none. Read
+/// in process, so it always runs; the matched text is never returned.
+#[must_use]
+pub fn credential_shape(text: &str) -> Option<&'static str> {
+    let bytes = text.as_bytes();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'-';
+    let run = |from: usize, within: &dyn Fn(u8) -> bool| {
+        bytes
+            .get(from..)
+            .map_or(0, |rest| rest.iter().take_while(|c| within(**c)).count())
+    };
+    let mut rest = text;
+    while let Some(at) = rest.find("-----BEGIN ") {
+        let after = &rest[at + "-----BEGIN ".len()..];
+        if let Some(end) = after.find("-----")
+            && end <= 40
+            && after[..end].contains("PRIVATE KEY")
+        {
+            return Some("private-key");
+        }
+        rest = after;
+    }
+    // A JWT: three base64url parts joined by dots, the first two encoding a JSON object.
+    let jwt = |from: usize| {
+        let first = run(from, &word);
+        let second = from + first + 1;
+        let third = second + run(second, &word) + 1;
+        first >= 13
+            && bytes.get(from + first) == Some(&b'.')
+            && bytes.get(second..).is_some_and(|at| at.starts_with(b"eyJ"))
+            && run(second, &word) >= 13
+            && bytes.get(third - 1) == Some(&b'.')
+            && run(third, &word) >= 10
+    };
+    for at in 0..bytes.len() {
+        if at > 0 && word(bytes[at - 1]) {
+            continue;
+        }
+        let here = &bytes[at..];
+        let shape = if here.starts_with(b"sk-ant-") && run(at + 7, &word) >= 20 {
+            Some("anthropic-token")
+        } else if here.starts_with(b"sk-") && run(at + 3, &word) >= 32 {
+            Some("openai-key")
+        } else if (here.len() > 4
+            && here.starts_with(b"gh")
+            && b"pousr".contains(&here[2])
+            && here[3] == b'_'
+            && run(at + 4, &|c: u8| c.is_ascii_alphanumeric()) >= 36)
+            || (here.starts_with(b"github_pat_") && run(at + 11, &word) >= 22)
+        {
+            Some("github-token")
+        } else if here.starts_with(b"eyJ") && jwt(at) {
+            Some("jwt")
+        } else {
+            None
+        };
+        if shape.is_some() {
+            return shape;
+        }
+    }
+    const FIELDS: [&str; 7] = [
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "oauth_token",
+        "accessToken",
+        "refreshToken",
+        "idToken",
+    ];
+    let token = |c: u8| c.is_ascii_alphanumeric() || b"._~+/=-".contains(&c);
+    for field in FIELDS {
+        for (at, _) in text.match_indices(field) {
+            let mut from = at + field.len();
+            let gap = run(from, &|c: u8| b"\"' \t:=".contains(&c));
+            let assigned = bytes[from..from + gap]
+                .iter()
+                .any(|c| *c == b':' || *c == b'=');
+            from += gap;
+            let value = &bytes[from..from + run(from, &token)];
+            if assigned
+                && gap <= 4
+                && value.len() >= 20
+                && value.iter().any(u8::is_ascii_digit)
+                && value.iter().any(u8::is_ascii_alphabetic)
+            {
+                return Some("token-field");
+            }
+        }
+    }
+    None
+}
+
+/// Why the content of `proposal` may not reach the tree or the record, read before the edit
+/// effect writes a byte of it: each proposed file's content and the session's summary, each
+/// apart so the refusal names which, hold no shape of [`CREDENTIAL_SHAPES`] and pass `scan`
+/// (`b10x-gates scan-text` under the gates policy, [`ChangeScan`]); a scan that cannot run (no
+/// program, a policy that does not load, any exit but 0) refuses as a match does. With no scan
+/// set, the proposal of a harness whose session may have read outside its copy (`unscanned_refused`,
+/// [`crate::harness::Harness::reads_outside_its_copy`]) is refused: not scanned is never passed.
+/// A refusal names the file or the summary and the shape or the scan's exit, never the text
+/// matched. None when it passes.
+fn proposal_scan_refusal(
+    tree: &Path,
+    scan: Option<&ChangeScan>,
+    unscanned_refused: bool,
+    proposal: &crate::harness::Proposal,
+) -> Option<String> {
+    let action = &proposal.action;
+    let mut texts: Vec<(&str, &str)> = proposal
+        .files
+        .iter()
+        .filter_map(|file| Some((file.path.as_str(), file.content.as_deref()?)))
+        .collect();
+    texts.push(("the step's summary", proposal.summary.as_str()));
+    for (what, text) in &texts {
+        if let Some(shape) = credential_shape(text) {
+            return Some(format!(
+                "{action} proposes {what}, which holds text of the shape of a credential ({shape})"
+            ));
+        }
+    }
+    let Some(scan) = scan else {
+        return unscanned_refused.then(|| {
+            format!(
+                "{action} proposes a change of a session that could read outside its copy, and no gates policy is set ({}): not scanned, which is not passed",
+                crate::forge::POLICY_VAR
+            )
+        });
+    };
+    texts.iter().find_map(|(what, text)| {
+        scan_bytes(tree, scan, "proposed.txt", text.as_bytes())
+            .err()
+            .map(|why| {
+                if why.starts_with(SCAN_DID_NOT_RUN) {
+                    format!(
+                        "the secret scan of {what}, which {action} proposes, could not run: {why}"
+                    )
+                } else {
+                    format!("{action} proposes {what}, which did not pass the secret scan: {why}")
+                }
+            })
+    })
+}
+
+/// Scans the change so far, `diff`, with `scan` ([`scan_bytes`]).
 fn scan_change(tree: &Path, scan: &ChangeScan, diff: &[u8]) -> std::result::Result<(), String> {
+    scan_bytes(tree, scan, "change.diff", diff)
+}
+
+/// Scans `bytes` with `scan`: written to a file `name` of its own (`0600`, in a directory of its
+/// own, `0700`, under the temporary directory, outside the tree, removed after), then
+/// `<program> scan-text --repo <tree> --policy <policy> <file>` in the tree. `Ok` only when it
+/// exits 0; else why, naming its exit and never what it printed, which may quote the bytes.
+fn scan_bytes(
+    tree: &Path,
+    scan: &ChangeScan,
+    name: &str,
+    bytes: &[u8],
+) -> std::result::Result<(), String> {
     use std::io::Write as _;
     use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
     static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -7481,14 +7663,14 @@ fn scan_change(tree: &Path, scan: &ChangeScan, diff: &[u8]) -> std::result::Resu
         .create(&dir)
         .map_err(|error| format!("{SCAN_DID_NOT_RUN}: make {}: {error}", dir.display()))?;
     let dir = Removed(dir);
-    let file = dir.0.join("change.diff");
+    let file = dir.0.join(name);
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(&file)
-        .and_then(|mut handle| handle.write_all(diff))
+        .and_then(|mut handle| handle.write_all(bytes))
         .map_err(|error| format!("{SCAN_DID_NOT_RUN}: write {}: {error}", file.display()))?;
     let ran = std::process::Command::new(&scan.program)
         .arg("scan-text")
@@ -8969,6 +9151,36 @@ impl<'a> Run<'a> {
         )
     }
 
+    /// Charges a harness step that failed, proposing nothing, with the tokens its session
+    /// reported nonetheless (a session the hermetic floor held back ran to its end): the run's
+    /// count, and a harness step line carrying them, their components and what the harness
+    /// reported of the call, with no action and [`UNPROPOSED_SUMMARY`]; the error or refusal the
+    /// run ends on says why. Nothing when the harness reported no tokens for the step. Written
+    /// after the step's change was put back, as every step line is.
+    fn charge_unproposed(
+        &mut self,
+        events: &Events,
+        transcript: Option<std::result::Result<String, String>>,
+    ) -> Result<()> {
+        let Some(usage) = self.harness.last_usage() else {
+            return Ok(());
+        };
+        let tokens = usage.total();
+        self.tokens += tokens;
+        self.stepped(
+            events,
+            SteppedBy::Harness(
+                Some(tokens),
+                Some(usage),
+                self.harness.last_call().map(Box::new),
+                transcript,
+            ),
+            self.harness.name(),
+            "",
+            UNPROPOSED_SUMMARY,
+        )
+    }
+
     /// Why the step guard refuses `proposal` on its face, before the edit effect writes a byte
     /// of it to `tree`: an action neither `offered` nor among the `approvals`; a file changed
     /// for an approval, `repository.inspect` or an action that records a choice (`shape`),
@@ -9900,13 +10112,30 @@ impl<'a> Run<'a> {
             // `tests.write`, a path reached through a link, a path git ignores) is refused before
             // a byte of it reaches the tree; one that passes is written, and judged below as any
             // step's change.
+            //
+            // Its content is read before that, whatever the guard says of it: each file and the
+            // summary checked for the shape of a credential and scanned under the gates policy
+            // ([`proposal_scan_refusal`]). One that does not pass is refused, and its summary is
+            // not recorded ([`PROPOSAL_NOT_RECORDED`]); a refusal on its face is said first.
             let stepped = match stepped {
                 Ok(report) => match self.harness.take_proposal() {
                     None => Ok(report),
                     Some(proposal) => {
+                        let unscanned = proposal_scan_refusal(
+                            &self.tree,
+                            self.change_scan.as_ref(),
+                            self.harness.reads_outside_its_copy(),
+                            &proposal,
+                        );
+                        let summary = match unscanned {
+                            Some(_) => PROPOSAL_NOT_RECORDED.to_owned(),
+                            None => report.summary.clone(),
+                        };
                         match Self::proposal_refusal(
                             &self.tree, &proposal, &offered, &approvals, &surface, &shape,
-                        ) {
+                        )
+                        .or(unscanned)
+                        {
                             Some(why) => {
                                 let moved = undo()?;
                                 let why = format!("{}{moved}", crate::trace::escape(&why));
@@ -9923,7 +10152,7 @@ impl<'a> Run<'a> {
                                     ),
                                     self.harness.name(),
                                     &report.action,
-                                    &report.summary,
+                                    &summary,
                                 )?;
                                 self.refused(events, BY_TAKT, &why)?;
                                 writeln!(
@@ -9985,8 +10214,9 @@ impl<'a> Run<'a> {
             // A step that returned when the hour budget ended, failed (killed by it) or not, is
             // discarded whole like any failed step, recorded as a refusal, and the run stops on
             // the budget. One that reported keeps its step line, with its tokens and their
-            // components and a summary saying it was discarded, so the steps' tokens add up to
-            // the run's; what of the git directory could not be put back is named. One that
+            // components and a summary saying it was discarded, and one that failed is charged
+            // what its session reported ([`Run::charge_unproposed`]), so the steps' tokens add up
+            // to the run's; what of the git directory could not be put back is named. One that
             // failed by itself before then failed as any other.
             if let Some(h) = self.options.hours
                 && self.deadline().is_some_and(|deadline| returned >= deadline)
@@ -10031,6 +10261,8 @@ impl<'a> Run<'a> {
                         &report.action,
                         &format!("discarded at the run's end: {}", report.summary),
                     )?;
+                } else {
+                    self.charge_unproposed(events, transcript.clone())?;
                 }
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(out, "{why}")?;
@@ -10042,10 +10274,18 @@ impl<'a> Run<'a> {
                 Err(error) => {
                     let _ = tell(out);
                     return Err(match undo() {
-                        Ok(moved) => error.context(format!(
-                            "step {}: the harness failed; everything the step changed was discarded{moved}{note}",
-                            self.steps
-                        )),
+                        Ok(moved) => {
+                            let error = error.context(format!(
+                                "step {}: the harness failed; everything the step changed was discarded{moved}{note}",
+                                self.steps
+                            ));
+                            match self.charge_unproposed(events, transcript.clone()) {
+                                Ok(()) => error,
+                                Err(unrecorded) => error.context(format!(
+                                    "and the tokens its session reported could not be recorded: {unrecorded:#}"
+                                )),
+                            }
+                        }
                         Err(undo) => error.context(format!(
                             "step {}: the harness failed, and the step's change could not be discarded: {undo:#}{note}",
                             self.steps

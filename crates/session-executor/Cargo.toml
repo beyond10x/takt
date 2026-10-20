@@ -13,4 +13,5 @@ path = "src/lib.rs"
 [dependencies]
 b10x-loom-sdk = { workspace = true }
 metaharness = { workspace = true }
+metaharness-b10x = { workspace = true }
 serde_json = { workspace = true }

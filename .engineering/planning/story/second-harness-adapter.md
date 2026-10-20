@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:second-harness-adapter
 kind: story
-status: draft
+status: implemented
 title: A second harness adapter behind the Harness trait yields the same decisions
 summary: The brief and report contract shared; a second program drives the judgement step
 tags:
@@ -19,7 +19,11 @@ scope:
   path: crates/takt/src/harness.rs
 - confidence: inferred
   path: crates/takt/tests/harness_seam.rs
-revision: 8
+revision: 13
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-20T19:22:58Z", actor: "human:timo", revision: 11, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "proposed", to: "active", at: "2026-10-20T19:22:58Z", actor: "human:timo", revision: 12, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "active", to: "implemented", at: "2026-10-20T19:22:58Z", actor: "human:timo", revision: 13, decided_on: {"recorded":{"test_result":1,"review_outcome":3}}}
 ---
 # Story: second-harness-adapter
 
@@ -57,3 +61,10 @@ An operator switches the judgement actor between Claude Code and Codex with `--h
 ## Out of Scope
 
 A hosted-model executor or a runtime of takt's own; confining the session (`story:harness-child-confined`); moving the crate into Loom; prompt tuning; the parity proof on a planning-store story, which left with `story:story-done-end-to-end` when this story was rescoped.
+
+## Planner notes (2026-10-20, wave 24 unit B)
+
+- Taken now on the owner's direction (relayed by the orchestrator, 18:1x): "takt should now start using codex behind meta-harness during evals, we need to save some subscription tokens"; "make sure this generally works, then let it run with it once and compare with the claude variant in the backend". story:confinement-seam does not come first.
+- Hermetic mode for Codex is `On`, not Strict (the orchestrator's decision): metaharness's strict floor fails Codex on H1a, H1b, H4 and H5, rows its opening record does not carry; the verdict is recorded per step; H9 gates (codex-cli pinned at 0.153.4). Codex moves to Strict once metaharness makes those rows decidable for it (asked of metaharness by the orchestrator).
+- Scope widened by the owner (18:2x): "use takt -> metaharness -> (claude|codex|harness)": `--harness` takes claude, codex and harness (b10x-harness through metaharness `Kind::B10x`, which observes and decides no call; takt's guard on the returned proposal still applies), one session-executor seam with the kind as a parameter. No live harness-arm call on a paid API key without the owner.
+- After the merge the trial agent runs one five-run set with `--harness codex` and one with `--harness claude` on the merged commit and reports them side by side.

@@ -542,6 +542,7 @@ version = "0.6.0"
 dependencies = [
  "b10x-loom-sdk",
  "metaharness",
+ "metaharness-b10x",
  "serde_json",
 ]
 
