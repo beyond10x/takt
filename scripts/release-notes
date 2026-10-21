@@ -1,0 +1,358 @@
+#!/usr/bin/env -S python3 -I
+"""release-notes: print a release's GitHub notes from `CHANGELOG.md`, or check the whole file.
+
+  release-notes [--changelog <file>] <version>
+  release-notes [--changelog <file>] --check
+
+  <version>    the notes of the section `## [<version>] - YYYY-MM-DD`: its summary, if it has
+               one; a `**Breaking**` list of every bullet of the section that starts
+               `**Breaking:**`, the prefix removed, or the line `Breaking: none.`; a `**Changed**`
+               list of the other bullets of its `### Changed`, left out when there are none; each
+               list at most 8 entries, then the line `and <n> more in the changelog`; and last the
+               line `Full changelog: <repository>/blob/<version>/CHANGELOG.md`. Exit 1, nothing on
+               standard output, the reason on standard error, for a version with no section, a
+               section with no date or no entries, or a section that fails the check
+  --check      exit 0 when the file is in the form below, else exit 1 listing every violation as
+               `<file>:<line>: <what>` on standard error
+  --changelog  the file; `CHANGELOG.md` in the current directory without it
+
+The form is Keep a Changelog 1.1.0 (https://keepachangelog.com/en/1.1.0/) as takt keeps it:
+
+  - `# Changelog` on the first line, then a paragraph about the file;
+  - `## [Unreleased]` first, when there is one, and then each release as
+    `## [<major>.<minor>.<patch>] - YYYY-MM-DD`, newest first: versions falling, dates not rising;
+  - under each, an optional summary of at most 2 lines, then only `### Added`, `### Changed`,
+    `### Deprecated`, `### Removed`, `### Fixed` and `### Security`, in that order, each once
+    and only with entries; no other heading;
+  - every entry one line `- <text>` of at most 200 characters, never continued on the next line;
+    `**Breaking:**` only at the start of an entry, and no entry starting with the word
+    `breaking` in another spelling or markup (`**Breaking**:`, `Breaking:`, `*Breaking:*`);
+  - every release with entries (`[Unreleased]` may have none);
+  - after the last section, one link reference per section and nothing else:
+    `[Unreleased]: <repository>/compare/<newest>...HEAD`,
+    `[<version>]: <repository>/compare/<previous>...<version>`, and for the oldest
+    `[<version>]: <repository>/releases/tag/<version>`.
+
+Python 3 standard library only; run with `python3 -I`.
+"""
+
+import argparse
+import datetime
+import re
+import sys
+from pathlib import Path
+
+REPOSITORY = "https://github.com/beyond10x/takt"
+TITLE = "# Changelog"
+TYPES = ("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security")
+UNRELEASED = "Unreleased"
+BREAKING = "**Breaking:**"
+MAX_LINE = 200
+MAX_SUMMARY = 2
+MAX_LISTED = 8
+
+SECTION = re.compile(r"^## \[([^\]]*)\](.*)$")
+DATED = re.compile(r"^ - (\d{4}-\d{2}-\d{2})$")
+VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+TYPE = re.compile(r"^### (.*)$")
+HEADING = re.compile(r"^#+(\s|$)")
+LINK = re.compile(r"^\[([^\]]+)\]: (.*)$")
+MISMARKED = re.compile(r"^[*_~`\s]*breaking\b", re.IGNORECASE)
+
+
+class Section:
+    def __init__(self, line, name, rest):
+        self.line = line
+        self.name = name
+        self.rest = rest
+        self.summary = []
+        self.types = []
+        self.end = line
+
+    def bullets(self):
+        return [bullet for kind in self.types for bullet in kind.bullets]
+
+    def date(self):
+        match = DATED.match(self.rest)
+        return match.group(1) if match else None
+
+
+class Kind:
+    def __init__(self, line, name):
+        self.line = line
+        self.name = name
+        self.bullets = []
+
+
+def parse(lines):
+    """The sections, the link references and every violation, each `(line, what)`."""
+    problems = []
+    sections = []
+    links = []
+    if not lines or lines[0] != TITLE:
+        problems.append((1, f"the first line is `{TITLE}`"))
+    section = None
+    kind = None
+    last_bullet = None
+    for number, text in enumerate(lines, start=1):
+        if number == 1:
+            continue
+        if links and text.strip() and not LINK.match(text):
+            problems.append((number, "only link references follow the first one"))
+            continue
+        link = LINK.match(text)
+        if link and section is not None:
+            links.append((number, link.group(1), link.group(2)))
+            continue
+        if text.startswith("## "):
+            match = SECTION.match(text)
+            if not match:
+                problems.append((number, "a section heading is `## [<version>] - YYYY-MM-DD`"))
+                section = Section(number, None, "")
+            else:
+                section = Section(number, match.group(1), match.group(2))
+            sections.append(section)
+            kind = None
+            last_bullet = None
+            continue
+        if section is None:
+            if HEADING.match(text):
+                problems.append((number, "no heading but the title before the first section"))
+            continue
+        section.end = number
+        if len(text) > MAX_LINE:
+            problems.append((number, f"{len(text)} characters, at most {MAX_LINE}"))
+        if not text.strip():
+            last_bullet = None
+            continue
+        match = TYPE.match(text)
+        if match:
+            kind = Kind(number, match.group(1))
+            section.types.append(kind)
+            last_bullet = None
+            continue
+        if HEADING.match(text):
+            problems.append((number, f"`{text.split()[0]}` is no heading of a section"))
+            continue
+        if text.startswith(("* ", "+ ")):
+            problems.append((number, "an entry starts with `- `"))
+            continue
+        if kind is None:
+            if text.startswith("- "):
+                problems.append((number, "an entry outside `### <type>`"))
+            else:
+                section.summary.append((number, text))
+            continue
+        if text.startswith("- "):
+            entry = text[2:]
+            if not entry.strip():
+                problems.append((number, "an empty entry"))
+            marked = entry.startswith(BREAKING + " ")
+            if BREAKING in entry[len(BREAKING) :] or (BREAKING in entry and not marked):
+                problems.append((number, f"`{BREAKING}` only starts an entry, then a space"))
+            elif not marked and MISMARKED.match(entry):
+                problems.append(
+                    (number, f"a misspelt mark: a breaking entry starts `{BREAKING} ` exactly")
+                )
+            kind.bullets.append((number, text))
+            last_bullet = number
+            continue
+        if last_bullet is not None:
+            problems.append(
+                (number, f"continues the entry of line {last_bullet}: an entry is one line")
+            )
+        else:
+            problems.append((number, f"text under `### {kind.name}` that is no entry"))
+    return sections, links, problems
+
+
+def check_sections(sections, links):
+    problems = []
+    versions = []
+    seen = set()
+    previous = None
+    for index, section in enumerate(sections):
+        name = section.name
+        if name is None:
+            continue
+        if name in seen:
+            problems.append((section.line, f"a second section `[{name}]`"))
+        seen.add(name)
+        if name == UNRELEASED:
+            if section.rest:
+                problems.append((section.line, "`## [Unreleased]` has no date"))
+            if index != 0:
+                problems.append((section.line, "`## [Unreleased]` comes before every release"))
+        else:
+            version = VERSION.match(name)
+            if not version:
+                problems.append((section.line, f"`[{name}]` is no version <major>.<minor>.<patch>"))
+            if not section.rest:
+                problems.append((section.line, f"`## [{name}]` has no date"))
+            elif not DATED.match(section.rest):
+                problems.append((section.line, "a release heading is `## [<version>] - YYYY-MM-DD`"))
+            date = section.date()
+            if date is not None:
+                try:
+                    date = datetime.date.fromisoformat(date)
+                except ValueError:
+                    problems.append((section.line, f"{section.date()} is no date"))
+                    date = None
+            if version:
+                key = tuple(int(part) for part in version.groups())
+                if previous is not None:
+                    before_key, before_date, before_name = previous
+                    if key >= before_key:
+                        problems.append(
+                            (section.line, f"`[{name}]` is not older than `[{before_name}]`: newest first")
+                        )
+                    if date is not None and before_date is not None and date > before_date:
+                        problems.append(
+                            (section.line, f"{date} is after `[{before_name}]`'s {before_date}: newest first")
+                        )
+                previous = (key, date, name)
+                versions.append(name)
+            if not section.bullets():
+                problems.append((section.line, f"`## [{name}]` has no entries"))
+        if len(section.summary) > MAX_SUMMARY:
+            problems.append(
+                (section.summary[0][0], f"a summary of {len(section.summary)} lines, at most {MAX_SUMMARY}")
+            )
+        order = -1
+        for kind in section.types:
+            if kind.name not in TYPES:
+                problems.append(
+                    (kind.line, f"`### {kind.name}` is none of {', '.join(TYPES)}")
+                )
+                continue
+            at = TYPES.index(kind.name)
+            if at == order:
+                problems.append((kind.line, f"a second `### {kind.name}` in the section"))
+            elif at < order:
+                problems.append(
+                    (kind.line, f"`### {kind.name}` out of order: {', '.join(TYPES)}")
+                )
+            order = max(order, at)
+            if not kind.bullets:
+                problems.append((kind.line, f"`### {kind.name}` has no entries"))
+
+    expected = {}
+    if versions:
+        expected[UNRELEASED] = f"{REPOSITORY}/compare/{versions[0]}...HEAD"
+    for index, version in enumerate(versions):
+        if index + 1 < len(versions):
+            expected[version] = f"{REPOSITORY}/compare/{versions[index + 1]}...{version}"
+        else:
+            expected[version] = f"{REPOSITORY}/releases/tag/{version}"
+    referenced = set()
+    for number, label, url in links:
+        if label in referenced:
+            problems.append((number, f"a second link reference `[{label}]`"))
+        referenced.add(label)
+        if label not in seen:
+            problems.append((number, f"the link reference `[{label}]` names no section"))
+        elif label in expected and url != expected[label]:
+            problems.append((number, f"`[{label}]` links to {expected[label]}"))
+    for section in sections:
+        if section.name is not None and section.name not in referenced:
+            target = expected.get(section.name, "<url>")
+            problems.append(
+                (section.line, f"no link reference `[{section.name}]: {target}` at the end")
+            )
+    return problems
+
+
+def read(path):
+    try:
+        return Path(path).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as error:
+        sys.exit(f"release-notes: {path}: {error}")
+
+
+def check(path):
+    lines = read(path)
+    sections, links, problems = parse(lines)
+    problems += check_sections(sections, links)
+    for number, what in sorted(problems):
+        print(f"{path}:{number}: {what}", file=sys.stderr)
+    if problems:
+        print(f"release-notes: {path}: {len(problems)} violations", file=sys.stderr)
+        return 1
+    releases = sum(1 for section in sections if section.name != UNRELEASED)
+    print(f"{path}: {releases} releases in Keep a Changelog 1.1.0 form")
+    return 0
+
+
+def listed(heading, entries):
+    block = [heading, "\n".join(entries[:MAX_LISTED])]
+    if len(entries) > MAX_LISTED:
+        block.append(f"and {len(entries) - MAX_LISTED} more in the changelog")
+    return block
+
+
+def notes(path, version):
+    lines = read(path)
+    sections, links, problems = parse(lines)
+    problems += check_sections(sections, links)
+    found = [section for section in sections if section.name == version]
+    if not found:
+        print(f"release-notes: {path}: no section `## [{version}]`", file=sys.stderr)
+        return 1
+    section = found[0]
+    if not section.rest:
+        print(f"release-notes: {path}:{section.line}: `## [{version}]` has no date", file=sys.stderr)
+        return 1
+    if not section.bullets():
+        print(f"release-notes: {path}:{section.line}: `## [{version}]` has no entries", file=sys.stderr)
+        return 1
+    own = [(number, what) for number, what in problems if section.line <= number <= section.end]
+    if own:
+        for number, what in sorted(own):
+            print(f"{path}:{number}: {what}", file=sys.stderr)
+        print(f"release-notes: `## [{version}]` fails the check; no notes", file=sys.stderr)
+        return 1
+
+    blocks = []
+    if section.summary:
+        blocks.append("\n".join(text for _, text in section.summary))
+    breaking = [
+        "- " + text[2 + len(BREAKING) :].lstrip()
+        for _, text in section.bullets()
+        if text[2:].startswith(BREAKING)
+    ]
+    if breaking:
+        blocks += listed("**Breaking**", breaking)
+    else:
+        blocks.append("Breaking: none.")
+    changed = [
+        text
+        for kind in section.types
+        if kind.name == "Changed"
+        for _, text in kind.bullets
+        if not text[2:].startswith(BREAKING)
+    ]
+    if changed:
+        blocks += listed("**Changed**", changed)
+    blocks.append(f"Full changelog: {REPOSITORY}/blob/{version}/CHANGELOG.md")
+    print("\n\n".join(blocks))
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="release-notes",
+        description="Print a release's GitHub notes from CHANGELOG.md, or check the whole file.",
+    )
+    parser.add_argument("--changelog", default="CHANGELOG.md", help="the changelog file")
+    parser.add_argument("--check", action="store_true", help="check the whole file")
+    parser.add_argument("version", nargs="?", help="the release whose notes to print")
+    args = parser.parse_args()
+    if args.check == (args.version is not None):
+        parser.error("give a <version> or --check")
+    if args.check:
+        return check(args.changelog)
+    return notes(args.changelog, args.version)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

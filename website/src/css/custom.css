@@ -183,8 +183,12 @@ html .theme-admonition [class*='admonitionHeading'] {
 
 /* A code block wraps instead of running past its box: the CLI reference's help blocks hold each
    option's description on one line. A line that does not fit goes on indented, by the 10 columns
-   of a help description in plain text (4 on a phone), by 4 in a command. Only the display wraps:
-   the text, and what the copy button copies, are unchanged. */
+   of a help description in plain text (4 on a phone), by 4 in a command. A line of a plain-text
+   two-column list, "  name    description", goes on under its description, as a terminal's help
+   list wraps (src/theme/CodeBlock/Line/index.tsx sets its column), but never so far in that less
+   room is left than the longest word kept whole needs (LONG_WORD, src/words.mjs, 24 columns): such
+   a word never splits, and alignment gives way. Only the display wraps: the text, and what the
+   copy button copies, are unchanged. */
 html .theme-code-block pre > code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -200,6 +204,29 @@ html .theme-code-block.language-text {
   html .theme-code-block.language-text {
     --takt-hang: 4ch;
   }
+}
+/* The pre is the container a list line's room is measured in (cqi, less the code's padding on both
+   sides). A list line's hang is padding, so a word of its name would count toward the block's
+   narrowest width as if it sat under the description; contained, the line is sized by the block,
+   not by its words. */
+html .theme-code-block.language-text pre {
+  container-type: inline-size;
+}
+/* --takt-long-word is LONG_WORD of src/words.mjs (24ch), set beside --takt-list-hang by
+   src/theme/CodeBlock/Line/index.tsx, the only setter of the takt-list class. */
+html .theme-code-block.language-text .token-line.takt-list {
+  --takt-hang: min(
+    var(--takt-list-hang),
+    max(0ch, 100cqi - 2 * var(--ifm-pre-padding) - var(--takt-long-word))
+  );
+  contain: inline-size;
+}
+
+/* A code block's lines sit as far from its top and bottom as from its sides: the code inside the
+   pre carries the padding on all four (Docusaurus's codeBlockLines, var(--ifm-pre-padding)), and
+   the template's pre added 1.1rem more above and below (product-theme.css), 39 px against 22. */
+html .theme-code-block pre[class*='language-'] {
+  padding-block: 0;
 }
 
 /* A table's frame (scripts/rehype-layout.mjs) and a chart's (Chart.tsx) scroll sideways when what
@@ -228,6 +255,53 @@ html .takt-chart > svg {
   min-inline-size: var(--takt-chart-min, 0);
   max-inline-size: var(--takt-chart-width, none);
   block-size: auto;
+}
+
+/* A chart's title, introduction, legend and notes are the page's text, set around its plot
+   (Chart.tsx), so on a narrow column they wrap and stay in view while only the plot scrolls. A
+   legend entry's mark sits on the first line of its text. */
+html .takt-figure {
+  margin: 1.5rem 0;
+}
+html .takt-figure__title {
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+  color: var(--b10x-color-heading);
+}
+html .takt-figure__intro {
+  margin: 0 0 0.5rem;
+  font-size: 0.875rem;
+}
+html .takt-figure__intro,
+html .takt-figure__note--muted {
+  color: var(--b10x-color-muted);
+}
+html .markdown .takt-figure__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.25rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.875rem;
+}
+html .markdown .takt-figure__legend > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin: 0;
+}
+html .takt-figure__legend svg {
+  flex: none;
+  margin-top: 0.25em;
+}
+html .takt-figure__note {
+  margin: 0.6rem 0 0;
+  font-size: 0.875rem;
+}
+html .takt-figure__caption {
+  margin-top: 0.6rem;
+  font-size: 0.9rem;
 }
 
 /* On paper nothing scrolls, so a frame shows all it holds: a table fits the page, in smaller

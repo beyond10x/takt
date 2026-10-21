@@ -2,9 +2,12 @@
 // when a page scrolls horizontally, when any HTML text, a ::before's or ::after's included, renders
 // below 12 px or a chart's SVG text below 11 px, when two text boxes of one chart intersect, when
 // a page logs a console error or a request of it fails, when a navbar label wraps or the navbar's
-// wordmark is cut, or when a page does not follow the reader's colour mode choice stored by the
-// site. The protocol viewer is checked at 1024, 1000 and 768 px too, and a path the site does not
-// have must answer 404 with the not-found page's title and noindex.
+// wordmark is cut, when a code block scrolls sideways, has more or less space above or below its
+// lines than beside them or a wrapped plain-text list line goes on neither under its description
+// nor where it leaves room for the longest word kept whole, when such a word splits across lines,
+// or when a page does not follow the reader's colour mode choice stored by the site. The protocol
+// viewer is checked at 1024, 1000 and 768 px too, and a path the site does not have must answer 404
+// with the not-found page's title and noindex.
 //
 //   node website/scripts/site-check.mjs [--out <dir>]
 //
@@ -19,6 +22,7 @@ import {createServer} from 'node:http';
 import {dirname, extname, join, normalize, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright-core';
+import {LONG_WORD} from '../src/words.mjs';
 
 const website = join(dirname(fileURLToPath(import.meta.url)), '..');
 const build = join(website, 'build');
@@ -166,6 +170,68 @@ function inspect(floors) {
   if (title && visible(title) && title.scrollWidth > title.clientWidth + 1) {
     failures.push(`navbar title cut: scrollWidth ${title.scrollWidth} > clientWidth ${title.clientWidth}`);
   }
+  // A code block has as much space above its first line and below its last as beside its text
+  // (custom.css). A wrapped line of a plain-text two-column list goes on under its description, as
+  // a terminal's help list wraps, or, where that column leaves less room than the longest word kept
+  // whole (LONG_WORD), where that room starts (the pattern is src/words.mjs's).
+  const LIST = /^( +)(\S+(?: \S+)*?)( {2,})\S/;
+  const spaced = [];
+  const unaligned = [];
+  const scrolling = [];
+  for (const block of document.querySelectorAll('.theme-code-block')) {
+    const pre = block.querySelector('pre');
+    const lines = [...block.querySelectorAll('.token-line')];
+    if (!pre || !lines.length || !visible(pre)) continue;
+    if (pre.scrollWidth > pre.clientWidth + 1) scrolling.push(`${pre.scrollWidth - pre.clientWidth} px`);
+    const box = pre.getBoundingClientRect();
+    const [first, last] = [lines[0], lines[lines.length - 1]].map((l) => l.getBoundingClientRect());
+    const side = first.left - box.left;
+    const [top, bottom] = [first.top - box.top, box.bottom - last.bottom];
+    if (Math.abs(top - side) > 1 || Math.abs(bottom - side) > 1) spaced.push(`${top.toFixed(1)}/${bottom.toFixed(1)} px against ${side.toFixed(1)} px`);
+    if (!block.classList.contains('language-text')) continue;
+    for (const line of lines) {
+      const list = LIST.exec(line.textContent);
+      if (!list) continue;
+      const lineLeft = line.getBoundingClientRect().left;
+      const lineTop = line.getBoundingClientRect().top;
+      const height = parseFloat(getComputedStyle(line).lineHeight);
+      let at = list[0].length - 1;
+      let description;
+      let ch;
+      const starts = new Map();
+      const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const range = document.createRange();
+        if (description === undefined && at < node.length) {
+          range.setStart(node, at);
+          range.setEnd(node, at + 1);
+          ({left: description, width: ch} = range.getBoundingClientRect());
+        }
+        at -= node.length;
+        range.selectNodeContents(node);
+        for (const r of range.getClientRects()) {
+          const row = Math.floor((r.top + r.height / 2 - lineTop) / height);
+          if (r.width > 0 && row > 0) starts.set(row, Math.min(starts.get(row) ?? Infinity, r.left));
+        }
+      }
+      const room = Math.max(0, line.getBoundingClientRect().width - floors.word * ch);
+      const hang = lineLeft + Math.min(description - lineLeft, room);
+      const off = [...starts.values()].filter((left) => Math.abs(left - hang) > 1);
+      if (off.length) unaligned.push(`"${list[2]}" goes on at ${Math.round(off[0])} px, not ${Math.round(hang)} px`);
+    }
+  }
+  // A word kept whole (src/words.mjs) stays on one line; only a long one may wrap.
+  const split = [];
+  for (const word of document.querySelectorAll('.takt-word:not(.takt-word--long)')) {
+    const range = document.createRange();
+    range.selectNodeContents(word);
+    const rows = new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)));
+    if (rows.size > 1) split.push(word.textContent);
+  }
+  if (split.length) failures.push(`${split.length} word(s) kept whole split across lines, e.g. "${split[0]}"`);
+  if (spaced.length) failures.push(`${spaced.length} code block(s) spaced unevenly above/below against the side, e.g. ${spaced[0]}`);
+  if (unaligned.length) failures.push(`${unaligned.length} wrapped list line(s) neither under their description nor where the room for a word kept whole starts, e.g. ${unaligned[0]}`);
+  if (scrolling.length) failures.push(`${scrolling.length} code block(s) wider than their box, which wraps them, e.g. by ${scrolling[0]}`);
   let chart = 0;
   for (const svg of document.querySelectorAll('svg')) {
     if (svg.parentElement && svg.parentElement.closest('svg')) continue;
@@ -233,7 +299,7 @@ async function main() {
         const response = await page.goto(origin + path, {waitUntil: 'networkidle'});
         await page.evaluate(() => document.fonts.ready);
         await page.waitForTimeout(300);
-        const failures = response && response.ok() ? await page.evaluate(inspect, {chart: MIN_PX, text: MIN_TEXT_PX}) : [`answered ${response ? response.status() : 'nothing'}`];
+        const failures = response && response.ok() ? await page.evaluate(inspect, {chart: MIN_PX, text: MIN_TEXT_PX, word: LONG_WORD}) : [`answered ${response ? response.status() : 'nothing'}`];
         for (const e of errors) failures.push(e.slice(0, 160));
         const slug = path.slice(BASE.length).replace(/\/$/, '').replace(/\//g, '__') || 'index';
         await page.screenshot({path: join(dir, `${slug}.png`), fullPage: true, timeout: 180000});

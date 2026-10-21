@@ -302,9 +302,18 @@ medians as reference lines. If
 chart between them, so the deck needs no hand edit. Append a record and re-run it.
 
 Both charts are drawn at their own size, 960 px wide while the revisions fit, with no text under 12 px, and each label
-goes where its estimated box meets no other label. A page shows them at 1:1 and scrolls them
-sideways on a narrow screen rather than shrinking them; the svg carries its width and height for
-that.
+goes where its estimated box meets no other label. In the timeline a line stops 3 px short of a
+label it would cross and goes on past it, so no wave, turn, event, grid or reference line runs
+through a label.
+
+Each svg is whole on its own, for the deck and for reading the file: title, plot, legend and
+notes. The plot is one group between `<!-- plot begin -->` and `<!-- plot end -->`, its box in
+`data-plot`, and `<metadata id="takt-timeline-key">` (`takt-journey-key`) holds the title, the
+journey's introduction, the legend entries with their marks and the notes as JSON
+(`takt-chart-key/1`). The site (`website/scripts/generate.mjs`, `website/src/components/Chart.tsx`)
+shows the plot alone, shrunk to its column down to 11 px text and scrolled sideways below that,
+and sets the title, the legend and the notes as the page's own text, so on a phone only the plot
+scrolls.
 
 ## The journeys
 

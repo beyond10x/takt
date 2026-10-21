@@ -7,6 +7,11 @@ draws journey.svg: one lane per run, grouped by arm and then by takt revision. W
 docs/pitch/index.html holds the markers <!-- journey.svg begin --> and <!-- journey.svg end -->,
 the SVG between them is replaced too.
 
+The SVG is whole on its own. As in timeline.svg, the plot is one group between <!-- plot begin -->
+and <!-- plot end --> whose data-plot attribute is its box, and <metadata id="takt-journey-key">
+holds the title, the introduction, the legend and the note as JSON (takt-chart-key/1), so a page
+can show the plot alone in a frame that scrolls and lay out the rest as its own text.
+
 No token or cost figure is taken from the journeys: those come only from scenario-runs.jsonl.
 """
 
@@ -618,6 +623,14 @@ def wrap(text, width, size=FS):
     return lines + [line] if line else lines
 
 
+TITLE = "Scenario 1: every recorded run, one lane each"
+
+
+def swatch(classes, x, y, width=12):
+    """An operation's swatch in the legend, its foot at y."""
+    return f'<rect x="{x}" y="{y - 10}" width="{width}" height="10" rx="1.5" class="{classes}"/>'
+
+
 def mark(kind, x, y):
     """A pattern mark centred at x, its foot at y."""
     if kind == "seed":
@@ -674,12 +687,12 @@ def draw(lanes, legend_kinds, data_dates):
     style = "".join(css) + "@media (prefers-color-scheme: dark){" + "".join(dark) + "}" + \
         "@media print{" + "".join(css) + "}"
 
-    o = ['<title id="takt-journey-title">Every recorded scenario 1 run, one lane each, in one vocabulary of '
-         'operations</title>', f"<style>{style}</style>",
-         f'<text x="20" y="24" font-size="15" font-weight="600" fill="currentColor">Scenario 1: every '
-         f'recorded run, one lane each</text>']
+    # head: the title and the introduction; o: the plot; foot: the legend and the note
+    head = [f'<text x="20" y="24" font-size="15" font-weight="600" fill="currentColor">{esc(TITLE)}</text>']
     for k, line in enumerate(intro_lines):
-        o.append(f'<text x="20" y="{44 + 16 * k}" class="mut">{esc(line)}</text>')
+        head.append(f'<text x="20" y="{44 + 16 * k}" class="mut">{esc(line)}</text>')
+    o = [f"<style>{style}</style>"]
+    foot = []
     for k in range(0, int(tmax // tick) + 1):
         x = xs(k * tick)
         o.append(f'<text x="{x:.1f}" y="{top - 8}" text-anchor="middle" class="mut">{k * tick} s</text>')
@@ -765,8 +778,16 @@ def draw(lanes, legend_kinds, data_dates):
             o.append(f'<text x="{xe + 6:.1f}" y="{cy + 5:.1f}" class="mut">{len(evs)} operations; '
                      f'{l["wall_seconds"]} s in all</text>')
 
+    # the plot's box: from the time axis's labels to under the last lane
+    plot_box = (0, top - 24, W, plot_bottom + 6 - (top - 24))
+
     # legend: the operation kinds, flowing and wrapping at the chart's width, then the drawing
     # conventions and the pattern marks one to a line
+    kinds = [(swatch(f"k-{k}", 1, 12), k.replace("_", " ")) for k in legend_kinds]
+    ways = [(swatch("k-pr_open noop", 1, 12), "hollow: the step changed nothing"),
+            (swatch("k-edit call", 1, 12), "outlined: a takt step taken by the harness (one model call)"),
+            (swatch("k-test placed", 4, 12, 6), "dashed: no time recorded, placed in order between timed operations")]
+    ways += [(mark(k, 7, 12), MARK_TEXT[k]) for k in used_marks]
     y = plot_bottom + 30
     x = 20
     for k in legend_kinds:
@@ -774,23 +795,21 @@ def draw(lanes, legend_kinds, data_dates):
         wide = 17 + text_w(text) + 24
         if x + wide > W - 10:
             x, y = 20, y + 20
-        o.append(f'<rect x="{x}" y="{y - 10}" width="12" height="10" rx="1.5" class="k-{k}"/>')
-        o.append(f'<text x="{x + 17}" y="{y}" fill="currentColor">{text}</text>')
+        foot.append(swatch(f"k-{k}", x, y))
+        foot.append(f'<text x="{x + 17}" y="{y}" fill="currentColor">{text}</text>')
         x += wide
     y += 26
-    o.append(f'<rect x="20" y="{y - 10}" width="12" height="10" rx="1.5" class="k-pr_open noop"/>')
-    o.append(f'<text x="37" y="{y}" fill="currentColor">hollow: the step changed nothing</text>')
-    o.append(f'<rect x="300" y="{y - 10}" width="12" height="10" rx="1.5" class="k-edit call"/>')
-    o.append(f'<text x="317" y="{y}" fill="currentColor">outlined: a takt step taken by the harness '
-             f'(one model call)</text>')
+    foot.append(swatch("k-pr_open noop", 20, y))
+    foot.append(f'<text x="37" y="{y}" fill="currentColor">{ways[0][1]}</text>')
+    foot.append(swatch("k-edit call", 300, y))
+    foot.append(f'<text x="317" y="{y}" fill="currentColor">{ways[1][1]}</text>')
     y += 20
-    o.append(f'<rect x="23" y="{y - 10}" width="6" height="10" rx="1.5" class="k-test placed"/>')
-    o.append(f'<text x="37" y="{y}" fill="currentColor">dashed: no time recorded, placed in order between '
-             f'timed operations</text>')
+    foot.append(swatch("k-test placed", 23, y, 6))
+    foot.append(f'<text x="37" y="{y}" fill="currentColor">{ways[2][1]}</text>')
     for k in used_marks:
         y += 20
-        o.append(mark(k, 26, y - 2))
-        o.append(f'<text x="37" y="{y}" fill="currentColor">{esc(MARK_TEXT[k])}</text>')
+        foot.append(mark(k, 26, y - 2))
+        foot.append(f'<text x="37" y="{y}" fill="currentColor">{esc(MARK_TEXT[k])}</text>')
     span = data_dates[0] if len(set(data_dates)) == 1 else f"{min(data_dates)} to {max(data_dates)}"
     note = (f'Data: {span} (UTC), docs/metrics/journeys.jsonl from the raw records each run in '
             f'docs/metrics/scenario-runs.jsonl names. No token or cost figure is read from the journeys. '
@@ -798,13 +817,22 @@ def draw(lanes, legend_kinds, data_dates):
             f'in order (Codex); runs with a stream are timed. First results, not a benchmark.')
     y += 30
     for line in wrap(note, W - 40):
-        o.append(f'<text x="20" y="{y}" class="mut">{esc(line)}</text>')
+        foot.append(f'<text x="20" y="{y}" class="mut">{esc(line)}</text>')
         y += 16
     H = int(y + 4)
-    head = (f'<svg class="takt-journey" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
-            f'width="{W}" height="{H}" role="img" aria-labelledby="takt-journey-title" '
-            f'font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="{FS}">')
-    return "\n".join([head] + o + ["</svg>"]) + "\n"
+    # the key a page lays out as its own text, each mark in a 14 px box
+    key = {"format": "takt-chart-key/1", "class": "takt-journey", "title": TITLE, "intro": intro,
+           "legend": [[{"mark": m, "text": t} for m, t in kinds], [{"mark": m, "text": t} for m, t in ways]],
+           "notes": [{"text": note, "muted": True}]}
+    svg = (f'<svg class="takt-journey" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
+           f'width="{W}" height="{H}" role="img" aria-labelledby="takt-journey-title" '
+           f'font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="{FS}">\n'
+           '<title id="takt-journey-title">Every recorded scenario 1 run, one lane each, in one vocabulary of '
+           'operations</title>\n'
+           f'<metadata id="takt-journey-key">{html.escape(json.dumps(key, ensure_ascii=False), quote=False)}'
+           '</metadata>')
+    return "\n".join([svg] + head + ["<!-- plot begin -->", f'<g data-plot="{" ".join(str(v) for v in plot_box)}">']
+                     + o + ["</g>", "<!-- plot end -->"] + foot + ["</svg>"]) + "\n"
 
 
 def main():

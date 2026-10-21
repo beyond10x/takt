@@ -26,11 +26,15 @@ env:
 
 jobs:
   check:
-    name: takt / task check
+    name: takt / task check (${{ matrix.part }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [check-static, test-cli, test-library]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -57,8 +61,8 @@ jobs:
 
       - name: Install ess
         env:
-          ESS_VERSION: "0.60.0"
-          ESS_SHA256: 89980809ffcb2cfe7e94efb662bdbd5387a9733e1fc5a69c2743045c753a5730
+          ESS_VERSION: "0.66.0"
+          ESS_SHA256: aa6b209efb5f9545c85fc31d3b66363d10be208c5bcdeaba61be0d54c50e17f6
         run: |
           set -euo pipefail
           asset="ess-$ESS_VERSION-x86_64-unknown-linux-gnu.tar.gz"
@@ -99,5 +103,7 @@ jobs:
           fi
           bwrap --unshare-net --dev-bind / / true
 
-      - name: task check
-        run: task check
+      - name: task ${{ matrix.part }}
+        env:
+          PART: ${{ matrix.part }}
+        run: task "$PART"

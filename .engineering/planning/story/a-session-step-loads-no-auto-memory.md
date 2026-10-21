@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-session-step-loads-no-auto-memory
 kind: story
-status: draft
+status: implemented
 title: A judgement step through the metaharness session loads no auto-memory or other per-user context, so its first request is no larger than the print-mode step's
 summary: 'Git-state probe: first request 7,100 tokens vs 6,275-6,461 at 0.6.0; the session init shows an auto-memory path the 0.6.0 runs lacked (cause inferred)'
 tags:
@@ -10,7 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-21T08:13:39Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-21T08:13:39Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-21T08:25:39Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: a-session-step-loads-no-auto-memory
 
