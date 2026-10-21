@@ -777,7 +777,7 @@ types:
         summary: >-
           Layer name to revision, each taken from what ran; absent on a line written before the
           field, which reads as "layers not recorded".
-      # read from: .engineering/planning/story/confinement-seam.md:88
+      # read from: .engineering/planning/story/confinement-seam.md:89
       # read from: crates/takt/src/events.rs:77-93
       # read from: crates/takt/src/run.rs:9711-9734
       - name: confinement
@@ -2405,8 +2405,8 @@ types:
   # gate's commands and providers, which the assertions library starts itself, are refused
   # before the gate collects. `takt.work.RunOpened.confinement` carries the adapter a run used;
   # the `--confinement` flag gives it.
-  # read from: .engineering/planning/story/confinement-seam.md:45
-  # read from: .engineering/planning/story/confinement-seam.md:77
+  # read from: .engineering/planning/story/confinement-seam.md:46
+  # read from: .engineering/planning/story/confinement-seam.md:78
   # read from: crates/takt/src/confinement.rs:209-220
   # read from: crates/takt/src/confinement.rs:249-255
   # read from: crates/takt/src/confinement.rs:382-407
