@@ -21,12 +21,12 @@
 //! ([`crate::case::approvals_only`]).
 
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Context as _, Result, anyhow};
 use serde::Deserialize;
 
 use crate::case::Approval;
+use crate::confinement::Command;
 
 /// The status a story is ready at: refined and agreed enough to pick up.
 pub const READY: &str = "proposed";

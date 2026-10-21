@@ -24,12 +24,12 @@
 //! record installs it.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
+use crate::confinement::Command;
 use crate::evidence::Record;
 use crate::forge::{Forge, Limits};
 use crate::promotion::Kind;
@@ -2227,9 +2227,9 @@ mod at {
 #[cfg(all(test, unix))]
 mod tests {
     use std::path::{Path, PathBuf};
-    use std::process::Command;
 
     use super::{Scripts, at};
+    use crate::confinement::Command;
 
     /// A scratch directory of this test's own, removed on drop.
     struct Scratch(PathBuf);

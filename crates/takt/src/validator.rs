@@ -3,7 +3,6 @@
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -23,6 +22,7 @@ use loom_sdk::commission::ports::executor::AgentExecutor;
 use loom_sdk::{CanonGovernor, EffectPort, LoopContext, LoopEnd, run_until_blocked};
 
 use crate::case::{BRANCH_FILE, Branch, CaseFiles, current};
+use crate::confinement::Command;
 use crate::evidence::{Record, uuid_from};
 use crate::forge::{BotRoute, Checks, Forge, Limits, PullRequest, PullRequestState};
 use crate::git::Mirror;
@@ -1016,22 +1016,21 @@ impl TestsRun {
                 }
             }
         }
-        let mut command = Command::new(&self.command[0]);
-        command.args(&self.command[1..]).current_dir(tree);
-        crate::forge::without_credentials(&mut command, |_| false);
-        let home = FreshHome::new()?;
-        home.apply(&mut command);
-        crate::forge::without_login(&mut command, home.dir());
         let mut limits = self.limits;
         if let Some(deadline) = deadline {
             limits.timeout = limits
                 .timeout
                 .min(deadline.saturating_duration_since(std::time::Instant::now()));
         }
-        let output = crate::forge::run_child(&mut command, limits)
-            .map_err(crate::forge::refused_namespaces)
+        // The adapter in use runs it: under `none` as [`crate::confinement::unconfined`] starts
+        // it, under another as that adapter confines it, or refuses it.
+        let output = crate::confinement::current()
+            .run_test(&crate::confinement::TestRun {
+                argv: &self.command,
+                tree,
+                limits,
+            })
             .with_context(|| format!("run {}", self.command.join(" ")))?;
-        drop(home);
         let result = if output.success() { "pass" } else { "fail" };
         let printed =
             String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
@@ -2000,6 +1999,27 @@ impl GateRun {
                     .context
                     .timeout
                     .min(deadline.saturating_duration_since(std::time::Instant::now()));
+            }
+            // The library starts the commands and providers the project file binds itself,
+            // outside [`crate::confinement::Command`]: each is asked of the adapter in use
+            // first, and one refused starts none of them.
+            let confinement = crate::confinement::current();
+            for executable in prepared
+                .context
+                .commands
+                .values()
+                .map(|binding| &binding.executable)
+                .chain(
+                    prepared
+                        .context
+                        .providers
+                        .values()
+                        .map(|provider| &provider.command.executable),
+                )
+            {
+                confinement
+                    .admit_delegated(executable.as_os_str())
+                    .with_context(|| format!("start the commands of {document}"))?;
             }
             // The provider starts the gate's commands in process groups of their own and waits
             // on them itself: no sweep on another thread may take one meanwhile.

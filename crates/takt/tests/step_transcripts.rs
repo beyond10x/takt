@@ -10,8 +10,8 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
+use takt::confinement::Command;
 
 use takt::events::Events;
 use takt::harness::ClaudeCode;

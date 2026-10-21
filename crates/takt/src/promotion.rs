@@ -67,12 +67,12 @@ use std::io::Write;
 use std::os::fd::AsRawFd as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+use crate::confinement::Command;
 use crate::scorecard::{
     BINARY_FILE, METRICS, Row, Rule, RunBinary, Scorecard, StatedBy, is_sha256, names_no_revision,
     rank, refuse_unknown_tokens, unnamed_in_a_mix,

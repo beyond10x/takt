@@ -25,11 +25,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
+
+use crate::confinement::Command;
 
 /// The environment variable that names the `b10x-gates` policy file.
 pub const POLICY_VAR: &str = "B10X_GATES_POLICY";
@@ -690,9 +692,9 @@ pub fn without_login(command: &mut Command, home: &Path) {
 mod session {
     use std::ffi::{CStr, CString};
     use std::os::unix::ffi::OsStrExt as _;
-    use std::os::unix::process::CommandExt as _;
     use std::path::PathBuf;
-    use std::process::Command;
+
+    use crate::confinement::Command;
 
     /// Writes `text` to the file at `path`, as the child between fork and exec may: system
     /// calls only, nothing allocated.
@@ -1093,7 +1095,7 @@ pub fn run_child_keeping_head(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(command, 0);
+    command.process_group(0);
     let mut busy = 0;
     let mut child = loop {
         let mut running = RUNNING

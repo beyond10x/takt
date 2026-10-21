@@ -74,6 +74,9 @@ pub enum Event {
     /// stated it. A layer the run cannot read is absent, never guessed; the map is written,
     /// empty or not, by every run of this takt, and absent on a line written before it, which
     /// a reader reads as "layers not recorded", never as a revision.
+    /// The confinement: the name of the adapter every child of the run starts through
+    /// (`crate::confinement::Confinement::name`), `none` or `substrate`; absent on a line
+    /// written before it, which a reader reads as "confinement not recorded".
     Opened {
         case: String,
         protocol: String,
@@ -86,6 +89,8 @@ pub enum Event {
         binary: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         layers: Option<BTreeMap<String, String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        confinement: Option<String>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.

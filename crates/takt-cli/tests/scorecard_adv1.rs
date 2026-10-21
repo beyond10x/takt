@@ -76,6 +76,7 @@ fn scenario_one_with_its_grant(repo: &Path, case: &str) {
         base: None,
         binary: None,
         layers: None,
+        confinement: None,
     };
     let step = |tokens: u64| Event::Step {
         by: "harness".to_owned(),

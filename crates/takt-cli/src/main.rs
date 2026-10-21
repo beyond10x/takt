@@ -674,6 +674,18 @@ struct LoopArgs {
     /// commit with the identity it was opened with, and another given for it is refused.
     #[arg(long, value_name = "'NAME <EMAIL>'")]
     commit_identity: Option<takt::git::CommitIdentity>,
+    /// The adapter every child of the run starts through. `none`: each child as takt has
+    /// always started it, its environment without the credentials it does not need, the test
+    /// command in a user and mount namespace of its own. `substrate`: the test command run by
+    /// the `SubstrateRunner` of loom-sdk, on a fixed `PATH` of read-only toolchain roots, with
+    /// only the build directory writable and no network; a test command its profile does not
+    /// serve (it serves `cargo` on a Rust toolchain; a Python one among those it does not), and
+    /// a gate's commands, which the assertions library starts itself, are refused by name and
+    /// never run unconfined. `substrate` needs a delegated cgroup: outside one, takt runs the
+    /// same command again under `systemd-run --user --scope -p Delegate=yes` and exits as that
+    /// run does. The first line the run prints and its `opened` event name the adapter.
+    #[arg(long, default_value = "none", value_parser = ["none", "substrate"])]
+    confinement: String,
 }
 
 /// A harness that performs nothing. Asked while an approval is pending, it requests the gate
@@ -986,6 +998,9 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             let repo = repo
                 .canonicalize()
                 .with_context(|| format!("the repository {}", repo.display()))?;
+            if let Some(code) = looping.confine(&repo)? {
+                return Ok(code);
+            }
             let inputs = inputs
                 .iter()
                 .map(|pair| {
@@ -1312,6 +1327,32 @@ impl LoopArgs {
             ));
         }
         Ok(())
+    }
+
+    /// Installs the adapter --confinement names for a run on `repo`, before anything of the
+    /// run is done. For `substrate` outside a delegated cgroup, the same command is run again
+    /// inside one and its exit code is this run's: `Some(code)`.
+    fn confine(&self, repo: &Path) -> Result<Option<u8>> {
+        if self.confinement != "substrate" {
+            return Ok(None);
+        }
+        match takt::confinement::Substrate::open(repo) {
+            Ok(substrate) => {
+                takt::confinement::install(std::sync::Arc::new(substrate));
+                Ok(None)
+            }
+            Err(error)
+                if takt::confinement::undelegated(&error)
+                    && std::env::var_os(takt::confinement::DELEGATED).is_none() =>
+            {
+                let code = takt::confinement::delegate()?;
+                Ok(Some(u8::try_from(code).unwrap_or(EXIT_REFUSED)))
+            }
+            Err(error) => Err(anyhow!(
+                "confinement substrate refused the run on {}: {error}; nothing was started",
+                repo.display()
+            )),
+        }
     }
 
     /// The run's options: the protocol a case opens on, its inputs and its id, with this loop's
@@ -1924,6 +1965,9 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     let repo = repo
         .canonicalize()
         .with_context(|| format!("the repository {}", repo.display()))?;
+    if let Some(code) = looping.confine(&repo)? {
+        return Ok(code);
+    }
     let scenario = Scenario::read(&repo, &declared_on, &scenario)?;
     let harness = harness_of(&looping)?;
     let harness = harness.as_ref();

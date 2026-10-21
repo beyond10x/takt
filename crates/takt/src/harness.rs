@@ -6,10 +6,10 @@
 //! ([`keep_transcript`]).
 
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
+use crate::confinement::Command;
 use crate::decision::Decision;
 use crate::protocol::LoadedProtocol;
 
@@ -429,7 +429,12 @@ impl Harness for SessionHarness {
             Self::copied(context.tree)?,
             prompt,
         )
-        .of_kind(self.kind);
+        .of_kind(self.kind)
+        // Every program the session's runners start goes through the run's confinement
+        // adapter first, as a child takt starts itself does.
+        .with_admission(|program: &str| {
+            crate::confinement::current().admit(std::ffi::OsStr::new(program))
+        });
         executor.model.clone_from(&self.model);
         executor.max_turns = (self.kind != Kind::Codex).then_some(self.max_turns);
         executor.endpoint.clone_from(&self.endpoint);

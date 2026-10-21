@@ -2153,7 +2153,7 @@ impl Modules {
     fn answer(python: &Path, tree: &Path) -> Option<Answer> {
         let home = crate::validator::FreshHome::new().ok()?;
         let tree = std::path::absolute(tree).ok()?;
-        let mut command = std::process::Command::new(python);
+        let mut command = crate::confinement::Command::new(python);
         command
             .args(["-I", "-c", NAMES_PY])
             .arg(&tree)
@@ -6873,7 +6873,7 @@ fn cargo_builds(tree: &Path) -> CargoBuilds {
     if !std::fs::symlink_metadata(tree.join("Cargo.toml")).is_ok_and(|meta| meta.is_file()) {
         return Ok(None);
     }
-    let mut command = std::process::Command::new("cargo");
+    let mut command = crate::confinement::Command::new("cargo");
     command
         .args([
             "metadata",
@@ -7746,7 +7746,7 @@ fn scan_bytes(
         .open(&file)
         .and_then(|mut handle| handle.write_all(bytes))
         .map_err(|error| format!("{SCAN_DID_NOT_RUN}: write {}: {error}", file.display()))?;
-    let ran = std::process::Command::new(&scan.program)
+    let ran = crate::confinement::Command::new(&scan.program)
         .arg("scan-text")
         .arg("--repo")
         .arg(tree)
@@ -9708,6 +9708,9 @@ impl<'a> Run<'a> {
         if let Some(binary) = &self.binary {
             layers.insert("takt".to_owned(), binary.clone());
         }
+        // The adapter every child of this run starts through, named on the first line and
+        // in the record so a reader knows what confined the evidence.
+        let confinement = crate::confinement::current().name().to_owned();
         events.emit(
             self.steps,
             &Event::Opened {
@@ -9723,11 +9726,12 @@ impl<'a> Run<'a> {
                     .and_then(|branch| branch.base_commit),
                 binary: self.binary.clone(),
                 layers: Some(layers),
+                confinement: Some(confinement.clone()),
             },
         )?;
         writeln!(
             out,
-            "case {} on {} in {}; inputs {}",
+            "case {} on {} in {}; inputs {}; confinement {confinement}",
             self.case.id,
             self.case.protocol.id,
             self.tree.display(),

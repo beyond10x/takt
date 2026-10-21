@@ -250,6 +250,7 @@ fn emit_run(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Option<&st
                 base: None,
                 binary: binary.map(str::to_owned),
                 layers: None,
+                confinement: None,
             },
         ),
         (

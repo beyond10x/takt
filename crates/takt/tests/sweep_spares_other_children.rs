@@ -8,9 +8,9 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use takt::confinement::Command;
 
 use anyhow::anyhow;
 use takt::forge::Limits;
