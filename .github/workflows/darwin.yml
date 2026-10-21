@@ -72,8 +72,8 @@ jobs:
 
       - name: Install aep
         env:
-          AEP_VERSION: "0.74.0"
-          AEP_SHA256: 3d9cd9d08431976f6ca335737688765eed22c6442f07af5623f72c5e456b73bd
+          AEP_VERSION: "0.76.0"
+          AEP_SHA256: 9caaa46bba016a321d5f10ed755254d8ee06e99e4122e9025b9dec1aafa24baa
         run: |
           set -euo pipefail
           asset="aep-$AEP_VERSION-aarch64-apple-darwin.tar.gz"
