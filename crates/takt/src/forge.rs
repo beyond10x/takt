@@ -907,7 +907,8 @@ pub struct SweepsHeld {
 /// for as long as that child can run, so that no sweep on another thread takes the child for a
 /// leftover, kills it and reaps it, leaving its own wait an error ("No child processes"). Held
 /// by any number of threads at once. Not re-entrant: the thread holding it must not call
-/// [`sweep_left`] or [`run_child`] before dropping it, as their sweep would wait for it forever.
+/// [`sweep_left`] or [`run_child`] before dropping it, as their sweep would wait for it forever,
+/// nor hold it a second time, which waits forever behind a sweep that is due.
 pub fn hold_sweeps() -> SweepsHeld {
     SweepsHeld {
         _held: SWEEPS

@@ -129,6 +129,8 @@ fn observed_beside(name: &str, beside: Option<fn()>) -> Observation {
             scope.spawn(move || {
                 while !done.load(Ordering::Relaxed) {
                     beside();
+                    // A sweep taken again at once starves every reader waiting for the lock.
+                    std::thread::sleep(Duration::from_millis(2));
                 }
             });
         }
