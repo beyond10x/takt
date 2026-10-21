@@ -319,7 +319,7 @@ impl SessionExecutor {
         let mut seams: Box<dyn SeamFactory> = match self.kind {
             Kind::Claude => Box::new(ClaudeSeams),
             Kind::Codex => Box::new(CodexSeams),
-            Kind::B10x => Box::new(metaharness_b10x::B10xSeams::new(None, None, None)),
+            Kind::B10x => Box::new(metaharness_b10x::B10xSeams::new(None, None)),
         };
         // A Codex session's home is its own, in the scratch root ([`Homed`]).
         let home = match self.kind {

@@ -893,6 +893,11 @@ fn the_session_is_handed_no_withheld_variable() {
             );
             for (key, held) in &seen.env[0] {
                 assert!(!held.contains(value), "{name}'s value is in {key}");
+                // Metaharness's own switch under `credentials: none` (0.11.0), never the
+                // operator's: it turns Claude Code's analytics traffic off.
+                if key == "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" && held == "1" {
+                    continue;
+                }
                 assert!(
                     !(takt::forge::is_credential(key)
                         || key == "CLAUDECODE"
