@@ -25,7 +25,7 @@ at 8340882b, one sub-agent at a time, approved by the orchestrator under the own
   39580233035 at 8340882b passed, jobs 6.0, 12.6 and 1.9 min (test-cli, test-library,
   check-static); 1 of 3 consecutive runs under 20 min, since run 39569813626 at 02130a98 was red.
 - 2026-10-21: review of 4774e77, needs-revision. High: the test's side thread took the write lock
-  again at once and starved every reader, one file run took 1.6 s to 910 s; 18289f0 pauses 2 ms
+  again at once and starved every reader, one file run took 1.6 s to 910 s; ba8a8e0 pauses 2 ms
   between sweeps (10 of 10 runs in 1.0-1.4 s; with both holds removed the reviewer saw 20 of 20
   fail). Low: `hold_sweeps` now says a thread must not hold it twice. 9f3cc25 re-points the 25
   citations the doc line moved.
