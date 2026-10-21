@@ -13,6 +13,7 @@ beside `claude`, and the gate's reader fails closed on lines 0.6.0 read.
 
 ### Changed
 
+- **Breaking:** No macOS binary in 0.7.0; macOS returns in 0.7.1.
 - `--harness claude` runs Claude Code through a metaharness session (`HermeticMode::Strict`) in a scratch copy of the case tree, offered only the file tools.
 - **Breaking:** A Claude step needs `$HOME/.claude/.credentials.json`; without it the session gets no login (not from `CLAUDE_CONFIG_DIR`, probably not from the macOS Keychain) and probably fails.
 - The session's change comes back as a proposal that takt writes to the case tree only after the step guard admits it; a refused one ends the run `StepRefused`.
