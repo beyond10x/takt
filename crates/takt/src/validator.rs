@@ -1691,8 +1691,13 @@ impl GateRun {
                     .timeout
                     .min(deadline.saturating_duration_since(std::time::Instant::now()));
             }
-            canon_engineering_assertions::collect(prepared, now)
-                .with_context(|| format!("collect the observations of {document}"))
+            // The provider starts the gate's commands in process groups of their own and waits
+            // on them itself: no sweep on another thread may take one meanwhile.
+            let held = crate::forge::hold_sweeps();
+            let collected = canon_engineering_assertions::collect(prepared, now)
+                .with_context(|| format!("collect the observations of {document}"));
+            drop(held);
+            collected
         })();
         drop(home);
         let cleared = clear();

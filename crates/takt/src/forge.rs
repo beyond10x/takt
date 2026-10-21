@@ -887,6 +887,44 @@ fn kill_group(child: &std::process::Child) {
 static RUNNING: std::sync::Mutex<std::collections::BTreeSet<u32>> =
     std::sync::Mutex::new(std::collections::BTreeSet::new());
 
+/// Held for reading while a child another thread cannot know of runs: one started outside
+/// [`run_child`], in a process group or a session of its own, by a caller that waits on it
+/// itself ([`hold_sweeps`]). Held for writing by every sweep, [`sweep_left`]'s and the one
+/// [`run_child`] makes once its child has ended, so that a sweep waits until no such child is
+/// running instead of killing it and taking the exit status its caller waits for. Taken before
+/// [`RUNNING`], never while holding it.
+static SWEEPS: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+/// A hold on this process's sweeps, from [`hold_sweeps`]: while it lives no sweep runs, and
+/// one that is due waits until it is dropped.
+#[must_use = "sweeps are held only while the hold lives"]
+pub struct SweepsHeld {
+    _held: std::sync::RwLockReadGuard<'static, ()>,
+}
+
+/// Holds this process's sweeps off for as long as the answer lives: what starts a child outside
+/// [`run_child`], in a process group or a session of its own, and waits on it itself holds it
+/// for as long as that child can run, so that no sweep on another thread takes the child for a
+/// leftover, kills it and reaps it, leaving its own wait an error ("No child processes"). Held
+/// by any number of threads at once. Not re-entrant: the thread holding it must not call
+/// [`sweep_left`] or [`run_child`] before dropping it, as their sweep would wait for it forever,
+/// nor hold it a second time, which waits forever behind a sweep that is due.
+pub fn hold_sweeps() -> SweepsHeld {
+    SweepsHeld {
+        _held: SWEEPS
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    }
+}
+
+/// Takes this process's sweeps for one sweep: it waits until no [`SweepsHeld`] lives.
+#[cfg(target_os = "linux")]
+fn sweeping() -> std::sync::RwLockWriteGuard<'static, ()> {
+    SWEEPS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// The variable every child of [`run_child`] carries, its value unique to the call: a process
 /// that still carries it after the child ended was started by the child.
 const MARK: &str = "TAKT_CHILD";
@@ -995,11 +1033,14 @@ mod leftovers {
 /// harness, or a validator that ran a program by itself, left running once it returned (a writer
 /// in the background). On Linux this process is made the subreaper of what it starts first, so
 /// an orphan is found too; elsewhere nothing is done. The run calls it after each judgement step
-/// and each observation.
+/// and each observation. It waits while a [`SweepsHeld`] lives: a child another thread started
+/// outside [`run_child`] and waits on itself (a gate's command, a harness's session) is not a
+/// leftover, and is swept, if at all, only once it has ended and its caller has reaped it.
 pub fn sweep_left() -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         leftovers::adopt();
+        let _sweeping = sweeping();
         let running = RUNNING
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1097,6 +1138,10 @@ pub fn run_child_keeping_head(
     // What the child started goes before anything it may have written is looked at.
     kill_group(&child);
     let swept = {
+        // A child another thread waits on outside this call is not this child's leftover:
+        // the sweep waits until none is running ([`hold_sweeps`]).
+        #[cfg(target_os = "linux")]
+        let _sweeping = sweeping();
         let mut running = RUNNING
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);

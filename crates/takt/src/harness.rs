@@ -467,7 +467,11 @@ impl Harness for SessionHarness {
             None => {}
         }
         let (commission, frontier) = Self::frontier(context);
+        // The session's process is started in a session of its own and waited on by the
+        // executor: no sweep on another thread may take it meanwhile.
+        let held = crate::forge::hold_sweeps();
         let outcome = executor.run(&commission, &frontier);
+        drop(held);
         let report = executor.last_report().unwrap_or_default();
         *self.transcript.borrow_mut() =
             Some(bounded(opening, 0, &report.transcript, TRANSCRIPT_CAP));
