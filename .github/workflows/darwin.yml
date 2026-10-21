@@ -86,6 +86,14 @@ jobs:
           tar -xzf "$asset"
           echo "$RUNNER_TEMP/aep-$AEP_VERSION-aarch64-apple-darwin" >> "$GITHUB_PATH"
 
+      - name: Install flock
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: |
+          set -euo pipefail
+          brew install flock
+          command -v flock
+
       - name: Fill aep's protocol cache
         continue-on-error: true
         run: aep plan artifact validate
