@@ -163,7 +163,7 @@ types:
   # read from: crates/takt/src/scorecard.rs:206-209
   # read from: crates/takt/src/run.rs:9333-9340
   # read from: crates/takt/src/harness.rs:61-77
-  # read from: crates/takt/src/harness.rs:1710-1725
+  # read from: crates/takt/src/harness.rs:1733-1748
   # read from: crates/takt/src/scorecard.rs:766-779
   - name: takt.work.LayerName
     kind: newtype
@@ -279,8 +279,8 @@ types:
   # read from: crates/takt-cli/src/main.rs:685-708
   # read from: crates/takt/src/harness.rs:80-82
   # read from: crates/takt/src/harness.rs:377-381
-  # read from: crates/takt/src/harness.rs:992-996
-  # read from: crates/takt/src/harness.rs:1630
+  # read from: crates/takt/src/harness.rs:1015-1019
+  # read from: crates/takt/src/harness.rs:1653
   # read from: crates/takt-cli/src/main.rs:1349-1366
   - name: takt.work.HarnessName
     kind: newtype
@@ -696,7 +696,7 @@ types:
   # read from: crates/takt-cli/build.rs:211-265
   # read from: crates/takt/src/run.rs:9333-9340
   # read from: crates/takt/src/harness.rs:61-77
-  # read from: crates/takt/src/harness.rs:1710-1725
+  # read from: crates/takt/src/harness.rs:1733-1748
   - name: takt.work.RunOpened
     kind: struct
     fields:
@@ -762,8 +762,8 @@ types:
   # read from: crates/takt/src/harness.rs:385-387
   # read from: crates/takt/src/harness.rs:61-77
   # read from: crates/takt/src/harness.rs:98-102
-  # read from: crates/takt/src/harness.rs:1561-1577
-  # read from: crates/takt/src/harness.rs:1727-1745
+  # read from: crates/takt/src/harness.rs:1584-1600
+  # read from: crates/takt/src/harness.rs:1750-1768
   - name: takt.work.RunStep
     kind: struct
     fields:
@@ -1053,9 +1053,10 @@ types:
       # files, since Codex reads no file mention: `AGENTS.md`, then the files the intent's
       # `## Scope` section names, in that order and each once, each kept by the rules the scope
       # files are kept by, read at the step's `HEAD` and on disk, `AGENTS.md` counted against the
-      # same 8 files and 64 KiB; and only a file of UTF-8 text with no NUL that git's index
-      # tracks, as metaharness refuses a session for any other. The prompt is the same as
-      # without them. Claude Code's and b10x-harness's sessions are given none.
+      # same 8 files and 64 KiB, each file costing what metaharness charges for it, its bytes and
+      # its path as a JSON string with the quotes; and only a file of UTF-8 text with no NUL that
+      # git's index tracks, as metaharness refuses a session for any other. The prompt is the
+      # same as without them. Claude Code's and b10x-harness's sessions are given none.
       # read from: crates/takt/src/harness.rs
       - name: context_files
         type: List<String>
@@ -2216,7 +2217,7 @@ types:
   # call once one is recorded (none is today: the step's transcript holds its tool calls, and
   # the trace does not read it).
   # read from: crates/takt/src/trace.rs:91-110
-  # read from: crates/takt/src/harness.rs:1591-1593
+  # read from: crates/takt/src/harness.rs:1614-1616
   - name: takt.work.TraceKind
     kind: enum
     variants:
@@ -2557,17 +2558,17 @@ entities:
   # `PYTHONUSERBASE` or `PYTHONPATH` entry at `~/.local`). Everything else under a guarded
   # import directory stays guarded: a step that writes a module beside them is charged with it.
   # read from: crates/takt/src/harness.rs:103-106
-  # read from: crates/takt/src/harness.rs:896-898
-  # read from: crates/takt/src/harness.rs:1250-1269
+  # read from: crates/takt/src/harness.rs:919-921
+  # read from: crates/takt/src/harness.rs:1273-1292
   # read from: crates/takt/src/run.rs:10014-10049
   # read from: crates/takt/src/run.rs:9330-9332
-  # read from: crates/takt/src/harness.rs:1333-1338
+  # read from: crates/takt/src/harness.rs:1356-1361
   # read from: crates/takt/src/run.rs:7205-7213
-  # read from: crates/takt/src/harness.rs:1235-1248
-  # read from: crates/takt/src/harness.rs:1506-1544
+  # read from: crates/takt/src/harness.rs:1258-1271
+  # read from: crates/takt/src/harness.rs:1529-1567
   # read from: crates/takt/src/run.rs:8197-8220
-  # read from: crates/takt/src/harness.rs:1387-1439
-  # read from: crates/takt/src/harness.rs:1273-1276
+  # read from: crates/takt/src/harness.rs:1410-1462
+  # read from: crates/takt/src/harness.rs:1296-1299
   # read from: crates/takt/src/run.rs:6298-6336
   # read from: crates/takt-cli/src/main.rs:1646-1653
   - name: takt.work.Case
@@ -3325,8 +3326,8 @@ entities:
   # read from: crates/takt/src/run.rs:10220-10276
   # read from: crates/takt/src/run.rs:9477-9491
   # read from: crates/takt/src/run.rs:8501
-  # read from: crates/takt/src/harness.rs:932
-  # read from: crates/takt/src/harness.rs:1631-1638
+  # read from: crates/takt/src/harness.rs:955
+  # read from: crates/takt/src/harness.rs:1654-1661
   # No git takt runs honours a replace ref, which would make a read at a revision (the base's
   # judge-surface list, its loop metric definitions) return another object's content: a ref a
   # step planted is a change the checkpoint names and its restore removes. Neither does a program

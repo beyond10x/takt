@@ -669,10 +669,11 @@ pub fn scope_files(
 /// the files the intent's `## Scope` section names, in that order and each once, each kept by
 /// the rules [`scope_files`] keeps a file by, read as the tree holds them now (at `HEAD` and on
 /// disk, as the session's copy is made from them), with `AGENTS.md` counted against
-/// [`SCOPE_FILES`] and [`SCOPE_BYTES`] like any other. A file metaharness would refuse the
-/// session for is left out as well: one whose bytes are not UTF-8 text or hold a NUL, and one
-/// git's index does not track, which is what the copy's git state holds. A tree with no
-/// `AGENTS.md` git tracks gives only the scope files.
+/// [`SCOPE_FILES`] and [`SCOPE_BYTES`] like any other, each file costing what metaharness
+/// charges for it, its bytes and its path as a JSON string ([`path_cost`]). A file metaharness
+/// would refuse the session for is left out as well: one whose bytes are not UTF-8 text or hold
+/// a NUL, and one git's index does not track, which is what the copy's git state holds. A tree
+/// with no `AGENTS.md` git tracks gives only the scope files.
 #[must_use]
 pub fn context_files(
     tree: &Path,
@@ -743,7 +744,10 @@ fn kept_files(
         if kept.len() == SCOPE_FILES {
             break;
         }
-        let limit = SCOPE_BYTES - total;
+        let charge = path_cost(path, given);
+        let Some(limit) = (SCOPE_BYTES - total).checked_sub(charge) else {
+            continue;
+        };
         let bytes = match at {
             None => read_plain(&tree.join(path), limit),
             Some(revision) => size(path)
@@ -760,11 +764,30 @@ fn kept_files(
         {
             continue;
         }
-        total += bytes.len() as u64;
+        total += charge + bytes.len() as u64;
         kept.push(path.to_owned());
     }
     kept
 }
+
+/// What a kept file costs against [`SCOPE_BYTES`] besides its bytes: nothing as a mention; as
+/// a context file, what metaharness charges for its path, which is the path as a JSON string
+/// with its quotes (`context_cost`, metaharness-protocol 0.11.0 `src/spec.rs:751`), since
+/// metaharness refuses a session whose context files cost more than its cap in all
+/// (metaharness 0.11.0 `src/context.rs:114-115`).
+fn path_cost(path: &str, given: Given) -> u64 {
+    match given {
+        Given::Mention => 0,
+        Given::Context => session_executor::metaharness::protocol::context_cost(path, 0) as u64,
+    }
+}
+
+// takt's bounds on context files are inside metaharness's, so a list takt keeps is one
+// metaharness reads.
+const _: () = assert!(
+    SCOPE_BYTES <= session_executor::metaharness::protocol::CONTEXT_BYTES_MAX as u64
+        && SCOPE_FILES <= session_executor::metaharness::protocol::CONTEXT_FILES_MAX
+);
 
 /// The spans the intent's `## Scope` section holds in backticks, in order: the lines after a
 /// line `## Scope` up to the next heading of level 1 or 2.
@@ -2469,7 +2492,8 @@ mod tests {
     }
 
     /// `AGENTS.md` counts against [`SCOPE_FILES`] and [`SCOPE_BYTES`] with the scope files: with
-    /// it, the eighth scope file is not given, and a scope file past the bytes left is not.
+    /// it, the eighth scope file is not given, and a scope file past the bytes left is not, each
+    /// file's path as a JSON string counted with its bytes.
     #[test]
     fn agents_md_counts_against_the_bounds() {
         let dir = scratch("context-bounds");
@@ -2487,19 +2511,46 @@ mod tests {
             context_files(&dir.0, &scoped(&paths), &ChangeSoFar::NoneYet, None),
             expected
         );
-        let left = usize::try_from(SCOPE_BYTES).expect("a size") - AGENTS.1.len();
+        let paths = r#""AGENTS.md""#.len() + r#""fits.py""#.len();
+        let left = usize::try_from(SCOPE_BYTES).expect("a size") - AGENTS.1.len() - paths;
         let big = vec![b'a'; left + 1];
         let fits = vec![b'b'; left];
         let dir = scratch("context-bytes");
-        committed(&dir.0, &[AGENTS, ("big.py", &big), ("fits.py", &fits)]);
+        committed(&dir.0, &[AGENTS, ("over.py", &big), ("fits.py", &fits)]);
+        let intent = scoped(&["over.py", "fits.py"]);
         assert_eq!(
-            context_files(
-                &dir.0,
-                &scoped(&["big.py", "fits.py"]),
-                &ChangeSoFar::NoneYet,
-                None
-            ),
+            context_files(&dir.0, &intent, &ChangeSoFar::NoneYet, None),
             ["AGENTS.md", "fits.py"]
+        );
+        let (_, launched) = session_launch(Kind::Codex, &dir.0, &intent);
+        assert_eq!(launched.len(), 1, "one child");
+        assert_eq!(context_paths(&launched[0]), ["AGENTS.md", "fits.py"]);
+    }
+
+    /// Context files that cost metaharness's byte cap exactly, each its content and its path
+    /// as a JSON string with the quotes, reach the Codex session, which starts; with one byte
+    /// more, takt leaves the last file out, and the session still starts.
+    #[test]
+    fn context_files_at_metaharness_byte_cap_start_the_session() {
+        use session_executor::metaharness::protocol::CONTEXT_BYTES_MAX;
+        let paths = r#""AGENTS.md""#.len() + r#""fits.py""#.len();
+        let left = CONTEXT_BYTES_MAX - AGENTS.1.len() - paths;
+        let intent = scoped(&["fits.py"]);
+        let at_cap = vec![b'a'; left];
+        let dir = scratch("context-cap");
+        committed(&dir.0, &[AGENTS, ("fits.py", &at_cap)]);
+        let (_, launched) = session_launch(Kind::Codex, &dir.0, &intent);
+        assert_eq!(launched.len(), 1, "one child at the cap");
+        assert_eq!(context_paths(&launched[0]), ["AGENTS.md", "fits.py"]);
+        let over = vec![b'a'; left + 1];
+        let dir = scratch("context-cap-over");
+        committed(&dir.0, &[AGENTS, ("fits.py", &over)]);
+        let (_, launched) = session_launch(Kind::Codex, &dir.0, &intent);
+        assert_eq!(launched.len(), 1, "one child one byte past the cap");
+        assert_eq!(context_paths(&launched[0]), ["AGENTS.md"]);
+        assert_eq!(
+            context_files(&dir.0, &intent, &ChangeSoFar::NoneYet, None),
+            ["AGENTS.md"]
         );
     }
 
