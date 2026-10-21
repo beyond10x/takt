@@ -163,7 +163,7 @@ types:
   # read from: crates/takt/src/scorecard.rs:206-209
   # read from: crates/takt/src/run.rs:9703-9710
   # read from: crates/takt/src/harness.rs:61-77
-  # read from: crates/takt/src/harness.rs:1643-1658
+  # read from: crates/takt/src/harness.rs:1738-1753
   # read from: crates/takt/src/scorecard.rs:766-779
   - name: takt.work.LayerName
     kind: newtype
@@ -330,9 +330,9 @@ types:
   # other judgement step it ends the run with an error.
   # read from: crates/takt-cli/src/main.rs:697-720
   # read from: crates/takt/src/harness.rs:80-82
-  # read from: crates/takt/src/harness.rs:376-380
-  # read from: crates/takt/src/harness.rs:925-929
-  # read from: crates/takt/src/harness.rs:1563
+  # read from: crates/takt/src/harness.rs:377-381
+  # read from: crates/takt/src/harness.rs:1020-1024
+  # read from: crates/takt/src/harness.rs:1658
   # read from: crates/takt-cli/src/main.rs:1391-1408
   - name: takt.work.HarnessName
     kind: newtype
@@ -751,7 +751,7 @@ types:
   # read from: crates/takt-cli/build.rs:211-265
   # read from: crates/takt/src/run.rs:9703-9710
   # read from: crates/takt/src/harness.rs:61-77
-  # read from: crates/takt/src/harness.rs:1643-1658
+  # read from: crates/takt/src/harness.rs:1738-1753
   - name: takt.work.RunOpened
     kind: struct
     fields:
@@ -822,11 +822,11 @@ types:
   # read from: crates/takt/src/run.rs:262-274
   # read from: crates/takt/src/harness.rs:50-59
   # read from: crates/takt/src/harness.rs:85-89
-  # read from: crates/takt/src/harness.rs:384-386
+  # read from: crates/takt/src/harness.rs:385-387
   # read from: crates/takt/src/harness.rs:61-77
   # read from: crates/takt/src/harness.rs:98-102
-  # read from: crates/takt/src/harness.rs:1494-1510
-  # read from: crates/takt/src/harness.rs:1660-1678
+  # read from: crates/takt/src/harness.rs:1589-1605
+  # read from: crates/takt/src/harness.rs:1755-1773
   - name: takt.work.RunStep
     kind: struct
     fields:
@@ -1111,6 +1111,17 @@ types:
       # started at, as its tree held them.
       # read from: crates/takt/src/harness.rs
       - name: scope_files
+        type: List<String>
+      # The files a Codex step's session is given before it starts as metaharness's context
+      # files, since Codex reads no file mention: `AGENTS.md`, then the files the intent's
+      # `## Scope` section names, in that order and each once, each kept by the rules the scope
+      # files are kept by, read at the step's `HEAD` and on disk, `AGENTS.md` counted against the
+      # same 8 files and 64 KiB, each file costing what metaharness charges for it, its bytes and
+      # its path as a JSON string with the quotes; and only a file of UTF-8 text with no NUL that
+      # git's index tracks, as metaharness refuses a session for any other. The prompt is the
+      # same as without them. Claude Code's and b10x-harness's sessions are given none.
+      # read from: crates/takt/src/harness.rs
+      - name: context_files
         type: List<String>
 
   # What a judgement step is shown of the change its case has made so far, one block of its
@@ -2269,7 +2280,7 @@ types:
   # call once one is recorded (none is today: the step's transcript holds its tool calls, and
   # the trace does not read it).
   # read from: crates/takt/src/trace.rs:91-110
-  # read from: crates/takt/src/harness.rs:1524-1526
+  # read from: crates/takt/src/harness.rs:1619-1621
   - name: takt.work.TraceKind
     kind: enum
     variants:
@@ -2530,7 +2541,7 @@ types:
   # tree, and the proposal that names one is refused.
   # read from: Loom 0.28.0, crates/loom-commission/src/ports/executor.rs:1-5
   # read from: crates/session-executor/src/lib.rs:69-75
-  # read from: crates/session-executor/src/lib.rs:1080-1089
+  # read from: crates/session-executor/src/lib.rs:1091-1100
   - name: takt.work.ProposedFile
     kind: struct
     fields:
@@ -2629,17 +2640,17 @@ entities:
   # `PYTHONUSERBASE` or `PYTHONPATH` entry at `~/.local`). Everything else under a guarded
   # import directory stays guarded: a step that writes a module beside them is charged with it.
   # read from: crates/takt/src/harness.rs:103-106
-  # read from: crates/takt/src/harness.rs:829-831
-  # read from: crates/takt/src/harness.rs:1183-1202
+  # read from: crates/takt/src/harness.rs:924-926
+  # read from: crates/takt/src/harness.rs:1278-1297
   # read from: crates/takt/src/run.rs:10160-10195
   # read from: crates/takt/src/run.rs:9700-9702
-  # read from: crates/takt/src/harness.rs:1266-1271
+  # read from: crates/takt/src/harness.rs:1361-1366
   # read from: crates/takt/src/run.rs:7274-7282
-  # read from: crates/takt/src/harness.rs:1168-1181
-  # read from: crates/takt/src/harness.rs:1439-1477
+  # read from: crates/takt/src/harness.rs:1263-1276
+  # read from: crates/takt/src/harness.rs:1534-1572
   # read from: crates/takt/src/run.rs:8266-8289
-  # read from: crates/takt/src/harness.rs:1320-1372
-  # read from: crates/takt/src/harness.rs:1206-1209
+  # read from: crates/takt/src/harness.rs:1415-1467
+  # read from: crates/takt/src/harness.rs:1301-1304
   # read from: crates/takt/src/run.rs:6367-6405
   # read from: crates/takt-cli/src/main.rs:1688-1695
   - name: takt.work.Case
@@ -3436,8 +3447,8 @@ entities:
   # read from: crates/takt/src/run.rs:10366-10422
   # read from: crates/takt/src/run.rs:9409-9423
   # read from: crates/takt/src/run.rs:8570
-  # read from: crates/takt/src/harness.rs:865
-  # read from: crates/takt/src/harness.rs:1564-1571
+  # read from: crates/takt/src/harness.rs:960
+  # read from: crates/takt/src/harness.rs:1659-1666
   # No git takt runs honours a replace ref, which would make a read at a revision (the base's
   # judge-surface list, its loop metric definitions) return another object's content: a ref a
   # step planted is a change the checkpoint names and its restore removes. Neither does a program
@@ -5281,7 +5292,7 @@ entities:
   # read from: crates/takt/src/harness.rs:117-123
   # read from: crates/takt/src/run.rs:10268-10271
   # read from: crates/takt/src/run.rs:7649-7657
-  # read from: crates/session-executor/src/lib.rs:671-678
+  # read from: crates/session-executor/src/lib.rs:682-689
   - name: takt.work.Proposal
     naming:
       summary: >-

@@ -194,11 +194,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "b10x-harness-catalogue"
+version = "0.15.1"
+source = "git+https://github.com/beyond10x/harness?rev=f0870131e58df3e1119860d0a255f46589026d62#f0870131e58df3e1119860d0a255f46589026d62"
+dependencies = [
+ "b10x-harness-wire 0.15.1",
+ "b10x-tool-code-editor",
+ "b10x-tool-fs",
+ "b10x-tool-toolchain",
+ "globset",
+ "nix",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "b10x-harness-loop"
 version = "0.13.3"
 source = "git+https://github.com/beyond10x/harness?rev=798325f03cf5a18df8fadb346d31b314826136ec#798325f03cf5a18df8fadb346d31b314826136ec"
 dependencies = [
- "b10x-harness-wire",
+ "b10x-harness-wire 0.13.3",
+ "jsonschema 0.52.1",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+]
+
+[[package]]
+name = "b10x-harness-loop"
+version = "0.15.1"
+source = "git+https://github.com/beyond10x/harness?rev=f0870131e58df3e1119860d0a255f46589026d62#f0870131e58df3e1119860d0a255f46589026d62"
+dependencies = [
+ "b10x-harness-wire 0.15.1",
  "jsonschema 0.52.1",
  "serde",
  "serde_json",
@@ -224,7 +253,7 @@ version = "0.13.3"
 source = "git+https://github.com/beyond10x/harness?rev=798325f03cf5a18df8fadb346d31b314826136ec#798325f03cf5a18df8fadb346d31b314826136ec"
 dependencies = [
  "b10x-harness-toolchain",
- "b10x-harness-wire",
+ "b10x-harness-wire 0.13.3",
  "globset",
  "nix",
  "regex",
@@ -236,6 +265,18 @@ dependencies = [
 name = "b10x-harness-wire"
 version = "0.13.3"
 source = "git+https://github.com/beyond10x/harness?rev=798325f03cf5a18df8fadb346d31b314826136ec#798325f03cf5a18df8fadb346d31b314826136ec"
+dependencies = [
+ "httpdate",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
+name = "b10x-harness-wire"
+version = "0.15.1"
+source = "git+https://github.com/beyond10x/harness?rev=f0870131e58df3e1119860d0a255f46589026d62#f0870131e58df3e1119860d0a255f46589026d62"
 dependencies = [
  "httpdate",
  "serde",
@@ -535,8 +576,8 @@ source = "git+https://github.com/beyond10x/loom?tag=0.31.0#05699aaef92071aae566d
 dependencies = [
  "b10x-loom-commission",
  "loom",
- "metaharness",
- "metaharness-b10x",
+ "metaharness 0.10.1",
+ "metaharness-b10x 0.10.1",
  "serde_json",
  "sha2 0.11.1",
 ]
@@ -546,8 +587,8 @@ name = "b10x-session-executor"
 version = "0.7.0"
 dependencies = [
  "b10x-loom-sdk",
- "metaharness",
- "metaharness-b10x",
+ "metaharness 0.11.0",
+ "metaharness-b10x 0.11.0",
  "serde_json",
 ]
 
@@ -626,6 +667,60 @@ dependencies = [
  "clap",
  "serde_json",
  "serde_yaml_ng",
+]
+
+[[package]]
+name = "b10x-tool-code-editor"
+version = "0.2.0"
+source = "git+https://github.com/beyond10x/tools?tag=0.2.0#60d4d0e32f558bb84a01ac8adb581f4f856c1230"
+dependencies = [
+ "b10x-tool-contract",
+ "schemars",
+ "serde",
+ "serde_json",
+ "similar",
+ "thiserror",
+]
+
+[[package]]
+name = "b10x-tool-contract"
+version = "0.2.0"
+source = "git+https://github.com/beyond10x/tools?tag=0.2.0#60d4d0e32f558bb84a01ac8adb581f4f856c1230"
+dependencies = [
+ "clap",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.11.1",
+ "thiserror",
+]
+
+[[package]]
+name = "b10x-tool-fs"
+version = "0.2.0"
+source = "git+https://github.com/beyond10x/tools?tag=0.2.0#60d4d0e32f558bb84a01ac8adb581f4f856c1230"
+dependencies = [
+ "b10x-tool-contract",
+ "globset",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+]
+
+[[package]]
+name = "b10x-tool-toolchain"
+version = "0.2.0"
+source = "git+https://github.com/beyond10x/tools?tag=0.2.0#60d4d0e32f558bb84a01ac8adb581f4f856c1230"
+dependencies = [
+ "b10x-tool-contract",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.11.1",
 ]
 
 [[package]]
@@ -1112,6 +1207,12 @@ name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
+name = "dyn-clone"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "email_address"
@@ -2876,11 +2977,29 @@ version = "0.10.1"
 source = "git+https://github.com/beyond10x/metaharness?tag=0.10.1#c2548b3bf6f44d204dcb76c674a36d74b3364a37"
 dependencies = [
  "getrandom 0.4.3",
- "metaharness-b10x",
- "metaharness-claude",
- "metaharness-codex",
- "metaharness-protocol",
- "metaharness-tools",
+ "metaharness-b10x 0.10.1",
+ "metaharness-claude 0.10.1",
+ "metaharness-codex 0.10.1",
+ "metaharness-protocol 0.10.1",
+ "metaharness-tools 0.10.1",
+ "rustix",
+ "rustls",
+ "serde_json",
+ "tempfile",
+ "webpki-roots",
+]
+
+[[package]]
+name = "metaharness"
+version = "0.11.0"
+source = "git+https://github.com/beyond10x/metaharness?tag=0.11.0#16340162d0d83a03faea0c3039cf695bd1f8286e"
+dependencies = [
+ "getrandom 0.4.3",
+ "metaharness-b10x 0.11.0",
+ "metaharness-claude 0.11.0",
+ "metaharness-codex 0.11.0",
+ "metaharness-protocol 0.11.0",
+ "metaharness-tools 0.11.0",
  "rustix",
  "rustls",
  "serde_json",
@@ -2893,9 +3012,22 @@ name = "metaharness-b10x"
 version = "0.10.1"
 source = "git+https://github.com/beyond10x/metaharness?tag=0.10.1#c2548b3bf6f44d204dcb76c674a36d74b3364a37"
 dependencies = [
- "b10x-harness-loop",
+ "b10x-harness-loop 0.13.3",
  "b10x-harness-tools",
- "metaharness-protocol",
+ "metaharness-protocol 0.10.1",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+]
+
+[[package]]
+name = "metaharness-b10x"
+version = "0.11.0"
+source = "git+https://github.com/beyond10x/metaharness?tag=0.11.0#16340162d0d83a03faea0c3039cf695bd1f8286e"
+dependencies = [
+ "b10x-harness-catalogue",
+ "b10x-harness-loop 0.15.1",
+ "metaharness-protocol 0.11.0",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -2906,7 +3038,17 @@ name = "metaharness-claude"
 version = "0.10.1"
 source = "git+https://github.com/beyond10x/metaharness?tag=0.10.1#c2548b3bf6f44d204dcb76c674a36d74b3364a37"
 dependencies = [
- "metaharness-protocol",
+ "metaharness-protocol 0.10.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "metaharness-claude"
+version = "0.11.0"
+source = "git+https://github.com/beyond10x/metaharness?tag=0.11.0#16340162d0d83a03faea0c3039cf695bd1f8286e"
+dependencies = [
+ "metaharness-protocol 0.11.0",
  "serde",
  "serde_json",
 ]
@@ -2916,7 +3058,16 @@ name = "metaharness-codex"
 version = "0.10.1"
 source = "git+https://github.com/beyond10x/metaharness?tag=0.10.1#c2548b3bf6f44d204dcb76c674a36d74b3364a37"
 dependencies = [
- "metaharness-protocol",
+ "metaharness-protocol 0.10.1",
+ "serde_json",
+]
+
+[[package]]
+name = "metaharness-codex"
+version = "0.11.0"
+source = "git+https://github.com/beyond10x/metaharness?tag=0.11.0#16340162d0d83a03faea0c3039cf695bd1f8286e"
+dependencies = [
+ "metaharness-protocol 0.11.0",
  "serde_json",
 ]
 
@@ -2931,12 +3082,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "metaharness-protocol"
+version = "0.11.0"
+source = "git+https://github.com/beyond10x/metaharness?tag=0.11.0#16340162d0d83a03faea0c3039cf695bd1f8286e"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+]
+
+[[package]]
 name = "metaharness-tools"
 version = "0.10.1"
 source = "git+https://github.com/beyond10x/metaharness?tag=0.10.1#c2548b3bf6f44d204dcb76c674a36d74b3364a37"
 dependencies = [
  "b10x-harness-tools",
- "b10x-harness-wire",
+ "b10x-harness-wire 0.13.3",
+ "serde_json",
+]
+
+[[package]]
+name = "metaharness-tools"
+version = "0.11.0"
+source = "git+https://github.com/beyond10x/metaharness?tag=0.11.0#16340162d0d83a03faea0c3039cf695bd1f8286e"
+dependencies = [
+ "b10x-harness-catalogue",
+ "b10x-harness-wire 0.15.1",
  "serde_json",
 ]
 
@@ -3640,6 +3811,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "schemars"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab508826f74a77ca9d5aba6ff19b522583ee3eaf28a19384ff3d0e5835fadf6e"
+dependencies = [
+ "dyn-clone",
+ "ref-cast",
+ "schemars_derive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1c3a92094fa7d61aa124645844facb6b554dfc797136d0f5fd1f890e2bffc69"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 3.0.9",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3698,6 +3894,17 @@ name = "serde_derive"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3838,6 +4045,12 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "slab"

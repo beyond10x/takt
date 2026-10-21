@@ -209,6 +209,13 @@ pub struct SessionExecutor {
     pub program: Option<PathBuf>,
     /// For `Kind::B10x`, the endpoint its loop is pointed at; the session is refused without one.
     pub endpoint: Option<Endpoint>,
+    /// The files the session is given before it starts, by their paths relative to the
+    /// workspace, in order: metaharness's context files (`RunSpec::context`), read in the copy,
+    /// which holds the workspace's files and git state. None by default. Metaharness refuses
+    /// the session before it starts for a path that is absolute, escapes the copy or passes
+    /// through a link, a file that is not regular UTF-8 text git tracks there, and more than 16
+    /// files or 65,536 bytes.
+    pub context: Vec<String>,
     runner: RefCell<Option<Box<dyn ProcessRunner>>>,
     admission: Option<Admission>,
     last: RefCell<Option<SessionReport>>,
@@ -227,6 +234,7 @@ impl std::fmt::Debug for SessionExecutor {
             .field("kind", &self.kind)
             .field("workspace", &self.workspace)
             .field("files", &self.files.len())
+            .field("context", &self.context)
             .field("model", &self.model)
             .field("scratch", &self.scratch)
             .finish_non_exhaustive()
@@ -254,6 +262,7 @@ impl SessionExecutor {
             timeout: None,
             program: None,
             endpoint: None,
+            context: Vec::new(),
             runner: RefCell::new(None),
             admission: None,
             last: RefCell::new(None),
@@ -297,7 +306,8 @@ impl SessionExecutor {
     /// opening record does not carry, H1a, H1b, H4 and H5, which metaharness cannot decide for
     /// it yet); b10x-harness `On`, observed, pointed at [`Self::endpoint`] with its subscription
     /// token, confined by substrate in the loop's own process so its write tools reach the copy
-    /// and nothing else. Each with the copy as its declared scratch working directory.
+    /// and nothing else. Each with the copy as its declared scratch working directory and
+    /// [`Self::context`] as its context files.
     fn spec(&self, copy: &Path) -> Result<RunSpec, String> {
         let mut spec = RunSpec::new(self.kind);
         spec.credentials = self.credentials;
@@ -305,6 +315,7 @@ impl SessionExecutor {
         spec.scratch_cwd = true;
         spec.prompt = Some(self.brief.clone());
         spec.model.clone_from(&self.model);
+        spec.context = self.context.iter().map(PathBuf::from).collect();
         match self.kind {
             Kind::Claude => {
                 spec.hermetic = HermeticMode::Strict;
@@ -343,7 +354,7 @@ impl SessionExecutor {
         let mut seams: Box<dyn SeamFactory> = match self.kind {
             Kind::Claude => Box::new(ClaudeSeams),
             Kind::Codex => Box::new(CodexSeams),
-            Kind::B10x => Box::new(metaharness_b10x::B10xSeams::new(None, None, None)),
+            Kind::B10x => Box::new(metaharness_b10x::B10xSeams::new(None, None)),
         };
         // A Codex session's home is its own, in the scratch root ([`Homed`]).
         let home = match self.kind {
@@ -1945,6 +1956,32 @@ mod tests {
             "{:?}",
             plans[0]
         );
+    }
+
+    /// The context files the embedder names reach the run metaharness is asked for, in order
+    /// and as named, on every kind; an executor naming none asks for none.
+    #[test]
+    fn the_context_files_reach_the_spec_on_every_kind() {
+        let copy = Path::new("/s/copy");
+        for kind in [Kind::Claude, Kind::Codex, Kind::B10x] {
+            let mut executor = SessionExecutor::new("/s/tree", Vec::new(), "brief").of_kind(kind);
+            executor.endpoint = Some(Endpoint {
+                base_url: "http://127.0.0.1:1/v1".to_owned(),
+                wire: "openai-responses".to_owned(),
+                model: "m".to_owned(),
+                token_file: PathBuf::from("/s/token.json"),
+                token_pointer: None,
+            });
+            let none = executor.spec(copy).expect("a spec");
+            assert!(none.context.is_empty(), "{kind:?}: {:?}", none.context);
+            executor.context = vec!["AGENTS.md".to_owned(), "src/lib.rs".to_owned()];
+            let spec = executor.spec(copy).expect("a spec");
+            assert_eq!(
+                spec.context,
+                [PathBuf::from("AGENTS.md"), PathBuf::from("src/lib.rs")],
+                "{kind:?}"
+            );
+        }
     }
 
     /// Set in the child [`a_claude_session_metaharness_spawns_starts_with_auto_memory_off`]
