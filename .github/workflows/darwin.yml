@@ -88,11 +88,22 @@ jobs:
 
       - name: Install flock
         env:
-          HOMEBREW_NO_AUTO_UPDATE: "1"
+          FLOCK_VERSION: "0.4.0"
+          FLOCK_SHA256: 01bbd497d168e9b7306f06794c57602da0f61ebd463a3210d63c1d8a0513c5cc
         run: |
           set -euo pipefail
-          brew install flock
-          command -v flock
+          asset="flock-$FLOCK_VERSION.tar.xz"
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --output "$asset" \
+            "https://github.com/discoteq/flock/releases/download/v$FLOCK_VERSION/$asset"
+          echo "$FLOCK_SHA256  $asset" | shasum -a 256 --check --strict
+          tar -xJf "$asset"
+          cd "flock-$FLOCK_VERSION"
+          ./configure --prefix="$RUNNER_TEMP/flock"
+          make CFLAGS="-O2 -Wno-error"
+          make install
+          echo "$RUNNER_TEMP/flock/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/flock/bin/flock" --version
 
       - name: Fill aep's protocol cache
         continue-on-error: true
