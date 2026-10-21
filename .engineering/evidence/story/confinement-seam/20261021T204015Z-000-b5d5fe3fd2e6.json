@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-21T20:40:15Z",
+  "actor": "human:timo",
+  "artifact": "story:confinement-seam",
+  "kind": "story",
+  "revision": 21,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test at 79da7e4: tests/confinement.rs 12 passed, harness_parity 14 passed; b10x-takt 1153 passed, 4 ignored, 1 timing failure that passed alone 3 of 3; b10x-takt-cli 477 passed; session-executor 13 passed"
+  }
+}

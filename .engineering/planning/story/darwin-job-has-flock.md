@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:darwin-job-has-flock
 kind: story
-status: active
+status: implemented
 title: The darwin job has flock
 summary: brew install flock in the darwin job's setup; file-finding refuses to file without it
 tags:
@@ -14,10 +14,11 @@ refs:
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-21T15:00:42Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-21T15:00:42Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-21T22:46:02Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # The darwin job has flock
 

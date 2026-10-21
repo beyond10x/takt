@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:file-finding-resolves-paths-without-gnu-realpath
 kind: story
-status: active
+status: implemented
 title: file-finding resolves its paths without GNU realpath -e
 tags:
 - finding
@@ -13,10 +13,11 @@ refs:
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-21T14:44:43Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-21T14:44:43Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-21T22:46:01Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # file-finding resolves its paths without GNU realpath -e
 

@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-21T21:08:46Z",
+  "actor": "human:timo",
+  "artifact": "story:file-finding-resolves-paths-without-gnu-realpath",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "darwin run 39674142829 at a01556d: 0 log lines 'realpath: illegal option -- e'",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/39674142829"
+  }
+}

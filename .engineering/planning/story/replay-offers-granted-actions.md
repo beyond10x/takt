@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:replay-offers-granted-actions
 kind: story
-status: active
+status: implemented
 title: takt replay rebuilds a step's offer with the grants the step had
 summary: replay reads authority.yaml at the step's revisions, so a step taken after a grant replays; wave 29 fix of the governor unit's replay gap
 tags:
@@ -11,10 +11,11 @@ relations:
 - decomposes: epic:takt-on-loom-sdk
 - serves: vision:safe-agentic-coding
 - depends_on: story:governor-holds-takts-cases
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-21T18:44:12Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-21T18:44:12Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-21T22:46:01Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: replay-offers-granted-actions
 
