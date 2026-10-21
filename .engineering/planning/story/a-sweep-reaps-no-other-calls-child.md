@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-sweep-reaps-no-other-calls-child
 kind: story
-status: draft
+status: implemented
 title: A sweep reaps no child another call is waiting on
 tags:
 - finding
@@ -11,7 +11,12 @@ refs:
   reference: a-sweep-reaps-no-other-calls-child
 relations:
 - decomposes: epic:composable-agentic-work
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-21T09:53:45Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-21T09:53:45Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-21T11:11:46Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 
