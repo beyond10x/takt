@@ -4,8 +4,11 @@
 //! the authority the operator granted the case, once granted, `commit-identity`, the identity
 //! its commits carry when it opened with one, and `riders/<revision>/`, what the
 //! run's store writes on the story committed, which its riders must equal byte for byte
-//! ([`approvals_only`]). Every evaluation reads the files
-//! and asks Canon. A case is opened once and resumed by every later run on it.
+//! ([`approvals_only`]), and `observations.json`, the observations the Commission runtime
+//! reported to the case ([`OBSERVATIONS_FILE`]). Every evaluation is the governor of Loom's, over
+//! the case's files as its case store ([`CaseFiles`]); a grant reaches it as the answer of the
+//! case's authority provider ([`CaseAuthority`]). A case is opened once and resumed by every
+//! later run on it.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -13,6 +16,18 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use b10x_canon::eval;
+use loom_sdk::commission::model::json as cjson;
+use loom_sdk::commission::model::primitives::{Timestamp, Uuid};
+use loom_sdk::commission::model::responsibility::{
+    ActionRequestData, ActionStatus, AuthorityVerdict, AuthorityVerdictApprovalRequired,
+    AuthorityVerdictDeny, CaseId, CommissionData, EvidenceData, EvidenceId, GovernorError,
+    ObservationData, ObservationId, Unit,
+};
+use loom_sdk::commission::ports::authority::{AuthorityProvider, AuthorityProviderError};
+use loom_sdk::commission::ports::governor::Governor as _;
+use loom_sdk::governor::{
+    CanonGovernor, CaseIndependence, CaseInputs, CaseState, FallibleCaseStore, HeldEvidence,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
@@ -34,6 +49,17 @@ pub const AUTHORITY_FILE: &str = "authority.yaml";
 
 /// The file under the case directory that names the story the case was opened for.
 pub const STORY_FILE: &str = "story.yaml";
+
+/// The file under the case directory that keeps the observations reported to the case, in the
+/// order received: a JSON array of objects with `observation_id`, `source`, `subject`,
+/// `observed_at` and `payload`, the shape Loom's `FileCaseStore` keeps them in. Written as `[]`
+/// when the case opens; a case opened before has none, which reads as no observation.
+pub const OBSERVATIONS_FILE: &str = "observations.json";
+
+/// The member of `case.yaml` holding the case revision, `r<n>`: 1 when the case opens (and when
+/// the member is absent, as in a case opened before it was kept), one more each time an
+/// artifact moves to another revision. Canon reads it as the snapshot's `revision`.
+const CASE_REVISION: &str = "revision";
 
 /// The file under the case directory whoever holds the case creates, holding the instant it
 /// took hold: a run while it runs, `resume` while it brings the case to its branch, a grant
@@ -562,8 +588,9 @@ impl AuthorityDecision {
 }
 
 /// The authority the operator granted the case, `authority.yaml`: a list of decisions, at most
-/// one per capability (Canon refuses a capability decided twice), read into every evaluation
-/// of the case as the supplied authority, each grant only at the revision it was given at.
+/// one per capability (Canon refuses a capability decided twice), answered into every
+/// evaluation of the case by its authority provider ([`CaseAuthority`]), each grant only at the
+/// revision it was given at.
 /// Absent until the first grant: a case with none stops at the gate with `ApprovalRequired`,
 /// and a connection to the forge is never authority.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1158,7 +1185,12 @@ pub fn inputs_of(case_dir: &Path) -> Result<Vec<(String, String)>> {
         std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     let doc: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
-    Ok(doc["inputs"]
+    Ok(inputs_in(&doc))
+}
+
+/// The inputs a `case.yaml` document holds, `name=value` pairs, a boolean as `true` or `false`.
+fn inputs_in(doc: &serde_yaml_ng::Value) -> Vec<(String, String)> {
+    doc["inputs"]
         .as_mapping()
         .map(|map| {
             map.iter()
@@ -1172,7 +1204,553 @@ pub fn inputs_of(case_dir: &Path) -> Result<Vec<(String, String)>> {
                 })
                 .collect()
         })
-        .unwrap_or_default())
+        .unwrap_or_default()
+}
+
+/// The case revision a `case.yaml` document holds ([`CASE_REVISION`]): 1 when it holds none; one
+/// that is not `r<n>` with `n` from 1 is an error.
+fn case_revision(doc: &serde_yaml_ng::Value) -> Result<i64> {
+    let Some(value) = doc.get(CASE_REVISION) else {
+        return Ok(1);
+    };
+    value
+        .as_str()
+        .and_then(|text| {
+            let n = text.strip_prefix('r')?.parse::<i64>().ok()?;
+            (n >= 1 && text == format!("r{n}")).then_some(n)
+        })
+        .ok_or_else(|| anyhow!("the case revision {value:?} is not r<n>"))
+}
+
+/// The evidence records under `case_dir`, `evidence/*.json` and `*.yaml`, in name order, each
+/// with its path.
+fn evidence_files(case_dir: &Path) -> Result<Vec<(PathBuf, String)>> {
+    let evidence = case_dir.join("evidence");
+    let mut names: Vec<_> = std::fs::read_dir(&evidence)
+        .with_context(|| format!("read {}", evidence.display()))?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    names.sort();
+    names
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|e| e == "json" || e == "yaml"))
+        .map(|path| {
+            let text = std::fs::read_to_string(&path)
+                .with_context(|| format!("read {}", path.display()))?;
+            Ok((path, text))
+        })
+        .collect()
+}
+
+/// Writes `text` to `path` through a file beside it renamed over it, so a reader finds the old
+/// text or the new one, never a part.
+fn write_atomically(path: &Path, text: &str) -> Result<()> {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let partial = path.with_file_name(format!(".{name}.{}.partial", std::process::id()));
+    std::fs::write(&partial, text).with_context(|| format!("write {}", partial.display()))?;
+    std::fs::rename(&partial, path).with_context(|| format!("write {}", path.display()))
+}
+
+/// A UUID-shaped id derived from `seed`: the first 16 bytes of its SHA-256, marked version 8
+/// (custom) and the RFC 9562 variant, so one record is given the same id at every read.
+fn uuid_from(seed: &str) -> String {
+    let digest = Sha256::digest(seed.as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
+}
+
+/// The record in `text`, read from the file `name` under the case `case`'s `evidence/`, as the
+/// governor holds a received record: its facts the record itself (JSON, or YAML read as JSON),
+/// its kind and producer the record's own, its provenance the file. takt's records bind to the
+/// revision of the artifact they are about in their facts (`subject_revision`), which Canon
+/// reads; the case revision the governor's record carries is 0, a record received before any.
+/// Every one applies: [`CaseDir::evaluate`] has Canon read each before the governor does.
+fn held_evidence(case: &str, name: &str, text: &str) -> Result<HeldEvidence> {
+    let facts = match cjson::parse(text) {
+        Ok(facts) => facts,
+        Err(_) => {
+            let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(text)
+                .with_context(|| format!("read the evidence record {name}"))?;
+            let json = serde_json::to_string(&yaml)
+                .with_context(|| format!("read the evidence record {name} as JSON"))?;
+            cjson::parse(&json)
+                .map_err(|error| anyhow!("{error}"))
+                .with_context(|| format!("read the evidence record {name} as JSON"))?
+        }
+    };
+    let text_of = |member: &str| match facts.member(member) {
+        Some(cjson::Value::Text(text)) => text.clone(),
+        _ => String::new(),
+    };
+    let kind = text_of("kind");
+    let producer = text_of("producer");
+    Ok(HeldEvidence {
+        data: EvidenceData {
+            evidence_id: EvidenceId(Uuid(uuid_from(&format!("{case}/evidence/{name}")))),
+            case_id: CaseId(case.to_owned()),
+            kind,
+            subject_revision: 0,
+            producer,
+            observation_ids: Vec::new(),
+            facts,
+            provenance: cjson::Value::Object(vec![(
+                "file".to_owned(),
+                cjson::Value::Text(format!("evidence/{name}")),
+            )]),
+        },
+        applies: true,
+    })
+}
+
+/// The governor of Loom's case store over one case's directory, `.engineering/cases/<id>/`:
+/// the case is read from the files takt writes (`case.yaml`, `evidence/`), and observations are
+/// kept in [`OBSERVATIONS_FILE`] beside them. It holds one case, the one whose directory it is,
+/// under the name its protocol is registered with the governor by (`<name>/<major>`, the
+/// protocol's [`LoadedProtocol::id`]). takt opens a case ([`CaseDir::open`]) and writes its
+/// evidence; the store takes no new case and changes nothing of a case but its artifacts'
+/// revisions and its case revision, and a change to anything else is refused with nothing
+/// written. It holds no explicit decision.
+#[derive(Debug, Clone)]
+pub struct CaseFiles {
+    dir: PathBuf,
+    id: String,
+    protocol: String,
+}
+
+impl CaseFiles {
+    /// The store over the case `id` at `case_dir`, its protocol registered as `protocol`.
+    #[must_use]
+    pub fn new(case_dir: &Path, id: &str, protocol: &str) -> Self {
+        Self {
+            dir: case_dir.to_path_buf(),
+            id: id.to_owned(),
+            protocol: protocol.to_owned(),
+        }
+    }
+
+    /// The store over the case at `case_dir`: its id the directory's name, its protocol the one
+    /// the case's `protocol.yaml` declares.
+    pub fn at(case_dir: &Path) -> Result<Self> {
+        let id = case_dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .ok_or_else(|| anyhow!("the case directory {} has no name", case_dir.display()))?;
+        let (protocol, _) = required_capabilities(case_dir)?;
+        Ok(Self::new(case_dir, &id, &protocol))
+    }
+
+    /// The name the case's protocol is registered with the governor by, `story.delivery/1`.
+    #[must_use]
+    pub fn protocol(&self) -> &str {
+        &self.protocol
+    }
+
+    /// The case as its files hold it now; `None` when it has no `case.yaml`.
+    fn read(&self) -> Result<Option<CaseState>> {
+        let path = self.dir.join("case.yaml");
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let text =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let doc: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+        let mut artifacts = BTreeMap::new();
+        for (artifact, entry) in doc["artifacts"].as_mapping().into_iter().flatten() {
+            let artifact = artifact
+                .as_str()
+                .ok_or_else(|| anyhow!("{}: an artifact is not named", path.display()))?;
+            let revision = entry["revision"].as_str().ok_or_else(|| {
+                anyhow!(
+                    "{}: the artifact {artifact} has no revision",
+                    path.display()
+                )
+            })?;
+            artifacts.insert(artifact.to_owned(), revision.to_owned());
+        }
+        let revision = case_revision(&doc).with_context(|| format!("read {}", path.display()))?;
+        let inputs = CaseInputs::try_from_pairs(inputs_in(&doc))
+            .map_err(|error| anyhow!("{}: {error}", path.display()))?;
+        let mut independence = CaseIndependence::none();
+        for (producer, dimensions) in doc["independence"].as_mapping().into_iter().flatten() {
+            let producer = producer
+                .as_str()
+                .ok_or_else(|| anyhow!("{}: a producer is not named", path.display()))?;
+            let dimensions: Vec<&str> = dimensions
+                .as_sequence()
+                .into_iter()
+                .flatten()
+                .map(|dimension| {
+                    dimension.as_str().ok_or_else(|| {
+                        anyhow!("{}: a dimension of {producer} is not named", path.display())
+                    })
+                })
+                .collect::<Result<_>>()?;
+            independence = independence
+                .with(producer, dimensions)
+                .map_err(|error| anyhow!("{}: {error}", path.display()))?;
+        }
+        let evidence = evidence_files(&self.dir)?
+            .iter()
+            .map(|(path, text)| {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                held_evidence(&self.id, &name, text)
+            })
+            .collect::<Result<_>>()?;
+        Ok(Some(CaseState {
+            id: CaseId(self.id.clone()),
+            protocol: self.protocol.clone(),
+            revision,
+            artifacts,
+            inputs,
+            independence,
+            evidence,
+            decisions: Vec::new(),
+        }))
+    }
+
+    /// Writes `state`'s artifact revisions and case revision into `case.yaml`, the rest of the
+    /// file as it is; an artifact the file does not declare is refused with nothing written.
+    fn write_artifacts(&self, state: &CaseState) -> Result<()> {
+        let path = self.dir.join("case.yaml");
+        let text =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let mut doc: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+        for (artifact, revision) in &state.artifacts {
+            let entry = doc
+                .get_mut("artifacts")
+                .and_then(|artifacts| artifacts.get_mut(artifact.as_str()))
+                .ok_or_else(|| anyhow!("the case declares no artifact {artifact}"))?;
+            entry["revision"] = revision.as_str().into();
+        }
+        doc[CASE_REVISION] = format!("r{}", state.revision).into();
+        let yaml = serde_yaml_ng::to_string(&doc).context("write the case snapshot")?;
+        write_atomically(&path, &yaml)
+    }
+
+    /// The observations [`OBSERVATIONS_FILE`] keeps, in the order received; none when there is
+    /// no file.
+    fn read_observations(&self) -> Result<Vec<ObservationData>> {
+        let path = self.dir.join(OBSERVATIONS_FILE);
+        if !path.is_file() {
+            return Ok(Vec::new());
+        }
+        let text =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let value = cjson::parse(&text)
+            .map_err(|error| anyhow!("{error}"))
+            .with_context(|| format!("read {}", path.display()))?;
+        let read = |at: &str, item: &cjson::Value| -> Result<ObservationData, cjson::DecodeError> {
+            let text = |name: &str| -> Result<String, cjson::DecodeError> {
+                cjson::text_at(
+                    cjson::member_at(item, at, name)?,
+                    &cjson::nested(at, name),
+                    "a string",
+                )
+                .map(str::to_owned)
+            };
+            Ok(ObservationData {
+                observation_id: ObservationId(Uuid(text("observation_id")?)),
+                source: text("source")?,
+                subject: text("subject")?,
+                observed_at: Timestamp(text("observed_at")?),
+                payload: cjson::member_at(item, at, "payload")?.clone(),
+            })
+        };
+        cjson::items_at(&value, "$", "an array")
+            .and_then(|items| {
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| read(&format!("$[{index}]"), item))
+                    .collect()
+            })
+            .map_err(|error| anyhow!("{error}"))
+            .with_context(|| format!("read {}", path.display()))
+    }
+}
+
+/// `observations` as [`OBSERVATIONS_FILE`] keeps them.
+fn render_observations(observations: &[ObservationData]) -> String {
+    let mut out = String::from("[");
+    for (index, observation) in observations.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        cjson::member(&mut out, "observation_id");
+        cjson::push_text(&mut out, &observation.observation_id.0.0);
+        cjson::member(&mut out, "source");
+        cjson::push_text(&mut out, &observation.source);
+        cjson::member(&mut out, "subject");
+        cjson::push_text(&mut out, &observation.subject);
+        cjson::member(&mut out, "observed_at");
+        cjson::push_text(&mut out, &observation.observed_at.0);
+        cjson::member(&mut out, "payload");
+        cjson::push_value(&mut out, &observation.payload);
+        out.push('}');
+    }
+    out.push_str("]\n");
+    out
+}
+
+/// `document` written as Canon writes a `canon-decision/1` document: two-space indentation,
+/// members in the order the document holds them, and a newline at the end; for the document
+/// the governor rendered, the bytes Canon rendered.
+fn render_canonical(document: &loom_sdk::governor::model::json::Value) -> String {
+    use loom_sdk::governor::model::json::Value;
+    fn text(text: &str, out: &mut String) {
+        out.push('"');
+        for c in text.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\u{8}' => out.push_str("\\b"),
+                '\t' => out.push_str("\\t"),
+                '\n' => out.push_str("\\n"),
+                '\u{c}' => out.push_str("\\f"),
+                '\r' => out.push_str("\\r"),
+                c if u32::from(c) < 0x20 => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+    }
+    fn line(indent: usize, out: &mut String) {
+        out.push('\n');
+        out.extend(std::iter::repeat_n(' ', indent));
+    }
+    fn write(value: &Value, indent: usize, out: &mut String) {
+        match value {
+            Value::Null => out.push_str("null"),
+            Value::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
+            Value::Number(spelling) => out.push_str(spelling),
+            Value::Text(value) => text(value, out),
+            Value::Array(items) if items.is_empty() => out.push_str("[]"),
+            Value::Array(items) => {
+                out.push('[');
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    line(indent + 2, out);
+                    write(item, indent + 2, out);
+                }
+                line(indent, out);
+                out.push(']');
+            }
+            Value::Object(members) if members.is_empty() => out.push_str("{}"),
+            Value::Object(members) => {
+                out.push('{');
+                for (index, (name, item)) in members.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    line(indent + 2, out);
+                    text(name, out);
+                    out.push_str(": ");
+                    write(item, indent + 2, out);
+                }
+                line(indent, out);
+                out.push('}');
+            }
+        }
+    }
+    let mut out = String::new();
+    write(document, 0, &mut out);
+    out.push('\n');
+    out
+}
+
+impl FallibleCaseStore for CaseFiles {
+    type Error = anyhow::Error;
+
+    /// takt opens its cases itself ([`CaseDir::open`]): the case this store holds is already
+    /// held (`false`), and any other is refused.
+    fn insert(&self, state: CaseState) -> Result<bool> {
+        if state.id.0 == self.id && self.dir.join("case.yaml").is_file() {
+            return Ok(false);
+        }
+        bail!(
+            "the case store at {} holds the case {} alone, opened by takt; {} is not opened here",
+            self.dir.display(),
+            self.id,
+            state.id.0
+        )
+    }
+
+    fn get(&self, case: &CaseId) -> Result<Option<CaseState>> {
+        if case.0 != self.id {
+            return Ok(None);
+        }
+        self.read()
+    }
+
+    fn update<T>(
+        &self,
+        case: &CaseId,
+        change: impl FnOnce(&mut CaseState) -> T,
+    ) -> Result<Option<T>> {
+        let Some(state) = self.get(case)? else {
+            return Ok(None);
+        };
+        let mut changed = state.clone();
+        let answer = change(&mut changed);
+        if changed.id != state.id
+            || changed.protocol != state.protocol
+            || changed.inputs != state.inputs
+            || changed.independence != state.independence
+            || changed.evidence != state.evidence
+            || changed.decisions != state.decisions
+        {
+            bail!(
+                "the case {} changes only its artifacts' revisions here: its evidence is written under evidence/ by takt, and it holds no explicit decision; nothing was written",
+                self.id
+            );
+        }
+        if changed.artifacts != state.artifacts || changed.revision != state.revision {
+            self.write_artifacts(&changed)?;
+        }
+        Ok(Some(answer))
+    }
+
+    fn observe(&self, observation: ObservationData) -> Result<()> {
+        let mut observations = self.read_observations()?;
+        observations.push(observation);
+        write_atomically(
+            &self.dir.join(OBSERVATIONS_FILE),
+            &render_observations(&observations),
+        )
+    }
+
+    fn observations(&self) -> Result<Vec<ObservationData>> {
+        self.read_observations()
+    }
+}
+
+/// The authority provider of a case: what Commission asks, at the moment an action that requires
+/// a capability is requested, and what [`CaseDir::evaluate`] asks of every action the governor
+/// finds approval-required. It answers from the case's `authority.yaml` and its files as they
+/// are when asked. A denial on file is denied at every revision. A grant is allowed only while
+/// the case is at the case revision the request expected, and its subject (the artifact the
+/// capability's action is about, [`LoadedProtocol::grant_subject`]) at the revision the grant
+/// was given at ([`Authority::grants_at`]); otherwise the capability is approval-required. The
+/// request names no artifact revision, so the subject's revision is read from the case's files.
+/// An action that does not require the capability asked about is denied it. The merge validator
+/// still merges only under [`holds_grant`].
+#[derive(Debug, Clone)]
+pub struct CaseAuthority {
+    dir: PathBuf,
+    id: String,
+}
+
+impl CaseAuthority {
+    /// The provider of the case `id` at `case_dir`.
+    #[must_use]
+    pub fn new(case_dir: &Path, id: &str) -> Self {
+        Self {
+            dir: case_dir.to_path_buf(),
+            id: id.to_owned(),
+        }
+    }
+
+    /// Whether `action` is authorised `capability` with the case at `expected_case_revision`.
+    pub fn verdict(
+        &self,
+        action: &str,
+        capability: &str,
+        expected_case_revision: i64,
+    ) -> Result<AuthorityVerdict> {
+        let approval = |request: String| {
+            AuthorityVerdict::ApprovalRequired(AuthorityVerdictApprovalRequired { request })
+        };
+        let (_, actions) = required_capabilities(&self.dir)?;
+        if !actions
+            .get(action)
+            .is_some_and(|required| required.iter().any(|c| c == capability))
+        {
+            return Ok(AuthorityVerdict::Deny(AuthorityVerdictDeny {
+                reason: format!(
+                    "{action} does not require {capability} in the protocol of the case {}",
+                    self.id
+                ),
+            }));
+        }
+        let authority = Authority::read(&self.dir)?.unwrap_or_default();
+        if let Some(decided) = authority.decision(capability)
+            && decided.decision == Grant::Denied
+        {
+            return Ok(AuthorityVerdict::Deny(AuthorityVerdictDeny {
+                reason: format!(
+                    "{capability} is denied to the case {} by {} at {}",
+                    self.id, decided.approver, decided.granted_at
+                ),
+            }));
+        }
+        let Some(state) = CaseFiles::at(&self.dir)?.get(&CaseId(self.id.clone()))? else {
+            bail!("no case {} at {}", self.id, self.dir.display());
+        };
+        if state.revision != expected_case_revision {
+            return Ok(approval(format!(
+                "{capability} for {action}: the case {} is at case revision {}, not {expected_case_revision}",
+                self.id, state.revision
+            )));
+        }
+        let protocol = LoadedProtocol::from_file(&self.dir.join("protocol.yaml"))?;
+        let Ok(subject) = protocol.grant_subject(capability) else {
+            return Ok(approval(format!(
+                "{capability} for {action}: its actions are about no single artifact"
+            )));
+        };
+        let Some(revision) = state.artifacts.get(&subject) else {
+            return Ok(approval(format!(
+                "{capability} for {action}: the case has no {subject} revision"
+            )));
+        };
+        if authority.grants_at(capability, revision) {
+            Ok(AuthorityVerdict::Allow(Unit(true)))
+        } else {
+            Ok(approval(format!(
+                "{capability} for {action} at {subject} {revision}"
+            )))
+        }
+    }
+}
+
+impl AuthorityProvider for CaseAuthority {
+    fn decide(
+        &self,
+        commission: &CommissionData,
+        request: &ActionRequestData,
+        capability: &str,
+    ) -> Result<AuthorityVerdict, AuthorityProviderError> {
+        if request.case_id.0 != self.id || commission.case_id.0 != self.id {
+            return Err(AuthorityProviderError::new(format!(
+                "the authority of the case {} answers for it alone, not for {} under the commission of {}",
+                self.id, request.case_id.0, commission.case_id.0
+            )));
+        }
+        self.verdict(&request.action, capability, request.expected_case_revision)
+            .map_err(|error| AuthorityProviderError::new(format!("{error:#}")))
+    }
 }
 
 /// The case's `case.yaml` at `case_dir` with its `implementation` artifact at `revision`, the
@@ -2077,21 +2655,7 @@ impl CaseDir {
     /// `false`; none for a protocol that declares no input.
     #[must_use]
     pub fn inputs(&self) -> Vec<(String, String)> {
-        self.doc["inputs"]
-            .as_mapping()
-            .map(|map| {
-                map.iter()
-                    .filter_map(|(key, value)| {
-                        let value = match value {
-                            serde_yaml_ng::Value::Bool(flag) => flag.to_string(),
-                            serde_yaml_ng::Value::String(text) => text.clone(),
-                            other => serde_yaml_ng::to_string(other).ok()?.trim().to_owned(),
-                        };
-                        Some((key.as_str()?.to_owned(), value))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        inputs_in(&self.doc)
     }
 
     /// Creates the directory and writes the case's files, `case.yaml` last.
@@ -2102,6 +2666,7 @@ impl CaseDir {
         std::fs::write(self.dir.join("protocol.ir.json"), &self.protocol.ir_json)?;
         std::fs::write(self.dir.join("protocol.yaml"), &self.protocol.yaml)?;
         std::fs::write(self.dir.join("intent.md"), intent)?;
+        std::fs::write(self.dir.join(OBSERVATIONS_FILE), render_observations(&[]))?;
         branch.write(&self.dir)?;
         self.write()
     }
@@ -2289,14 +2854,20 @@ impl CaseDir {
             .unwrap_or_else(crate::git::CommitIdentity::takt))
     }
 
-    /// Moves `artifact` to `revision`; evidence about the old revision no longer applies.
+    /// Moves `artifact` to `revision`; evidence about the old revision no longer applies. A move
+    /// to another revision is a new revision of the case ([`CASE_REVISION`]), the one an
+    /// authority answer was asked at no longer.
     pub fn set_revision(&mut self, artifact: &str, revision: &str) -> Result<()> {
+        let next = case_revision(&self.doc)? + 1;
         let entry = self
             .doc
             .get_mut("artifacts")
             .and_then(|a| a.get_mut(artifact))
             .ok_or_else(|| anyhow!("the case declares no artifact {artifact}"))?;
-        entry["revision"] = revision.into();
+        if entry["revision"].as_str() != Some(revision) {
+            entry["revision"] = revision.into();
+            self.doc[CASE_REVISION] = format!("r{next}").into();
+        }
         self.write()
     }
 
@@ -2346,62 +2917,97 @@ impl CaseDir {
     /// The evidence records under the case, `evidence/*.json` and `*.yaml`, in name order, each
     /// with its path.
     fn evidence_texts(&self) -> Result<Vec<(PathBuf, String)>> {
-        let evidence = self.dir.join("evidence");
-        let mut names: Vec<_> = std::fs::read_dir(&evidence)
-            .with_context(|| format!("read {}", evidence.display()))?
-            .map(|entry| entry.map(|e| e.path()))
-            .collect::<std::io::Result<Vec<_>>>()?;
-        names.sort();
-        names
-            .into_iter()
-            .filter(|path| path.extension().is_some_and(|e| e == "json" || e == "yaml"))
-            .map(|path| {
-                let text = std::fs::read_to_string(&path)
-                    .with_context(|| format!("read {}", path.display()))?;
-                Ok((path, text))
-            })
-            .collect()
+        evidence_files(&self.dir)
     }
 
-    /// Asks Canon for the decision over the case, its evidence and the authority the operator
-    /// granted it (`authority.yaml`, read now, so a grant written since the last evaluation is
-    /// seen; a grant only at the revision it was given at of the artifact its action is about),
-    /// now; writes it
-    /// under `decisions/` and answers it. An evidence record that does not read is an error
-    /// naming its file.
+    /// Asks the governor of Loom for the decision over the case as its files hold it now
+    /// ([`CaseFiles`]), its evidence and the time now; writes the `canon-decision/1` document the
+    /// governor rendered for it under `decisions/`, and answers it with each action the governor
+    /// finds approval-required answered by the case's authority ([`CaseAuthority`], reading
+    /// `authority.yaml` now, so a grant written since the last evaluation is seen, and only at
+    /// the revision of its subject it was given at): `admissible` where it allows the
+    /// capability, `blocked` where it denies it. The governor supplies no authority, so the
+    /// document on file finds such an action approval-required, granted or not. Canon reads
+    /// every evidence record first, so one that does not read is an error naming its file; the
+    /// governor would drop it.
     pub fn evaluate(&self, seq: usize) -> Result<Decision> {
-        let ir = eval::read_ir(&self.protocol.ir_json).map_err(|r| anyhow!("{r}"))?;
-        let case_yaml = std::fs::read_to_string(self.dir.join("case.yaml"))?;
-        let case = eval::read_case(&case_yaml).map_err(|r| anyhow!("{r}"))?;
         let records = self.evidence_records()?;
-        // The revision a grant is filtered by is the one in the `case.yaml` Canon is handed,
-        // read from the same bytes: never this `CaseDir`'s in-memory copy, which another
-        // holder may have moved on since it was read.
-        let snapshot: serde_yaml_ng::Value =
-            serde_yaml_ng::from_str(&case_yaml).context("read the case snapshot")?;
-        let revision_of = |capability: &str| {
-            let subject = self.protocol.grant_subject(capability).ok()?;
-            snapshot["artifacts"][subject.as_str()]["revision"]
-                .as_str()
-                .map(str::to_owned)
-        };
-        let authority = Authority::read(&self.dir)?
-            .map(|authority| authority.canon_by(revision_of))
-            .transpose()?;
+        let files = CaseFiles::new(&self.dir, &self.id, &self.protocol.id);
+        let case = CaseId(self.id.clone());
+        if files.get(&case)?.is_none() {
+            bail!("no case {} at {}", self.id, self.dir.display());
+        }
         let now = crate::now();
-        let supplied = eval::Supplied {
-            authority: authority.as_deref(),
-            at: Some(&now),
-            decisions: None,
-        };
-        let decision =
-            eval::evaluate_with(&ir, &case, &records, supplied).map_err(|r| anyhow!("{r}"))?;
-        let json = eval::render(&decision);
+        let at = now.clone();
+        let governor = CanonGovernor::new(files)
+            .with_protocol_yaml(&self.protocol.id, &self.protocol.yaml)
+            .map_err(|error| anyhow!("register the protocol {}: {error}", self.protocol.id))?
+            .with_evaluation_time(move |_: &CaseId| Ok(Some(at.clone())));
+        let refused = |error: GovernorError| self.refusal(&records, &now, error);
+        let frontier = governor.frontier(&case).map_err(refused)?;
+        let frontier = frontier.data();
+        let document = governor
+            .decision_document(&case, &frontier.frontier_id)
+            .map_err(refused)?
+            .ok_or_else(|| {
+                anyhow!(
+                    "the case {} changed while it was decided; nothing was written",
+                    self.id
+                )
+            })?;
+        let json = render_canonical(&document);
         std::fs::write(
             self.dir.join("decisions").join(format!("{seq:04}.json")),
             &json,
         )?;
-        Decision::from_json(&json)
+        let mut decision = Decision::from_json(&json)?;
+        let authority = CaseAuthority::new(&self.dir, &self.id);
+        for action in &frontier.actions {
+            let (ActionStatus::ApprovalRequired, Some(capability)) =
+                (&action.status, &action.capability)
+            else {
+                continue;
+            };
+            let status =
+                match authority.verdict(&action.action, capability, frontier.case_revision)? {
+                    AuthorityVerdict::Allow(_) => "admissible",
+                    AuthorityVerdict::Deny(_) => "blocked",
+                    AuthorityVerdict::ApprovalRequired(_) => continue,
+                };
+            decision
+                .actions
+                .insert(action.action.clone(), status.to_owned());
+        }
+        Ok(decision)
+    }
+
+    /// Why the governor refused to decide the case: Canon's own refusal of it, read over the
+    /// same files without authority, when Canon refuses it too; otherwise the governor's.
+    fn refusal(
+        &self,
+        records: &[b10x_canon::model::EvidenceRecord],
+        now: &str,
+        error: GovernorError,
+    ) -> anyhow::Error {
+        let canon = || -> Result<()> {
+            let ir = eval::read_ir(&self.protocol.ir_json).map_err(|r| anyhow!("{r}"))?;
+            let case_yaml = std::fs::read_to_string(self.dir.join("case.yaml"))?;
+            let case = eval::read_case(&case_yaml).map_err(|r| anyhow!("{r}"))?;
+            let supplied = eval::Supplied {
+                authority: None,
+                at: Some(now),
+                decisions: None,
+            };
+            eval::evaluate_with(&ir, &case, records, supplied).map_err(|r| anyhow!("{r}"))?;
+            Ok(())
+        };
+        match canon() {
+            Err(refusal) => refusal,
+            Ok(()) => anyhow!(
+                "the governor of Loom does not decide the case {}: {error:?}",
+                self.id
+            ),
+        }
     }
 }
 

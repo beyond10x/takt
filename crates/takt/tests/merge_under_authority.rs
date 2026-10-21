@@ -520,13 +520,20 @@ fn without_a_grant_the_run_stops_at_the_gate_and_the_resumed_run_merges_under_it
         "{}",
         decision.json
     );
+    assert!(granted_by_authority(&decision), "{}", decision.json);
+}
+
+/// Whether the case's authority answered a grant into `decision`: the governor of Loom supplies
+/// no authority, so its document computes from none and finds the gated action
+/// approval-required, and the decision the run acts on takes that action as admissible.
+fn granted_by_authority(decision: &Decision) -> bool {
     let document: serde_json::Value = serde_json::from_str(&decision.json).expect("json");
-    assert_eq!(
-        document["explanation"]["computed_from"]["authority"],
-        serde_json::json!([{"capability": "repository.merge", "decision": "granted"}]),
-        "{}",
-        decision.json
-    );
+    document["explanation"]["computed_from"]
+        .get("authority")
+        .is_none()
+        && decision.actions.iter().any(|(action, status)| {
+            status == "admissible" && document["actions"][action]["status"] == "approval-required"
+        })
 }
 
 /// The grant is read into every evaluation of the case, not only a run's: a case whose four
@@ -1054,13 +1061,7 @@ fn the_open_case_of_an_active_story_is_resumed_and_its_approval_recorded_on_the_
     // The resumed case reads the grant: `software.change/1` requires it for its merge.
     let case = CaseDir::resume(&repo, &case_id).expect("the case reads back");
     let decision = case.evaluate(60).expect("evaluates");
-    let document: serde_json::Value = serde_json::from_str(&decision.json).expect("json");
-    assert_eq!(
-        document["explanation"]["computed_from"]["authority"],
-        serde_json::json!([{"capability": "repository.merge", "decision": "granted"}]),
-        "{}",
-        decision.json
-    );
+    assert!(granted_by_authority(&decision), "{}", decision.json);
 }
 
 /// A frontier that is never asked to record: a case opened on an intent has no story to record
@@ -2669,14 +2670,14 @@ fn store_case_at_the_gate(name: &str) -> (Scratch, String) {
     (repo, case_id)
 }
 
-/// What Canon reads as the case's authority when the case is resumed now.
-fn authority_read(repo: &Path, case_id: &str) -> serde_json::Value {
+/// Whether the case's authority answers its grant into the evaluation when the case is resumed
+/// now ([`granted_by_authority`]).
+fn authority_read(repo: &Path, case_id: &str) -> bool {
     let case = CaseDir::resume(repo, case_id).expect("the case reads back");
     let decision = case
         .evaluate(case.evaluations().expect("counts") + 1)
         .expect("evaluates");
-    let document: serde_json::Value = serde_json::from_str(&decision.json).expect("json");
-    document["explanation"]["computed_from"]["authority"].clone()
+    granted_by_authority(&decision)
 }
 
 /// `takt approve` on a story's case commits the record it made in the planning store on the
@@ -2718,8 +2719,7 @@ fn the_approvals_own_commit_keeps_the_revision_the_grant_authorises() {
             .count(),
         0
     );
-    let granted = serde_json::json!([{"capability": "repository.merge", "decision": "granted"}]);
-    assert_eq!(authority_read(&repo, &case_id), granted);
+    assert!(authority_read(&repo, &case_id));
     let case = CaseDir::resume(&repo, &case_id).expect("the case reads back");
     assert_eq!(
         case.revision("implementation").as_deref(),
@@ -2731,7 +2731,7 @@ fn the_approvals_own_commit_keeps_the_revision_the_grant_authorises() {
     fs::write(repo.join("check.txt"), "fixed\n").expect("a file");
     git(&repo, &["commit", "-q", "-am", "a later commit"]);
     let later = git(&repo, &["rev-parse", "HEAD"]);
-    assert_eq!(authority_read(&repo, &case_id), serde_json::json!([]));
+    assert!(!authority_read(&repo, &case_id));
     let case = CaseDir::resume(&repo, &case_id).expect("the case reads back");
     assert_eq!(
         case.revision("implementation").as_deref(),
