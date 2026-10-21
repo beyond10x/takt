@@ -88,6 +88,41 @@ read_body() {
     BODY=${text%x}
 }
 
+# Sets RESOLVED to the absolute physical path of $1, every symbolic link in it resolved, the last
+# component's too; fails when the path, or a link's target, does not exist. This is what
+# `realpath -e` does, but macOS's realpath has no `-e`.
+RESOLVED=
+resolve_path() {
+    local path=$1 dir base target hops=0
+    while :; do
+        [[ -e $path ]] || return 1
+        if [[ -d $path ]]; then
+            dir=$(CDPATH= cd -P -- "$path" && pwd -P && printf x) || return 1
+            RESOLVED=${dir%$'\n'x}
+            return 0
+        fi
+        case $path in
+        */*) dir=${path%/*} base=${path##*/} ;;
+        *) dir=. base=$path ;;
+        esac
+        dir=$(CDPATH= cd -P -- "${dir:-/}" && pwd -P && printf x) || return 1
+        dir=${dir%$'\n'x}
+        [[ $dir != / ]] || dir=
+        if [[ ! -L $dir/$base ]]; then
+            RESOLVED=$dir/$base
+            return 0
+        fi
+        hops=$((hops + 1))
+        ((hops <= 40)) || return 1
+        target=$(readlink -- "$dir/$base" && printf x) || return 1
+        target=${target%$'\n'x}
+        case $target in
+        /*) path=$target ;;
+        *) path=$dir/$target ;;
+        esac
+    done
+}
+
 # The `expected_before` block's entries: PREDICATE_KEYS[i] gives PREDICATE_VALUES[i]. Two indexed
 # arrays, not one associative array, which macOS's bash 3.2 does not have.
 PREDICATE_KEYS=()
@@ -287,7 +322,8 @@ fi
 [[ $kind == story || $kind == blocker ]] || usage "--kind $kind: a finding is filed as a story or a blocker"
 [[ -f $from && -r $from ]] || usage "--from $from: no readable file"
 # Absolute before any `cd`, and read once: what is parsed is what is filed.
-from=$(realpath -e -- "$from") || usage "--from $from: does not resolve"
+resolve_path "$from" || usage "--from $from: does not resolve"
+from=$RESOLVED
 read_body "$from" || usage "--from $from: unreadable"
 text=$BODY
 if [[ -z $repo ]]; then
@@ -306,7 +342,8 @@ case /$source/ in
 */../*) malformed "source \`$source\` climbs out of the repository" ;;
 esac
 [[ -e $repo/$source ]] || malformed "source \`$source\` does not exist in $repo"
-resolved=$(realpath -e -- "$repo/$source") || malformed "source \`$source\` does not resolve"
+resolve_path "$repo/$source" || malformed "source \`$source\` does not resolve"
+resolved=$RESOLVED
 [[ $resolved == "$repo" || $resolved == "$repo"/* ]] ||
     malformed "source \`$source\` resolves outside the repository"
 
