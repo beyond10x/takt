@@ -61,6 +61,59 @@ fn gate_commands() -> Vec<String> {
     commands
 }
 
+/// The commands of `Taskfile.yml`'s task `name`, read now, in order, each a line.
+fn task_commands(name: &str) -> Vec<String> {
+    let text = fs::read_to_string(root().join("Taskfile.yml")).expect("Taskfile.yml");
+    let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text).expect("Taskfile.yml parses");
+    doc["tasks"][name]["cmds"]
+        .as_sequence()
+        .unwrap_or_else(|| panic!("the task {name} has commands"))
+        .iter()
+        .map(|cmd| {
+            cmd.as_str()
+                .unwrap_or_else(|| panic!("each command of {name} is a line"))
+                .to_owned()
+        })
+        .collect()
+}
+
+/// story:the-cli-suite-fits-its-ci-budget: CI runs `task check` as three jobs of one matrix,
+/// one per task, and the three tasks run the check task's commands: `check-static` the four
+/// before the tests, word for word, and `test-cli` and `test-library` its test command split by
+/// package, `b10x-takt-cli` and every other package of the workspace, which together are the
+/// workspace's.
+#[test]
+fn ci_runs_the_check_tasks_commands_as_three_jobs() {
+    let check = check_task();
+    let (test, before) = check.split_last().expect("the check task has commands");
+    assert_eq!(test, TEST_COMMAND);
+    assert_eq!(task_commands("check-static"), before);
+    assert_eq!(
+        task_commands("test-cli"),
+        ["cargo test --locked -p b10x-takt-cli"]
+    );
+    assert_eq!(
+        task_commands("test-library"),
+        ["cargo test --workspace --locked --exclude b10x-takt-cli"]
+    );
+    let text = fs::read_to_string(root().join(".github/workflows/check.yml")).expect("check.yml");
+    let workflow: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text).expect("check.yml parses");
+    let job = &workflow["jobs"]["check"];
+    let parts: Vec<&str> = job["strategy"]["matrix"]["part"]
+        .as_sequence()
+        .expect("the check job's parts")
+        .iter()
+        .map(|part| part.as_str().expect("each part is a task name"))
+        .collect();
+    assert_eq!(parts, ["check-static", "test-cli", "test-library"]);
+    let last = job["steps"]
+        .as_sequence()
+        .and_then(|steps| steps.last())
+        .expect("the check job's steps");
+    assert_eq!(last["env"]["PART"].as_str(), Some("${{ matrix.part }}"));
+    assert_eq!(last["run"].as_str(), Some("task \"$PART\""));
+}
+
 /// takt's own gates document, read through the loader the gate validator evaluates it with:
 /// it binds, in order, exactly the check task's commands but the tests, each as `gate-exec`
 /// with the tool and its arguments, and those four and the test command are the check task.

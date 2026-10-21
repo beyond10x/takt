@@ -25,3 +25,6 @@ sha1-checked = { version = "0.10", default-features = false, features = ["std"] 
 sha2 = "0.10"
 time = { version = "0.3", features = ["formatting", "macros"] }
 unsafe-libyaml = "0.2.11"
+
+[profile.dev.package.sha2]
+opt-level = 3

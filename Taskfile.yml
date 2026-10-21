@@ -14,6 +14,24 @@ tasks:
       - cargo clippy --workspace --all-targets --locked -- -D warnings
       - cargo test --workspace --locked
 
+  check-static:
+    desc: The commands of `task check` before its tests; CI runs it as a job of its own.
+    cmds:
+      - ess specify validate --path ess
+      - python3 -I scripts/check-citations --require-digests
+      - cargo fmt --all --check
+      - cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test-cli:
+    desc: The tests of b10x-takt-cli; with test-library, the tests of `task check`, which CI runs as two jobs.
+    cmds:
+      - cargo test --locked -p b10x-takt-cli
+
+  test-library:
+    desc: The tests of every package but b10x-takt-cli; with test-cli, the tests of `task check`.
+    cmds:
+      - cargo test --workspace --locked --exclude b10x-takt-cli
+
   fuzz:
     desc: Run each fuzz target for 60 s on nightly; exits 0 when none crashes.
     dir: fuzz

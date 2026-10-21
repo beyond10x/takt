@@ -36,6 +36,7 @@ every step validated by Canon over evidence. This file is for agents working on 
 
 ```
 task check                      # specification, citations, format, lint, tests
+task check-static | test-cli | test-library   # the three parts of check that CI runs as parallel jobs (check.yml)
 task build
 task site-build                 # the documentation site into website/build
 task site-check                 # site-build, then every page at 1440 and 390 px in headless Chrome (website/.site-check/)

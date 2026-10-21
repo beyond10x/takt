@@ -26,11 +26,15 @@ env:
 
 jobs:
   check:
-    name: takt / task check
+    name: takt / task check (${{ matrix.part }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [check-static, test-cli, test-library]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -99,5 +103,7 @@ jobs:
           fi
           bwrap --unshare-net --dev-bind / / true
 
-      - name: task check
-        run: task check
+      - name: task ${{ matrix.part }}
+        env:
+          PART: ${{ matrix.part }}
+        run: task "$PART"
