@@ -243,6 +243,34 @@ fn write_executable(tree: &Path, path: &str, text: &str) {
     fs::set_permissions(tree.join(path), fs::Permissions::from_mode(0o755)).expect("a mode");
 }
 
+/// The wrapper `name` as the test command names it: the word itself where the `PATH` takt
+/// inherits has it; else a stand-in outside the tree, named by its absolute path, that drops the
+/// `before` words ahead of the command and runs the command (macOS has no `timeout`). The guard
+/// reads a wrapper by its name, whatever directory names it.
+fn wrapper(tree: &Scratch, name: &str, before: usize) -> String {
+    let on_path = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .filter(|dir| dir.is_absolute())
+        .any(|dir| {
+            fs::metadata(dir.join(name))
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        });
+    if on_path {
+        return name.to_owned();
+    }
+    let program = tree.root.join("bin").join(name);
+    write_executable(
+        &tree.root,
+        &format!("bin/{name}"),
+        &format!("#!/bin/sh\nshift {before}\nexec \"$@\"\n"),
+    );
+    let program = program.to_str().expect("a UTF-8 path").to_owned();
+    assert!(
+        !program.contains(char::is_whitespace),
+        "the test command is split at white space: {program}"
+    );
+    program
+}
+
 const MANIFEST: &str =
     "[package]\nname = \"forged\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n";
 const FAILING_LIB: &str =
@@ -407,7 +435,8 @@ fn adv1_script_after_sh_o_earns_no_pass() {
 #[test]
 fn adv1_script_under_a_wrapper_earns_no_pass() {
     let tree = repository("timeout", &[("check.sh", FAILING_CHECK, true)]);
-    let ran = run(&tree, "timeout 600 ./check.sh", |tree| {
+    let command = format!("{} 600 ./check.sh", wrapper(&tree, "timeout", 1));
+    let ran = run(&tree, &command, |tree| {
         write_executable(tree, "check.sh", PASSING_CHECK);
     });
     ran.assert_no_forged_pass();

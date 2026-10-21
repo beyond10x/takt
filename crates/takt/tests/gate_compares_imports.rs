@@ -518,6 +518,21 @@ fn a_shell_line_the_gate_cannot_read_fails_closed_naming_it() {
 /// The bash every test of a bash-only form runs its gate with.
 const BASH: &str = "/bin/bash";
 
+/// The shell a gate runs `&>>` with: [`BASH`] where it parses it (bash 4.0 and later), else
+/// zsh, which has it too. macOS keeps bash 3.2 at `/bin/bash`, which refuses `&>>` as a syntax
+/// error. The reader reads every shell's line alike.
+fn appending_shell() -> &'static str {
+    [BASH, "/bin/zsh"]
+        .into_iter()
+        .find(|shell| {
+            Command::new(shell)
+                .args(["-c", "echo appended &>>/dev/null"])
+                .output()
+                .is_ok_and(|output| output.status.success() && output.stdout.is_empty())
+        })
+        .expect("a shell that parses `&>>`: bash 4.0 or later at /bin/bash, or /bin/zsh")
+}
+
 /// [`through_a_shell`] with the gate running `args` under `shell`.
 fn through(shell: &str, name: &str, args: &[&str]) -> Scratch {
     repository_running(
@@ -741,7 +756,7 @@ fn output_redirections_leave_the_script_read() {
         ("fd-amp-out", BASH, "python3 &>/dev/null scripts/check.py"),
         (
             "fd-amp-append",
-            BASH,
+            appending_shell(),
             "python3 &>>/dev/null scripts/check.py",
         ),
         ("fd-clobber", SHELL, "python3 >|/dev/null scripts/check.py"),

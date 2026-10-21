@@ -1248,14 +1248,14 @@ fn the_outside_path_run() {
         "inheritedvenv" => (inherited_venv_site(&home).join("zz.pth"), None),
         "usersite" => {
             let site = python_says("import site; print(site.getusersitepackages())");
-            assert!(
-                Path::new(&site).starts_with(&home),
-                "the user site {site:?} is under {home:?}"
-            );
-            (
-                PathBuf::from(site).join("zz.pth"),
-                Some(home.join(".local")),
-            )
+            // The directory the step makes on its way, the first under the empty home: `.local`
+            // on Linux, `Library` on macOS (`~/Library/Python/<version>/...`).
+            let first = Path::new(&site)
+                .strip_prefix(&home)
+                .ok()
+                .and_then(|under| under.components().next())
+                .unwrap_or_else(|| panic!("the user site {site:?} is under {home:?}"));
+            (PathBuf::from(&site).join("zz.pth"), Some(home.join(first)))
         }
         other => panic!("no variant {other}"),
     };

@@ -40,6 +40,43 @@ fn git(tree: &Path, args: &[&str]) -> String {
         .to_owned()
 }
 
+/// Adds `text` to the index of `tree` at `path`, byte for byte, through git alone: git holds a
+/// name that is not UTF-8, which a file system that keeps names in UTF-8 only (APFS) refuses.
+#[cfg(unix)]
+fn stage(tree: &Path, path: &[u8], text: &[u8]) {
+    use std::io::Write as _;
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::process::Stdio;
+    let mut hash = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(tree)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("git runs");
+    hash.stdin
+        .take()
+        .expect("its input")
+        .write_all(text)
+        .expect("the blob");
+    let hashed = hash.wait_with_output().expect("git ends");
+    assert!(hashed.status.success(), "git hash-object");
+    let blob = String::from_utf8(hashed.stdout).expect("utf-8");
+    let added = Command::new("git")
+        .args([
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "100644",
+            blob.trim(),
+        ])
+        .arg(std::ffi::OsStr::from_bytes(path))
+        .current_dir(tree)
+        .status()
+        .expect("git runs");
+    assert!(added.success(), "git update-index");
+}
+
 struct Scratch(PathBuf);
 
 impl std::ops::Deref for Scratch {
@@ -1109,13 +1146,10 @@ fn change_read_reads_none_and_names_a_conflict_only_inside_engineering() {
 #[cfg(unix)]
 #[test]
 fn tests_run_refuses_a_path_that_is_not_utf8_on_the_case_branch_naming_it() {
-    use std::ffi::OsStr;
-    use std::os::unix::ffi::OsStrExt as _;
     let memory = Rc::new(Memory::default());
     let (tree, _) = edited("not-utf8", &memory, "a story\nthe fix\n");
     let ran = tree.join("ran.txt");
-    fs::write(tree.join(OsStr::from_bytes(b"r\xff.txt")), "a file\n").expect("a file");
-    git(&tree, &["add", "--", ":(glob)r*.txt"]);
+    stage(&tree, b"r\xff.txt", b"a file\n");
     git(&tree, &["commit", "-q", "-m", "a path that is not utf-8"]);
     let revision = git(&tree, &["rev-parse", "HEAD"]);
     let command = format!("touch {}", ran.display());
