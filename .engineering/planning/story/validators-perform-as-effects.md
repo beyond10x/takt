@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:validators-perform-as-effects
 kind: story
-status: draft
+status: active
 title: Each validator performs as a Commission effect, and evidence enters only through submit_evidence
 summary: Validators as EffectPorts; merge grant check, judge guard and record_before inside effects; a producer test over every fixture run
 tags:
@@ -11,7 +11,10 @@ relations:
 - decomposes: epic:takt-on-loom-sdk
 - serves: vision:safe-agentic-coding
 - depends_on: story:governor-holds-takts-cases
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-21T15:53:50Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-21T15:53:51Z", actor: "human:timo", revision: 3}
 ---
 # Story: validators-perform-as-effects
 
