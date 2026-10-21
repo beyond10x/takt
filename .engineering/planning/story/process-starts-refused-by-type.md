@@ -9,7 +9,7 @@ tags:
 relations:
 - decomposes: epic:takt-on-loom-sdk
 - depends_on: story:confinement-seam
-revision: 1
+revision: 2
 ---
 ## Outcome
 
@@ -38,3 +38,8 @@ seam. clippy's `disallowed_types` and `disallowed_methods` (`clippy.toml`) refus
    -- -D warnings` passes with the only `#[allow]` in the seam and the session-executor's tests.
 2. A file outside the seam that starts a process through a macro-assembled path fails clippy: a
    fixture test.
+3. Raw identifiers (`use std::process::r#Command;`, `use std::r#process as p;`,
+   `std::process::r#Command::new`) and libc `forkpty`, `execvP` and `wordexp` outside the seam
+   each fail clippy: a fixture test per form. The wave 29 re-review at f75195b found the text
+   scan misses all of them (`crates/takt/tests/confinement.rs:460`, `:479`, `:665`); each
+   compiles and runs.
