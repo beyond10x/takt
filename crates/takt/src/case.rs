@@ -1215,11 +1215,15 @@ fn case_revision(doc: &serde_yaml_ng::Value) -> Result<i64> {
     };
     value
         .as_str()
-        .and_then(|text| {
-            let n = text.strip_prefix('r')?.parse::<i64>().ok()?;
-            (n >= 1 && text == format!("r{n}")).then_some(n)
-        })
+        .and_then(case_revision_number)
         .ok_or_else(|| anyhow!("the case revision {value:?} is not r<n>"))
+}
+
+/// The number of the case revision `text`, `r<n>` with `n` from 1; none for text of another
+/// form.
+fn case_revision_number(text: &str) -> Option<i64> {
+    let n = text.strip_prefix('r')?.parse::<i64>().ok()?;
+    (n >= 1 && text == format!("r{n}")).then_some(n)
 }
 
 /// The evidence records under `case_dir`, `evidence/*.json` and `*.yaml`, in name order, each
@@ -1655,7 +1659,9 @@ impl FallibleCaseStore for CaseFiles {
 /// was given at ([`Authority::grants_at`]); otherwise the capability is approval-required. The
 /// request names no artifact revision, so the subject's revision is read from the case's files.
 /// An action that does not require the capability asked about is denied it. The merge validator
-/// still merges only under [`holds_grant`].
+/// still merges only under [`holds_grant`]. A decision on file is answered by the same rule
+/// over the case as the decision was computed at, for `takt replay`
+/// ([`CaseAuthority::answer_recorded`]).
 #[derive(Debug, Clone)]
 pub struct CaseAuthority {
     dir: PathBuf,
@@ -1678,6 +1684,69 @@ impl CaseAuthority {
         action: &str,
         capability: &str,
         expected_case_revision: i64,
+    ) -> Result<AuthorityVerdict> {
+        self.verdict_over(action, capability, expected_case_revision, || {
+            let Some(state) = CaseFiles::at(&self.dir)?.get(&CaseId(self.id.clone()))? else {
+                bail!("no case {} at {}", self.id, self.dir.display());
+            };
+            Ok((state.revision, state.artifacts))
+        })
+    }
+
+    /// The decision `recorded`, a `canon-decision/1` document the governor rendered for the
+    /// case, with each action it finds approval-required answered as [`CaseDir::evaluate`]
+    /// answers it (`admissible` where the capability is allowed, `blocked` where it is denied),
+    /// by the rule of [`CaseAuthority::verdict`] over the case as the document says it was
+    /// computed from (`explanation.computed_from.case`): its case revision, both the one
+    /// expected and the one held, and its artifacts' revisions, in place of the case's files
+    /// now; `authority.yaml` is read as it is now. The capability asked about is the first the
+    /// action requires in the case's protocol, the one the governor names. A document that
+    /// names no case revision it was computed at is answered as it is, granting nothing.
+    pub fn answer_recorded(&self, recorded: &Decision) -> Result<Decision> {
+        let doc: serde_json::Value =
+            serde_json::from_str(&recorded.json).context("read the decision document")?;
+        let case = &doc["explanation"]["computed_from"]["case"];
+        let mut answered = recorded.clone();
+        let Some(revision) = case[CASE_REVISION].as_str() else {
+            return Ok(answered);
+        };
+        let revision = case_revision_number(revision).ok_or_else(|| {
+            anyhow!("the decision was computed at the case revision {revision:?}, not r<n>")
+        })?;
+        let artifacts: BTreeMap<String, String> = case["artifacts"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(artifact, entry)| {
+                Some((artifact.clone(), entry["revision"].as_str()?.to_owned()))
+            })
+            .collect();
+        let (_, actions) = required_capabilities(&self.dir)?;
+        for (action, status) in &recorded.actions {
+            if status != "approval-required" {
+                continue;
+            }
+            let Some(capability) = actions.get(action).and_then(|required| required.first()) else {
+                continue;
+            };
+            let verdict = self.verdict_over(action, capability, revision, || {
+                Ok((revision, artifacts.clone()))
+            })?;
+            if let Some(status) = answered_status(&verdict) {
+                answered.actions.insert(action.clone(), status.to_owned());
+            }
+        }
+        Ok(answered)
+    }
+
+    /// [`CaseAuthority::verdict`] with the case held as `held` answers it, its case revision
+    /// and its artifacts' revisions, read only once a denial on file has not decided it.
+    fn verdict_over(
+        &self,
+        action: &str,
+        capability: &str,
+        expected_case_revision: i64,
+        held: impl FnOnce() -> Result<(i64, BTreeMap<String, String>)>,
     ) -> Result<AuthorityVerdict> {
         let approval = |request: String| {
             AuthorityVerdict::ApprovalRequired(AuthorityVerdictApprovalRequired { request })
@@ -1705,13 +1774,11 @@ impl CaseAuthority {
                 ),
             }));
         }
-        let Some(state) = CaseFiles::at(&self.dir)?.get(&CaseId(self.id.clone()))? else {
-            bail!("no case {} at {}", self.id, self.dir.display());
-        };
-        if state.revision != expected_case_revision {
+        let (held_revision, artifacts) = held()?;
+        if held_revision != expected_case_revision {
             return Ok(approval(format!(
-                "{capability} for {action}: the case {} is at case revision {}, not {expected_case_revision}",
-                self.id, state.revision
+                "{capability} for {action}: the case {} is at case revision {held_revision}, not {expected_case_revision}",
+                self.id
             )));
         }
         let protocol = LoadedProtocol::from_file(&self.dir.join("protocol.yaml"))?;
@@ -1720,7 +1787,7 @@ impl CaseAuthority {
                 "{capability} for {action}: its actions are about no single artifact"
             )));
         };
-        let Some(revision) = state.artifacts.get(&subject) else {
+        let Some(revision) = artifacts.get(&subject) else {
             return Ok(approval(format!(
                 "{capability} for {action}: the case has no {subject} revision"
             )));
@@ -1732,6 +1799,17 @@ impl CaseAuthority {
                 "{capability} for {action} at {subject} {revision}"
             )))
         }
+    }
+}
+
+/// The status an evaluation gives an action the governor finds approval-required once the
+/// case's authority has answered for it: `admissible` where it allows the capability, `blocked`
+/// where it denies it; none where an approval is still required, and the action keeps its status.
+fn answered_status(verdict: &AuthorityVerdict) -> Option<&'static str> {
+    match verdict {
+        AuthorityVerdict::Allow(_) => Some("admissible"),
+        AuthorityVerdict::Deny(_) => Some("blocked"),
+        AuthorityVerdict::ApprovalRequired(_) => None,
     }
 }
 
@@ -2968,12 +3046,10 @@ impl CaseDir {
             else {
                 continue;
             };
-            let status =
-                match authority.verdict(&action.action, capability, frontier.case_revision)? {
-                    AuthorityVerdict::Allow(_) => "admissible",
-                    AuthorityVerdict::Deny(_) => "blocked",
-                    AuthorityVerdict::ApprovalRequired(_) => continue,
-                };
+            let verdict = authority.verdict(&action.action, capability, frontier.case_revision)?;
+            let Some(status) = answered_status(&verdict) else {
+                continue;
+            };
             decision
                 .actions
                 .insert(action.action.clone(), status.to_owned());
