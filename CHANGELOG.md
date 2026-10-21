@@ -41,7 +41,7 @@ beside `claude`, and the gate's reader fails closed on lines 0.6.0 read.
 
 ### Security
 
-- **Breaking:** The gate's reader fails a line closed when a tree file handing off to a known program sets `PYTHON*` or a whole environment, changes directory or writes `sys.path`.
+- **Breaking:** The gate's reader fails a line closed when a tree file handing off to a known program sets `PYTHON*` or an environment, changes directory or writes `sys.path` (a comment counts).
 - **Breaking:** The reader fails it closed, too, if that file hides such a name (`getattr(`, `import sys as`), takes a word before the program, is not Python or shell, or is unreadable or over 1 MiB.
 
 ## [0.6.0] - 2026-10-20
@@ -67,7 +67,7 @@ on, and the gate's reader fails closed on lines 0.5.0 read.
 - `gate.run` compares what a gate command's Python files import from every import directory, a `PYTHONPATH` set anywhere on the line included.
 - `gate.run` reads `cd`, `env -C`, a redirection-only `exec`, `taskset`, `chrt`, `unbuffer`, `script -c`, `uv run`, `env -S` and `pytest FILE`: 0.5.0's known limit of 11 forms and wrappers closes.
 - **Breaking:** The gate's import walk reads at most 64 Python files a command; the cap, `importlib`, `__import__(`, `exec(`, `eval(` or `xargs` input fails closed.
-- **Breaking:** The step guard reads the same forms and fails closed in five more places (`doas python3 …` among them), refusing a step that changes any Python file, shell file or program.
+- **Breaking:** The step guard reads these forms and fails closed in five more places (`doas python3 …`); while a test command line is unreadable, it refuses steps changing Python, shell or programs.
 
 ## [0.5.0] - 2026-10-20
 
