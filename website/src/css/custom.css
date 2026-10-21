@@ -230,6 +230,53 @@ html .takt-chart > svg {
   block-size: auto;
 }
 
+/* A chart's title, introduction, legend and notes are the page's text, set around its plot
+   (Chart.tsx), so on a narrow column they wrap and stay in view while only the plot scrolls. A
+   legend entry's mark sits on the first line of its text. */
+html .takt-figure {
+  margin: 1.5rem 0;
+}
+html .takt-figure__title {
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+  color: var(--b10x-color-heading);
+}
+html .takt-figure__intro {
+  margin: 0 0 0.5rem;
+  font-size: 0.875rem;
+}
+html .takt-figure__intro,
+html .takt-figure__note--muted {
+  color: var(--b10x-color-muted);
+}
+html .markdown .takt-figure__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.25rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.875rem;
+}
+html .markdown .takt-figure__legend > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin: 0;
+}
+html .takt-figure__legend svg {
+  flex: none;
+  margin-top: 0.25em;
+}
+html .takt-figure__note {
+  margin: 0.6rem 0 0;
+  font-size: 0.875rem;
+}
+html .takt-figure__caption {
+  margin-top: 0.6rem;
+  font-size: 0.9rem;
+}
+
 /* On paper nothing scrolls, so a frame shows all it holds: a table fits the page, in smaller
    type and with its words breaking where they must, and a chart scales to the column (its text then falls under the 11 px
    floor, which is the screen's). Without this the runs page's nine-column table and both charts

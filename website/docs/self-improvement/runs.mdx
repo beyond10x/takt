@@ -68,7 +68,7 @@ takt's own runs of scenario 1 per takt revision: tokens on the left axis, wall t
 the right, the waves that changed takt, the improvement turns and dated events as markers above
 the plot, and the free-running medians as reference lines. Drawn by `docs/metrics/timeline.py`.
 
-<Chart svg={timeline} />
+<Chart chart={timeline} />
 
 What it shows:
 
@@ -121,7 +121,7 @@ Ten takt runs at a0b8576, one on each task.
 
 Drawn by `docs/metrics/journey.py`.
 
-<Chart svg={journey} caption="Grouped by arm, then by takt revision." />
+<Chart chart={journey} caption="Grouped by arm, then by takt revision." />
 
 Waste takt has filed against itself, counted over the 31 takt lanes of scenario 1 that reached
 the merge approval (`journeys.jsonl`):

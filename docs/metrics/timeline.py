@@ -3,6 +3,12 @@
 A dated event, one line of docs/metrics/events.jsonl, is drawn as a marker at the right edge of
 the last column dated at or before it, and spelled out under the legend.
 
+The SVG is whole on its own: title, plot, legend and notes. The plot is one group between the
+comments <!-- plot begin --> and <!-- plot end -->, whose data-plot attribute is its box, and a
+<metadata id="takt-timeline-key"> element holds the title, the legend and the notes as JSON
+(takt-chart-key/1), so a page can show the plot alone in a frame that scrolls and lay out the
+rest as its own text (website/scripts/generate.mjs).
+
 Run as `python3 -I docs/metrics/timeline.py` from the repository root, or from anywhere: paths are
 resolved from this file. Standard library only. When docs/pitch/index.html holds the markers
 <!-- timeline.svg begin --> and <!-- timeline.svg end -->, the SVG between them is replaced too, so
@@ -31,8 +37,10 @@ PW = W - L - R
 MIN_SLOT = 64
 FS = 12
 ROW = 18
+GAP = 3
 GREY = "#8a9a95"
 BASE_MODEL = "claude-opus-5-5"
+TITLE = f"Scenario {SCENARIO}: takt runs to the merge approval, by takt revision"
 
 
 def text_w(s, size=FS, bold=False):
@@ -61,6 +69,54 @@ def load(path):
 
 def esc(s):
     return html.escape(str(s), quote=True)
+
+
+def text_box(x, y, wide, anchor="start", size=FS):
+    """A label's box from its estimated width, ascent and descent included."""
+    x0 = x - wide if anchor == "end" else x - wide / 2 if anchor == "middle" else x
+    return (x0, y - size, x0 + wide, y + 0.3 * size)
+
+
+def cut(x1, y1, x2, y2, labels):
+    """The parts of an axis-parallel line that run through no label: the line stops GAP px short of
+    each label box it would cross and goes on past it."""
+    vertical = x1 == x2
+    a, b = (min(y1, y2), max(y1, y2)) if vertical else (min(x1, x2), max(x1, x2))
+    holes = sorted((by0 - GAP, by1 + GAP) if vertical else (bx0 - GAP, bx1 + GAP)
+                   for bx0, by0, bx1, by1 in labels
+                   if (bx0 - 1 < x1 < bx1 + 1 if vertical else by0 - 1 < y1 < by1 + 1))
+    parts, at = [], a
+    for lo, hi in holes:
+        if lo > at:
+            parts.append((at, min(lo, b)))
+        at = max(at, hi)
+        if at >= b:
+            break
+    if at < b:
+        parts.append((at, b))
+    return [(x1, p, x2, q) if vertical else (p, y1, q, y2) for p, q in parts if q - p > 0.5]
+
+
+def legend_mark(mark, cx, cy):
+    """A legend's mark centred at (cx, cy)."""
+    if mark == "dot":
+        return f'<circle cx="{cx}" cy="{cy}" r="5" class="acc"/>'
+    if mark == "square":
+        return f'<rect x="{cx - 4}" y="{cy - 4}" width="8" height="8" fill="none" stroke="{GREY}" stroke-width="1.6"/>'
+    if mark == "cross":
+        return (f'<path d="M{cx - 4},{cy - 4}L{cx + 4},{cy + 4}M{cx - 4},{cy + 4}L{cx + 4},{cy - 4}" '
+                f'stroke="{GREY}" stroke-width="1.8"/>')
+    if mark == "ring":
+        return f'<circle cx="{cx}" cy="{cy}" r="4" fill="none" stroke="{GREY}" stroke-width="1.5"/>'
+    if mark == "event":
+        return f'<rect x="{cx - 4.5}" y="{cy - 4.5}" width="9" height="9" class="acc"/>'
+    return (f'<path d="M{cx},{cy - 6}L{cx + 6},{cy}L{cx},{cy + 6}L{cx - 6},{cy}Z" class="acc" '
+            f'fill-opacity="0.25" stroke-width="1.8"/>')
+
+
+def key_json(key):
+    """The chart's key as the text of a <metadata> element."""
+    return html.escape(json.dumps(key, ensure_ascii=False), quote=False)
 
 
 def thousands(n):
@@ -204,8 +260,19 @@ def build():
     tok_y = lambda v: T + PH - PH * v / tok_max  # noqa: E731
     wall_y = lambda v: T + PH - PH * v / wall_max  # noqa: E731
 
+    # o is the plot; foot, the legend and the notes under it. A line is drawn last (rule()), cut
+    # where it would run through a label of the plot (labels), so a wave's or a turn's line passes
+    # the labels of the rows below its own and every reference line's label, and no line crosses
+    # a label at any size the chart is shown.
     o = []
+    foot = []
     boxes = []
+    labels = []
+    rules = []
+
+    def rule(x1, y1, x2, y2, attrs):
+        rules.append((len(o), x1, y1, x2, y2, attrs))
+        o.append("")
 
     def free(box):
         return all(box[2] <= b[0] or box[0] >= b[2] or box[3] <= b[1] or box[1] >= b[3] for b in boxes)
@@ -228,25 +295,21 @@ def build():
             ".takt-timeline .mut{fill:#a8b8b3}"
             ".takt-timeline .warn{fill:#f0a06a}")
     o.append(f"<style>{css}@media (prefers-color-scheme: dark){{{dark}}}@media print{{{css}}}</style>")
-    o.append(f'<text x="{L}" y="24" font-size="15" font-weight="600" fill="currentColor">'
-             f'Scenario {SCENARIO}: takt runs to the merge approval, by takt revision</text>')
 
-    for h in heads:
+    for (span, _, _), h in zip(placed_heads, heads):
         top = T - 12 - ROW * h["row"]
+        labels.append((span[0], top - FS, span[1], top + 0.3 * FS))
         if h["kind"] == "wave":
-            o.append(f'<line x1="{h["x"]:.1f}" x2="{h["x"]:.1f}" y1="{top - 10}" y2="{T + PH}" class="acc-s" '
-                     f'stroke-width="1.5" stroke-dasharray="3 3"/>')
+            rule(h["x"], top - 10, h["x"], T + PH, 'class="acc-s" stroke-width="1.5" stroke-dasharray="3 3"')
             o.append(f'<text x="{h["tx"]:.1f}" y="{top}" text-anchor="{h["anchor"]}" font-weight="600" '
                      f'class="acc-t">wave {esc(h["wave"])}: <tspan font-weight="400">{esc(h["label"])}</tspan></text>')
         elif h["kind"] == "event":
-            o.append(f'<line x1="{h["x"]:.1f}" x2="{h["x"]:.1f}" y1="{top - 10}" y2="{T + PH}" class="acc-s" '
-                     f'stroke-width="2.5" stroke-dasharray="8 3"/>')
+            rule(h["x"], top - 10, h["x"], T + PH, 'class="acc-s" stroke-width="2.5" stroke-dasharray="8 3"')
             o.append(f'<rect x="{h["x"] - 4.5:.1f}" y="{top - 14.5}" width="9" height="9" class="acc"/>')
             o.append(f'<text x="{h["tx"]:.1f}" y="{top}" text-anchor="{h["anchor"]}" font-weight="700" '
                      f'class="acc-t">{esc(h["label"])}</text>')
         else:
-            o.append(f'<line x1="{h["x"]:.1f}" x2="{h["x"]:.1f}" y1="{top - 10}" y2="{T + PH}" class="acc-s" '
-                     f'stroke-width="2.5"/>')
+            rule(h["x"], top - 10, h["x"], T + PH, 'class="acc-s" stroke-width="2.5"')
             o.append(f'<circle cx="{h["x"]:.1f}" cy="{top - 10}" r="4" class="acc"/>')
             o.append(f'<text x="{h["tx"]:.1f}" y="{top}" text-anchor="{h["anchor"]}" font-weight="700" '
                      f'class="acc-t">{esc(h["label"])}</text>')
@@ -254,8 +317,7 @@ def build():
     for k in range(0, int(tok_max // tok_step) + 1):
         v = k * tok_step
         y = tok_y(v)
-        o.append(f'<line x1="{L}" x2="{L + PW}" y1="{y:.1f}" y2="{y:.1f}" stroke="{GREY}" '
-                 f'stroke-opacity="0.25"/>')
+        rule(L, y, L + PW, y, f'stroke="{GREY}" stroke-opacity="0.25"')
         o.append(f'<text x="{L - 8}" y="{y + 4:.1f}" text-anchor="end" fill="currentColor">'
                  f'{thousands(int(v // 1000)) + "k" if v else "0"}</text>')
     for k in range(0, int(wall_max // wall_step) + 1):
@@ -266,8 +328,7 @@ def build():
              f'fill="currentColor">tokens per run (input + output + cache read + cache write)</text>')
     o.append(f'<text transform="translate({W - 12} {T + PH / 2:.0f}) rotate(90)" text-anchor="middle" '
              f'class="mut">wall time per run</text>')
-    o.append(f'<line x1="{L}" x2="{L + PW}" y1="{T + PH}" y2="{T + PH}" stroke="currentColor" '
-             f'stroke-opacity="0.6"/>')
+    rule(L, T + PH, L + PW, T + PH, 'stroke="currentColor" stroke-opacity="0.6"')
 
     # the runs: a dot per run's tokens, a square per run's wall time, the median as a bar
     for i, s in enumerate(slots):
@@ -308,8 +369,7 @@ def build():
         if toks:
             y = tok_y(statistics.median(toks))
             half = max(14, (n - 1) * sp / 2 + 7)
-            o.append(f'<line x1="{cx - half:.1f}" x2="{cx + half:.1f}" y1="{y:.1f}" y2="{y:.1f}" '
-                     f'class="acc-s" stroke-width="2" stroke-opacity="0.7"/>')
+            rule(cx - half, y, cx + half, y, 'class="acc-s" stroke-width="2" stroke-opacity="0.7"')
         # resumes: only a run that needed one is labelled (rN); an unlabelled dot is r0
         for k, r in enumerate(rs):
             if r["tokens"]["sum"] is None or not r["resumes"]:
@@ -322,13 +382,13 @@ def build():
                 if free(b):
                     break
             boxes.append(b)
+            labels.append(text_box(x, ly, text_w(text), "middle"))
             o.append(f'<text x="{x:.1f}" y="{ly:.1f}" text-anchor="middle" fill="currentColor">{text}</text>')
 
     # the free-running medians: a dashed line each, its label where it meets no other label
     for name, v, n in sorted(refs, key=lambda ref: -ref[1]):
         y = tok_y(v)
-        o.append(f'<line x1="{L}" x2="{L + PW}" y1="{y:.1f}" y2="{y:.1f}" stroke="currentColor" '
-                 f'stroke-opacity="0.55" stroke-dasharray="6 4"/>')
+        rule(L, y, L + PW, y, 'stroke="currentColor" stroke-opacity="0.55" stroke-dasharray="6 4"')
         text = f'{name}, median {thousands(int(v))} (n={n})'
         tries = [(L + 6, y - 5, "start"), (L + PW - 6, y - 5, "end"), (L + 6, y + 15, "start"),
                  (L + PW - 6, y + 15, "end"), (L + 6, y - 19, "start"), (L + PW - 6, y + 29, "end")]
@@ -337,6 +397,7 @@ def build():
             if free(b):
                 break
         boxes.append(b)
+        labels.append(text_box(tx, ty, text_w(text), anchor))
         o.append(f'<text x="{tx}" y="{ty:.1f}" text-anchor="{anchor}" fill="currentColor">{esc(text)}</text>')
 
     # under the axis: the revision, then one row per count, each row named in the left margin
@@ -372,6 +433,8 @@ def build():
                 o.append(f'<text x="{x_of(i):.1f}" y="{y + 15 * k}" text-anchor="middle" class="{cls}">'
                          f'{esc(v)}</text>')
         y += 15 * tall + 2
+    # the plot's box: from the header rows' top (44) to under the last row of counts
+    plot_box = (0, 44, W, int(y - 10) - 44)
 
     # legend, flowing left to right and wrapping at the chart's width
     y += 16
@@ -388,24 +451,10 @@ def build():
         wide = 18 + text_w(text, FS) + 22
         if x + wide > W - 8 and x > L:
             x, y = L, y + 20
-        cx_, cy_ = x + 6, y - 4
-        if mark == "dot":
-            o.append(f'<circle cx="{cx_}" cy="{cy_}" r="5" class="acc"/>')
-        elif mark == "square":
-            o.append(f'<rect x="{cx_ - 4}" y="{cy_ - 4}" width="8" height="8" fill="none" stroke="{GREY}" '
-                     f'stroke-width="1.6"/>')
-        elif mark == "cross":
-            o.append(f'<path d="M{cx_ - 4},{cy_ - 4}L{cx_ + 4},{cy_ + 4}M{cx_ - 4},{cy_ + 4}L{cx_ + 4},{cy_ - 4}" '
-                     f'stroke="{GREY}" stroke-width="1.8"/>')
-        elif mark == "ring":
-            o.append(f'<circle cx="{cx_}" cy="{cy_}" r="4" fill="none" stroke="{GREY}" stroke-width="1.5"/>')
-        elif mark == "event":
-            o.append(f'<rect x="{cx_ - 4.5}" y="{cy_ - 4.5}" width="9" height="9" class="acc"/>')
-        else:
-            o.append(f'<path d="M{cx_},{cy_ - 6}L{cx_ + 6},{cy_}L{cx_},{cy_ + 6}L{cx_ - 6},{cy_}Z" class="acc" '
-                     f'fill-opacity="0.25" stroke-width="1.8"/>')
-        o.append(f'<text x="{x + 18}" y="{y}" fill="currentColor">{esc(text)}</text>')
+        foot.append(legend_mark(mark, x + 6, y - 4))
+        foot.append(f'<text x="{x + 18}" y="{y}" fill="currentColor">{esc(text)}</text>')
         x += wide
+    notes = []
 
     # the improvement turns, spelled out under the legend instead of over the plot
     for t in turns:
@@ -424,10 +473,12 @@ def build():
         if t.get("outcome"):
             parts.append(f'outcome: {t["outcome"]}')
         y += 22
-        for k, line in enumerate(wrap("; ".join(parts), W - L - 8, FS)):
-            o.append(f'<text x="{L}" y="{y}" fill="currentColor">'
-                     + (f'<tspan font-weight="700" class="acc-t">{esc(t["id"])}</tspan>{esc(line[len(t["id"]):])}'
-                        if k == 0 else esc(line)) + '</text>')
+        whole = "; ".join(parts)
+        notes.append({"lead": t["id"], "text": whole[len(t["id"]):]})
+        for k, line in enumerate(wrap(whole, W - L - 8, FS)):
+            foot.append(f'<text x="{L}" y="{y}" fill="currentColor">'
+                        + (f'<tspan font-weight="700" class="acc-t">{esc(t["id"])}</tspan>{esc(line[len(t["id"]):])}'
+                           if k == 0 else esc(line)) + '</text>')
             y += 16
         y -= 16
 
@@ -435,10 +486,12 @@ def build():
     for e in events:
         y += 22
         head = f'{e["label"]} (dashed line, square)'
-        for k, line in enumerate(wrap(f'{head}, {e["date"][:10]}: {e["text"]}', W - L - 8, FS)):
-            o.append(f'<text x="{L}" y="{y}" fill="currentColor">'
-                     + (f'<tspan font-weight="700" class="acc-t">{esc(line[:len(e["label"])])}</tspan>'
-                        f'{esc(line[len(e["label"]):])}' if k == 0 else esc(line)) + '</text>')
+        whole = f'{head}, {e["date"][:10]}: {e["text"]}'
+        notes.append({"lead": e["label"], "text": whole[len(e["label"]):]})
+        for k, line in enumerate(wrap(whole, W - L - 8, FS)):
+            foot.append(f'<text x="{L}" y="{y}" fill="currentColor">'
+                        + (f'<tspan font-weight="700" class="acc-t">{esc(line[:len(e["label"])])}</tspan>'
+                           f'{esc(line[len(e["label"]):])}' if k == 0 else esc(line)) + '</text>')
             y += 16
         y -= 16
 
@@ -449,17 +502,30 @@ def build():
             f'wall time; tokens are summed over the invocations that reached the merge approval, resumes '
             f'included.' + (' Events: docs/metrics/events.jsonl, each with its run record.' if events else ''))
     y += 26
+    notes.append({"text": note, "muted": True})
     for line in wrap(note, W - L - 8, FS):
-        o.append(f'<text x="{L}" y="{y}" class="mut">{esc(line)}</text>')
+        foot.append(f'<text x="{L}" y="{y}" class="mut">{esc(line)}</text>')
         y += 16
     H = int(y + 6)
 
+    for i, x1, y1, x2, y2, attrs in rules:
+        o[i] = "\n".join(f'<line x1="{a:.1f}" x2="{c:.1f}" y1="{b:.1f}" y2="{d:.1f}" {attrs}/>'
+                         for a, b, c, d in cut(x1, y1, x2, y2, labels))
+    o = [s for s in o if s]
+
+    # the key a page lays out as its own text, each mark centred in a 14 px box
+    key = {"format": "takt-chart-key/1", "class": "takt-timeline", "title": TITLE,
+           "legend": [[{"mark": legend_mark(mark, 7, 7), "text": text} for mark, text in items]],
+           "notes": notes}
     head = (f'<svg class="takt-timeline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
             f'width="{W}" height="{H}" role="img" aria-labelledby="takt-timeline-title" '
             f'font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="{FS}">\n'
             '<title id="takt-timeline-title">takt on scenario 1: tokens and wall time per takt revision, '
-            'with waves, the improvement turns, dated events and the free-running medians</title>')
-    return "\n".join([head] + o + ["</svg>"]) + "\n"
+            'with waves, the improvement turns, dated events and the free-running medians</title>\n'
+            f'<metadata id="takt-timeline-key">{key_json(key)}</metadata>\n'
+            f'<text x="{L}" y="24" font-size="15" font-weight="600" fill="currentColor">{esc(TITLE)}</text>\n'
+            f'<!-- plot begin -->\n<g data-plot="{" ".join(str(v) for v in plot_box)}">')
+    return "\n".join([head] + o + ["</g>\n<!-- plot end -->"] + foot + ["</svg>"]) + "\n"
 
 
 def main():
