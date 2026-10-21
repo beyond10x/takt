@@ -1041,7 +1041,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 takt::case::check_id(&resuming.id)?;
                 if let Some(why) = takt::case::turn_judge_refusal(
                     &repo.join(takt::case::CASES_DIR).join(&resuming.id),
-                    Path::new(RUNNING_BINARY),
+                    &running_binary()?,
                 )? {
                     return Err(anyhow!(why));
                 }
@@ -1120,8 +1120,9 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 let candidate = taken(takt::case::TURN_CANDIDATE);
                 let surface = taken(takt::case::TURN_SURFACE);
                 // The binary that judges the turn is this one, which must be the promoted:
-                // read as it runs, whatever its path holds by now.
-                let binary = PathBuf::from(RUNNING_BINARY);
+                // read as it runs on Linux, whatever its path holds by now; elsewhere, read at
+                // its path (`running_binary`).
+                let binary = running_binary()?;
                 let mut opened = takt::case::turn_opening(
                     &repo,
                     finding.as_deref(),
@@ -2178,9 +2179,22 @@ fn take_story<'a>(
     Ok(run)
 }
 
-/// The running binary as the kernel holds it, whatever file its path names by now: what a turn's
-/// judge is read and checked from.
-const RUNNING_BINARY: &str = "/proc/self/exe";
+/// The running binary, what a turn's judge is read and checked from. On Linux it is
+/// `/proc/self/exe`, the file the kernel holds as this process runs, whatever file its path names
+/// by now. Elsewhere no such handle exists: it is the path the platform reports for this binary
+/// (`std::env::current_exe`), and the file it names is read when the judge is checked, so a file
+/// put at that path after the binary started is the one read and checked, not the one running.
+/// A path the platform cannot report is an error, never a fallback. `cfg!`, not `#[cfg]`, so that both branches
+/// are type-checked on every platform.
+fn running_binary() -> Result<PathBuf> {
+    if cfg!(target_os = "linux") {
+        Ok(PathBuf::from("/proc/self/exe"))
+    } else {
+        std::env::current_exe().context(
+            "resolve this binary's path (std::env::current_exe), what a turn's judge is read and checked from",
+        )
+    }
+}
 
 /// The protocol a store story opens on when `--protocol` is not given.
 const STORY_DELIVERY: &str = "story.delivery/1";

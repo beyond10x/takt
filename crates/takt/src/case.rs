@@ -2843,12 +2843,13 @@ pub fn turn_protocol_refusal(protocol: &LoadedProtocol) -> Result<Option<String>
 /// written when the turn opens ([`CaseDir::open_turn`]).
 pub const JUDGE_FILE: &str = "judge.sha256";
 
-/// Why a run of the case at `case_dir` by the binary `binary` (`/proc/self/exe`, the running
-/// one) is refused before any step, or none: a case of any protocol but an improvement turn's is
-/// never refused here; a turn is run only by the binary whose sha256 it recorded when it opened
-/// ([`JUDGE_FILE`]), so a resume by another binary, the candidate's that `takt promote` just
-/// installed among them, judges nothing. `takt promote` keeps the binary it replaces by its
-/// digest ([`crate::promotion::kept_binary`]), and the refusal names where.
+/// Why a run of the case at `case_dir` by the binary `binary` (the running one: `/proc/self/exe`
+/// on Linux, the file the kernel holds; elsewhere the path `std::env::current_exe` reports, read
+/// as that path holds it now) is refused before any step, or none: a case of any protocol but an
+/// improvement turn's is never refused here; a turn is run only by the binary whose sha256 it
+/// recorded when it opened ([`JUDGE_FILE`]), so a resume by another binary, the candidate's that
+/// `takt promote` just installed among them, judges nothing. `takt promote` keeps the binary it
+/// replaces by its digest ([`crate::promotion::kept_binary`]), and the refusal names where.
 pub fn turn_judge_refusal(case_dir: &Path, binary: &Path) -> Result<Option<String>> {
     if required_capabilities(case_dir)?.0 != TURN_PROTOCOL {
         return Ok(None);
