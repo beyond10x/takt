@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-20T23:32:49Z",
+  "actor": "human:timo",
+  "artifact": "story:step-spends-a-request-reading-its-scope-files",
+  "kind": "story",
+  "revision": 2,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check at 27782c0e: 1603 passed, 0 failed, 6 ignored; citations 1017/1017"
+  }
+}
