@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:harness-child-confined
 kind: story
-status: draft
+status: active
 title: The harness session, git, the forge and aep run under a Substrate profile through loom-sdk
 summary: Fail-closed profiles with named egress for the harness; the tests ignored for confinement pass
 tags:
@@ -12,7 +12,10 @@ relations:
 - serves: vision:safe-agentic-coding
 - depends_on: story:second-harness-adapter
 - depends_on: story:confinement-seam
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-21T23:29:26Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-21T23:29:26Z", actor: "human:timo", revision: 4}
 ---
 # Story: harness-child-confined
 
