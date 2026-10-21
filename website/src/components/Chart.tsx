@@ -18,8 +18,8 @@ function measure(svg: string): {width: number; font: number} | undefined {
 // edge that has more (custom.css).
 export default function Chart({svg, caption}: {svg: string; caption?: ReactNode}): ReactNode {
   const size = measure(svg);
+  // The frame's overflow is custom.css's, so its print rule can show the whole chart.
   const style = {
-    overflowX: 'auto',
     maxWidth: '100%',
     ...(size && {
       '--takt-chart-width': `${size.width}px`,

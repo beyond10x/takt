@@ -230,6 +230,32 @@ html .takt-chart > svg {
   block-size: auto;
 }
 
+/* On paper nothing scrolls, so a frame shows all it holds: a table fits the page, in smaller
+   type and with its words breaking where they must, and a chart scales to the column (its text then falls under the 11 px
+   floor, which is the screen's). Without this the runs page's nine-column table and both charts
+   were cut at the frame's edge. */
+@media print {
+  html .takt-scroll,
+  html .takt-chart {
+    overflow: visible;
+    background: none;
+  }
+  html .takt-scroll > table {
+    display: table;
+    inline-size: 100%;
+    font-size: 0.7rem;
+  }
+  html .takt-scroll :is(th, td) {
+    overflow-wrap: anywhere;
+  }
+  html .takt-scroll .takt-word {
+    white-space: normal;
+  }
+  html .takt-chart > svg {
+    min-inline-size: 0;
+  }
+}
+
 /* A word of code, of a table header or of a one-word table cell does not break at its own
    hyphens or slashes (`--rejudge`, `held-out`, src/words.mjs); a long one still wraps when it is
    wider than its line, without the hanging indent of the code line around it. */

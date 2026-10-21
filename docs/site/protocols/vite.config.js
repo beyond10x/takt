@@ -28,10 +28,20 @@ function site() {
     ([, kind, target, label, position]) => {
       const path = target.replace(/^pathname:\/\//, "");
       const href = kind === "to" ? baseUrl.replace(/\/$/, "") + (path === "/" ? "/" : path.replace(/\/$/, "")) : path;
-      return { label, href, position, external: /^https?:/.test(href), current: href === baseUrl + PAGE };
+      // Docusaurus draws every `href` item, a pathname:// one too, as an external link: a new tab
+      // and the external-link icon. The viewer draws them the same, so its navbar matches.
+      return { label, href, position, external: kind === "href", current: href === baseUrl + PAGE };
     },
   );
   if (!nav.length) throw new Error(`${CONFIG}: no navbar items found; the protocol viewer reads them`);
+  // The social preview image the site's pages name (themeConfig.image and its metadata).
+  const image = new URL(baseUrl + one(/^\s*image: '([^']+)'/m, "themeConfig.image"), url).href;
+  const meta = Object.fromEntries(
+    [...text.matchAll(/\{(property|name): '((?:og|twitter):image:[a-z]+)', content: '([^']+)'\}/g)].map(([, attr, name, content]) => [name, { attr, content }]),
+  );
+  for (const name of ["og:image:width", "og:image:height", "og:image:alt", "twitter:image:alt"]) {
+    if (!meta[name]) throw new Error(`${CONFIG}: no ${name} in themeConfig.metadata; the protocol viewer reads it`);
+  }
   // Docusaurus stores the choice under "theme", namespaced by the first three hex digits of the
   // MD5 of the site's URL when site storage is namespaced, which future.v4 turns on
   // (@docusaurus/core lib/server/storage.js).
@@ -41,7 +51,7 @@ function site() {
   const home = new URL(baseUrl, url).href;
   const namespaced = /\bv4:\s*true\b/.test(text);
   const themeKey = "theme" + (namespaced ? "-" + createHash("md5").update(home).digest("hex").slice(0, 3) : "");
-  return { url: home, baseUrl, title, mark, nav, themeKey };
+  return { url: home, baseUrl, title, mark, nav, themeKey, image, meta };
 }
 
 const SITE = site();
@@ -73,6 +83,12 @@ function head() {
         { tag: "link", attrs: { rel: "icon", href: `${SITE.baseUrl}img/mark.svg` }, injectTo: "head" },
         { tag: "link", attrs: { rel: "canonical", href: SITE.url + PAGE }, injectTo: "head" },
         { tag: "meta", attrs: { property: "og:url", content: SITE.url + PAGE }, injectTo: "head" },
+        // The preview image as the site's pages name it (Docusaurus writes og:image, twitter:image
+        // and twitter:card from themeConfig.image, and the rest from themeConfig.metadata).
+        { tag: "meta", attrs: { property: "og:image", content: SITE.image }, injectTo: "head" },
+        ...Object.entries(SITE.meta).map(([name, { attr, content }]) => ({ tag: "meta", attrs: { [attr]: name, content }, injectTo: "head" })),
+        { tag: "meta", attrs: { name: "twitter:card", content: "summary_large_image" }, injectTo: "head" },
+        { tag: "meta", attrs: { name: "twitter:image", content: SITE.image }, injectTo: "head" },
         ...["inter-variable-latin.woff2", "fira-code-regular-latin.woff2"].map((file) => ({
           tag: "link", attrs: { rel: "preload", href: font(file), as: "font", type: "font/woff2", crossorigin: "anonymous" }, injectTo: "head",
         })),
