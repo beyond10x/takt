@@ -87,6 +87,7 @@ jobs:
           echo "$RUNNER_TEMP/aep-$AEP_VERSION-aarch64-apple-darwin" >> "$GITHUB_PATH"
 
       - name: Fill aep's protocol cache
+        continue-on-error: true
         run: aep plan artifact validate
 
       - name: Build
