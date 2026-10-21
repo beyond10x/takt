@@ -88,9 +88,67 @@ read_body() {
     BODY=${text%x}
 }
 
-# Reads the `expected_before` block of the body text $1 into the associative array PREDICATE,
+# Sets RESOLVED to the absolute physical path of $1, every symbolic link in it resolved, the last
+# component's too; fails when the path, or a link's target, does not exist. This is what
+# `realpath -e` does, but macOS's realpath has no `-e`.
+RESOLVED=
+resolve_path() {
+    local path=$1 dir base target hops=0
+    while :; do
+        [[ -e $path ]] || return 1
+        if [[ -d $path ]]; then
+            dir=$(CDPATH= cd -P -- "$path" && pwd -P && printf x) || return 1
+            RESOLVED=${dir%$'\n'x}
+            return 0
+        fi
+        case $path in
+        */*) dir=${path%/*} base=${path##*/} ;;
+        *) dir=. base=$path ;;
+        esac
+        dir=$(CDPATH= cd -P -- "${dir:-/}" && pwd -P && printf x) || return 1
+        dir=${dir%$'\n'x}
+        [[ $dir != / ]] || dir=
+        if [[ ! -L $dir/$base ]]; then
+            RESOLVED=$dir/$base
+            return 0
+        fi
+        hops=$((hops + 1))
+        ((hops <= 40)) || return 1
+        target=$(readlink -- "$dir/$base" && printf x) || return 1
+        target=${target%$'\n'x}
+        case $target in
+        /*) path=$target ;;
+        *) path=$dir/$target ;;
+        esac
+    done
+}
+
+# The `expected_before` block's entries: PREDICATE_KEYS[i] gives PREDICATE_VALUES[i]. Two indexed
+# arrays, not one associative array, which macOS's bash 3.2 does not have.
+PREDICATE_KEYS=()
+PREDICATE_VALUES=()
+# Whether the block gives the key $1.
+predicate_given() {
+    local i
+    for ((i = 0; i < ${#PREDICATE_KEYS[@]}; i++)); do
+        [[ ${PREDICATE_KEYS[i]} != "$1" ]] || return 0
+    done
+    return 1
+}
+# Prints the value the block gives the key $1, with no newline; status 1 when it gives none.
+predicate_value() {
+    local i
+    for ((i = 0; i < ${#PREDICATE_KEYS[@]}; i++)); do
+        if [[ ${PREDICATE_KEYS[i]} == "$1" ]]; then
+            printf '%s' "${PREDICATE_VALUES[i]}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Reads the `expected_before` block of the body text $1 into PREDICATE_KEYS and PREDICATE_VALUES,
 # or refuses the finding as malformed.
-declare -A PREDICATE=()
 read_predicate() {
     local text=$1 fence='```' line inside=0 blocks=0 key value
     while IFS= read -r line || [[ -n $line ]]; do
@@ -117,38 +175,42 @@ read_predicate() {
         scenario | repository | seed | test | command | exit | healthy_exit | output | source) ;;
         *) malformed "the expected_before block gives \`$key\`, which nothing reads; it gives scenario or repository, seed and test, command, exit, healthy_exit, output and source" ;;
         esac
-        [[ -v PREDICATE[$key] ]] && malformed "the expected_before block gives \`$key\` twice"
+        predicate_given "$key" && malformed "the expected_before block gives \`$key\` twice"
         [[ -n $value ]] || malformed "the expected_before block gives \`$key\` no value"
-        PREDICATE[$key]=$value
+        PREDICATE_KEYS+=("$key")
+        PREDICATE_VALUES+=("$value")
     done < <(printf '%s' "$text")
     ((blocks > 0)) || malformed "the body holds no \`${fence}expected_before\` block: a finding without a predicate a machine can check is a note"
     ((blocks == 1)) || malformed "the body holds $blocks expected_before blocks; a finding has one predicate"
     ((!inside)) || malformed "the expected_before block is never closed"
-    local name
+    local name number command scenario repository seed output
     for name in command source; do
-        [[ -v PREDICATE[$name] ]] || malformed "the expected_before block gives no \`$name\`"
+        predicate_given "$name" || malformed "the expected_before block gives no \`$name\`"
     done
     # The command runs the takt under test, `$TAKT` or `${TAKT}` in its text; one that never
     # names it gives the same result at every revision, so it shows nothing about any of them.
     local runs_takt='\$(TAKT([^A-Za-z0-9_]|$)|\{TAKT\})'
-    [[ ${PREDICATE[command]} =~ $runs_takt ]] ||
+    command=$(predicate_value command)
+    [[ $command =~ $runs_takt ]] ||
         malformed "the command never runs \`\$TAKT\`, the takt under test, so its result would be the same at every revision; run it"
     # One form: a scenario the scenario repository declares, or a repository and a seed the
     # predicate names itself.
-    if [[ -v PREDICATE[scenario] && -v PREDICATE[repository] ]]; then
+    if predicate_given scenario && predicate_given repository; then
         malformed "the expected_before block gives both \`scenario\` and \`repository\`; a predicate runs on one of them"
-    elif [[ -v PREDICATE[scenario] ]]; then
-        [[ ${PREDICATE[scenario]} =~ ^[A-Za-z0-9_-]+$ ]] ||
-            malformed "scenario \`${PREDICATE[scenario]}\`: a scenario id is letters, digits, \`-\` and \`_\`"
+    elif predicate_given scenario; then
+        scenario=$(predicate_value scenario)
+        [[ $scenario =~ ^[A-Za-z0-9_-]+$ ]] ||
+            malformed "scenario \`$scenario\`: a scenario id is letters, digits, \`-\` and \`_\`"
         for name in seed test; do
-            [[ -v PREDICATE[$name] ]] &&
+            predicate_given "$name" &&
                 malformed "the expected_before block gives \`$name\` with a scenario; \`$name\` goes with \`repository\`, whose seed the scenario repository declares"
         done
-    elif [[ -v PREDICATE[repository] ]]; then
-        case ${PREDICATE[repository]} in
-        https://*@*) malformed "repository \`${PREDICATE[repository]}\`: a repository URL carries no user or credential; the check clones with none" ;;
+    elif predicate_given repository; then
+        repository=$(predicate_value repository)
+        case $repository in
+        https://*@*) malformed "repository \`$repository\`: a repository URL carries no user or credential; the check clones with none" ;;
         https://?*) ;;
-        *) malformed "repository \`${PREDICATE[repository]}\`: a repository is an \`https://\` URL, which the check clones with no credential of its own and which holds on every machine; a local checkout stands in for it through check-finding's \`--checkout <url>=<path>\`" ;;
+        *) malformed "repository \`$repository\`: a repository is an \`https://\` URL, which the check clones with no credential of its own and which holds on every machine; a local checkout stands in for it through check-finding's \`--checkout <url>=<path>\`" ;;
         esac
         # The host, between `https://` and the next `/`, less a port. A filed repository names
         # a public host: a dotted DNS name (labels of letters, digits and `-`, at least one dot,
@@ -158,7 +220,7 @@ read_predicate() {
         # last label is a number is read as an address, as a browser reads it, so no hex, octal
         # or shorthand spelling of a loopback passes as a name. This is a lint on the URL's
         # text, not a boundary: the predicate's own command reaches whatever it names.
-        local host=${PREDICATE[repository]#https://} why= last
+        local host=${repository#https://} why= last lower
         local octet='(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])'
         host=${host%%/*}
         case $host in
@@ -173,9 +235,9 @@ read_predicate() {
             why="the URL names no host"
         elif [[ $host == *. ]]; then
             why="a host ends in no dot"
-        elif [[ ${host,,} == localhost || ${host,,} == *.localhost ]]; then
+        elif lower=$(printf '%s' "$host" | tr 'A-Z' 'a-z') && [[ $lower == localhost || $lower == *.localhost ]]; then
             why="\`localhost\` and the names under it are one machine's"
-        elif [[ ${last,,} =~ ^(0x[0-9a-f]*|[0-9]+)$ ]]; then
+        elif [[ $(printf '%s' "$last" | tr 'A-Z' 'a-z') =~ ^(0x[0-9a-f]*|[0-9]+)$ ]]; then
             if [[ ! $host =~ ^$octet(\.$octet){3}$ ]]; then
                 why="an address is dotted decimal: four octets, 0 to 255, no leading zero, no hex, no shorthand"
             else
@@ -188,32 +250,34 @@ read_predicate() {
             why="a name is labels of letters, digits and \`-\`, with at least one dot"
         fi
         [[ -z $why ]] ||
-            malformed "repository \`${PREDICATE[repository]}\`: its host \`$host\` names no public repository ($why); a repository is one every machine reaches, a local checkout standing in for it through check-finding's \`--checkout <url>=<path>\`"
-        [[ -v PREDICATE[seed] ]] || malformed "the expected_before block gives \`repository\` but no \`seed\`: the commit the task starts from"
-        [[ ${PREDICATE[seed]} =~ ^[0-9a-f]{7,64}$ ]] ||
-            malformed "seed \`${PREDICATE[seed]}\`: a seed is a commit id, 7 to 64 hex digits, so the check starts from the same tree every time"
+            malformed "repository \`$repository\`: its host \`$host\` names no public repository ($why); a repository is one every machine reaches, a local checkout standing in for it through check-finding's \`--checkout <url>=<path>\`"
+        predicate_given seed || malformed "the expected_before block gives \`repository\` but no \`seed\`: the commit the task starts from"
+        seed=$(predicate_value seed)
+        [[ $seed =~ ^[0-9a-f]{7,64}$ ]] ||
+            malformed "seed \`$seed\`: a seed is a commit id, 7 to 64 hex digits, so the check starts from the same tree every time"
     else
         malformed "the expected_before block gives neither \`scenario\` nor \`repository\`: nothing to run the command on"
     fi
-    [[ -v PREDICATE[exit] || -v PREDICATE[output] ]] ||
+    predicate_given exit || predicate_given output ||
         malformed "the expected_before block gives neither \`exit\` nor \`output\`: nothing to check the command against"
     # A fixed string of a few characters turns up in almost any output.
-    if [[ -v PREDICATE[output] ]] && ((${#PREDICATE[output]} < 8)); then
-        malformed "output \`${PREDICATE[output]}\` is ${#PREDICATE[output]} characters; an output is at least 8, so it does not turn up in any output by chance"
+    if output=$(predicate_value output) && ((${#output} < 8)); then
+        malformed "output \`$output\` is ${#output} characters; an output is at least 8, so it does not turn up in any output by chance"
     fi
     for name in exit healthy_exit; do
-        [[ -v PREDICATE[$name] ]] || continue
-        [[ ${PREDICATE[$name]} =~ ^[0-9]{1,3}$ ]] && ((10#${PREDICATE[$name]} <= 255)) ||
-            malformed "$name \`${PREDICATE[$name]}\` is no exit status, 0 to 255"
-        case $((10#${PREDICATE[$name]})) in
-        124 | 137) malformed "$name \`${PREDICATE[$name]}\` is what scripts/check-finding reads as its timeout, so the check could never give a result; name another status, or the output" ;;
+        number=$(predicate_value "$name") || continue
+        [[ $number =~ ^[0-9]{1,3}$ ]] && ((10#$number <= 255)) ||
+            malformed "$name \`$number\` is no exit status, 0 to 255"
+        case $((10#$number)) in
+        124 | 137) malformed "$name \`$number\` is what scripts/check-finding reads as its timeout, so the check could never give a result; name another status, or the output" ;;
         esac
     done
     # The healthy exit is the one status `scripts/check-finding` reads as the defect gone; an
     # `exit` equal to it tells the defect from its fix only by the output.
-    local healthy=$((10#${PREDICATE[healthy_exit]:-0}))
-    if [[ -v PREDICATE[exit] && ! -v PREDICATE[output] ]] && ((10#${PREDICATE[exit]} == healthy)); then
-        malformed "exit \`${PREDICATE[exit]}\` is the healthy exit too (healthy_exit, 0 when not given), and with no \`output\` the check could never tell the defect from its fix; give the output, or the status the command gives once the defect is gone as healthy_exit"
+    number=$(predicate_value healthy_exit) || number=
+    local healthy=$((10#${number:-0}))
+    if number=$(predicate_value exit) && ! predicate_given output && ((10#$number == healthy)); then
+        malformed "exit \`$number\` is the healthy exit too (healthy_exit, 0 when not given), and with no \`output\` the check could never tell the defect from its fix; give the output, or the status the command gives once the defect is gone as healthy_exit"
     fi
 }
 
@@ -245,7 +309,9 @@ if [[ -n $predicate_only ]]; then
     read_body "$predicate_only" || usage "--predicate $predicate_only: unreadable"
     read_predicate "$BODY"
     for name in scenario repository seed test command exit healthy_exit output source; do
-        [[ -v PREDICATE[$name] ]] && printf '%s\t%s\n' "$name" "${PREDICATE[$name]}"
+        if value=$(predicate_value "$name"); then
+            printf '%s\t%s\n' "$name" "$value"
+        fi
     done
     exit 0
 fi
@@ -256,7 +322,8 @@ fi
 [[ $kind == story || $kind == blocker ]] || usage "--kind $kind: a finding is filed as a story or a blocker"
 [[ -f $from && -r $from ]] || usage "--from $from: no readable file"
 # Absolute before any `cd`, and read once: what is parsed is what is filed.
-from=$(realpath -e -- "$from") || usage "--from $from: does not resolve"
+resolve_path "$from" || usage "--from $from: does not resolve"
+from=$RESOLVED
 read_body "$from" || usage "--from $from: unreadable"
 text=$BODY
 if [[ -z $repo ]]; then
@@ -269,13 +336,14 @@ repo=$(cd "$repo" && pwd -P) || usage "--repo $repo: no directory"
 read_predicate "$text"
 
 # The source is a path of this repository, relative, that exists and stays inside it.
-source=${PREDICATE[source]}
+source=$(predicate_value source)
 [[ $source != /* ]] || malformed "source \`$source\` is absolute; it is a path relative to the repository"
 case /$source/ in
 */../*) malformed "source \`$source\` climbs out of the repository" ;;
 esac
 [[ -e $repo/$source ]] || malformed "source \`$source\` does not exist in $repo"
-resolved=$(realpath -e -- "$repo/$source") || malformed "source \`$source\` does not resolve"
+resolve_path "$repo/$source" || malformed "source \`$source\` does not resolve"
+resolved=$RESOLVED
 [[ $resolved == "$repo" || $resolved == "$repo"/* ]] ||
     malformed "source \`$source\` resolves outside the repository"
 

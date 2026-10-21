@@ -60,6 +60,7 @@ fn opened(case: &str) -> Event {
         base: Some("0123456789abcdef0123456789abcdef01234567".to_owned()),
         binary: None,
         layers: None,
+        confinement: None,
     }
 }
 

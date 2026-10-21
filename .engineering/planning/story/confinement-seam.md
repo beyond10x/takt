@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:confinement-seam
 kind: story
-status: draft
+status: implemented
 title: Every child process of a run starts through a Confinement adapter
 summary: The fifth seam with a none adapter; a refusing test adapter proves nothing escapes it
 tags:
@@ -33,7 +33,11 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/confinement.rs
-revision: 19
+revision: 22
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-21T18:32:43Z", actor: "human:timo", revision: 20, decided_on: {"recorded":{"review_outcome":4}}}
+- {from: "proposed", to: "active", at: "2026-10-21T18:32:43Z", actor: "human:timo", revision: 21, decided_on: {"recorded":{"review_outcome":4}}}
+- {from: "active", to: "implemented", at: "2026-10-21T22:46:01Z", actor: "human:timo", revision: 22, decided_on: {"recorded":{"test_result":1,"review_outcome":4}}}
 ---
 # Story: confinement-seam
 

@@ -373,6 +373,7 @@ fn record(repo: &Path, case: &str, layers: Option<BTreeMap<String, String>>, mod
                     .as_ref()
                     .and_then(|layers| layers.get("takt").cloned()),
                 layers,
+                confinement: None,
             },
         ),
         (

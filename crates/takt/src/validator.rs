@@ -1,16 +1,32 @@
 //! Validators: programs that turn an observation into evidence: `tests.run`, `gate.run`,
 //! `pr.open`, `ci.read`, `repository.merge` and `change.read`.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context as _, Result, anyhow, bail};
+use loom_sdk::commission::model::json as cjson;
+use loom_sdk::commission::model::primitives::{Timestamp, Uuid};
+use loom_sdk::commission::model::responsibility::{
+    ActionRequestId, AgentRevisionId, AuthorityContext, CaseId, Commission, CommissionData,
+    CommissionId, EffectOutcome, EffectOutcomePending, EffectOutcomePerformed,
+    EffectOutcomeRefused, ExecutorOutcome, ExecutorOutcomeProposedAction, Frontier, ObservationId,
+    PrincipalId, ProposedActionArguments, RunId, commission_state, frontier_state,
+};
+use loom_sdk::commission::outcome::RunStore;
+use loom_sdk::commission::ports::authority::AuthorityProvider;
+use loom_sdk::commission::ports::effect::{AdmittedRequest, EffectError};
+use loom_sdk::commission::ports::executor::AgentExecutor;
+use loom_sdk::{CanonGovernor, EffectPort, LoopContext, LoopEnd, run_until_blocked};
 
-use crate::case::{BRANCH_FILE, Branch, current};
-use crate::evidence::Record;
+use crate::case::{BRANCH_FILE, Branch, CaseFiles, current};
+use crate::confinement::Command;
+use crate::evidence::{Record, uuid_from};
 use crate::forge::{BotRoute, Checks, Forge, Limits, PullRequest, PullRequestState};
 use crate::git::Mirror;
+use crate::protocol::LoadedProtocol;
 
 /// What a validator observed, and the records it wrote from it.
 #[derive(Debug)]
@@ -106,6 +122,300 @@ pub trait Validator {
     fn runs(&self) -> Vec<String> {
         Vec::new()
     }
+}
+
+/// How an effect performs the request it was handed: the validator's observation, taken where
+/// the run guards it, its records submitted through the case's evidence port
+/// ([`crate::evidence::CaseEvidence`]), answered as the effect's outcome ([`outcome`]).
+pub trait Step {
+    /// Performs `request` with `validator`.
+    ///
+    /// # Errors
+    /// A failure to observe or to record; the run ends on it.
+    fn perform(
+        &mut self,
+        validator: &dyn Validator,
+        request: &AdmittedRequest,
+    ) -> Result<EffectOutcome>;
+}
+
+/// An effect the run hands Commission's runtime, which keeps the error that failed it: the
+/// runtime reports a failed effect as text alone ([`EffectError`]), and the run ends on the error
+/// itself.
+pub trait Effect: EffectPort {
+    /// The error the last invocation failed on, if it failed.
+    fn take_failure(&self) -> Option<anyhow::Error>;
+}
+
+/// A validator as an [`EffectPort`]: it performs its validator's action and no other, and only
+/// what Commission's runtime hands it, an [`AdmittedRequest`] the governor admitted and, for an
+/// action that requires a capability, the authority provider allowed. It performs the request
+/// through `step`; the gates a validator keeps itself (the merge's grant of `repository.merge`
+/// at the case's revision, a judge surface's grant) are inside the effect, whatever the authority
+/// provider answered.
+pub struct ValidatorEffect<'v> {
+    validator: &'v dyn Validator,
+    step: RefCell<&'v mut dyn Step>,
+    failed: RefCell<Option<anyhow::Error>>,
+}
+
+impl<'v> ValidatorEffect<'v> {
+    /// The effect of `validator`, performing through `step`.
+    pub fn new(validator: &'v dyn Validator, step: &'v mut dyn Step) -> Self {
+        Self {
+            validator,
+            step: RefCell::new(step),
+            failed: RefCell::new(None),
+        }
+    }
+}
+
+impl EffectPort for ValidatorEffect<'_> {
+    fn performs(&self, action: &str) -> bool {
+        action == self.validator.action()
+    }
+
+    fn invoke(
+        &self,
+        _: &Commission<commission_state::Assigned>,
+        request: &AdmittedRequest,
+    ) -> Result<EffectOutcome, EffectError> {
+        if !self.performs(&request.data().action) {
+            return Ok(EffectOutcome::Refused(EffectOutcomeRefused {
+                reason: format!(
+                    "{} performs {}, not {}",
+                    self.validator.name(),
+                    self.validator.action(),
+                    request.data().action
+                ),
+                ends_run: true,
+            }));
+        }
+        let performed = self.step.borrow_mut().perform(self.validator, request);
+        performed.map_err(|error| {
+            let message = format!("{error:#}");
+            self.failed.replace(Some(error));
+            EffectError::new(message)
+        })
+    }
+}
+
+impl Effect for ValidatorEffect<'_> {
+    fn take_failure(&self) -> Option<anyhow::Error> {
+        self.failed.take()
+    }
+}
+
+/// What writes a choice record: a request for the choice action, performed.
+pub type ChoiceWrite<'c> = dyn FnMut(&AdmittedRequest) -> Result<EffectOutcome> + 'c;
+
+/// The effect that writes a judgement step's choice records (producer
+/// [`crate::run::CHOICE_PRODUCER`]): it performs the one action the harness chose, which
+/// records a choice, and only what Commission's runtime hands it, through `write`.
+pub struct ChoiceEffect<'c> {
+    action: &'c str,
+    write: RefCell<&'c mut ChoiceWrite<'c>>,
+    failed: RefCell<Option<anyhow::Error>>,
+}
+
+impl<'c> ChoiceEffect<'c> {
+    /// The effect performing `action` through `write`.
+    pub fn new(action: &'c str, write: &'c mut ChoiceWrite<'c>) -> Self {
+        Self {
+            action,
+            write: RefCell::new(write),
+            failed: RefCell::new(None),
+        }
+    }
+}
+
+impl EffectPort for ChoiceEffect<'_> {
+    fn performs(&self, action: &str) -> bool {
+        action == self.action
+    }
+
+    fn invoke(
+        &self,
+        _: &Commission<commission_state::Assigned>,
+        request: &AdmittedRequest,
+    ) -> Result<EffectOutcome, EffectError> {
+        if !self.performs(&request.data().action) {
+            return Ok(EffectOutcome::Refused(EffectOutcomeRefused {
+                reason: format!(
+                    "the choice effect performs {}, not {}",
+                    self.action,
+                    request.data().action
+                ),
+                ends_run: true,
+            }));
+        }
+        let written = (self.write.borrow_mut())(request);
+        written.map_err(|error| {
+            let message = format!("{error:#}");
+            self.failed.replace(Some(error));
+            EffectError::new(message)
+        })
+    }
+}
+
+impl Effect for ChoiceEffect<'_> {
+    fn take_failure(&self) -> Option<anyhow::Error> {
+        self.failed.take()
+    }
+}
+
+/// The outcome of an effect that observed `observation`: `Performed` when it wrote a record,
+/// reporting its summary and the records' ids; `Pending` when it wrote none and waits
+/// ([`Validator::observe_waiting`]); `Refused` otherwise, naming what it observed, with the run
+/// going on.
+#[must_use]
+pub fn outcome(observation: &Observation, waits: bool) -> EffectOutcome {
+    let report = cjson::Value::Object(vec![
+        (
+            "summary".to_owned(),
+            cjson::Value::Text(observation.summary.clone()),
+        ),
+        (
+            "records".to_owned(),
+            cjson::Value::Array(
+                observation
+                    .records
+                    .iter()
+                    .map(|record| cjson::Value::Text(record.id.clone()))
+                    .collect(),
+            ),
+        ),
+    ]);
+    if !observation.records.is_empty() {
+        EffectOutcome::Performed(EffectOutcomePerformed {
+            report,
+            attempt: None,
+            audit: None,
+            usage: None,
+        })
+    } else if waits {
+        EffectOutcome::Pending(EffectOutcomePending { report })
+    } else {
+        EffectOutcome::Refused(EffectOutcomeRefused {
+            reason: observation.summary.clone(),
+            ends_run: false,
+        })
+    }
+}
+
+/// The executor of a deterministic step: it proposes the one action takt found due, which no
+/// model chose.
+struct Proposes(String);
+
+impl AgentExecutor for Proposes {
+    fn run(
+        &self,
+        _: &Commission<commission_state::Assigned>,
+        _: &Frontier<frontier_state::Issued>,
+    ) -> ExecutorOutcome {
+        ExecutorOutcome::ProposedAction(ExecutorOutcomeProposedAction {
+            action: self.0.clone(),
+            arguments: ProposedActionArguments(cjson::Value::Object(Vec::new())),
+        })
+    }
+}
+
+/// The runtime's ids, derived from `seed`, the time from takt's clock, and a budget of one step.
+struct Clock {
+    seed: String,
+    n: u64,
+}
+
+impl Clock {
+    fn next(&mut self, what: &str) -> Uuid {
+        self.n += 1;
+        Uuid(uuid_from(&format!("{}/{what}/{}", self.seed, self.n)))
+    }
+}
+
+impl LoopContext for Clock {
+    fn action_request_id(&mut self) -> ActionRequestId {
+        ActionRequestId(self.next("action-request"))
+    }
+
+    fn observation_id(&mut self) -> ObservationId {
+        ObservationId(self.next("observation"))
+    }
+
+    fn now(&mut self) -> Timestamp {
+        Timestamp(crate::now())
+    }
+
+    fn step_budget(&self) -> Option<usize> {
+        Some(1)
+    }
+}
+
+/// Every [`run_effect`] of this process, so no two derive the same ids.
+static RUNS: AtomicU64 = AtomicU64::new(0);
+
+/// One step of Commission's runtime of loom-sdk (`run_until_blocked`) on the case `id` at `dir`:
+/// its governor over the case's files under `protocol`, the executor proposing `action`, the
+/// request revalidated, its capability (if the action requires one) asked of `authority`, and
+/// the admitted request handed to `effect`. Ids derive from `seed`. Answers how the runtime
+/// ended, with the effects it invoked; an effect that failed ends it on the effect's own error.
+///
+/// # Errors
+/// The runtime's failure, or the effect's.
+pub fn run_effect<A, F>(
+    dir: &Path,
+    id: &str,
+    protocol: &LoadedProtocol,
+    authority: &A,
+    effect: &F,
+    action: &str,
+    seed: &str,
+) -> Result<LoopEnd>
+where
+    A: AuthorityProvider + ?Sized,
+    F: Effect + ?Sized,
+{
+    let n = RUNS.fetch_add(1, Ordering::Relaxed);
+    let seed = format!("{id}/{seed}/{action}/{}/{n}", crate::now());
+    let at = crate::now();
+    let governor = CanonGovernor::new(CaseFiles::new(dir, id, &protocol.id))
+        .with_protocol_yaml(&protocol.id, &protocol.yaml)
+        .map_err(|error| anyhow!("register the protocol {}: {error}", protocol.id))?
+        .with_evaluation_time(move |_: &CaseId| Ok(Some(at.clone())));
+    let mut clock = Clock {
+        seed: seed.clone(),
+        n: 0,
+    };
+    let commission = Commission::new(CommissionData {
+        commission_id: CommissionId(clock.next("commission")),
+        agent_revision_id: AgentRevisionId(clock.next("agent-revision")),
+        case_id: CaseId(id.to_owned()),
+        principal: PrincipalId("takt".to_owned()),
+        authority_context: AuthorityContext(cjson::Value::Null),
+    });
+    let mut runs = RunStore::new({
+        let seed = seed.clone();
+        let mut n = 0u64;
+        move || {
+            n += 1;
+            RunId(Uuid(uuid_from(&format!("{seed}/run/{n}"))))
+        }
+    });
+    let executor = Proposes(action.to_owned());
+    run_until_blocked(
+        &governor,
+        &executor,
+        authority,
+        effect,
+        &commission,
+        &mut runs,
+        &mut clock,
+    )
+    .map_err(|error| {
+        effect
+            .take_failure()
+            .unwrap_or_else(|| anyhow!("Commission's runtime failed on {action}: {error}"))
+    })
 }
 
 /// What the case's branch did to the judge surface between its base and a revision.
@@ -706,22 +1016,21 @@ impl TestsRun {
                 }
             }
         }
-        let mut command = Command::new(&self.command[0]);
-        command.args(&self.command[1..]).current_dir(tree);
-        crate::forge::without_credentials(&mut command, |_| false);
-        let home = FreshHome::new()?;
-        home.apply(&mut command);
-        crate::forge::without_login(&mut command, home.dir());
         let mut limits = self.limits;
         if let Some(deadline) = deadline {
             limits.timeout = limits
                 .timeout
                 .min(deadline.saturating_duration_since(std::time::Instant::now()));
         }
-        let output = crate::forge::run_child(&mut command, limits)
-            .map_err(crate::forge::refused_namespaces)
+        // The adapter in use runs it: under `none` as [`crate::confinement::unconfined`] starts
+        // it, under another as that adapter confines it, or refuses it.
+        let output = crate::confinement::current()
+            .run_test(&crate::confinement::TestRun {
+                argv: &self.command,
+                tree,
+                limits,
+            })
             .with_context(|| format!("run {}", self.command.join(" ")))?;
-        drop(home);
         let result = if output.success() { "pass" } else { "fail" };
         let printed =
             String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
@@ -1690,6 +1999,27 @@ impl GateRun {
                     .context
                     .timeout
                     .min(deadline.saturating_duration_since(std::time::Instant::now()));
+            }
+            // The library starts the commands and providers the project file binds itself,
+            // outside [`crate::confinement::Command`]: each is asked of the adapter in use
+            // first, and one refused starts none of them.
+            let confinement = crate::confinement::current();
+            for executable in prepared
+                .context
+                .commands
+                .values()
+                .map(|binding| &binding.executable)
+                .chain(
+                    prepared
+                        .context
+                        .providers
+                        .values()
+                        .map(|provider| &provider.command.executable),
+                )
+            {
+                confinement
+                    .admit_delegated(executable.as_os_str())
+                    .with_context(|| format!("start the commands of {document}"))?;
             }
             // The provider starts the gate's commands in process groups of their own and waits
             // on them itself: no sweep on another thread may take one meanwhile.

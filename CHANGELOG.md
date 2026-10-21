@@ -6,6 +6,10 @@ takt's releases.
 
 ## [Unreleased]
 
+### Changed
+
+- `b10x-loom-sdk` moves from loom 0.28.0 to 0.31.0, which pins substrate 0.7.18.
+
 ## [0.7.0] - 2026-10-21
 
 The minor version moves because every harness step runs through a metaharness session, `--harness` takes `codex` and `harness`

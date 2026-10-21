@@ -67,9 +67,13 @@ cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
   may gate an action on it but never an outcome on it alone.
 - Protocols are data: use `b10x-canon-engineering`'s built-ins, or a `protocol/1` file; never a
   model of a protocol written in Rust. Where a person is needed is the protocol's: an action that
-  `requires` a capability waits for a grant (`takt approve`). The one gate in Rust is the merge
-  validator's, which merges only under a grant of `repository.merge` at the case's revision; add
-  no other.
+  `requires` a capability waits for a grant (`takt approve`). The governor of Loom decides every
+  evaluation over the case's files and supplies no authority, so its decision finds such an
+  action approval-required, granted or not. The grant reaches the run as the case's authority
+  provider's answer (`CaseAuthority`, `crates/takt/src/case.rs`): it reads `authority.yaml`
+  when asked and allows a grant only at the case revision asked about and the revision of its
+  subject it was given at. The one gate in Rust is the merge validator's, which merges only under
+  a grant of `repository.merge` at the case's revision; add no other.
 - A judgement step offers the model only the actions the frontier admits; a step that does more is
   refused and reverted, not accepted.
 - Credentials never enter a harness's environment, its prompt or a case record.

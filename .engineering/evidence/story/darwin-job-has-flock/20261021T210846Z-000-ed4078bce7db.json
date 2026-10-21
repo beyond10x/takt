@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-21T21:08:46Z",
+  "actor": "human:timo",
+  "artifact": "story:darwin-job-has-flock",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "darwin run 39674142829 at a01556d (flock 0.4.0 built from its pinned source): 0 log lines 'flock is missing'; 104 failures, 101 log lines on bubblewrap",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/39674142829"
+  }
+}

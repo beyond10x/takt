@@ -7,6 +7,7 @@
 //! The design is `docs/design/takt.md`.
 
 pub mod case;
+pub mod confinement;
 pub mod decision;
 pub mod events;
 pub mod evidence;

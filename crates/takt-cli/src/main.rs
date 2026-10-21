@@ -674,6 +674,18 @@ struct LoopArgs {
     /// commit with the identity it was opened with, and another given for it is refused.
     #[arg(long, value_name = "'NAME <EMAIL>'")]
     commit_identity: Option<takt::git::CommitIdentity>,
+    /// The adapter every child of the run starts through. `none`: each child as takt has
+    /// always started it, its environment without the credentials it does not need, the test
+    /// command in a user and mount namespace of its own. `substrate`: the test command run by
+    /// the `SubstrateRunner` of loom-sdk, on a fixed `PATH` of read-only toolchain roots, with
+    /// only the build directory writable and no network; a test command its profile does not
+    /// serve (it serves `cargo` on a Rust toolchain; a Python one among those it does not), and
+    /// a gate's commands, which the assertions library starts itself, are refused by name and
+    /// never run unconfined. `substrate` needs a delegated cgroup: outside one, takt runs the
+    /// same command again under `systemd-run --user --scope -p Delegate=yes` and exits as that
+    /// run does. The first line the run prints and its `opened` event name the adapter.
+    #[arg(long, default_value = "none", value_parser = ["none", "substrate"])]
+    confinement: String,
 }
 
 /// A harness that performs nothing. Asked while an approval is pending, it requests the gate
@@ -986,6 +998,9 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             let repo = repo
                 .canonicalize()
                 .with_context(|| format!("the repository {}", repo.display()))?;
+            if let Some(code) = looping.confine(&repo)? {
+                return Ok(code);
+            }
             let inputs = inputs
                 .iter()
                 .map(|pair| {
@@ -1041,7 +1056,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 takt::case::check_id(&resuming.id)?;
                 if let Some(why) = takt::case::turn_judge_refusal(
                     &repo.join(takt::case::CASES_DIR).join(&resuming.id),
-                    Path::new(RUNNING_BINARY),
+                    &running_binary()?,
                 )? {
                     return Err(anyhow!(why));
                 }
@@ -1120,8 +1135,9 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 let candidate = taken(takt::case::TURN_CANDIDATE);
                 let surface = taken(takt::case::TURN_SURFACE);
                 // The binary that judges the turn is this one, which must be the promoted:
-                // read as it runs, whatever its path holds by now.
-                let binary = PathBuf::from(RUNNING_BINARY);
+                // read as it runs on Linux, whatever its path holds by now; elsewhere, read at
+                // its path (`running_binary`).
+                let binary = running_binary()?;
                 let mut opened = takt::case::turn_opening(
                     &repo,
                     finding.as_deref(),
@@ -1311,6 +1327,32 @@ impl LoopArgs {
             ));
         }
         Ok(())
+    }
+
+    /// Installs the adapter --confinement names for a run on `repo`, before anything of the
+    /// run is done. For `substrate` outside a delegated cgroup, the same command is run again
+    /// inside one and its exit code is this run's: `Some(code)`.
+    fn confine(&self, repo: &Path) -> Result<Option<u8>> {
+        if self.confinement != "substrate" {
+            return Ok(None);
+        }
+        match takt::confinement::Substrate::open(repo) {
+            Ok(substrate) => {
+                takt::confinement::install(std::sync::Arc::new(substrate));
+                Ok(None)
+            }
+            Err(error)
+                if takt::confinement::undelegated(&error)
+                    && std::env::var_os(takt::confinement::DELEGATED).is_none() =>
+            {
+                let code = takt::confinement::delegate()?;
+                Ok(Some(u8::try_from(code).unwrap_or(EXIT_REFUSED)))
+            }
+            Err(error) => Err(anyhow!(
+                "confinement substrate refused the run on {}: {error}; nothing was started",
+                repo.display()
+            )),
+        }
     }
 
     /// The run's options: the protocol a case opens on, its inputs and its id, with this loop's
@@ -1923,6 +1965,9 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     let repo = repo
         .canonicalize()
         .with_context(|| format!("the repository {}", repo.display()))?;
+    if let Some(code) = looping.confine(&repo)? {
+        return Ok(code);
+    }
     let scenario = Scenario::read(&repo, &declared_on, &scenario)?;
     let harness = harness_of(&looping)?;
     let harness = harness.as_ref();
@@ -2178,9 +2223,22 @@ fn take_story<'a>(
     Ok(run)
 }
 
-/// The running binary as the kernel holds it, whatever file its path names by now: what a turn's
-/// judge is read and checked from.
-const RUNNING_BINARY: &str = "/proc/self/exe";
+/// The running binary, what a turn's judge is read and checked from. On Linux it is
+/// `/proc/self/exe`, the file the kernel holds as this process runs, whatever file its path names
+/// by now. Elsewhere no such handle exists: it is the path the platform reports for this binary
+/// (`std::env::current_exe`), and the file it names is read when the judge is checked, so a file
+/// put at that path after the binary started is the one read and checked, not the one running.
+/// A path the platform cannot report is an error, never a fallback. `cfg!`, not `#[cfg]`, so that both branches
+/// are type-checked on every platform.
+fn running_binary() -> Result<PathBuf> {
+    if cfg!(target_os = "linux") {
+        Ok(PathBuf::from("/proc/self/exe"))
+    } else {
+        std::env::current_exe().context(
+            "resolve this binary's path (std::env::current_exe), what a turn's judge is read and checked from",
+        )
+    }
+}
 
 /// The protocol a store story opens on when `--protocol` is not given.
 const STORY_DELIVERY: &str = "story.delivery/1";

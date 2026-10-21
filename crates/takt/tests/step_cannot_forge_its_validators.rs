@@ -1437,14 +1437,116 @@ fn a_writer_a_step_leaves_running_is_killed_with_its_group() {
     );
 }
 
-/// Out of this story, recorded on story:confinement-seam (reviewer route M8): a `cargo` wrapper
-/// a step writes into a directory on the test command's `PATH` outside the tree runs instead of
-/// cargo and exits 0.
-#[test]
-#[ignore = "confinement-seam: a program in a user-writable PATH directory outside the tree (M8) is confinement, not the step guard"]
-fn a_cargo_wrapper_on_the_path_outside_the_tree_earns_no_pass() {
+/// Set in the delegated child of a case ([`delegated`]): it runs the case.
+const DELEGATED_CASE: &str = "TAKT_CONFINEMENT_TEST_DELEGATED";
+/// The file the delegated child writes what it decided into.
+const REPORT: &str = "TAKT_CONFINEMENT_TEST_REPORT";
+
+/// Runs `case` again in this test binary under `systemd-run --user --scope -p Delegate=yes`,
+/// where Substrate can open, as `crates/takt/tests/confinement.rs` does; or skips naming what
+/// is missing (bubblewrap, a user systemd manager, the Substrate driver).
+fn delegated(name: &str, case: impl FnOnce()) {
+    if std::env::var_os(DELEGATED_CASE).is_some() {
+        let report = PathBuf::from(std::env::var_os(REPORT).expect("the report path is given"));
+        fs::write(&report, "started").expect("the report");
+        let probe = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("step-forge-{}-probe", std::process::id()))
+            .join("workspace");
+        fs::create_dir_all(&probe).expect("a workspace");
+        match takt::confinement::Substrate::open(&probe) {
+            Ok(_) => {
+                fs::write(&report, "ran").expect("the report");
+                case();
+            }
+            Err(error) => {
+                fs::write(&report, format!("the Substrate driver ({error})")).expect("the report");
+            }
+        }
+        return;
+    }
+    if !Path::new("/usr/bin/bwrap").is_file() {
+        eprintln!("skipped: missing prerequisite: executable /usr/bin/bwrap");
+        return;
+    }
+    let state = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("step-forge-{}-{name}-state", std::process::id()));
+    let _ = fs::remove_dir_all(&state);
+    fs::create_dir_all(&state).expect("a directory");
+    let report = state.join("report");
+    let started = Command::new("systemd-run")
+        .args(["--user", "--scope", "--quiet", "-p", "Delegate=yes", "--"])
+        .arg(std::env::current_exe().expect("this binary"))
+        .args(["--exact", name, "--nocapture", "--test-threads=1"])
+        .env(DELEGATED_CASE, "1")
+        .env(REPORT, &report)
+        .env(takt::confinement::DELEGATED, "1")
+        .output();
+    let output = match started {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("skipped: missing prerequisite: systemd-run ({error})");
+            return;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    match fs::read_to_string(&report).ok().as_deref() {
+        None => eprintln!(
+            "skipped: missing prerequisite: a user systemd manager that starts a delegated scope (systemd-run {}: {})",
+            output.status,
+            stderr.trim()
+        ),
+        Some("started") => panic!(
+            "the delegated case stopped before it decided its prerequisites: {}\n{stdout}{stderr}",
+            output.status
+        ),
+        Some("ran") => {
+            assert!(
+                output.status.success(),
+                "the delegated case failed: {}\n{stdout}{stderr}",
+                output.status
+            );
+            assert!(
+                stdout.contains("1 passed"),
+                "the delegated binary ran the case: {stdout}{stderr}"
+            );
+            eprintln!("ran delegated: {name}");
+        }
+        Some(missing) => eprintln!("skipped: missing prerequisite: {missing}"),
+    }
+    let _ = fs::remove_dir_all(&state);
+}
+
+/// A directory outside every tree, user-writable, put early on a `PATH`.
+fn writable_path_dir() -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("step-forge-{}-bin", std::process::id()))
+}
+
+/// A `cargo` wrapper at `path` that exits 0 on `test` and hands every other subcommand to the
+/// cargo running these tests.
+fn cargo_wrapper(path: &Path) {
+    let cargo = std::env::var("CARGO").expect("cargo runs the tests");
+    fs::write(
+        path,
+        format!("#!/bin/sh\nif [ \"$1\" = test ]; then exit 0; fi\nexec '{cargo}' \"$@\"\n"),
+    )
+    .expect("a wrapper");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("a mode");
+}
+
+/// A touch of the implementation that leaves its only test failing.
+fn touch(tree: &Path) {
+    write(
+        tree,
+        "src/lib.rs",
+        "// touched\n#[test]\nfn the_only_test() {\n    panic!(\"fails\");\n}\n",
+    );
+}
+
+/// A crate whose only test fails, its lock file committed.
+fn failing_crate(name: &str) -> Scratch {
     let tree = repository(
-        "path-wrapper",
+        name,
         &[
             (
                 "Cargo.toml",
@@ -1458,7 +1560,7 @@ fn a_cargo_wrapper_on_the_path_outside_the_tree_earns_no_pass() {
             ),
         ],
     );
-    let locked = Command::new("cargo")
+    let locked = Command::new(std::env::var("CARGO").expect("cargo runs the tests"))
         .args(["generate-lockfile", "--offline", "--quiet"])
         .current_dir(&*tree)
         .status()
@@ -1466,29 +1568,95 @@ fn a_cargo_wrapper_on_the_path_outside_the_tree_earns_no_pass() {
     assert!(locked.success(), "the lock file is generated");
     git(&tree, &["add", "Cargo.lock"]);
     git(&tree, &["commit", "-q", "--amend", "-m", "start"]);
-    let cargo = std::env::var("CARGO").expect("cargo runs the tests");
-    let real = Path::new(&cargo)
-        .parent()
-        .expect("a directory")
-        .display()
-        .to_string();
-    let bin = tree.root.join("bin");
-    fs::create_dir_all(&bin).expect("a directory");
-    let command = format!(
-        "env PATH={}:{real}:/usr/bin:/bin cargo test --quiet --offline",
-        bin.display()
+    tree
+}
+
+/// Runs `case` under Substrate opened on `substrate_on` when it names a tree, the adapter in
+/// use before put back after; under the adapter in use when it names none.
+fn under(substrate_on: Option<&Path>, case: impl FnOnce() -> Ran) -> Ran {
+    let Some(tree) = substrate_on else {
+        return case();
+    };
+    let substrate = takt::confinement::Substrate::open(tree).expect("Substrate opens");
+    let before = takt::confinement::install(std::sync::Arc::new(substrate));
+    let ran = case();
+    takt::confinement::install(before);
+    ran
+}
+
+/// story:confinement-seam (reviewer route M8): a `cargo` wrapper that exits 0 on `test` in a
+/// user-writable directory early on the `PATH` takt runs with, outside the tree, runs instead
+/// of cargo. The step that writes it is refused by the step guard, which cannot put a program
+/// takt never writes back, so the wrapper stays; the next run's test command, plain `cargo
+/// test` on a crate whose only test fails, earns a pass under `none`. Under `substrate` it
+/// earns none: the test command runs on Substrate's fixed `PATH` of read-only toolchain roots,
+/// the wrapper is not on it, and the test fails. In a delegated scope ([`delegated`]), so the
+/// `PATH` this case sets is the delegated child's alone.
+#[test]
+fn a_cargo_wrapper_on_the_path_outside_the_tree_earns_no_pass() {
+    delegated(
+        "a_cargo_wrapper_on_the_path_outside_the_tree_earns_no_pass",
+        || {
+            let bin = writable_path_dir();
+            let _ = fs::remove_dir_all(&bin);
+            fs::create_dir_all(&bin).expect("a directory");
+            let mut dirs = vec![bin.clone()];
+            dirs.extend(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            ));
+            let path = std::env::join_paths(dirs).expect("a PATH");
+            // SAFETY: the delegated child runs this one case on one thread
+            // (`--test-threads=1`), and nothing else reads the environment meanwhile.
+            unsafe { std::env::set_var("PATH", path) };
+            let plain = "cargo test --quiet --offline";
+
+            // The step that writes the wrapper is refused, and the wrapper stays.
+            let planted = failing_crate("path-wrapper-planted");
+            let ran = run(&planted, plain, |tree| {
+                cargo_wrapper(&writable_path_dir().join("cargo"));
+                touch(tree);
+            });
+            assert!(
+                ran.refusal()
+                    .contains(&*bin.join("cargo").to_string_lossy()),
+                "the guard refuses the step that writes the wrapper: {}",
+                ran.text
+            );
+            assert!(
+                bin.join("cargo").is_file(),
+                "the premise: the wrapper stays on the PATH: {}",
+                ran.text
+            );
+
+            for confined in [false, true] {
+                let tree = failing_crate(&format!("path-wrapper-takt-{confined}"));
+                let ran = under(confined.then_some(&*tree), || run(&tree, plain, touch));
+                if confined {
+                    assert!(ran.passes().is_empty(), "{:?}\n{}", ran.records, ran.text);
+                    assert!(
+                        ran.records
+                            .iter()
+                            .any(|r| r["kind"] == "test_result" && r["result"] == "fail"),
+                        "the confined test command ran and failed: {:?}\n{}",
+                        ran.records,
+                        ran.text
+                    );
+                } else {
+                    assert!(
+                        !ran.passes().is_empty(),
+                        "the premise: under none the wrapper earns a pass: {:?}\n{}",
+                        ran.records,
+                        ran.text
+                    );
+                }
+            }
+            assert!(
+                bin.join("cargo").is_file(),
+                "the wrapper stayed on the PATH"
+            );
+            let _ = fs::remove_dir_all(&bin);
+        },
     );
-    let ran = run(&tree, &command, |tree| {
-        let wrapper = tree.parent().expect("the root").join("bin/cargo");
-        fs::write(&wrapper, "#!/bin/sh\nexit 0\n").expect("a wrapper");
-        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).expect("a mode");
-        write(
-            tree,
-            "src/lib.rs",
-            "// touched\n#[test]\nfn the_only_test() {\n    panic!(\"fails\");\n}\n",
-        );
-    });
-    assert!(ran.passes().is_empty(), "{:?}\n{}", ran.records, ran.text);
 }
 
 /// Out of this story, recorded on story:confinement-seam (reviewer route M9): a test command

@@ -48,6 +48,43 @@ fn git_bytes(tree: &Path, args: &[&str]) -> Vec<u8> {
     output.stdout
 }
 
+/// Adds `text` to the index of `tree` at `path`, byte for byte, through git alone: git holds a
+/// name that is not UTF-8, which a file system that keeps names in UTF-8 only (APFS) refuses.
+#[cfg(unix)]
+fn stage(tree: &Path, path: &[u8], text: &[u8]) {
+    use std::io::Write as _;
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::process::Stdio;
+    let mut hash = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(tree)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("git runs");
+    hash.stdin
+        .take()
+        .expect("its input")
+        .write_all(text)
+        .expect("the blob");
+    let hashed = hash.wait_with_output().expect("git ends");
+    assert!(hashed.status.success(), "git hash-object");
+    let blob = String::from_utf8(hashed.stdout).expect("utf-8");
+    let added = Command::new("git")
+        .args([
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "100644",
+            blob.trim(),
+        ])
+        .arg(std::ffi::OsStr::from_bytes(path))
+        .current_dir(tree)
+        .status()
+        .expect("git runs");
+    assert!(added.success(), "git update-index");
+}
+
 struct Scratch(PathBuf);
 
 impl std::ops::Deref for Scratch {
@@ -494,15 +531,10 @@ fn takt_own_actor_is_refused_as_the_approver_of_a_story_merge() {
 #[cfg(unix)]
 #[test]
 fn a_store_write_at_a_path_that_is_not_utf8_is_kept_as_committed_or_not_at_all() {
-    use std::ffi::OsStr;
-    use std::os::unix::ffi::OsStrExt as _;
     let repo = repository("not-utf8");
     let revision = git(&repo, &["rev-parse", "HEAD"]);
     let committed: &[u8] = b".engineering/evidence/story/ready-one/r\xff.json";
-    let file = repo.join(OsStr::from_bytes(committed));
-    fs::create_dir_all(file.parent().expect("a parent")).expect("a directory");
-    fs::write(&file, "{}\n").expect("a record");
-    git(&repo, &["add", "-A"]);
+    stage(&repo, committed, b"{}\n");
     git(&repo, &["commit", "-q", "-m", "a store write"]);
     let commit = git(&repo, &["rev-parse", "HEAD"]);
     let case_dir = repo.join(".engineering/cases/probe");

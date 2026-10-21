@@ -7,9 +7,9 @@ use std::cell::Cell;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::rc::Rc;
 use std::time::Duration;
+use takt::confinement::Command;
 
 use anyhow::anyhow;
 use takt::forge::{Checks, Forge, Limits, Memory};

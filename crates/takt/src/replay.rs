@@ -6,14 +6,17 @@
 //! The state a step started from ([`Start`]): the revision, the last one the record names before
 //! the step's line (a validator's observed revision, a step's committed effect, a store write's
 //! commit), else the parent of the step's own commit; the decision, the last the step's run
-//! evaluated before it (`decisions/<seq>.json`); the evidence records written before it; the
-//! record up to it; the case's intent, protocol and inputs. In the scratch tree, at that
+//! evaluated before it (`decisions/<seq>.json`), with each approval-required action answered as
+//! the run answered it, by the case's authority over the revisions that decision was computed at
+//! where the record's line shows the run had that answer; the evidence records written before
+//! it; the record up to it; the case's intent, protocol and inputs. In the scratch tree, at that
 //! revision, the case directory is rebuilt as the step found it ([`rebuild_case`]), and the
 //! harness is given the step's context ([`crate::StepContext`]) with the offer the run made at
 //! that decision ([`crate::run::judgement_offer`]) and the change so far read as the run read it
 //! ([`crate::run::change_so_far`]). A replay records `replay.json`
 //! ([`FORMAT`]) and the step's transcript beside it, and the scratch tree is removed.
 
+use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -74,7 +77,9 @@ pub struct Start {
     pub decision_file: String,
     /// The decision's sequence number.
     pub decision_seq: usize,
-    /// The decision.
+    /// The decision, with each action it finds approval-required that the case's authority
+    /// answered for the run, over the revisions the decision was computed at, given that answer
+    /// where the record's line for the evaluation shows it.
     pub decision: Decision,
     /// The case's intent, `intent.md`.
     pub intent: String,
@@ -238,6 +243,12 @@ pub fn starting_state(case_dir: &Path, step: u64, run: Option<u64>) -> Result<St
         .map(|name| name.to_string_lossy().into_owned())
         .ok_or_else(|| anyhow!("the case directory {} has no name", case_dir.display()))?;
     crate::case::check_id(&case)?;
+    let decision = as_answered(
+        case_dir,
+        &case,
+        &decision,
+        decision_line.value["frontier"].as_str(),
+    )?;
     Ok(Start {
         case_dir: case_dir.to_path_buf(),
         case,
@@ -256,6 +267,46 @@ pub fn starting_state(case_dir: &Path, step: u64, run: Option<u64>) -> Result<St
         transcript: value["transcript"].as_str().map(str::to_owned),
         action: value["action"].as_str().unwrap_or_default().to_owned(),
     })
+}
+
+/// The decision `recorded`, the governor's document the step's run evaluated, with each action
+/// it finds approval-required answered as the run answered it: by the case's authority over the
+/// case and artifact revisions the document was computed at
+/// ([`crate::case::CaseAuthority::answer_recorded`]), where the record's line for that
+/// evaluation, its `frontier`, gives the run that same answer. The document holds no authority,
+/// so a step offered an action through a grant is offered it again. A grant records the
+/// revision of its subject and no case revision, and its instant only to the second, so a grant
+/// on file now may have been given after the step, at the same revisions: the record says
+/// whether the run had it. Neither grants alone: a status the record names that the authority
+/// does not answer is not taken, and an answer the record does not show is not applied.
+fn as_answered(
+    case_dir: &Path,
+    case: &str,
+    recorded: &Decision,
+    frontier: Option<&str>,
+) -> Result<Decision> {
+    let by_authority = crate::case::CaseAuthority::new(case_dir, case).answer_recorded(recorded)?;
+    let run_had = frontier.map(frontier_statuses).unwrap_or_default();
+    let mut answered = recorded.clone();
+    for (action, status) in by_authority.actions {
+        if recorded.actions.get(&action) != Some(&status) && run_had.get(&action) == Some(&status) {
+            answered.actions.insert(action, status);
+        }
+    }
+    Ok(answered)
+}
+
+/// Each action's status as a record's `frontier` line gives it (`frontier: <action> (<status>),
+/// ...`, [`Decision::frontier_line`]); none from a line of another form.
+fn frontier_statuses(line: &str) -> BTreeMap<String, String> {
+    line.strip_prefix("frontier: ")
+        .into_iter()
+        .flat_map(|actions| actions.split(", "))
+        .filter_map(|part| {
+            let (action, status) = part.strip_suffix(')')?.rsplit_once(" (")?;
+            Some((action.to_owned(), status.to_owned()))
+        })
+        .collect()
 }
 
 /// The revision the step whose line is `lines[index]` started at: the last the record names
@@ -477,8 +528,9 @@ pub fn rebuild_case(start: &Start, tree: &Path, revision: &str) -> Result<PathBu
 
 /// The bytes of the regular file at `path`, read without following a link at it
 /// (`O_NOFOLLOW`); none when nothing is there. A link there, or anything but a regular file, is
-/// refused: a case is never read through a link.
-fn read_plain(path: &Path) -> Result<Option<Vec<u8>>> {
+/// refused: a case is never read through a link. The case's `authority.yaml` is read so too
+/// ([`crate::case::Authority::read`]).
+pub(crate) fn read_plain(path: &Path) -> Result<Option<Vec<u8>>> {
     use std::io::Read as _;
     use std::os::unix::fs::OpenOptionsExt as _;
     match std::fs::symlink_metadata(path) {

@@ -260,6 +260,34 @@ fn write_executable(tree: &Path, path: &str, text: &str) {
     fs::set_permissions(tree.join(path), fs::Permissions::from_mode(0o755)).expect("a mode");
 }
 
+/// The wrapper `name` as the test command names it: the word itself where the `PATH` takt
+/// inherits has it; else a stand-in outside the tree, named by its absolute path, that drops the
+/// `before` words ahead of the command and runs the command (macOS has no `taskset`). The guard
+/// reads a wrapper by its name, whatever directory names it.
+fn wrapper(tree: &Scratch, name: &str, before: usize) -> String {
+    let on_path = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .filter(|dir| dir.is_absolute())
+        .any(|dir| {
+            fs::metadata(dir.join(name))
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        });
+    if on_path {
+        return name.to_owned();
+    }
+    let program = tree.root.join("bin").join(name);
+    write_executable(
+        &tree.root,
+        &format!("bin/{name}"),
+        &format!("#!/bin/sh\nshift {before}\nexec \"$@\"\n"),
+    );
+    let program = program.to_str().expect("a UTF-8 path").to_owned();
+    assert!(
+        !program.contains(char::is_whitespace),
+        "the test command is split at white space: {program}"
+    );
+    program
+}
+
 // ---- 1. the manifest line scanner ----
 
 const MANIFEST: &str =
@@ -412,7 +440,8 @@ fn adv2_script_after_perl_i_earns_no_pass() {
 #[test]
 fn adv2_script_under_a_wrapper_outside_the_table_earns_no_pass() {
     let tree = repository("taskset", &[("check.sh", FAILING_CHECK, true)]);
-    let ran = run(&tree, "taskset -c 0 ./check.sh", |tree| {
+    let command = format!("{} -c 0 ./check.sh", wrapper(&tree, "taskset", 2));
+    let ran = run(&tree, &command, |tree| {
         write_executable(tree, "check.sh", PASSING_CHECK);
     });
     ran.assert_no_forged_pass();

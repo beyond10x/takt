@@ -11,11 +11,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
 use crate::case::{CASES_DIR, is_under_cases};
+use crate::confinement::Command;
 
 /// What every git takt runs is told on its command line, over whatever the repository's, the
 /// user's or the system's configuration says: run no code from configuration. No

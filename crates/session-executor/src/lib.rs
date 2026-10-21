@@ -15,8 +15,12 @@
 //! | `Codex` | Codex (`codex exec`) | `On`, H9 gating | decided here (`Ask`): `Bash` and `apply_patch` ([`CODEX_TOOLS`]) naming no path outside the copy; its own sandbox (`workspace-write` on the copy, no network) confines what a command writes; its home is its own ([`HOME_VARIABLES`]) |
 //! | `B10x` | b10x-harness | `On`, a gap holds the proposal | observed, never decided: metaharness's b10x adapter decides no call; the loop's toolset is what substrate confines to the copy |
 //!
-//! This crate depends on no crate of the application that embeds it, so it can move into Loom
-//! unchanged.
+//! It starts no process of its own: every program its runners start is first asked of the
+//! embedder ([`SessionExecutor::with_admission`]), so the embedder's seam sees it.
+//!
+//! The library depends on no crate of the application that embeds it, its tests included, so it
+//! can move into Loom unchanged. Its test module is no session's: its fixtures start `git` and
+//! their own binary with the standard library, outside any embedder's seam.
 
 use std::cell::RefCell;
 use std::path::{Component, Path, PathBuf};
@@ -206,8 +210,16 @@ pub struct SessionExecutor {
     /// For `Kind::B10x`, the endpoint its loop is pointed at; the session is refused without one.
     pub endpoint: Option<Endpoint>,
     runner: RefCell<Option<Box<dyn ProcessRunner>>>,
+    admission: Option<Admission>,
     last: RefCell<Option<SessionReport>>,
 }
+
+/// What the embedder is asked before a runner of this crate starts a program: the program as
+/// it is started, by path where it is named by one; an error refuses the start and is the
+/// session's error. The embedder answers from its own seam, so every process a session starts
+/// is one the embedder admitted; a runner the embedder supplies ([`SessionExecutor::with_runner`])
+/// is the embedder's own and is not asked about.
+pub type Admission = std::sync::Arc<dyn Fn(&str) -> std::io::Result<()> + Send + Sync>;
 
 impl std::fmt::Debug for SessionExecutor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -243,8 +255,20 @@ impl SessionExecutor {
             program: None,
             endpoint: None,
             runner: RefCell::new(None),
+            admission: None,
             last: RefCell::new(None),
         }
+    }
+
+    /// The same executor, each program its own runners start first asked of `admit`
+    /// ([`Admission`]).
+    #[must_use]
+    pub fn with_admission(
+        mut self,
+        admit: impl Fn(&str) -> std::io::Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        self.admission = Some(std::sync::Arc::new(admit));
+        self
     }
 
     /// The same executor, its session the harness `kind`.
@@ -333,29 +357,43 @@ impl SessionExecutor {
         let mut supplied = self.runner.borrow_mut();
         let mut named = match (supplied.is_some(), &self.program, self.kind) {
             (true, _, _) | (false, _, Kind::B10x) | (false, None, Kind::Claude) => None,
-            (false, Some(program), kind) => Some(Named::new(kind, program.display().to_string())),
-            (false, None, Kind::Codex) => Some(Named::new(Kind::Codex, "codex".to_owned())),
+            (false, Some(program), kind) => Some(Named::new(
+                kind,
+                program.display().to_string(),
+                self.admission.clone(),
+            )),
+            (false, None, Kind::Codex) => Some(Named::new(
+                Kind::Codex,
+                "codex".to_owned(),
+                self.admission.clone(),
+            )),
         };
-        // Claude Code's with no program named: metaharness's own spawn, which `start` would use,
-        // so that every Claude Code session starts through [`Restricted`].
-        let mut spawn = metaharness::SpawnRunner::new();
-        let runner: Option<&mut dyn ProcessRunner> = match (supplied.as_mut(), named.as_mut()) {
-            (Some(runner), _) => Some(runner.as_mut()),
-            (None, Some(named)) => Some(named),
-            (None, None) if self.kind == Kind::Claude => Some(&mut spawn),
-            (None, None) => None,
+        // Claude Code's with no program named, and b10x-harness's: metaharness's own spawn,
+        // which `start` would use, so that every Claude Code session starts through
+        // [`Restricted`] and every program this crate's runners start is admitted
+        // ([`Admitted`]).
+        let mut spawn = Admitted {
+            admission: self.admission.clone(),
+            inner: metaharness::SpawnRunner::new(),
         };
-        let started = match (runner, &home) {
-            (Some(inner), Some(home)) => {
-                let mut homed = Homed { home, inner };
+        let runner: &mut dyn ProcessRunner = match (supplied.as_mut(), named.as_mut()) {
+            (Some(runner), _) => runner.as_mut(),
+            (None, Some(named)) => named,
+            (None, None) => &mut spawn,
+        };
+        let started = match &home {
+            Some(home) => {
+                let mut homed = Homed {
+                    home,
+                    inner: runner,
+                };
                 builder.start_with(Input::FromSpec, &mut homed, &mut *seams)
             }
-            (Some(inner), None) if self.kind == Kind::Claude => {
-                let mut restricted = Restricted { inner };
+            None if self.kind == Kind::Claude => {
+                let mut restricted = Restricted { inner: runner };
                 builder.start_with(Input::FromSpec, &mut restricted, &mut *seams)
             }
-            (Some(runner), None) => builder.start_with(Input::FromSpec, runner, &mut *seams),
-            (None, _) => builder.start(Input::FromSpec),
+            None => builder.start_with(Input::FromSpec, runner, &mut *seams),
         };
         drop(named);
         drop(supplied);
@@ -593,7 +631,31 @@ impl AgentExecutor for SessionExecutor {
 struct Named {
     kind: Kind,
     program: String,
+    admission: Option<Admission>,
     inner: Box<dyn ProcessRunner>,
+}
+
+/// A runner of this crate's whose every start first asks the embedder's [`Admission`] about the
+/// program it starts; refused, it starts nothing.
+struct Admitted<R> {
+    admission: Option<Admission>,
+    inner: R,
+}
+
+impl<R: ProcessRunner> ProcessRunner for Admitted<R> {
+    fn requires_executable(&self) -> bool {
+        self.inner.requires_executable()
+    }
+
+    fn start(
+        &mut self,
+        plan: &metaharness::LaunchPlanView,
+    ) -> std::io::Result<Box<dyn metaharness::HarnessProcess>> {
+        if let Some(admit) = &self.admission {
+            admit(plan.program)?;
+        }
+        self.inner.start(plan)
+    }
 }
 
 /// The variables a Codex session's child is given that say where its home is, each as a path
@@ -701,14 +763,21 @@ pub const CODEX_SANDBOX: [&str; 4] = [
 ];
 
 impl Named {
-    fn new(kind: Kind, program: String) -> Self {
+    fn new(kind: Kind, program: String, admission: Option<Admission>) -> Self {
         let inner: Box<dyn ProcessRunner> = match kind {
-            Kind::Codex => Box::new(metaharness::CodexSpawnRunner::new()),
-            _ => Box::new(metaharness::SpawnRunner::new()),
+            Kind::Codex => Box::new(Admitted {
+                admission: admission.clone(),
+                inner: metaharness::CodexSpawnRunner::new(),
+            }),
+            _ => Box::new(Admitted {
+                admission: admission.clone(),
+                inner: metaharness::SpawnRunner::new(),
+            }),
         };
         Self {
             kind,
             program,
+            admission,
             inner,
         }
     }
@@ -740,6 +809,11 @@ impl ProcessRunner for Named {
                 .display()
                 .to_string()
         };
+        // The vendor program is admitted as well as `setsid`, which the inner runner admits
+        // as the program it starts: `setsid` execs this one in place.
+        if let Some(admit) = &self.admission {
+            admit(&resolved)?;
+        }
         let setsid = ["/usr/bin/setsid", "/bin/setsid"]
             .into_iter()
             .find(|path| Path::new(path).is_file());

@@ -149,13 +149,28 @@ close_inherited() {
     for fd in /proc/self/fd/*; do
         fd=${fd##*/}
         [[ $fd =~ ^[0-9]+$ ]] && ((fd > 2)) || continue
-        { exec {fd}<&-; } 2>/dev/null || true
+        { eval "exec $fd<&-"; } 2>/dev/null || true
     done
 }
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 scenarios= declared_on=main repo=
-declare -A checkouts=()
+# The `--checkout` options: checkout_urls[i] stands in for checkout_paths[i]. Two indexed arrays,
+# not one associative array, which macOS's bash 3.2 does not have.
+checkout_urls=()
+checkout_paths=()
+# Prints the checkout `--checkout` gives for the URL $1, with no newline; status 1 when it gives
+# none.
+checkout_for() {
+    local i
+    for ((i = 0; i < ${#checkout_urls[@]}; i++)); do
+        if [[ ${checkout_urls[i]} == "$1" ]]; then
+            printf '%s' "${checkout_paths[i]}"
+            return 0
+        fi
+    done
+    return 1
+}
 positional=()
 while (($#)); do
     case $1 in
@@ -169,8 +184,12 @@ while (($#)); do
             [[ $2 == https://?*=?* ]] || usage "--checkout $2: give <https-url>=<path>, the URL a predicate names and the local checkout that stands in for it"
             url=${2%%=*}
             path=${2#*=}
-            [[ -z ${checkouts[$url]+x} ]] || usage "--checkout $2: $url is given twice"
-            checkouts[$url]=$(cd "$path" 2>/dev/null && pwd -P) || usage "--checkout $2: $path is no directory"
+            if checkout_for "$url" >/dev/null; then
+                usage "--checkout $2: $url is given twice"
+            fi
+            stands_in=$(cd "$path" 2>/dev/null && pwd -P) || usage "--checkout $2: $path is no directory"
+            checkout_urls+=("$url")
+            checkout_paths+=("$stands_in")
             ;;
         esac
         shift 2
@@ -219,14 +238,35 @@ cd "$repo"
 cp -- "$finding_file" "$run/finding.md"
 "$here/file-finding" --predicate "$run/finding.md" >"$run/predicate.tsv" 2>"$run/predicate.err" ||
     fail "$finding: its predicate does not parse: $(tail -n 1 "$run/predicate.err")"
-declare -A predicate=()
+# The predicate's entries: predicate_keys[i] gives predicate_values[i], a later line for a key
+# replacing an earlier one. Two indexed arrays, not one associative array, which macOS's bash 3.2
+# does not have.
+predicate_keys=()
+predicate_values=()
 while IFS=$'\t' read -r key value; do
-    predicate[$key]=$value
+    [[ -n $key ]] || fail "$finding: $run/predicate.tsv holds a line with no key"
+    i=0
+    while ((i < ${#predicate_keys[@]})) && [[ ${predicate_keys[i]} != "$key" ]]; do
+        i=$((i + 1))
+    done
+    predicate_keys[i]=$key
+    predicate_values[i]=$value
 done <"$run/predicate.tsv"
-scenario=${predicate[scenario]:-}
-repository=${predicate[repository]:-}
-test_command=${predicate[test]:-}
-command=${predicate[command]}
+# Prints the value the predicate gives the key $1, with no newline; status 1 when it gives none.
+predicate_value() {
+    local i
+    for ((i = 0; i < ${#predicate_keys[@]}; i++)); do
+        if [[ ${predicate_keys[i]} == "$1" ]]; then
+            printf '%s' "${predicate_values[i]}"
+            return 0
+        fi
+    done
+    return 1
+}
+scenario=$(predicate_value scenario) || scenario=
+repository=$(predicate_value repository) || repository=
+test_command=$(predicate_value test) || test_command=
+command=$(predicate_value command) || fail "$finding: its predicate gives no command"
 
 # The revision, in this repository.
 sha=$(git -C "$repo" rev-parse --verify --quiet "$revision^{commit}") ||
@@ -276,19 +316,19 @@ else
     [[ -z $scenarios ]] || say "--scenarios is not read: the predicate names its repository, $repository"
     source=$repository
     checkout=
-    if [[ -n ${checkouts[$repository]+x} ]]; then
-        checkout=${checkouts[$repository]}
+    if checkout=$(checkout_for "$repository"); then
         source=$checkout
         say "$repository: cloning the checkout $checkout in its place"
     fi
-    seed=${predicate[seed]}
+    seed=$(predicate_value seed) || fail "$finding: its predicate names repository $repository and no seed"
     where="$repository at ${seed:0:12}"
 fi
 # A --checkout for a URL the predicate does not name stands in for nothing: a mistyped URL
 # would otherwise send the check to the network without a word.
-for url in "${!checkouts[@]}"; do
+for ((i = 0; i < ${#checkout_urls[@]}; i++)); do
+    url=${checkout_urls[i]}
     [[ $url == "$repository" ]] ||
-        usage "--checkout $url=${checkouts[$url]}: the predicate names ${repository:-no repository}, not $url"
+        usage "--checkout $url=${checkout_paths[i]}: the predicate names ${repository:-no repository}, not $url"
 done
 
 # The toolchain a build calls, as `takt promote` resolves it (crates/takt/src/promotion.rs,
@@ -362,7 +402,8 @@ enough_space
 command -v flock >/dev/null ||
     fail "flock is not on PATH; check-finding builds and runs one check at a time under it, never without"
 lock=$root/lock
-exec {lock_fd}>>"$lock" || fail "open the lock $lock"
+lock_fd=9
+exec 9>>"$lock" || fail "open the lock $lock"
 if ! flock --nonblock "$lock_fd"; then
     say "waiting for $lock: another check-finding builds or runs under it"
     flock "$lock_fd" || fail "take the lock $lock"
@@ -546,7 +587,7 @@ for dir in "${hidden[@]}"; do
 done
 sandbox+=(--bind "$clone" "$clone" --bind "$home" "$home" --ro-bind "$takt" "$takt")
 [[ ! -d $sources ]] || sandbox+=(--ro-bind "$sources" "$sources")
-sandbox+=("${binds[@]}")
+sandbox+=(${binds[@]+"${binds[@]}"})
 for dir in "${hidden[@]}"; do
     sandbox+=(--remount-ro "$dir")
 done
@@ -577,13 +618,18 @@ fi
 # status that says the command ran to the scenario and the defect is gone; any other status (a
 # panic's 101, a rejected flag's 2, a command not found's 127, the defect's exit without its
 # output) is `error`, which verifies nothing.
-healthy=$((10#${predicate[healthy_exit]:-0}))
+healthy_exit=$(predicate_value healthy_exit) || healthy_exit=
+healthy=$((10#${healthy_exit:-0}))
 named=$healthy
-[[ ! -v predicate[exit] ]] || named=$((10#${predicate[exit]}))
+if exit_named=$(predicate_value exit); then
+    named=$((10#$exit_named))
+fi
 held=1
 ((status == named)) || held=0
-if [[ -v predicate[output] ]] && ! grep -qF -- "${predicate[output]}" "$run/output"; then
-    held=0
+expected_output= output_named=
+if expected_output=$(predicate_value output); then
+    output_named=1
+    grep -qF -- "$expected_output" "$run/output" || held=0
 fi
 if ((held)); then
     result=reproduced
@@ -591,7 +637,7 @@ elif ((status == healthy)); then
     result=not_reproduced
 else
     result=error
-    say "exit $status, which the predicate names as neither the defect's with all its expectations (exit $named${predicate[output]+, output \`${predicate[output]}\`}) nor the healthy one (healthy_exit $healthy): the command did not show the defect, nor that it is gone"
+    say "exit $status, which the predicate names as neither the defect's with all its expectations (exit $named${output_named:+, output \`$expected_output\`}) nor the healthy one (healthy_exit $healthy): the command did not show the defect, nor that it is gone"
 fi
 {
     printf 'finding: %s\nrevision: %s\n' "$finding" "$sha"
