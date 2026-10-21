@@ -210,6 +210,57 @@ fn every_violation_is_listed_with_its_line() {
     }
 }
 
+/// A misspelt mark would list a breaking entry as a plain change, so `--check` names each one
+/// with its line, and `<version>` prints no notes for the section.
+#[test]
+fn a_misspelt_breaking_mark_is_refused_naming_its_line() {
+    let marks = [
+        "**Breaking**: ",
+        "Breaking: ",
+        "**breaking:** ",
+        "*Breaking:* ",
+        "**BREAKING:** ",
+        "__Breaking:__ ",
+        "**Breaking** ",
+        "Breaking change: ",
+    ];
+    let mut body = String::from("### Changed\n\n- **Breaking:** A well-marked entry.\n");
+    for mark in marks {
+        body.push_str(&format!("- {mark}An entry.\n"));
+    }
+    body.push_str("- A plain entry that names breaking changes later on.\n");
+    let text = changelog(&body);
+
+    let checked = over("misspelt", &text, &["--check"]);
+    assert_eq!(checked.status.code(), Some(1), "{}", shown(&checked));
+    let err = stderr(&checked);
+    // `### Changed` is line 9, the well-marked entry line 11, the misspelt ones lines 12 to 19.
+    for (offset, mark) in marks.iter().enumerate() {
+        let needle = format!("CHANGELOG.md:{}: ", 12 + offset);
+        let hit = err
+            .lines()
+            .any(|l| l.contains(&needle) && l.contains("**Breaking:**"));
+        assert!(
+            hit,
+            "{mark:?} on line {}:\n{}",
+            12 + offset,
+            shown(&checked)
+        );
+    }
+    for line in [11, 20] {
+        let needle = format!("CHANGELOG.md:{line}: ");
+        assert!(
+            !err.contains(&needle),
+            "line {line} is well formed:\n{}",
+            shown(&checked)
+        );
+    }
+
+    let notes = over("misspelt-notes", &text, &["1.0.0"]);
+    assert_eq!(notes.status.code(), Some(1), "{}", shown(&notes));
+    assert!(stdout(&notes).is_empty(), "{}", shown(&notes));
+}
+
 #[test]
 fn a_heading_out_of_order_with_an_em_dash_or_a_bad_date_is_refused() {
     let text = format!(

@@ -212,8 +212,13 @@ html .theme-code-block.language-text {
 html .theme-code-block.language-text pre {
   container-type: inline-size;
 }
+/* --takt-long-word is LONG_WORD of src/words.mjs (24ch), set beside --takt-list-hang by
+   src/theme/CodeBlock/Line/index.tsx, the only setter of the takt-list class. */
 html .theme-code-block.language-text .token-line.takt-list {
-  --takt-hang: min(var(--takt-list-hang), max(0ch, 100cqi - 2 * var(--ifm-pre-padding) - 24ch));
+  --takt-hang: min(
+    var(--takt-list-hang),
+    max(0ch, 100cqi - 2 * var(--ifm-pre-padding) - var(--takt-long-word))
+  );
   contain: inline-size;
 }
 

@@ -14,19 +14,20 @@ beside `claude`, and the gate's reader fails closed on lines 0.6.0 read.
 ### Changed
 
 - `--harness claude` runs Claude Code through a metaharness session (`HermeticMode::Strict`) in a scratch copy of the case tree, offered only the file tools.
+- **Breaking:** A Claude step needs `$HOME/.claude/.credentials.json`; without it the session gets no login (not from `CLAUDE_CONFIG_DIR`, probably not from the macOS Keychain) and probably fails.
 - The session's change comes back as a proposal that takt writes to the case tree only after the step guard admits it; a refused one ends the run `StepRefused`.
 - A gap the hermetic floor reports holds the proposal back; H9 and H1a are reported by row id in the step summary until metaharness declares Claude Code 2.1.304.
 - `takt replay` keeps the print-mode harness in its scratch worktree.
 - Each judgement step's prompt carries the change the case has made so far: the diff of its accepted steps from the base commit, about 8 KiB at most, fenced as data.
 - `--harness` takes `claude`, `codex` (codex-cli 0.153.4) or `harness` (b10x-harness), each through one metaharness session seam.
 - Codex runs hermetic `On` with H9 gating, its sandbox writing only to the copy with no network, its home and XDG directories in the session's scratch.
-- Every proposal's files and the step's summary are checked before the edit is written: a credential shape or a `b10x-gates scan-text` refusal refuses it whole.
-- With no gates policy a `codex` or `harness` proposal is refused, and a scan that cannot run refuses too.
+- **Breaking:** A proposal is refused whole, `StepRefused`, on a credential shape in its files or summary, a `b10x-gates scan-text` refusal or a scan that cannot run; 0.6.0 completed such steps.
+- With no gates policy a `codex` or `harness` proposal is refused unscanned; a `claude` one is checked for credential shapes only.
 - The session's scratch copy reaches the case tree's git state through a `.git` file naming a git directory outside it; the tree's `.git` is never written.
 - On the Claude route a judgement step's prompt names its story's `## Scope` files as file mentions (`@todo.py`), at most 8 files and 64 KiB.
 - `b10x-loom-sdk` 0.27.0 → 0.28.0 is a dependency of `b10x-takt`; `metaharness` 0.10.1 comes through the new crate `b10x-session-executor`.
 - `task site-check` fails a page on text under 12 px, console errors, failed requests and an ignored stored theme.
-- Every Claude Code session starts with `--restricted`, so it loads no auto-memory; scenario 1's first request is about 755 tokens smaller.
+- The metaharness session starts Claude Code with `--restricted`, as 0.6.0's print mode did, so no auto-memory: a scenario 1 request is 754-757 tokens smaller than without it in three live pairs.
 - CI runs `task check` as three parallel jobs (`task check-static`, `test-cli`, `test-library`); test builds compile `sha2` at opt-level 3.
 - CHANGELOG.md follows Keep a Changelog 1.1.0; `scripts/release-notes <version>` writes a release's GitHub notes, and `task check` runs its `--check`.
 - takt's specification requires ess 0.66 (`ess/ess-inputs.yaml`), and CI installs ess 0.66.0.
@@ -40,7 +41,8 @@ beside `claude`, and the gate's reader fails closed on lines 0.6.0 read.
 
 ### Security
 
-- **Breaking:** The gate's reader fails a line closed when a tree file handing off to a known program first sets `PYTHON*`, changes directory or writes `sys.path`.
+- **Breaking:** The gate's reader fails a line closed when a tree file handing off to a known program sets `PYTHON*` or a whole environment, changes directory or writes `sys.path`.
+- **Breaking:** The reader fails it closed, too, if that file hides such a name (`getattr(`, `import sys as`), takes a word before the program, is not Python or shell, or is unreadable or over 1 MiB.
 
 ## [0.6.0] - 2026-10-20
 
@@ -56,16 +58,16 @@ on, and the gate's reader fails closed on lines 0.5.0 read.
 ### Changed
 
 - **Breaking:** `takt scorecard` prints the layers of the runs it scores and refuses runs whose layers differ, naming the layer, unless `--across-layers`.
-- **Breaking:** A run whose harness step recorded no tokens, or 0, has unknown tokens; `takt scorecard --against` and `takt promote` refuse such a set, exit 1.
+- **Breaking:** A run whose harness step recorded no tokens, or 0, has unknown tokens (0.5.0's known limit); `takt scorecard --against` and `takt promote` refuse such a set, exit 1.
 - **Breaking:** The metrics `tokens` and `step_tokens` move to definition version 2: a baseline of 0.5.0 or earlier is compared only after `takt promote --rebaseline`.
 - `b10x-loom-sdk` 0.27.0 is a dev-dependency; Loom's governor decides takt's 30 recorded case decisions as takt did but where a grant is missing.
 
 ### Security
 
 - `gate.run` compares what a gate command's Python files import from every import directory, a `PYTHONPATH` set anywhere on the line included.
-- `gate.run` reads `cd`, `env -C`, a redirection-only `exec`, `taskset`, `chrt`, `unbuffer`, `script -c`, `uv run`, `env -S` and `pytest FILE`: 0.5.0's 11 forms close.
+- `gate.run` reads `cd`, `env -C`, a redirection-only `exec`, `taskset`, `chrt`, `unbuffer`, `script -c`, `uv run`, `env -S` and `pytest FILE`: 0.5.0's known limit of 11 forms and wrappers closes.
 - **Breaking:** The gate's import walk reads at most 64 Python files a command; the cap, `importlib`, `__import__(`, `exec(`, `eval(` or `xargs` input fails closed.
-- The step guard reads the same forms and fails closed in five more places, such as a program it does not know given one it knows (`doas python3 …`).
+- **Breaking:** The step guard reads the same forms and fails closed in five more places (`doas python3 …` among them), refusing a step that changes any Python file, shell file or program.
 
 ## [0.5.0] - 2026-10-20
 
@@ -86,18 +88,22 @@ a commit identity the forge's scan refuses stops a run at open, and a gate line 
 - takt's own gates run through `scripts/gate-exec`, now a Python program (`/usr/bin/python3 -I`, standard library only) that the gate compares whole at the base.
 - **Breaking:** `scripts/check-finding` runs one check at a time per cache directory and refuses, exit 1, under `CHECK_FINDING_MIN_FREE_GIB` (20) GiB free.
 - The trial agent's profile adds a pre-flight, a token and an active-time cap per run, and an early stop once a set's verdict is decided.
+- Known limit: run-level tokens still read a harness step that recorded no tokens as 0, so a missing record reads as a saving; no promotion is made on 0.5.0.
+- Known limit: 11 shell forms still let a change decide the gate, 6 of them `PYTHONPATH` set on the line, by `export` or in a sourced file, and `cd dir && python3` with `-m x`, `-c …` or `- < x.py`.
+- Known limit: the other 5 are `env -C dir python3 -m x`, a script on `xargs`'s input, `exec 0< FILE; sh`, `exec < FILE; sh` and `exec < FILE; bash` (story:the-gate-reads-every-shell-form).
+- Known limit: wrapper programs the reader does not know (`taskset`, `chrt`, `unbuffer`, `script -qec`, `uv run`, `env -S`, `pytest`) and `env PYTHONPATH=…` slip too.
 - Known limit: 0.4.0's known limits on build-time code, squash merges, the forge's repository, tipless grants, candidate refs and `takt view` still hold.
 
 ### Fixed
 
 - `takt scorecard --steps` reads a harness step that recorded no tokens as unknown, not 0; a targeted step unknown on either side is refused, exit 1.
 - `takt run --help`: `--forge none` names the `Unperformable` stop, exit 7, when only a forge action is left.
-- A step that writes `.engineering/commit-identity.conf` is refused naming the commit identity file, no longer as a write into the planning store.
+- A step that writes `.engineering/commit-identity.conf` is refused naming the commit identity file, no longer as a write into the planning store (0.4.0's known limit).
 
 ### Security
 
 - **Breaking:** `gate.run` fails closed on a line its reader cannot read with certainty (a glob, an unknown option or redirection, a second script input), naming why.
-- `gate.run` compares a Python script run through `sh -c`, a shell script, `exec` or a shell reading a tree file, and what it imports, as it compares one run directly.
+- `gate.run` compares a Python script run through `sh -c`, a shell script, `exec` or a shell reading a tree file, and what it imports, as it compares one run directly (0.4.0's known limit).
 
 ## [0.4.0] - 2026-10-20
 
@@ -125,6 +131,9 @@ and a run that pushes is refused without a commit identity.
 - Known limit: a judge-surface merge refused because its grant records no tip names no way past (story:a-tipless-judge-grant-names-its-way-past).
 - Known limit: nothing keeps the commit an open turn was opened on once a resume deletes its candidate ref (story:a-candidate-stays-reachable-while-a-turn-names-it).
 - Known limit: `takt view` joins a transcript by path suffix and writes through a linked `--output` (story:view-joins-own-transcripts-and-writes-a-private-page).
+- Known limit: a step refused for writing `.engineering/commit-identity.conf` is told it wrote into the planning store (story:commit-identity-refusal-names-the-identity-file).
+- Known limit: a gate running Python through a shell (`sh -c "python3 …"`, a shell script) has neither the script nor its imports compared (story:gate-compares-python-run-through-a-shell).
+- Known limit: nor is a module that `python3 -c` imports from the directory the command runs in.
 - takt's repository configures its commit identity in `.engineering/commit-identity.conf` and lists `scripts/**` on its judge surface.
 - The agent profiles describe one dispatcher session that runs the waves and one trial agent that runs the trials.
 
@@ -160,6 +169,7 @@ The minor version moves because `takt promote` now refuses scorecards that 0.2.x
 - A wait on something local (a saved scorecard, a promoted binary, a merge into the local `main`) stops `Waiting`, exit 6, right after the step that observed it.
 - `takt run --install-root` on a resumed turn is accepted when it names the root the turn was opened with.
 - Claude runs with `--output-format stream-json --verbose`.
+- Known limit: `Unperformable` ranks with the budget stops, so a `--forge none` run that stopped `NoProgress` under 0.2.x ranks one higher against an older baseline.
 - Known limit: the `lint` gate runs `cargo clippy`, which compiles and runs build code a step wrote, so the merge of such a change stays guarded by the owner.
 
 ### Fixed
@@ -242,10 +252,10 @@ The first published release of the 0.2 line; its changes are those listed under 
 - `.engineering/judge-allow.yaml` and `.engineering/delegations.yaml` are read at the merge target's tip, and a change to either merges under a `human:` grant alone.
 - **Breaking:** The judge guard needs git 2.38 or later (`git merge-tree --write-tree`) and refuses a conflict, a base off the target or a pull request on another base.
 - **Breaking:** `takt approve --by` takes only `human:<id>` or `agent:<role>`.
-- **Breaking:** `scripts/check-finding` says `not_reproduced` only for the predicate's healthy exit, and `error` for a status the predicate does not name.
+- **Breaking:** `scripts/check-finding` says `not_reproduced` only for the predicate's healthy exit, and `error` for a status the predicate does not name (0.1.0's known limit).
 - **Breaking:** `scripts/file-finding` refuses a predicate whose command never runs `$TAKT`, and an `output` shorter than 8 characters.
 - **Breaking:** `takt scorecard --save` takes `--revision` only as the full 40-hex commit id and refuses a run whose `opened` line names another or `-dirty`.
-- **Breaking:** A scenario case's outcome comes from `held-out.txt` beside its record, `failed` unless its first line is `PASS`; a case without one is refused.
+- **Breaking:** A scenario case's outcome comes from `held-out.txt` beside its record, `failed` unless its first line is `PASS`; a case without one is refused (0.1.0's known limit).
 - **Breaking:** `takt scorecard --against` gives no verdict, exit 1, on fewer cases a side than the rule's trials, and `takt promote` refuses such a scenario.
 - **Breaking:** `takt promote` refuses a revision that is no ancestor of `origin/main` as last fetched, and a scorecard holding a run made by another binary.
 - `takt promote` no longer refuses a second promotion on the same UTC day; promotions still run one at a time under the store's lock.
@@ -262,10 +272,10 @@ The first published release of the 0.2 line; its changes are those listed under 
 - A step cannot replace what the test command's script loads: its modules, `sitecustomize.py`, `usercustomize.py`, `*.pth` files and the tree's `PATH` executables.
 - **Breaking:** `tests.run` and `gate.run` run with a fresh empty `HOME` outside the tree, `PYTHONNOUSERSITE=1` and `PYTHONDONTWRITEBYTECODE=1`.
 - A step that changes a writable directory on their `PATH`, or one Python imports from outside the tree, stops the run naming the path.
-- **Breaking:** `tests.run` starts without the variables that locate a login, in its own user and mount namespace on Linux; without user namespaces it does not run.
-- A harness step that changes a file in an ignored directory that existed before it is refused and undone, a rewritten file moved to `$XDG_STATE_HOME/takt/set-aside/`.
-- A step or a test command that replaces `.engineering/cases` with a link or a non-directory is undone, and a case is never opened or resumed through a link.
-- **Breaking:** `scripts/check-finding` builds the revision under check in bubblewrap with a cleared environment and a scratch home; without `bwrap` nothing is built.
+- **Breaking:** `tests.run` starts without the variables that locate a login, in its own user and mount namespace on Linux; without user namespaces it does not run (0.1.0's known limit).
+- A harness step that changes a file in an ignored directory that existed before it is refused and undone, a rewritten file moved to `$XDG_STATE_HOME/takt/set-aside/` (0.1.0's known limit).
+- A step or a test command that replaces `.engineering/cases` with a link or a non-directory is undone, and a case is never opened or resumed through a link (0.1.0's known limit).
+- **Breaking:** `scripts/check-finding` builds the revision under check in bubblewrap with a cleared environment and a scratch home; without `bwrap` nothing is built (0.1.0's known limit).
 - A predicate's command runs in bubblewrap: host paths read-only but the clone and its home, no network, its own PID and IPC namespaces, `/tmp` and `/run`.
 
 ## [0.1.0] - 2026-10-19
@@ -312,7 +322,13 @@ The first published release of the 0.2 line; its changes are those listed under 
 
 - Known limit: `story.delivery/1` does not require a failing test before the implementation (story:story-delivery-tests-first).
 - Known limit: a relative or in-tree `B10X_GATES_POLICY` resolves inside the case's tree, where a step can rewrite it (story:scan-policy-outside-the-tree).
+- Known limit: the scorecard takes a run's outcome from the run's own record, not from a held-out acceptance check (story:scorecard-outcome-from-held-out-check).
+- Known limit: the test command can reach the operator's forge login through the keyring and session bus (story:test-command-reaches-no-forge-login).
+- Known limit: a step's writes inside a git-ignored directory that existed before it are not detected (story:ignored-directories-are-guarded).
+- Known limit: a step that replaces `.engineering/cases` or a case directory with a symbolic link is not undone (story:cases-root-link-is-undone).
 - Known limit: under load, a process a test command started with `setsid` can write into the tree after it returns (story:run-child-sweep-survives-setsid).
+- Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
+- Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
 [Unreleased]: https://github.com/beyond10x/takt/compare/0.7.0...HEAD
 [0.7.0]: https://github.com/beyond10x/takt/compare/0.6.0...0.7.0
