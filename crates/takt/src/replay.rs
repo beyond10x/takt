@@ -346,7 +346,8 @@ fn first_line(bytes: &[u8]) -> &[u8] {
 /// The first line of the transcript `claude` would write for the step `start` describes, the
 /// prompt it builds, without running anything: the step is asked of a copy whose program
 /// cannot start, and a step whose harness never started has that line alone as its transcript.
-/// The change so far is read in `repo`, the repository that holds the case's commits.
+/// The change so far is read in `repo`, the repository that holds the case's commits, and so
+/// are the scope files, at the revision the step started at.
 pub fn rebuilt_prompt_line(
     claude: &ClaudeCode,
     start: &Start,
@@ -368,7 +369,8 @@ pub fn rebuilt_prompt_line(
         gate,
     )?;
     let change = change_of(start, &start.case_dir, repo, &start.revision)?;
-    let context = context(start, &start.case_dir, &offer, &change);
+    // The scope files as the revision the step started at holds them, in the repository.
+    let context = context(start, repo, &offer, &change, Some(&start.revision));
     let _ = probe.step(&context);
     let transcript = probe
         .last_transcript()
@@ -401,14 +403,17 @@ fn change_of(start: &Start, case_dir: &Path, tree: &Path, revision: &str) -> Res
 }
 
 /// The context the step `start` describes was given, in `tree`, with `offer` and the change so
-/// far ([`change_of`]).
+/// far ([`change_of`]), its scope files read at `scope_revision` when one is given, else in
+/// `tree` as it stands ([`crate::harness::scope_files`]).
 fn context<'a>(
     start: &'a Start,
     tree: &'a Path,
     offer: &'a crate::run::Offer,
     change: &'a ChangeSoFar,
+    scope_revision: Option<&'a str>,
 ) -> StepContext<'a> {
     StepContext {
+        scope_revision,
         tree,
         intent: &start.intent,
         offered: &offer.offered,
@@ -623,7 +628,7 @@ pub fn replay_once(
     )?;
     let started_at = crate::events::instant();
     let change = change_of(start, &case_dir, &tree, &revision)?;
-    let stepped = harness.step(&context(start, &tree, &offer, &change));
+    let stepped = harness.step(&context(start, &tree, &offer, &change, None));
     let transcript = harness.last_transcript();
     if let Some(bytes) = &transcript {
         write_private(&dir.join("transcript.jsonl"), bytes)?;

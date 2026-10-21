@@ -7629,8 +7629,13 @@ fn proposal_scan_refusal(
     })
 }
 
-/// Scans the change so far, `diff`, with `scan` ([`scan_bytes`]).
-fn scan_change(tree: &Path, scan: &ChangeScan, diff: &[u8]) -> std::result::Result<(), String> {
+/// Scans the change so far, `diff`, with `scan` ([`scan_bytes`]). The one scan both the change
+/// so far and each scope file a prompt attaches pass ([`crate::harness::scope_files`]).
+pub(crate) fn scan_change(
+    tree: &Path,
+    scan: &ChangeScan,
+    diff: &[u8],
+) -> std::result::Result<(), String> {
     scan_bytes(tree, scan, "change.diff", diff)
 }
 
@@ -9896,6 +9901,7 @@ impl<'a> Run<'a> {
                 step: self.steps as usize,
                 time_left: None,
                 change: &change,
+                scope_revision: None,
             };
             // The step is judged by what it did to the tree, against a checkpoint taken just
             // before it: `HEAD`, the index, every path already uncommitted (a validator's run

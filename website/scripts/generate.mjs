@@ -21,7 +21,7 @@ const SOURCE = 'https://github.com/beyond10x/takt/blob/main';
 
 function git(...args) {
   try {
-    return execFileSync('git', ['-C', repo, ...args], {encoding: 'utf8'}).trim();
+    return execFileSync('git', ['-C', repo, ...args], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']}).trim();
   } catch {
     return undefined;
   }
@@ -57,6 +57,13 @@ function readKind(kind) {
     .map((f) => ({file: f, ...frontMatter(readFileSync(join(dir, f), 'utf8'))}));
 }
 
+// A flag in a story's title or summary stays on one line. The docs template prints both as plain
+// text (StatusTable), where Chrome breaks after a hyphen, the first of the two included ("-" |
+// "-allowedTools" once "--" | "allowedTools" is joined); a word joiner, U+2060, after each hyphen
+// of the flag forbids those breaks. It is invisible, and what a reader copies differs from the
+// title by that character only.
+const whole = (text) => text.replace(/(^|[\s(])(--[A-Za-z][\w-]*)/g, (_, before, flag) => before + flag.replace(/-(?=.)/g, '-⁠'));
+
 function status() {
   const epics = Object.fromEntries(
     readKind('epic').map((e) => [e.id, e.title.split(':')[0].trim()]),
@@ -73,9 +80,9 @@ function status() {
     const epic = s.relations.find(([r, t]) => r === 'decomposes' && t.startsWith('epic:'));
     items.push({
       area: epic ? epics[epic[1]] ?? epic[1] : 'Other',
-      label: s.title,
+      label: whole(s.title),
       status: mapped,
-      ...(s.summary ? {detail: s.summary} : {}),
+      ...(s.summary ? {detail: whole(s.summary)} : {}),
       href: `${SOURCE}/.engineering/planning/story/${s.file}`,
     });
   }
@@ -120,8 +127,6 @@ function charts() {
 
 // The CLI reference and the exit codes, from the binary's own help: built with cargo from this
 // checkout, or TAKT_BIN when it names a binary.
-const COMMANDS = [['run'], ['approve'], ['protocols'], ['scenario', 'run'], ['scorecard'], ['trace'], ['report'], ['promote']];
-
 function takt(args) {
   const bin = process.env.TAKT_BIN;
   const [program, argv] = bin ? [bin, args] : ['cargo', ['run', '--locked', '--quiet', '-p', 'b10x-takt-cli', '--', ...args]];
@@ -129,6 +134,21 @@ function takt(args) {
 }
 
 const help = (args) => takt([...args, '--help']);
+
+// Every command the help lists, in its order, and a command with commands of its own as each of
+// them (`scenario run`): a command added to the binary gets its section with no edit here.
+function commands(args = []) {
+  const text = help(args);
+  const at = text.indexOf('\nCommands:\n');
+  if (at < 0) return [args];
+  const names = [];
+  for (const line of text.slice(at + 11).split('\n')) {
+    if (!line.startsWith('  ')) break;
+    const m = /^  (\S+)\s/.exec(line);
+    if (m && m[1] !== 'help') names.push(m[1]);
+  }
+  return names.flatMap((name) => commands([...args, name]));
+}
 
 function exitCodes(text) {
   const at = text.indexOf('\nExit codes:\n');
@@ -142,18 +162,61 @@ function exitCodes(text) {
   return rows;
 }
 
-const cell = (s) => s.replace(/\|/g, '\\|').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// A table cell from help text. `|` is escaped everywhere, since the table splits its cells before
+// code spans are read. `<` and `>` are escaped outside code spans only: Markdown decodes no entity
+// inside one, which showed `&lt;case&gt;` on the page. A flag outside a code span becomes one, and
+// a table's code does not wrap, so `--baseline-only` never breaks after its `--`.
+const cell = (s) =>
+  s
+    .split(/(`[^`]*`)/)
+    .map((part, i) =>
+      i % 2
+        ? part
+        : part
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/(^|[\s(])(--[a-z][a-z0-9-]*)/g, '$1`$2`'),
+    )
+    .join('')
+    .replace(/\|/g, '\\|');
+
+// Whose help the pages show, in words. `takt --version` prints Cargo.toml's version and the commit
+// it was built from, and between releases `main` keeps the last release's number: "takt 0.6.0"
+// alone would name a release whose help this is not. The site is built from `main`
+// (.github/workflows/pages.yml, a shallow checkout without tags, so how far it is past the release
+// is known only where the tags are).
+function origin(version) {
+  const m = /^takt (\S+) \(([0-9a-f]{7,40})(-dirty)?\)$/.exec(version);
+  if (!m) return `of \`${version}\``;
+  const [, number, sha, dirty] = m;
+  const commit = `[\`${sha.slice(0, 8)}\`](https://github.com/beyond10x/takt/commit/${sha})`;
+  const changes = dirty ? ', with uncommitted changes' : '';
+  if (!dirty && git('describe', '--tags', '--exact-match', sha) === number) return `of release ${number} (commit ${commit})`;
+  const ref = process.env.GITHUB_REF ?? '';
+  const branch = process.env.GITHUB_HEAD_REF || (ref.startsWith('refs/heads/') ? ref.slice(11) : git('symbolic-ref', '--short', '-q', 'HEAD'));
+  const built = branch ? `\`${branch}\` at commit ${commit}` : `commit ${commit}`;
+  const after = /^(.+)-(\d+)-g[0-9a-f]+$/.exec(git('describe', '--tags', sha) ?? '');
+  const where = after
+    ? `${after[2]} commit${after[2] === '1' ? '' : 's'} after release ${after[1]}, whose version number it still prints`
+    : `which can be ahead of release ${number}, whose version number it prints`;
+  return (
+    `of takt built from ${built}${changes}, ${where}. What it has beyond the release is under ` +
+    `Unreleased in the [changelog](${SOURCE}/CHANGELOG.md); the release's own \`takt --help\` does not list it`
+  );
+}
 
 function cli() {
   const version = takt(['--version']).trim();
+  const of = origin(version);
   const head = (title, description) =>
     `---\ntitle: ${title}\ndescription: ${description}\ncustom_edit_url: null\n---\n\n<!-- generated by website/scripts/generate.mjs from takt --help; do not edit -->\n\n# ${title}\n\n`;
   let page = head('CLI', 'Every takt command and its options, from the binary\'s own help.');
-  page += `Generated from \`takt <command> --help\` of \`${version}\`.\n\n`;
+  page += `Generated from \`takt <command> --help\` ${of}.\n\n`;
   page += '```text\n' + help([]).trim() + '\n```\n';
   let codes = head('Exit codes', 'What each takt command\'s exit code means, from the binary\'s own help.');
-  codes += `Generated from \`takt <command> --help\` of \`${version}\`. A run's outcome lives in files and the exit code, never only in a process, so a script or an orchestrator can drive takt from the code alone.\n`;
-  for (const args of COMMANDS) {
+  codes += `Generated from \`takt <command> --help\` ${of}. A run's outcome lives in files and the exit code, never only in a process, so a script or an orchestrator can drive takt from the code alone.\n`;
+  const all = commands();
+  for (const args of all) {
     const name = `takt ${args.join(' ')}`;
     const text = help(args).trim();
     page += `\n## ${name}\n\n\`\`\`text\n${text}\n\`\`\`\n`;
@@ -165,7 +228,7 @@ function cli() {
   const dir = join(website, 'docs', 'reference');
   writeFileSync(join(dir, 'cli.md'), page);
   writeFileSync(join(dir, 'exit-codes.md'), codes);
-  console.log(`cli: ${COMMANDS.length} commands from ${version}`);
+  console.log(`cli: ${all.length} commands (${all.map((a) => a.join(' ')).join(', ')}) from ${version}`);
 }
 
 function viewer() {

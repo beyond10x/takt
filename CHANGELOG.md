@@ -43,12 +43,25 @@ A release is cut by an annotated tag `<major>.<minor>.<patch>` whose version equ
 - The session's scratch copy carries the case tree's git state through a `.git` file naming a
   git directory outside the copy, so Claude Code's start-up git commands answer there as in the
   tree; the case tree's `.git` is never written, and an edit under `.git` is refused.
+- On the Claude route a judgement step's prompt names each file its story's `## Scope` lists as
+  a file mention (`@todo.py`), so the step starts with those files read: relative, tracked and
+  not ignored at the step's HEAD, outside `.engineering/`, reached through no link, at most 8
+  files and 64 KiB, each passing the credential check and, under a gates policy, the scan; Codex
+  and b10x-harness get no such line (story:step-spends-a-request-reading-its-scope-files, the
+  trial agent's candidate of the 0.6.0 cycle).
 
 ### Repository
 
 - `b10x-loom-sdk` 0.27.0 → 0.28.0, now a dependency of `b10x-takt`; `metaharness` 0.10.1 through
   the new crate `b10x-session-executor`, which depends on no takt crate; `metaharness-b10x`
   0.10.1 beside it.
+- The site fixes the 44 defects of its 2026-10-20 screen but the AEP card's family styling, which
+  only the shared template can give, and the runs charts' titles and legends, which still scroll
+  with the chart on a phone: pages say what the code, the CHANGELOG and
+  `takt --help` say, the CLI reference lists every command from the help, code wraps, tables and
+  charts fit their column, the protocol viewer follows the site's theme and navbar, and the
+  navbar, footer, home cards, social image and 404 page fit every width; `site-check` fails a
+  page on text under 12 px, console errors, failed requests and an ignored stored theme.
 
 ## [0.6.0] — 2026-10-20
 

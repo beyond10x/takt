@@ -1,22 +1,71 @@
-/* The home page's palette, type and column, so the two pages read as one site. */
-:root {
+/* The documentation site's palette, type and navbar, so the viewer reads as one of its pages. The
+   colour mode is the site's: <html data-theme> is set from the reader's choice on the site, else
+   from the system's scheme (src/theme.js). */
+:root, html[data-theme='light'] {
   --canvas: #f6f8f5; --panel: #fff; --heading: #0f1b1c; --text: #26332f; --muted: #4f625d;
   --accent: #17684a; --hairline: #d6dfda; --code: #eaf0ec;
-  --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  /* The graph's node kinds, also the legend's: fill, line and the label on the fill. */
+  --action-fill: #e8f2ec; --action-line: #17684a; --action-ink: #0f1b1c;
+  --evidence-fill: #eef1f6; --evidence-line: #5b6b86; --evidence-ink: #0f1b1c;
+  --claim-fill: #ffffff; --claim-line: #17684a; --claim-ink: #0f1b1c;
+  --capability-fill: #fff4e0; --capability-line: #b07a12; --capability-ink: #0f1b1c;
+  --outcome-fill: #17684a; --outcome-line: #17684a; --outcome-ink: #ffffff;
+  --obligation-fill: #f6eef6; --obligation-line: #86568a; --obligation-ink: #0f1b1c;
+  --decision-fill: #f2f2f2; --decision-line: #666666; --decision-ink: #0f1b1c;
+  --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "Fira Code", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --column: 60rem;
 }
-@media (prefers-color-scheme: dark) {
-  :root { --canvas: #101a1b; --panel: #172324; --heading: #f1f6f3; --text: #d5dfdb; --muted: #a8b8b3;
-    --accent: #b6e5ce; --hairline: #314244; --code: #101b1c; }
+html[data-theme='dark'] {
+  --canvas: #101a1b; --panel: #172324; --heading: #f1f6f3; --text: #d5dfdb; --muted: #a8b8b3;
+  --accent: #b6e5ce; --hairline: #314244; --code: #101b1c;
+  --action-fill: #1b3a2e; --action-line: #b6e5ce; --action-ink: #f1f6f3;
+  --evidence-fill: #1f2a3a; --evidence-line: #a9b8d4; --evidence-ink: #f1f6f3;
+  --claim-fill: #172324; --claim-line: #b6e5ce; --claim-ink: #f1f6f3;
+  --capability-fill: #352c17; --capability-line: #efd09a; --capability-ink: #f1f6f3;
+  --outcome-fill: #17684a; --outcome-line: #b6e5ce; --outcome-ink: #ffffff;
+  --obligation-fill: #2e2232; --obligation-line: #dcb6e0; --obligation-ink: #f1f6f3;
+  --decision-fill: #243031; --decision-line: #8fa39e; --decision-ink: #f1f6f3;
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--canvas); color: var(--text); font: 1rem/1.7 var(--sans); }
-.site { background: var(--panel); border-bottom: 1px solid var(--hairline); }
-.site div { max-width: calc(var(--column) + 3rem); margin: 0 auto; padding: .7rem 1.5rem; display: flex; flex-wrap: wrap; gap: .3rem 1.4rem; align-items: baseline; }
-.site a { text-decoration: none; font-size: .95rem; }
-.site a.brand { color: var(--heading); font-weight: 700; font-size: 1.15rem; letter-spacing: -.03em; margin-right: auto; }
-.site a[aria-current] { color: var(--heading); font-weight: 600; }
+body { margin: 0; background: var(--canvas); color: var(--text); font: 1rem/1.7 var(--sans); font-feature-settings: "cv11", "ss01"; font-optical-sizing: auto; -webkit-font-smoothing: antialiased; }
+:where(code, kbd, samp, pre) { font-variant-ligatures: none; }
+
+/* The navbar: the site's (the docs-system product layer over Infima), at the same sizes, as a docs
+   page draws it (website/src/css/custom.css): it spans the window, 1.5 rem from each edge. */
+.navbar { position: sticky; top: 0; z-index: 10; display: flex; height: 4.6rem; padding: .5rem 1.5rem; background: var(--canvas); line-height: 1.65; }
+.navbar__inner { display: flex; flex-wrap: wrap; justify-content: space-between; width: 100%; border-bottom: 1px solid var(--hairline); }
+.navbar__items { display: flex; flex: 1; align-items: center; min-width: 0; }
+.navbar__items--right { flex: 0 0 auto; justify-content: flex-end; margin-left: .4rem; }
+.navbar__items--right > :last-child { padding-right: 0; }
+.navbar__brand { display: flex; align-items: center; gap: .75rem; min-width: 0; margin-right: 2.25rem; color: var(--heading); text-decoration: none; }
+.navbar__brand::before {
+  display: grid; flex: none; place-items: center; inline-size: 2rem; block-size: 2rem;
+  border: 1px solid var(--accent); border-radius: .5rem; background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent); content: var(--mark, none); font: 650 .95rem/1 var(--sans); letter-spacing: -.02em;
+}
+.navbar__title { flex: 1 1 auto; overflow: hidden; font-size: 1.3rem; font-weight: 750; letter-spacing: -.03em; text-overflow: ellipsis; white-space: nowrap; }
+.navbar__title::after { margin-left: .7rem; color: var(--muted); content: "/ beyond10x"; font-size: .76rem; font-weight: 400; letter-spacing: 0; }
+.navbar__brand + .navbar__item { margin-left: auto; }
+.navbar__item { display: inline-block; padding: .25rem .75rem; }
+.navbar__link { color: var(--muted); font-size: .84rem; font-weight: 450; text-decoration: none; white-space: nowrap; }
+/* Between 997 and 1199 px the labels and the whole wordmark fit only with the site's narrower
+   spacing; without it Self-improvement wrapped and the wordmark was cut to "takt / beyon…". */
+@media (min-width: 997px) and (max-width: 1199px) {
+  .navbar__item { padding-inline: .5rem; }
+  .navbar__brand { margin-right: 1.25rem; }
+}
+.navbar__link:hover { color: var(--heading); }
+.navbar__link--active { color: var(--heading); box-shadow: inset 0 -1px 0 var(--accent); }
+.navbar__link svg { margin-left: .3rem; }
+.clean-btn { padding: 0; border: none; background: none; color: var(--muted); font-family: inherit; cursor: pointer; }
+.toggle { width: 2rem; height: 2rem; }
+.toggle button { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; border-radius: 50%; }
+.toggle button:hover { background: var(--hairline); }
+.toggle svg { display: none; }
+[data-theme-choice='system'] .toggle .system, [data-theme-choice='light'] .toggle .light, [data-theme-choice='dark'] .toggle .dark { display: initial; }
+.navbar__menu, .navbar__menu:not([open]) .navbar__sheet { display: none; }
+
 main { max-width: calc(var(--column) + 3rem); margin: 0 auto; padding: 3.5rem 1.5rem 4rem; }
 h1 { color: var(--heading); font-size: clamp(2.2rem, 5vw, 3rem); font-weight: 620; letter-spacing: -.05em; line-height: 1.08; margin: 0 0 1rem; }
 h2 { color: var(--heading); font-size: 1.35rem; font-weight: 620; letter-spacing: -.02em; margin: 2.4rem 0 .4rem; }
@@ -33,6 +82,21 @@ code { font-family: var(--mono); font-size: .85rem; background: var(--code); pad
 .tabs button span { display: block; color: var(--muted); font-size: .8rem; font-family: var(--mono); }
 .tabs button.on { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
 table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--hairline); border-radius: 8px; font-size: .9rem; }
+/* A table wider than the column (an action's names do not break, and the actions table needs
+   about 49 rem) scrolls inside its own frame, not the page, and shades the edge that has more, as
+   the site's tables do (website/src/css/custom.css): the shade is drawn at the frame's edge and
+   covered by a band of the panel's colour that moves with the content. */
+@media (min-width: 40.0625rem) {
+  table {
+    display: block; overflow-x: auto;
+    background:
+      linear-gradient(to right, var(--panel) 40%, transparent) left / 3rem 100% no-repeat local,
+      linear-gradient(to left, var(--panel) 40%, transparent) right / 3rem 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--heading) 30%, transparent), transparent) left / 1.1rem 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--heading) 30%, transparent), transparent) right / 1.1rem 100% no-repeat scroll,
+      var(--panel);
+  }
+}
 th, td { text-align: left; vertical-align: top; padding: .5rem .7rem; border-bottom: 1px solid var(--hairline); }
 th { color: var(--heading); font-weight: 600; background: var(--code); }
 .tools { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin: .6rem 0; font-size: .85rem; }
@@ -46,12 +110,41 @@ th { color: var(--heading); font-weight: 600; background: var(--code); }
 .relations ul { margin: .2rem 0; padding-left: 1.2rem; }
 .relations li { margin: .2rem 0; }
 .k { padding: 0 .35em; border-radius: 4px; border: 1px solid var(--hairline); }
-.k.action { border-color: #17684a; } .k.evidence { border-color: #5b6b86; } .k.claim { border-color: #17684a; border-radius: 1em; }
-.k.capability { border-color: #b07a12; } .k.outcome { background: #17684a; color: #fff; } .k.obligation { border-color: #86568a; }
+.k.action { background: var(--action-fill); border-color: var(--action-line); color: var(--action-ink); }
+.k.evidence { background: var(--evidence-fill); border-color: var(--evidence-line); color: var(--evidence-ink); }
+.k.claim { background: var(--claim-fill); border-color: var(--claim-line); color: var(--claim-ink); border-radius: 1em; }
+.k.capability { background: var(--capability-fill); border-color: var(--capability-line); color: var(--capability-ink); }
+.k.outcome { background: var(--outcome-fill); border-color: var(--outcome-line); color: var(--outcome-ink); }
+.k.obligation { background: var(--obligation-fill); border-color: var(--obligation-line); color: var(--obligation-ink); }
 footer { margin-top: 4rem; padding-top: 1.5rem; border-top: 1px solid var(--hairline); color: var(--muted); font-size: .9rem; }
+
+/* At the site's phone breakpoint the links and the colour mode toggle move into a menu behind one
+   button, as on the site's pages. */
+@media (max-width: 996px) {
+  .navbar__brand { margin-right: auto; }
+  .navbar__item, .navbar__items--right { display: none; }
+  .navbar__menu { display: block; margin-left: .75rem; }
+  .navbar__menu > summary {
+    display: grid; place-items: center; inline-size: 2.5rem; block-size: 2.5rem; list-style: none;
+    border: 1px solid var(--hairline); border-radius: .5rem; color: var(--heading); cursor: pointer;
+  }
+  .navbar__menu > summary::-webkit-details-marker { display: none; }
+  .navbar__menu > summary:hover { border-color: var(--accent); }
+  .navbar__menu > summary svg { inline-size: 1.15rem; block-size: 1.15rem; }
+  .navbar__sheet {
+    position: absolute; top: calc(100% - .25rem); right: 1.5rem; left: 1.5rem; display: flex; flex-direction: column; gap: .15rem;
+    padding: .75rem; border: 1px solid var(--hairline); border-radius: .5rem; background: var(--canvas); box-shadow: 0 16px 40px rgb(0 0 0 / 18%);
+  }
+  .navbar__sheet a { padding: .55rem .85rem; border-radius: 5px; color: var(--text); font-weight: 500; text-decoration: none; }
+  .navbar__sheet a[aria-current] { color: var(--heading); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .navbar__sheet a svg { margin-left: .3rem; }
+  .navbar__sheet .toggle { margin: .3rem 0 0 .5rem; }
+}
+@media (max-width: 560px) {
+  .navbar__title::after { display: none; }
+}
 @media (max-width: 40rem) {
   main { padding: 2.2rem 1.1rem 3rem; }
-  .site div { padding: .6rem 1.1rem; }
   .tabs button { width: 100%; }
   table.stack, table.stack tbody, table.stack tr, table.stack td { display: block; width: 100%; }
   table.stack tr:first-child { display: none; }

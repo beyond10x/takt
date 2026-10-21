@@ -10,7 +10,7 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
 ---
 # Story: the-cli-suite-fits-its-ci-budget
 
@@ -44,6 +44,20 @@ through a metaharness session in a scratch copy (story:harness-proposes-takt-per
 every CLI test with a fake `claude` now takes. Comes from self-improvement work, so it carries
 `rsi`.
 
+Since wave 24 (main 0fab445): run 39483288396 attempt 2 ended on the same 30-minute limit
+(19:43:07 to 20:13:26 UTC on 2026-10-20), every binary it reached green; the summed test-binary
+time was 1401 s over 139 binaries against 839 s at fd395d2 (0.6.0). The job's limit moved to 45
+minutes as a stopgap (149a4e2, the orchestrator's word); this story brings it back to 30. The
+five slowest test binaries at 0fab445 against 0.6.0, from the job logs:
+
+| binary | fd395d2 (0.6.0) | 0fab445 (attempt 2) |
+|---|---|---|
+| `self_improvement_cli` | 155.4 s | 354.6 s |
+| `gate_compares_imports` | 58.6 s | 137.3 s |
+| `gate_validator` | 47.7 s | 117.0 s |
+| `scenario_run` | 40.4 s | 86.9 s |
+| `hours_bounds_the_run_end` | 88.8 s | 74.0 s |
+
 ## Scope
 
 - `crates/takt-cli/tests/self_improvement_cli.rs` first, then the next binaries by growth; the
@@ -57,5 +71,5 @@ every CLI test with a fake `claude` now takes. Comes from self-improvement work,
    session, git, the gate's commands, waits), each figure from a command's output.
 2. Each cause takt owns is fixed or split into its own CI job, with the before and after times;
    a cause that is the runner is named as such with the evidence.
-3. `check.yml` on main finishes in under two thirds of its `timeout-minutes` for three
-   consecutive runs.
+3. `check.yml` on main finishes in under two thirds of 30 minutes for three
+   consecutive runs, and the job's `timeout-minutes` is back at 30.

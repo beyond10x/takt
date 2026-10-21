@@ -5,13 +5,16 @@ import { reads } from "./predicate.js";
 const id = (kind, name) => `${kind}_${String(name).replace(/[^A-Za-z0-9_]/g, "_")}`;
 const label = (text) => `"${String(text).replace(/"/g, "'")}"`;
 
+export const KINDS = ["action", "evidence", "claim", "capability", "outcome", "obligation", "decision"];
+
 // The same relations as a list, for a screen too narrow for the graph: [from, relation, to], each
 // end a [kind, name] pair.
 export function relations(doc) {
-  return flowchart(doc, true);
+  return flowchart(doc, null, true);
 }
 
-export function flowchart(doc, asList = false) {
+// palette: per kind of KINDS, its { fill, line, ink } colours for the current colour mode.
+export function flowchart(doc, palette, asList = false) {
   const lines = ["flowchart LR"];
   const list = [];
   const rel = (from, verb, to) => list.push([from, verb, to]);
@@ -86,14 +89,10 @@ export function flowchart(doc, asList = false) {
       rel(["decision", d], "is required by", ["outcome", name]);
     }
   }
-  lines.push(
-    "  classDef action fill:#e8f2ec,stroke:#17684a,color:#0f1b1c",
-    "  classDef evidence fill:#eef1f6,stroke:#5b6b86,color:#0f1b1c",
-    "  classDef claim fill:#ffffff,stroke:#17684a,color:#0f1b1c",
-    "  classDef capability fill:#fff4e0,stroke:#b07a12,color:#0f1b1c",
-    "  classDef outcome fill:#17684a,stroke:#17684a,color:#ffffff",
-    "  classDef obligation fill:#f6eef6,stroke:#86568a,color:#0f1b1c",
-    "  classDef decision fill:#f2f2f2,stroke:#666,color:#0f1b1c",
-  );
-  return asList ? list : lines.join("\n");
+  if (asList) return list;
+  for (const kind of KINDS) {
+    const { fill, line, ink } = palette[kind];
+    lines.push(`  classDef ${kind} fill:${fill},stroke:${line},color:${ink}`);
+  }
+  return lines.join("\n");
 }

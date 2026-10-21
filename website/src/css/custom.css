@@ -1,6 +1,9 @@
-/* The site check refuses text under 11 px (story:docs-site-with-sidebar). The docs-system sets
-   these small-caps labels between 9.6 and 10.9 px; they are raised to 12 px here. `html` makes
-   each rule win over the docs-system's, which loads after this file. */
+/* The site check refuses text under 12 px, a ::before's or ::after's included, and a chart's text
+   under 11 px (scripts/site-check.mjs; story:docs-site-with-sidebar set 11). The docs-system sets
+   these small-caps labels between 9.6 and 10.9 px and its other small text (kickers, counters,
+   the status source line, the footer's titles and lines, code labels, the pager's labels) between
+   9.9 and 11.5 px; all of it is raised to 12 px here. `html` makes each rule win over the
+   docs-system's, which loads after this file. */
 html .theme-doc-sidebar-item-category-level-1 .menu__link--sublist,
 html [class*='categoryLinkLabel'],
 html .markdown table th,
@@ -10,6 +13,261 @@ html .b10x-status--shipped,
 html .b10x-status--decided,
 html .b10x-status--planned,
 html .b10x-flow__label,
-html .b10x-status-strip__group-title {
+html .b10x-status-strip__group-title,
+html .b10x-kicker,
+html .b10x-kpi__index,
+html .b10x-feature::before,
+html .b10x-status-strip__source,
+html .footer__title,
+html .footer__copyright,
+html .b10x-build-line,
+html .pagination-nav__sublabel,
+html .theme-code-block[class*='language-']::before,
+html .theme-code-block > [class*='codeBlockTitle']::after {
   font-size: 0.75rem;
+}
+
+/* Edges. The landing, its navbar and its footer share one column, 1240 px less 3 rem a side
+   (1.5 rem a side up to 996 px); the footer drops Infima's own 2 rem a side, which set it 12 px
+   inside that column at 1280 px. A docs page spans the window, and its navbar and footer start
+   where the sidebar's text does, 1.5 rem from the edge, as Docusaurus's navbar does. */
+html .footer {
+  padding-inline: 0;
+}
+html.plugin-docs .navbar {
+  padding-inline: 1.5rem;
+}
+html.plugin-docs .navbar__inner {
+  max-width: none;
+}
+html.plugin-docs .footer .container {
+  max-width: none;
+  padding-inline: 1.5rem;
+}
+
+/* The navbar's labels stay on one line. Between 997 and 1199 px nine items and the whole
+   wordmark fit only with narrower spacing; with the docs-system's, Self-improvement and
+   Protocols wrapped and the wordmark was cut to "takt / beyon…". */
+html .navbar__link {
+  white-space: nowrap;
+}
+@media (min-width: 997px) and (max-width: 1199px) {
+  html .navbar__item {
+    padding-inline: 0.5rem;
+  }
+  html .navbar__brand {
+    margin-right: 1.25rem;
+  }
+}
+
+/* A link in running text is underlined: its colour alone sets it 1.18:1 from the text around it
+   in dark mode and 2.2:1 in light, under the 3:1 a colour-only cue needs (WCAG 1.4.1). */
+html :is(.markdown, .takt-not-found) a:not(.hash-link) {
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.22em;
+}
+
+/* Landing. The hero's second line is balanced on its own: across the forced break the docs-system
+   puts after the first, `text-wrap: balance` left "counts." alone on a line at 1280 px. */
+html .b10x-hero h1 em {
+  display: block;
+  text-wrap: balance;
+}
+
+/* Each feature card and each related-tool card is a subgrid of its grid's rows, so the cards in a
+   row share their rows: a title that wraps moves the badge, the text and the relation line of
+   every card in its row, not of its own alone. The gaps between rows of cards become each card's
+   own bottom padding, which the grid's negative margin takes back after the last row. */
+html .b10x-feature-grid {
+  --takt-feature-gap: 2.5rem;
+  row-gap: 0;
+  margin-bottom: calc(-1 * var(--takt-feature-gap));
+}
+html .b10x-feature {
+  display: grid;
+  grid-row: span 4;
+  grid-template-rows: subgrid;
+  row-gap: 0;
+  align-items: start;
+  padding-bottom: var(--takt-feature-gap);
+}
+html .b10x-feature > .b10x-status {
+  justify-self: start;
+}
+@media (max-width: 996px) {
+  html .b10x-feature-grid {
+    --takt-feature-gap: 1.6rem;
+  }
+}
+html .b10x-related {
+  row-gap: 0;
+  margin-bottom: -1rem;
+}
+html .b10x-related > li {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  row-gap: 0;
+  padding-bottom: 1rem;
+}
+html .b10x-related__card {
+  grid-row: 1 / -1;
+  grid-template-rows: subgrid;
+  row-gap: 0.3rem;
+}
+html .b10x-related__copy {
+  display: contents;
+}
+html .b10x-related__copy > * {
+  grid-column: 2;
+}
+/* Four related tools sit four across or two by two, never three and one: four across from
+   1168 px, where each card keeps the docs-system's 16 rem, one a row under 576 px. */
+html .b10x-related:has(> li:nth-child(4):last-child) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (min-width: 1168px) {
+  html .b10x-related:has(> li:nth-child(4):last-child) {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media (max-width: 575px) {
+  html .b10x-related:has(> li:nth-child(4):last-child) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A status item's detail sits under its title: the item stretches to the tallest item in its
+   row, and the docs-system let its two rows share the extra height, which left the detail of a
+   one-line title up to 35 px below it. */
+html .b10x-status-strip__items li {
+  align-content: start;
+}
+
+/* The status bar grows as one: the docs-system scales each segment from its own left edge, so
+   while the bar scrolls in, the shipped segment ends short of the decided one and leaves an
+   unlabelled hole (92 px at 85 % of a 900 px window). The bar is revealed instead, left to
+   right, on the same timeline. */
+@media (prefers-reduced-motion: no-preference) {
+  html .b10x-status-strip__segment {
+    animation: none;
+  }
+  html .b10x-status-strip__bar {
+    animation: takt-reveal 700ms cubic-bezier(0.2, 0.7, 0.2, 1) 150ms backwards;
+  }
+  @supports (animation-timeline: view()) {
+    html .b10x-status-strip__bar {
+      animation-delay: 0s;
+      animation-timeline: view();
+      animation-range: entry 0% cover 35%;
+    }
+  }
+}
+@keyframes takt-reveal {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+/* An admonition's title is shown as written: Docusaurus capitalises it
+   (theme-classic Admonition/Layout/styles.module.css, .admonitionHeading), which turned
+   `:::warning[macOS]` into MACOS. Every admonition here therefore carries its own title. */
+html .theme-admonition [class*='admonitionHeading'] {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* A code block wraps instead of running past its box: the CLI reference's help blocks hold each
+   option's description on one line. A line that does not fit goes on indented, by the 10 columns
+   of a help description in plain text (4 on a phone), by 4 in a command. Only the display wraps:
+   the text, and what the copy button copies, are unchanged. */
+html .theme-code-block pre > code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+html .theme-code-block .token-line {
+  padding-inline-start: var(--takt-hang, 4ch);
+  text-indent: calc(-1 * var(--takt-hang, 4ch));
+}
+html .theme-code-block.language-text {
+  --takt-hang: 10ch;
+}
+@media (max-width: 600px) {
+  html .theme-code-block.language-text {
+    --takt-hang: 4ch;
+  }
+}
+
+/* A table's frame (scripts/rehype-layout.mjs) and a chart's (Chart.tsx) scroll sideways when what
+   they hold is wider than the column, and shade the edge that has more. The shade is drawn at
+   the frame's edge and covered by a band of the page's colour that moves with the content, so it
+   shows only where content is hidden. */
+html .takt-scroll,
+html .takt-chart {
+  overflow-x: auto;
+  background:
+    linear-gradient(to right, var(--b10x-color-canvas) 40%, transparent) left / 3rem 100% no-repeat local,
+    linear-gradient(to left, var(--b10x-color-canvas) 40%, transparent) right / 3rem 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--b10x-color-heading) 30%, transparent), transparent) left / 1.1rem 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--b10x-color-heading) 30%, transparent), transparent) right / 1.1rem 100% no-repeat scroll;
+}
+html .takt-scroll {
+  max-inline-size: 100%;
+  margin-bottom: var(--ifm-spacing-vertical);
+}
+html .takt-scroll > table {
+  margin-bottom: 0;
+}
+html .takt-chart > svg {
+  display: block;
+  inline-size: 100%;
+  min-inline-size: var(--takt-chart-min, 0);
+  max-inline-size: var(--takt-chart-width, none);
+  block-size: auto;
+}
+
+/* On paper nothing scrolls, so a frame shows all it holds: a table fits the page, in smaller
+   type and with its words breaking where they must, and a chart scales to the column (its text then falls under the 11 px
+   floor, which is the screen's). Without this the runs page's nine-column table and both charts
+   were cut at the frame's edge. */
+@media print {
+  html .takt-scroll,
+  html .takt-chart {
+    overflow: visible;
+    background: none;
+  }
+  html .takt-scroll > table {
+    display: table;
+    inline-size: 100%;
+    font-size: 0.7rem;
+  }
+  html .takt-scroll th {
+    overflow-wrap: anywhere;
+  }
+  html .takt-scroll td {
+    overflow-wrap: break-word;
+  }
+  html .takt-scroll .takt-word {
+    white-space: normal;
+  }
+  html .takt-chart > svg {
+    min-inline-size: 0;
+  }
+}
+
+/* A word of code, of a table header or of a one-word table cell does not break at its own
+   hyphens or slashes (`--rejudge`, `held-out`, src/words.mjs); a long one still wraps when it is
+   wider than its line, without the hanging indent of the code line around it. */
+html .takt-word {
+  white-space: nowrap;
+}
+html .takt-word--long {
+  display: inline-block;
+  max-inline-size: 100%;
+  white-space: inherit;
+  text-indent: 0;
 }

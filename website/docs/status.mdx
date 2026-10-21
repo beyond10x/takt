@@ -8,12 +8,28 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-0.1.0 was the first release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
-`scorecard`, `trace`, `report` and `promote`, with `story.delivery/1` embedded, and prebuilt
-binaries for Linux (x86_64, aarch64) and macOS (aarch64). 0.2.1 published the 0.2 line: the judge
-guard, and `self.improvement/1` turns that end `unreproducible` or `declined`
-([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md)). 0.2.2 lets a turn reach
-`accepted` on validators' records.
+0.6.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+`scorecard`, `trace`, `report`, `view`, `promote` and `replay`, with `story.delivery/1` and
+`self.improvement/1` embedded, and prebuilt binaries for Linux (x86_64, aarch64) and macOS
+(aarch64). Its one harness is Claude Code (`--harness claude`), or `none` to run validators only.
+
+How it got there ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md)):
+
+| release | what it added |
+|---|---|
+| 0.1.0 | the first release: `run`, `approve`, `protocols`, `scenario run`, `scorecard`, `trace`, `report` and `promote`, with `story.delivery/1` embedded |
+| 0.2.1 | the 0.2 line (0.2.0 was tagged, not published): the judge guard, and `self.improvement/1` turns that end `unreproducible` or `declined` |
+| 0.2.2 | a turn reaches `accepted` on validators' records: the merge validators and `binary.promote` |
+| 0.2.3 | a Claude step is offered only the tools it may use (`--tools` beside `--allowedTools`): on scenario 1 with one fixed prompt, a step's first request fell from 12,554 to 5,550 prompt tokens |
+| 0.3.0 | a promotion judged against the start of its series and on every scenario either side has; the `Unperformable` and `DiskLow` stops; each harness step's transcript kept |
+| 0.4.0 | `takt view`; one commit identity on every commit takt makes; a `--forge none` delivery handed over as a candidate |
+| 0.5.0 | `takt replay`; the `--active-seconds` budget and its `ActiveTime` stop; `takt scorecard --steps`, judging the steps a candidate targets |
+| 0.6.0 | a run records the layers it ran on, and `takt report` attributes tokens, cost and time to them; a run whose harness step recorded no tokens has unknown tokens, never a sum that counts the step as 0 |
+
+On `main`, not yet released (Unreleased in the changelog): every harness runs through one
+metaharness session, and `--harness` takes `codex` (Codex) and `harness` (b10x-harness) beside
+`claude`. The harness's change comes back as a proposal, which takt writes to the case's tree only
+after the step guard admits it.
 
 | milestone | state |
 |---|---|
@@ -21,15 +37,16 @@ guard, and `self.improvement/1` turns that end `unreproducible` or `declined`
 | M2 a story end to end | built; not yet proven with the grant as the only manual step |
 | unattended scenario 1 | next: accepted with one invocation plus one grant, daily for a week |
 | self-improvement | phase R0. Turns 1 to 3 were accepted from records written by hand (2026-10-18 and 2026-10-19). On 2026-10-19 takt drove three turns to `accepted` and promoted their candidates, every claim recorded by a validator, in scratch state under `--forge none` ([Turns](./self-improvement/turns.md)). Next: a turn promoted in the installed takt's own store |
-| M3 to M5 | workflows as `workflow/1` files, a second harness and the confinement seam, a week of daily runs: not built |
-| continuous runs | designed, not built |
+| M3 to M5 | a second harness: on `main` since [wave 24](https://github.com/beyond10x/takt/blob/main/docs/waves/wave-24.md), not yet released (`--harness codex`, `--harness harness`); 0.6.0 runs Claude Code only. The [CLI reference](./reference/cli.md) is the help of `main`, not of 0.6.0, so it lists both. Workflows as `workflow/1` files, the confinement seam and a week of daily runs: not built |
+| continuous runs | a run that plans its next stories and works a wave with parallel workers: designed, not built. The shipped story under Continuous orchestration below is how takt's own waves are delivered today, by one dispatcher session; it is not a takt run |
 
 ## Every story
 
 The planning store at {counts.revision} holds {counts.total} stories that are not archived:
 {counts.counts.implemented ?? 0} implemented, {counts.counts.active ?? 0} in an open wave,
 {counts.counts.proposed ?? 0} proposed and {counts.counts.draft ?? 0} drafts. The table lists the
-first two groups: **Shipped** is `implemented`, **Decided** is `active`. Proposed stories and
+first two groups: **Shipped** is `implemented`, merged into `main`, which can be ahead of the latest
+release; **Decided** is `active`. Proposed stories and
 drafts are in
 [`.engineering/planning/story/`](https://github.com/beyond10x/takt/tree/main/.engineering/planning/story).
 

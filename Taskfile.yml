@@ -33,7 +33,7 @@ tasks:
       - npm --prefix website run build
 
   site-check:
-    desc: Screenshot every page of the built site at 1440 and 390 px into website/.site-check with headless Chrome; fail on horizontal scroll, text under 11 px or intersecting chart labels.
+    desc: Screenshot every page of the built site at 1440 and 390 px into website/.site-check with headless Chrome; fail on horizontal scroll, text under 12 px (11 px inside charts) or intersecting chart labels.
     cmds:
       - task: site-build
       - npm --prefix website run site-check

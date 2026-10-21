@@ -40,6 +40,11 @@ pub struct StepContext<'a> {
     pub time_left: Option<std::time::Duration>,
     /// The change the case has made so far, as the step is shown it.
     pub change: &'a ChangeSoFar,
+    /// The revision whose tree the scope files the prompt attaches are read from
+    /// ([`scope_files`]): a replay rebuilding a recorded step's prompt in the repository names
+    /// the revision the step started at; none for a step in a tree, read at its `HEAD` and on
+    /// disk.
+    pub scope_revision: Option<&'a str>,
 }
 
 /// What a step reported.
@@ -407,10 +412,8 @@ impl Harness for SessionHarness {
         let started_at = crate::events::instant();
         let prompt = ClaudeCode::prompt_with(
             context,
-            match self.kind {
-                Kind::Codex => ClaudeCode::SHELL_RULE,
-                _ => ClaudeCode::FILE_TOOLS_RULE,
-            },
+            ClaudeCode::rule_of(self.kind),
+            crate::run::ChangeScan::from_env().as_ref(),
         );
         let mut opening = serde_json::json!({
             "type": "takt.prompt",
@@ -615,6 +618,205 @@ impl ChangeSoFar {
     }
 }
 
+/// The most files a judgement step's prompt attaches from its intent's scope ([`scope_files`]).
+pub const SCOPE_FILES: usize = 8;
+
+/// The most bytes the files a judgement step's prompt attaches hold in all ([`scope_files`]).
+pub const SCOPE_BYTES: u64 = 64 << 10;
+
+/// The files of `tree` the intent's `## Scope` section names in backticks that a judgement
+/// step's prompt attaches as Claude Code file mentions (`@<path>`), so the step starts with them
+/// read, in the order named and each once. A path is kept only when all hold: it is relative,
+/// has no `.` or `..` component and holds no white space, quote, backslash, `#`, `@` or control
+/// character ([`plain_scope_path`]); every part of its way from `tree`, read without following
+/// a link, is a directory that is no link, and it ends in a regular file; git tracks it as a
+/// regular file at `HEAD` and does not ignore it; it lies outside `.engineering/`; the change
+/// so far does not show it whole already. Paths resolve against `tree`, never the working
+/// directory. At most [`SCOPE_FILES`] files and [`SCOPE_BYTES`] in all: a file past either is
+/// left out. A file whose bytes hold text of a credential's shape
+/// ([`crate::run::credential_shape`], read in process, so with or without a policy) is left
+/// out. Under `scan` (`B10X_GATES_POLICY`), only a file whose bytes the scan of the change so
+/// far passes ([`crate::run::scan_change`]); a file it refuses or cannot scan is left out. A git
+/// read that fails attaches nothing.
+///
+/// At a revision `at` (a replay rebuilding a recorded step's prompt in the repository the case's
+/// commits are in), the files are read as that revision's tree holds them in place of `HEAD`
+/// and the files on disk: tracked there as a regular file (a path under a link is not in a
+/// tree), their bytes its blobs.
+#[must_use]
+pub fn scope_files(
+    tree: &Path,
+    at: Option<&str>,
+    intent: &str,
+    change: &ChangeSoFar,
+    scan: Option<&crate::run::ChangeScan>,
+) -> Vec<String> {
+    let mut named: Vec<&str> = Vec::new();
+    for path in scope_paths(intent) {
+        if plain_scope_path(path)
+            && !named.contains(&path)
+            && (at.is_some() || regular_in(tree, path))
+        {
+            named.push(path);
+        }
+    }
+    if named.is_empty() {
+        return Vec::new();
+    }
+    let Ok(tracked) = tracked_at(tree, at.unwrap_or("HEAD"), &named) else {
+        return Vec::new();
+    };
+    let size = |path: &str| {
+        tracked
+            .iter()
+            .find(|(kept, _)| kept == path)
+            .map(|(_, size)| *size)
+    };
+    named.retain(|path| size(path).is_some());
+    let Ok(ignored) = crate::git::ignored_among(tree, &named) else {
+        return Vec::new();
+    };
+    named.retain(|path| !ignored.iter().any(|left| left == path));
+    let whole = shown_whole(change);
+    named.retain(|path| !whole.contains(path));
+    let mut kept = Vec::new();
+    let mut total = 0;
+    for path in named {
+        if kept.len() == SCOPE_FILES {
+            break;
+        }
+        let limit = SCOPE_BYTES - total;
+        let bytes = match at {
+            None => read_plain(&tree.join(path), limit),
+            Some(revision) => size(path)
+                .filter(|size| *size <= limit)
+                .and_then(|_| crate::git::blob(tree, &format!("{revision}:{path}")).ok())
+                .filter(|bytes| bytes.len() as u64 <= limit),
+        };
+        let Some(bytes) = bytes else {
+            continue;
+        };
+        if crate::run::credential_shape(&String::from_utf8_lossy(&bytes)).is_some()
+            || scan.is_some_and(|scan| crate::run::scan_change(tree, scan, &bytes).is_err())
+        {
+            continue;
+        }
+        total += bytes.len() as u64;
+        kept.push(path.to_owned());
+    }
+    kept
+}
+
+/// The spans the intent's `## Scope` section holds in backticks, in order: the lines after a
+/// line `## Scope` up to the next heading of level 1 or 2.
+fn scope_paths(intent: &str) -> Vec<&str> {
+    let mut inside = false;
+    let mut spans = Vec::new();
+    for line in intent.lines() {
+        let line = line.trim_end();
+        let level = line.chars().take_while(|c| *c == '#').count();
+        if (1..=2).contains(&level) && (line.len() == level || line[level..].starts_with(' ')) {
+            inside = level == 2 && line[level..].trim() == "Scope";
+            continue;
+        }
+        if inside {
+            let parts: Vec<&str> = line.split('`').collect();
+            // The odd parts are inside backticks; a last one no backtick closes is not.
+            for (at, part) in parts.iter().enumerate() {
+                if at % 2 == 1 && at + 1 < parts.len() && !part.is_empty() {
+                    spans.push(*part);
+                }
+            }
+        }
+    }
+    spans
+}
+
+/// Whether `path` can be attached as a mention as it is written ([`scope_files`]): relative,
+/// every component a plain name (no empty, `.` or `..` one), outside `.engineering/`, and no
+/// white space, quote, backtick, backslash, `#`, `@` or control character, which would change
+/// what Claude Code reads as the mention (a line range after `#`, another mention, a quoted
+/// path).
+fn plain_scope_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.chars().any(|c| {
+            c.is_whitespace() || c.is_control() || matches!(c, '"' | '\'' | '`' | '\\' | '#' | '@')
+        })
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+        && path.split('/').next() != Some(".engineering")
+}
+
+/// Whether `path` is a regular file of `tree` with no link on its way: each part from `tree`
+/// read without following a link, every one but the last a directory, the last a file.
+fn regular_in(tree: &Path, path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    let mut at = tree.to_path_buf();
+    for (index, part) in parts.iter().enumerate() {
+        at.push(part);
+        let Ok(meta) = std::fs::symlink_metadata(&at) else {
+            return false;
+        };
+        let last = index + 1 == parts.len();
+        if meta.file_type().is_symlink() || (last && !meta.is_file()) || (!last && !meta.is_dir()) {
+            return false;
+        }
+    }
+    true
+}
+
+/// The paths of `paths` git holds at `revision` in `tree` as a regular file (mode `100644` or
+/// `100755`), each with its size in bytes, each named literally (`--literal-pathspecs`).
+fn tracked_at(tree: &Path, revision: &str, paths: &[&str]) -> Result<Vec<(String, u64)>> {
+    let mut args = vec!["--literal-pathspecs", "ls-tree", "-z", "-l", revision, "--"];
+    args.extend_from_slice(paths);
+    let listed = crate::git::bytes(tree, &args)?;
+    Ok(listed
+        .split(|byte| *byte == 0)
+        .filter_map(|entry| {
+            let entry = std::str::from_utf8(entry).ok()?;
+            let (meta, path) = entry.split_once('\t')?;
+            let mut fields = meta.split_whitespace();
+            let mode = fields.next()?;
+            let kind = fields.next()?;
+            let size = fields.nth(1)?.parse().ok()?;
+            (matches!(mode, "100644" | "100755") && kind == "blob").then(|| (path.to_owned(), size))
+        })
+        .collect())
+}
+
+/// The paths the change so far shows whole ([`ChangeSoFar::Shown`] with `whole`): each file of
+/// its diff that is not a test path, read from its `diff --git a/<path> b/<path>` lines.
+fn shown_whole(change: &ChangeSoFar) -> Vec<&str> {
+    let ChangeSoFar::Shown { diff, whole: true } = change else {
+        return Vec::new();
+    };
+    diff.lines()
+        .filter_map(|line| {
+            let (a, b) = line.strip_prefix("diff --git a/")?.split_once(" b/")?;
+            (a == b && !is_test_path(b)).then_some(b)
+        })
+        .collect()
+}
+
+/// The bytes of the regular file at `path`, opened without following a link at it, when it
+/// holds at most `limit`; none for anything else.
+fn read_plain(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= limit).then_some(bytes)
+}
 /// The most bytes a step's transcript holds: past it, its head and its tail
 /// ([`ClaudeCode::transcript`]).
 pub const TRANSCRIPT_CAP: usize = 16 << 20;
@@ -659,6 +861,16 @@ impl Default for ClaudeCode {
             transcript: std::cell::RefCell::new(None),
         }
     }
+}
+
+/// How the harness that takes a step works in it, as its prompt says ([`ClaudeCode::rule_of`]).
+#[derive(Debug, Clone, Copy)]
+struct Rule {
+    /// The rules naming its tools.
+    tools: &'static str,
+    /// Whether it reads `@<path>` in the prompt as a file attached before its first request,
+    /// as Claude Code does: only then does the prompt name the scope files ([`scope_files`]).
+    mentions: bool,
 }
 
 /// The meaning of each action the prompt explains: the adapter's own words for the actions it
@@ -708,8 +920,14 @@ impl ClaudeCode {
         r#"{"disableAllHooks":true}"#,
     ];
 
+    /// The step's prompt for Claude Code, its scope files scanned under the scan the environment
+    /// names ([`crate::run::ChangeScan::from_env`]), as the change so far is.
     fn prompt(context: &StepContext<'_>) -> String {
-        Self::prompt_with(context, Self::FILE_TOOLS_RULE)
+        Self::prompt_with(
+            context,
+            Self::CLAUDE_RULE,
+            crate::run::ChangeScan::from_env().as_ref(),
+        )
     }
 
     /// How a harness with file tools works in the step: Claude Code's, and b10x-harness's.
@@ -722,12 +940,63 @@ impl ClaudeCode {
          apply_patch, inside this directory. Run no build, test or other command that writes; \
          takt runs the tests and records the evidence.";
 
-    /// The prompt, its rules naming the tools of the harness that takes the step (`rule`);
-    /// everything else the same for every harness.
-    fn prompt_with(context: &StepContext<'_>, rule: &str) -> String {
+    /// Claude Code's rule: file tools, and a `@<path>` in the prompt is a file it attaches.
+    const CLAUDE_RULE: Rule = Rule {
+        tools: Self::FILE_TOOLS_RULE,
+        mentions: true,
+    };
+
+    /// b10x-harness's rule: file tools, and no file mentions.
+    const B10X_RULE: Rule = Rule {
+        tools: Self::FILE_TOOLS_RULE,
+        mentions: false,
+    };
+
+    /// Codex's rule: a shell and `apply_patch`, and no file mentions.
+    const CODEX_RULE: Rule = Rule {
+        tools: Self::SHELL_RULE,
+        mentions: false,
+    };
+
+    /// The rule of the harness of `kind` ([`Rule`]).
+    const fn rule_of(kind: Kind) -> Rule {
+        match kind {
+            Kind::Claude => Self::CLAUDE_RULE,
+            Kind::Codex => Self::CODEX_RULE,
+            Kind::B10x => Self::B10X_RULE,
+        }
+    }
+
+    /// The prompt, its rules naming the tools of the harness that takes the step (`rule`), and,
+    /// for a harness whose rule takes file mentions, its scope files ([`scope_files`]) scanned
+    /// under `scan`: each attached as an unquoted, relative mention after white space, on one
+    /// line after the intent. Everything else the same for every harness.
+    fn prompt_with(
+        context: &StepContext<'_>,
+        rule: Rule,
+        scan: Option<&crate::run::ChangeScan>,
+    ) -> String {
         let mut text = String::new();
         text.push_str("You are the judgement step of a governed engineering run (takt).\n\n");
         text.push_str(&format!("Intent: {}\n\n", context.intent));
+        let attached = if rule.mentions {
+            scope_files(
+                context.tree,
+                context.scope_revision,
+                context.intent,
+                context.change,
+                scan,
+            )
+        } else {
+            Vec::new()
+        };
+        if !attached.is_empty() {
+            text.push_str("Files in scope, attached:");
+            for path in &attached {
+                text.push_str(&format!(" @{path}"));
+            }
+            text.push_str("\n\n");
+        }
         text.push_str(&format!(
             "Protocol: {}. Step {}.\n\n",
             context.protocol.id, context.step
@@ -759,7 +1028,7 @@ impl ClaudeCode {
                 text.push_str(&format!("- {action}\n"));
             }
         }
-        text.push_str(&format!("\nRules: {rule}"));
+        text.push_str(&format!("\nRules: {}", rule.tools));
         text.push_str(
             " Do not commit. If the action \
              you pick is `repository.inspect`, change no file. If it is `tests.write`, change test \
@@ -1587,5 +1856,496 @@ mod tests {
             "a result event whose start was cut is not read as one"
         );
         assert_eq!(ClaudeCode::result_line(b"\"b\":2}", true), None);
+    }
+
+    /// A scratch directory under the temporary directory, removed when dropped.
+    struct Scratch(std::path::PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
+        let dir = std::env::temp_dir().join(format!("takt-scope-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        Scratch(dir)
+    }
+
+    fn git(tree: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .current_dir(tree)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// A repository at `tree` holding `files`, all committed.
+    fn committed(tree: &Path, files: &[(&str, &[u8])]) {
+        for (path, bytes) in files {
+            let path = tree.join(path);
+            std::fs::create_dir_all(path.parent().expect("a parent")).expect("its directory");
+            std::fs::write(path, bytes).expect("a file");
+        }
+        git(tree, &["init", "-q", "-b", "main"]);
+        git(tree, &["add", "-A"]);
+        git(tree, &["commit", "-q", "-m", "start"]);
+    }
+
+    /// An intent whose `## Scope` section names each of `paths` in backticks.
+    fn scoped(paths: &[&str]) -> String {
+        let mut intent = "Remove a todo by its number\n\n## Scope\n\n".to_owned();
+        for path in paths {
+            intent.push_str(&format!("- `{path}` (a `remove` command)\n"));
+        }
+        intent
+    }
+
+    fn attached(tree: &Path, paths: &[&str]) -> Vec<String> {
+        scope_files(tree, None, &scoped(paths), &ChangeSoFar::NoneYet, None)
+    }
+
+    const TODO: (&str, &[u8]) = ("todo.py", b"def add(): pass\n");
+    const TESTS: (&str, &[u8]) = ("tests/test_todo.py", b"def test_add(): pass\n");
+
+    /// The paths resolve against the step's tree, never the process's working directory: a
+    /// file only the working directory holds is not attached, one only the tree holds is. Only
+    /// the `## Scope` section is read, each path once.
+    #[test]
+    fn scope_files_are_read_in_the_tree_not_the_working_directory() {
+        let dir = scratch("tree");
+        committed(&dir.0, &[TODO, TESTS, ("extra.py", b"x\n")]);
+        assert!(
+            Path::new("Cargo.toml").is_file(),
+            "the working directory holds it"
+        );
+        assert!(!dir.0.join("Cargo.toml").exists());
+        let intent = format!(
+            "Use `extra.py` too\n\n{}- `todo.py` again\n\n## Notes\n\n- `extra.py`\n",
+            scoped(&["todo.py", "Cargo.toml", "tests/test_todo.py"])
+        );
+        assert_eq!(
+            scope_files(&dir.0, None, &intent, &ChangeSoFar::NoneYet, None),
+            ["todo.py", "tests/test_todo.py"]
+        );
+    }
+
+    /// A tracked file the work tree holds as a link to a file outside is not attached.
+    #[test]
+    fn a_link_to_a_file_outside_is_not_attached() {
+        let dir = scratch("link");
+        let outside = scratch("link-outside");
+        std::fs::write(outside.0.join("secret.py"), "x\n").expect("a file outside");
+        committed(&dir.0, &[TODO, ("notes.py", b"n\n")]);
+        std::fs::remove_file(dir.0.join("notes.py")).expect("removed");
+        std::os::unix::fs::symlink(outside.0.join("secret.py"), dir.0.join("notes.py"))
+            .expect("a link");
+        assert_eq!(attached(&dir.0, &["notes.py", "todo.py"]), ["todo.py"]);
+    }
+
+    /// A tracked file reached through a directory the work tree holds as a link is not attached.
+    #[test]
+    fn a_directory_link_on_the_way_is_not_attached() {
+        let dir = scratch("dirlink");
+        committed(&dir.0, &[TODO, ("lib/a.py", b"a\n")]);
+        std::fs::rename(dir.0.join("lib"), dir.0.join("lib-real")).expect("moved");
+        std::os::unix::fs::symlink("lib-real", dir.0.join("lib")).expect("a link");
+        assert!(dir.0.join("lib/a.py").is_file(), "the link resolves");
+        assert_eq!(attached(&dir.0, &["lib/a.py", "todo.py"]), ["todo.py"]);
+    }
+
+    /// A path with a `..` (or `.`) component is not attached, whether or not it names a file.
+    #[test]
+    fn a_parent_component_is_not_attached() {
+        let dir = scratch("dotdot");
+        let tree = dir.0.join("tree");
+        std::fs::create_dir_all(tree.join("lib")).expect("the tree");
+        std::fs::write(dir.0.join("outside.py"), "x\n").expect("a file outside");
+        committed(&tree, &[TODO]);
+        assert_eq!(
+            attached(
+                &tree,
+                &["../outside.py", "lib/../todo.py", "./todo.py", "todo.py"]
+            ),
+            ["todo.py"]
+        );
+    }
+
+    /// An absolute path is not attached, even one naming a file of the tree.
+    #[test]
+    fn an_absolute_path_is_not_attached() {
+        let dir = scratch("absolute");
+        committed(&dir.0, &[TODO, TESTS]);
+        let absolute = dir.0.join("todo.py");
+        let absolute = absolute.to_str().expect("UTF-8");
+        assert_eq!(
+            attached(&dir.0, &[absolute, "tests/test_todo.py"]),
+            ["tests/test_todo.py"]
+        );
+    }
+
+    /// A file git does not track at `HEAD`, and one it ignores, are not attached.
+    #[test]
+    fn an_untracked_file_and_an_ignored_one_are_not_attached() {
+        let dir = scratch("untracked");
+        committed(&dir.0, &[TODO, (".env", b"TOKEN=x\n")]);
+        std::fs::write(dir.0.join("new.py"), "n\n").expect("an untracked file");
+        // `.env` is in `HEAD`, but taken out of the index and ignored now.
+        git(&dir.0, &["rm", "-q", "--cached", ".env"]);
+        std::fs::write(dir.0.join(".gitignore"), ".env\nkey.pem\n").expect("ignore rules");
+        std::fs::write(dir.0.join("key.pem"), "k\n").expect("an ignored file");
+        assert_eq!(
+            attached(&dir.0, &["new.py", ".env", "key.pem", "todo.py"]),
+            ["todo.py"]
+        );
+    }
+
+    /// A file under `.engineering/` is not attached.
+    #[test]
+    fn the_engineering_directory_is_not_attached() {
+        let dir = scratch("engineering");
+        committed(&dir.0, &[TODO, (".engineering/planning/a.md", b"a\n")]);
+        assert_eq!(
+            attached(&dir.0, &[".engineering/planning/a.md", "todo.py"]),
+            ["todo.py"]
+        );
+    }
+
+    /// At most [`SCOPE_FILES`] files: the ninth is not attached.
+    #[test]
+    fn the_ninth_file_is_not_attached() {
+        let dir = scratch("ninth");
+        let names: Vec<String> = (1..=9).map(|n| format!("f{n}.py")).collect();
+        let files: Vec<(&str, &[u8])> = names
+            .iter()
+            .map(|name| (name.as_str(), &b"x\n"[..]))
+            .collect();
+        committed(&dir.0, &files);
+        let paths: Vec<&str> = names.iter().map(String::as_str).collect();
+        assert_eq!(attached(&dir.0, &paths), paths[..SCOPE_FILES]);
+    }
+
+    /// A file that would take the total past [`SCOPE_BYTES`] is not attached; a later one that
+    /// fits is.
+    #[test]
+    fn a_file_past_the_byte_bound_is_not_attached() {
+        let dir = scratch("bytes");
+        let big = vec![b'a'; 40 << 10];
+        let more = vec![b'b'; 30 << 10];
+        committed(&dir.0, &[("a.py", &big), ("b.py", &more), TODO]);
+        assert_eq!(
+            attached(&dir.0, &["a.py", "b.py", "todo.py"]),
+            ["a.py", "todo.py"]
+        );
+    }
+
+    /// A backticked word that names no file, or a directory, is not attached.
+    #[test]
+    fn a_backticked_word_naming_no_file_is_not_attached() {
+        let dir = scratch("word");
+        committed(&dir.0, &[TODO, TESTS]);
+        assert_eq!(
+            scope_files(
+                &dir.0,
+                None,
+                "Do it\n\n## Scope\n\n- `todo.py` (a `remove` beside `add` and `done`)\n- `tests`\n",
+                &ChangeSoFar::NoneYet,
+                None
+            ),
+            ["todo.py"]
+        );
+    }
+
+    /// A path holding white space, a quote, `#`, `@` or a control character is not attached,
+    /// though git tracks a file at it.
+    #[test]
+    fn a_path_with_a_space_or_a_mention_character_is_not_attached() {
+        let dir = scratch("space");
+        let odd = [
+            "my notes.py",
+            "a#b.py",
+            "x@y.py",
+            "q'uote.py",
+            "d\"q.py",
+            "t\tab.py",
+        ];
+        let mut files: Vec<(&str, &[u8])> = odd.iter().map(|path| (*path, &b"x\n"[..])).collect();
+        files.push(TODO);
+        committed(&dir.0, &files);
+        let mut paths = odd.to_vec();
+        paths.push("todo.py");
+        assert_eq!(attached(&dir.0, &paths), ["todo.py"]);
+    }
+
+    /// Under a scan, a file whose bytes it refuses is not attached, and none is when the scan
+    /// cannot run; the scan is handed each file's bytes.
+    #[test]
+    fn a_file_the_scan_refuses_is_not_attached() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch("scan");
+        let tools = scratch("scan-tools");
+        committed(&dir.0, &[TODO, ("config.py", b"KEY = 'SECRET'\n")]);
+        let program = tools.0.join("gates");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\nfor last; do :; done\n\
+             [ \"$1\" = scan-text ] || exit 2\n\
+             if grep -q SECRET \"$last\"; then exit 1; fi\nexit 0\n",
+        )
+        .expect("a fake scan");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("executable");
+        let intent = scoped(&["config.py", "todo.py"]);
+        let scan = crate::run::ChangeScan {
+            program: program.clone(),
+            policy: tools.0.join("policy.yaml"),
+        };
+        assert_eq!(
+            scope_files(&dir.0, None, &intent, &ChangeSoFar::NoneYet, Some(&scan)),
+            ["todo.py"]
+        );
+        let missing = crate::run::ChangeScan {
+            program: tools.0.join("no-such-gates"),
+            policy: tools.0.join("policy.yaml"),
+        };
+        assert!(
+            scope_files(&dir.0, None, &intent, &ChangeSoFar::NoneYet, Some(&missing)).is_empty()
+        );
+    }
+
+    /// At a revision, the files are read as its tree holds them: one removed after it is
+    /// attached, one added after it is not; read at `HEAD` and on disk, the other way round.
+    #[test]
+    fn scope_files_at_a_revision_are_read_from_its_tree() {
+        let dir = scratch("revision");
+        committed(&dir.0, &[TODO, ("notes.py", b"notes\n")]);
+        let start = crate::git::head(&dir.0).expect("a head");
+        git(&dir.0, &["rm", "-q", "notes.py"]);
+        std::fs::write(dir.0.join("later.py"), "later\n").expect("a file");
+        git(&dir.0, &["add", "later.py"]);
+        git(&dir.0, &["commit", "-q", "-m", "later"]);
+        let intent = scoped(&["notes.py", "later.py", "todo.py"]);
+        assert_eq!(
+            scope_files(&dir.0, Some(&start), &intent, &ChangeSoFar::NoneYet, None),
+            ["notes.py", "todo.py"]
+        );
+        assert_eq!(
+            scope_files(&dir.0, None, &intent, &ChangeSoFar::NoneYet, None),
+            ["later.py", "todo.py"]
+        );
+    }
+
+    /// A file the change so far shows whole is not attached again; a test file it shows as its
+    /// changed lines is, and so is every file when it shows each as its changed lines.
+    #[test]
+    fn a_file_the_change_so_far_shows_whole_is_not_attached() {
+        let dir = scratch("whole");
+        committed(&dir.0, &[TODO, TESTS]);
+        let diff = "diff --git a/tests/test_todo.py b/tests/test_todo.py\n\
+                    --- a/tests/test_todo.py\n+++ b/tests/test_todo.py\n@@ -1 +1,2 @@\n\
+                    def test_add(): pass\n+# more\n\
+                    diff --git a/todo.py b/todo.py\n--- a/todo.py\n+++ b/todo.py\n\
+                    @@ -1 +1 @@\n-def add(): pass\n+def add(): return 1\n";
+        let intent = scoped(&["todo.py", "tests/test_todo.py"]);
+        assert_eq!(
+            scope_files(
+                &dir.0,
+                None,
+                &intent,
+                &ChangeSoFar::shown(diff.as_bytes(), true),
+                None
+            ),
+            ["tests/test_todo.py"]
+        );
+        assert_eq!(
+            scope_files(
+                &dir.0,
+                None,
+                &intent,
+                &ChangeSoFar::shown(diff.as_bytes(), false),
+                None
+            ),
+            ["todo.py", "tests/test_todo.py"]
+        );
+    }
+
+    /// The prompt names each attached file as an unquoted, relative mention after white space,
+    /// on a line of its own right after the intent; an intent with no scope file gets no line.
+    #[test]
+    fn the_prompt_mentions_each_scope_file_on_a_line_after_the_intent() {
+        let dir = scratch("prompt");
+        committed(&dir.0, &[TODO, TESTS]);
+        let intent = scoped(&["todo.py", "tests/test_todo.py"]);
+        let prompt = in_context(&dir.0, &intent, |context| {
+            ClaudeCode::prompt_with(context, ClaudeCode::CLAUDE_RULE, None)
+        });
+        let expected = format!(
+            "Intent: {intent}\n\nFiles in scope, attached: @todo.py @tests/test_todo.py\n\n\
+             Protocol: "
+        );
+        assert!(prompt.contains(&expected), "{prompt}");
+        let plain = in_context(&dir.0, "Remove a todo", |context| {
+            ClaudeCode::prompt_with(context, ClaudeCode::CLAUDE_RULE, None)
+        });
+        assert!(!plain.contains("Files in scope"), "{plain}");
+        assert!(
+            plain.contains("Intent: Remove a todo\n\nProtocol: "),
+            "{plain}"
+        );
+    }
+
+    /// `f` of the context of step 1 in `tree` for `intent`, offering `tests.write`, with no
+    /// change made yet.
+    fn in_context<R>(tree: &Path, intent: &str, f: impl FnOnce(&StepContext<'_>) -> R) -> R {
+        let protocol = LoadedProtocol::builtin("story.delivery/1").expect("a built-in");
+        let decision = Decision {
+            claims: std::collections::BTreeMap::new(),
+            obligations: std::collections::BTreeMap::new(),
+            actions: std::collections::BTreeMap::new(),
+            outcomes: std::collections::BTreeMap::new(),
+            json: String::new(),
+        };
+        let offered = ["tests.write".to_owned()];
+        f(&StepContext {
+            tree,
+            intent,
+            offered: &offered,
+            approvals: &[],
+            choices: &[],
+            decision: &decision,
+            protocol: &protocol,
+            step: 1,
+            time_left: None,
+            change: &ChangeSoFar::NoneYet,
+            scope_revision: None,
+        })
+    }
+
+    /// The prompt the metaharness route of `kind` builds for a step in `tree` for `intent`, read
+    /// from the first line of its transcript; the session is scripted and says nothing, so no
+    /// program runs.
+    fn session_prompt(kind: Kind, tree: &Path, intent: &str) -> String {
+        use session_executor::metaharness::{ScriptedLog, ScriptedRunner};
+        let mut harness = SessionHarness::of(kind);
+        harness.credentials = session_executor::CredentialSource::None;
+        let harness = harness.with_runner(|| {
+            Box::new(ScriptedRunner::of_lines(
+                Vec::<String>::new(),
+                ScriptedLog::new(),
+            ))
+        });
+        in_context(tree, intent, |context| {
+            let _ = harness.step(context);
+        });
+        let transcript = harness.last_transcript().expect("the step kept its prompt");
+        let first = transcript
+            .split(|byte| *byte == b'\n')
+            .next()
+            .expect("a first line");
+        let line: serde_json::Value = serde_json::from_slice(first).expect("the prompt line reads");
+        line["prompt"].as_str().expect("a prompt").to_owned()
+    }
+
+    /// `--harness claude` through metaharness (`ClaudeSession::step`) gives the step the same
+    /// mention line as the `claude -p` route, right after the intent.
+    #[test]
+    fn the_metaharness_claude_route_mentions_the_scope_files() {
+        let dir = scratch("session-claude");
+        committed(&dir.0, &[TODO, TESTS]);
+        let intent = scoped(&["todo.py", "tests/test_todo.py"]);
+        let prompt = session_prompt(Kind::Claude, &dir.0, &intent);
+        let expected = format!(
+            "Intent: {intent}\n\nFiles in scope, attached: @todo.py @tests/test_todo.py\n\n\
+             Protocol: "
+        );
+        assert!(prompt.contains(&expected), "{prompt}");
+    }
+
+    /// Codex takes no `@<path>` as a file mention: its prompt names no scope file, and the
+    /// intent is followed by the protocol as before.
+    #[test]
+    fn the_codex_route_gets_no_mention_line() {
+        let dir = scratch("session-codex");
+        committed(&dir.0, &[TODO, TESTS]);
+        let intent = scoped(&["todo.py", "tests/test_todo.py"]);
+        let prompt = session_prompt(Kind::Codex, &dir.0, &intent);
+        assert!(!prompt.contains("Files in scope"), "{prompt}");
+        assert!(!prompt.contains("@todo.py"), "{prompt}");
+        assert!(
+            prompt.contains(&format!("Intent: {intent}\n\nProtocol: ")),
+            "{prompt}"
+        );
+    }
+
+    /// b10x-harness takes no `@<path>` as a file mention: its prompt names no scope file, and
+    /// the intent is followed by the protocol as before.
+    #[test]
+    fn the_b10x_harness_route_gets_no_mention_line() {
+        let dir = scratch("session-b10x");
+        committed(&dir.0, &[TODO, TESTS]);
+        let intent = scoped(&["todo.py", "tests/test_todo.py"]);
+        let prompt = session_prompt(Kind::B10x, &dir.0, &intent);
+        assert!(!prompt.contains("Files in scope"), "{prompt}");
+        assert!(!prompt.contains("@todo.py"), "{prompt}");
+        assert!(
+            prompt.contains(&format!("Intent: {intent}\n\nProtocol: ")),
+            "{prompt}"
+        );
+    }
+
+    /// A tracked file whose bytes hold text of a credential's shape
+    /// ([`crate::run::credential_shape`]) is not attached, with no policy set and under a scan
+    /// that passes everything; the file beside it is.
+    #[test]
+    fn a_file_of_a_credentials_shape_is_not_attached_with_or_without_a_policy() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch("credential");
+        let tools = scratch("credential-tools");
+        let dashes = "-----";
+        let key = format!(
+            "{dashes}BEGIN OPENSSH PRIVATE KEY{dashes}\nb3BlbnNzaC1rZXktdjEAAAAA\n\
+             {dashes}END OPENSSH PRIVATE KEY{dashes}\n"
+        );
+        assert!(crate::run::credential_shape(&key).is_some());
+        committed(&dir.0, &[TODO, ("deploy.py", key.as_bytes())]);
+        let intent = scoped(&["deploy.py", "todo.py"]);
+        assert_eq!(
+            scope_files(&dir.0, None, &intent, &ChangeSoFar::NoneYet, None),
+            ["todo.py"]
+        );
+        let program = tools.0.join("gates");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\n[ \"$1\" = scan-text ] || exit 2\nexit 0\n",
+        )
+        .expect("a fake scan");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("executable");
+        let passing = crate::run::ChangeScan {
+            program,
+            policy: tools.0.join("policy.yaml"),
+        };
+        assert_eq!(
+            scope_files(&dir.0, None, &intent, &ChangeSoFar::NoneYet, Some(&passing)),
+            ["todo.py"]
+        );
+        let prompt = in_context(&dir.0, &intent, |context| {
+            ClaudeCode::prompt_with(context, ClaudeCode::CLAUDE_RULE, Some(&passing))
+        });
+        assert!(
+            prompt.contains("Files in scope, attached: @todo.py\n"),
+            "{prompt}"
+        );
     }
 }
