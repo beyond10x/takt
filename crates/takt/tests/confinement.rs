@@ -2,8 +2,9 @@
 //! `crates/takt/src/confinement.rs`, and the test command runs under the `SubstrateRunner` of
 //! loom-sdk when the run is given `--confinement substrate`.
 //!
-//! - No module of `crates/takt/src` but the seam, and no library source of the session-executor
-//!   crate (its test module's fixtures excepted), names `std::process::Command`.
+//! - No source under any crate's `src/` but the seam starts a process, or imports or reaches a
+//!   way to (`std::process::Command`, `CommandExt`, `libc` and `nix` spawns, process crates);
+//!   the session executor's and the CLI's one test module each excepted, the rest of both read.
 //! - An adapter that refuses every program: the run starts no process, writes no evidence
 //!   record and stops with the refusal named; the harness's program is refused at its own spawn.
 //! - Under Substrate the test command of a scratch crate writes the record it writes under
@@ -332,9 +333,13 @@ fn repository(name: &str, protocol: &str, files: &[(&str, &str, bool)]) -> Scrat
     Scratch { root, repo }
 }
 
-/// A crate whose one test is `test`, a function body.
+/// A crate whose one test is `test`, a function body. The test reports into the crate's own
+/// `target/`, which it makes first: where the build went elsewhere (`CARGO_TARGET_DIR` in the
+/// environment the run inherits) there is none, and under Substrate the build made it.
 fn scratch_crate(name: &str, protocol: &str, test: &str) -> Scratch {
-    let lib = format!("#[test]\nfn the_test() {{\n{test}\n}}\n");
+    let lib = format!(
+        "#[test]\nfn the_test() {{\n    std::fs::create_dir_all(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/target\")).unwrap();\n{test}\n}}\n"
+    );
     repository(
         name,
         protocol,
@@ -433,11 +438,200 @@ fn run(tree: &Scratch, command: &str, harness: &dyn Harness) -> Ran {
     }
 }
 
-// --- Acceptance 1: the seam is the one place that names `std::process::Command`. ---
+// --- Acceptance 1: the seam is the one place that starts a process. ---
+//
+// The scan reads every crate's `src/` but the seam's file. Comments and the contents of string
+// and character literals are blanked first, so what it reads is code. It flags:
+//
+// - a `use` whose tree, in any form (a group, `self`, a glob, an alias, a leading `::`), names
+//   a path of `WATCHED` or of `SPAWNS` under `SPAWNING_MODULES`, a module on the way to one
+//   (`std`, `std::process`, `libc`, `nix::unistd`), or a path under one: so what name the
+//   import binds never matters;
+// - such a path written out in code, by its last two segments (`process::Command`,
+//   `libc::fork`) or by its crate (`duct::`);
+// - `extern crate` of a crate one of them is in, a foreign block (`extern "C" { … }`), inline
+//   assembly, `include!` and a `#[path = …]` attribute, each a way of starting a process the
+//   names above do not show.
+//
+// In an excepted file it skips exactly its one `#[cfg(test)] mod tests { … }`, brace-balanced,
+// and reads the rest.
+
+/// The paths that start a process or a child, or modules of nothing else.
+const WATCHED: &[&str] = &[
+    "std::process::Command",
+    "std::os::unix::process::CommandExt",
+    "std::os::linux::process::CommandExt",
+    "std::os::unix::prelude::CommandExt",
+    "tokio::process",
+    "async_process",
+    "async_std::process",
+    "smol::process",
+    "duct",
+    "subprocess",
+    "xshell",
+    "cmd_lib",
+    "nix::spawn",
+    "nix::sched::clone",
+    "rustix::runtime",
+];
+
+/// The C library's calls that start, replace or reach a process, in each of `SPAWNING_MODULES`.
+const SPAWNS: &[&str] = &[
+    "fork",
+    "vfork",
+    "clone",
+    "clone3",
+    "execv",
+    "execve",
+    "execvp",
+    "execvpe",
+    "execl",
+    "execle",
+    "execlp",
+    "fexecve",
+    "execveat",
+    "posix_spawn",
+    "posix_spawnp",
+    "system",
+    "popen",
+    "daemon",
+    "syscall",
+    "dlsym",
+];
+
+/// The modules `SPAWNS` are called from.
+const SPAWNING_MODULES: &[&str] = &["libc", "nix::unistd", "nix::libc"];
+
+/// Every watched path, by its segments.
+fn watched() -> Vec<Vec<String>> {
+    let segments = |path: &str| path.split("::").map(str::to_owned).collect::<Vec<_>>();
+    let mut paths: Vec<Vec<String>> = WATCHED.iter().map(|path| segments(path)).collect();
+    for module in SPAWNING_MODULES {
+        for call in SPAWNS {
+            paths.push(segments(&format!("{module}::{call}")));
+        }
+    }
+    paths
+}
 
 /// Whether `c` continues an identifier.
 fn ident(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
+}
+
+/// The character before byte `at` of `text`.
+fn before(text: &str, at: usize) -> Option<char> {
+    text[..at].chars().next_back()
+}
+
+/// `c` blanked: a line break kept, anything else a space.
+fn blank(c: char) -> char {
+    if c == '\n' { '\n' } else { ' ' }
+}
+
+/// Copies the string literal whose opening quote is at `quote` into `out`, its contents
+/// blanked, and returns the index after it. A raw one, `raw` its count of `#`, ends at the
+/// first quote followed by as many `#`; any other at the first quote no `\` escapes.
+fn literal(chars: &[char], quote: usize, raw: Option<usize>, out: &mut String) -> usize {
+    out.push('"');
+    let mut i = quote + 1;
+    while let Some(&c) = chars.get(i) {
+        match raw {
+            None if c == '\\' => {
+                out.push(' ');
+                if let Some(&escaped) = chars.get(i + 1) {
+                    out.push(blank(escaped));
+                }
+                i += 2;
+                continue;
+            }
+            None if c == '"' => {
+                out.push('"');
+                return i + 1;
+            }
+            Some(hashes) if c == '"' && (1..=hashes).all(|k| chars.get(i + k) == Some(&'#')) => {
+                out.push('"');
+                out.extend(std::iter::repeat_n('#', hashes));
+                return i + 1 + hashes;
+            }
+            _ => {}
+        }
+        out.push(blank(c));
+        i += 1;
+    }
+    i
+}
+
+/// `text` with every comment and the contents of every string and character literal blanked,
+/// its line breaks kept: what is left is code, on the lines it was on.
+fn code(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let at = |i: usize| chars.get(i).copied();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while let Some(c) = at(i) {
+        let previous = i.checked_sub(1).and_then(at);
+        // A raw string's `r` starts a token, or follows a `b` or `c` that does.
+        let starts_raw = c == 'r'
+            && match previous {
+                Some('b' | 'c') => !i.checked_sub(2).and_then(at).is_some_and(ident),
+                Some(p) => !ident(p),
+                None => true,
+            };
+        let hashes = (i + 1..chars.len())
+            .take_while(|&k| chars[k] == '#')
+            .count();
+        if c == '/' && at(i + 1) == Some('/') {
+            while let Some(c) = at(i) {
+                if c == '\n' {
+                    break;
+                }
+                out.push(' ');
+                i += 1;
+            }
+        } else if c == '/' && at(i + 1) == Some('*') {
+            let mut depth = 0usize;
+            while let Some(c) = at(i) {
+                if c == '/' && at(i + 1) == Some('*') {
+                    depth += 1;
+                    out.push_str("  ");
+                    i += 2;
+                } else if c == '*' && at(i + 1) == Some('/') {
+                    depth -= 1;
+                    out.push_str("  ");
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    out.push(blank(c));
+                    i += 1;
+                }
+            }
+        } else if c == '"' {
+            i = literal(&chars, i, None, &mut out);
+        } else if starts_raw && at(i + 1 + hashes) == Some('"') {
+            out.push('r');
+            out.extend(std::iter::repeat_n('#', hashes));
+            i = literal(&chars, i + 1 + hashes, Some(hashes), &mut out);
+        } else if c == '\'' && at(i + 1) == Some('\\') {
+            let mut end = i + 3;
+            while at(end).is_some_and(|c| c != '\'') {
+                end += 1;
+            }
+            out.push('\'');
+            out.extend((i + 1..end).map(|k| blank(chars[k])));
+            out.push('\'');
+            i = end + 1;
+        } else if c == '\'' && at(i + 2) == Some('\'') {
+            out.push_str("' '");
+            i += 3;
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// `text` with its white space dropped where a token does not need it, and the line each byte
@@ -467,53 +661,286 @@ fn squeezed(text: &str) -> (String, Vec<usize>) {
     (flat, lines)
 }
 
-/// The lines of `text` that name `std::process::Command`: by its path, by a group or a glob
-/// that imports it, or through the module under another name.
-fn names_process_command(text: &str) -> Vec<usize> {
-    let (flat, lines) = squeezed(text);
-    let mut found = Vec::new();
-    for (at, _) in flat.match_indices("process::") {
-        if flat[..at].chars().next_back().is_some_and(ident) {
+/// The tokens of a squeezed `use` tree: words, `::` and single marks.
+fn tokens(tree: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut word = String::new();
+    for c in tree.chars() {
+        if ident(c) || c == '$' || c == '#' {
+            word.push(c);
             continue;
         }
-        let rest = &flat[at + "process::".len()..];
-        let named = if let Some(after) = rest.strip_prefix("Command") {
-            !after.chars().next().is_some_and(ident)
-        } else if rest.starts_with('*') {
-            true
-        } else if let Some(group) = rest.strip_prefix('{') {
-            let mut depth = 1;
-            let mut end = group.len();
-            for (i, c) in group.char_indices() {
-                match c {
-                    '{' => depth += 1,
-                    '}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            end = i;
+        if !word.is_empty() {
+            out.push(std::mem::take(&mut word));
+        }
+        match c {
+            ' ' => {}
+            ':' if out.last().is_some_and(|t| t == ":") => {
+                out.pop();
+                out.push("::".to_owned());
+            }
+            c => out.push(c.to_string()),
+        }
+    }
+    if !word.is_empty() {
+        out.push(word);
+    }
+    out
+}
+
+/// Every path the `use` tree at `tokens[*at]` imports, each from `prefix`: `self` in a group
+/// is the group's own path, a glob ends in `*`, an alias is dropped.
+fn imported(tokens: &[String], at: &mut usize, prefix: Vec<String>, into: &mut Vec<Vec<String>>) {
+    let mut path = prefix;
+    loop {
+        let Some(token) = tokens.get(*at) else {
+            into.push(path);
+            return;
+        };
+        match token.as_str() {
+            "::" | "self" => *at += 1,
+            "{" => {
+                *at += 1;
+                while let Some(token) = tokens.get(*at) {
+                    match token.as_str() {
+                        "}" => {
+                            *at += 1;
                             break;
                         }
+                        "," => *at += 1,
+                        _ => imported(tokens, at, path.clone(), into),
                     }
-                    _ => {}
                 }
+                return;
             }
-            group[..end]
-                .split([',', '{', '}'])
-                .map(str::trim)
-                .any(|item| item == "Command" || item.starts_with("Command as ") || item == "*")
-        } else {
-            false
-        };
-        if named {
+            "*" => {
+                *at += 1;
+                path.push("*".to_owned());
+                into.push(path);
+                return;
+            }
+            "as" => {
+                *at += 2;
+                into.push(path);
+                return;
+            }
+            "," | "}" => {
+                into.push(path);
+                return;
+            }
+            segment => {
+                path.push(segment.to_owned());
+                *at += 1;
+            }
+        }
+    }
+}
+
+/// Whether importing `path` imports a way to start a process: it is a watched path, a module
+/// on the way to one, or a path under one. A glob imports its module.
+fn imports_a_spawn(path: &[String], watched: &[Vec<String>]) -> bool {
+    let path: Vec<String> = path.iter().filter(|s| *s != "*").cloned().collect();
+    !path.is_empty()
+        && watched
+            .iter()
+            .any(|w| w.starts_with(&path) || path.starts_with(w))
+}
+
+/// The byte range of the bracketed span whose opening mark is at `open` in `flat`.
+fn span(flat: &str, open: usize, marks: (char, char)) -> Option<std::ops::Range<usize>> {
+    let mut depth = 0usize;
+    for (i, c) in flat[open..].char_indices() {
+        if c == marks.0 {
+            depth += 1;
+        } else if c == marks.1 {
+            depth -= 1;
+            if depth == 0 {
+                return Some(open..open + i + c.len_utf8());
+            }
+        }
+    }
+    None
+}
+
+/// The lines of the squeezed code `flat` that start a process, or import or reach a way to.
+fn flagged(flat: &str, lines: &[usize]) -> Vec<usize> {
+    let watched = watched();
+    let mut found = Vec::new();
+    // `use` items, whatever names they bind.
+    for (at, _) in flat.match_indices("use") {
+        if before(flat, at).is_some_and(|c| ident(c) || c == '$' || c == '#') {
+            continue;
+        }
+        let rest = &flat[at + "use".len()..];
+        if !rest.starts_with([' ', ':', '{']) {
+            continue;
+        }
+        let tokens = tokens(&rest[..rest.find(';').unwrap_or(rest.len())]);
+        let mut paths = Vec::new();
+        let mut i = 0;
+        while i < tokens.len() {
+            let start = i;
+            imported(&tokens, &mut i, Vec::new(), &mut paths);
+            if i == start {
+                i += 1;
+            }
+        }
+        if paths.iter().any(|path| imports_a_spawn(path, &watched)) {
             found.push(lines[at]);
         }
     }
-    for (at, _) in flat.match_indices("std::process as ") {
-        found.push(lines[at]);
+    // Paths in code: a watched path by its last two segments, a crate by its name and `::`.
+    let mut needles: Vec<(String, bool)> = WATCHED
+        .iter()
+        .map(|path| match path.rsplit_once("::") {
+            Some((module, item)) => (
+                format!("{}::{item}", module.rsplit("::").next().unwrap_or(module)),
+                true,
+            ),
+            None => (format!("{path}::"), false),
+        })
+        .collect();
+    for module in SPAWNING_MODULES {
+        let last = module.rsplit("::").next().unwrap_or(module);
+        needles.extend(SPAWNS.iter().map(|call| (format!("{last}::{call}"), true)));
+    }
+    for (needle, ends) in &needles {
+        for (at, _) in flat.match_indices(needle.as_str()) {
+            let after = flat[at + needle.len()..].chars().next();
+            if !before(flat, at).is_some_and(ident) && !(*ends && after.is_some_and(ident)) {
+                found.push(lines[at]);
+            }
+        }
+    }
+    // `extern crate` of a watched crate, and a foreign block.
+    let crates: Vec<&str> = std::iter::once("std")
+        .chain(
+            WATCHED
+                .iter()
+                .chain(SPAWNING_MODULES)
+                .map(|path| path.split("::").next().unwrap_or(path)),
+        )
+        .collect();
+    for (at, _) in flat.match_indices("extern") {
+        let rest = &flat[at + "extern".len()..];
+        if before(flat, at).is_some_and(ident) || rest.starts_with(ident) {
+            continue;
+        }
+        let rest = rest.trim_start();
+        if let Some(name) = rest.strip_prefix("crate ") {
+            let name: String = name.chars().take_while(|c| ident(*c)).collect();
+            if crates.contains(&name.as_str()) {
+                found.push(lines[at]);
+            }
+            continue;
+        }
+        let rest = match rest.strip_prefix('"') {
+            Some(abi) => abi.find('"').map_or("", |end| &abi[end + 1..]),
+            None => rest,
+        };
+        if rest.trim_start().starts_with('{') {
+            found.push(lines[at]);
+        }
+    }
+    // Inline assembly and an included source.
+    for (at, _) in flat.match_indices('!') {
+        let start = flat[..at]
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| ident(*c))
+            .last()
+            .map_or(at, |(i, _)| i);
+        if ["asm", "global_asm", "naked_asm", "include"].contains(&&flat[start..at]) {
+            found.push(lines[start]);
+        }
+    }
+    // A module read from a path of its own.
+    for (at, _) in flat.match_indices('#') {
+        let rest = &flat[at + 1..];
+        let open = at + 1 + usize::from(rest.starts_with('!'));
+        if !flat[open..].starts_with('[') {
+            continue;
+        }
+        let Some(range) = span(flat, open, ('[', ']')) else {
+            continue;
+        };
+        let attribute = &flat[range.clone()];
+        if attribute
+            .match_indices("path=")
+            .any(|(i, _)| !before(attribute, i).is_some_and(ident))
+        {
+            found.push(lines[at]);
+        }
     }
     found.sort_unstable();
     found.dedup();
     found
+}
+
+/// Takes out of `flat` and `lines` its one `#[cfg(test)] mod tests { … }`, brace-balanced; an
+/// error when there is not exactly one `mod tests`, or it is not that.
+fn without_the_test_module(flat: &mut String, lines: &mut Vec<usize>) -> Result<(), String> {
+    let modules: Vec<usize> = flat
+        .match_indices("mod tests{")
+        .map(|(at, _)| at)
+        .filter(|&at| !before(flat, at).is_some_and(ident))
+        .collect();
+    let [module] = modules[..] else {
+        return Err(format!(
+            "{} `mod tests` where the one excepted test module is",
+            modules.len()
+        ));
+    };
+    let attribute = "#[cfg(test)]";
+    if !flat[..module].ends_with(attribute) {
+        return Err("its `mod tests` is not `#[cfg(test)] mod tests {`".to_owned());
+    }
+    let start = module - attribute.len();
+    let range = span(flat, module + "mod tests".len(), ('{', '}'))
+        .ok_or_else(|| "its test module does not close".to_owned())?;
+    let line = lines[start];
+    flat.replace_range(start..range.end, " ");
+    lines.splice(start..range.end, [line]);
+    Ok(())
+}
+
+/// The lines of `text`, a source, that start a process, or import or reach a way to.
+fn starts_a_process(text: &str) -> Vec<usize> {
+    let (flat, lines) = squeezed(&code(text));
+    flagged(&flat, &lines)
+}
+
+/// The lines the scan flags in `text`, a file's source; in an excepted file, everything but
+/// its one test module.
+fn scanned(text: &str, excepted: bool) -> Result<Vec<usize>, String> {
+    let (mut flat, mut lines) = squeezed(&code(text));
+    if excepted {
+        without_the_test_module(&mut flat, &mut lines)?;
+    }
+    Ok(flagged(&flat, &lines))
+}
+
+/// Whether `file` is one whose test module the scan does not read. The session executor's
+/// fixtures start `git` and the test binary itself, and the crate depends on no crate of this
+/// repository, its tests included (`harness_parity.rs`), so they cannot take takt's seam. The
+/// CLI's fixtures start `git` and `aep` to set up and read the repositories a test runs on;
+/// neither is a run's process. Everything else in both files is read.
+fn excepted(file: &Path) -> bool {
+    file.ends_with("session-executor/src/lib.rs") || file.ends_with("takt-cli/src/main.rs")
+}
+
+/// Every source file the scan reads: each crate's `src/` under `crates`, the workspace's
+/// crates directory.
+fn scanned_sources(crates: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(crates).expect("the crates directory") {
+        let src = entry.expect("an entry").path().join("src");
+        if src.is_dir() {
+            sources(&src, &mut files);
+        }
+    }
+    files.sort();
+    files
 }
 
 /// Every `.rs` file under `dir`, at any depth.
@@ -543,76 +970,254 @@ fn the_scan_finds_every_way_of_naming_the_process_command() {
         "fn f(c: &mut process::Command) {}",
     ] {
         assert!(
-            !names_process_command(line).is_empty(),
+            !starts_a_process(line).is_empty(),
             "the scan misses {line:?}"
         );
     }
     for line in [
-        "use std::os::unix::process::CommandExt as _;",
         "use std::process::{Child, Stdio, ExitStatus};",
+        "use std::process::ExitCode;",
         "let c = crate::confinement::Command::new(\"x\");",
-        "subprocess::Command::new(\"x\")",
+        "myprocess::Command::new(\"x\")",
         "use metaharness::protocol::{Command, Decision};",
         "std::process::id()",
+        "let c = std::process::Stdio::null();",
+        "use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};",
+        "let f = libc::O_NOFOLLOW | libc::O_CLOEXEC;",
+        "unsafe { libc::kill(pid, libc::SIGKILL) };",
+        "std::thread::spawn(|| ());",
+        "fn execute(system: &str) {}",
+        "// std::process::Command and libc::fork() in a comment",
+        "/* use std::{process as p}; */",
+        "let s = \"std::process::Command::new and libc::fork()\";",
+        "let s = r#\"use std::process as p;\"#;",
+        "let c = '\"'; let d = '{'; fn f<'a>(x: &'a str) {}",
+        "pub extern \"C\" fn exported() {}",
+        "let path = 1; format!(\"{path}\", path = path);",
     ] {
-        assert!(
-            names_process_command(line).is_empty(),
-            "the scan flags {line:?}"
-        );
+        assert!(starts_a_process(line).is_empty(), "the scan flags {line:?}");
     }
     assert_eq!(
-        names_process_command("// a\n\nuse std::process::{\n    Stdio,\n    Command,\n};\n"),
+        starts_a_process("// a\n\nuse std::process::{\n    Stdio,\n    Command,\n};\n"),
         vec![3],
         "the line a name is on is the line its path starts on"
     );
 }
 
+/// The planted sources in `cases` the scan does not flag, each with what it misses.
+fn missed<'a>(cases: &[&'a str]) -> Vec<&'a str> {
+    cases
+        .iter()
+        .copied()
+        .filter(|case| starts_a_process(case).is_empty())
+        .collect()
+}
+
+#[test]
+fn the_scan_finds_a_grouped_or_aliased_import_of_the_process_module() {
+    let missed = missed(&[
+        "use std::{process as p};\nfn f() { p::Command::new(\"true\"); }",
+        "use std::{process};",
+        "use std::{fs, process as p, io};",
+        "use std::process::{self, Stdio};",
+        "use std::process::{self as p};",
+        "use std::{process::{self as q}};",
+        "use std::process;",
+        "use ::std::process as p;",
+        "use std::process::{Command as C};",
+        "use std::process::{Stdio, Command as C, Child};",
+        "use std as s;\nfn f() { s::process::Command::new(\"true\"); }",
+        "use std::{self as s};",
+        "use std::*;",
+        "extern crate std as s;",
+    ]);
+    assert!(
+        missed.is_empty(),
+        "the scan misses {} of these imports:\n{}",
+        missed.len(),
+        missed.join("\n")
+    );
+}
+
+#[test]
+fn the_scan_finds_every_other_way_of_starting_a_process() {
+    let missed = missed(&[
+        "unsafe { libc::fork() };",
+        "unsafe { libc::vfork() };",
+        "unsafe { libc::execv(p, a) };",
+        "unsafe { libc::execvp(p, a) };",
+        "unsafe { libc::execve(p, a, e) };",
+        "unsafe { libc::posix_spawn(&mut pid, p, f, a, v, e) };",
+        "unsafe { libc::posix_spawnp(&mut pid, p, f, a, v, e) };",
+        "unsafe { libc::system(c) };",
+        "unsafe { libc::popen(c, m) };",
+        "unsafe { libc::syscall(libc::SYS_clone) };",
+        "use libc::{fork, c_int};",
+        "use libc::*;",
+        "use libc as l;",
+        "use nix::unistd::{fork, ForkResult};",
+        "nix::unistd::execv(p, a);",
+        "use nix::spawn::posix_spawn;",
+        "use nix::unistd::*;",
+        "tokio::process::Command::new(\"x\");",
+        "use tokio::process::Command;",
+        "async_process::Command::new(\"x\");",
+        "use async_process::Command;",
+        "duct::cmd!(\"x\").run();",
+        "subprocess::Exec::cmd(\"x\").join();",
+        "use std::os::unix::process::CommandExt as _;",
+        "use std::os::unix::process::CommandExt;",
+        "std::os::unix::process::CommandExt::exec(&mut c);",
+        "use std::os::unix::prelude::*;",
+        "use std::os::unix::{prelude::CommandExt as _};",
+        "unsafe extern \"C\" { fn fork() -> i32; }",
+        "extern { fn system(c: *const u8) -> i32; }",
+        "std::arch::asm!(\"syscall\");",
+        "include!(\"elsewhere.txt\");",
+        "#[path = \"../../elsewhere.rs\"]\nmod elsewhere;",
+    ]);
+    assert!(
+        missed.is_empty(),
+        "the scan misses {} of these ways of starting a process:\n{}",
+        missed.len(),
+        missed.join("\n")
+    );
+}
+
+/// An excepted file whose test module is followed by library code that starts a process.
+const AFTER_THE_TEST_MODULE: &str = "pub fn library() {}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    #[test]
+    fn fixture() {
+        let _ = Command::new(\"git\").arg(\"}\").status();
+    }
+}
+
+pub fn after_the_test_module() -> bool {
+    std::process::Command::new(\"true\").status().is_ok()
+}
+";
+
+/// An excepted file with a second test module, which starts a process.
+const A_SECOND_TEST_MODULE: &str = "pub fn library() {}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn fixture() {}
+}
+
+#[cfg(test)]
+mod more_tests {
+    #[test]
+    fn spawns() {
+        let _ = std::process::Command::new(\"true\").status();
+    }
+}
+";
+
+/// An excepted file whose `mod tests` is not where its library ends: a nested one.
+const TWO_TEST_MODULES: &str = "pub mod inner {
+    #[cfg(test)]
+    mod tests {
+        fn spawns() { let _ = std::process::Command::new(\"true\"); }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn fixture() {}
+}
+";
+
+#[test]
+fn the_scan_reads_an_excepted_file_past_its_test_module() {
+    let mut wrong = Vec::new();
+    for (case, source, expected) in [
+        (
+            "the library after the test module is read, the test module is not",
+            AFTER_THE_TEST_MODULE,
+            Ok(vec![14]),
+        ),
+        (
+            "a second test module is read",
+            A_SECOND_TEST_MODULE,
+            Ok(vec![13]),
+        ),
+        (
+            "an excepted file has exactly one `mod tests`",
+            TWO_TEST_MODULES,
+            Err(()),
+        ),
+    ] {
+        let got = scanned(source, true);
+        if got.clone().map_err(|_| ()) != expected {
+            wrong.push(format!("{case}: expected {expected:?}, got {got:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn the_scan_reads_every_crate_of_the_workspace() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the workspace's crates");
+    let files = scanned_sources(crates);
+    let mut unread = Vec::new();
+    for entry in fs::read_dir(crates).expect("the crates directory") {
+        let src = entry.expect("an entry").path().join("src");
+        if src.is_dir() && !files.iter().any(|f| f.starts_with(&src)) {
+            unread.push(src.display().to_string());
+        }
+    }
+    assert!(unread.is_empty(), "the scan reads none of {unread:?}");
+    let main = crates.join("takt-cli/src/main.rs");
+    assert!(files.contains(&main), "the scan reads {}", main.display());
+    assert!(
+        excepted(&main),
+        "the CLI's test module, whose fixtures start `git` and `aep`, is excepted"
+    );
+}
+
 #[test]
 fn no_module_but_the_seam_names_the_process_command() {
-    let takt = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let seam = takt.join("src/confinement.rs");
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the workspace's crates");
+    let seam = crates.join("takt/src/confinement.rs");
     let seam_text = fs::read_to_string(&seam).expect("the seam's source");
     assert!(
-        !names_process_command(&seam_text).is_empty(),
+        !starts_a_process(&seam_text).is_empty(),
         "the scan sees the seam's own use of std::process::Command"
     );
-    let mut files = Vec::new();
-    sources(&takt.join("src"), &mut files);
-    sources(&takt.join("../session-executor"), &mut files);
-    files.sort();
+    let files = scanned_sources(crates);
     assert!(
-        files.iter().any(|f| f.ends_with("src/run.rs"))
+        files.iter().any(|f| f.ends_with("takt/src/run.rs"))
             && files
                 .iter()
                 .any(|f| f.ends_with("session-executor/src/lib.rs")),
         "the scan reads takt's and the session executor's sources: {files:?}"
     );
-    // The session executor's test module is no session's: its fixtures start `git` and the
-    // test binary itself, and the crate depends on no crate of this repository, its tests
-    // included (`harness_parity.rs`), so they cannot take takt's seam. Its library, everything
-    // above that module, is read.
-    let fixtures = "\n#[cfg(test)]\nmod tests {\n";
     let mut named = Vec::new();
     for file in files.iter().filter(|f| **f != seam) {
-        let mut text = fs::read_to_string(file).expect("a source");
-        if file.ends_with("session-executor/src/lib.rs") {
-            let at = text
-                .find(fixtures)
-                .expect("the session executor's test module is where its library ends");
-            assert_eq!(
-                text.matches(fixtures).count(),
-                1,
-                "one test module in the session executor"
-            );
-            text.truncate(at);
-        }
-        for line in names_process_command(&text) {
-            named.push(format!("{}:{line}", file.display()));
+        let text = fs::read_to_string(file).expect("a source");
+        match scanned(&text, excepted(file)) {
+            Ok(lines) => named.extend(
+                lines
+                    .into_iter()
+                    .map(|line| format!("{}:{line}", file.display())),
+            ),
+            Err(why) => named.push(format!("{}: {why}", file.display())),
         }
     }
     assert!(
         named.is_empty(),
-        "std::process::Command is named outside the seam:\n{}",
+        "a process is started outside the seam:\n{}",
         named.join("\n")
     );
 }
@@ -877,6 +1482,9 @@ fn delegated(name: &str, case: impl FnOnce()) {
         .env(DELEGATED_CASE, "1")
         .env(REPORT, &report)
         .env(confinement::DELEGATED, "1")
+        // The scratch crates build into their own `target/`, which their tests write into; a
+        // caller's `CARGO_TARGET_DIR` would send their builds into the one this binary runs from.
+        .env_remove("CARGO_TARGET_DIR")
         .output();
     let output = match started {
         Ok(output) => output,
