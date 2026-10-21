@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:governor-holds-takts-cases
 kind: story
-status: draft
+status: active
 title: The Loom governor holds and decides takt cases; grants come from an AuthorityProvider over authority.yaml
 summary: CanonGovernor over a takt FallibleCaseStore on .engineering/cases/<id>/; case files written as before; the grant change is the owner's call at the verdict
 tags:
@@ -11,7 +11,10 @@ relations:
 - decomposes: epic:takt-on-loom-sdk
 - serves: vision:safe-agentic-coding
 - depends_on: story:harness-proposes-takt-performs
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-21T14:44:43Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-21T14:44:43Z", actor: "human:timo", revision: 3}
 ---
 # Story: governor-holds-takts-cases
 
