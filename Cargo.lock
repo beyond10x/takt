@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "b10x-session-executor"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "b10x-loom-sdk",
  "metaharness",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "b10x-takt"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "b10x-canon",
@@ -607,7 +607,7 @@ dependencies = [
 
 [[package]]
 name = "b10x-takt-cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "b10x-canon-engineering-assertions",

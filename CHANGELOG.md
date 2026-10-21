@@ -6,6 +6,11 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-21
+
+The minor version moves because every harness step runs through a metaharness session, `--harness` takes `codex` and `harness`
+beside `claude`, and the gate's reader fails closed on lines 0.6.0 read.
+
 ### Changed
 
 - `--harness claude` runs Claude Code through a metaharness session (`HermeticMode::Strict`) in a scratch copy of the case tree, offered only the file tools.
@@ -21,11 +26,17 @@ takt's releases.
 - On the Claude route a judgement step's prompt names its story's `## Scope` files as file mentions (`@todo.py`), at most 8 files and 64 KiB.
 - `b10x-loom-sdk` 0.27.0 → 0.28.0 is a dependency of `b10x-takt`; `metaharness` 0.10.1 comes through the new crate `b10x-session-executor`.
 - `task site-check` fails a page on text under 12 px, console errors, failed requests and an ignored stored theme.
+- Every Claude Code session starts with `--restricted`, so it loads no auto-memory; scenario 1's first request is about 755 tokens smaller.
+- CI runs `task check` as three parallel jobs (`task check-static`, `test-cli`, `test-library`); test builds compile `sha2` at opt-level 3.
+- CHANGELOG.md follows Keep a Changelog 1.1.0; `scripts/release-notes <version>` writes a release's GitHub notes, and `task check` runs its `--check`.
+- takt's specification requires ess 0.66 (`ess/ess-inputs.yaml`), and CI installs ess 0.66.0.
 
 ### Fixed
 
 - `takt scorecard --against` prints a `median <metric>` line only for a metric with a per-case figure, no longer wall-time medians as `step_tokens`.
-- The site fixes the defects of its 2026-10-20 screen but the AEP card's family styling and the runs charts' titles and legends on a phone.
+- The site fixes the defects of its 2026-10-20 screen but the AEP card's family styling.
+- On the runs page no chart line runs through a label, and on a phone each chart's title and legend stay in view while only the plot scrolls.
+- A wrapped entry of a CLI help list continues under its description, and code blocks have the same space above and below as at the sides.
 
 ### Security
 
@@ -303,7 +314,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: a relative or in-tree `B10X_GATES_POLICY` resolves inside the case's tree, where a step can rewrite it (story:scan-policy-outside-the-tree).
 - Known limit: under load, a process a test command started with `setsid` can write into the tree after it returns (story:run-child-sweep-survives-setsid).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.6.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.7.0...HEAD
+[0.7.0]: https://github.com/beyond10x/takt/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/beyond10x/takt/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/beyond10x/takt/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/beyond10x/takt/compare/0.3.0...0.4.0
