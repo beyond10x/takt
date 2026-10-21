@@ -7,8 +7,9 @@ description: Install takt 0.7.0, check what it needs, and run one validated step
 
 ## Install a release
 
-Each version tag publishes `takt-<version>-<target>.tar.gz` for `x86_64-unknown-linux-gnu`,
-`aarch64-unknown-linux-gnu` and `aarch64-apple-darwin`, with a `SHA256SUMS` file, at
+Each version tag publishes `takt-<version>-<target>.tar.gz` for `x86_64-unknown-linux-gnu` and
+`aarch64-unknown-linux-gnu`, and up to 0.6.0 for `aarch64-apple-darwin` (0.7.0 has no macOS
+binary: on macOS use 0.6.0 until 0.7.1), with a `SHA256SUMS` file, at
 [github.com/beyond10x/takt/releases](https://github.com/beyond10x/takt/releases). No Rust
 toolchain is needed. The latest release is 0.7.0; what `main` holds beyond it is listed under
 Unreleased in the [changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md#unreleased).

@@ -1,6 +1,7 @@
 # Cuts a GitHub Release for every version tag: the tag's provenance is checked, `task check`
 # runs on the tagged commit, `takt` is built natively per target, and the archives are published
-# with a SHA256SUMS file and the notes `scripts/release-notes` prints for the tag. Manual dispatch
+# with a SHA256SUMS file and the notes `scripts/release-notes` prints for the tag, read from the
+# tagged CHANGELOG.md, or on a backfill from the dispatching branch's. Manual dispatch
 # exists only to backfill an annotated tag that is already cut; a release is driven by the tag push.
 #
 # Tags are bare SemVer (`0.1.0`). Every third-party action is pinned by commit: the release job
@@ -79,8 +80,6 @@ jobs:
             os: ubuntu-24.04
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-          - target: aarch64-apple-darwin
-            os: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -144,16 +143,18 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          ls takt-*-x86_64-unknown-linux-gnu.tar.gz takt-*-aarch64-unknown-linux-gnu.tar.gz takt-*-aarch64-apple-darwin.tar.gz
+          ls takt-*-x86_64-unknown-linux-gnu.tar.gz takt-*-aarch64-unknown-linux-gnu.tar.gz
           sha256sum *.tar.gz > SHA256SUMS
           sha256sum --check --strict SHA256SUMS
 
       - name: Release notes from CHANGELOG.md
         env:
           VERSION: ${{ needs.provenance.outputs.version }}
+          CHANGELOG_AT: ${{ github.event_name == 'workflow_dispatch' && github.sha || needs.provenance.outputs.commit }}
         run: |
           set -euo pipefail
-          python3 -I scripts/release-notes "$VERSION" > notes.md
+          git show "$CHANGELOG_AT:CHANGELOG.md" > "$RUNNER_TEMP/CHANGELOG.md"
+          python3 -I scripts/release-notes --changelog "$RUNNER_TEMP/CHANGELOG.md" "$VERSION" > notes.md
           test -s notes.md
 
       - name: Create or backfill the GitHub Release
