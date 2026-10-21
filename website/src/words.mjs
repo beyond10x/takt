@@ -21,3 +21,14 @@ export function words(value) {
 }
 
 export const keepClass = (keep) => (keep === 'long' ? 'takt-word takt-word--long' : 'takt-word');
+
+// A line of a two-column list, as a command's help prints one: leading spaces, a name of words
+// joined by single spaces (`-h, --help`), two or more spaces, then its description.
+const LIST = /^( +)(\S+(?: \S+)*?)( {2,})\S/;
+
+// The column a list line's description starts at, read from the line's own leading spaces, name
+// and gap; undefined for any other line. Used by src/theme/CodeBlock/Line/index.tsx.
+export function listColumn(line) {
+  const list = LIST.exec(line);
+  return list ? list[0].length - 1 : undefined;
+}
