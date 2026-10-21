@@ -245,8 +245,11 @@ html .takt-chart > svg {
     inline-size: 100%;
     font-size: 0.7rem;
   }
-  html .takt-scroll :is(th, td) {
+  html .takt-scroll th {
     overflow-wrap: anywhere;
+  }
+  html .takt-scroll td {
+    overflow-wrap: break-word;
   }
   html .takt-scroll .takt-word {
     white-space: normal;

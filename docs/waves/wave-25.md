@@ -40,7 +40,7 @@ high, 14 medium, 24 low; 12 duplicates close with their primary), relayed by the
   Docusaurus namespaces under `future.v4`), redraws its graph per mode, has a full head (no
   favicon 404) and the site's navbar; `site-check` now fails a page on console errors, failed
   requests or an ignored stored theme. Unit 5 (the template-level defects) dispatched.
-- 2026-10-21: unit 5 committed in 27782c0e (19 ids with duplicates; s1-03 left to the template):
+- 2026-10-21: unit 5 committed in 27782c0e (21 ids with duplicates; s1-03 left to the template):
   a probe of 66 checks against the served build, 37 red before, 1 after; `site-check` fails
   text under 12 px. Gate at 27782c0e: `task check` exit 0, 1603 passed, 0 failed, 6 ignored,
   citations 1017/1017. The adversarial review dispatched at 27782c0e.
