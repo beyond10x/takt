@@ -2,13 +2,17 @@
 format: aep.planning-md/3
 id: story:the-runs-charts-read-on-a-phone
 kind: story
-status: draft
+status: implemented
 title: The runs charts read on a phone
 summary: titles and legends of the runs charts outside the scrolling plot at 390 and 1024 px
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-21T08:13:39Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-21T08:13:39Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-21T08:25:39Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # The runs charts read on a phone
 
