@@ -42,6 +42,7 @@ task site-build                 # the documentation site into website/build
 task site-check                 # site-build, then every page at 1440 and 390 px in headless Chrome (website/.site-check/)
 aep plan artifact validate
 python3 -I scripts/check-citations --require-digests [dump | fix | accept <doc>:<line>...]   # each ess/ `read from:` against its needles and digest (ess/domains/<doc>.citations.tsv); accept records a digest after a person or an agent read the lines, and the commit names the lines
+python3 -I scripts/release-notes <version> | --check   # a release's GitHub notes from CHANGELOG.md (Keep a Changelog 1.1.0), or the whole file checked against that form
 git add <paths> && b10x-gates bot -- commit -F <file>   # staging is plain git; the route refuses add
 b10x-gates scan-text --policy <file> <path>...           # or B10X_GATES_POLICY; no policy found is "not scanned", never "passed"
 cargo run -p b10x-takt-cli -- run --repo <path> --intent "<text>" --iterations 1

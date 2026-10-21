@@ -9,6 +9,10 @@ gates:
     text: Every read-from citation of the specification matches its lines and its digest.
     assertions:
       - 'process.succeeded("citations")'
+  - id: changelog
+    text: CHANGELOG.md is in Keep a Changelog 1.1.0 form, every entry one line.
+    assertions:
+      - 'process.succeeded("changelog")'
   - id: format
     text: The workspace is formatted.
     assertions:

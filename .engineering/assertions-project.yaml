@@ -16,6 +16,13 @@ commands:
       - -I
       - scripts/check-citations
       - --require-digests
+  changelog:
+    executable: scripts/gate-exec
+    args:
+      - python3
+      - -I
+      - scripts/release-notes
+      - --check
   format:
     executable: scripts/gate-exec
     args:

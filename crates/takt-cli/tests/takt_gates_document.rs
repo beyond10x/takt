@@ -1,5 +1,5 @@
 //! story:takt-has-a-gates-document: takt's own repository names its gate. The gates document
-//! binds the four fast commands of `Taskfile.yml`'s `check` task, each through
+//! binds the five fast commands of `Taskfile.yml`'s `check` task, each through
 //! `scripts/gate-exec`, which finds the tool on the system directories, then the Cargo bin
 //! directory, and refuses one that resolves inside the repository; the fifth, the workspace's
 //! tests, is a delivery's test command. A delivery on a scratch repository carrying copies of
@@ -50,7 +50,7 @@ fn check_task() -> Vec<String> {
         .collect()
 }
 
-/// The four commands the gate runs: the check task's but its test command.
+/// The five commands the gate runs: the check task's but its test command.
 fn gate_commands() -> Vec<String> {
     let mut commands = check_task();
     assert_eq!(
@@ -78,7 +78,7 @@ fn task_commands(name: &str) -> Vec<String> {
 }
 
 /// story:the-cli-suite-fits-its-ci-budget: CI runs `task check` as three jobs of one matrix,
-/// one per task, and the three tasks run the check task's commands: `check-static` the four
+/// one per task, and the three tasks run the check task's commands: `check-static` the five
 /// before the tests, word for word, and `test-cli` and `test-library` its test command split by
 /// package, `b10x-takt-cli` and every other package of the workspace, which together are the
 /// workspace's.
@@ -116,7 +116,7 @@ fn ci_runs_the_check_tasks_commands_as_three_jobs() {
 
 /// takt's own gates document, read through the loader the gate validator evaluates it with:
 /// it binds, in order, exactly the check task's commands but the tests, each as `gate-exec`
-/// with the tool and its arguments, and those four and the test command are the check task.
+/// with the tool and its arguments, and those five and the test command are the check task.
 #[test]
 fn takts_gates_document_binds_the_check_tasks_commands_through_gate_exec() {
     let root = root();
@@ -249,8 +249,8 @@ fn stub(dir: &Path, name: &str, log: &Path, code: i32) {
 /// The gate's tools log what they were run with to `gate-log`. `gate-exec` looks in the system
 /// directories first, which a test cannot change, so each tool is a stub wherever the system
 /// directories hand it on: `ess` in the scratch Cargo bin (`cargo-home/bin`); `python3` is the
-/// system's, running the repository's `scripts/check-citations`, a stub that also logs the
-/// interpreter to `python-log`; `cargo` is the scratch Cargo bin's stub on a host with no cargo
+/// system's, running the repository's `scripts/check-citations` and `scripts/release-notes`,
+/// stubs that also log the interpreter to `python-log`; `cargo` is the scratch Cargo bin's stub on a host with no cargo
 /// in the system directories and the stub toolchain of the scratch rustup home (`rustup-home`)
 /// where the system's cargo is rustup's proxy. A host whose system directories hold `ess` or a
 /// cargo that is not rustup's runs the real one here. A `python3` planted in the scratch Cargo
@@ -285,19 +285,21 @@ fn world_editing(name: &str, clippy_fails: bool, edit: &str) -> World {
     }
     let log = outer.join("gate-log");
     fs::create_dir_all(repo.join("scripts")).expect("a directory");
-    fs::write(
-        repo.join("scripts/check-citations"),
-        format!(
-            "import sys\n\
-             with open({log:?}, 'a') as log:\n    \
-             log.write(' '.join(['python3'] + (['-I'] if sys.flags.isolated else []) + sys.argv) + '\\n')\n\
-             with open({python:?}, 'a') as log:\n    \
-             log.write(sys.executable + '\\n')\n",
-            log = log.display().to_string(),
-            python = outer.join("python-log").display().to_string(),
-        ),
-    )
-    .expect("the citations stub is written");
+    for script in ["scripts/check-citations", "scripts/release-notes"] {
+        fs::write(
+            repo.join(script),
+            format!(
+                "import sys\n\
+                 with open({log:?}, 'a') as log:\n    \
+                 log.write(' '.join(['python3'] + (['-I'] if sys.flags.isolated else []) + sys.argv) + '\\n')\n\
+                 with open({python:?}, 'a') as log:\n    \
+                 log.write(sys.executable + '\\n')\n",
+                log = log.display().to_string(),
+                python = outer.join("python-log").display().to_string(),
+            ),
+        )
+        .unwrap_or_else(|error| panic!("the stub {script} is written: {error}"));
+    }
     fs::write(
         repo.join(".engineering/commit-identity.conf"),
         "[identity]\n\tname = Test Bot\n\temail = bot@example.invalid\n",
@@ -570,7 +572,7 @@ fn steps(out: &str) -> Vec<(String, Vec<String>)> {
 }
 
 /// The story's acceptance: a delivery on a repository carrying takt's gate offers `gate.run`
-/// after the implementation, the gate passes with each of the four commands run once a gate run
+/// after the implementation, the gate passes with each of the five commands run once a gate run
 /// through `gate-exec`, the tests run as takt's test command, and the run reaches `pr.open`
 /// within 20 steps, so a gate that never passes ends the run, red, instead of looping.
 #[test]
@@ -609,7 +611,7 @@ fn a_delivery_on_takts_gate_runs_it_after_the_implementation_and_opens_the_pull_
     );
     assert_eq!(world.pull_requests(), 1, "stdout {out} stderr {err}");
     // The library runs a document's commands in its plan's order, not the document's; each
-    // gate run runs every one of the four once.
+    // gate run runs every one of the five once.
     let mut ran = world.log("gate-log");
     ran.sort();
     let mut expected: Vec<String> = gates.iter().flat_map(|_| gate_commands()).collect();
@@ -661,7 +663,7 @@ fn a_failing_gate_command_holds_the_gate_red_and_opens_no_pull_request() {
     expected.sort();
     assert_eq!(
         ran, expected,
-        "each gate run ran its four commands: stdout {out}"
+        "each gate run ran its five commands: stdout {out}"
     );
     world.assert_no_planted_python();
     assert!(
@@ -716,7 +718,7 @@ fn delivered(world: &World) -> Vec<String> {
 /// story:gate-exec-is-readable-by-the-gate: the command reader the step guard and the gate share
 /// reads every command of takt's gates document with certainty, so a delivery that changes a
 /// Python file, a shell file and a program no gate command runs is judged by its gate: each gate
-/// run's summary names no fail-closed reason, the gate runs its four commands and passes, and the
+/// run's summary names no fail-closed reason, the gate runs its five commands and passes, and the
 /// run reaches `pr.open`.
 #[test]
 fn a_delivery_changing_an_unrelated_python_file_is_judged_by_takts_gate() {
@@ -768,14 +770,16 @@ fn a_delivery_changing_an_unrelated_python_file_is_judged_by_takts_gate() {
     world.assert_no_planted_python();
 }
 
-/// A delivery that changes a script a gate command runs, `gate-exec` itself or the citations
-/// check it hands to `python3`, still stops the gate: from the implementation on, nothing is
-/// run, and each gate run's summary names the script and no fail-closed reason.
+/// A delivery that changes a script a gate command runs, `gate-exec` itself or a check it hands
+/// to `python3` (the citations or the changelog check), still stops the gate: from the
+/// implementation on, nothing is run, and each gate run's summary names the script and no
+/// fail-closed reason.
 #[test]
 fn a_delivery_changing_a_script_a_gate_runs_stops_the_gate_naming_it() {
     for (name, script) in [
         ("gate-exec-changed", GATE_EXEC),
         ("citations-changed", "scripts/check-citations"),
+        ("release-notes-changed", "scripts/release-notes"),
     ] {
         let world = world_editing(name, false, &format!("printf '# the step\\n' >> {script}"));
         let (code, out, err) = world.deliver(&["--iterations", "8"]);

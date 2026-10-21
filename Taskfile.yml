@@ -10,6 +10,7 @@ tasks:
     cmds:
       - ess specify validate --path ess
       - python3 -I scripts/check-citations --require-digests
+      - python3 -I scripts/release-notes --check
       - cargo fmt --all --check
       - cargo clippy --workspace --all-targets --locked -- -D warnings
       - cargo test --workspace --locked
@@ -19,6 +20,7 @@ tasks:
     cmds:
       - ess specify validate --path ess
       - python3 -I scripts/check-citations --require-digests
+      - python3 -I scripts/release-notes --check
       - cargo fmt --all --check
       - cargo clippy --workspace --all-targets --locked -- -D warnings
 

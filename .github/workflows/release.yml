@@ -1,7 +1,7 @@
 # Cuts a GitHub Release for every version tag: the tag's provenance is checked, `task check`
 # runs on the tagged commit, `takt` is built natively per target, and the archives are published
-# with a SHA256SUMS file and the tag's own CHANGELOG section. Manual dispatch exists only to
-# backfill an annotated tag that is already cut; a release is driven by the tag push.
+# with a SHA256SUMS file and the notes `scripts/release-notes` prints for the tag. Manual dispatch
+# exists only to backfill an annotated tag that is already cut; a release is driven by the tag push.
 #
 # Tags are bare SemVer (`0.1.0`). Every third-party action is pinned by commit: the release job
 # holds write authority, so neither action code nor the source revision it packages may float.
@@ -54,7 +54,7 @@ jobs:
           metadata="$(cargo metadata --locked --no-deps --format-version 1)"
           cargo_version="$(jq -r '.packages[] | select(.name == "b10x-takt-cli") | .version' <<< "$metadata")"
           test "$TAG" = "$cargo_version"
-          grep -Eq "^## \[$TAG\] — [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md
+          grep -Eq "^## \[$TAG\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$TAG" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -153,10 +153,7 @@ jobs:
           VERSION: ${{ needs.provenance.outputs.version }}
         run: |
           set -euo pipefail
-          awk -v version="$VERSION" '
-            /^## \[/ { printing = index($0, "## [" version "] ") == 1; if (printing) next }
-            printing { print }
-          ' CHANGELOG.md > notes.md
+          python3 -I scripts/release-notes "$VERSION" > notes.md
           test -s notes.md
 
       - name: Create or backfill the GitHub Release
