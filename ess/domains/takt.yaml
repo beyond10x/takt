@@ -2117,7 +2117,7 @@ types:
         type: Optional<Timestamp>
 
   # What an operation on a journey timeline was, in the one vocabulary every arm's run is drawn in.
-  # read from: docs/metrics/journey.py:30-31
+  # read from: docs/metrics/journey.py:35-36
   - name: takt.work.JourneyKind
     kind: enum
     variants:
@@ -2144,8 +2144,8 @@ types:
   # only), its kind, who performed it (`deterministic` or `harness`), the protocol action on a
   # takt lane, its effect, the tool's class or a label, and the source record. No token or cost
   # figure is taken from it. Docs tooling, not the kernel: no takt binary writes or reads it.
-  # read from: docs/metrics/journey.py:1-10
-  # read from: docs/metrics/journey.py:832-839
+  # read from: docs/metrics/journey.py:1-15
+  # read from: docs/metrics/journey.py:860-867
   - name: takt.work.JourneyEvent
     kind: struct
     fields:
@@ -2368,7 +2368,7 @@ types:
   # configuration; Claude Code under takt's harness isolation plus a shell; Codex running free.
   # Spelled as the scenario records spell them.
   # read from: docs/metrics/README.md:45
-  # read from: docs/metrics/journey.py:40
+  # read from: docs/metrics/journey.py:45
   # read from: .engineering/planning/design/benchmark-integration.md:35
   # Maps to bench.arm and bench.harness of the organization's benchmark instrument: an arm there is
   # a treatment (`raw`, `plugin`, `driven`, `native`) with its framework and pin, a harness is what
