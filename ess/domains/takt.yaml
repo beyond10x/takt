@@ -456,9 +456,9 @@ types:
   # read from: crates/takt/src/run.rs:8601-8607
   # read from: crates/takt/src/run.rs:9766-9776
   # read from: crates/takt/src/validator.rs:72-80
-  # read from: crates/takt/src/improvement.rs:1107-1111
-  # read from: crates/takt/src/improvement.rs:1643-1647
-  # read from: crates/takt/src/improvement.rs:1855-1859
+  # read from: crates/takt/src/improvement.rs:1110-1114
+  # read from: crates/takt/src/improvement.rs:1646-1650
+  # read from: crates/takt/src/improvement.rs:1858-1862
   # read from: crates/takt/src/run.rs:111-125
   # read from: crates/takt/src/run.rs:141
   # read from: crates/takt/src/run.rs:8609-8617
@@ -1524,7 +1524,7 @@ types:
       # `story.yaml`), filed as `<kind>:<key>` with the reference `finding:<key>`; absent when the
       # case records none.
       # read from: crates/takt/src/loop_scorecard.rs:57-59
-      # read from: scripts/file-finding:308
+      # read from: scripts/file-finding:339
       - name: finding
         type: Optional<takt.work.FindingKey>
       - name: baseline
@@ -1858,7 +1858,7 @@ types:
   # read from: crates/takt/src/promotion.rs:3126-3133
   # read from: crates/takt/src/scorecard.rs:925-948
   # read from: crates/takt/src/scorecard.rs:1482-1483
-  # read from: crates/takt/src/improvement.rs:958-963
+  # read from: crates/takt/src/improvement.rs:961-966
   - name: takt.work.Comparison
     kind: enum
     variants: [no_regression, regression]
@@ -1905,8 +1905,8 @@ types:
   # lower-case letters and digits in words joined by `-`. One key is one finding: a filing of a
   # key the store holds already, under whatever kind, is refused.
   # read from: .engineering/planning/design/recursive-self-improvement.md:87-88
-  # read from: scripts/file-finding:267
-  # read from: scripts/file-finding:283-306
+  # read from: scripts/file-finding:298
+  # read from: scripts/file-finding:314-337
   - name: takt.work.FindingKey
     kind: newtype
     of: String
@@ -1915,8 +1915,8 @@ types:
   # (`story:<key>`) or a blocker (`blocker:<key>`), never both and never neither; decided
   # 2026-10-18. No blocker is declared in this specification, so the blocker variant carries the
   # artifact id as text.
-  # read from: scripts/file-finding:256
-  # read from: scripts/file-finding:308
+  # read from: scripts/file-finding:287
+  # read from: scripts/file-finding:339
   # read from: .engineering/planning/story/finding-intake.md:51
   - name: takt.work.FindingArtifact
     kind: union
@@ -1928,7 +1928,7 @@ types:
   # What filing a finding came to, the result of a `finding_record` record.
   # read from: protocols/self-improvement/1.yaml:41-44
   # read from: scripts/file-finding:79
-  # read from: scripts/file-finding:313
+  # read from: scripts/file-finding:344
   - name: takt.work.FilingResult
     kind: enum
     variants: [filed, malformed]
@@ -1940,7 +1940,7 @@ types:
   # crash, a flag rejected, a command not found) or the predicate's `exit` without its `output`,
   # which makes no claim true.
   # read from: protocols/self-improvement/1.yaml:45-50
-  # read from: scripts/check-finding:580-594
+  # read from: scripts/check-finding:622-640
   - name: takt.work.ScenarioResult
     kind: enum
     variants: [reproduced, not_reproduced, error]
@@ -2066,7 +2066,7 @@ types:
   # file; `takt approve` takes the grant, and `candidate.merge_judge_surface` records nothing
   # on any other (story:self-improvement-protocol, part 2, correction 2).
   # read from: crates/takt/src/validator.rs:2908-2915
-  # read from: crates/takt/src/improvement.rs:1297-1303
+  # read from: crates/takt/src/improvement.rs:1300-1306
   # A turn's judge-surface grant authorises only a merge made after it: `takt approve` records
   # the mainline's tip with the grant, read once the grant's instant is taken through the forge
   # the turn recorded when it opened (`Case.forge`), and `candidate.merge_judge_surface`
@@ -2079,9 +2079,9 @@ types:
   # ancestor of it), records nothing either. `candidate.merge` shares the validator and
   # is not held to it. Decided by the planner
   # (story:a-judge-surface-candidate-merges-after-its-grant, 2026-10-19).
-  # read from: crates/takt/src/improvement.rs:1344-1356
-  # read from: crates/takt/src/improvement.rs:1414-1423
-  # read from: crates/takt/src/improvement.rs:1547-1548
+  # read from: crates/takt/src/improvement.rs:1347-1359
+  # read from: crates/takt/src/improvement.rs:1417-1426
+  # read from: crates/takt/src/improvement.rs:1550-1551
   # read from: crates/takt/src/case.rs:1084-1089
   - name: takt.work.Approver
     kind: union
@@ -2672,7 +2672,7 @@ entities:
       # read from: protocols/self-improvement/1.yaml:28-32
       # read from: .engineering/planning/story/self-improvement-protocol.md:64
       # read from: crates/takt/src/case.rs:2717-2740
-      # read from: crates/takt/src/improvement.rs:1127-1136
+      # read from: crates/takt/src/improvement.rs:1130-1139
       # read from: crates/takt/src/case.rs:2660-2681
       - name: finding
         type: Optional<takt.work.FindingKey>
@@ -2683,7 +2683,7 @@ entities:
       # other protocol (story:self-improvement-protocol).
       # read from: protocols/self-improvement/1.yaml:24-26
       # read from: crates/takt/src/case.rs:2184-2275
-      # read from: crates/takt/src/improvement.rs:78-91
+      # read from: crates/takt/src/improvement.rs:81-94
       - name: independence
         type: Map<takt.work.ProducerName, List<String>>
       # The sha256 of the binary that judges an improvement turn, the promoted one that opened it,
@@ -2715,7 +2715,7 @@ entities:
       # its canonical path is the recorded root, and refused naming both roots when it is not; a
       # turn that recorded none, or a case under another protocol, refuses any.
       # read from: crates/takt/src/case.rs:2452-2458
-      # read from: crates/takt/src/improvement.rs:1780-1788
+      # read from: crates/takt/src/improvement.rs:1783-1791
       # read from: crates/takt-cli/src/main.rs:2274-2277
       - name: install_root
         type: Optional<String>
@@ -2730,7 +2730,7 @@ entities:
       # read from: crates/takt/src/case.rs:2477-2482
       # read from: crates/takt/src/case.rs:2270-2271
       # read from: crates/takt/src/case.rs:2821
-      # read from: crates/takt/src/improvement.rs:1146-1152
+      # read from: crates/takt/src/improvement.rs:1149-1155
       # read from: crates/takt/src/case.rs:2507-2516
       - name: forge
         type: Optional<String>
@@ -3763,12 +3763,12 @@ entities:
   # read from: crates/takt/src/validator.rs:3342-3354
   # read from: crates/takt/src/forge.rs:589-602
   # read from: crates/takt/src/validator.rs:712-714
-  # read from: crates/takt/src/improvement.rs:511-519
-  # read from: crates/takt/src/improvement.rs:662-668
-  # read from: crates/takt/src/improvement.rs:841-851
+  # read from: crates/takt/src/improvement.rs:514-522
+  # read from: crates/takt/src/improvement.rs:665-671
+  # read from: crates/takt/src/improvement.rs:844-854
   # read from: crates/takt/src/validator.rs:3357-3375
-  # read from: crates/takt/src/improvement.rs:324-398
-  # read from: crates/takt/src/improvement.rs:402-471
+  # read from: crates/takt/src/improvement.rs:327-401
+  # read from: crates/takt/src/improvement.rs:405-474
   # read from: crates/takt/src/forge.rs:607-625
   # read from: crates/takt/src/validator.rs:252-255
   # read from: crates/takt/src/validator.rs:320-331
@@ -3779,7 +3779,7 @@ entities:
   # read from: crates/takt/src/validator.rs:223-235
   # read from: crates/takt/src/validator.rs:777-780
   # read from: crates/takt/src/validator.rs:174-205
-  # read from: crates/takt/src/improvement.rs:1547-1548
+  # read from: crates/takt/src/improvement.rs:1550-1551
   # read from: crates/takt/src/validator.rs:767-775
   # read from: crates/takt/src/validator.rs:902-931
   # read from: crates/takt/src/validator.rs:1215-1219
@@ -4340,12 +4340,12 @@ entities:
   # read from: .engineering/planning/story/finding-on-any-repository.md (§ Outcome)
   # read from: .engineering/planning/story/check-finding-builds-name-their-revision.md (§ Outcome)
   # read from: scripts/file-finding:11-56
-  # read from: scripts/file-finding:117
-  # read from: scripts/file-finding:256
-  # read from: scripts/check-finding:235-495
-  # read from: scripts/check-finding:541-570
-  # read from: scripts/check-finding:346-371
-  # read from: scripts/check-finding:202-204
+  # read from: scripts/file-finding:140
+  # read from: scripts/file-finding:287
+  # read from: scripts/check-finding:275-536
+  # read from: scripts/check-finding:582-611
+  # read from: scripts/check-finding:386-412
+  # read from: scripts/check-finding:221-223
   # One predicate on one scenario or one repository: a body with a second `expected_before`
   # block, a block that gives a key twice, or one that gives both `scenario` and `repository`, or
   # neither, is malformed and nothing is filed. `seed` and `test` go with `repository` only: a
@@ -4358,18 +4358,18 @@ entities:
   # and shared ranges, and no IPv6 literal. The check is a lint on the URL's text, not a
   # boundary. The command runs the takt under test (`$TAKT` or `${TAKT}` in its text), and an
   # `output` is at least 8 characters; a predicate otherwise is malformed.
-  # read from: scripts/file-finding:120
-  # read from: scripts/file-finding:125
-  # read from: scripts/file-finding:136-196
-  # read from: scripts/file-finding:131-135
-  # read from: scripts/file-finding:200-203
+  # read from: scripts/file-finding:143
+  # read from: scripts/file-finding:149
+  # read from: scripts/file-finding:161-224
+  # read from: scripts/file-finding:155-160
+  # read from: scripts/file-finding:228-231
   # A finding is filed as exactly one store artifact, a story or a blocker, and that artifact is
   # filed for that finding alone (its id is `<kind>:<key>`, the finding's key): one-to-one,
   # decided 2026-10-18, held in `artifact` (takt.work.FindingArtifact). A relation entry needs a
   # field typed by the target's identity, and the story variant sits inside a union beside a
   # blocker this specification does not declare, so no relation to takt.work.Story is declared and
   # the one-to-one is stated here.
-  # read from: scripts/file-finding:308
+  # read from: scripts/file-finding:339
   # read from: .engineering/planning/story/finding-intake.md:51
   - name: takt.work.Finding
     naming:
@@ -4554,7 +4554,7 @@ entities:
   # changed, else `non_judge`; a given `surface` that disagrees is refused, naming the first
   # such path (story:self-improvement-protocol S5, 2026-10-19).
   # read from: protocols/self-improvement/1.yaml:18-22
-  # read from: crates/takt/src/improvement.rs:1233-1243
+  # read from: crates/takt/src/improvement.rs:1236-1246
   # read from: .engineering/planning/design/recursive-self-improvement.md:112-113
   # read from: .engineering/planning/story/judge-guard.md:87
   # read from: .engineering/planning/story/judge-guard.md:122
