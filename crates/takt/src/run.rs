@@ -19,13 +19,20 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
-use crate::case::{CASES_DIR, CaseDir, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT};
+use loom_sdk::commission::model::json as cjson;
+use loom_sdk::commission::model::responsibility::{
+    EffectOutcome, EffectOutcomePerformed, EffectOutcomeRefused,
+};
+use loom_sdk::commission::ports::effect::AdmittedRequest;
+
+use crate::case::{CASES_DIR, CaseAuthority, CaseDir, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT};
 use crate::events::{BY_STORE, BY_TAKT, Event, Events};
+use crate::evidence::CaseEvidence;
 use crate::frontier::{Frontier, IMPLEMENTED, Story, TEST_RESULT, Take, Unit};
 use crate::git::{BoundedDiff, DiffContext};
 use crate::harness::{CHANGE_SHOWN_BYTES, ChangeSoFar, Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
-use crate::validator::Validator;
+use crate::validator::{ChoiceEffect, Step, Validator, ValidatorEffect, outcome, run_effect};
 
 /// What a run is given.
 #[derive(Debug, Clone)]
@@ -273,6 +280,68 @@ enum Before {
     Ungranted,
     Recorded,
     Missing(String),
+}
+
+/// What a validator's step came to ([`Run::validator_step`]): a stop that ends the run, or
+/// the observation at `revision`, its records written, and whether it waits.
+enum Taken {
+    Stop(Stop),
+    Observed {
+        revision: String,
+        observation: crate::validator::Observation,
+        waits: bool,
+    },
+}
+
+/// Where a validator's step is taken: the run's record and output, the evaluation it follows,
+/// and whether the story's records were written before a granted step this run.
+struct StepPlace<'p> {
+    events: &'p Events,
+    out: &'p mut dyn Write,
+    seq: usize,
+    recorded_before: &'p mut bool,
+}
+
+/// The step a [`crate::validator::ValidatorEffect`] performs in the run: the run's validator
+/// step ([`Run::validator_step`]), what it came to kept for the loop in `taken`, and answered
+/// to Commission's runtime as the effect's outcome: a stop as a refusal that ends its run, an
+/// observation as [`crate::validator::outcome`] finds it.
+struct GuardedStep<'g, 'a> {
+    run: &'g mut Run<'a>,
+    events: &'g Events,
+    out: &'g mut dyn Write,
+    seq: usize,
+    recorded_before: &'g mut bool,
+    taken: Option<Taken>,
+}
+
+impl Step for GuardedStep<'_, '_> {
+    fn perform(
+        &mut self,
+        validator: &dyn Validator,
+        request: &AdmittedRequest,
+    ) -> Result<EffectOutcome> {
+        let place = StepPlace {
+            events: self.events,
+            out: &mut *self.out,
+            seq: self.seq,
+            recorded_before: &mut *self.recorded_before,
+        };
+        let taken =
+            self.run
+                .validator_step(place, validator, &request.data().action_request_id.0.0)?;
+        let answer = match &taken {
+            Taken::Stop(stop) => EffectOutcome::Refused(EffectOutcomeRefused {
+                reason: format!("{} ended the run: {stop:?}", validator.action()),
+                ends_run: true,
+            }),
+            Taken::Observed {
+                observation, waits, ..
+            } => outcome(observation, *waits),
+        };
+        self.taken = Some(taken);
+        Ok(answer)
+    }
 }
 
 /// Whether `validator` is due at a decision: its action is admissible, its evidence is missing
@@ -9319,6 +9388,307 @@ impl<'a> Run<'a> {
         Ok(())
     }
 
+    /// The step of `validator`, as its effect performs the request `request` Commission's
+    /// runtime handed it: the story's records in the store just before the step a grant
+    /// authorises ([`Run::record_before`]), the observation guarded as a judgement step is, and
+    /// each record it wrote submitted through the case's evidence port
+    /// ([`crate::evidence::CaseEvidence`]) under the validator's name. Answers the stop that
+    /// ends the run, or what was observed.
+    fn validator_step(
+        &mut self,
+        place: StepPlace<'_>,
+        validator: &dyn Validator,
+        request: &str,
+    ) -> Result<Taken> {
+        let StepPlace {
+            events,
+            out,
+            seq,
+            recorded_before,
+        } = place;
+        // The story's records in the store, once a run, just before the step its grant
+        // authorises: they ride to the base with the merge, and without both of them the
+        // step is not taken.
+        if !*recorded_before {
+            match self.record_before(events, validator.action(), out)? {
+                Before::Ungranted => {}
+                Before::Recorded => *recorded_before = true,
+                Before::Missing(why) => {
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(out, "  refused: {why}")?;
+                    return Ok(Taken::Stop(Stop::StepRefused(why)));
+                }
+            }
+        }
+        self.steps += 1;
+        let revision = self
+            .case
+            .revision(validator.subject())
+            .context("the validator's subject has a revision")?;
+        // A record is bound to the revision, `HEAD`: a tree with uncommitted changes
+        // outside the cases directory would be observed on other content than the one
+        // the record names. Nothing is observed, and the changes are left as they are.
+        let uncommitted = crate::git::uncommitted(&self.tree)?;
+        if !uncommitted.is_empty() {
+            let why = format!(
+                "{} would observe {} with uncommitted changes: {}",
+                validator.action(),
+                &revision[..8.min(revision.len())],
+                uncommitted.join(", ")
+            );
+            self.stepped(
+                events,
+                SteppedBy::Validator(None),
+                validator.name(),
+                validator.action(),
+                "nothing observed",
+            )?;
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+            writeln!(out, "  refused: {why}; nothing observed")?;
+            return Ok(Taken::Stop(Stop::StepRefused(why)));
+        }
+        // What a validator runs may be code a model wrote (the test command, a gate's
+        // commands): the cases directory is guarded as around a judgement step, and the
+        // tree must be as it was before the observation: the guarded part of `.git`
+        // (hooks, config, `info/`), `HEAD`, every branch and tag, the index and every path outside the cases
+        // directory; ignored files it made (a build's output) may stay. The validator's
+        // own writes under its case are the only change admitted; anything else is put
+        // back, and the observation refused with nothing recorded. `.git` is put back
+        // before any git runs again: git runs what was planted there (a hook,
+        // `core.fsmonitor`). The judge surface is snapshotted as around a judgement
+        // step: what the observation left there that git does not list (a FIFO, a file
+        // in an ignored directory) or that git lists as ignored is put back and the
+        // observation refused like any other foreign write. So are the files outside
+        // the tree that decide how cargo and rustup build and run the tests
+        // ([`Outside`]): one that differs from what the run found when it began (a
+        // change no step could keep, by another route) and nothing is observed or
+        // recorded; one the observation changed is put back and the observation refused.
+        let outside_kept = Outside::read(&self.tree, &self.outside_dirs)?;
+        let outside_moved = self.outside.differing(&outside_kept);
+        if !outside_moved.is_empty() {
+            let why = format!(
+                "{} would observe {} while what cargo or rustup reads outside the tree, a program on `PATH`, or what Python imports from there differs from what the run found when it began: {}",
+                validator.action(),
+                &revision[..8.min(revision.len())],
+                outside_named(&outside_moved)
+            );
+            self.stepped(
+                events,
+                SteppedBy::Validator(None),
+                validator.name(),
+                validator.action(),
+                "nothing observed",
+            )?;
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+            writeln!(out, "  refused: {why}; nothing observed")?;
+            return Ok(Taken::Stop(Stop::StepRefused(why)));
+        }
+        let checkpoint = self.checkpoint(false)?;
+        let cases = self.tree.join(CASES_DIR);
+        let kept = snapshot(&cases)?;
+        let globs = self.judge_list()?.unwrap_or_default();
+        let (surface, surface_kept) =
+            JudgeSurface::read(&self.runs(), globs, &self.modules, &self.tree)?;
+        let observed = validator
+            .observe_within(&self.tree, &revision, seq, self.deadline())
+            .with_context(|| format!("{} ({})", validator.action(), validator.name()));
+        let returned = Instant::now();
+        // What the observation left running is killed before anything is looked at;
+        // one that could not be killed is named with the rest of what it left.
+        let swept = crate::forge::sweep_left();
+        let git_dir = checkpoint.put_back_git_dir(&self.tree);
+        let mut planted = git_dir.touched;
+        planted.extend(
+            git_dir
+                .failed
+                .into_iter()
+                .map(|path| format!("not put back: {path}")),
+        );
+        if let Err(error) = swept {
+            planted.push(format!("processes still running: {error:#}"));
+        }
+        // What the observation left: on the judge surface, in the cases directory, in the
+        // tree as git sees it and outside the tree. A read that fails (a file the run may
+        // not read) discards everything the observation did before the run ends on the
+        // error.
+        let kept_all = Kept {
+            checkpoint: &checkpoint,
+            cases: &cases,
+            cases_kept: &kept,
+            surface: &surface,
+            surface_kept: &surface_kept,
+            outside: &outside_kept,
+            outside_dirs: &self.outside_dirs,
+        };
+        let seen = (|| -> Result<_> {
+            let on_surface = differing(&surface_kept, &surface.snapshot(&self.tree)?);
+            let touched = differing(&kept, &snapshot(&cases)?);
+            let change = checkpoint.change(&self.tree)?;
+            let moved = outside_kept.differing(&Outside::read(&self.tree, &self.outside_dirs)?);
+            Ok((on_surface, touched, change, moved))
+        })();
+        let (on_surface, touched, change, outside_moved) = match seen {
+            Ok(seen) => seen,
+            Err(error) => {
+                return Err(match undo_step(&self.tree, &kept_all) {
+                    Ok(_) => error.context(format!(
+                        "{}: what the observation left could not be read; everything it changed was discarded",
+                        validator.action()
+                    )),
+                    Err(undo) => error.context(format!(
+                        "{}: what the observation left could not be read, and its change could not be discarded: {undo:#}",
+                        validator.action()
+                    )),
+                });
+            }
+        };
+        let own: Vec<PathBuf> = match self.case.dir.file_name() {
+            Some(id) => validator
+                .writes()
+                .iter()
+                .map(|path| Path::new(id).join(path))
+                .collect(),
+            None => Vec::new(),
+        };
+        let mut foreign = cases_named(&cases, touched.iter().filter(|path| !own.contains(path)));
+        let mut outside: Vec<String> = planted;
+        outside.extend(change.paths.iter().cloned());
+        if change.staged {
+            outside.push("the index".to_owned());
+        }
+        if let Some(moved) = &change.head {
+            outside.push(format!("HEAD, moved {moved}"));
+        }
+        outside.extend(change.refs.iter().cloned());
+        for path in on_surface
+            .iter()
+            .map(|path| path.display().to_string())
+            .chain(
+                change
+                    .ignored_added
+                    .iter()
+                    .chain(&change.ignored_changed)
+                    .chain(&change.ignored_removed)
+                    .filter(|path| surface.contains(&path.to_string_lossy()))
+                    .map(|path| crate::git::shown(path)),
+            )
+        {
+            if !outside.contains(&path) {
+                outside.push(path);
+            }
+        }
+        outside.extend(outside_moved.iter().map(|path| path.display().to_string()));
+        if !foreign.is_empty() || !outside.is_empty() {
+            let left = undo_step(&self.tree, &kept_all)?.left;
+            foreign.extend(outside);
+            foreign.extend(left.iter().map(|path| {
+                format!("not put back (a program or import directory takt never writes, a link on its way, or a file too large to keep a copy of): {}", path.display())
+            }));
+            let mut why = format!(
+                "{} wrote what its validator does not: {}",
+                validator.action(),
+                foreign.join(", ")
+            );
+            if let Err(error) = &observed {
+                why.push_str(&format!("; the observation failed too: {error:#}"));
+            }
+            // Written after the cases directory was put back, which would take a
+            // line written before it along.
+            self.stepped(
+                events,
+                SteppedBy::Validator(Some(&revision)),
+                validator.name(),
+                validator.action(),
+                "nothing recorded",
+            )?;
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+            writeln!(
+                out,
+                "  refused: {why}; the cases directory was put back, the change discarded and nothing recorded"
+            )?;
+            return Ok(Taken::Stop(Stop::StepRefused(why)));
+        }
+        // An observation that failed when the hour budget ended, its child killed by it,
+        // records nothing, and the run stops on the budget.
+        if let Err(error) = &observed
+            && self.deadline().is_some_and(|deadline| returned >= deadline)
+            && let Some(h) = self.options.hours
+        {
+            restore(&self.tree, &cases, &kept, &touched)?;
+            let why = format!(
+                "step {}: the hour budget ran out during {}; nothing recorded: {error:#}",
+                self.steps,
+                validator.action()
+            );
+            self.stepped(
+                events,
+                SteppedBy::Validator(Some(&revision)),
+                validator.name(),
+                validator.action(),
+                "nothing recorded",
+            )?;
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+            writeln!(out, "  {why}")?;
+            return Ok(Taken::Stop(Stop::Hours(h)));
+        }
+        let (observation, waits) = observed?;
+        self.stepped(
+            events,
+            SteppedBy::Validator(Some(&revision)),
+            validator.name(),
+            validator.action(),
+            &observation.summary,
+        )?;
+        writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+        writeln!(out, "  effect: {}", observation.summary)?;
+        // What the validator retains lands before the records that refer to it: a
+        // retention that fails ends the run with nothing written for the step.
+        if let Some(artifact) = &observation.artifact {
+            let dir = self.case.dir.join("artifacts");
+            std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+            let path = dir.join(&artifact.name);
+            std::fs::write(&path, &artifact.bytes)
+                .with_context(|| format!("write {}", path.display()))?;
+            writeln!(
+                out,
+                "  artifact: {}",
+                path.strip_prefix(&self.tree).unwrap_or(&path).display()
+            )?;
+        }
+        let evidence = CaseEvidence::new(&mut self.case, vec![validator.name().to_owned()])?;
+        for record in &observation.records {
+            let written = evidence.submit(validator.name(), record, Some(request))?;
+            events.emit(
+                self.steps,
+                &Event::Evidence {
+                    id: record.id.clone(),
+                    kind: record.kind.clone(),
+                    result: record.result.clone(),
+                    path: written
+                        .strip_prefix(&self.tree)
+                        .unwrap_or(&written)
+                        .display()
+                        .to_string(),
+                },
+            )?;
+            writeln!(
+                out,
+                "  evidence: {} {}",
+                record.kind,
+                record.result.as_deref().unwrap_or("-")
+            )?;
+        }
+        Ok(Taken::Observed {
+            revision,
+            observation,
+            waits,
+        })
+    }
+
     /// The loop, the case held.
     fn run_held(&mut self, events: &Events, out: &mut dyn Write) -> Result<Stop> {
         let inputs: Vec<String> = self
@@ -9474,284 +9844,56 @@ impl<'a> Run<'a> {
                 if let Some(stop) = self.disk_low(out)? {
                     return Ok(stop);
                 }
-                // The story's records in the store, once a run, just before the step its grant
-                // authorises: they ride to the base with the merge, and without both of them the
-                // step is not taken.
-                if !recorded_before {
-                    match self.record_before(events, validator.action(), out)? {
-                        Before::Ungranted => {}
-                        Before::Recorded => recorded_before = true,
-                        Before::Missing(why) => {
-                            self.refused(events, BY_TAKT, &why)?;
-                            writeln!(out, "  refused: {why}")?;
-                            return Ok(Stop::StepRefused(why));
-                        }
-                    }
-                }
-                self.steps += 1;
-                let revision = self
-                    .case
-                    .revision(validator.subject())
-                    .context("the validator's subject has a revision")?;
-                // A record is bound to the revision, `HEAD`: a tree with uncommitted changes
-                // outside the cases directory would be observed on other content than the one
-                // the record names. Nothing is observed, and the changes are left as they are.
-                let uncommitted = crate::git::uncommitted(&self.tree)?;
-                if !uncommitted.is_empty() {
-                    let why = format!(
-                        "{} would observe {} with uncommitted changes: {}",
-                        validator.action(),
-                        &revision[..8.min(revision.len())],
-                        uncommitted.join(", ")
-                    );
-                    self.stepped(
-                        events,
-                        SteppedBy::Validator(None),
-                        validator.name(),
-                        validator.action(),
-                        "nothing observed",
-                    )?;
-                    self.refused(events, BY_TAKT, &why)?;
-                    writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
-                    writeln!(out, "  refused: {why}; nothing observed")?;
-                    return Ok(Stop::StepRefused(why));
-                }
-                // What a validator runs may be code a model wrote (the test command, a gate's
-                // commands): the cases directory is guarded as around a judgement step, and the
-                // tree must be as it was before the observation: the guarded part of `.git`
-                // (hooks, config, `info/`), `HEAD`, every branch and tag, the index and every path outside the cases
-                // directory; ignored files it made (a build's output) may stay. The validator's
-                // own writes under its case are the only change admitted; anything else is put
-                // back, and the observation refused with nothing recorded. `.git` is put back
-                // before any git runs again: git runs what was planted there (a hook,
-                // `core.fsmonitor`). The judge surface is snapshotted as around a judgement
-                // step: what the observation left there that git does not list (a FIFO, a file
-                // in an ignored directory) or that git lists as ignored is put back and the
-                // observation refused like any other foreign write. So are the files outside
-                // the tree that decide how cargo and rustup build and run the tests
-                // ([`Outside`]): one that differs from what the run found when it began (a
-                // change no step could keep, by another route) and nothing is observed or
-                // recorded; one the observation changed is put back and the observation refused.
-                let outside_kept = Outside::read(&self.tree, &self.outside_dirs)?;
-                let outside_moved = self.outside.differing(&outside_kept);
-                if !outside_moved.is_empty() {
-                    let why = format!(
-                        "{} would observe {} while what cargo or rustup reads outside the tree, a program on `PATH`, or what Python imports from there differs from what the run found when it began: {}",
-                        validator.action(),
-                        &revision[..8.min(revision.len())],
-                        outside_named(&outside_moved)
-                    );
-                    self.stepped(
-                        events,
-                        SteppedBy::Validator(None),
-                        validator.name(),
-                        validator.action(),
-                        "nothing observed",
-                    )?;
-                    self.refused(events, BY_TAKT, &why)?;
-                    writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
-                    writeln!(out, "  refused: {why}; nothing observed")?;
-                    return Ok(Stop::StepRefused(why));
-                }
-                let checkpoint = self.checkpoint(false)?;
-                let cases = self.tree.join(CASES_DIR);
-                let kept = snapshot(&cases)?;
-                let globs = self.judge_list()?.unwrap_or_default();
-                let (surface, surface_kept) =
-                    JudgeSurface::read(&self.runs(), globs, &self.modules, &self.tree)?;
-                let observed = validator
-                    .observe_within(&self.tree, &revision, seq, self.deadline())
-                    .with_context(|| format!("{} ({})", validator.action(), validator.name()));
-                let returned = Instant::now();
-                // What the observation left running is killed before anything is looked at;
-                // one that could not be killed is named with the rest of what it left.
-                let swept = crate::forge::sweep_left();
-                let git_dir = checkpoint.put_back_git_dir(&self.tree);
-                let mut planted = git_dir.touched;
-                planted.extend(
-                    git_dir
-                        .failed
-                        .into_iter()
-                        .map(|path| format!("not put back: {path}")),
+                // The step is the validator's effect: Commission's runtime of loom-sdk hands it
+                // the request for its action once the governor admitted it and, where the action
+                // requires a capability, the case's authority allowed it
+                // ([`crate::validator::ValidatorEffect`]). Whatever gate the validator keeps (the
+                // merge's grant at the case's revision) it keeps inside the effect.
+                let (dir, id, protocol) = (
+                    self.case.dir.clone(),
+                    self.case.id.clone(),
+                    self.case.protocol.clone(),
                 );
-                if let Err(error) = swept {
-                    planted.push(format!("processes still running: {error:#}"));
-                }
-                // What the observation left: on the judge surface, in the cases directory, in the
-                // tree as git sees it and outside the tree. A read that fails (a file the run may
-                // not read) discards everything the observation did before the run ends on the
-                // error.
-                let kept_all = Kept {
-                    checkpoint: &checkpoint,
-                    cases: &cases,
-                    cases_kept: &kept,
-                    surface: &surface,
-                    surface_kept: &surface_kept,
-                    outside: &outside_kept,
-                    outside_dirs: &self.outside_dirs,
-                };
-                let seen = (|| -> Result<_> {
-                    let on_surface = differing(&surface_kept, &surface.snapshot(&self.tree)?);
-                    let touched = differing(&kept, &snapshot(&cases)?);
-                    let change = checkpoint.change(&self.tree)?;
-                    let moved =
-                        outside_kept.differing(&Outside::read(&self.tree, &self.outside_dirs)?);
-                    Ok((on_surface, touched, change, moved))
-                })();
-                let (on_surface, touched, change, outside_moved) = match seen {
-                    Ok(seen) => seen,
-                    Err(error) => {
-                        return Err(match undo_step(&self.tree, &kept_all) {
-                            Ok(_) => error.context(format!(
-                                "{}: what the observation left could not be read; everything it changed was discarded",
-                                validator.action()
-                            )),
-                            Err(undo) => error.context(format!(
-                                "{}: what the observation left could not be read, and its change could not be discarded: {undo:#}",
-                                validator.action()
-                            )),
-                        });
-                    }
-                };
-                let own: Vec<PathBuf> = match self.case.dir.file_name() {
-                    Some(id) => validator
-                        .writes()
-                        .iter()
-                        .map(|path| Path::new(id).join(path))
-                        .collect(),
-                    None => Vec::new(),
-                };
-                let mut foreign =
-                    cases_named(&cases, touched.iter().filter(|path| !own.contains(path)));
-                let mut outside: Vec<String> = planted;
-                outside.extend(change.paths.iter().cloned());
-                if change.staged {
-                    outside.push("the index".to_owned());
-                }
-                if let Some(moved) = &change.head {
-                    outside.push(format!("HEAD, moved {moved}"));
-                }
-                outside.extend(change.refs.iter().cloned());
-                for path in on_surface
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .chain(
-                        change
-                            .ignored_added
-                            .iter()
-                            .chain(&change.ignored_changed)
-                            .chain(&change.ignored_removed)
-                            .filter(|path| surface.contains(&path.to_string_lossy()))
-                            .map(|path| crate::git::shown(path)),
-                    )
-                {
-                    if !outside.contains(&path) {
-                        outside.push(path);
-                    }
-                }
-                outside.extend(outside_moved.iter().map(|path| path.display().to_string()));
-                if !foreign.is_empty() || !outside.is_empty() {
-                    let left = undo_step(&self.tree, &kept_all)?.left;
-                    foreign.extend(outside);
-                    foreign.extend(left.iter().map(|path| {
-                        format!("not put back (a program or import directory takt never writes, a link on its way, or a file too large to keep a copy of): {}", path.display())
-                    }));
-                    let mut why = format!(
-                        "{} wrote what its validator does not: {}",
-                        validator.action(),
-                        foreign.join(", ")
-                    );
-                    if let Err(error) = &observed {
-                        why.push_str(&format!("; the observation failed too: {error:#}"));
-                    }
-                    // Written after the cases directory was put back, which would take a
-                    // line written before it along.
-                    self.stepped(
-                        events,
-                        SteppedBy::Validator(Some(&revision)),
-                        validator.name(),
-                        validator.action(),
-                        "nothing recorded",
-                    )?;
-                    self.refused(events, BY_TAKT, &why)?;
-                    writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
-                    writeln!(
-                        out,
-                        "  refused: {why}; the cases directory was put back, the change discarded and nothing recorded"
-                    )?;
-                    return Ok(Stop::StepRefused(why));
-                }
-                // An observation that failed when the hour budget ended, its child killed by it,
-                // records nothing, and the run stops on the budget.
-                if let Err(error) = &observed
-                    && self.deadline().is_some_and(|deadline| returned >= deadline)
-                    && let Some(h) = self.options.hours
-                {
-                    restore(&self.tree, &cases, &kept, &touched)?;
-                    let why = format!(
-                        "step {}: the hour budget ran out during {}; nothing recorded: {error:#}",
-                        self.steps,
-                        validator.action()
-                    );
-                    self.stepped(
-                        events,
-                        SteppedBy::Validator(Some(&revision)),
-                        validator.name(),
-                        validator.action(),
-                        "nothing recorded",
-                    )?;
-                    self.refused(events, BY_TAKT, &why)?;
-                    writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
-                    writeln!(out, "  {why}")?;
-                    return Ok(Stop::Hours(h));
-                }
-                let (observation, waits) = observed?;
-                self.stepped(
+                let authority = CaseAuthority::new(&dir, &id);
+                let mut step = GuardedStep {
+                    run: self,
                     events,
-                    SteppedBy::Validator(Some(&revision)),
-                    validator.name(),
-                    validator.action(),
-                    &observation.summary,
-                )?;
-                writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
-                writeln!(out, "  effect: {}", observation.summary)?;
-                // What the validator retains lands before the records that refer to it: a
-                // retention that fails ends the run with nothing written for the step.
-                if let Some(artifact) = &observation.artifact {
-                    let dir = self.case.dir.join("artifacts");
-                    std::fs::create_dir_all(&dir)
-                        .with_context(|| format!("create {}", dir.display()))?;
-                    let path = dir.join(&artifact.name);
-                    std::fs::write(&path, &artifact.bytes)
-                        .with_context(|| format!("write {}", path.display()))?;
-                    writeln!(
-                        out,
-                        "  artifact: {}",
-                        path.strip_prefix(&self.tree).unwrap_or(&path).display()
-                    )?;
-                }
-                for record in &observation.records {
-                    let written = self.case.add_evidence(record)?;
-                    events.emit(
-                        self.steps,
-                        &Event::Evidence {
-                            id: record.id.clone(),
-                            kind: record.kind.clone(),
-                            result: record.result.clone(),
-                            path: written
-                                .strip_prefix(&self.tree)
-                                .unwrap_or(&written)
-                                .display()
-                                .to_string(),
-                        },
-                    )?;
-                    writeln!(
-                        out,
-                        "  evidence: {} {}",
-                        record.kind,
-                        record.result.as_deref().unwrap_or("-")
-                    )?;
-                }
+                    out: &mut *out,
+                    seq,
+                    recorded_before: &mut recorded_before,
+                    taken: None,
+                };
+                let ended = {
+                    let effect = ValidatorEffect::new(validator.as_ref(), &mut step);
+                    run_effect(
+                        &dir,
+                        &id,
+                        &protocol,
+                        &authority,
+                        &effect,
+                        validator.action(),
+                        &seq.to_string(),
+                    )?
+                };
+                let (revision, observation, waits) = match step.taken.take() {
+                    Some(Taken::Stop(stop)) => return Ok(stop),
+                    Some(Taken::Observed {
+                        revision,
+                        observation,
+                        waits,
+                    }) => (revision, observation, waits),
+                    None => {
+                        let why = format!(
+                            "{} was not handed to its validator {}: Commission's runtime ended {:?}",
+                            validator.action(),
+                            validator.name(),
+                            ended.outcome
+                        );
+                        self.refused(events, BY_TAKT, &why)?;
+                        writeln!(out, "  refused: {why}")?;
+                        return Ok(Stop::StepRefused(why));
+                    }
+                };
                 // A validator that wrote no record (the gate was unknown) is not due again at
                 // this revision. The pass counts as idle only when nothing else can move the
                 // decision, no judgement step offered, no other validator due and none waiting
@@ -10660,7 +10802,11 @@ impl<'a> Run<'a> {
                     },
                 )?;
                 writeln!(out, "  effect: no file changed")?;
-                let mut recorded = false;
+                // The records missing, each about an artifact at its revision: written by the
+                // choice effect ([`crate::validator::ChoiceEffect`]) once Commission's runtime
+                // hands it the request for the action the harness chose, through the case's
+                // evidence port under [`CHOICE_PRODUCER`].
+                let mut missing: Vec<(String, String, String, String)> = Vec::new();
                 for (kind, subjects) in choices {
                     for subject in subjects {
                         if self.case.has_evidence(kind, subject)? {
@@ -10674,33 +10820,91 @@ impl<'a> Run<'a> {
                         } else {
                             format!("{}-{subject}-{seq}", kind.replace('_', "-"))
                         };
-                        let record = crate::evidence::Record::new(
-                            id,
-                            kind,
-                            None,
-                            subject,
-                            &revision,
-                            CHOICE_PRODUCER,
-                        );
-                        let written = self.case.add_evidence(&record)?;
-                        events.emit(
-                            self.steps,
-                            &Event::Evidence {
-                                id: record.id.clone(),
-                                kind: record.kind.clone(),
-                                result: None,
-                                path: written
-                                    .strip_prefix(&self.tree)
-                                    .unwrap_or(&written)
-                                    .display()
-                                    .to_string(),
-                            },
-                        )?;
-                        writeln!(out, "  evidence: {kind} -")?;
-                        recorded = true;
+                        missing.push((id, kind.clone(), subject.clone(), revision));
                     }
                 }
-                last_idle = (!recorded).then_some(state);
+                let mut written: Vec<(crate::evidence::Record, PathBuf)> = Vec::new();
+                if !missing.is_empty() {
+                    let (dir, id, protocol) = (
+                        self.case.dir.clone(),
+                        self.case.id.clone(),
+                        self.case.protocol.clone(),
+                    );
+                    let authority = CaseAuthority::new(&dir, &id);
+                    let case = &mut self.case;
+                    let mut write = |request: &AdmittedRequest| -> Result<EffectOutcome> {
+                        let mut records = Vec::new();
+                        for (id, kind, subject, revision) in &missing {
+                            records.push(crate::evidence::Record::new(
+                                id,
+                                kind,
+                                None,
+                                subject,
+                                revision,
+                                CHOICE_PRODUCER,
+                            ));
+                        }
+                        let evidence =
+                            CaseEvidence::new(&mut *case, vec![CHOICE_PRODUCER.to_owned()])?;
+                        let mut ids = Vec::new();
+                        for record in records {
+                            let path = evidence.submit(
+                                CHOICE_PRODUCER,
+                                &record,
+                                Some(&request.data().action_request_id.0.0),
+                            )?;
+                            ids.push(cjson::Value::Text(record.id.clone()));
+                            written.push((record, path));
+                        }
+                        Ok(EffectOutcome::Performed(EffectOutcomePerformed {
+                            report: cjson::Value::Object(vec![(
+                                "records".to_owned(),
+                                cjson::Value::Array(ids),
+                            )]),
+                            attempt: None,
+                            audit: None,
+                            usage: None,
+                        }))
+                    };
+                    let ended = {
+                        let effect = ChoiceEffect::new(&report.action, &mut write);
+                        run_effect(
+                            &dir,
+                            &id,
+                            &protocol,
+                            &authority,
+                            &effect,
+                            &report.action,
+                            &seq.to_string(),
+                        )?
+                    };
+                    if written.is_empty() {
+                        let why = format!(
+                            "{} was not handed to the effect that records the choice: Commission's runtime ended {:?}",
+                            report.action, ended.outcome
+                        );
+                        self.refused(events, BY_TAKT, &why)?;
+                        writeln!(out, "  refused: {why}")?;
+                        return Ok(Stop::StepRefused(why));
+                    }
+                }
+                for (record, path) in &written {
+                    events.emit(
+                        self.steps,
+                        &Event::Evidence {
+                            id: record.id.clone(),
+                            kind: record.kind.clone(),
+                            result: None,
+                            path: path
+                                .strip_prefix(&self.tree)
+                                .unwrap_or(path)
+                                .display()
+                                .to_string(),
+                        },
+                    )?;
+                    writeln!(out, "  evidence: {} -", record.kind)?;
+                }
+                last_idle = written.is_empty().then_some(state);
                 continue;
             }
             if changed.is_empty() {

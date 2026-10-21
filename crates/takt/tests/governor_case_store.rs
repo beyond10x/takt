@@ -261,6 +261,61 @@ fn governor_at(
         .with_evaluation_time(move |_: &CaseId| Ok(Some(at.clone())))
 }
 
+/// The observations of a case a run took to its merge gate are what Commission's runtime of
+/// loom-sdk recorded of its validator steps (`story:validators-perform-as-effects`): as many
+/// proposals of the executor (`executor`) as outcomes of the effect (`effect`), and one
+/// observation under the validator's name of each record the run's effects submitted, naming a
+/// record in `evidence/` of that producer. The records written before the run have none.
+fn assert_observed_by_the_runtime(case_dir: &Path, memory: &Rc<Memory>) {
+    let observations = json_file(&case_dir.join(OBSERVATIONS_FILE));
+    let observations = observations.as_array().expect("an array");
+    let names: Vec<String> = validators(memory.clone())
+        .iter()
+        .map(|validator| validator.name().to_owned())
+        .collect();
+    let records: Vec<serde_json::Value> = fs::read_dir(case_dir.join("evidence"))
+        .expect("evidence")
+        .map(|entry| json_file(&entry.expect("an entry").path()))
+        .collect();
+    let of = |source: &str| {
+        observations
+            .iter()
+            .filter(|observation| observation["source"] == source)
+            .count()
+    };
+    assert!(of("executor") > 0, "{observations:?}");
+    assert_eq!(of("executor"), of("effect"), "{observations:?}");
+    let mut observed = Vec::new();
+    for observation in observations {
+        let source = observation["source"].as_str().expect("a source");
+        if source == "executor" || source == "effect" {
+            continue;
+        }
+        assert!(names.iter().any(|name| name == source), "{observation}");
+        let id = observation["payload"]["record"].as_str().expect("a record");
+        assert!(
+            records
+                .iter()
+                .any(|record| record["id"] == id && record["producer"] == source),
+            "{observation}"
+        );
+        observed.push(id.to_owned());
+    }
+    let mut by_the_run: Vec<String> = records
+        .iter()
+        .filter(|record| {
+            record["producer"]
+                .as_str()
+                .is_some_and(|producer| names.iter().any(|name| name == producer))
+        })
+        .map(|record| record["id"].as_str().expect("an id").to_owned())
+        .collect();
+    observed.sort();
+    by_the_run.sort();
+    assert!(!by_the_run.is_empty());
+    assert_eq!(observed, by_the_run, "{observations:?}");
+}
+
 /// Acceptance 1: a case run to its merge gate has `case.yaml`, its evidence, `decisions/` and
 /// `observations.json` where takt writes them, and `authority.yaml` once granted. The latest
 /// decision file is the document the governor renders for the case as it is held, at the instant
@@ -286,8 +341,7 @@ fn a_case_at_its_merge_gate_holds_its_files_and_the_governors_decision_documents
             "{name}"
         );
     }
-    let observations = json_file(&case_dir.join(OBSERVATIONS_FILE));
-    assert_eq!(observations, serde_json::json!([]));
+    assert_observed_by_the_runtime(&case_dir, &memory);
     assert!(!case_dir.join(AUTHORITY_FILE).exists());
 
     let latest = json_file(decisions.last().expect("a decision"));
@@ -371,6 +425,7 @@ fn the_case_store_reads_the_case_files_and_keeps_observations() {
     );
 
     let governor = governor_at(&case_dir, "2026-10-21T00:00:00Z");
+    let held = governor.try_observations().expect("reads");
     let observation = ObservationData {
         observation_id: ObservationId(Uuid("00000000-0000-4000-8000-000000000001".to_owned())),
         source: "forge".to_owned(),
@@ -381,14 +436,13 @@ fn the_case_store_reads_the_case_files_and_keeps_observations() {
     governor
         .observe(Observation::new(observation.clone()))
         .expect("observed");
-    assert_eq!(
-        governor.try_observations().expect("reads"),
-        vec![observation.clone()]
-    );
+    let mut kept = held.clone();
+    kept.push(observation.clone());
+    assert_eq!(governor.try_observations().expect("reads"), kept);
     let again = CaseFiles::at(&case_dir).expect("the case's files");
-    assert_eq!(again.observations().expect("reads"), vec![observation]);
+    assert_eq!(again.observations().expect("reads"), kept);
     let written = json_file(&case_dir.join(OBSERVATIONS_FILE));
-    assert_eq!(written[0]["source"], "forge", "{written}");
+    assert_eq!(written[held.len()]["source"], "forge", "{written}");
 }
 
 fn commission(case: &str) -> CommissionData {

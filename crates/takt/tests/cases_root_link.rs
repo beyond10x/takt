@@ -173,8 +173,9 @@ fn files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 }
 
 /// The cases directory after the run is the one the step began on: every file of it there with
-/// its bytes, the event log only grown by the lines the run wrote after putting it back, and
-/// nothing else added; the run's own hold, `run.lock`, is let go when the run ends.
+/// its bytes, the event log only grown by the lines the run wrote after putting it back, the
+/// observations only grown by the outcome Commission's runtime recorded of the refused effect
+/// after it, and nothing else added; the run's own hold, `run.lock`, is let go when the run ends.
 fn assert_put_back(
     before: &BTreeMap<PathBuf, Vec<u8>>,
     after: &BTreeMap<PathBuf, Vec<u8>>,
@@ -197,6 +198,22 @@ fn assert_put_back(
                 "{} keeps what it held\n{text}",
                 path.display()
             );
+        } else if path.ends_with("observations.json") {
+            let held = observations(bytes);
+            let now = observations(now);
+            assert!(
+                now.starts_with(&held),
+                "{} keeps what it held\n{text}",
+                path.display()
+            );
+            for added in &now[held.len()..] {
+                assert_eq!(
+                    added["source"],
+                    "effect",
+                    "{} grows only by the effect's outcome: {added}\n{text}",
+                    path.display()
+                );
+            }
         } else {
             assert_eq!(now, bytes, "{} as it was\n{text}", path.display());
         }
@@ -208,6 +225,11 @@ fn assert_put_back(
             path.display()
         );
     }
+}
+
+/// The observations a case's `observations.json` holds, in the order kept.
+fn observations(bytes: &[u8]) -> Vec<serde_json::Value> {
+    serde_json::from_slice(bytes).expect("observations.json is a JSON array")
 }
 
 /// What every refused swap leaves: a stop naming the cases directory as a link, the directory a
