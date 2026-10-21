@@ -1,0 +1,98 @@
+name: darwin
+
+on:
+  push:
+    branches: ["wave/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: darwin-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CHECK_FINDING_MIN_FREE_GIB: "0"
+
+jobs:
+  test:
+    name: takt / darwin (${{ matrix.part }})
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: test-cli
+            args: -p b10x-takt-cli
+          - part: test-library
+            args: --workspace --exclude b10x-takt-cli
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: stable
+
+      - name: Install go-task
+        env:
+          TASK_VERSION: "3.52.0"
+          TASK_SHA256: debfa9a3bc06fcb5d5550b44725ecd22bb305499ce057bd6d7a774db5cdaa7b8
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/task.tar.gz" \
+            "https://github.com/go-task/task/releases/download/v$TASK_VERSION/task_darwin_arm64.tar.gz"
+          echo "$TASK_SHA256  $RUNNER_TEMP/task.tar.gz" | shasum -a 256 --check --strict
+          mkdir -p "$RUNNER_TEMP/task-bin"
+          tar -xzf "$RUNNER_TEMP/task.tar.gz" -C "$RUNNER_TEMP/task-bin" task
+          echo "$RUNNER_TEMP/task-bin" >> "$GITHUB_PATH"
+
+      - name: Install ess
+        env:
+          ESS_VERSION: "0.66.0"
+          ESS_SHA256: c5dd4fb32d16c1b6a45cbc340e4be9ff4f4664c8f24b34c9797d5c89a177d3ee
+        run: |
+          set -euo pipefail
+          asset="ess-$ESS_VERSION-aarch64-apple-darwin.tar.gz"
+          release="https://github.com/beyond10x/ess/releases/download/$ESS_VERSION"
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --output "$asset" "$release/$asset"
+          curl --fail --silent --show-error --location --output SHA256SUMS "$release/SHA256SUMS"
+          grep -Fx "$ESS_SHA256  $asset" SHA256SUMS
+          grep -F "  $asset" SHA256SUMS | shasum -a 256 --check --strict
+          tar -xzf "$asset"
+          echo "$RUNNER_TEMP/ess-$ESS_VERSION-aarch64-apple-darwin" >> "$GITHUB_PATH"
+
+      - name: Install aep
+        env:
+          AEP_VERSION: "0.74.0"
+          AEP_SHA256: 3d9cd9d08431976f6ca335737688765eed22c6442f07af5623f72c5e456b73bd
+        run: |
+          set -euo pipefail
+          asset="aep-$AEP_VERSION-aarch64-apple-darwin.tar.gz"
+          release="https://github.com/beyond10x/aep/releases/download/$AEP_VERSION"
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --output "$asset" "$release/$asset"
+          curl --fail --silent --show-error --location --output AEP-SHA256SUMS "$release/SHA256SUMS"
+          grep -Fx "$AEP_SHA256  $asset" AEP-SHA256SUMS
+          grep -F "  $asset" AEP-SHA256SUMS | shasum -a 256 --check --strict
+          tar -xzf "$asset"
+          echo "$RUNNER_TEMP/aep-$AEP_VERSION-aarch64-apple-darwin" >> "$GITHUB_PATH"
+
+      - name: Fill aep's protocol cache
+        run: aep plan artifact validate
+
+      - name: Build
+        run: cargo build --workspace --locked --all-targets
+
+      - name: cargo test (${{ matrix.part }})
+        env:
+          ARGS: ${{ matrix.args }}
+        run: cargo test --locked --no-fail-fast $ARGS
