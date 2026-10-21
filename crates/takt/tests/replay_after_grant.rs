@@ -478,3 +478,43 @@ fn a_step_taken_before_the_grant_replays_without_it() {
         String::from_utf8_lossy(&rebuilt)
     );
 }
+
+/// `authority.yaml` is never read or written through a link, as no file of a case is: a link
+/// there, even to the grant the run had, is refused naming it, by replay's starting state and
+/// by every reader of the case's authority, so it grants nothing; and a write over it leaves
+/// the file it points at as it was.
+#[test]
+fn authority_through_a_link_is_not_read() {
+    let case = granted("linked");
+    let outside = directory("linked-outside");
+    let file = case.case_dir.join(AUTHORITY_FILE);
+    let target = outside.join("authority.yaml");
+    fs::rename(&file, &target).expect("moved out");
+    std::os::unix::fs::symlink(&target, &file).expect("a link");
+    let named = |error: &anyhow::Error| {
+        let text = format!("{error:#}");
+        assert!(
+            text.contains(&file.display().to_string()) && text.contains("link"),
+            "the refusal names the link: {text}"
+        );
+    };
+    match starting_state(&case.case_dir, case.after.1, Some(case.after.0)) {
+        Ok(start) => panic!(
+            "replay read the grant through a link: {GATE} {:?}",
+            start.decision.actions.get(GATE)
+        ),
+        Err(error) => named(&error),
+    }
+    named(&Authority::read(&case.case_dir).expect_err("the authority is not read"));
+    named(
+        &takt::case::holds_grant(&case.case_dir, GATE)
+            .expect_err("the merge validator's gate reads no grant"),
+    );
+    let before = fs::read(&target).expect("the file linked to");
+    named(
+        &Authority::default()
+            .write(&case.case_dir)
+            .expect_err("the authority is not written through the link"),
+    );
+    assert_eq!(fs::read(&target).expect("the file linked to"), before);
+}

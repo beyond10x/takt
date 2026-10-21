@@ -528,8 +528,9 @@ pub fn rebuild_case(start: &Start, tree: &Path, revision: &str) -> Result<PathBu
 
 /// The bytes of the regular file at `path`, read without following a link at it
 /// (`O_NOFOLLOW`); none when nothing is there. A link there, or anything but a regular file, is
-/// refused: a case is never read through a link.
-fn read_plain(path: &Path) -> Result<Option<Vec<u8>>> {
+/// refused: a case is never read through a link. The case's `authority.yaml` is read so too
+/// ([`crate::case::Authority::read`]).
+pub(crate) fn read_plain(path: &Path) -> Result<Option<Vec<u8>>> {
     use std::io::Read as _;
     use std::os::unix::fs::OpenOptionsExt as _;
     match std::fs::symlink_metadata(path) {

@@ -636,13 +636,32 @@ fn the_case_evidence_port_takes_records_only_from_the_runs_producers() {
     assert_eq!(written["subject_revision"], revision.as_str());
 }
 
-/// Acceptance 2, for every run: no code of takt writes a record into a case but the case's
-/// evidence port. `CaseDir::add_evidence` is called from `evidence.rs` alone.
-#[test]
-fn no_record_reaches_a_case_but_through_the_case_evidence_port() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut callers = Vec::new();
-    let mut dirs = vec![src.clone()];
+/// Whether the line of code `code` may write a record into a case or names a path into a case's
+/// `evidence/`: a call of `add_evidence(` or of `rebuild_case(` (replay's copy of a case), the
+/// name `"evidence"` given to a path (`join("evidence")`, `Path::new("evidence")`) or bound to a
+/// name, or a path literal through `evidence/` (`"evidence/…"`, `…/evidence/…`). The planning
+/// store's `.engineering/evidence/` is another directory, no case's, and is left out.
+fn names_case_evidence(code: &str) -> bool {
+    let code = code.replace(".engineering/evidence/", "");
+    code.contains("add_evidence(")
+        || code.contains("rebuild_case(")
+        || code.contains("(\"evidence\")")
+        || code.contains(": &str = \"evidence\"")
+        || code.contains(" = \"evidence\";")
+        || code.contains("\"evidence/")
+        || code.contains("/evidence/")
+}
+
+/// The lines of the code of every crate under `crates` (`<crate>/src/**/*.rs`) that may write a
+/// record into a case or name a path into a case's `evidence/` ([`names_case_evidence`]), each
+/// trimmed, with its file relative to `crates`, in order; comment lines are skipped.
+fn evidence_lines(crates: &Path) -> Vec<(String, String)> {
+    let mut lines = Vec::new();
+    let mut dirs: Vec<PathBuf> = fs::read_dir(crates)
+        .expect("the crates directory")
+        .map(|entry| entry.expect("an entry").path().join("src"))
+        .filter(|src| src.is_dir())
+        .collect();
     while let Some(dir) = dirs.pop() {
         for entry in fs::read_dir(&dir).expect("a source directory") {
             let path = entry.expect("an entry").path();
@@ -654,32 +673,168 @@ fn no_record_reaches_a_case_but_through_the_case_evidence_port() {
                 continue;
             }
             let text = fs::read_to_string(&path).expect("a source file");
-            for (n, line) in text.lines().enumerate() {
-                let code = line.trim_start();
-                if code.starts_with("//") || !code.contains("add_evidence(") {
+            for line in text.lines() {
+                let code = line.trim();
+                if code.starts_with("//") || !names_case_evidence(code) {
                     continue;
                 }
-                let file = path.strip_prefix(&src).expect("under src").display();
-                callers.push((file.to_string(), n + 1, code.to_owned()));
+                let file = path.strip_prefix(crates).expect("under crates").display();
+                lines.push((file.to_string(), code.to_owned()));
             }
         }
     }
-    callers.sort();
-    let outside: Vec<&(String, usize, String)> = callers
+    lines.sort();
+    lines
+}
+
+/// The guard below finds a record written past the port in any crate, by `add_evidence` or by a
+/// plain write into a case's `evidence/`: two such lines in a scratch copy of the crates' layout
+/// are both found.
+#[test]
+fn the_port_guard_finds_a_record_written_past_it_in_any_crate() {
+    let crates = scratch("port-guard");
+    for (file, code) in [
+        ("takt/src/lib.rs", "case.add_evidence(&record)?;"),
+        (
+            "takt-cli/src/main.rs",
+            "std::fs::write(case.join(\"evidence\").join(\"0001-x.json\"), record)?;",
+        ),
+    ] {
+        let path = crates.join(file);
+        fs::create_dir_all(path.parent().expect("a parent")).expect("a source directory");
+        fs::write(&path, format!("fn f() {{\n    {code}\n}}\n")).expect("a source file");
+    }
+    assert_eq!(
+        evidence_lines(&crates),
+        vec![
+            (
+                "takt-cli/src/main.rs".to_owned(),
+                "std::fs::write(case.join(\"evidence\").join(\"0001-x.json\"), record)?;"
+                    .to_owned()
+            ),
+            (
+                "takt/src/lib.rs".to_owned(),
+                "case.add_evidence(&record)?;".to_owned()
+            ),
+        ]
+    );
+}
+
+/// Every line of takt's crates that may write a record into a case or names a path into a
+/// case's `evidence/` ([`evidence_lines`]), with what it does: the port's one write, and
+/// otherwise a read, a name, the empty directory a case opens with, or replay's copy into a
+/// scratch tree. A line found and not here, or here and not found, fails the guard.
+const EVIDENCE_LINES: [(&str, &str, &str); 16] = [
+    (
+        "takt/src/evidence.rs",
+        "match self.case.borrow_mut().add_evidence(&record) {",
+        "the port, `CaseEvidence`: the one write of a record into a case",
+    ),
+    (
+        "takt/src/case.rs",
+        "pub fn add_evidence(&mut self, record: &Record) -> Result<PathBuf> {",
+        "the write the port calls",
+    ),
+    (
+        "takt/src/case.rs",
+        ".join(\"evidence\")",
+        "the path `add_evidence` writes the record at",
+    ),
+    (
+        "takt/src/case.rs",
+        "std::fs::create_dir_all(self.dir.join(\"evidence\"))",
+        "the empty directory a case is opened with",
+    ),
+    (
+        "takt/src/case.rs",
+        "let evidence = case_dir.join(\"evidence\");",
+        "reads the records (`evidence_files`)",
+    ),
+    (
+        "takt/src/case.rs",
+        "evidence_id: EvidenceId(Uuid(uuid_from(&format!(\"{case}/evidence/{name}\")))),",
+        "a record's id, derived from its name; nothing written",
+    ),
+    (
+        "takt/src/case.rs",
+        "cjson::Value::Text(format!(\"evidence/{name}\")),",
+        "names a record the case holds; nothing written",
+    ),
+    (
+        "takt/src/evidence.rs",
+        "evidence_id: EvidenceId(Uuid(uuid_from(&format!(\"{id}/evidence/{}\", record.id)))),",
+        "a record's id, derived from its name; nothing written",
+    ),
+    (
+        "takt/src/loop_scorecard.rs",
+        "let dir = crate::case::current(tree)?.join(\"evidence\");",
+        "reads the records (`case_records`)",
+    ),
+    (
+        "takt/src/run.rs",
+        "let mine = Path::new(CASES_DIR).join(&self.case.id).join(\"evidence\");",
+        "a path compared with a record line's; nothing written",
+    ),
+    (
+        "takt/src/replay.rs",
+        "let (_, name) = path.rsplit_once(\"/evidence/\")?;",
+        "reads a record's name from the record's line",
+    ),
+    (
+        "takt/src/replay.rs",
+        "pub fn rebuild_case(start: &Start, tree: &Path, revision: &str) -> Result<PathBuf> {",
+        "replay's copy of a case into a scratch tree, defined",
+    ),
+    (
+        "takt/src/replay.rs",
+        "let case_dir = rebuild_case(start, &tree, &revision)?;",
+        "its one call, by `replay_once`, into the scratch worktree it made at `<dir>/tree`",
+    ),
+    (
+        "takt/src/replay.rs",
+        "plain_dir(&dir.join(\"evidence\"))?;",
+        "the scratch case's directory, in the scratch tree",
+    ),
+    (
+        "takt/src/replay.rs",
+        "let from = start.case_dir.join(\"evidence\").join(name);",
+        "reads a record of the case, never writes it",
+    ),
+    (
+        "takt/src/replay.rs",
+        "write_plain(&dir.join(\"evidence\").join(name), &bytes)?;",
+        "copies that record, byte for byte, into the scratch case only",
+    ),
+];
+
+/// Acceptance 2, for every run: no code of takt writes a record into a case but the case's
+/// evidence port. In every crate's source, `CaseDir::add_evidence` is called from `evidence.rs`
+/// alone, and every other line that names a path into a case's `evidence/` reads, names, opens
+/// the empty directory, or copies a record into replay's scratch tree ([`EVIDENCE_LINES`]).
+#[test]
+fn no_record_reaches_a_case_but_through_the_case_evidence_port() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the crates directory");
+    let mut found = evidence_lines(crates);
+    found.sort();
+    let mut known: Vec<(String, String)> = EVIDENCE_LINES
         .iter()
-        .filter(|(file, _, code)| {
-            !(file == "evidence.rs"
-                || (file == "case.rs" && code.starts_with("pub fn add_evidence(")))
-        })
+        .map(|(file, code, _)| ((*file).to_owned(), (*code).to_owned()))
         .collect();
+    known.sort();
+    let unknown: Vec<&(String, String)> =
+        found.iter().filter(|line| !known.contains(line)).collect();
     assert!(
-        outside.is_empty(),
-        "records written past the evidence port: {outside:#?}"
+        unknown.is_empty(),
+        "lines that may write a record into a case past its evidence port: {unknown:#?}"
     );
+    let gone: Vec<&(String, String)> = known.iter().filter(|line| !found.contains(line)).collect();
     assert!(
-        callers.iter().any(|(file, _, _)| file == "evidence.rs"),
-        "{callers:#?}"
+        gone.is_empty(),
+        "lines EVIDENCE_LINES names that are no longer in the code: {gone:#?}"
     );
+    assert_eq!(found, known, "each line as often as it is named");
 }
 
 /// Brings a case on the delivery protocol to the gate over the forge double: the tests and the

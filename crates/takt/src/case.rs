@@ -587,10 +587,11 @@ impl AuthorityDecision {
     }
 }
 
-/// The authority the operator granted the case, `authority.yaml`: a list of decisions, at most
-/// one per capability (Canon refuses a capability decided twice), answered into every
-/// evaluation of the case by its authority provider ([`CaseAuthority`]), each grant only at the
-/// revision it was given at.
+/// The authority the operator granted the case, `authority.yaml`: a list of decisions, one per
+/// capability as `takt approve` writes it (Canon refuses a capability decided twice; a file that
+/// decides one more than once is read by [`Authority::decision`], a denial first), answered into
+/// every evaluation of the case by its authority provider ([`CaseAuthority`]), each grant only at
+/// the revision it was given at. Never read or written through a link.
 /// Absent until the first grant: a case with none stops at the gate with `ApprovalRequired`,
 /// and a connection to the forge is never authority.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -601,32 +602,58 @@ pub struct Authority {
 }
 
 impl Authority {
-    /// Reads the case's `authority.yaml`; `None` when the case has none.
+    /// Reads the case's `authority.yaml`; `None` when the case has none. It is read without
+    /// following a link at it: a link there, or anything but a regular file, is an error naming
+    /// it, so a grant the case does not hold is never read from elsewhere.
     pub fn read(case_dir: &Path) -> Result<Option<Self>> {
         let path = case_dir.join(AUTHORITY_FILE);
-        if !path.is_file() {
+        let Some(bytes) = crate::replay::read_plain(&path)? else {
             return Ok(None);
-        }
-        let text =
-            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        };
+        let text = String::from_utf8(bytes).with_context(|| format!("read {}", path.display()))?;
         let authority =
             serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
         Ok(Some(authority))
     }
 
-    /// Writes the case's `authority.yaml`.
+    /// Writes the case's `authority.yaml`, without following a link at it (`O_NOFOLLOW`): a link
+    /// there is refused, naming it.
     pub fn write(&self, case_dir: &Path) -> Result<()> {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
         let path = case_dir.join(AUTHORITY_FILE);
         let text = serde_yaml_ng::to_string(self).context("write the authority")?;
-        std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path)
+            .with_context(|| {
+                format!(
+                    "write {}; a case is never read or written through a link",
+                    path.display()
+                )
+            })?;
+        file.write_all(text.as_bytes())
+            .with_context(|| format!("write {}", path.display()))
     }
 
-    /// The decision on `capability`, when the case decides it.
+    /// The decision on `capability`, when the case decides it: a denial of it wherever the file
+    /// has one, in whatever order, since a denial applies at every revision and a capability
+    /// decided more than once fails closed; else the first decision on it. Every reader of a
+    /// grant reads this one ([`Authority::grants_at`], [`CaseAuthority`], `takt approve`).
     #[must_use]
     pub fn decision(&self, capability: &str) -> Option<&AuthorityDecision> {
-        self.decisions
+        let mut on = self
+            .decisions
             .iter()
-            .find(|decision| decision.capability == capability)
+            .filter(|decision| decision.capability == capability);
+        let first = on.clone().next()?;
+        Some(
+            on.find(|decision| decision.decision == Grant::Denied)
+                .unwrap_or(first),
+        )
     }
 
     /// Whether the case holds a grant of `capability` at `revision`, a revision of the artifact
@@ -2100,8 +2127,9 @@ pub fn approvals_only(tree: &Path, revision: &str, head: &str, case_dir: &Path) 
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // The grants at `revision` by the rule `grants_at` reads, the first decision on each
-    // capability, not yet found recorded; each record found takes its grant out.
+    // The grants at `revision` by the rule `grants_at` reads, the one decision on each
+    // capability `decision` answers, not yet found recorded; each record found takes its grant
+    // out.
     let authority = Authority::read(case_dir)?.unwrap_or_default();
     let mut unrecorded: Vec<Approval> = authority
         .decisions
@@ -2949,7 +2977,9 @@ impl CaseDir {
         self.write()
     }
 
-    /// Adds an evidence record, written as `evidence/<n>-<id>.json`.
+    /// Adds an evidence record, written as `evidence/<n>-<id>.json`. In takt's own code only the
+    /// case's evidence port calls it ([`crate::evidence::CaseEvidence`]); it is public for the
+    /// tests that seed a case with records.
     pub fn add_evidence(&mut self, record: &Record) -> Result<PathBuf> {
         self.written += 1;
         let path = self

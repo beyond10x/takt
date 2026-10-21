@@ -587,6 +587,71 @@ fn a_denial_on_file_is_denied_and_blocks_the_merge() {
     assert_eq!(action(&decision, "repository.merge"), "blocked");
 }
 
+/// A capability `authority.yaml` decides more than once is denied wherever one of its
+/// decisions denies it, in whatever order they are on file: a denial appended after a grant at
+/// the same revision denies the merge to the provider and the evaluation, the merge validator's
+/// gate (`holds_grant`, the case's `grants`, `grants_at`) holds no grant, the merge validator
+/// merges nothing, and `takt approve` grants nothing over it.
+#[test]
+fn a_denial_after_a_grant_still_denies() {
+    let tree = scratch("dupdeny");
+    let memory = memory();
+    let (revision, case_dir) = first_run(&tree, "dupdeny", &memory);
+    grant(&tree, "dupdeny", "repository.merge", "human:operator").expect("granted");
+    let mut authority = Authority::read(&case_dir).expect("reads").expect("held");
+    authority.decisions.push(AuthorityDecision {
+        capability: "repository.merge".to_owned(),
+        decision: Grant::Denied,
+        approver: "human:operator".to_owned(),
+        granted_at: "2026-10-21T00:00:00Z".to_owned(),
+        revision: Some(revision.clone()),
+        mainline_tip: None,
+    });
+    authority.write(&case_dir).expect("written");
+    let at = case_revision(&case_dir, "dupdeny");
+    let answer = verdict(&case_dir, "dupdeny", at);
+    assert!(
+        matches!(answer, AuthorityVerdict::Deny(_)),
+        "verdict {answer:?}"
+    );
+    assert!(
+        !authority.grants_at("repository.merge", &revision),
+        "grants_at"
+    );
+    assert!(
+        authority
+            .decision("repository.merge")
+            .is_some_and(|decision| decision.decision == Grant::Denied),
+        "the decision on the capability"
+    );
+    let case = CaseDir::resume(&tree, "dupdeny").expect("the case resumes");
+    let decision = case
+        .evaluate(case.evaluations().expect("counts") + 1)
+        .expect("evaluates");
+    assert_eq!(action(&decision, "repository.merge"), "blocked");
+    assert!(!case.grants("repository.merge").expect("reads"), "grants");
+    drop(case);
+    assert!(
+        !holds_grant(&case_dir, "repository.merge").expect("reads"),
+        "holds_grant"
+    );
+    let observation = PrMerged::new(memory.clone())
+        .observe(&tree, &revision, 99)
+        .expect("observes");
+    assert!(observation.records.is_empty(), "{}", observation.summary);
+    assert!(
+        memory.merged.borrow().is_empty(),
+        "merged: {}",
+        observation.summary
+    );
+    let refused = grant(&tree, "dupdeny", "repository.merge", "human:operator")
+        .expect_err("a grant over a denial is refused");
+    assert!(
+        format!("{refused:#}").contains("already decides repository.merge"),
+        "{refused:#}"
+    );
+}
+
 /// Acceptance 4: a case the last release left at its merge grant (no case revision in
 /// `case.yaml`, no `observations.json`, each decision rendered by Canon directly) resumes after
 /// the grant `takt approve` writes and merges.
