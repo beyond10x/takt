@@ -3,13 +3,13 @@ format: aep.planning-md/3
 id: dependency-blocker:loom-runtime-stops
 kind: dependency-blocker
 status: open
-title: 'Loom''s run_until_blocked cannot end a run where takt''s loop ends it (0.32.0: C and E open)'
+title: 'Loom''s run_until_blocked cannot end a run where takt''s loop ends it (0.32.0: C open, E settled)'
 summary: approval gate, idle bound, token and time budgets, pending requests, completion
 tags:
 - loom
 relations:
 - blocks: story:the-loop-is-run-until-blocked
-revision: 3
+revision: 5
 ---
 # Blocker: Loom 0.31.0's run_until_blocked cannot end a run where takt's loop ends it
 
@@ -37,8 +37,8 @@ Read at tag `0.32.0` (a238395b); paths in `crates/loom-commission/src/` unless n
 | B | closed, with a condition: the idle bound applies under a step budget (`runtime.rs:1134-1137`, `1795-1803`); progress is a new (action, arguments) pair in the run, and a performed effect does not make a repeated pair new (`1575-1578`, `1638`) | `idle_bound: Some(1)`, `IdleBound` mapped to `NoProgress`; validator proposals carry a per-revision key in their arguments (today `{}`, `crates/takt/src/validator.rs:313-325`); a harness proposal that changes no file answers `NoUsefulAction` | probe: budget 10 with `Some(1)`, 1 call then `IdleBound{1}`; with `None`, 10 calls then `Suspended(Budget max_steps 10)`; the same arguments twice, 2 calls, 2 effects, then `IdleBound{1}` |
 | C | partly closed: `RunBudget { max_tokens, deadline, max_steps }` (`runtime.rs:291-306`, `1475-1479`, `1505-1517`); one `StopPolicy.on_breach` for every limit (`1490-1517`) | open: takt keeps a step that crosses the token limit (`crates/takt/tests/loop_gaps.rs:286-299`) and discards a harness step that returned at or after the hour deadline (`crates/takt/src/run.rs:10366-10420`); one `on_breach` cannot do both. Needs a breach choice per limit in Loom | read |
 | D | closed: `EffectOutcomePending { ends_run: true }` ends the run `Waiting` (`runtime.rs:182-189`, `2663-2676`); a pending answer is not judged against the idle bound (`1431-1446`); the deadline is checked before each re-invocation | `ends_run: true` for a local wait and for a run with no step or hour budget; a forge wait pauses inside `invoke` and answers `ends_run: false` | read |
-| E | changed: `CanonGovernor::with_completion_rule(CompletionRule::FirstDeclared)` (`crates/loom-governor/src/lib.rs:894`, `1334-1345`, `1951-1960`) | open: takt completes on the first legitimate outcome by id (`crates/takt/src/decision.rs:78-86`), Loom on the first declared; with `accepted` and `abandoned` both legitimate takt records `abandoned`, Loom `accepted`, exit 0 either way. Needs `CompletionRule::FirstById` in Loom or an owner decision to accept declaration order | read |
+| E | changed: `CanonGovernor::with_completion_rule(CompletionRule::FirstDeclared)` (`crates/loom-governor/src/lib.rs:894`, `1334-1345`, `1951-1960`) | settled: takt takes `CompletionRule::FirstDeclared` (approval-record:completion-order-first-declared, 2026-10-22). Today takt completes on the first legitimate outcome by id (`crates/takt/src/decision.rs:78-86`); with `accepted` and `abandoned` both legitimate it records `abandoned` today and `accepted` once the story lands, exit 0 either way | read |
 
 Outside A–E, needed for acceptance 2: `ActiveTime` (wall time less forge pauses) has no Loom limit (`max_duration_ms` over reported durations is near it if the executor reports wall time), and `DiskLow` has no Loom stop. Both read.
 
-Clearing this for 0.32.0: no. It needs C's per-limit breach choice and E settled in Loom or by the owner, and a stop for `ActiveTime` and `DiskLow`.
+Clearing this for 0.32.0: no. It needs C's per-limit breach choice and a stop for `ActiveTime` and `DiskLow`. E is settled by approval-record:completion-order-first-declared.
