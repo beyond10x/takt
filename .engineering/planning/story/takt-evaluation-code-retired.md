@@ -11,7 +11,7 @@ relations:
 - decomposes: epic:takt-on-loom-sdk
 - serves: vision:safe-agentic-coding
 - depends_on: story:the-loop-is-run-until-blocked
-revision: 1
+revision: 2
 ---
 # Story: takt-evaluation-code-retired
 
@@ -41,6 +41,14 @@ revision: 1
 3. `ess specify validate --path ess` and `python3 -I scripts/check-citations --require-digests` pass, with no citation into a removed line.
 4. `AGENTS.md` § Layout names no `decision` or `harness` module and names the session-executor crate.
 5. `task check` passes.
+
+## Kept until a Loom contract change
+
+approval-record:loop-pre-checks-ahead-of-loom keeps two of takt's checks ahead of every Loom step:
+`Shape::only_behind` (ApprovalRequired, exit 4) and `Shape::unperformable` (Unperformable, exit 7),
+with the evaluation they read. That part stays, and acceptance 1 allows exactly what those two
+checks need, until Loom's documented contract changes (loom `AGENTS.md:329-338` and `:378`); that
+change is the owner's.
 
 ## Out of Scope
 

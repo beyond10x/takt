@@ -2,11 +2,13 @@
 format: aep.planning-md/3
 id: dependency-blocker:loom-handed-frontier
 kind: dependency-blocker
-status: open
+status: cleared
 title: Loom hands every performed action, so a grant-only or unperformable case ends on the host stop or the idle bound
 relations:
 - blocks: story:the-loop-is-run-until-blocked
-revision: 1
+revision: 4
+transitions:
+- {from: "open", to: "cleared", at: "2026-10-22T13:02:27Z", actor: "human:timo", revision: 4}
 ---
 # Blocker: Loom hands every performed action, so its stops come before takt's
 
@@ -46,3 +48,21 @@ takt's own stop.
 
 dependency-blocker:loom-runtime-stops was cleared on a reading of 0.34.0; this probe shows the
 reading missed the handed frontier.
+
+## Decision (2026-10-22)
+
+The orchestrator, under the owner's delegation: "A. Loom gets the change (NeedsAuthority before
+host_stop when only a grant moves an open obligation; NoPerformableAction naming the claim when
+the deciding action has no performer). It is approved to loom as a wave toward 0.35.0. ... The
+exit-7 conditions from my last message still apply when the story resumes."
+
+Option B, not taken: accept exit 8 where takt gives 4 and exit 3 where it gives 7.
+
+## Worked around (2026-10-22)
+
+Loom reported that both stops break its documented contract (loom `AGENTS.md:329-338` on where
+the host stop is asked, and `:378`, "the frontier relates no action to a claim"), so the Loom
+change of the decision above is withdrawn. The orchestrator approved option C instead: takt runs
+`Shape::only_behind` and `Shape::unperformable` on its case before every Loom step and stops 4 or
+7 itself (approval-record:loop-pre-checks-ahead-of-loom). The blocker is cleared as worked around;
+a Loom contract change that would make the checks unnecessary is the owner's.
