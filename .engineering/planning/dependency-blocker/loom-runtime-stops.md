@@ -9,7 +9,7 @@ tags:
 - loom
 relations:
 - blocks: story:the-loop-is-run-until-blocked
-revision: 11
+revision: 12
 transitions:
 - {from: "open", to: "cleared", at: "2026-10-22T12:24:54Z", actor: "human:timo", revision: 11}
 ---
@@ -88,3 +88,9 @@ Read at tag `0.34.0` (8cfac2cc); `rt` is `crates/loom-commission/src/runtime.rs`
 The orchestrator, under the owner's delegation, chose option A for the order of Hours and
 Unperformable, with two conditions; approval-record:wave-33-loom-0-34-0 quotes it. Cleared: the
 `host_stop` order this blocker waited on ships in 0.34.0.
+
+## After the probe (2026-10-22)
+
+The clearing above read the host_stop order and missed the handed frontier: a probe on 0.34.0
+ends the grant fixture DiskLow (exit 8) and the unperformable fixture IdleBound (exit 3). The
+story now waits on dependency-blocker:loom-handed-frontier.

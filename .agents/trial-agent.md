@@ -74,8 +74,8 @@ Each cycle has its own directory outside the repository, named `<YYYY-MM-DD>-<sh
      (`events.jsonl`), the longest over the baseline set's runs; a baseline with no rollouts to
      read it from gives no active cap, and the report says so. A run over it stops `ActiveTime`
      (exit 3), or `Waiting` naming `ActiveTime` (exit 6), and counts as worse. A run that stops
-     `Unperformable` (exit 7) with its active time over the cap counts as worse the same way:
-     where both hold, the loop reports `Unperformable` first. No `--hours`:
+     `Unperformable` (exit 7) with its active time over the cap counts as worse the same way.
+     No `--hours`:
      a wait on the forge is not capped by time (a queued check is not the candidate's cost);
      `--iterations` stays the run's step budget.
    - **Early stop.** Every set, first sets included, stops after two runs with the same outcome
