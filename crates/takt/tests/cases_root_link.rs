@@ -174,8 +174,9 @@ fn files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 
 /// The cases directory after the run is the one the step began on: every file of it there with
 /// its bytes, the event log only grown by the lines the run wrote after putting it back, the
-/// observations only grown by the outcome Commission's runtime recorded of the refused effect
-/// after it, and nothing else added; the run's own hold, `run.lock`, is let go when the run ends.
+/// observations only grown by the outcome Commission's runtime recorded of the refused step
+/// after it (a refused effect's, or the suspended executor step of a judgement step takt
+/// refused), and nothing else added; the run's own hold, `run.lock`, is let go when the run ends.
 fn assert_put_back(
     before: &BTreeMap<PathBuf, Vec<u8>>,
     after: &BTreeMap<PathBuf, Vec<u8>>,
@@ -207,10 +208,10 @@ fn assert_put_back(
                 path.display()
             );
             for added in &now[held.len()..] {
-                assert_eq!(
-                    added["source"],
-                    "effect",
-                    "{} grows only by the effect's outcome: {added}\n{text}",
+                let outcome = (&added["source"], &added["payload"]["outcome"]);
+                assert!(
+                    outcome.0 == "effect" || (outcome.0 == "executor" && outcome.1 == "Suspended"),
+                    "{} grows only by the outcome of the refused step: {added}\n{text}",
                     path.display()
                 );
             }

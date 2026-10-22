@@ -321,7 +321,10 @@ fn a_given_case_id_names_the_story_case_from_the_binary() {
         "--case-id",
         "given",
     ]);
-    assert_eq!(code, 3, "the step budget stop: stdout {out} stderr {err}");
+    assert_eq!(
+        code, 7,
+        "the gate with no gates document, ahead of the step budget: stdout {out} stderr {err}"
+    );
     assert!(
         out.starts_with("frontier: took story:ready-one: Make the check pass\n"),
         "{out}"

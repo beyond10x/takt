@@ -546,6 +546,41 @@ fn a_forge_none_case_at_ahead_stops_unperformable_on_a_low_disk() {
     assert_eq!(low, fine, "{text}");
 }
 
+/// The same case resumed with its hour budget already spent, on a low disk, stops
+/// `Unperformable` too: the check runs before the Loom step, whose host stop would read the
+/// budget (exit 7, not 3), and the harness is not called.
+#[test]
+fn a_forge_none_case_at_ahead_stops_unperformable_with_its_hours_spent() {
+    let tree = gated("spent");
+    let validators = delivery_validators(None);
+    let harness = Editing::default();
+    first_run(&tree, "spent", &validators, &harness);
+    let calls = harness.calls.get();
+    let mut options = options("spent");
+    options.iterations = Some(12);
+    options.hours = Some(0.0);
+    options.gate = None;
+    let mut run =
+        Run::resume(&tree, options, "spent", &harness, &validators).expect("the case resumes");
+    run.stop_when_unperformable();
+    run.stop_when_disk_below(10 * GIB, None);
+    run.read_free_space_with(|_| {
+        Ok(FreeSpace {
+            device: 1,
+            bytes: GIB,
+        })
+    });
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).expect("the run stops without an error");
+    let text = String::from_utf8(out).expect("utf-8");
+    assert_eq!(
+        stop.to_string(),
+        "Unperformable (pr.opened; nothing performs it without the forge)",
+        "{text}"
+    );
+    assert_eq!(harness.calls.get(), calls, "{text}");
+}
+
 /// Writes the scenario trial `case` under `repo`: one run per stop line, each with whether it
 /// is a completion, and the held-out check's first line.
 fn trial(repo: &Path, case: &str, stops: &[(&str, bool)], held: &str) {

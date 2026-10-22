@@ -2605,7 +2605,7 @@ fn a_run_holds_its_case_and_lets_go_at_every_stop() {
     let error = format!("{:#}", run.run(&mut out).expect_err("the harness failed"));
     assert!(error.contains("the harness failed"), "{error}");
     assert!(!lock.exists(), "the lock outlived the run that failed");
-    // And when it stops on its budget.
+    // And when it stops at the gate, which comes ahead of its spent budget.
     let mut options = options("held");
     options.iterations = Some(0);
     let mut run = Run::resume(&tree, options, "held", &NoHarness, &none).expect("the case resumes");
@@ -2613,7 +2613,7 @@ fn a_run_holds_its_case_and_lets_go_at_every_stop() {
     to_the_gate(&mut run.case, 1);
     assert_eq!(
         run.run(&mut Vec::new()).expect("the run stops"),
-        Stop::Iterations(0)
+        Stop::ApprovalRequired(vec!["repository.merge".to_owned()])
     );
     assert!(!lock.exists(), "the lock outlived the run that stopped");
     grant(&tree, "held", "repository.merge", "human:operator")

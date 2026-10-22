@@ -171,7 +171,7 @@ fn record(id: String, kind: &str, result: Option<&str>, revision: &str, producer
 }
 
 /// The double: its checks pending for the first `pending` reads, then each read taking `slow`
-/// before it answers its own answer (pass).
+/// before it answers its own answer (pass, or what [`Checked::answering`] names).
 struct Checked {
     memory: Rc<Memory>,
     pending: Cell<usize>,
@@ -180,9 +180,14 @@ struct Checked {
 
 impl Checked {
     fn new(pending: usize, slow: Duration) -> Self {
+        Self::answering(Checks::Pass, pending, slow)
+    }
+
+    /// The double answering `checks` once no read is left pending.
+    fn answering(checks: Checks, pending: usize, slow: Duration) -> Self {
         Self {
             memory: Rc::new(Memory {
-                checks: Checks::Pass,
+                checks,
                 ..Memory::default()
             }),
             pending: Cell::new(pending),
@@ -372,12 +377,18 @@ fn a_forge_wait_longer_than_the_active_budget_does_not_stop_the_run() {
 
 /// A step that takes longer than the budget (a checks read of 2.5 s, after one pending read and
 /// a 1 s pause): before the next step the run stops `ActiveTime`, naming the budget, an active
-/// time past it and the time it waited, which is not counted in it.
+/// time past it and the time it waited, which is not counted in it. The checks fail, so the
+/// next step is a judgement step: a case that only a grant moves stops on that first, ahead of
+/// any budget (approval-record:loop-pre-checks-ahead-of-loom).
 #[test]
 fn steps_that_pass_the_active_budget_stop_the_run_on_it() {
     let repo = repository("steps");
     let id = worked_case(&repo);
-    let forge = Rc::new(Checked::new(1, Duration::from_millis(2500)));
+    let forge = Rc::new(Checked::answering(
+        Checks::Fail,
+        1,
+        Duration::from_millis(2500),
+    ));
     let harness = Gatekeeper::default();
 
     let (stop, text, wall) =

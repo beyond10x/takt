@@ -90,3 +90,16 @@ fn stop_kinds_names_every_stop_but_completed_by_the_word_its_display_opens_with(
     );
     assert!(!listed.contains("Completed"));
 }
+
+/// Every stop is reached through Commission's runtime of loom-sdk: the loop in `run.rs` calls
+/// `run_until_blocked` itself, in code, not only in a comment (story:the-loop-is-run-until-blocked).
+#[test]
+fn the_loop_calls_run_until_blocked() {
+    let source = include_str!("../src/run.rs");
+    let calls = source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .filter(|line| line.contains("run_until_blocked("))
+        .count();
+    assert!(calls > 0, "run.rs calls run_until_blocked nowhere");
+}

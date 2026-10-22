@@ -9,6 +9,9 @@ takt's releases.
 ### Changed
 
 - `b10x-loom-sdk` moves from loom 0.28.0 to 0.31.0, which pins substrate 0.7.18.
+- `takt run` takes every step through one call of loom-sdk's `run_until_blocked`, and its stop comes from how that call ended.
+- A case that only a grant moves stops `ApprovalRequired` (exit 4) before any budget or low-disk stop; 0.7.0 stopped on a spent budget (exit 3) first.
+- A case whose open claim has no performer stops `Unperformable` (exit 7) before any budget or low-disk stop; 0.7.0 stopped on a spent budget (exit 3) first.
 
 ## [0.7.0] - 2026-10-21
 
