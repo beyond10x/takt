@@ -294,7 +294,10 @@ pub fn outcome(observation: &Observation, waits: bool) -> EffectOutcome {
             usage: None,
         })
     } else if waits {
-        EffectOutcome::Pending(EffectOutcomePending { report })
+        EffectOutcome::Pending(EffectOutcomePending {
+            report,
+            ends_run: false,
+        })
     } else {
         EffectOutcome::Refused(EffectOutcomeRefused {
             reason: observation.summary.clone(),
