@@ -2694,8 +2694,15 @@ mod tests {
             "true",
         ]);
         assert!(out.contains("frontier: took story:ready-one"), "{out}");
-        assert!(out.contains("stopped: Iterations (1)"), "{out}");
-        assert_eq!(code, 3, "the step budget stop exits 3, as before: {out}");
+        // After the tests, the gate is left with no gates document to run it: the run stops
+        // there ahead of its step budget, exit 7.
+        assert!(
+            out.contains(
+                "stopped: Unperformable (gate.green; nothing performs it without the gates document)"
+            ),
+            "{out}"
+        );
+        assert_eq!(code, 7, "{out}");
         let case = the_case(&repo);
         let id = case.file_name().expect("a name").to_string_lossy();
         assert!(id.starts_with("story-ready-one-"), "{id}");
@@ -2965,7 +2972,8 @@ mod tests {
     }
 
     /// With an origin and no `--forge`, the bot route is the forge, named with the repository
-    /// its origin names; the step budget stops the run before anything would be pushed.
+    /// its origin names; the run stops before anything would be pushed, on the gate it has no
+    /// gates document for, which comes ahead of its step budget.
     #[test]
     fn with_an_origin_the_default_forge_is_the_bot_route() {
         let repo = gated_repository("forge-default-bot", None);
@@ -2983,9 +2991,10 @@ mod tests {
                 "Test Bot <bot@example.invalid>",
             ],
         ));
-        assert_eq!(code, 3, "{out}");
+        assert_eq!(code, 7, "{out}");
         assert!(out.contains("forge: bot (owner/repo)"), "{out}");
         assert!(out.contains("step 1: tests.run {}"), "{out}");
+        assert!(!out.contains("pr.open {}"), "nothing is pushed: {out}");
     }
 
     #[test]
@@ -3041,7 +3050,7 @@ mod tests {
             "default-elsewhere",
             &["--iterations", "1"],
         ));
-        assert_eq!(code, 3, "{out}");
+        assert_eq!(code, 7, "{out}");
         assert!(
             out.contains("forge: none (origin gitlab.example.com is not github.com)"),
             "{out}"

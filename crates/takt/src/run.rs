@@ -12,6 +12,7 @@
 //! base with it above the granted revision, the move last ([`crate::case::approvals_only`]); or
 //! once its case terminates `accepted`, when there was no such step.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -20,19 +21,30 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, anyhow, bail};
 
 use loom_sdk::commission::model::json as cjson;
+use loom_sdk::commission::model::primitives::{Timestamp, Uuid};
 use loom_sdk::commission::model::responsibility::{
-    EffectOutcome, EffectOutcomePerformed, EffectOutcomeRefused,
+    ActionRequestId, ActionStatus, AgentRevisionId, AuthorityContext, BreachStep, CaseId,
+    Commission, CommissionData, CommissionId, EffectOutcome, EffectOutcomePerformed,
+    EffectOutcomeRefused, ExecutorOutcome, ExecutorOutcomeProposedAction, ExecutorOutcomeSuspended,
+    ExecutorStep, ExecutorUsage, Frontier as LoomFrontier, HostStop as LoomHostStop, ObservationId,
+    PrincipalId, ProposedActionArguments, RunId, RunOutcome, StopPolicy, SuspensionReason,
+    Unit as LoomUnit, commission_state, frontier_state,
 };
-use loom_sdk::commission::ports::effect::AdmittedRequest;
+use loom_sdk::commission::outcome::RunStore;
+use loom_sdk::commission::ports::effect::{AdmittedRequest, EffectError};
+use loom_sdk::commission::ports::executor::AgentExecutor;
+use loom_sdk::{CanonGovernor, EffectPort, LoopContext, run_until_blocked};
 
-use crate::case::{CASES_DIR, CaseAuthority, CaseDir, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT};
+use crate::case::{
+    CASES_DIR, CaseAuthority, CaseDir, CaseFiles, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT,
+};
 use crate::events::{BY_STORE, BY_TAKT, Event, Events};
-use crate::evidence::CaseEvidence;
+use crate::evidence::{CaseEvidence, uuid_from};
 use crate::frontier::{Frontier, IMPLEMENTED, Story, TEST_RESULT, Take, Unit};
 use crate::git::{BoundedDiff, DiffContext};
 use crate::harness::{CHANGE_SHOWN_BYTES, ChangeSoFar, Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
-use crate::validator::{ChoiceEffect, Step, Validator, ValidatorEffect, outcome, run_effect};
+use crate::validator::{ChoiceEffect, Effect, Step, Validator, ValidatorEffect, outcome};
 
 /// What a run is given.
 #[derive(Debug, Clone)]
@@ -341,6 +353,375 @@ impl Step for GuardedStep<'_, '_> {
         };
         self.taken = Some(taken);
         Ok(answer)
+    }
+}
+
+/// What a judgement step came to before Commission's runtime hands its action on
+/// ([`Run::harness_turn`]): a stop that ends the run, or the action proposed, its change held.
+enum Judgement {
+    Stop(Stop),
+    Propose(Box<Proposed>),
+}
+
+/// A judgement step's proposal: what the harness reported, the transcript kept of it, the paths
+/// it changed, whether it requests an approval (`ask`), and what puts its change back.
+struct Proposed {
+    report: crate::harness::StepReport,
+    transcript: Option<std::result::Result<String, String>>,
+    changed: Vec<String>,
+    ask: bool,
+    held: StepKept,
+}
+
+/// What a judgement step is put back to, owned until its proposal is kept or discarded
+/// ([`Kept`] borrows it).
+struct StepKept {
+    checkpoint: crate::git::Checkpoint,
+    cases: PathBuf,
+    cases_kept: BTreeMap<PathBuf, Entry>,
+    surface: JudgeSurface,
+    surface_kept: BTreeMap<PathBuf, Entry>,
+    outside: Outside,
+    outside_dirs: OutsideDirs,
+}
+
+impl StepKept {
+    fn kept(&self) -> Kept<'_> {
+        Kept {
+            checkpoint: &self.checkpoint,
+            cases: &self.cases,
+            cases_kept: &self.cases_kept,
+            surface: &self.surface,
+            surface_kept: &self.surface_kept,
+            outside: &self.outside,
+            outside_dirs: &self.outside_dirs,
+        }
+    }
+}
+
+/// Who takes the step a call of Commission's runtime makes: the validator due, else the
+/// harness when an action is offered to it, else nobody.
+#[derive(Clone, Copy)]
+enum Taker<'v> {
+    Validator(&'v dyn Validator),
+    Harness,
+    Nobody,
+}
+
+/// What the step came to, for the loop: a validator's step ([`Taken`]), or a judgement step
+/// kept, with whether it moved the case.
+enum Came {
+    Taken(Taken),
+    Kept(bool),
+}
+
+/// One call of Commission's runtime of loom-sdk as the run takes it: the run, its record and
+/// output, the evaluation the call follows, who takes the step, and what came of it. The
+/// executor, the effect and the context of the call share it ([`TurnExecutor`], [`TurnEffect`],
+/// [`TurnContext`]); the runtime calls them one at a time.
+struct Turn<'t, 'a> {
+    run: &'t mut Run<'a>,
+    events: &'t Events,
+    out: &'t mut dyn Write,
+    seq: usize,
+    recorded_before: &'t mut bool,
+    taker: Taker<'a>,
+    decision: &'t crate::Decision,
+    offered: &'t [String],
+    approvals: &'t [String],
+    shape: &'t Shape,
+    run_number: u64,
+    /// The host's stop the context answered, with whether it is a budget's.
+    host: Option<(Stop, bool)>,
+    came: Option<Came>,
+    /// A judgement step's proposal, until its effect keeps it.
+    proposed: Option<Box<Proposed>>,
+    /// The error a part of the call failed on, which the run ends on.
+    failed: Option<anyhow::Error>,
+}
+
+/// The composite executor of a call: the due validator's action, proposed as found due, which
+/// no model chose; else a judgement step of the harness ([`Run::harness_turn`]), its usage
+/// reported to the runtime; else no useful action.
+struct TurnExecutor<'r, 't, 'a>(&'r RefCell<Turn<'t, 'a>>);
+
+impl AgentExecutor for TurnExecutor<'_, '_, '_> {
+    fn run(
+        &self,
+        commission: &Commission<commission_state::Assigned>,
+        frontier: &LoomFrontier<frontier_state::Issued>,
+    ) -> ExecutorOutcome {
+        self.run_with_usage(commission, frontier).outcome
+    }
+
+    fn run_with_usage(
+        &self,
+        _: &Commission<commission_state::Assigned>,
+        _: &LoomFrontier<frontier_state::Issued>,
+    ) -> ExecutorStep {
+        let mut guard = self.0.borrow_mut();
+        let turn = &mut *guard;
+        let proposal = |action: &str| {
+            ExecutorOutcome::ProposedAction(ExecutorOutcomeProposedAction {
+                action: action.to_owned(),
+                arguments: ProposedActionArguments(cjson::Value::Object(Vec::new())),
+            })
+        };
+        let step = |outcome| ExecutorStep {
+            outcome,
+            usage: None,
+            transcript_digest: None,
+            summary: None,
+        };
+        match turn.taker {
+            Taker::Validator(validator) => step(proposal(validator.action())),
+            Taker::Nobody => step(ExecutorOutcome::NoUsefulAction(LoomUnit(true))),
+            Taker::Harness => {
+                let started = Instant::now();
+                let judged = turn.run.harness_turn(
+                    turn.events,
+                    &mut *turn.out,
+                    turn.decision,
+                    turn.offered,
+                    turn.approvals,
+                    turn.shape,
+                    turn.run_number,
+                );
+                let suspended = |detail: String| {
+                    step(ExecutorOutcome::Suspended(ExecutorOutcomeSuspended {
+                        reason: SuspensionReason::HostStop(LoomHostStop {
+                            name: "takt".to_owned(),
+                            detail: cjson::Value::Text(detail),
+                        }),
+                    }))
+                };
+                match judged {
+                    Err(error) => {
+                        let detail = format!("{error:#}");
+                        turn.failed = Some(error);
+                        suspended(detail)
+                    }
+                    Ok(Judgement::Stop(stop)) => {
+                        let detail = stop.to_string();
+                        turn.came = Some(Came::Taken(Taken::Stop(stop)));
+                        suspended(detail)
+                    }
+                    Ok(Judgement::Propose(proposed)) => {
+                        let usage = match turn.run.harness.last_usage() {
+                            Some(usage) => (
+                                usage
+                                    .input
+                                    .saturating_add(usage.cache_read)
+                                    .saturating_add(usage.cache_creation),
+                                usage.output,
+                            ),
+                            None => (proposed.report.tokens.unwrap_or(0), 0),
+                        };
+                        let outcome = proposal(&proposed.report.action);
+                        let summary = Some(proposed.report.summary.clone());
+                        turn.proposed = Some(proposed);
+                        ExecutorStep {
+                            outcome,
+                            usage: Some(ExecutorUsage {
+                                input_tokens: i64::try_from(usage.0).unwrap_or(i64::MAX),
+                                output_tokens: i64::try_from(usage.1).unwrap_or(i64::MAX),
+                                duration_ms: i64::try_from(started.elapsed().as_millis())
+                                    .unwrap_or(i64::MAX),
+                                cost_micro_usd: None,
+                            }),
+                            transcript_digest: None,
+                            summary,
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The composite effect of a call: it hands a validator's request to that validator's
+/// [`ValidatorEffect`], performing through the run's validator step, and keeps the harness's
+/// proposed action ([`Run::keep`]), handing an action that records a choice to the
+/// [`ChoiceEffect`]; a request for an approval it answers with a refusal that ends the run,
+/// nothing performed. It performs only what Commission's runtime hands it.
+struct TurnEffect<'r, 't, 'a>(&'r RefCell<Turn<'t, 'a>>);
+
+impl EffectPort for TurnEffect<'_, '_, '_> {
+    fn performs(&self, action: &str) -> bool {
+        let turn = self.0.borrow();
+        turn.run.validators.iter().any(|v| v.action() == action)
+            || turn.offered.iter().any(|offered| offered == action)
+            || turn.approvals.iter().any(|approval| approval == action)
+    }
+
+    fn invoke(
+        &self,
+        commission: &Commission<commission_state::Assigned>,
+        request: &AdmittedRequest,
+    ) -> Result<EffectOutcome, EffectError> {
+        let mut guard = self.0.borrow_mut();
+        let turn = &mut *guard;
+        let action = request.data().action.clone();
+        let performed = match turn.taker {
+            Taker::Validator(validator) if validator.action() == action => {
+                let mut step = GuardedStep {
+                    run: &mut *turn.run,
+                    events: turn.events,
+                    out: &mut *turn.out,
+                    seq: turn.seq,
+                    recorded_before: &mut *turn.recorded_before,
+                    taken: None,
+                };
+                let (answered, failure) = {
+                    let effect = ValidatorEffect::new(validator, &mut step);
+                    let answered = effect.invoke(commission, request);
+                    (answered, effect.take_failure())
+                };
+                turn.came = step.taken.take().map(Came::Taken);
+                if let Some(error) = failure {
+                    turn.failed = Some(error);
+                }
+                return answered;
+            }
+            Taker::Harness
+                if turn
+                    .proposed
+                    .as_ref()
+                    .is_some_and(|proposed| proposed.report.action == action) =>
+            {
+                let Some(proposed) = turn.proposed.take() else {
+                    unreachable!("the proposal was just found");
+                };
+                if proposed.ask {
+                    let stop = Stop::ApprovalRequired(vec![action.clone()]);
+                    turn.came = Some(Came::Taken(Taken::Stop(stop)));
+                    Ok(EffectOutcome::Refused(EffectOutcomeRefused {
+                        reason: format!(
+                            "{action} requests an approval; nothing is performed for it"
+                        ),
+                        ends_run: true,
+                    }))
+                } else {
+                    let kept = turn.run.keep(
+                        turn.events,
+                        &mut *turn.out,
+                        turn.seq,
+                        turn.shape,
+                        &proposed,
+                        commission,
+                        request,
+                    );
+                    kept.map(|(moved, answered)| {
+                        turn.came = Some(Came::Kept(moved));
+                        answered.unwrap_or_else(|| {
+                            EffectOutcome::Performed(EffectOutcomePerformed {
+                                report: cjson::Value::Object(vec![(
+                                    "paths".to_owned(),
+                                    cjson::Value::Array(
+                                        proposed
+                                            .changed
+                                            .iter()
+                                            .map(|path| cjson::Value::Text(path.clone()))
+                                            .collect(),
+                                    ),
+                                )]),
+                                attempt: None,
+                                audit: None,
+                                usage: None,
+                            })
+                        })
+                    })
+                }
+            }
+            _ => Ok(EffectOutcome::Refused(EffectOutcomeRefused {
+                reason: format!("{action} is not the action this step proposed"),
+                ends_run: true,
+            })),
+        };
+        performed.map_err(|error| {
+            let message = format!("{error:#}");
+            turn.failed = Some(error);
+            EffectError::new(message)
+        })
+    }
+}
+
+/// Every call of Commission's runtime a run of this process makes, so no two derive the same ids.
+static TURNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The ids of one call, derived from `seed`.
+struct TurnIds {
+    seed: String,
+    n: u64,
+}
+
+impl TurnIds {
+    fn next(&mut self, what: &str) -> Uuid {
+        self.n += 1;
+        Uuid(uuid_from(&format!("{}/{what}/{}", self.seed, self.n)))
+    }
+}
+
+/// The context of one call: its ids, takt's clock, a budget of one step, no approval gate and
+/// an idle bound of one, so the call ends after the one step whatever it came to; and the
+/// host's stop, asked before the step: the run's budget spent ([`Run::budget_spent`]), then,
+/// for a step somebody takes, a file system under its threshold ([`Run::disk_low`]).
+struct TurnContext<'r, 't, 'a> {
+    turn: &'r RefCell<Turn<'t, 'a>>,
+    ids: TurnIds,
+}
+
+impl LoopContext for TurnContext<'_, '_, '_> {
+    fn action_request_id(&mut self) -> ActionRequestId {
+        ActionRequestId(self.ids.next("action-request"))
+    }
+
+    fn observation_id(&mut self) -> ObservationId {
+        ObservationId(self.ids.next("observation"))
+    }
+
+    fn now(&mut self) -> Timestamp {
+        Timestamp(crate::now())
+    }
+
+    fn step_budget(&self) -> Option<usize> {
+        Some(1)
+    }
+
+    fn stop_policy(&self) -> StopPolicy {
+        StopPolicy {
+            approval_gate: false,
+            idle_bound: Some(1),
+            on_breach: BreachStep::DiscardStep,
+            breach_by_limit: Vec::new(),
+        }
+    }
+
+    fn host_stop(&mut self) -> Option<LoomHostStop> {
+        let mut guard = self.turn.borrow_mut();
+        let turn = &mut *guard;
+        let stop = match turn.run.budget_spent() {
+            Some(stop) => (stop, true),
+            None if matches!(turn.taker, Taker::Nobody) => return None,
+            None => match turn.run.disk_low(&mut *turn.out) {
+                Ok(Some(stop)) => (stop, false),
+                Ok(None) => return None,
+                Err(error) => {
+                    let detail = format!("{error:#}");
+                    turn.failed = Some(error);
+                    return Some(LoomHostStop {
+                        name: "takt".to_owned(),
+                        detail: cjson::Value::Text(detail),
+                    });
+                }
+            },
+        };
+        let detail = stop.0.to_string();
+        turn.host = Some(stop);
+        Some(LoomHostStop {
+            name: "takt".to_owned(),
+            detail: cjson::Value::Text(detail),
+        })
     }
 }
 
@@ -9805,17 +10186,9 @@ impl<'a> Run<'a> {
             if last_idle.as_deref() == Some(state.as_str()) {
                 return Ok(Stop::NoProgress);
             }
-            let legitimate = decision.legitimate();
-            if let Some(outcome) = legitimate.first() {
-                return Ok(Stop::Completed(outcome.clone()));
-            }
-            if let Some(stop) = self.budget_spent() {
-                return Ok(if awaited.is_empty() {
-                    stop
-                } else {
-                    waiting(&awaited, Some(stop))
-                });
-            }
+            // A case with a legitimate outcome is not stepped: Commission's runtime ends the run
+            // completed at once, before any check below.
+            let open = decision.legitimate().is_empty();
             let admissible = decision.admissible();
             // The judgement actions: the admissible ones no validator owns, but none whose evidence
             // only a validator writes ([`Shape::for_harness`]). A harness that keeps nothing
@@ -9830,298 +10203,413 @@ impl<'a> Run<'a> {
                 .collect();
             // A deterministic step first: a validator due at this decision.
             let mut due = None;
-            for validator in self.validators {
-                if is_due(
-                    &self.case,
-                    &admissible,
-                    &observed_without_record,
-                    validator.as_ref(),
-                )? {
-                    due = Some(validator);
-                    break;
-                }
-            }
-            if let Some(validator) = due {
-                // A deterministic step follows: a file system under the threshold stops the run
-                // here rather than the step failing in it for want of space
-                // ([`Run::stop_when_disk_below`]).
-                if let Some(stop) = self.disk_low(out)? {
-                    return Ok(stop);
-                }
-                // The step is the validator's effect: Commission's runtime of loom-sdk hands it
-                // the request for its action once the governor admitted it and, where the action
-                // requires a capability, the case's authority allowed it
-                // ([`crate::validator::ValidatorEffect`]). Whatever gate the validator keeps (the
-                // merge's grant at the case's revision) it keeps inside the effect.
-                let (dir, id, protocol) = (
-                    self.case.dir.clone(),
-                    self.case.id.clone(),
-                    self.case.protocol.clone(),
-                );
-                let authority = CaseAuthority::new(&dir, &id);
-                let mut step = GuardedStep {
-                    run: self,
-                    events,
-                    out: &mut *out,
-                    seq,
-                    recorded_before: &mut recorded_before,
-                    taken: None,
-                };
-                let ended = {
-                    let effect = ValidatorEffect::new(validator.as_ref(), &mut step);
-                    run_effect(
-                        &dir,
-                        &id,
-                        &protocol,
-                        &authority,
-                        &effect,
-                        validator.action(),
-                        &seq.to_string(),
-                    )?
-                };
-                let (revision, observation, waits) = match step.taken.take() {
-                    Some(Taken::Stop(stop)) => return Ok(stop),
-                    Some(Taken::Observed {
-                        revision,
-                        observation,
-                        waits,
-                    }) => (revision, observation, waits),
-                    None => {
-                        let why = format!(
-                            "{} was not handed to its validator {}: Commission's runtime ended {:?}",
-                            validator.action(),
-                            validator.name(),
-                            ended.outcome
-                        );
-                        self.refused(events, BY_TAKT, &why)?;
-                        writeln!(out, "  refused: {why}")?;
-                        return Ok(Stop::StepRefused(why));
+            if open {
+                for validator in self.validators {
+                    if is_due(
+                        &self.case,
+                        &admissible,
+                        &observed_without_record,
+                        validator.as_ref(),
+                    )? {
+                        due = Some(validator);
+                        break;
                     }
-                };
-                // A validator that wrote no record (the gate was unknown) is not due again at
-                // this revision. The pass counts as idle only when nothing else can move the
-                // decision, no judgement step offered, no other validator due and none waiting
-                // on the forge: then the next pass would see the same decision, and the run
-                // stops there as no progress. One that waits on the forge is due again after
-                // the pause below; when every wait is on something local, the run stops here,
-                // with no pause and no further decision.
-                awaited.retain(|(name, _, _, _)| name != validator.name());
-                if observation.records.is_empty() {
-                    observed_without_record.insert((validator.name().to_owned(), revision.clone()));
-                    if waits {
-                        awaited.push((
-                            validator.name().to_owned(),
-                            validator.action().to_owned(),
-                            revision,
-                            validator
-                                .waits_locally()
-                                .then(|| observation.summary.clone()),
-                        ));
-                        if all_local(&awaited) {
-                            return Ok(waiting(&awaited, None));
-                        }
-                        last_idle = None;
-                        continue;
-                    }
-                    let mut another_due = false;
-                    for v in self.validators {
-                        if is_due(
-                            &self.case,
-                            &admissible,
-                            &observed_without_record,
-                            v.as_ref(),
-                        )? {
-                            another_due = true;
-                            break;
-                        }
-                    }
-                    last_idle =
-                        (offered.is_empty() && !another_due && awaited.is_empty()).then_some(state);
-                } else {
-                    last_idle = None;
                 }
-                continue;
             }
             // No validator is due, and one waits on the forge whose action is still admissible:
             // the run pauses and observes it again, offering no judgement step meanwhile. A run
             // with no step or hour budget has nothing to wait in and stops waiting at once; the
             // case stays open for the next run, as it does when every wait left is on something
-            // local.
-            awaited.retain(|(_, action, _, _)| admissible.contains(action));
-            if !awaited.is_empty() {
-                let pause = self.pause().filter(|_| !all_local(&awaited));
-                let Some(pause) = pause else {
-                    return Ok(waiting(&awaited, None));
-                };
-                let on: Vec<&str> = awaited
-                    .iter()
-                    .map(|(_, action, _, _)| action.as_str())
-                    .collect();
-                events.emit(
-                    self.steps,
-                    &Event::Waiting {
-                        on: on.iter().map(|action| (*action).to_owned()).collect(),
-                        seconds: pause.as_secs_f64(),
-                    },
-                )?;
-                writeln!(
-                    out,
-                    "  waiting: {:.1} s on the forge, then {} again",
-                    pause.as_secs_f64(),
-                    on.join(", ")
-                )?;
-                let paused = Instant::now();
-                std::thread::sleep(pause);
-                self.waited += paused.elapsed();
-                for (name, _, revision, _) in &awaited {
-                    observed_without_record.remove(&(name.clone(), revision.clone()));
+            // local. A budget spent stops the wait first.
+            if open && due.is_none() {
+                awaited.retain(|(_, action, _, _)| admissible.contains(action));
+                if !awaited.is_empty() {
+                    if let Some(stop) = self.budget_spent() {
+                        return Ok(waiting(&awaited, Some(stop)));
+                    }
+                    let pause = self.pause().filter(|_| !all_local(&awaited));
+                    let Some(pause) = pause else {
+                        return Ok(waiting(&awaited, None));
+                    };
+                    let on: Vec<&str> = awaited
+                        .iter()
+                        .map(|(_, action, _, _)| action.as_str())
+                        .collect();
+                    events.emit(
+                        self.steps,
+                        &Event::Waiting {
+                            on: on.iter().map(|action| (*action).to_owned()).collect(),
+                            seconds: pause.as_secs_f64(),
+                        },
+                    )?;
+                    writeln!(
+                        out,
+                        "  waiting: {:.1} s on the forge, then {} again",
+                        pause.as_secs_f64(),
+                        on.join(", ")
+                    )?;
+                    let paused = Instant::now();
+                    std::thread::sleep(pause);
+                    self.waited += paused.elapsed();
+                    for (name, _, revision, _) in &awaited {
+                        observed_without_record.remove(&(name.clone(), revision.clone()));
+                    }
+                    continue;
                 }
-                continue;
             }
-            // No judgement step when only a grant stands between the case and its outcome:
-            // every claim still open is decided by evidence only an action waiting for an
-            // approval produces. The run stops there at once and spends nothing on asking.
-            let waiting_for_grant = decision.approval_required();
-            if !waiting_for_grant.is_empty()
-                && let Some(behind) = shape.only_behind(&decision, &waiting_for_grant)
-            {
-                return Ok(Stop::ApprovalRequired(behind));
+            // Two checks of takt's own come before every step it hands Commission's runtime with
+            // no validator due, ahead of the runtime's budget and host stops: Loom's frontier
+            // relates no action to a claim, so neither stop is the runtime's to find (loom
+            // `AGENTS.md` § Commission; approval-record:loop-pre-checks-ahead-of-loom). A due
+            // validator's step goes first: what it observes may still decide a claim.
+            if open && due.is_none() {
+                // No step when only a grant stands between the case and its outcome: every claim
+                // still open is decided by evidence only an action waiting for an approval
+                // produces. The run stops there at once and spends nothing on asking.
+                let waiting_for_grant = decision.approval_required();
+                if !waiting_for_grant.is_empty()
+                    && let Some(behind) = shape.only_behind(&decision, &waiting_for_grant)
+                {
+                    return Ok(Stop::ApprovalRequired(behind));
+                }
+                // No step when no step can move the case: nothing offered produces what an open
+                // obligation reads, and a claim left is decided only by an admissible action the
+                // run has no performer for (no forge, no gates document). Checked at each step,
+                // never at open, so a `--forge none` run works up to its change read ahead first.
+                // On when the caller asked for it ([`Run::stop_when_unperformable`]): the CLI does.
+                if self.stops_unperformable
+                    && let Some((claim, action)) =
+                        shape.unperformable(&decision, &offered, |action| {
+                            self.validators.iter().any(|v| v.action() == action)
+                        })
+                {
+                    return Ok(Stop::Unperformable {
+                        claim,
+                        performer: performer_of(&action),
+                    });
+                }
             }
-            // No judgement step when no step can move the case: nothing offered produces what
-            // an open obligation reads, and a claim left is decided only by an admissible action
-            // the run has no performer for (no forge, no gates document). Checked at each step,
-            // never at open, so a `--forge none` run works up to its change read ahead first.
-            // On when the caller asked for it ([`Run::stop_when_unperformable`]): the CLI does.
-            if self.stops_unperformable
-                && let Some((claim, action)) = shape.unperformable(&decision, &offered, |action| {
-                    self.validators.iter().any(|v| v.action() == action)
-                })
-            {
-                return Ok(Stop::Unperformable {
-                    claim,
-                    performer: performer_of(&action),
-                });
-            }
-            // Then a judgement step among the offered actions.
-            if offered.is_empty() {
-                let approvals = decision.approval_required();
-                return Ok(if approvals.is_empty() {
-                    Stop::NothingAdmissible
-                } else {
-                    Stop::ApprovalRequired(approvals)
-                });
-            }
-            // A judgement step follows, every stop that takes none checked first (a grant, no
-            // performer, nothing admissible): a file system under the threshold stops the run
-            // here ([`Run::stop_when_disk_below`]).
-            if let Some(stop) = self.disk_low(out)? {
-                return Ok(stop);
-            }
-            self.steps += 1;
+            // The step itself is one call of Commission's runtime of loom-sdk
+            // (`run_until_blocked`), with a budget of one step: the composite executor proposes
+            // the due validator's action, else asks the harness for a judgement step, else
+            // proposes nothing; the governor admits the request, the case's authority allows
+            // one that requires a capability, and the effect performs it. The run's own budget
+            // and the free disk are the host's stop, asked before the step
+            // ([`TurnContext::host_stop`]).
+            let taker = match due {
+                Some(validator) => Taker::Validator(validator.as_ref()),
+                None if open && !offered.is_empty() => Taker::Harness,
+                None => Taker::Nobody,
+            };
             let approvals: Vec<String> = decision
                 .approval_required()
                 .into_iter()
                 .filter(|a| self.options.gate.as_deref() == Some(a.as_str()))
                 .collect();
-            let choices: Vec<String> = offered
-                .iter()
-                .filter(|a| !shape.choices_of(a).is_empty())
-                .cloned()
-                .collect();
-            let change = change_so_far(
-                &self.tree,
-                &self.case.dir,
-                || events.read(),
-                None,
-                self.change_scan.as_ref(),
-                out,
-            )?;
-            let mut context = StepContext {
-                tree: &self.tree,
-                intent: &self.options.intent,
+            let (dir, id, protocol) = (
+                self.case.dir.clone(),
+                self.case.id.clone(),
+                self.case.protocol.clone(),
+            );
+            let authority = CaseAuthority::new(&dir, &id);
+            let n = TURNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let seed = format!("{id}/{seq}/{}/{n}", crate::now());
+            let at = crate::now();
+            let governor = CanonGovernor::new(CaseFiles::new(&dir, &id, &protocol.id))
+                .with_protocol_yaml(&protocol.id, &protocol.yaml)
+                .map_err(|error| anyhow!("register the protocol {}: {error}", protocol.id))?
+                .with_evaluation_time(move |_: &CaseId| Ok(Some(at.clone())));
+            let mut ids = TurnIds { seed, n: 0 };
+            let commission = Commission::new(CommissionData {
+                commission_id: CommissionId(ids.next("commission")),
+                agent_revision_id: AgentRevisionId(ids.next("agent-revision")),
+                case_id: CaseId(id.clone()),
+                principal: PrincipalId("takt".to_owned()),
+                authority_context: AuthorityContext(cjson::Value::Null),
+            });
+            let mut runs = RunStore::new({
+                let seed = ids.seed.clone();
+                let mut n = 0u64;
+                move || {
+                    n += 1;
+                    RunId(Uuid(uuid_from(&format!("{seed}/run/{n}"))))
+                }
+            });
+            let turn = std::cell::RefCell::new(Turn {
+                run: &mut *self,
+                events,
+                out: &mut *out,
+                seq,
+                recorded_before: &mut recorded_before,
+                taker,
+                decision: &decision,
                 offered: &offered,
                 approvals: &approvals,
-                choices: &choices,
-                decision: &decision,
-                protocol: &self.case.protocol,
-                step: self.steps as usize,
-                time_left: None,
-                change: &change,
-                scope_revision: None,
+                shape: &shape,
+                run_number,
+                host: None,
+                came: None,
+                proposed: None,
+                failed: None,
+            });
+            let ended = {
+                let executor = TurnExecutor(&turn);
+                let effect = TurnEffect(&turn);
+                let mut context = TurnContext { turn: &turn, ids };
+                run_until_blocked(
+                    &governor,
+                    &executor,
+                    &authority,
+                    &effect,
+                    &commission,
+                    &mut runs,
+                    &mut context,
+                )
             };
-            // The step is judged by what it did to the tree, against a checkpoint taken just
-            // before it: `HEAD`, the index, every path already uncommitted (a validator's run
-            // may leave one) with what is at it, the ignored paths, and the guarded part of the
-            // git directory. An accepted step commits exactly the paths it changed; a refused
-            // one, or one whose harness failed, is put back to the checkpoint whole.
-            //
-            // The cases directory is the kernel's, every case under it: its files are what
-            // the evaluations read, and a harness that wrote into it (a grant, a record, a
-            // branch number, the protocol, for this case or a sibling waiting for its grant)
-            // would decide what only a validator or the operator decides. It is snapshotted
-            // before the step and put back after, whatever the step reported and however it
-            // ended; a step that touched it is refused.
-            let cases = self.tree.join(CASES_DIR);
-            let kept = snapshot(&cases)?;
-            // The judge surface likewise ([`JudgeSurface`]): the planning store and everything
-            // else under `.engineering/` but the cases (the project file that says where the
-            // store is kept, the gates and the assertions project file among it), whose
-            // artifacts and evidence the store's lifecycle moves a story on and which only
-            // takt's own writes change, each its own commit on the case's branch: the take when
-            // the case opens ([`Run::take_next`]); and, riding above the implementation revision
-            // to the base with the pull request ([`crate::case::approvals_only`]), a grant's
-            // record (`takt approve`) and the story's `test_result` and move to `implemented`,
-            // written before the step the case's grant authorises or, without one, once the
-            // case is accepted ([`Run::record_on`]); and what
-            // decides the validators, which a step that changed it would decide its own
-            // verdict with: the cargo configuration, the toolchain, build scripts, the CI
-            // workflows, pytest's configuration, the test command's own script and its build
-            // tool's file, and what the repository's own list adds. Matched
-            // whatever the case. A step whose change git sees there (a file, a link, a mode, a
-            // rename), or that left anything there the snapshot sees differ (a FIFO, which git
-            // does not list, a file in an ignored directory), is refused, and put back to the
-            // snapshot taken here.
-            // A run with no set-aside root takes no judgement step: a rewrite of a file inside an
-            // ignored directory would have nowhere to go when the step is discarded.
-            if self.set_aside.is_none() {
-                let why = NO_SET_ASIDE.to_owned();
+            let Turn {
+                host,
+                came,
+                proposed,
+                failed,
+                ..
+            } = turn.into_inner();
+            if let Some(error) = failed {
+                return Err(error);
+            }
+            let ended = ended.map_err(|error| anyhow!("Commission's runtime failed: {error}"))?;
+            match came {
+                Some(Came::Taken(Taken::Stop(stop))) => return Ok(stop),
+                Some(Came::Taken(Taken::Observed {
+                    revision,
+                    observation,
+                    waits,
+                })) => {
+                    let Some(validator) = due else {
+                        bail!("an observation came of a step no validator took");
+                    };
+                    // A validator that wrote no record (the gate was unknown) is not due again at
+                    // this revision. The pass counts as idle only when nothing else can move the
+                    // decision, no judgement step offered, no other validator due and none
+                    // waiting on the forge: then the next pass would see the same decision, and
+                    // the run stops there as no progress. One that waits on the forge is due
+                    // again after the pause above; when every wait is on something local, the
+                    // run stops here, with no pause and no further decision.
+                    awaited.retain(|(name, _, _, _)| name != validator.name());
+                    if observation.records.is_empty() {
+                        observed_without_record
+                            .insert((validator.name().to_owned(), revision.clone()));
+                        if waits {
+                            awaited.push((
+                                validator.name().to_owned(),
+                                validator.action().to_owned(),
+                                revision,
+                                validator
+                                    .waits_locally()
+                                    .then(|| observation.summary.clone()),
+                            ));
+                            if all_local(&awaited) {
+                                return Ok(waiting(&awaited, None));
+                            }
+                            last_idle = None;
+                            continue;
+                        }
+                        let mut another_due = false;
+                        for v in self.validators {
+                            if is_due(
+                                &self.case,
+                                &admissible,
+                                &observed_without_record,
+                                v.as_ref(),
+                            )? {
+                                another_due = true;
+                                break;
+                            }
+                        }
+                        last_idle = (offered.is_empty() && !another_due && awaited.is_empty())
+                            .then_some(state);
+                    } else {
+                        last_idle = None;
+                    }
+                    continue;
+                }
+                Some(Came::Kept(moved)) => {
+                    last_idle = (!moved).then_some(state);
+                    continue;
+                }
+                None => {}
+            }
+            // A judgement step proposed and never handed to its effect: a request for an
+            // approval ends the run there, whatever the authority answered; any other is put
+            // back whole and refused.
+            if let Some(proposed) = proposed {
+                if proposed.ask {
+                    return Ok(Stop::ApprovalRequired(vec![proposed.report.action.clone()]));
+                }
+                let moved = undo_step(&self.tree, &proposed.held.kept())
+                    .map(|undone| undone.aside.named())?;
+                self.record_proposed(events, &proposed)?;
+                let why = format!(
+                    "{} was not handed to its effect: Commission's runtime ended {:?}{moved}",
+                    proposed.report.action, ended.outcome
+                );
                 self.refused(events, BY_TAKT, &why)?;
-                writeln!(
-                    out,
-                    "step {}: refused before the harness: {why}",
-                    self.steps
-                )?;
+                writeln!(out, "  refused: {why}; the change was discarded")?;
                 return Ok(Stop::StepRefused(why));
             }
-            let runs = self.runs();
-            // The repository's own list extends the surface, read at the case's base: a list
-            // that does not parse takes no judgement step at all.
-            let globs = match self.judge_list()? {
-                Ok(globs) => globs,
-                Err(why) => {
-                    let why = format!(
-                        "{why}; no judgement step is taken while the repository's judge-surface list does not parse"
-                    );
-                    self.refused(events, BY_TAKT, &why)?;
-                    writeln!(
-                        out,
-                        "step {}: refused before the harness: {why}",
-                        self.steps
-                    )?;
-                    return Ok(Stop::StepRefused(why));
-                }
-            };
-            let (surface, surface_kept) =
-                JudgeSurface::read(&runs, globs, &self.modules, &self.tree)?;
-            // A link is never followed: while what a validator or the guarded command reads is
-            // reached through one, what it guards could be anywhere, in the tree or out of it,
-            // and no judgement step is taken ([`JudgeSurface::locking_links`]). Any other link
-            // on the surface is an entry by itself: changing it is refused like any change.
-            let links = surface.locking_links(&self.tree, &surface_kept)?;
-            if !links.is_empty() {
+            // The host's stop the runtime ended on: a budget spent while a validator waits on the
+            // forge is that wait's.
+            if let Some((stop, budget)) = host {
+                return Ok(if budget && !awaited.is_empty() {
+                    waiting(&awaited, Some(stop))
+                } else {
+                    stop
+                });
+            }
+            if let Some(validator) = due {
                 let why = format!(
-                    "the judge surface is reached through a link, which takt never follows: {}; no judgement step is taken while one is there",
-                    links.join(", ")
+                    "{} was not handed to its validator {}: Commission's runtime ended {:?}",
+                    validator.action(),
+                    validator.name(),
+                    ended.outcome
+                );
+                self.refused(events, BY_TAKT, &why)?;
+                writeln!(out, "  refused: {why}")?;
+                return Ok(Stop::StepRefused(why));
+            }
+            return Ok(match ended.outcome {
+                RunOutcome::Completed(completed) => Stop::Completed(completed.outcome),
+                RunOutcome::EffectRefused(refused) => Stop::StepRefused(refused.reason),
+                // Nothing to step: what waits for an approval on the last frontier, or nothing
+                // admissible.
+                RunOutcome::NoAdmissibleAction(_)
+                | RunOutcome::NoPerformableAction(_)
+                | RunOutcome::NeedsExternalEvidence(_)
+                | RunOutcome::NeedsAuthority(_)
+                | RunOutcome::AwaitingApproval(_)
+                | RunOutcome::IdleBound(_) => {
+                    let approvals: Vec<String> = match &ended.last_frontier {
+                        Some(frontier) => frontier
+                            .actions
+                            .iter()
+                            .filter(|listed| listed.status == ActionStatus::ApprovalRequired)
+                            .map(|listed| listed.action.clone())
+                            .collect(),
+                        None => decision.approval_required(),
+                    };
+                    if approvals.is_empty() {
+                        Stop::NothingAdmissible
+                    } else {
+                        Stop::ApprovalRequired(approvals)
+                    }
+                }
+                other => {
+                    let why = format!("Commission's runtime ended {other:?}");
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(out, "  refused: {why}")?;
+                    Stop::StepRefused(why)
+                }
+            });
+        }
+    }
+
+    /// A judgement step up to its proposal, as the executor of Commission's runtime of loom-sdk
+    /// takes it ([`TurnExecutor`]): the harness called on the actions `offered`, the guards that
+    /// judge what it did to the tree, and either a stop (a refusal, the hour budget ended in the
+    /// step) or the action it proposes, its change held in the tree with what puts it back. The
+    /// change is kept only once the runtime hands the request to the effect ([`Run::keep`]).
+    ///
+    /// # Errors
+    /// A failure to read, put back or record the step; the run ends on it.
+    #[allow(clippy::too_many_arguments)]
+    fn harness_turn(
+        &mut self,
+        events: &Events,
+        out: &mut dyn Write,
+        decision: &crate::Decision,
+        offered: &[String],
+        approvals: &[String],
+        shape: &Shape,
+        run_number: u64,
+    ) -> Result<Judgement> {
+        self.steps += 1;
+        let choices: Vec<String> = offered
+            .iter()
+            .filter(|a| !shape.choices_of(a).is_empty())
+            .cloned()
+            .collect();
+        let change = change_so_far(
+            &self.tree,
+            &self.case.dir,
+            || events.read(),
+            None,
+            self.change_scan.as_ref(),
+            out,
+        )?;
+        let mut context = StepContext {
+            tree: &self.tree,
+            intent: &self.options.intent,
+            offered,
+            approvals,
+            choices: &choices,
+            decision,
+            protocol: &self.case.protocol,
+            step: self.steps as usize,
+            time_left: None,
+            change: &change,
+            scope_revision: None,
+        };
+        // The step is judged by what it did to the tree, against a checkpoint taken just
+        // before it: `HEAD`, the index, every path already uncommitted (a validator's run
+        // may leave one) with what is at it, the ignored paths, and the guarded part of the
+        // git directory. An accepted step commits exactly the paths it changed; a refused
+        // one, or one whose harness failed, is put back to the checkpoint whole.
+        //
+        // The cases directory is the kernel's, every case under it: its files are what
+        // the evaluations read, and a harness that wrote into it (a grant, a record, a
+        // branch number, the protocol, for this case or a sibling waiting for its grant)
+        // would decide what only a validator or the operator decides. It is snapshotted
+        // before the step and put back after, whatever the step reported and however it
+        // ended; a step that touched it is refused.
+        let cases = self.tree.join(CASES_DIR);
+        let kept = snapshot(&cases)?;
+        // The judge surface likewise ([`JudgeSurface`]): the planning store and everything
+        // else under `.engineering/` but the cases (the project file that says where the
+        // store is kept, the gates and the assertions project file among it), whose
+        // artifacts and evidence the store's lifecycle moves a story on and which only
+        // takt's own writes change, each its own commit on the case's branch: the take when
+        // the case opens ([`Run::take_next`]); and, riding above the implementation revision
+        // to the base with the pull request ([`crate::case::approvals_only`]), a grant's
+        // record (`takt approve`) and the story's `test_result` and move to `implemented`,
+        // written before the step the case's grant authorises or, without one, once the
+        // case is accepted ([`Run::record_on`]); and what
+        // decides the validators, which a step that changed it would decide its own
+        // verdict with: the cargo configuration, the toolchain, build scripts, the CI
+        // workflows, pytest's configuration, the test command's own script and its build
+        // tool's file, and what the repository's own list adds. Matched
+        // whatever the case. A step whose change git sees there (a file, a link, a mode, a
+        // rename), or that left anything there the snapshot sees differ (a FIFO, which git
+        // does not list, a file in an ignored directory), is refused, and put back to the
+        // snapshot taken here.
+        // A run with no set-aside root takes no judgement step: a rewrite of a file inside an
+        // ignored directory would have nowhere to go when the step is discarded.
+        if self.set_aside.is_none() {
+            let why = NO_SET_ASIDE.to_owned();
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(
+                out,
+                "step {}: refused before the harness: {why}",
+                self.steps
+            )?;
+            return Ok(Judgement::Stop(Stop::StepRefused(why)));
+        }
+        let runs = self.runs();
+        // The repository's own list extends the surface, read at the case's base: a list
+        // that does not parse takes no judgement step at all.
+        let globs = match self.judge_list()? {
+            Ok(globs) => globs,
+            Err(why) => {
+                let why = format!(
+                    "{why}; no judgement step is taken while the repository's judge-surface list does not parse"
                 );
                 self.refused(events, BY_TAKT, &why)?;
                 writeln!(
@@ -10129,838 +10617,910 @@ impl<'a> Run<'a> {
                     "step {}: refused before the harness: {why}",
                     self.steps
                 )?;
-                return Ok(Stop::StepRefused(why));
+                return Ok(Judgement::Stop(Stop::StepRefused(why)));
             }
-            let surface_dirty_before: BTreeSet<String> = crate::git::changed_paths(&self.tree)?
-                .into_iter()
-                .filter(|path| surface.contains(path))
-                .collect();
-            // The cargo manifests as `HEAD` has them before the step: what decides how cargo
-            // builds and runs the tests is compared with them after it.
-            let head_before = crate::git::head(&self.tree)?;
-            let cargo_before = cargo_builds(&self.tree);
-            // What cargo and rustup read outside the tree ([`Outside`]), put back with the rest
-            // of a step that is discarded.
-            let mut outside_before = Outside::read(&self.tree, &self.outside_dirs)?;
-            let outside_dirs = self.outside_dirs.clone();
-            // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
-            // base, and a sibling case's branch, which a step could otherwise move under it; a
-            // branch another worktree has checked out is that session's, but never the case's
-            // base or its own branch.
-            let checkpoint = self.checkpoint(true)?;
-            // What is left of the hour budget is read last, just before the call, so the step
-            // ends by the run's end and not by the time its preparation took after it.
-            context.time_left = self.time_left();
-            // A harness that panics is put back like one that failed, then the panic goes on
-            // to `run`, which records it and lets go of the case.
-            let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.harness.step(&context)
-            }));
-            let returned = Instant::now();
-            // The step's transcript is kept now, before any way out of the step below, the
-            // panic's and the errors' too: under the transcripts directory, outside the tree
-            // and every case directory ([`Run::transcripts_in`]), so no snapshot of the step
-            // reads it and no put-back takes it along. The step's line names it, or why none
-            // was kept: a file at its path is never overwritten, and the run goes on. A way out
-            // below that writes no step line (the harness failed, the hour budget ended it,
-            // what it left could not be killed or read) names it in the error or refusal line
-            // instead (`note`) and on the run's output (`told`); a record names it relative to
-            // the transcripts directory, the output whole.
-            let kept_transcript = crate::harness::keep_step_transcript(
-                self.harness,
-                self.transcripts
-                    .as_ref()
-                    .map(|(root, key)| (root.as_path(), key.as_str())),
-                &self.case.id,
-                run_number,
-                self.steps,
+        };
+        let (surface, surface_kept) = JudgeSurface::read(&runs, globs, &self.modules, &self.tree)?;
+        // A link is never followed: while what a validator or the guarded command reads is
+        // reached through one, what it guards could be anywhere, in the tree or out of it,
+        // and no judgement step is taken ([`JudgeSurface::locking_links`]). Any other link
+        // on the surface is an entry by itself: changing it is refused like any change.
+        let links = surface.locking_links(&self.tree, &surface_kept)?;
+        if !links.is_empty() {
+            let why = format!(
+                "the judge surface is reached through a link, which takt never follows: {}; no judgement step is taken while one is there",
+                links.join(", ")
             );
-            // What takt wrote for the transcript, each exact path, is takt's: taken as found
-            // before the step and when the run began ([`Outside::took`]), so neither this step
-            // nor a later observation is charged with it (the transcripts directory under a
-            // `PYTHONUSERBASE` of `~/.local`); what the step wrote beside it still is.
-            if let Some(kept) = &kept_transcript {
-                outside_before.took(kept.made(), &self.tree, &outside_dirs);
-                self.outside.took(kept.made(), &self.tree, &outside_dirs);
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(
+                out,
+                "step {}: refused before the harness: {why}",
+                self.steps
+            )?;
+            return Ok(Judgement::Stop(Stop::StepRefused(why)));
+        }
+        let surface_dirty_before: BTreeSet<String> = crate::git::changed_paths(&self.tree)?
+            .into_iter()
+            .filter(|path| surface.contains(path))
+            .collect();
+        // The cargo manifests as `HEAD` has them before the step: what decides how cargo
+        // builds and runs the tests is compared with them after it.
+        let head_before = crate::git::head(&self.tree)?;
+        let cargo_before = cargo_builds(&self.tree);
+        // What cargo and rustup read outside the tree ([`Outside`]), put back with the rest
+        // of a step that is discarded.
+        let mut outside_before = Outside::read(&self.tree, &self.outside_dirs)?;
+        let outside_dirs = self.outside_dirs.clone();
+        // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
+        // base, and a sibling case's branch, which a step could otherwise move under it; a
+        // branch another worktree has checked out is that session's, but never the case's
+        // base or its own branch.
+        let checkpoint = self.checkpoint(true)?;
+        // What is left of the hour budget is read last, just before the call, so the step
+        // ends by the run's end and not by the time its preparation took after it.
+        context.time_left = self.time_left();
+        // A harness that panics is put back like one that failed, then the panic goes on
+        // to `run`, which records it and lets go of the case.
+        let stepped =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.harness.step(&context)));
+        let returned = Instant::now();
+        // The step's transcript is kept now, before any way out of the step below, the
+        // panic's and the errors' too: under the transcripts directory, outside the tree
+        // and every case directory ([`Run::transcripts_in`]), so no snapshot of the step
+        // reads it and no put-back takes it along. The step's line names it, or why none
+        // was kept: a file at its path is never overwritten, and the run goes on. A way out
+        // below that writes no step line (the harness failed, the hour budget ended it,
+        // what it left could not be killed or read) names it in the error or refusal line
+        // instead (`note`) and on the run's output (`told`); a record names it relative to
+        // the transcripts directory, the output whole.
+        let kept_transcript = crate::harness::keep_step_transcript(
+            self.harness,
+            self.transcripts
+                .as_ref()
+                .map(|(root, key)| (root.as_path(), key.as_str())),
+            &self.case.id,
+            run_number,
+            self.steps,
+        );
+        // What takt wrote for the transcript, each exact path, is takt's: taken as found
+        // before the step and when the run began ([`Outside::took`]), so neither this step
+        // nor a later observation is charged with it (the transcripts directory under a
+        // `PYTHONUSERBASE` of `~/.local`); what the step wrote beside it still is.
+        if let Some(kept) = &kept_transcript {
+            outside_before.took(kept.made(), &self.tree, &outside_dirs);
+            self.outside.took(kept.made(), &self.tree, &outside_dirs);
+        }
+        let transcript = kept_transcript
+            .as_ref()
+            .map(crate::harness::KeptTranscript::recorded);
+        let note = kept_transcript
+            .as_ref()
+            .map(crate::harness::KeptTranscript::note)
+            .unwrap_or_default();
+        let told = kept_transcript
+            .as_ref()
+            .map(crate::harness::KeptTranscript::told);
+        let tell = |out: &mut dyn Write| -> std::io::Result<()> {
+            match &told {
+                Some(told) => writeln!(out, "{told}"),
+                None => Ok(()),
             }
-            let transcript = kept_transcript
-                .as_ref()
-                .map(crate::harness::KeptTranscript::recorded);
-            let note = kept_transcript
-                .as_ref()
-                .map(crate::harness::KeptTranscript::note)
-                .unwrap_or_default();
-            let told = kept_transcript
-                .as_ref()
-                .map(crate::harness::KeptTranscript::told);
-            let tell = |out: &mut dyn Write| -> std::io::Result<()> {
-                match &told {
-                    Some(told) => writeln!(out, "{told}"),
-                    None => Ok(()),
+        };
+        // What the step left running (a writer in a process group of its own) is killed
+        // before anything it did is looked at, so nothing lands after the step is judged.
+        let swept = crate::forge::sweep_left();
+        // What git runs or reads as configuration first: every git call after this one
+        // would read what the step planted there. Nothing in it ends early; a path it could
+        // not put back is named in the refusal below.
+        let git_dir = checkpoint.put_back_git_dir(&self.tree);
+        let tree = self.tree.clone();
+        let kept_all = Kept {
+            checkpoint: &checkpoint,
+            cases: &cases,
+            cases_kept: &kept,
+            surface: &surface,
+            surface_kept: &surface_kept,
+            outside: &outside_before,
+            outside_dirs: &outside_dirs,
+        };
+        // Every way a harness step is discarded goes through here, and what it says of the
+        // files it set aside ([`crate::git::SetAside::named`]) is what every message about the
+        // discard carries.
+        let undo =
+            || -> Result<String> { undo_step(&tree, &kept_all).map(|undone| undone.aside.named()) };
+        let stepped = match stepped {
+            Ok(stepped) => stepped,
+            Err(panic) => {
+                match undo() {
+                    Ok(moved) if !moved.is_empty() => eprintln!(
+                        "step {}: the harness panicked; its change was discarded{moved}",
+                        self.steps
+                    ),
+                    Ok(_) => {}
+                    Err(undo) => eprintln!(
+                        "step {}: the harness panicked, and the step's change could not be discarded: {undo:#}",
+                        self.steps
+                    ),
                 }
-            };
-            // What the step left running (a writer in a process group of its own) is killed
-            // before anything it did is looked at, so nothing lands after the step is judged.
-            let swept = crate::forge::sweep_left();
-            // What git runs or reads as configuration first: every git call after this one
-            // would read what the step planted there. Nothing in it ends early; a path it could
-            // not put back is named in the refusal below.
-            let git_dir = checkpoint.put_back_git_dir(&self.tree);
-            let tree = self.tree.clone();
-            let kept_all = Kept {
-                checkpoint: &checkpoint,
-                cases: &cases,
-                cases_kept: &kept,
-                surface: &surface,
-                surface_kept: &surface_kept,
-                outside: &outside_before,
-                outside_dirs: &outside_dirs,
-            };
-            // Every way a harness step is discarded goes through here, and what it says of the
-            // files it set aside ([`crate::git::SetAside::named`]) is what every message about the
-            // discard carries.
-            let undo = || -> Result<String> {
-                undo_step(&tree, &kept_all).map(|undone| undone.aside.named())
-            };
-            let stepped = match stepped {
-                Ok(stepped) => stepped,
-                Err(panic) => {
-                    match undo() {
-                        Ok(moved) if !moved.is_empty() => eprintln!(
-                            "step {}: the harness panicked; its change was discarded{moved}",
-                            self.steps
-                        ),
-                        Ok(_) => {}
-                        Err(undo) => eprintln!(
-                            "step {}: the harness panicked, and the step's change could not be discarded: {undo:#}",
-                            self.steps
-                        ),
+                let _ = tell(out);
+                std::panic::resume_unwind(panic);
+            }
+        };
+        // A step whose leftovers could not all be killed is not judged: it is discarded
+        // whole and the run ends on the error.
+        if let Err(error) = swept {
+            let _ = tell(out);
+            return Err(match undo() {
+                Ok(moved) => error.context(format!(
+                    "step {}: what the step left running could not be killed; everything it changed was discarded{moved}{note}",
+                    self.steps
+                )),
+                Err(undo) => error.context(format!(
+                    "step {}: what the step left running could not be killed, and its change could not be discarded: {undo:#}{note}",
+                    self.steps
+                )),
+            });
+        }
+        // The edit effect: a harness that works in a scratch copy and never in the tree
+        // ([`Harness::take_proposal`]) hands its change over as a proposal, and takt writes
+        // it here, after the checkpoint and before the step is judged. A proposal the guard
+        // refuses on its face (an action not offered, a file changed for an action that
+        // changes none or records a choice, a path that is no plain path of the tree, under
+        // `.git`, in the cases directory, on the judge surface, a non-test path for
+        // `tests.write`, a path reached through a link, a path git ignores) is refused before
+        // a byte of it reaches the tree; one that passes is written, and judged below as any
+        // step's change.
+        //
+        // Its content is read before that, whatever the guard says of it: each file and the
+        // summary checked for the shape of a credential and scanned under the gates policy
+        // ([`proposal_scan_refusal`]). One that does not pass is refused, and its summary is
+        // not recorded ([`PROPOSAL_NOT_RECORDED`]); a refusal on its face is said first.
+        let stepped = match stepped {
+            Ok(report) => match self.harness.take_proposal() {
+                None => Ok(report),
+                Some(proposal) => {
+                    let unscanned = proposal_scan_refusal(
+                        &self.tree,
+                        self.change_scan.as_ref(),
+                        self.harness.reads_outside_its_copy(),
+                        &proposal,
+                    );
+                    let summary = match unscanned {
+                        Some(_) => PROPOSAL_NOT_RECORDED.to_owned(),
+                        None => report.summary.clone(),
+                    };
+                    match Self::proposal_refusal(
+                        &self.tree, &proposal, offered, approvals, &surface, shape,
+                    )
+                    .or(unscanned)
+                    {
+                        Some(why) => {
+                            let moved = undo()?;
+                            let why = format!("{}{moved}", crate::trace::escape(&why));
+                            if let Some(tokens) = report.tokens {
+                                self.tokens += tokens;
+                            }
+                            self.stepped(
+                                events,
+                                SteppedBy::Harness(
+                                    report.tokens,
+                                    self.harness.last_usage(),
+                                    self.harness.last_call().map(Box::new),
+                                    transcript.clone(),
+                                ),
+                                self.harness.name(),
+                                &report.action,
+                                &summary,
+                            )?;
+                            self.refused(events, BY_TAKT, &why)?;
+                            writeln!(
+                                out,
+                                "step {}: {} ({})",
+                                self.steps,
+                                report.action,
+                                self.harness.name()
+                            )?;
+                            writeln!(
+                                out,
+                                "  refused before the edit effect: {why}; nothing of the proposal was written to the tree"
+                            )?;
+                            tell(out)?;
+                            return Ok(Judgement::Stop(Stop::StepRefused(why)));
+                        }
+                        None => Self::apply_proposal(&self.tree, &proposal)
+                            .map(|()| report)
+                            .context("the edit effect could not write the proposal"),
                     }
-                    let _ = tell(out);
-                    std::panic::resume_unwind(panic);
                 }
-            };
-            // A step whose leftovers could not all be killed is not judged: it is discarded
-            // whole and the run ends on the error.
-            if let Err(error) = swept {
+            },
+            Err(error) => Err(error),
+        };
+        // What the step left, read now; a read that fails (a file the run may not read)
+        // discards the step before the run ends on the error.
+        let seen = (|| -> Result<(Vec<PathBuf>, Vec<String>)> {
+            let touched = differing(&kept, &snapshot(&cases)?);
+            let mut surface_touched: BTreeSet<String> =
+                differing(&surface_kept, &surface.snapshot(&tree)?)
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect();
+            surface_touched.extend(
+                crate::git::changed_paths(&tree)?
+                    .into_iter()
+                    .filter(|path| surface.contains(path) && !surface_dirty_before.contains(path)),
+            );
+            Ok((touched, surface_touched.into_iter().collect()))
+        })();
+        let (touched, surface_touched) = match seen {
+            Ok(seen) => seen,
+            Err(error) => {
                 let _ = tell(out);
                 return Err(match undo() {
                     Ok(moved) => error.context(format!(
-                        "step {}: what the step left running could not be killed; everything it changed was discarded{moved}{note}",
+                        "step {}: what the step left could not be read; everything it changed was discarded{moved}{note}",
                         self.steps
                     )),
                     Err(undo) => error.context(format!(
-                        "step {}: what the step left running could not be killed, and its change could not be discarded: {undo:#}{note}",
+                        "step {}: what the step left could not be read, and its change could not be discarded: {undo:#}{note}",
                         self.steps
                     )),
                 });
             }
-            // The edit effect: a harness that works in a scratch copy and never in the tree
-            // ([`Harness::take_proposal`]) hands its change over as a proposal, and takt writes
-            // it here, after the checkpoint and before the step is judged. A proposal the guard
-            // refuses on its face (an action not offered, a file changed for an action that
-            // changes none or records a choice, a path that is no plain path of the tree, under
-            // `.git`, in the cases directory, on the judge surface, a non-test path for
-            // `tests.write`, a path reached through a link, a path git ignores) is refused before
-            // a byte of it reaches the tree; one that passes is written, and judged below as any
-            // step's change.
-            //
-            // Its content is read before that, whatever the guard says of it: each file and the
-            // summary checked for the shape of a credential and scanned under the gates policy
-            // ([`proposal_scan_refusal`]). One that does not pass is refused, and its summary is
-            // not recorded ([`PROPOSAL_NOT_RECORDED`]); a refusal on its face is said first.
-            let stepped = match stepped {
-                Ok(report) => match self.harness.take_proposal() {
-                    None => Ok(report),
-                    Some(proposal) => {
-                        let unscanned = proposal_scan_refusal(
-                            &self.tree,
-                            self.change_scan.as_ref(),
-                            self.harness.reads_outside_its_copy(),
-                            &proposal,
-                        );
-                        let summary = match unscanned {
-                            Some(_) => PROPOSAL_NOT_RECORDED.to_owned(),
-                            None => report.summary.clone(),
-                        };
-                        match Self::proposal_refusal(
-                            &self.tree, &proposal, &offered, &approvals, &surface, &shape,
-                        )
-                        .or(unscanned)
-                        {
-                            Some(why) => {
-                                let moved = undo()?;
-                                let why = format!("{}{moved}", crate::trace::escape(&why));
-                                if let Some(tokens) = report.tokens {
-                                    self.tokens += tokens;
-                                }
-                                self.stepped(
-                                    events,
-                                    SteppedBy::Harness(
-                                        report.tokens,
-                                        self.harness.last_usage(),
-                                        self.harness.last_call().map(Box::new),
-                                        transcript.clone(),
-                                    ),
-                                    self.harness.name(),
-                                    &report.action,
-                                    &summary,
-                                )?;
-                                self.refused(events, BY_TAKT, &why)?;
-                                writeln!(
-                                    out,
-                                    "step {}: {} ({})",
-                                    self.steps,
-                                    report.action,
-                                    self.harness.name()
-                                )?;
-                                writeln!(
-                                    out,
-                                    "  refused before the edit effect: {why}; nothing of the proposal was written to the tree"
-                                )?;
-                                tell(out)?;
-                                return Ok(Stop::StepRefused(why));
-                            }
-                            None => Self::apply_proposal(&self.tree, &proposal)
-                                .map(|()| report)
-                                .context("the edit effect could not write the proposal"),
-                        }
-                    }
-                },
-                Err(error) => Err(error),
+        };
+        // Named as the step left them; the cases directory is put back with the rest of the
+        // step's change by `undo`, after the reset, on every path below that discards it.
+        let touched_named = cases_named(&cases, &touched);
+        // A step that returned when the hour budget ended, failed (killed by it) or not, is
+        // discarded whole like any failed step, recorded as a refusal, and the run stops on
+        // the budget. One that reported keeps its step line, with its tokens and their
+        // components and a summary saying it was discarded, and one that failed is charged
+        // what its session reported ([`Run::charge_unproposed`]), so the steps' tokens add up
+        // to the run's; what of the git directory could not be put back is named. One that
+        // failed by itself before then failed as any other.
+        if let Some(h) = self.options.hours
+            && self.deadline().is_some_and(|deadline| returned >= deadline)
+        {
+            let ended = match &stepped {
+                Ok(report) => {
+                    self.tokens += report.tokens.unwrap_or(0);
+                    format!("it reported {} at or after the run's end", report.action)
+                }
+                Err(error) => format!("{error:#}"),
             };
-            // What the step left, read now; a read that fails (a file the run may not read)
-            // discards the step before the run ends on the error.
-            let seen =
-                (|| -> Result<(Vec<PathBuf>, Vec<String>)> {
-                    let touched = differing(&kept, &snapshot(&cases)?);
-                    let mut surface_touched: BTreeSet<String> =
-                        differing(&surface_kept, &surface.snapshot(&tree)?)
-                            .iter()
-                            .map(|path| path.display().to_string())
-                            .collect();
-                    surface_touched.extend(crate::git::changed_paths(&tree)?.into_iter().filter(
-                        |path| surface.contains(path) && !surface_dirty_before.contains(path),
+            let not_put_back = if git_dir.failed.is_empty() {
+                String::new()
+            } else {
+                format!("; not put back: {}", git_dir.failed.join("; "))
+            };
+            let moved = match undo() {
+                Ok(moved) => moved,
+                Err(undo) => {
+                    return Err(anyhow::anyhow!(
+                        "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}{not_put_back}{note}",
+                        self.steps
                     ));
-                    Ok((touched, surface_touched.into_iter().collect()))
-                })();
-            let (touched, surface_touched) = match seen {
-                Ok(seen) => seen,
-                Err(error) => {
-                    let _ = tell(out);
-                    return Err(match undo() {
-                        Ok(moved) => error.context(format!(
-                            "step {}: what the step left could not be read; everything it changed was discarded{moved}{note}",
-                            self.steps
-                        )),
-                        Err(undo) => error.context(format!(
-                            "step {}: what the step left could not be read, and its change could not be discarded: {undo:#}{note}",
-                            self.steps
-                        )),
-                    });
                 }
             };
-            // Named as the step left them; the cases directory is put back with the rest of the
-            // step's change by `undo`, after the reset, on every path below that discards it.
-            let touched_named = cases_named(&cases, &touched);
-            // A step that returned when the hour budget ended, failed (killed by it) or not, is
-            // discarded whole like any failed step, recorded as a refusal, and the run stops on
-            // the budget. One that reported keeps its step line, with its tokens and their
-            // components and a summary saying it was discarded, and one that failed is charged
-            // what its session reported ([`Run::charge_unproposed`]), so the steps' tokens add up
-            // to the run's; what of the git directory could not be put back is named. One that
-            // failed by itself before then failed as any other.
-            if let Some(h) = self.options.hours
-                && self.deadline().is_some_and(|deadline| returned >= deadline)
-            {
-                let ended = match &stepped {
-                    Ok(report) => {
-                        self.tokens += report.tokens.unwrap_or(0);
-                        format!("it reported {} at or after the run's end", report.action)
-                    }
-                    Err(error) => format!("{error:#}"),
-                };
-                let not_put_back = if git_dir.failed.is_empty() {
-                    String::new()
-                } else {
-                    format!("; not put back: {}", git_dir.failed.join("; "))
-                };
-                let moved = match undo() {
-                    Ok(moved) => moved,
-                    Err(undo) => {
-                        return Err(anyhow::anyhow!(
-                            "step {}: the hour budget ran out during the step ({ended}), and the step's change could not be discarded: {undo:#}{not_put_back}{note}",
-                            self.steps
-                        ));
-                    }
-                };
-                let why = format!(
-                    "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}{not_put_back}{moved}{note}",
-                    self.steps
-                );
-                // Written after the cases directory was put back, which would take a line
-                // written before it along.
-                if let Ok(report) = &stepped {
-                    self.stepped(
-                        events,
-                        SteppedBy::Harness(
-                            report.tokens,
-                            self.harness.last_usage(),
-                            self.harness.last_call().map(Box::new),
-                            transcript.clone(),
-                        ),
-                        self.harness.name(),
-                        &report.action,
-                        &format!("discarded at the run's end: {}", report.summary),
-                    )?;
-                } else {
-                    self.charge_unproposed(events, transcript.clone())?;
-                }
-                self.refused(events, BY_TAKT, &why)?;
-                writeln!(out, "{why}")?;
-                tell(out)?;
-                return Ok(Stop::Hours(h));
-            }
-            let report = match stepped {
-                Ok(report) => report,
-                Err(error) => {
-                    let _ = tell(out);
-                    return Err(match undo() {
-                        Ok(moved) => {
-                            let error = error.context(format!(
-                                "step {}: the harness failed; everything the step changed was discarded{moved}{note}",
-                                self.steps
-                            ));
-                            match self.charge_unproposed(events, transcript.clone()) {
-                                Ok(()) => error,
-                                Err(unrecorded) => error.context(format!(
-                                    "and the tokens its session reported could not be recorded: {unrecorded:#}"
-                                )),
-                            }
-                        }
-                        Err(undo) => error.context(format!(
-                            "step {}: the harness failed, and the step's change could not be discarded: {undo:#}{note}",
-                            self.steps
-                        )),
-                    });
-                }
-            };
-            if let Some(tokens) = report.tokens {
-                self.tokens += tokens;
-            }
-            // The step's line is written once its change is kept or put back: putting the
-            // cases directory back to `kept` would take a line written before it along.
-            let harness = self.harness;
-            let record_step = |run: &Self| {
-                run.stepped(
+            let why = format!(
+                "step {}: the hour budget ran out during the step; everything the step changed was discarded: {ended}{not_put_back}{moved}{note}",
+                self.steps
+            );
+            // Written after the cases directory was put back, which would take a line
+            // written before it along.
+            if let Ok(report) = &stepped {
+                self.stepped(
                     events,
                     SteppedBy::Harness(
                         report.tokens,
-                        harness.last_usage(),
-                        harness.last_call().map(Box::new),
+                        self.harness.last_usage(),
+                        self.harness.last_call().map(Box::new),
                         transcript.clone(),
                     ),
-                    harness.name(),
+                    self.harness.name(),
                     &report.action,
-                    &report.summary,
-                )
-            };
-            // A step that cannot be told on `out` is not judged: it is discarded whole, as
-            // one whose harness failed, and the run ends on the error.
-            let told = writeln!(
-                out,
-                "step {}: {} ({})",
-                self.steps,
-                report.action,
-                self.harness.name()
+                    &format!("discarded at the run's end: {}", report.summary),
+                )?;
+            } else {
+                self.charge_unproposed(events, transcript.clone())?;
+            }
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(out, "{why}")?;
+            tell(out)?;
+            return Ok(Judgement::Stop(Stop::Hours(h)));
+        }
+        let report = match stepped {
+            Ok(report) => report,
+            Err(error) => {
+                let _ = tell(out);
+                return Err(match undo() {
+                    Ok(moved) => {
+                        let error = error.context(format!(
+                            "step {}: the harness failed; everything the step changed was discarded{moved}{note}",
+                            self.steps
+                        ));
+                        match self.charge_unproposed(events, transcript.clone()) {
+                            Ok(()) => error,
+                            Err(unrecorded) => error.context(format!(
+                                "and the tokens its session reported could not be recorded: {unrecorded:#}"
+                            )),
+                        }
+                    }
+                    Err(undo) => error.context(format!(
+                        "step {}: the harness failed, and the step's change could not be discarded: {undo:#}{note}",
+                        self.steps
+                    )),
+                });
+            }
+        };
+        if let Some(tokens) = report.tokens {
+            self.tokens += tokens;
+        }
+        // The step's line is written once its change is kept or put back: putting the
+        // cases directory back to `kept` would take a line written before it along.
+        let harness = self.harness;
+        let record_step = |run: &Self| {
+            run.stepped(
+                events,
+                SteppedBy::Harness(
+                    report.tokens,
+                    harness.last_usage(),
+                    harness.last_call().map(Box::new),
+                    transcript.clone(),
+                ),
+                harness.name(),
+                &report.action,
+                &report.summary,
             )
-            .and_then(|()| writeln!(out, "  said: {}", report.summary));
-            if let Err(error) = told {
+        };
+        // A step that cannot be told on `out` is not judged: it is discarded whole, as
+        // one whose harness failed, and the run ends on the error.
+        let told = writeln!(
+            out,
+            "step {}: {} ({})",
+            self.steps,
+            report.action,
+            self.harness.name()
+        )
+        .and_then(|()| writeln!(out, "  said: {}", report.summary));
+        if let Err(error) = told {
+            let moved = undo()?;
+            record_step(self)?;
+            return Err(anyhow::Error::new(error).context(format!(
+                "step {}: {} could not be printed; the change was discarded{moved}",
+                self.steps, report.action
+            )));
+        }
+        let change = match checkpoint.change(&self.tree) {
+            Ok(change) => change,
+            Err(error) => {
                 let moved = undo()?;
                 record_step(self)?;
-                return Err(anyhow::Error::new(error).context(format!(
-                    "step {}: {} could not be printed; the change was discarded{moved}",
+                return Err(error.context(format!(
+                    "step {}: what {} changed could not be read; the change was discarded{moved}",
                     self.steps, report.action
                 )));
             }
-            let change = match checkpoint.change(&self.tree) {
-                Ok(change) => change,
-                Err(error) => {
-                    let moved = undo()?;
-                    record_step(self)?;
-                    return Err(error.context(format!(
-                        "step {}: what {} changed could not be read; the change was discarded{moved}",
-                        self.steps, report.action
-                    )));
-                }
-            };
-            let changed = &change.paths;
-            if !touched.is_empty() {
-                let moved = undo()?;
-                let why = format!(
-                    "{} wrote into the cases directory: {}",
-                    report.action,
-                    touched_named.join(", ")
-                );
-                record_step(self)?;
-                let why = format!("{why}{moved}");
-                self.refused(events, BY_TAKT, &why)?;
-                writeln!(
-                    out,
-                    "  refused: {why}; the cases directory was put back and the change discarded"
-                )?;
-                return Ok(Stop::StepRefused(why));
-            }
-            if !surface_touched.is_empty() {
-                let moved = undo()?;
-                let why = surface_refusal(&report.action, &surface_touched)
-                    + &surface.modules_note(&surface_touched);
-                record_step(self)?;
-                let why = format!("{why}{moved}");
-                self.refused(events, BY_TAKT, &why)?;
-                writeln!(
-                    out,
-                    "  refused: {why}; the judge surface was put back and the change discarded"
-                )?;
-                return Ok(Stop::StepRefused(why));
-            }
-            // A cargo manifest anywhere in the tree decides how cargo builds and runs the
-            // tests through some of its keys ([`manifest_build_changes`]): a build script
-            // under another name, a test harness, a profile, a patch, a build dependency, a
-            // target's own entries but its dependencies. A step that adds, changes or removes
-            // one is refused, and so is one that changed a manifest the scanner cannot read
-            // with certainty, or what cargo itself reads as a build script or `links`
-            // ([`cargo_builds`]). `.cargo/` is guarded above, so cargo reads the base's
-            // configuration here.
-            // pytest's configuration in a `pyproject.toml` likewise ([`pytest_config_changes`]).
-            let manifests = (|| -> Result<Vec<String>> {
-                let mut changed_keys = Vec::new();
-                for path in changed
-                    .iter()
-                    .filter(|path| is_manifest(path) || is_pyproject(path))
-                {
-                    let before = manifest_at(&self.tree, &head_before, path)?;
-                    let full = self.tree.join(path);
-                    let after = match std::fs::symlink_metadata(&full) {
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-                        Err(error) => {
-                            return Err(error).with_context(|| format!("read {}", full.display()));
-                        }
-                        Ok(meta) if meta.is_file() => String::from_utf8_lossy(
-                            &std::fs::read(&full)
-                                .with_context(|| format!("read {}", full.display()))?,
-                        )
-                        .into_owned(),
-                        Ok(_) => {
-                            changed_keys.push(format!("{path}: not a regular file"));
-                            continue;
-                        }
-                    };
-                    let compared = if is_manifest(path) {
-                        manifest_build_changes(&before, &after)
-                    } else {
-                        pytest_config_changes(&before, &after)
-                    };
-                    match compared {
-                        Ok(keys) => {
-                            changed_keys
-                                .extend(keys.into_iter().map(|key| format!("{path}: {key}")));
-                        }
-                        Err(line) => changed_keys.push(format!(
-                            "{path}: a line the manifest scanner cannot read with certainty, {line}"
-                        )),
-                    }
-                }
-                // Cargo itself as the parser, the scanner's cross-check: the build scripts and
-                // `links` it reads, before the step and after it.
-                changed_keys.extend(cargo_build_changes(
-                    &cargo_before,
-                    &cargo_builds(&self.tree),
-                ));
-                Ok(changed_keys)
-            })();
-            let manifests = match manifests {
-                Ok(manifests) => manifests,
-                Err(error) => {
-                    let moved = undo()?;
-                    record_step(self)?;
-                    return Err(error.context(format!(
-                        "step {}: the cargo manifests {} changed could not be read; the change was discarded{moved}",
-                        self.steps, report.action
-                    )));
-                }
-            };
-            if !manifests.is_empty() {
-                let moved = undo()?;
-                // Each entry starts with the path it is about: pytest's tables in a
-                // `pyproject.toml`, else cargo's manifests and what cargo reads.
-                let (pytest, cargo): (Vec<&String>, Vec<&String>) =
-                    manifests.iter().partition(|entry| {
-                        entry
-                            .split_once(": ")
-                            .is_some_and(|(path, _)| is_pyproject(path))
-                    });
-                let join = |entries: &[&String]| {
-                    entries
-                        .iter()
-                        .map(|entry| entry.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                };
-                let mut parts = Vec::new();
-                if !cargo.is_empty() {
-                    parts.push(format!(
-                        "changed how cargo builds or runs the tests: {}",
-                        join(&cargo)
-                    ));
-                }
-                if !pytest.is_empty() {
-                    parts.push(format!(
-                        "changed how pytest collects or reports the tests: {}",
-                        join(&pytest)
-                    ));
-                }
-                let why = format!("{} {}", report.action, parts.join("; and "));
-                record_step(self)?;
-                let why = format!("{why}{moved}");
-                self.refused(events, BY_TAKT, &why)?;
-                writeln!(out, "  refused: {why}; the change was discarded")?;
-                return Ok(Stop::StepRefused(why));
-            }
-            // What cargo and rustup read outside the tree ([`Outside`]): a step that changed it
-            // is refused, and what it created there removed, what it changed or removed put back.
-            let outside_changed = match Outside::read(&self.tree, &self.outside_dirs) {
-                Ok(now) => outside_before.differing(&now),
-                Err(error) => {
-                    let moved = undo()?;
-                    record_step(self)?;
-                    return Err(error.context(format!(
-                        "step {}: what cargo and rustup read outside the tree could not be read after {}; the change was discarded{moved}",
-                        self.steps, report.action
-                    )));
-                }
-            };
-            if !outside_changed.is_empty() {
-                let moved = undo()?;
-                // What is still not as it was is behind a link, never written through.
-                let left =
-                    outside_before.differing(&Outside::read(&self.tree, &self.outside_dirs)?);
-                let mut why = format!(
-                    "{} changed what cargo or rustup reads outside the tree, a program on `PATH`, or what Python imports from there: {}",
-                    report.action,
-                    outside_named(&outside_changed)
-                );
-                if !left.is_empty() {
-                    why.push_str(&format!(
-                        "; not put back (a program or import directory takt never writes, a link on its way, or a file too large to keep a copy of): {}",
-                        outside_named(&left)
-                    ));
-                }
-                record_step(self)?;
-                let why = format!("{why}{moved}");
-                self.refused(events, BY_TAKT, &why)?;
-                writeln!(
-                    out,
-                    "  refused: {why}; the named configuration files were put back and the change discarded"
-                )?;
-                return Ok(Stop::StepRefused(why));
-            }
-            // What only takt does, or what nobody may: `.git/`, `HEAD`, the index, ignored
-            // paths, and a path that was uncommitted before the step, whose change cannot be
-            // told apart from what was there.
-            let action = &report.action;
-            let overreach = if !git_dir.touched.is_empty() {
-                let mut why = format!(
-                    "{action} wrote under .git, where git runs or reads it: {}",
-                    git_dir.touched.join(", ")
-                );
-                if !git_dir.failed.is_empty() {
-                    why.push_str(&format!("; not put back: {}", git_dir.failed.join("; ")));
-                }
-                Some(why)
-            } else if let Some(moved) = &change.head {
-                Some(format!("{action} moved HEAD {moved}"))
-            } else if !change.refs.is_empty() {
-                Some(format!("{action} moved {}", change.refs.join(", ")))
-            } else if change.staged {
-                Some(format!(
-                    "{action} changed the index; takt stages and commits a step's change, the step does not"
-                ))
-            } else if !change.ignored_added.is_empty()
-                || !change.ignored_changed.is_empty()
-                || !change.ignored_removed.is_empty()
-            {
-                let mut what = Vec::new();
-                if !change.ignored_added.is_empty() {
-                    what.push(format!("wrote {}", ignored_named(&change.ignored_added)));
-                }
-                if !change.ignored_changed.is_empty() {
-                    what.push(format!(
-                        "rewrote {}",
-                        ignored_named(&change.ignored_changed)
-                    ));
-                }
-                if !change.ignored_removed.is_empty() {
-                    what.push(format!(
-                        "removed {}",
-                        ignored_named(&change.ignored_removed)
-                    ));
-                }
-                let mut why = format!(
-                    "{action} {} ignored by git, which no commit would carry",
-                    what.join(" and ")
-                );
-                if !change.ignored_lost.is_empty() {
-                    why.push_str(&format!(
-                        "; nothing was kept to put back of {}",
-                        ignored_named(&change.ignored_lost)
-                    ));
-                }
-                Some(why)
-            } else if !change.already_uncommitted.is_empty() {
-                Some(format!(
-                    "{action} changed {}, uncommitted before the step already",
-                    change.already_uncommitted.join(", ")
-                ))
-            } else {
-                None
-            };
-            // A path is the step's to name: each control character in it escaped, so no name
-            // shapes a line of the output.
-            let overreach = overreach.map(|why| crate::trace::escape(&why));
-            if let Some(why) = overreach {
-                let moved = undo()?;
-                record_step(self)?;
-                let why = format!("{why}{moved}");
-                self.refused(events, BY_TAKT, &why)?;
-                writeln!(out, "  refused: {why}; the change was discarded")?;
-                return Ok(Stop::StepRefused(why));
-            }
-            if approvals.contains(&report.action) {
-                if !changed.is_empty() {
-                    let moved = undo()?;
-                    let why = format!("{} requested with changes", report.action);
-                    record_step(self)?;
-                    let why = format!("{why}{moved}");
-                    self.refused(events, BY_TAKT, &why)?;
-                    writeln!(
-                        out,
-                        "  refused: {} was requested with {} changed path(s); the change was discarded{moved}",
-                        report.action,
-                        changed.len()
-                    )?;
-                    return Ok(Stop::StepRefused(why));
-                }
-                record_step(self)?;
-                writeln!(out, "  effect: none; {} needs an approval", report.action)?;
-                return Ok(Stop::ApprovalRequired(vec![report.action]));
-            }
-            let refusal = if !offered.contains(&report.action) {
-                Some(format!("{} was not offered", report.action))
-            } else if report.action == "repository.inspect" && !changed.is_empty() {
-                Some(format!(
-                    "repository.inspect changed {} path(s)",
-                    changed.len()
-                ))
-            } else if report.action == "tests.write"
-                && let Some(path) = changed.iter().find(|p| !is_test_path(p))
-            {
-                Some(format!("tests.write changed a non-test path: {path}"))
-            } else {
-                None
-            };
-            if let Some(why) = refusal {
-                let moved = undo()?;
-                record_step(self)?;
-                let why = format!("{why}{moved}");
-                self.refused(events, BY_TAKT, &why)?;
-                writeln!(out, "  refused: {why}; the change was discarded")?;
-                return Ok(Stop::StepRefused(why));
-            }
-            // An action whose evidence records a choice ([`Shape`]): takt writes that record,
-            // with no result, bound to the revision of each artifact the protocol reads it about,
-            // for a step that changed no file. A step that changed one is refused, as a request
-            // for an approval with changes is. Taken again where its record is already written,
-            // it moves nothing, and the run sees no progress.
-            let choices = shape.choices_of(&report.action);
-            if !choices.is_empty() {
-                if !changed.is_empty() {
-                    let moved = undo()?;
-                    let why = format!(
-                        "{} records a choice and changed {} path(s)",
-                        report.action,
-                        changed.len()
-                    );
-                    record_step(self)?;
-                    let why = format!("{why}{moved}");
-                    self.refused(events, BY_TAKT, &why)?;
-                    writeln!(out, "  refused: {why}; the change was discarded")?;
-                    return Ok(Stop::StepRefused(why));
-                }
-                record_step(self)?;
-                events.emit(
-                    self.steps,
-                    &Event::Effect {
-                        paths: Vec::new(),
-                        revision: None,
-                    },
-                )?;
-                writeln!(out, "  effect: no file changed")?;
-                // The records missing, each about an artifact at its revision: written by the
-                // choice effect ([`crate::validator::ChoiceEffect`]) once Commission's runtime
-                // hands it the request for the action the harness chose, through the case's
-                // evidence port under [`CHOICE_PRODUCER`].
-                let mut missing: Vec<(String, String, String, String)> = Vec::new();
-                for (kind, subjects) in choices {
-                    for subject in subjects {
-                        if self.case.has_evidence(kind, subject)? {
-                            continue;
-                        }
-                        let revision = self.case.revision(subject).with_context(|| {
-                            format!("{kind} is read about {subject}, which has no revision")
-                        })?;
-                        let id = if subjects.len() == 1 {
-                            format!("{}-{seq}", kind.replace('_', "-"))
-                        } else {
-                            format!("{}-{subject}-{seq}", kind.replace('_', "-"))
-                        };
-                        missing.push((id, kind.clone(), subject.clone(), revision));
-                    }
-                }
-                let mut written: Vec<(crate::evidence::Record, PathBuf)> = Vec::new();
-                if !missing.is_empty() {
-                    let (dir, id, protocol) = (
-                        self.case.dir.clone(),
-                        self.case.id.clone(),
-                        self.case.protocol.clone(),
-                    );
-                    let authority = CaseAuthority::new(&dir, &id);
-                    let case = &mut self.case;
-                    let mut write = |request: &AdmittedRequest| -> Result<EffectOutcome> {
-                        let mut records = Vec::new();
-                        for (id, kind, subject, revision) in &missing {
-                            records.push(crate::evidence::Record::new(
-                                id,
-                                kind,
-                                None,
-                                subject,
-                                revision,
-                                CHOICE_PRODUCER,
-                            ));
-                        }
-                        let evidence =
-                            CaseEvidence::new(&mut *case, vec![CHOICE_PRODUCER.to_owned()])?;
-                        let mut ids = Vec::new();
-                        for record in records {
-                            let path = evidence.submit(
-                                CHOICE_PRODUCER,
-                                &record,
-                                Some(&request.data().action_request_id.0.0),
-                            )?;
-                            ids.push(cjson::Value::Text(record.id.clone()));
-                            written.push((record, path));
-                        }
-                        Ok(EffectOutcome::Performed(EffectOutcomePerformed {
-                            report: cjson::Value::Object(vec![(
-                                "records".to_owned(),
-                                cjson::Value::Array(ids),
-                            )]),
-                            attempt: None,
-                            audit: None,
-                            usage: None,
-                        }))
-                    };
-                    let ended = {
-                        let effect = ChoiceEffect::new(&report.action, &mut write);
-                        run_effect(
-                            &dir,
-                            &id,
-                            &protocol,
-                            &authority,
-                            &effect,
-                            &report.action,
-                            &seq.to_string(),
-                        )?
-                    };
-                    if written.is_empty() {
-                        let why = format!(
-                            "{} was not handed to the effect that records the choice: Commission's runtime ended {:?}",
-                            report.action, ended.outcome
-                        );
-                        self.refused(events, BY_TAKT, &why)?;
-                        writeln!(out, "  refused: {why}")?;
-                        return Ok(Stop::StepRefused(why));
-                    }
-                }
-                for (record, path) in &written {
-                    events.emit(
-                        self.steps,
-                        &Event::Evidence {
-                            id: record.id.clone(),
-                            kind: record.kind.clone(),
-                            result: None,
-                            path: path
-                                .strip_prefix(&self.tree)
-                                .unwrap_or(path)
-                                .display()
-                                .to_string(),
-                        },
-                    )?;
-                    writeln!(out, "  evidence: {} -", record.kind)?;
-                }
-                last_idle = written.is_empty().then_some(state);
-                continue;
-            }
-            if changed.is_empty() {
-                record_step(self)?;
-                events.emit(
-                    self.steps,
-                    &Event::Effect {
-                        paths: Vec::new(),
-                        revision: None,
-                    },
-                )?;
-                writeln!(out, "  effect: no file changed")?;
-                last_idle = Some(state);
-                continue;
-            }
-            last_idle = None;
-            // A commit that fails (a hook of the repository's own refused it) leaves nothing
-            // of the step behind either.
-            let head = match crate::git::commit_paths(
-                &self.tree,
-                &self.committer,
-                changed,
-                &format!("{}: {}", report.action, one_line(&report.summary)),
-            ) {
-                Ok(head) => head,
-                Err(error) => {
-                    let moved = undo()?;
-                    record_step(self)?;
-                    return Err(error.context(format!(
-                        "step {}: the commit of {}'s change failed; the change was discarded{moved}",
-                        self.steps, report.action
-                    )));
-                }
-            };
-            // The step is on record before anything that can end the run, so the tokens it spent
-            // are kept whatever follows: a case that declares no implementation artifact ends
-            // the run here.
+        };
+        let changed = &change.paths;
+        if !touched.is_empty() {
+            let moved = undo()?;
+            let why = format!(
+                "{} wrote into the cases directory: {}",
+                report.action,
+                touched_named.join(", ")
+            );
             record_step(self)?;
-            self.case.set_revision("implementation", &head)?;
+            let why = format!("{why}{moved}");
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(
+                out,
+                "  refused: {why}; the cases directory was put back and the change discarded"
+            )?;
+            return Ok(Judgement::Stop(Stop::StepRefused(why)));
+        }
+        if !surface_touched.is_empty() {
+            let moved = undo()?;
+            let why = surface_refusal(&report.action, &surface_touched)
+                + &surface.modules_note(&surface_touched);
+            record_step(self)?;
+            let why = format!("{why}{moved}");
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(
+                out,
+                "  refused: {why}; the judge surface was put back and the change discarded"
+            )?;
+            return Ok(Judgement::Stop(Stop::StepRefused(why)));
+        }
+        // A cargo manifest anywhere in the tree decides how cargo builds and runs the
+        // tests through some of its keys ([`manifest_build_changes`]): a build script
+        // under another name, a test harness, a profile, a patch, a build dependency, a
+        // target's own entries but its dependencies. A step that adds, changes or removes
+        // one is refused, and so is one that changed a manifest the scanner cannot read
+        // with certainty, or what cargo itself reads as a build script or `links`
+        // ([`cargo_builds`]). `.cargo/` is guarded above, so cargo reads the base's
+        // configuration here.
+        // pytest's configuration in a `pyproject.toml` likewise ([`pytest_config_changes`]).
+        let manifests = (|| -> Result<Vec<String>> {
+            let mut changed_keys = Vec::new();
+            for path in changed
+                .iter()
+                .filter(|path| is_manifest(path) || is_pyproject(path))
+            {
+                let before = manifest_at(&self.tree, &head_before, path)?;
+                let full = self.tree.join(path);
+                let after = match std::fs::symlink_metadata(&full) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                    Err(error) => {
+                        return Err(error).with_context(|| format!("read {}", full.display()));
+                    }
+                    Ok(meta) if meta.is_file() => String::from_utf8_lossy(
+                        &std::fs::read(&full)
+                            .with_context(|| format!("read {}", full.display()))?,
+                    )
+                    .into_owned(),
+                    Ok(_) => {
+                        changed_keys.push(format!("{path}: not a regular file"));
+                        continue;
+                    }
+                };
+                let compared = if is_manifest(path) {
+                    manifest_build_changes(&before, &after)
+                } else {
+                    pytest_config_changes(&before, &after)
+                };
+                match compared {
+                    Ok(keys) => {
+                        changed_keys.extend(keys.into_iter().map(|key| format!("{path}: {key}")));
+                    }
+                    Err(line) => changed_keys.push(format!(
+                        "{path}: a line the manifest scanner cannot read with certainty, {line}"
+                    )),
+                }
+            }
+            // Cargo itself as the parser, the scanner's cross-check: the build scripts and
+            // `links` it reads, before the step and after it.
+            changed_keys.extend(cargo_build_changes(
+                &cargo_before,
+                &cargo_builds(&self.tree),
+            ));
+            Ok(changed_keys)
+        })();
+        let manifests = match manifests {
+            Ok(manifests) => manifests,
+            Err(error) => {
+                let moved = undo()?;
+                record_step(self)?;
+                return Err(error.context(format!(
+                    "step {}: the cargo manifests {} changed could not be read; the change was discarded{moved}",
+                    self.steps, report.action
+                )));
+            }
+        };
+        if !manifests.is_empty() {
+            let moved = undo()?;
+            // Each entry starts with the path it is about: pytest's tables in a
+            // `pyproject.toml`, else cargo's manifests and what cargo reads.
+            let (pytest, cargo): (Vec<&String>, Vec<&String>) =
+                manifests.iter().partition(|entry| {
+                    entry
+                        .split_once(": ")
+                        .is_some_and(|(path, _)| is_pyproject(path))
+                });
+            let join = |entries: &[&String]| {
+                entries
+                    .iter()
+                    .map(|entry| entry.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let mut parts = Vec::new();
+            if !cargo.is_empty() {
+                parts.push(format!(
+                    "changed how cargo builds or runs the tests: {}",
+                    join(&cargo)
+                ));
+            }
+            if !pytest.is_empty() {
+                parts.push(format!(
+                    "changed how pytest collects or reports the tests: {}",
+                    join(&pytest)
+                ));
+            }
+            let why = format!("{} {}", report.action, parts.join("; and "));
+            record_step(self)?;
+            let why = format!("{why}{moved}");
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(out, "  refused: {why}; the change was discarded")?;
+            return Ok(Judgement::Stop(Stop::StepRefused(why)));
+        }
+        // What cargo and rustup read outside the tree ([`Outside`]): a step that changed it
+        // is refused, and what it created there removed, what it changed or removed put back.
+        let outside_changed = match Outside::read(&self.tree, &self.outside_dirs) {
+            Ok(now) => outside_before.differing(&now),
+            Err(error) => {
+                let moved = undo()?;
+                record_step(self)?;
+                return Err(error.context(format!(
+                    "step {}: what cargo and rustup read outside the tree could not be read after {}; the change was discarded{moved}",
+                    self.steps, report.action
+                )));
+            }
+        };
+        if !outside_changed.is_empty() {
+            let moved = undo()?;
+            // What is still not as it was is behind a link, never written through.
+            let left = outside_before.differing(&Outside::read(&self.tree, &self.outside_dirs)?);
+            let mut why = format!(
+                "{} changed what cargo or rustup reads outside the tree, a program on `PATH`, or what Python imports from there: {}",
+                report.action,
+                outside_named(&outside_changed)
+            );
+            if !left.is_empty() {
+                why.push_str(&format!(
+                    "; not put back (a program or import directory takt never writes, a link on its way, or a file too large to keep a copy of): {}",
+                    outside_named(&left)
+                ));
+            }
+            record_step(self)?;
+            let why = format!("{why}{moved}");
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(
+                out,
+                "  refused: {why}; the named configuration files were put back and the change discarded"
+            )?;
+            return Ok(Judgement::Stop(Stop::StepRefused(why)));
+        }
+        // What only takt does, or what nobody may: `.git/`, `HEAD`, the index, ignored
+        // paths, and a path that was uncommitted before the step, whose change cannot be
+        // told apart from what was there.
+        let action = &report.action;
+        let overreach = if !git_dir.touched.is_empty() {
+            let mut why = format!(
+                "{action} wrote under .git, where git runs or reads it: {}",
+                git_dir.touched.join(", ")
+            );
+            if !git_dir.failed.is_empty() {
+                why.push_str(&format!("; not put back: {}", git_dir.failed.join("; ")));
+            }
+            Some(why)
+        } else if let Some(moved) = &change.head {
+            Some(format!("{action} moved HEAD {moved}"))
+        } else if !change.refs.is_empty() {
+            Some(format!("{action} moved {}", change.refs.join(", ")))
+        } else if change.staged {
+            Some(format!(
+                "{action} changed the index; takt stages and commits a step's change, the step does not"
+            ))
+        } else if !change.ignored_added.is_empty()
+            || !change.ignored_changed.is_empty()
+            || !change.ignored_removed.is_empty()
+        {
+            let mut what = Vec::new();
+            if !change.ignored_added.is_empty() {
+                what.push(format!("wrote {}", ignored_named(&change.ignored_added)));
+            }
+            if !change.ignored_changed.is_empty() {
+                what.push(format!(
+                    "rewrote {}",
+                    ignored_named(&change.ignored_changed)
+                ));
+            }
+            if !change.ignored_removed.is_empty() {
+                what.push(format!(
+                    "removed {}",
+                    ignored_named(&change.ignored_removed)
+                ));
+            }
+            let mut why = format!(
+                "{action} {} ignored by git, which no commit would carry",
+                what.join(" and ")
+            );
+            if !change.ignored_lost.is_empty() {
+                why.push_str(&format!(
+                    "; nothing was kept to put back of {}",
+                    ignored_named(&change.ignored_lost)
+                ));
+            }
+            Some(why)
+        } else if !change.already_uncommitted.is_empty() {
+            Some(format!(
+                "{action} changed {}, uncommitted before the step already",
+                change.already_uncommitted.join(", ")
+            ))
+        } else {
+            None
+        };
+        // A path is the step's to name: each control character in it escaped, so no name
+        // shapes a line of the output.
+        let overreach = overreach.map(|why| crate::trace::escape(&why));
+        if let Some(why) = overreach {
+            let moved = undo()?;
+            record_step(self)?;
+            let why = format!("{why}{moved}");
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(out, "  refused: {why}; the change was discarded")?;
+            return Ok(Judgement::Stop(Stop::StepRefused(why)));
+        }
+        if approvals.contains(&report.action) {
+            if !changed.is_empty() {
+                let moved = undo()?;
+                let why = format!("{} requested with changes", report.action);
+                record_step(self)?;
+                let why = format!("{why}{moved}");
+                self.refused(events, BY_TAKT, &why)?;
+                writeln!(
+                    out,
+                    "  refused: {} was requested with {} changed path(s); the change was discarded{moved}",
+                    report.action,
+                    changed.len()
+                )?;
+                return Ok(Judgement::Stop(Stop::StepRefused(why)));
+            }
+            record_step(self)?;
+            writeln!(out, "  effect: none; {} needs an approval", report.action)?;
+            // The request for the approval is the proposal: the runtime asks the case's
+            // authority, and whatever it answers nothing is performed for it.
+            return Ok(Judgement::Propose(Box::new(Proposed {
+                report,
+                transcript,
+                changed: Vec::new(),
+                ask: true,
+                held: StepKept {
+                    checkpoint,
+                    cases,
+                    cases_kept: kept,
+                    surface,
+                    surface_kept,
+                    outside: outside_before,
+                    outside_dirs,
+                },
+            })));
+        }
+        let refusal = if !offered.contains(&report.action) {
+            Some(format!("{} was not offered", report.action))
+        } else if report.action == "repository.inspect" && !changed.is_empty() {
+            Some(format!(
+                "repository.inspect changed {} path(s)",
+                changed.len()
+            ))
+        } else if report.action == "tests.write"
+            && let Some(path) = changed.iter().find(|p| !is_test_path(p))
+        {
+            Some(format!("tests.write changed a non-test path: {path}"))
+        } else {
+            None
+        };
+        if let Some(why) = refusal {
+            let moved = undo()?;
+            record_step(self)?;
+            let why = format!("{why}{moved}");
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(out, "  refused: {why}; the change was discarded")?;
+            return Ok(Judgement::Stop(Stop::StepRefused(why)));
+        }
+        // An action whose evidence records a choice ([`Shape`]) is taken with no file changed: a
+        // step that changed one is refused, as a request for an approval with changes is.
+        if !shape.choices_of(&report.action).is_empty() && !changed.is_empty() {
+            let moved = undo()?;
+            let why = format!(
+                "{} records a choice and changed {} path(s)",
+                report.action,
+                changed.len()
+            );
+            record_step(self)?;
+            let why = format!("{why}{moved}");
+            self.refused(events, BY_TAKT, &why)?;
+            writeln!(out, "  refused: {why}; the change was discarded")?;
+            return Ok(Judgement::Stop(Stop::StepRefused(why)));
+        }
+        let changed = changed.clone();
+        Ok(Judgement::Propose(Box::new(Proposed {
+            report,
+            transcript,
+            changed,
+            ask: false,
+            held: StepKept {
+                checkpoint,
+                cases,
+                cases_kept: kept,
+                surface,
+                surface_kept,
+                outside: outside_before,
+                outside_dirs,
+            },
+        })))
+    }
+
+    /// The step line of the judgement step `proposed`: its tokens, their components and what
+    /// the harness reported about the call, and its transcript.
+    fn record_proposed(&self, events: &Events, proposed: &Proposed) -> Result<()> {
+        self.stepped(
+            events,
+            SteppedBy::Harness(
+                proposed.report.tokens,
+                self.harness.last_usage(),
+                self.harness.last_call().map(Box::new),
+                proposed.transcript.clone(),
+            ),
+            self.harness.name(),
+            &proposed.report.action,
+            &proposed.report.summary,
+        )
+    }
+
+    /// The effect of a judgement step, once Commission's runtime of loom-sdk handed it the
+    /// `request` for the proposed action: an action whose evidence records a choice is handed
+    /// to the choice effect ([`ChoiceEffect`]), which writes the records the case lacks through
+    /// the case's evidence port under [`CHOICE_PRODUCER`]; one that changed no file is kept as
+    /// such; else the change is committed, and the implementation moves to the commit. Answers
+    /// whether the step moved the case, and the choice effect's answer when it had one.
+    ///
+    /// # Errors
+    /// A failure to commit, record or write; a commit that fails is discarded whole first.
+    #[allow(clippy::too_many_arguments)]
+    fn keep(
+        &mut self,
+        events: &Events,
+        out: &mut dyn Write,
+        seq: usize,
+        shape: &Shape,
+        proposed: &Proposed,
+        commission: &Commission<commission_state::Assigned>,
+        request: &AdmittedRequest,
+    ) -> Result<(bool, Option<EffectOutcome>)> {
+        let report = &proposed.report;
+        let changed = &proposed.changed;
+        // An action whose evidence records a choice ([`Shape`]): takt writes that record,
+        // with no result, bound to the revision of each artifact the protocol reads it about.
+        // Taken again where its record is already written, it moves nothing, and the run sees
+        // no progress.
+        let choices = shape.choices_of(&report.action);
+        if !choices.is_empty() {
+            self.record_proposed(events, proposed)?;
             events.emit(
                 self.steps,
                 &Event::Effect {
-                    paths: changed.clone(),
-                    revision: Some(head.clone()),
+                    paths: Vec::new(),
+                    revision: None,
                 },
             )?;
-            writeln!(
-                out,
-                "  effect: committed {} path(s); implementation is now {}",
-                changed.len(),
-                &head[..8.min(head.len())]
-            )?;
+            writeln!(out, "  effect: no file changed")?;
+            // The records missing, each about an artifact at its revision: written by the
+            // choice effect ([`crate::validator::ChoiceEffect`]), which Commission's runtime
+            // handed the request for the action the harness chose, through the case's
+            // evidence port under [`CHOICE_PRODUCER`].
+            let mut missing: Vec<(String, String, String, String)> = Vec::new();
+            for (kind, subjects) in choices {
+                for subject in subjects {
+                    if self.case.has_evidence(kind, subject)? {
+                        continue;
+                    }
+                    let revision = self.case.revision(subject).with_context(|| {
+                        format!("{kind} is read about {subject}, which has no revision")
+                    })?;
+                    let id = if subjects.len() == 1 {
+                        format!("{}-{seq}", kind.replace('_', "-"))
+                    } else {
+                        format!("{}-{subject}-{seq}", kind.replace('_', "-"))
+                    };
+                    missing.push((id, kind.clone(), subject.clone(), revision));
+                }
+            }
+            // A step whose choice records the case already holds asks the choice effect for
+            // none: the request is answered as any step that changed no file is.
+            if missing.is_empty() {
+                return Ok((false, None));
+            }
+            let mut written: Vec<(crate::evidence::Record, PathBuf)> = Vec::new();
+            let (answered, failure) = {
+                let case = &mut self.case;
+                let written = &mut written;
+                let mut write = |request: &AdmittedRequest| -> Result<EffectOutcome> {
+                    let evidence = CaseEvidence::new(&mut *case, vec![CHOICE_PRODUCER.to_owned()])?;
+                    let mut ids = Vec::new();
+                    for (id, kind, subject, revision) in &missing {
+                        let record = crate::evidence::Record::new(
+                            id,
+                            kind,
+                            None,
+                            subject,
+                            revision,
+                            CHOICE_PRODUCER,
+                        );
+                        let path = evidence.submit(
+                            CHOICE_PRODUCER,
+                            &record,
+                            Some(&request.data().action_request_id.0.0),
+                        )?;
+                        ids.push(cjson::Value::Text(record.id.clone()));
+                        written.push((record, path));
+                    }
+                    Ok(EffectOutcome::Performed(EffectOutcomePerformed {
+                        report: cjson::Value::Object(vec![(
+                            "records".to_owned(),
+                            cjson::Value::Array(ids),
+                        )]),
+                        attempt: None,
+                        audit: None,
+                        usage: None,
+                    }))
+                };
+                let effect = ChoiceEffect::new(&report.action, &mut write);
+                let answered = effect.invoke(commission, request);
+                (answered, effect.take_failure())
+            };
+            if let Some(error) = failure {
+                return Err(error);
+            }
+            let answered =
+                answered.map_err(|error| anyhow!("the choice effect failed: {error}"))?;
+            for (record, path) in &written {
+                events.emit(
+                    self.steps,
+                    &Event::Evidence {
+                        id: record.id.clone(),
+                        kind: record.kind.clone(),
+                        result: None,
+                        path: path
+                            .strip_prefix(&self.tree)
+                            .unwrap_or(path)
+                            .display()
+                            .to_string(),
+                    },
+                )?;
+                writeln!(out, "  evidence: {} -", record.kind)?;
+            }
+            return Ok((!written.is_empty(), Some(answered)));
         }
+        if changed.is_empty() {
+            self.record_proposed(events, proposed)?;
+            events.emit(
+                self.steps,
+                &Event::Effect {
+                    paths: Vec::new(),
+                    revision: None,
+                },
+            )?;
+            writeln!(out, "  effect: no file changed")?;
+            return Ok((false, None));
+        }
+        // A commit that fails (a hook of the repository's own refused it) leaves nothing
+        // of the step behind either.
+        let head = match crate::git::commit_paths(
+            &self.tree,
+            &self.committer,
+            changed,
+            &format!("{}: {}", report.action, one_line(&report.summary)),
+        ) {
+            Ok(head) => head,
+            Err(error) => {
+                let moved = undo_step(&self.tree, &proposed.held.kept())
+                    .map(|undone| undone.aside.named())?;
+                self.record_proposed(events, proposed)?;
+                return Err(error.context(format!(
+                    "step {}: the commit of {}'s change failed; the change was discarded{moved}",
+                    self.steps, report.action
+                )));
+            }
+        };
+        // The step is on record before anything that can end the run, so the tokens it spent
+        // are kept whatever follows: a case that declares no implementation artifact ends
+        // the run here.
+        self.record_proposed(events, proposed)?;
+        self.case.set_revision("implementation", &head)?;
+        events.emit(
+            self.steps,
+            &Event::Effect {
+                paths: changed.clone(),
+                revision: Some(head.clone()),
+            },
+        )?;
+        writeln!(
+            out,
+            "  effect: committed {} path(s); implementation is now {}",
+            changed.len(),
+            &head[..8.min(head.len())]
+        )?;
+        Ok((true, None))
     }
 }

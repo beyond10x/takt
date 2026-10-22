@@ -223,6 +223,13 @@ fn action<'a>(decision: &'a Decision, id: &str) -> &'a str {
         .unwrap_or("absent")
 }
 
+/// The stop of a delivery that reached the merge with its checks passing: only the merge's
+/// grant moves the case, and the run stops there ahead of its step budget
+/// (approval-record:loop-pre-checks-ahead-of-loom).
+fn merge_waits() -> Stop {
+    Stop::ApprovalRequired(vec!["repository.merge".to_owned()])
+}
+
 /// The story's acceptance: with the double reporting the pull request open and its checks
 /// passing, the run writes a `pull_request` record with result `open` and a `ci_result` record
 /// with result `pass`, both about `implementation` at the pushed revision, and the decision
@@ -236,7 +243,7 @@ fn with_checks_passing_the_pull_request_and_the_ci_result_are_recorded_at_the_pu
     });
     let outcome = delivered(&tree, "pass", memory.clone());
     let head = git(&tree, &["rev-parse", "HEAD"]);
-    assert_eq!(outcome.stop, Stop::Iterations(2), "{}", outcome.text);
+    assert_eq!(outcome.stop, merge_waits(), "{}", outcome.text);
     assert_eq!(outcome.revision, head, "{}", outcome.text);
     assert!(
         outcome.text.contains("step 1: pr.open {}"),
@@ -1129,7 +1136,7 @@ fn adv_a_second_revision_pushes_again_and_opens_no_second_pull_request() {
         ..Memory::default()
     });
     let outcome = delivered(&tree, "adv-second", memory.clone());
-    assert_eq!(outcome.stop, Stop::Iterations(2), "{}", outcome.text);
+    assert_eq!(outcome.stop, merge_waits(), "{}", outcome.text);
     fs::write(tree.join("README.md"), "second\n").expect("a change");
     git(&tree, &["commit", "-q", "-am", "second"]);
     let second = git(&tree, &["rev-parse", "HEAD"]);
@@ -1222,7 +1229,7 @@ fn adv_a_closed_pull_request_at_a_second_revision_is_recorded_closed() {
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
     let text = String::from_utf8(out).expect("utf-8");
-    assert_eq!(stop, Stop::Iterations(2), "{text}");
+    assert_eq!(stop, merge_waits(), "{text}");
     assert!(text.contains("evidence: pull_request open"), "{text}");
     fs::write(tree.join("README.md"), "second\n").expect("a change");
     git(&tree, &["commit", "-q", "-am", "second"]);

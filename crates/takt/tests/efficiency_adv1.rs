@@ -416,3 +416,50 @@ fn adv_a_claim_whose_other_producer_is_blocked_by_an_input_calls_the_harness_at_
         "{text}"
     );
 }
+
+/// `takt.work.ChoiceEffect`: "a step whose choice records the case already holds asks for
+/// none". A choice action with no precondition, taken twice at one revision: the first step's
+/// effect is the choice effect's, answering the record it wrote; the second's case already
+/// holds that record, so the choice effect is asked for nothing, no record is written again,
+/// and the run sees no progress.
+#[test]
+fn a_choice_taken_again_with_its_record_held_asks_the_choice_effect_for_none() {
+    let yaml = "format: protocol/1\n\
+        protocol:\n  id: ack.twice\n  revision: 1\n\
+        artifacts:\n  implementation:\n    description: the code\n\
+        evidence_kinds:\n  ack:\n    description: the harness acknowledged\n  review:\n    description: a review of the code\n\
+        claims:\n  acked:\n    description: acknowledged\n    true_when:\n      evidence:\n        kind: ack\n        subject: implementation\n\
+        \x20 reviewed:\n    description: reviewed\n    true_when:\n      evidence:\n        kind: review\n        result: ok\n        subject: implementation\n\
+        actions:\n  implementation.edit:\n    description: change the code\n    effect: write\n\
+        \x20 ack.give:\n    description: acknowledge\n    effect: read\n    may_produce:\n      - evidence: ack\n\
+        \x20 review.write:\n    description: review the code\n    effect: write\n    may_produce:\n      - evidence: review\n\
+        outcomes:\n  accepted:\n    description: acknowledged and reviewed\n    requires:\n      all:\n        - claim: acked\n        - claim: reviewed\n";
+    let harness = Script::new(&[Move::Name("ack.give"), Move::Name("ack.give")]);
+    let (stop, text, case_dir) = run_protocol("ack-twice", yaml, &[], &harness);
+    assert_eq!(stop, Ok(Stop::NoProgress), "{text}");
+    let acks = records(&case_dir, "ack");
+    assert_eq!(acks.len(), 1, "one ack record: {acks:?}\n{text}");
+    assert_eq!(acks[0]["producer"], takt::run::CHOICE_PRODUCER, "{text}");
+    let observations: Vec<serde_json::Value> = serde_json::from_slice(
+        &fs::read(case_dir.join("observations.json")).expect("observations"),
+    )
+    .expect("observations parse");
+    let effects: Vec<String> = observations
+        .iter()
+        .filter(|observation| observation["source"] == "effect")
+        .map(|observation| observation["payload"].to_string())
+        .collect();
+    assert_eq!(
+        effects.len(),
+        2,
+        "two effect observations: {effects:?}\n{text}"
+    );
+    assert!(
+        effects[0].contains("\"records\"") && effects[0].contains("ack-"),
+        "the first step's effect is the choice effect's, naming its record: {effects:?}"
+    );
+    assert!(
+        !effects[1].contains("\"records\""),
+        "the second step asked the choice effect: {effects:?}"
+    );
+}

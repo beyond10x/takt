@@ -10,7 +10,7 @@ relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:declared-loops
 - informed_by: design:recursive-self-improvement
-revision: 8
+revision: 9
 ---
 # Design: continuous work and orchestration as a tree of takt cases
 
@@ -115,7 +115,7 @@ Exit codes ≥ 6 are registered in this section only; every other section and do
 | code | stop | status |
 |---|---|---|
 | 6 | `Waiting`: the run waited on the forge and its budget ended first; the next run resumes the case | built by story:ci-pending-waits (on the wave 08 branch at 200e15d, `crates/takt-cli/src/main.rs:203-204`) |
-| 7 | `Unperformable`: no step left moves an open obligation and the action that decides the claim has no performer | built; once the loop runs on loom-sdk (story:the-loop-is-run-until-blocked), a run whose budget (Hours, ActiveTime) has also run out exits 7, not 3 (approval-record:wave-33-loom-0-34-0) |
+| 7 | `Unperformable`: no step left moves an open obligation and the action that decides the claim has no performer | built; the check runs before each Loom step, so a run whose budget (Hours, ActiveTime) has also run out exits 7, not 3, as `ApprovalRequired` (exit 4) does where only a grant moves the case (approval-record:loop-pre-checks-ahead-of-loom) |
 | 8 | `DiskLow`: too little free disk before a step | built |
 | 9 | `Paused` | proposed, build step 7 (§ 11) |
 | 10 | `FrontierExhausted` (§ 3) | proposed, build step 7 (§ 11) |
