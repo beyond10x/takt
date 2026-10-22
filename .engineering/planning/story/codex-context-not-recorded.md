@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:codex-context-not-recorded
 kind: story
-status: draft
+status: implemented
 title: A Codex step's record does not name the context files it was given
 tags:
 - finding
@@ -10,7 +10,13 @@ tags:
 refs:
 - provider: finding
   reference: codex-context-not-recorded
-revision: 2
+relations:
+- serves: vision:safe-agentic-coding
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-22T00:17:24Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-22T00:17:24Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-22T01:29:47Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # A Codex step's record does not name the context files it was given
 
@@ -29,12 +35,14 @@ and may have been given different files.
 
 The predicate below runs one Codex step with a fake `codex` first on the `PATH` metaharness gives
 its child (as in `finding:codex-step-context`), then reads the `takt.prompt` records the run kept.
-The prompt text of a Codex step names no `AGENTS.md` (Codex is given no `@<path>` mention), so the
-defect is there when no `takt.prompt` record names `AGENTS.md`, and gone when one does.
+The defect is there when no `takt.prompt` record carries a context entry (`"channel":"user-prompt"`,
+metaharness's record form, keys sorted), and gone when one does. The first form of this predicate
+grepped the records for `AGENTS.md`; since story:codex-step-rereads-its-context the prompt text names
+the context files, so that form passed without the record and was changed in wave 31.
 
 ```expected_before
 scenario: 1
-command: mkdir -p "$HOME/.local/bin" && printf '#!/bin/sh\nprintf "%%s\\n" "$@" >> "%s/codex-argv"\n' "$HOME" > "$HOME/.local/bin/codex" && chmod +x "$HOME/.local/bin/codex" && git config user.name t && git config user.email t@example.invalid && XDG_STATE_HOME="$HOME/state" "$TAKT" run --repo . --intent "Remove a todo by its number" --harness codex --forge none --test-cmd ./check.sh --min-free-gib 0 --iterations 6 > "$HOME/run.log" 2>&1; test -s "$HOME/codex-argv" || { cat "$HOME/run.log"; echo "no codex child was started" >&2; exit 2; }; grep -rhs '"takt.prompt"' "$HOME/state/takt/transcripts" .engineering/cases > "$HOME/prompts"; test -s "$HOME/prompts" || { cat "$HOME/run.log"; echo "no takt.prompt record was kept" >&2; exit 2; }; grep -q "AGENTS.md" "$HOME/prompts" && exit 0; echo "a Codex step's prompt record names no context file" >&2; exit 9
+command: mkdir -p "$HOME/.local/bin" && printf '#!/bin/sh\nprintf "%%s\\n" "$@" >> "%s/codex-argv"\n' "$HOME" > "$HOME/.local/bin/codex" && chmod +x "$HOME/.local/bin/codex" && git config user.name t && git config user.email t@example.invalid && XDG_STATE_HOME="$HOME/state" "$TAKT" run --repo . --intent "Remove a todo by its number" --harness codex --forge none --test-cmd ./check.sh --min-free-gib 0 --iterations 6 > "$HOME/run.log" 2>&1; test -s "$HOME/codex-argv" || { cat "$HOME/run.log"; echo "no codex child was started" >&2; exit 2; }; grep -rhs '"takt.prompt"' "$HOME/state/takt/transcripts" .engineering/cases > "$HOME/prompts"; test -s "$HOME/prompts" || { cat "$HOME/run.log"; echo "no takt.prompt record was kept" >&2; exit 2; }; grep -q '"channel":"user-prompt"' "$HOME/prompts" && exit 0; echo "a Codex step's prompt record names no context file" >&2; exit 9
 exit: 9
 healthy_exit: 0
 output: a Codex step's prompt record names no context file

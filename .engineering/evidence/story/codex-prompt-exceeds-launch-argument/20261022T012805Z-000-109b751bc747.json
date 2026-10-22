@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-22T01:28:05Z",
+  "actor": "human:timo",
+  "artifact": "story:codex-prompt-exceeds-launch-argument",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check at 9110945 finished 2026-10-22T01:28:05Z: exit 0, 1666 passed, 0 failed, 5 ignored; the record before this one gives 00:00:00Z, a wrong instant for the same run"
+  }
+}

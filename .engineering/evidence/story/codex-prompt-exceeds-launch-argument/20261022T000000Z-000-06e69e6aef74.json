@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-22T00:00:00Z",
+  "actor": "human:timo",
+  "artifact": "story:codex-prompt-exceeds-launch-argument",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check at 9110945: exit 0, 1666 passed, 0 failed, 5 ignored; a_long_intent_leaves_out_context_files_and_the_session_starts and a_codex_steps_context_fits_its_argument_to_the_byte green"
+  }
+}

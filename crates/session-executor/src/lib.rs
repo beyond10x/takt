@@ -301,6 +301,34 @@ impl SessionExecutor {
         self.last.borrow().clone()
     }
 
+    /// The argument a `Kind::Codex` session's child is given its prompt in, were `brief` its
+    /// brief and `files` its context files: the execution context metaharness states ahead of
+    /// everything for this executor's run, then the files' block and the brief, as
+    /// metaharness's Codex adapter composes it (`with_agent_execution_context` over
+    /// `with_context_files`, metaharness-codex 0.11.0 `src/launch.rs:733-735`) and compares
+    /// with `ARGUMENT_BYTES_MAX` before the child starts; the brief alone after the execution
+    /// context for no files. The brief is a parameter so a caller whose brief depends on which
+    /// files it is given can measure each candidate pair. None for an executor of another
+    /// kind, whose prompt reaches its child otherwise.
+    #[must_use]
+    pub fn codex_prompt_argument(
+        &self,
+        brief: &str,
+        files: &[metaharness::protocol::DeclaredContextFile],
+    ) -> Option<String> {
+        if self.kind != Kind::Codex {
+            return None;
+        }
+        // The copy is declared as the working directory; the execution context reads only
+        // that one is, so the workspace stands in for it here.
+        let spec = self.spec(&self.workspace).ok()?;
+        Some(
+            spec.with_agent_execution_context(&metaharness::protocol::with_context_files(
+                brief, files,
+            )),
+        )
+    }
+
     /// The run metaharness is asked for, by kind: Claude Code `Strict` with every call decided
     /// here; Codex `On` with every call decided here (its strict floor fails on four rows its
     /// opening record does not carry, H1a, H1b, H4 and H5, which metaharness cannot decide for
@@ -1982,6 +2010,46 @@ mod tests {
                 "{kind:?}"
             );
         }
+    }
+
+    /// [`SessionExecutor::codex_prompt_argument`] is the argument a Codex session's child is
+    /// started with, byte for byte, with no context file and with one; an executor of another
+    /// kind composes none.
+    #[test]
+    fn the_codex_prompt_argument_is_the_one_the_child_is_given() {
+        use metaharness::protocol::DeclaredContextFile;
+        let scratch = Scratch::new("codex-argument");
+        let tree = scratch.0.join("tree");
+        std::fs::create_dir_all(&tree).expect("the tree");
+        let agents = b"# Agents\n\nRun the tests.\n";
+        std::fs::write(tree.join("AGENTS.md"), agents).expect("a file");
+        git(&tree, &["init", "-q", "-b", "main"]);
+        git(&tree, &["add", "-A"]);
+        git(&tree, &["commit", "-q", "-m", "start"]);
+        for context in [Vec::new(), vec!["AGENTS.md".to_owned()]] {
+            let plans = Plans::default();
+            let mut executor = SessionExecutor::new(&tree, vec!["AGENTS.md".to_owned()], "brief\n")
+                .of_kind(Kind::Codex)
+                .with_runner(Box::new(Recording(std::rc::Rc::clone(&plans))));
+            executor.credentials = CredentialSource::None;
+            executor.scratch = scratch.0.join("scratch");
+            executor.context.clone_from(&context);
+            let files: Vec<DeclaredContextFile> = context
+                .iter()
+                .map(|path| DeclaredContextFile::new(path.clone(), agents.to_vec()).expect("text"))
+                .collect();
+            let composed = executor
+                .codex_prompt_argument("brief\n", &files)
+                .expect("a Codex run");
+            assert!(composed.ends_with("\n\nbrief\n"), "{composed}");
+            let mut report = SessionReport::default();
+            let _ = executor.session(&mut report);
+            let plans = plans.borrow();
+            assert_eq!(plans.len(), 1, "one child: {:?}", report.error);
+            assert_eq!(plans[0].last(), Some(&composed), "{context:?}");
+        }
+        let claude = SessionExecutor::new(&tree, Vec::new(), "brief\n");
+        assert_eq!(claude.codex_prompt_argument("brief\n", &[]), None);
     }
 
     /// Set in the child [`a_claude_session_metaharness_spawns_starts_with_auto_memory_off`]
