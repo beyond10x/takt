@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-loop-is-run-until-blocked
 kind: story
-status: active
+status: implemented
 title: takt run drives the case with run_until_blocked, and every stop keeps its exit code
 summary: Composite executor (due validator first, else harness); stop and exit code derived from LoopEnd; no corpus regression
 tags:
@@ -11,10 +11,11 @@ relations:
 - decomposes: epic:takt-on-loom-sdk
 - serves: vision:safe-agentic-coding
 - depends_on: story:validators-perform-as-effects
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-21T17:16:13Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-21T17:16:13Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-22T16:09:54Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: the-loop-is-run-until-blocked
 
