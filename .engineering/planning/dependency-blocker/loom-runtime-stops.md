@@ -2,14 +2,16 @@
 format: aep.planning-md/3
 id: dependency-blocker:loom-runtime-stops
 kind: dependency-blocker
-status: open
+status: cleared
 title: 'Loom''s run_until_blocked cannot end a run where takt''s loop ends it (0.33.0: the low-disk stop comes before approval)'
 summary: approval gate, idle bound, token and time budgets, pending requests, completion
 tags:
 - loom
 relations:
 - blocks: story:the-loop-is-run-until-blocked
-revision: 9
+revision: 11
+transitions:
+- {from: "open", to: "cleared", at: "2026-10-22T12:24:54Z", actor: "human:timo", revision: 11}
 ---
 # Blocker: Loom's run_until_blocked cannot end a run where takt's loop ends it
 
@@ -69,3 +71,20 @@ mount/workdir and several apertures".
 Option A: this blocker stays open until a Loom release asks `host_stop` only when a step follows
 the admissibility and authority checks. Option B, not taken: accept exit 8 where takt gives 4 and
 land the loop story on 0.33.0.
+
+## Against Loom 0.34.0 (2026-10-22)
+
+Read at tag `0.34.0` (8cfac2cc); `rt` is `crates/loom-commission/src/runtime.rs`. Read, not probed.
+
+| gap | 0.34.0 | how takt gets its behaviour |
+|---|---|---|
+| C, ActiveTime | closed, as on 0.33.0 (`rt:553-561`, `1528-1537`, `1738-1745`, `1609`) | unchanged |
+| DiskLow | closed: `host_stop` is asked only when the handed frontier admits an action without a grant (`rt:1738`, `3645`); otherwise the host is asked just before a granted effect (`rt:1913`) | the composite executor proposes the gated action without a harness call, so `crates/takt/tests/free_disk.rs:529` holds |
+| order of Hours and Unperformable | Loom checks `NoPerformableAction` (`rt:1594`) before the deadline (`rt:1740`) | option A below: exit 7 where takt gave 3 when both hold |
+| `--tokens 0` | no token check before step 1 (`rt:1528-1531`) | takt stops before `run_until_blocked` when the token budget is spent, as `crates/takt/src/run.rs:8621-8624` does |
+
+## Decision on 0.34.0 (2026-10-22)
+
+The orchestrator, under the owner's delegation, chose option A for the order of Hours and
+Unperformable, with two conditions; approval-record:wave-33-loom-0-34-0 quotes it. Cleared: the
+`host_stop` order this blocker waited on ships in 0.34.0.
