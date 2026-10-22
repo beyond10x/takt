@@ -9,9 +9,9 @@ tags:
 - loom
 relations:
 - blocks: story:harness-child-confined
-revision: 4
+revision: 5
 ---
-# Blocker: Loom 0.32.0 confines a child only to its end
+# Blocker: Loom confines a child only partly as takt needs
 
 story:harness-child-confined runs the harness session, git, the bot-route forge and `aep` under a Substrate profile through loom-sdk. The two gaps its body names are closed in Loom 0.32.0 (tag `0.32.0`, a238395b): loom-sdk exports `ChildCommand` (`crates/loom-sdk/src/lib.rs:84`), `SubstrateRunner::run_child` runs one (`crates/loom-intake-slice/src/confinement.rs:424`), and a child can reach one named egress aperture (`with_egress`, `:763`; one aperture per run, `:659`). `run_child` runs a child to its end and returns its result, which leaves five gaps. Paths below are in `crates/loom-intake-slice/src/` at 0.32.0 unless named otherwise.
 
@@ -39,7 +39,7 @@ Read at tag `0.33.0` (3d56bca9); C is `crates/loom-intake-slice/src/confinement.
 | G3 | mostly closed: `run_child` keeps each stream apart up to 1 MiB, flagged when cut (C:63-67, 2431); `spawn_child` frames are tagged by stream (CH:22-27) | output over 1 MiB is read live |
 | G4 | closed: `with_read_only_root` (C:1074), `with_read_only_file` (C:1095), `at_host_path` (C:1113) | none |
 | G5 | reads only: a host path resolves read-only (`at_host_path`, `sandbox_path`, C:1113, 1336); a child starts in `/workspace` and writes only there (C:974-976) | the harness session's working directory, its decision channel and config home, and a linked worktree's common git directory cannot be written |
-| aperture | open: one aperture per run (C:966) | the bot route mints a token at `api.github.com` and pushes to `github.com` (gates source at `main`, `src/delivery.rs:122-198`), so one push needs two hosts |
+| aperture | open: one aperture per run (C:966) | the bot route mints a token at `api.github.com` and pushes to `github.com` (gates at `main` e5fe0e5, `src/delivery.rs:461`, `:554`), so one push needs two hosts |
 
 On 0.33.0: `aep` can be confined; git can be confined where `.git` is inside the workspace; the
 forge and the harness session cannot.
@@ -55,7 +55,5 @@ contract (4 -> 8, crates/takt/tests/free_disk.rs:509-528) and leaves confinement
 Loom 0.34.0 carries the host_stop ordering; a substrate session now builds the writable
 mount/workdir and several apertures".
 
-Option A: this blocker stays open until a Loom release asks `host_stop` only when a step follows
-the admissibility and authority checks, and gives a child a writable mount or working directory
-outside `/workspace` and more than one egress aperture per run. Option B, not taken: accept exit 8
-where takt gives 4 and land the loop story on 0.33.0.
+Option A: this blocker stays open until a Loom release gives a child a writable mount or working
+directory outside `/workspace` and more than one egress aperture per run.
