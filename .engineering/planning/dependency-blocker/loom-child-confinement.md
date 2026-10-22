@@ -9,7 +9,7 @@ tags:
 - loom
 relations:
 - blocks: story:harness-child-confined
-revision: 5
+revision: 6
 ---
 # Blocker: Loom confines a child only partly as takt needs
 
@@ -39,7 +39,7 @@ Read at tag `0.33.0` (3d56bca9); C is `crates/loom-intake-slice/src/confinement.
 | G3 | mostly closed: `run_child` keeps each stream apart up to 1 MiB, flagged when cut (C:63-67, 2431); `spawn_child` frames are tagged by stream (CH:22-27) | output over 1 MiB is read live |
 | G4 | closed: `with_read_only_root` (C:1074), `with_read_only_file` (C:1095), `at_host_path` (C:1113) | none |
 | G5 | reads only: a host path resolves read-only (`at_host_path`, `sandbox_path`, C:1113, 1336); a child starts in `/workspace` and writes only there (C:974-976) | the harness session's working directory, its decision channel and config home, and a linked worktree's common git directory cannot be written |
-| aperture | open: one aperture per run (C:966) | the bot route mints a token at `api.github.com` and pushes to `github.com` (gates at `main` e5fe0e5, `src/delivery.rs:461`, `:554`), so one push needs two hosts |
+| aperture | open: one aperture per run (C:966) | the bot route mints a token at `api.github.com` and pushes to `github.com` (gates at `main` e5fe0e5, `src/delivery.rs:461`, `:907-913`), so one push needs two hosts |
 
 On 0.33.0: `aep` can be confined; git can be confined where `.git` is inside the workspace; the
 forge and the harness session cannot.
