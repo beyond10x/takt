@@ -3,13 +3,13 @@ format: aep.planning-md/3
 id: dependency-blocker:loom-runtime-stops
 kind: dependency-blocker
 status: open
-title: 'Loom''s run_until_blocked cannot end a run where takt''s loop ends it (0.32.0: C open, E settled)'
+title: 'Loom''s run_until_blocked cannot end a run where takt''s loop ends it (0.33.0: the low-disk stop comes before approval)'
 summary: approval gate, idle bound, token and time budgets, pending requests, completion
 tags:
 - loom
 relations:
 - blocks: story:the-loop-is-run-until-blocked
-revision: 5
+revision: 8
 ---
 # Blocker: Loom 0.31.0's run_until_blocked cannot end a run where takt's loop ends it
 
@@ -42,3 +42,31 @@ Read at tag `0.32.0` (a238395b); paths in `crates/loom-commission/src/` unless n
 Outside A–E, needed for acceptance 2: `ActiveTime` (wall time less forge pauses) has no Loom limit (`max_duration_ms` over reported durations is near it if the executor reports wall time), and `DiskLow` has no Loom stop. Both read.
 
 Clearing this for 0.32.0: no. It needs C's per-limit breach choice and a stop for `ActiveTime` and `DiskLow`. E is settled by approval-record:completion-order-first-declared.
+
+## Against Loom 0.33.0 (2026-10-22)
+
+Read at tag `0.33.0` (3d56bca9); `rt` is `crates/loom-commission/src/runtime.rs`. Read, not probed.
+
+| gap | 0.33.0 | how takt gets its behaviour |
+|---|---|---|
+| C | closed: `StopPolicy.breach_by_limit` (`rt:1546-1563`, `3308-3322`); a kept breach stops the run at the top of the next iteration, after the completion check (`rt:1321-1345`, `1374-1379`) | `[{MaxTokens, KeepStep}, {Deadline, DiscardStep}]`; Loom breaches above the limit (`rt:3216`) and takt at it, so takt passes `max_tokens = t - 1`; reverting a discarded step's files stays takt's (`crates/takt/src/run.rs:10389`) |
+| ActiveTime | closed: `LoopContext::host_stop` is asked before every executor call and before a pending request is invoked again (`rt:532`, `1402-1404`, `1527-1529`) | `--active-seconds` (`crates/takt-cli/src/main.rs:619-625`) as `HostStop "ActiveTime"`, the forge-wait total shared between the effect port and the context; `--hours` is `RunBudget.deadline` |
+| DiskLow | the check closed, the order open: `host_stop` is asked before the executor call (`rt:1527`), while with `approval_gate: false` approval arrives as `NeedsAuthority` after a proposal and `NoAdmissibleAction` after the call | takt checks low disk after ApprovalRequired, NothingAdmissible and Unperformable (`run.rs:10006-10019`); on 0.33.0 a case that only a grant can move ends DiskLow (exit 8) where takt ends ApprovalRequired (exit 4), against `crates/takt/tests/free_disk.rs:509-528` |
+| order of Hours and Unperformable | Loom checks NoPerformableAction before the deadline and the host stop (`rt:1386-1390`, `1527`) | takt checks Hours and ActiveTime first (`run.rs:9812`, `9995`): exit 3 against Loom's exit 7 when both hold; whether a test pins it is not read |
+| `--tokens 0` | no token check before a step | takt stops before any step (`run.rs:8621-8624`); with Loom one step runs |
+
+Clearing this for 0.33.0: no. It needs Loom to ask `host_stop` only when a step would follow
+the admissibility and authority checks, or the owner's decision to accept exit 8 where takt
+gives 4 (a change to the documented exit order).
+
+## Decision on 0.33.0 (2026-10-22)
+
+The orchestrator, under the owner's delegation: "A, taken now. Reason: B changes takt's exit
+contract (4 -> 8, crates/takt/tests/free_disk.rs:509-528) and leaves confinement blocked. ...
+Loom 0.34.0 carries the host_stop ordering; a substrate session now builds the writable
+mount/workdir and several apertures".
+
+Option A: this blocker stays open until a Loom release asks `host_stop` only when a step follows
+the admissibility and authority checks, and gives a child a writable mount or working directory
+outside `/workspace` and more than one egress aperture per run. Option B, not taken: accept exit 8
+where takt gives 4 and land the loop story on 0.33.0.

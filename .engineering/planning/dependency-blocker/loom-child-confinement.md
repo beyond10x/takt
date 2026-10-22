@@ -3,13 +3,13 @@ format: aep.planning-md/3
 id: dependency-blocker:loom-child-confinement
 kind: dependency-blocker
 status: open
-title: Loom 0.32.0 confines a child only to its end (gaps G1-G5)
+title: Loom 0.33.0 confines a child but writes only in /workspace, with one aperture per run
 summary: live child, standard input, whole output, read-only roots, host paths
 tags:
 - loom
 relations:
 - blocks: story:harness-child-confined
-revision: 1
+revision: 4
 ---
 # Blocker: Loom 0.32.0 confines a child only to its end
 
@@ -26,3 +26,36 @@ story:harness-child-confined runs the harness session, git, the bot-route forge 
 Not known: whether one bot-route push reaches both `api.github.com` and `github.com`, which matters while a run has one aperture.
 
 Clearing this needs a Loom release that confines a live child (G1) with standard input (G2), both output streams whole (G3), read-only roots (G4) and host paths kept or mapped (G5). takt builds no substitute (`epic:takt-on-loom-sdk` § Out of scope).
+
+## Against Loom 0.33.0 (2026-10-22)
+
+Read at tag `0.33.0` (3d56bca9); C is `crates/loom-intake-slice/src/confinement.rs`, CH is
+`crates/loom-intake-slice/src/confinement/child.rs`. Read, not probed.
+
+| gap | 0.33.0 | what is left |
+|---|---|---|
+| G1 | closed: `spawn_child` (C:490); `write_stdin`, `read`, `signal`, `wait` (CH:195, 211, 220, 241) | a child is ended when 16 queued output frames go unread for 1 s (CH:113-115); a driver for another aperture or directory is refused while a launch runs (C:98-101), so every driver opens before the harness child starts |
+| G2 | closed with a cap: `with_stdin` for `run_child` (C:1246); a live child takes 16 MiB of input over its life, in 64 KiB frames (CH:191-194, C:1011) | git's `cat-file --batch` reader (`crates/takt/src/git.rs:629-650`) is reopened before 16 MiB |
+| G3 | mostly closed: `run_child` keeps each stream apart up to 1 MiB, flagged when cut (C:63-67, 2431); `spawn_child` frames are tagged by stream (CH:22-27) | output over 1 MiB is read live |
+| G4 | closed: `with_read_only_root` (C:1074), `with_read_only_file` (C:1095), `at_host_path` (C:1113) | none |
+| G5 | reads only: a host path resolves read-only (`at_host_path`, `sandbox_path`, C:1113, 1336); a child starts in `/workspace` and writes only there (C:974-976) | the harness session's working directory, its decision channel and config home, and a linked worktree's common git directory cannot be written |
+| aperture | open: one aperture per run (C:966) | the bot route mints a token at `api.github.com` and pushes to `github.com` (gates source at `main`, `src/delivery.rs:122-198`), so one push needs two hosts |
+
+On 0.33.0: `aep` can be confined; git can be confined where `.git` is inside the workspace; the
+forge and the harness session cannot.
+
+Clearing this for 0.33.0: no. It needs a writable mount or working directory outside
+`/workspace` (G5 writes) and more than one egress aperture per run, or the owner's decision to
+confine only `aep` and git first.
+
+## Decision on 0.33.0 (2026-10-22)
+
+The orchestrator, under the owner's delegation: "A, taken now. Reason: B changes takt's exit
+contract (4 -> 8, crates/takt/tests/free_disk.rs:509-528) and leaves confinement blocked. ...
+Loom 0.34.0 carries the host_stop ordering; a substrate session now builds the writable
+mount/workdir and several apertures".
+
+Option A: this blocker stays open until a Loom release asks `host_stop` only when a step follows
+the admissibility and authority checks, and gives a child a writable mount or working directory
+outside `/workspace` and more than one egress aperture per run. Option B, not taken: accept exit 8
+where takt gives 4 and land the loop story on 0.33.0.
