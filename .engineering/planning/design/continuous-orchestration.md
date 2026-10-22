@@ -10,7 +10,7 @@ relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:declared-loops
 - informed_by: design:recursive-self-improvement
-revision: 6
+revision: 7
 ---
 # Design: continuous work and orchestration as a tree of takt cases
 
@@ -80,7 +80,7 @@ stop planning   when buffer ≥ 1.5 × remaining, or one wave is planned ahead
 
 Before the first per-story figure exists, the rule is "fewer than 2 ready". One wave ahead is the
 cap, so planning does not run ahead of what the next delivery will invalidate. If no epic
-qualifies (§ 2 pick), the run stops with `FrontierExhausted` and exits 8 (§ 5). It does not invent
+qualifies (§ 2 pick), the run stops with `FrontierExhausted` and exits 10 (§ 5). It does not invent
 work.
 
 ## 4. Steering
@@ -105,7 +105,7 @@ evidence writes bump it.
 - `takt pause --repo <path> [--at step|unit]` writes `control.yaml` into the root case directory
   (§ 6). The cases directory is already protected from harness writes (`run.rs:570-578`).
 - The dispatcher reads it before each pick; a story case reads it before each step. Both stop with
-  `Paused`, exit 7.
+  `Paused`, exit 9.
 - SIGTERM: a handler sets the same pause flag, read at step boundaries; nothing is forwarded to the
   harness child (`harness.rs:170-185` runs it with `command.output()` and no handler today).
 - Resume is `takt run` again: open cases resume (`main.rs:982` test, "frontier: resumed ...").
@@ -115,8 +115,10 @@ Exit codes ≥ 6 are registered in this section only; every other section and do
 | code | stop | status |
 |---|---|---|
 | 6 | `Waiting`: the run waited on the forge and its budget ended first; the next run resumes the case | built by story:ci-pending-waits (on the wave 08 branch at 200e15d, `crates/takt-cli/src/main.rs:203-204`) |
-| 7 | `Paused` | proposed, build step 7 (§ 11) |
-| 8 | `FrontierExhausted` (§ 3) | proposed, build step 7 (§ 11) |
+| 7 | `Unperformable`: no step left moves an open obligation and the action that decides the claim has no performer; where a budget (Hours, ActiveTime) has also run out, Loom reports this first (`run_until_blocked` checks it before the deadline and the host stop), so such a run exits 7, not 3 | built; the order from wave 33 (approval-record:wave-33-loom-0-34-0) |
+| 8 | `DiskLow`: too little free disk before a step | built |
+| 9 | `Paused` | proposed, build step 7 (§ 11) |
+| 10 | `FrontierExhausted` (§ 3) | proposed, build step 7 (§ 11) |
 
 ## 6. Every loop is a case, and dispatch is an action
 
@@ -226,7 +228,7 @@ against qualities 1 (secure) and 4 (deterministic).
 | 4 | `wave.delivery/1` with parallel `story.delivery/1` children on an integration branch; the `integrated` outcome (O7) | 3 |
 | 5 | roles as harness profiles; per-action write-path allow-list; `review.panel/1` | 2; story:second-harness-adapter for mixed harnesses |
 | 6 | `plan.refill/1`, digest-pinned proposals, the low-water mark, `rank:NN` ordering | 3; O6 for agent-granted planning merges |
-| 7 | `takt pause`, SIGTERM handler; stops `Paused` (7), `FrontierExhausted` (8), `UnitWithdrawn` (3); codes as registered in § 5 | 2 |
+| 7 | `takt pause`, SIGTERM handler; stops `Paused` (9), `FrontierExhausted` (10), `UnitWithdrawn` (3); codes as registered in § 5 | 2 |
 | 8 | the root across repositories | 4, 5, 6 (PRD § 6) |
 
 Steps 1 to 4 earn the PRD success row "wave delivery through takt".
