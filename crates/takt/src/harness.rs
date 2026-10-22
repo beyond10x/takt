@@ -417,11 +417,13 @@ impl Harness for SessionHarness {
         let started_at = crate::events::instant();
         let scan = crate::run::ChangeScan::from_env();
         let rule = ClaudeCode::rule_of(self.kind);
-        // The step's prompt were it given `files` as context files. It names none yet; it is
-        // a function of them so the bound below measures the prompt as finally composed, and
-        // a prompt that comes to depend on which files fit is measured with each list tried.
-        let prompt_for =
-            |_files: &[DeclaredContextFile]| ClaudeCode::prompt_with(context, rule, scan.as_ref());
+        // The step's prompt were it given `files` as context files, which its Codex prompt
+        // names: the bound below measures the prompt so composed for each list tried, the line
+        // naming the files included, so the prompt the step is given is one measured whole.
+        let prompt_for = |files: &[DeclaredContextFile]| {
+            let paths: Vec<String> = files.iter().map(|file| file.path().to_owned()).collect();
+            ClaudeCode::prompt_with(context, rule, scan.as_ref(), &paths)
+        };
         let mut executor =
             session_executor::SessionExecutor::new(context.tree, Vec::new(), String::new())
                 .of_kind(self.kind)
@@ -1052,6 +1054,9 @@ struct Rule {
     /// Whether it reads `@<path>` in the prompt as a file attached before its first request,
     /// as Claude Code does: only then does the prompt name the scope files ([`scope_files`]).
     mentions: bool,
+    /// The rules naming its tools when its session is given context files
+    /// ([`context_files`]), which the prompt then names: Codex's.
+    given_tools: Option<&'static str>,
 }
 
 /// The meaning of each action the prompt explains: the adapter's own words for the actions it
@@ -1108,6 +1113,7 @@ impl ClaudeCode {
             context,
             Self::CLAUDE_RULE,
             crate::run::ChangeScan::from_env().as_ref(),
+            &[],
         )
     }
 
@@ -1121,22 +1127,32 @@ impl ClaudeCode {
          apply_patch, inside this directory. Run no build, test or other command that writes; \
          takt runs the tests and records the evidence.";
 
+    /// How Codex works in the step when its session is given context files: as
+    /// [`Self::SHELL_RULE`], but it reads with shell commands only the files it was not given.
+    const SHELL_RULE_GIVEN: &str = "read any other file of this directory with shell commands \
+         that change nothing (cat, sed -n, rg, ls, git status, git diff) and change files only \
+         with apply_patch, inside this directory. Run no build, test or other command that \
+         writes; takt runs the tests and records the evidence.";
+
     /// Claude Code's rule: file tools, and a `@<path>` in the prompt is a file it attaches.
     const CLAUDE_RULE: Rule = Rule {
         tools: Self::FILE_TOOLS_RULE,
         mentions: true,
+        given_tools: None,
     };
 
     /// b10x-harness's rule: file tools, and no file mentions.
     const B10X_RULE: Rule = Rule {
         tools: Self::FILE_TOOLS_RULE,
         mentions: false,
+        given_tools: None,
     };
 
-    /// Codex's rule: a shell and `apply_patch`, and no file mentions.
+    /// Codex's rule: a shell and `apply_patch`, no file mentions, and context files named.
     const CODEX_RULE: Rule = Rule {
         tools: Self::SHELL_RULE,
         mentions: false,
+        given_tools: Some(Self::SHELL_RULE_GIVEN),
     };
 
     /// The rule of the harness of `kind` ([`Rule`]).
@@ -1151,11 +1167,15 @@ impl ClaudeCode {
     /// The prompt, its rules naming the tools of the harness that takes the step (`rule`), and,
     /// for a harness whose rule takes file mentions, its scope files ([`scope_files`]) scanned
     /// under `scan`: each attached as an unquoted, relative mention after white space, on one
-    /// line after the intent. Everything else the same for every harness.
+    /// line after the intent. For a harness whose rule names context files, the context files
+    /// its session is given (`given`, [`context_files`]), when there are any: each named once,
+    /// on one line after the intent, and its rules then read only the other files. Everything
+    /// else the same for every harness.
     fn prompt_with(
         context: &StepContext<'_>,
         rule: Rule,
         scan: Option<&crate::run::ChangeScan>,
+        given: &[String],
     ) -> String {
         let mut text = String::new();
         text.push_str("You are the judgement step of a governed engineering run (takt).\n\n");
@@ -1177,6 +1197,13 @@ impl ClaudeCode {
                 text.push_str(&format!(" @{path}"));
             }
             text.push_str("\n\n");
+        }
+        let given_tools = rule.given_tools.filter(|_| !given.is_empty());
+        if given_tools.is_some() {
+            text.push_str(&format!(
+                "Files in scope, given above in full: {}; do not read them again.\n\n",
+                given.join(", ")
+            ));
         }
         text.push_str(&format!(
             "Protocol: {}. Step {}.\n\n",
@@ -1209,7 +1236,7 @@ impl ClaudeCode {
                 text.push_str(&format!("- {action}\n"));
             }
         }
-        text.push_str(&format!("\nRules: {}", rule.tools));
+        text.push_str(&format!("\nRules: {}", given_tools.unwrap_or(rule.tools)));
         text.push_str(
             " Do not commit. If the action \
              you pick is `repository.inspect`, change no file. If it is `tests.write`, change test \
@@ -2369,7 +2396,7 @@ mod tests {
         committed(&dir.0, &[TODO, TESTS]);
         let intent = scoped(&["todo.py", "tests/test_todo.py"]);
         let prompt = in_context(&dir.0, &intent, |context| {
-            ClaudeCode::prompt_with(context, ClaudeCode::CLAUDE_RULE, None)
+            ClaudeCode::prompt_with(context, ClaudeCode::CLAUDE_RULE, None, &[])
         });
         let expected = format!(
             "Intent: {intent}\n\nFiles in scope, attached: @todo.py @tests/test_todo.py\n\n\
@@ -2377,7 +2404,7 @@ mod tests {
         );
         assert!(prompt.contains(&expected), "{prompt}");
         let plain = in_context(&dir.0, "Remove a todo", |context| {
-            ClaudeCode::prompt_with(context, ClaudeCode::CLAUDE_RULE, None)
+            ClaudeCode::prompt_with(context, ClaudeCode::CLAUDE_RULE, None, &[])
         });
         assert!(!plain.contains("Files in scope"), "{plain}");
         assert!(
@@ -2470,6 +2497,16 @@ mod tests {
             .collect()
     }
 
+    /// The paths a prompt's "given above in full" line names, in order; none without one.
+    fn given_in_prompt(prompt: &str) -> Vec<String> {
+        prompt
+            .lines()
+            .find_map(|line| line.strip_prefix("Files in scope, given above in full: "))
+            .and_then(|rest| rest.strip_suffix("; do not read them again."))
+            .map(|paths| paths.split(", ").map(str::to_owned).collect())
+            .unwrap_or_default()
+    }
+
     const AGENTS: (&str, &[u8]) = ("AGENTS.md", b"# Agents\n\nRun the tests with make.\n");
 
     /// The paths [`context_files`] gives a Codex step in `tree` for `intent`, with no scan and
@@ -2482,8 +2519,8 @@ mod tests {
     }
 
     /// A Codex step's session is given `AGENTS.md` and then the intent's scope files as context
-    /// files, in that order and each once; its prompt is the one it was given before, with no
-    /// mention line.
+    /// files, in that order and each once; its prompt names them, each once, on one line after
+    /// the intent, and its rule reads only the other files with shell commands.
     #[test]
     fn a_codex_step_is_given_agents_md_and_the_scope_files_as_context() {
         let dir = scratch("context-codex");
@@ -2491,18 +2528,88 @@ mod tests {
         let intent = scoped(&["todo.py", "tests/test_todo.py", "AGENTS.md", "todo.py"]);
         let (prompt, launched) = session_launch(Kind::Codex, &dir.0, &intent);
         assert_eq!(launched.len(), 1, "one child: {launched:?}");
+        let given = context_paths(&launched[0]);
         assert_eq!(
-            context_paths(&launched[0]),
+            given,
             ["AGENTS.md", "todo.py", "tests/test_todo.py"],
             "{:?}",
             launched[0]
         );
-        assert!(!prompt.contains("Files in scope"), "{prompt}");
         assert!(!prompt.contains("<context-file"), "{prompt}");
+        let line = "Files in scope, given above in full: AGENTS.md, todo.py, \
+                    tests/test_todo.py; do not read them again.";
         assert!(
-            prompt.contains(&format!("Intent: {intent}\n\nProtocol: ")),
+            prompt.contains(&format!("Intent: {intent}\n\n{line}\n\nProtocol: ")),
             "{prompt}"
         );
+        assert_eq!(prompt.matches("Files in scope").count(), 1, "{prompt}");
+        let named: Vec<&str> = line
+            .strip_prefix("Files in scope, given above in full: ")
+            .and_then(|rest| rest.strip_suffix("; do not read them again."))
+            .expect("the line's paths")
+            .split(", ")
+            .collect();
+        assert_eq!(named, given);
+        assert!(
+            prompt.contains(
+                "Rules: read any other file of this directory with shell commands that change \
+                 nothing (cat, sed -n, rg, ls, git status, git diff) and change files only with \
+                 apply_patch, inside this directory."
+            ),
+            "{prompt}"
+        );
+        assert!(
+            !prompt.contains("read the files of this directory"),
+            "{prompt}"
+        );
+    }
+
+    /// A step given no context files has the prompt it had before Codex's were named: Codex's
+    /// with none to give, Claude Code's with its mention line, b10x-harness's, and Claude Code's
+    /// own adapter's, each byte for byte.
+    #[test]
+    fn a_prompt_with_no_context_files_is_as_before() {
+        let dir = scratch("context-none");
+        committed(&dir.0, &[AGENTS, TODO, TESTS]);
+        let intent = scoped(&["todo.py", "tests/test_todo.py"]);
+        let bare = scratch("context-none-bare");
+        committed(&bare.0, &[TODO]);
+        let prompts = [
+            session_prompt(Kind::Codex, &bare.0, "Remove a todo"),
+            session_prompt(Kind::Claude, &dir.0, &intent),
+            session_prompt(Kind::B10x, &dir.0, &intent),
+            in_context(&dir.0, &intent, ClaudeCode::prompt),
+        ];
+        let head = "You are the judgement step of a governed engineering run (takt).\n\nIntent: ";
+        let scope = "Remove a todo by its number\n\n## Scope\n\n\
+                     - `todo.py` (a `remove` command)\n\
+                     - `tests/test_todo.py` (a `remove` command)\n\n\n";
+        let mention = "Files in scope, attached: @todo.py @tests/test_todo.py\n\n";
+        let body = "Protocol: story.delivery/1. Step 1.\n\nClaims right now:\n\n\
+                    Open obligations:\n\n\
+                    The change this case has made so far: no change has been made yet.\n\n\
+                    You may perform exactly ONE of these actions now, nothing else:\n\
+                    - tests.write: add or change test files only (paths under tests/ or test/, \
+                    or named *_test.*, test_*.*, *.test.*, *.spec.*)\n\nRules: ";
+        let shell = "read the files of this directory with shell commands that change nothing \
+                     (cat, sed -n, rg, ls, git status, git diff) and change files only with \
+                     apply_patch, inside this directory. Run no build, test or other command \
+                     that writes; takt runs the tests and records the evidence.";
+        let file_tools = "use only your file tools (read, edit, write) inside this directory. \
+                          Do not run commands; takt runs the tests and records the evidence.";
+        let tail = " Do not commit. If the action you pick is `repository.inspect`, change no \
+                    file. If it is `tests.write`, change test files only. Keep the change \
+                    minimal and complete for the action.\n\n\
+                    When done, end your reply with exactly one line of JSON and nothing after \
+                    it:\n{\"action\": \"<one of the offered ids>\", \
+                    \"summary\": \"<one line on what you did>\"}\n";
+        let expected = [
+            format!("{head}Remove a todo\n\n{body}{shell}{tail}"),
+            format!("{head}{scope}{mention}{body}{file_tools}{tail}"),
+            format!("{head}{scope}{body}{file_tools}{tail}"),
+            format!("{head}{scope}{mention}{body}{file_tools}{tail}"),
+        ];
+        assert_eq!(prompts, expected);
     }
 
     /// A tree with no `AGENTS.md`, and one whose `AGENTS.md` git does not track, give a Codex
@@ -2712,6 +2819,11 @@ mod tests {
             given.first().map(String::as_str) == Some("AGENTS.md") && given.len() < all.len(),
             "{given:?}"
         );
+        assert_eq!(
+            given_in_prompt(&prompt),
+            given,
+            "the prompt names the files given"
+        );
         assert!(
             given.iter().all(|path| all.contains(path))
                 && given
@@ -2746,6 +2858,17 @@ mod tests {
             line["context"],
             serde_json::json!([entry(AGENTS), entry(TODO)]),
             "{line}"
+        );
+        let recorded: Vec<String> = line["context"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|file| file["path"].as_str().map(str::to_owned))
+            .collect();
+        assert_eq!(
+            given_in_prompt(line["prompt"].as_str().unwrap_or_default()),
+            recorded,
+            "the prompt names the files the record lists"
         );
         for kind in [Kind::Claude, Kind::B10x] {
             let (line, _) = session_opening(kind, &dir.0, &intent);
@@ -2796,18 +2919,21 @@ mod tests {
         assert!(prompt.contains(&expected), "{prompt}");
     }
 
-    /// Codex takes no `@<path>` as a file mention: its prompt names no scope file, and the
-    /// intent is followed by the protocol as before.
+    /// Codex takes no `@<path>` as a file mention: its prompt mentions no scope file, and the
+    /// intent is followed by the line naming the files its session is given as context.
     #[test]
     fn the_codex_route_gets_no_mention_line() {
         let dir = scratch("session-codex");
         committed(&dir.0, &[TODO, TESTS]);
         let intent = scoped(&["todo.py", "tests/test_todo.py"]);
         let prompt = session_prompt(Kind::Codex, &dir.0, &intent);
-        assert!(!prompt.contains("Files in scope"), "{prompt}");
+        assert!(!prompt.contains("Files in scope, attached"), "{prompt}");
         assert!(!prompt.contains("@todo.py"), "{prompt}");
         assert!(
-            prompt.contains(&format!("Intent: {intent}\n\nProtocol: ")),
+            prompt.contains(&format!(
+                "Intent: {intent}\n\nFiles in scope, given above in full: todo.py, \
+                 tests/test_todo.py; do not read them again.\n\nProtocol: "
+            )),
             "{prompt}"
         );
     }
@@ -2865,7 +2991,7 @@ mod tests {
             ["todo.py"]
         );
         let prompt = in_context(&dir.0, &intent, |context| {
-            ClaudeCode::prompt_with(context, ClaudeCode::CLAUDE_RULE, Some(&passing))
+            ClaudeCode::prompt_with(context, ClaudeCode::CLAUDE_RULE, Some(&passing), &[])
         });
         assert!(
             prompt.contains("Files in scope, attached: @todo.py\n"),
