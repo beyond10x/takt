@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:codex-context-not-recorded
 kind: story
-status: draft
+status: active
 title: A Codex step's record does not name the context files it was given
 tags:
 - finding
@@ -10,7 +10,12 @@ tags:
 refs:
 - provider: finding
   reference: codex-context-not-recorded
-revision: 2
+relations:
+- serves: vision:safe-agentic-coding
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-22T00:17:24Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-22T00:17:24Z", actor: "human:timo", revision: 4}
 ---
 # A Codex step's record does not name the context files it was given
 
