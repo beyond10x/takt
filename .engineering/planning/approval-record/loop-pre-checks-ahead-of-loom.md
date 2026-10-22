@@ -6,7 +6,7 @@ status: approved
 title: The loop keeps takt's grant-only and unperformable checks ahead of each Loom step
 relations:
 - decides: story:the-loop-is-run-until-blocked
-revision: 2
+revision: 4
 transitions:
 - {from: "draft", to: "approved", at: "2026-10-22T13:02:21Z", actor: "human:timo", revision: 2, executor: "agent:takt-dispatcher"}
 ---
@@ -43,9 +43,21 @@ every Loom step it hands over:
 | only a grant moves an open obligation | `Shape::only_behind` (`crates/takt/src/run.rs:913-929`) | ApprovalRequired | 4 |
 | the action that decides an open claim has no performer | `Shape::unperformable` (`run.rs:9984-10004`) | Unperformable | 7 |
 
-Nothing else of takt's own evaluation stays on the loop's path under this record. A test pins the
+Nothing else of takt's own evaluation of the case's obligations and claims stays on the loop's path. A test pins the
 order: a case in either state on a low disk stops 4 or 7, never DiskLow 8, and no harness is
 called. No Loom change and no ESS change.
+
+## Loop control that follows from the checks (amended 2026-10-22, after the review at a23e242)
+
+Running the two checks before every step means takt calls `run_until_blocked` one step per call
+(step budget 1). Two pieces of takt's loop control stay for that reason, and they decide no claim:
+
+| piece | where at a23e242 | why Loom does not hold it |
+|---|---|---|
+| the idle count across calls (`last_idle`) | `crates/takt/src/run.rs:10129`, `:10186`, `:10428-10436` | Loom's idle bound counts within one call (loom `crates/loom-commission/src/runtime.rs:222-245` at 0.34.0) |
+| the pause on a pending forge read, with its budget check | `run.rs:10224-10259` | Loom 0.34.0 sets no timer between invocations of a pending request |
+
+Neither is an exception the orchestrator named; both are reported to it with the wave.
 
 ## What follows
 
