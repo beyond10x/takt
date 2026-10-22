@@ -2834,6 +2834,42 @@ mod tests {
         );
     }
 
+    /// At the edge of metaharness's argument limit, a Codex step keeps a scope file whose launch
+    /// argument, the prompt's line naming it included, is one byte under `ARGUMENT_BYTES_MAX`,
+    /// and leaves it out at exactly the limit, the line then naming `AGENTS.md` alone.
+    #[test]
+    fn a_codex_steps_context_fits_its_argument_to_the_byte() {
+        use session_executor::metaharness::protocol::ARGUMENT_BYTES_MAX;
+        let dir = scratch("context-boundary");
+        committed(&dir.0, &[AGENTS, ("a.txt", b"alpha\n")]);
+        let base = format!("{}\n## Notes\n\n", scoped(&["a.txt"]));
+        let (_, launched) = session_launch(Kind::Codex, &dir.0, &base);
+        assert_eq!(context_paths(&launched[0]), ["AGENTS.md", "a.txt"]);
+        let unpadded = launched[0].last().map(String::len).unwrap_or(0);
+        let room = ARGUMENT_BYTES_MAX - unpadded;
+
+        let fits = format!("{base}{}", "x".repeat(room - 1));
+        let (prompt, launched) = session_launch(Kind::Codex, &dir.0, &fits);
+        assert_eq!(launched.len(), 1, "the session started");
+        assert_eq!(context_paths(&launched[0]), ["AGENTS.md", "a.txt"]);
+        assert_eq!(given_in_prompt(&prompt), ["AGENTS.md", "a.txt"]);
+        assert_eq!(
+            launched[0].last().map(String::len),
+            Some(ARGUMENT_BYTES_MAX - 1)
+        );
+
+        let over = format!("{base}{}", "x".repeat(room));
+        let (prompt, launched) = session_launch(Kind::Codex, &dir.0, &over);
+        assert_eq!(launched.len(), 1, "the session started: {launched:?}");
+        assert_eq!(context_paths(&launched[0]), ["AGENTS.md"]);
+        assert_eq!(given_in_prompt(&prompt), ["AGENTS.md"]);
+        assert!(
+            launched[0]
+                .iter()
+                .all(|argument| argument.len() < ARGUMENT_BYTES_MAX)
+        );
+    }
+
     /// A Codex step's `takt.prompt` record names each context file its session was given, in
     /// order, as metaharness records one: its path, its bytes, the sha256 of them and the
     /// channel, the user prompt. A Claude Code and a b10x-harness step's record carries no
