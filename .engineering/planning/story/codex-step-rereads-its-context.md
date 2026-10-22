@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:codex-step-rereads-its-context
 kind: story
-status: draft
+status: active
 title: A Codex step reads again the context files it was given
 tags:
 - finding
@@ -12,7 +12,10 @@ refs:
   reference: codex-step-rereads-its-context
 relations:
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-22T00:54:40Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-22T00:54:40Z", actor: "human:timo", revision: 4}
 ---
 # A Codex step reads again the context files it was given
 
