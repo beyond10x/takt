@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-22T01:29:47Z",
+  "actor": "human:timo",
+  "artifact": "story:codex-step-rereads-its-context",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check at 9110945: exit 0, 1666 passed, 0 failed, 5 ignored; candidate f4f8d8d merged at 9cae2d8, re-trial median run tokens 84,984 against 101,585"
+  }
+}

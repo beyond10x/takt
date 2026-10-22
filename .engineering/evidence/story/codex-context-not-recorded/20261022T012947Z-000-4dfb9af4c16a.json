@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-22T01:29:47Z",
+  "actor": "human:timo",
+  "artifact": "story:codex-context-not-recorded",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check at 9110945: exit 0, 1666 passed, 0 failed, 5 ignored; a_codex_steps_prompt_record_names_its_context_files green"
+  }
+}
