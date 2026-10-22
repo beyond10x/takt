@@ -174,6 +174,10 @@ pub struct SessionHarness {
 /// The harness kinds of [`SessionHarness`].
 pub use session_executor::Kind;
 
+/// A context file as metaharness reads and renders it: its path and its bytes, UTF-8 text with
+/// no NUL ([`context_files`]).
+pub use session_executor::metaharness::protocol::DeclaredContextFile;
+
 /// `--harness claude`: Claude Code through the session executor.
 pub type ClaudeSession = SessionHarness;
 
@@ -412,35 +416,62 @@ impl Harness for SessionHarness {
         *self.proposal.borrow_mut() = None;
         let started_at = crate::events::instant();
         let scan = crate::run::ChangeScan::from_env();
-        let prompt =
-            ClaudeCode::prompt_with(context, ClaudeCode::rule_of(self.kind), scan.as_ref());
+        let rule = ClaudeCode::rule_of(self.kind);
+        // The step's prompt were it given `files` as context files. It names none yet; it is
+        // a function of them so the bound below measures the prompt as finally composed, and
+        // a prompt that comes to depend on which files fit is measured with each list tried.
+        let prompt_for =
+            |_files: &[DeclaredContextFile]| ClaudeCode::prompt_with(context, rule, scan.as_ref());
+        let mut executor =
+            session_executor::SessionExecutor::new(context.tree, Vec::new(), String::new())
+                .of_kind(self.kind)
+                // Every program the session's runners start goes through the run's confinement
+                // adapter first, as a child takt starts itself does.
+                .with_admission(|program: &str| {
+                    crate::confinement::current().admit(std::ffi::OsStr::new(program))
+                });
+        // Codex reads no `@<path>` as a file, so its session is given `AGENTS.md` and the scope
+        // files as context files instead ([`context_files`]), as many as fit beside its prompt
+        // in the one argument metaharness starts its child with, the prompt composed afresh
+        // for each list tried; Claude Code has its mention line and b10x-harness neither.
+        let given = if self.kind == Kind::Codex {
+            context_files(
+                context.tree,
+                context.intent,
+                context.change,
+                scan.as_ref(),
+                &|files| {
+                    executor
+                        .codex_prompt_argument(&prompt_for(files), files)
+                        .unwrap_or_default()
+                },
+            )
+        } else {
+            Vec::new()
+        };
+        executor.brief = prompt_for(&given);
+        // The step's opening record: its prompt and, for a Codex step, each context file it is
+        // given, as metaharness records one (path, bytes, sha256, channel); the other kinds are
+        // given none and their record names none.
         let mut opening = serde_json::json!({
             "type": "takt.prompt",
             "step": context.step,
-            "prompt": &prompt,
-        })
-        .to_string()
-        .into_bytes();
+            "prompt": &executor.brief,
+        });
+        if self.kind == Kind::Codex {
+            use session_executor::metaharness::protocol::ContextChannel;
+            opening["context"] = serde_json::to_value(
+                given
+                    .iter()
+                    .map(|file| file.record(ContextChannel::UserPrompt))
+                    .collect::<Vec<_>>(),
+            )?;
+        }
+        let mut opening = opening.to_string().into_bytes();
         opening.push(b'\n');
         *self.transcript.borrow_mut() = Some(opening.clone());
-        let mut executor = session_executor::SessionExecutor::new(
-            context.tree,
-            Self::copied(context.tree)?,
-            prompt,
-        )
-        .of_kind(self.kind)
-        // Every program the session's runners start goes through the run's confinement
-        // adapter first, as a child takt starts itself does.
-        .with_admission(|program: &str| {
-            crate::confinement::current().admit(std::ffi::OsStr::new(program))
-        });
-        // Codex reads no `@<path>` as a file, so its session is given `AGENTS.md` and the scope
-        // files as context files instead ([`context_files`]); Claude Code has its mention line
-        // and b10x-harness neither.
-        if self.kind == Kind::Codex {
-            executor.context =
-                context_files(context.tree, context.intent, context.change, scan.as_ref());
-        }
+        executor.files = Self::copied(context.tree)?;
+        executor.context = given.iter().map(|file| file.path().to_owned()).collect();
         executor.model.clone_from(&self.model);
         executor.max_turns = (self.kind != Kind::Codex).then_some(self.max_turns);
         executor.endpoint.clone_from(&self.endpoint);
@@ -666,7 +697,15 @@ pub fn scope_files(
     change: &ChangeSoFar,
     scan: Option<&crate::run::ChangeScan>,
 ) -> Vec<String> {
-    kept_files(tree, at, scope_paths(intent), change, scan, Given::Mention)
+    kept_files(
+        tree,
+        at,
+        scope_paths(intent),
+        change,
+        scan,
+        Given::Mention,
+        &mut |_, _| true,
+    )
 }
 
 /// The files of `tree` a Codex step's session is given as metaharness's context files
@@ -679,16 +718,50 @@ pub fn scope_files(
 /// would refuse the session for is left out as well: one whose bytes are not UTF-8 text or hold
 /// a NUL, and one git's index does not track, which is what the copy's git state holds. A tree
 /// with no `AGENTS.md` git tracks gives only the scope files.
+///
+/// Metaharness puts the files ahead of the prompt in the one argument the Codex child is
+/// started with, and refuses the session when that argument is `ARGUMENT_BYTES_MAX` bytes or
+/// more (metaharness-codex 0.11.0 `src/launch.rs:733-739`); `argument` composes that argument
+/// for a list of files, the prompt as it would be with that list and every byte metaharness
+/// adds included ([`session_executor::SessionExecutor::codex_prompt_argument`]), and is called
+/// afresh for each list tried, so the list returned is one whose argument was measured whole.
+/// So a file is also left out,
+/// as one past [`SCOPE_BYTES`] is, when the argument with it and the files kept before it would
+/// not fit: the files are bounded by the smaller of [`SCOPE_BYTES`] and what the prompt leaves
+/// of the argument. The prompt is never cut: one too long by itself is given no file, and
+/// metaharness refuses it as before. Each file is returned as read, so its path, bytes and
+/// digest can be recorded.
 #[must_use]
 pub fn context_files(
     tree: &Path,
     intent: &str,
     change: &ChangeSoFar,
     scan: Option<&crate::run::ChangeScan>,
-) -> Vec<String> {
+    argument: &dyn Fn(&[DeclaredContextFile]) -> String,
+) -> Vec<DeclaredContextFile> {
     let mut named = vec!["AGENTS.md"];
     named.extend(scope_paths(intent));
-    kept_files(tree, None, named, change, scan, Given::Context)
+    let mut given: Vec<DeclaredContextFile> = Vec::new();
+    kept_files(
+        tree,
+        None,
+        named,
+        change,
+        scan,
+        Given::Context,
+        &mut |path, bytes| {
+            let Ok(file) = DeclaredContextFile::new(path.to_owned(), bytes.to_vec()) else {
+                return false;
+            };
+            given.push(file);
+            let fits = session_executor::metaharness::protocol::argument_fits(&argument(&given));
+            if !fits {
+                given.pop();
+            }
+            fits
+        },
+    );
+    given
 }
 
 /// What the files [`kept_files`] keeps are given as: Claude Code file mentions
@@ -700,7 +773,9 @@ enum Given {
 }
 
 /// The paths of `candidates` that [`scope_files`]'s rules keep, in order and each once; given
-/// as context files ([`Given::Context`]), only those [`context_files`] also keeps.
+/// as context files ([`Given::Context`]), only those [`context_files`] also keeps. Last, each
+/// file every rule keeps is asked of `admits` with its bytes, and left out, as a file past the
+/// bounds is, when it answers no.
 fn kept_files(
     tree: &Path,
     at: Option<&str>,
@@ -708,6 +783,7 @@ fn kept_files(
     change: &ChangeSoFar,
     scan: Option<&crate::run::ChangeScan>,
     given: Given,
+    admits: &mut dyn FnMut(&str, &[u8]) -> bool,
 ) -> Vec<String> {
     let mut named: Vec<&str> = Vec::new();
     for path in candidates {
@@ -766,6 +842,7 @@ fn kept_files(
         if (given == Given::Context && (std::str::from_utf8(&bytes).is_err() || bytes.contains(&0)))
             || crate::run::credential_shape(&String::from_utf8_lossy(&bytes)).is_some()
             || scan.is_some_and(|scan| crate::run::scan_change(tree, scan, &bytes).is_err())
+            || !admits(path, &bytes)
         {
             continue;
         }
@@ -2346,6 +2423,19 @@ mod tests {
     /// The prompt the metaharness route of `kind` builds for a step in `tree` for `intent`, as
     /// [`session_prompt`] reads it, and the argv of each child the scripted session started.
     fn session_launch(kind: Kind, tree: &Path, intent: &str) -> (String, Vec<Vec<String>>) {
+        let (line, launched) = session_opening(kind, tree, intent);
+        let prompt = line["prompt"].as_str().expect("a prompt").to_owned();
+        (prompt, launched)
+    }
+
+    /// The first line of the transcript the metaharness route of `kind` keeps for a step in
+    /// `tree` for `intent`, its `takt.prompt` record, read as JSON, and the argv of each child
+    /// the scripted session started.
+    fn session_opening(
+        kind: Kind,
+        tree: &Path,
+        intent: &str,
+    ) -> (serde_json::Value, Vec<Vec<String>>) {
         use session_executor::metaharness::{ScriptedLog, ScriptedRunner};
         let log = ScriptedLog::new();
         let mut harness = SessionHarness::of(kind);
@@ -2363,8 +2453,8 @@ mod tests {
             .next()
             .expect("a first line");
         let line: serde_json::Value = serde_json::from_slice(first).expect("the prompt line reads");
-        let prompt = line["prompt"].as_str().expect("a prompt").to_owned();
-        (prompt, log.launched())
+        assert_eq!(line["type"], "takt.prompt", "{line}");
+        (line, log.launched())
     }
 
     /// The paths of the context files metaharness rendered into a child's arguments, in order:
@@ -2381,6 +2471,15 @@ mod tests {
     }
 
     const AGENTS: (&str, &[u8]) = ("AGENTS.md", b"# Agents\n\nRun the tests with make.\n");
+
+    /// The paths [`context_files`] gives a Codex step in `tree` for `intent`, with no scan and
+    /// an argument any list of files fits in.
+    fn given_as_context(tree: &Path, intent: &str, change: &ChangeSoFar) -> Vec<String> {
+        context_files(tree, intent, change, None, &|_| String::new())
+            .iter()
+            .map(|file| file.path().to_owned())
+            .collect()
+    }
 
     /// A Codex step's session is given `AGENTS.md` and then the intent's scope files as context
     /// files, in that order and each once; its prompt is the one it was given before, with no
@@ -2421,7 +2520,7 @@ mod tests {
         assert_eq!(launched.len(), 1, "one child: {launched:?}");
         assert_eq!(context_paths(&launched[0]), ["todo.py"]);
         assert_eq!(
-            context_files(&dir.0, &intent, &ChangeSoFar::NoneYet, None),
+            given_as_context(&dir.0, &intent, &ChangeSoFar::NoneYet),
             ["todo.py"]
         );
     }
@@ -2484,7 +2583,7 @@ mod tests {
             whole: true,
         };
         assert_eq!(
-            context_files(&dir.0, &intent, &shown, None),
+            given_as_context(&dir.0, &intent, &shown),
             ["AGENTS.md", "todo.py"]
         );
         let (_, launched) = session_launch(Kind::Codex, &dir.0, &intent);
@@ -2513,7 +2612,7 @@ mod tests {
         let mut expected = vec!["AGENTS.md"];
         expected.extend_from_slice(&paths[..SCOPE_FILES - 1]);
         assert_eq!(
-            context_files(&dir.0, &scoped(&paths), &ChangeSoFar::NoneYet, None),
+            given_as_context(&dir.0, &scoped(&paths), &ChangeSoFar::NoneYet),
             expected
         );
         let paths = r#""AGENTS.md""#.len() + r#""fits.py""#.len();
@@ -2524,7 +2623,7 @@ mod tests {
         committed(&dir.0, &[AGENTS, ("over.py", &big), ("fits.py", &fits)]);
         let intent = scoped(&["over.py", "fits.py"]);
         assert_eq!(
-            context_files(&dir.0, &intent, &ChangeSoFar::NoneYet, None),
+            given_as_context(&dir.0, &intent, &ChangeSoFar::NoneYet),
             ["AGENTS.md", "fits.py"]
         );
         let (_, launched) = session_launch(Kind::Codex, &dir.0, &intent);
@@ -2554,9 +2653,104 @@ mod tests {
         assert_eq!(launched.len(), 1, "one child one byte past the cap");
         assert_eq!(context_paths(&launched[0]), ["AGENTS.md"]);
         assert_eq!(
-            context_files(&dir.0, &intent, &ChangeSoFar::NoneYet, None),
+            given_as_context(&dir.0, &intent, &ChangeSoFar::NoneYet),
             ["AGENTS.md"]
         );
+    }
+
+    /// The scope files of the finding: seven files of notes that, with `AGENTS.md`, fill
+    /// [`SCOPE_BYTES`] but for a few hundred bytes.
+    fn notes() -> Vec<(String, Vec<u8>)> {
+        [32_000, 16_000, 8_000, 4_000, 2_000, 1_000, 500]
+            .iter()
+            .map(|size| {
+                let line = b"a line of notes that fills the context budget\n";
+                let bytes: Vec<u8> = line.iter().copied().cycle().take(*size).collect();
+                (format!("notes/pad-{size}.txt"), bytes)
+            })
+            .collect()
+    }
+
+    /// A long intent leaves less of the one argument a Codex child is started with for the
+    /// context files: with an intent of 72 KiB besides its scope, whose files fill
+    /// [`SCOPE_BYTES`], the session still starts, every argument it is started with under
+    /// metaharness's `ARGUMENT_BYTES_MAX`, given `AGENTS.md` and the scope files that fit
+    /// beside the prompt, in their order; with a short intent the same files are all given.
+    #[test]
+    fn a_long_intent_leaves_out_context_files_and_the_session_starts() {
+        use session_executor::metaharness::protocol::ARGUMENT_BYTES_MAX;
+        let dir = scratch("context-long-intent");
+        let notes = notes();
+        let mut files: Vec<(&str, &[u8])> = notes
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+            .collect();
+        files.push(AGENTS);
+        committed(&dir.0, &files);
+        let paths: Vec<&str> = notes.iter().map(|(path, _)| path.as_str()).collect();
+        let mut all = vec!["AGENTS.md".to_owned()];
+        all.extend(paths.iter().map(|path| (*path).to_owned()));
+        let short = scoped(&paths);
+        let (_, launched) = session_launch(Kind::Codex, &dir.0, &short);
+        assert_eq!(launched.len(), 1, "one child with a short intent");
+        assert_eq!(context_paths(&launched[0]), all, "every file fits");
+        let sentence = "a sentence of the intent that makes it long\n";
+        let long = format!(
+            "{short}\n## Notes\n\n{}",
+            sentence.repeat((72 << 10) / sentence.len() + 1)
+        );
+        let (prompt, launched) = session_launch(Kind::Codex, &dir.0, &long);
+        assert!(prompt.len() > 72 << 10, "{}", prompt.len());
+        assert_eq!(launched.len(), 1, "the session started: {launched:?}");
+        let longest = launched[0].iter().map(String::len).max().unwrap_or(0);
+        assert!(
+            longest < ARGUMENT_BYTES_MAX,
+            "an argument of {longest} bytes"
+        );
+        let given = context_paths(&launched[0]);
+        assert!(
+            given.first().map(String::as_str) == Some("AGENTS.md") && given.len() < all.len(),
+            "{given:?}"
+        );
+        assert!(
+            given.iter().all(|path| all.contains(path))
+                && given
+                    .windows(2)
+                    .all(|pair| all.iter().position(|path| *path == pair[0])
+                        < all.iter().position(|path| *path == pair[1])),
+            "{given:?}"
+        );
+    }
+
+    /// A Codex step's `takt.prompt` record names each context file its session was given, in
+    /// order, as metaharness records one: its path, its bytes, the sha256 of them and the
+    /// channel, the user prompt. A Claude Code and a b10x-harness step's record carries no
+    /// `context`, as those sessions are given none.
+    #[test]
+    fn a_codex_steps_prompt_record_names_its_context_files() {
+        use sha2::Digest as _;
+        let dir = scratch("context-recorded");
+        committed(&dir.0, &[AGENTS, TODO, TESTS]);
+        let intent = scoped(&["todo.py"]);
+        let (line, launched) = session_opening(Kind::Codex, &dir.0, &intent);
+        assert_eq!(launched.len(), 1, "one child: {launched:?}");
+        let entry = |(path, bytes): (&str, &[u8])| {
+            serde_json::json!({
+                "path": path,
+                "sha256": format!("{:x}", sha2::Sha256::digest(bytes)),
+                "bytes": bytes.len(),
+                "channel": "user-prompt",
+            })
+        };
+        assert_eq!(
+            line["context"],
+            serde_json::json!([entry(AGENTS), entry(TODO)]),
+            "{line}"
+        );
+        for kind in [Kind::Claude, Kind::B10x] {
+            let (line, _) = session_opening(kind, &dir.0, &intent);
+            assert!(line.get("context").is_none(), "{kind:?}: {line}");
+        }
     }
 
     /// A Claude Code step's session is given no context files, and its prompt still holds the
