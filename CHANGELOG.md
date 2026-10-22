@@ -6,12 +6,36 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-22
+
+The minor version moves because takt's cases are decided by Loom's governor, the loop runs on loom-sdk's
+`run_until_blocked`, and two stops now come before a spent budget: exit 4 and exit 7 where 0.7.0 gave exit 3.
+
+### Added
+
+- `--confinement none|substrate` (default `none`): every child process of a run starts through one adapter.
+- Under `--confinement substrate` the test command runs in loom-sdk's `SubstrateRunner`; a test command its profile does not serve, and a gate's commands, are refused by name, never run unconfined.
+- A Codex judgement step is given `AGENTS.md` and its story's scope files as metaharness context files, named in one prompt line, within 8 files, 64 KiB and the 131,072-byte launch argument.
+- A Codex step's `takt.prompt` record lists each context file it was given: path, sha256, bytes and channel.
+
 ### Changed
 
-- `b10x-loom-sdk` moves from loom 0.28.0 to 0.31.0, which pins substrate 0.7.18.
+- **Breaking:** No macOS binary in 0.8.0 either: loom-sdk 0.34.0 does not compile on macOS, so macOS does not return in 0.7.1 as 0.7.0 said.
+- `b10x-loom-sdk` moves from loom 0.28.0 to 0.34.0, which pins substrate 0.7.18; `metaharness` moves from 0.10.1 to 0.11.0.
+- Every evaluation of a case goes through Loom's governor over the case's files; each `decisions/NNNN.json` is the `canon-decision/1` it rendered.
+- A case gains a revision and `observations.json`, which the Commission runtime records.
+- Each validator performs as a Commission effect, and every evidence record reaches the case through its evidence port; a record from anything but the run's validators is refused.
 - `takt run` takes every step through one call of loom-sdk's `run_until_blocked`, and its stop comes from how that call ended.
-- A case that only a grant moves stops `ApprovalRequired` (exit 4) before any budget or low-disk stop; 0.7.0 stopped on a spent budget (exit 3) first.
-- A case whose open claim has no performer stops `Unperformable` (exit 7) before any budget or low-disk stop; 0.7.0 stopped on a spent budget (exit 3) first.
+- **Breaking:** A case that only a grant moves stops `ApprovalRequired` (exit 4) before any budget or low-disk stop; 0.7.0 stopped on a spent budget (exit 3) first.
+- **Breaking:** A case whose open claim has no performer stops `Unperformable` (exit 7) before any budget or low-disk stop; 0.7.0 stopped on a spent budget (exit 3) first.
+- A turn's judge is checked through the path the platform reports for the running binary off Linux; Linux reads `/proc/self/exe` as before.
+- ESS 0.67 is required.
+
+### Fixed
+
+- `takt replay` offers a step taken after a grant the granted action again, so it no longer refuses on a prompt mismatch.
+- A denial in `authority.yaml` wins over a grant of the same capability, and `authority.yaml` is never read or written through a link.
+- A process sweep no longer kills a gate command another thread is waiting on.
 
 ## [0.7.0] - 2026-10-21
 
@@ -338,7 +362,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.7.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.8.0...HEAD
+[0.8.0]: https://github.com/beyond10x/takt/compare/0.7.0...0.8.0
 [0.7.0]: https://github.com/beyond10x/takt/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/beyond10x/takt/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/beyond10x/takt/compare/0.4.0...0.5.0
