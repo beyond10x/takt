@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:design-names-loom-as-the-runtime
 kind: story
-status: draft
+status: active
 title: The design, README and changelog name loom-sdk as the runtime takt runs on
 summary: docs/design/takt.md, README.md and CHANGELOG.md describe takt on loom-sdk; not a judge surface
 tags:
@@ -13,7 +13,10 @@ relations:
 - depends_on: story:takt-evaluation-code-retired
 - depends_on: story:second-harness-adapter
 - depends_on: story:confinement-seam
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-22T16:10:52Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-22T16:10:52Z", actor: "human:timo", revision: 3}
 ---
 # Story: design-names-loom-as-the-runtime
 
