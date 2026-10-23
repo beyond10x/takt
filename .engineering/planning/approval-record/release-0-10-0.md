@@ -6,7 +6,7 @@ status: approved
 title: Release 0.10.0 from main at the wave 35 merge, with the macOS binary and loom 0.37.0
 relations:
 - decides: story:takt-confines-on-macos
-revision: 2
+revision: 3
 transitions:
 - {from: "draft", to: "approved", at: "2026-10-23T10:35:22Z", actor: "human:timo", revision: 2}
 ---
@@ -31,3 +31,12 @@ dispatcher sends no `[TRIAL takt]`.
 | ESS | stays 0.68 | the newest ESS release is 0.68.0 (`gh release view -R beyond10x/ess`) |
 | CHANGELOG | `[0.9.0]` is left as released; `[0.10.0]` says it ships `aarch64-apple-darwin`, which 0.7.0 to 0.9.0 did not | a released section is history |
 | gate | the pull request's checks on the release commit, the three `main` runs at ec3ac9c, and `release.yml` with `darwin.yml` on the tag | |
+
+## Released
+
+| item | value |
+|---|---|
+| tag | `0.10.0`, annotated, tag object 9f8214d, on `main` at 593e527 (merge of `release/0.10.0` at 17c2910), author and committer `b10x-bot[bot]` |
+| release run | 39944747305 success: tag provenance, three builds, `darwin.yml` (test-cli, test-library) and `task check` on the tagged commit, publish |
+| GitHub Release | https://github.com/beyond10x/takt/releases/tag/0.10.0, not a draft: `takt-0.10.0-x86_64-unknown-linux-gnu.tar.gz`, `takt-0.10.0-aarch64-unknown-linux-gnu.tar.gz`, `takt-0.10.0-aarch64-apple-darwin.tar.gz`, `SHA256SUMS` |
+| trial | started by the orchestrator on the released binary; the dispatcher sent no `[TRIAL takt]` |
