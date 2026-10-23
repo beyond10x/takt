@@ -56,7 +56,7 @@ pub const SCORECARDS: &str = "takt/scorecards";
 /// confinement lives in that script alone, so no commit's ancestry stands in for it. A change to
 /// the script adds its digest here once it is reviewed (`tests/self_improvement.rs` holds this
 /// tree's script to the list).
-pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 4] = [
+pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 5] = [
     // The script of story:check-finding-run-step-confined (its last commit f2a20e9), its build's
     // checkout a repository made with no template, by a git under a cleared environment, that
     // fetches the revision through git's transport, every object hashed and checked
@@ -72,6 +72,8 @@ pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 4] = [
     // The same script that lists the descriptors it closes from `/dev/fd` where there is no
     // `/proc/self/fd`, and reads the passwd home from `dscl` where there is no `getent`, as on macOS.
     "cd0efbd518d25da3288f13cf082ecdbea3220673e3d0fe7953420ca8b667b4a5",
+    // The same script that builds and runs under Seatbelt (`sandbox-exec`) on macOS.
+    "0c2b3048ef4e0c25e4de26fe975a24ecca388589bc6350112fadbe4dcdff00aa",
 ];
 
 /// The file under a turn's `artifacts/` holding the sha256 of the takt `scripts/check-finding`

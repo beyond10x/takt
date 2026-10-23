@@ -622,10 +622,11 @@ fn a_line_break_in_a_git_dir_name_a_validator_wrote_shapes_no_line() {
     );
 }
 
-/// Across file systems: the set-aside root on a tmpfs of its own, which this test mounts by
-/// running itself again under bubblewrap (CI installs it). A regular file is copied with its
-/// bytes, mode and time and the source removed; a FIFO and a link are refused, left in place
-/// and named.
+/// Across file systems: the set-aside root on a file system of its own, which this test mounts
+/// before running itself again: on Linux a tmpfs under bubblewrap (CI installs it), on macOS a
+/// disk image `hdiutil` creates and attaches at the mount point, which needs no root there. A
+/// regular file is copied with its bytes, mode and time and the source removed; a FIFO and a
+/// link are refused, left in place and named.
 #[test]
 fn across_file_systems() {
     let Some(xfs) = std::env::var_os("TAKT_TEST_XFS").map(PathBuf::from) else {
@@ -634,23 +635,75 @@ fn across_file_systems() {
             std::process::id()
         ));
         fs::create_dir_all(&mount).expect("a mount point");
-        let output = Command::new("bwrap")
-            .args(["--dev-bind", "/", "/", "--tmpfs"])
-            .arg(&mount)
-            .arg("--")
-            .arg(std::env::current_exe().expect("the test binary"))
-            .args(["across_file_systems", "--exact", "--test-threads", "1"])
-            .env("TAKT_TEST_XFS", &mount)
-            .output()
-            .expect("bwrap runs (CI installs bubblewrap)");
-        let _ = fs::remove_dir(&mount);
-        assert!(
-            output.status.success(),
-            "under bwrap:\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return;
+        #[cfg(target_os = "macos")]
+        {
+            let image = mount.with_extension("dmg");
+            let _ = fs::remove_file(&image);
+            let hdiutil = |args: &[&std::ffi::OsStr]| {
+                let output = Command::new("hdiutil")
+                    .args(args)
+                    .output()
+                    .expect("hdiutil runs");
+                assert!(
+                    output.status.success(),
+                    "hdiutil {args:?}:\n{}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            };
+            hdiutil(&[
+                "create".as_ref(),
+                "-size".as_ref(),
+                "16m".as_ref(),
+                "-fs".as_ref(),
+                "HFS+".as_ref(),
+                "-volname".as_ref(),
+                "taktxfs".as_ref(),
+                image.as_os_str(),
+            ]);
+            hdiutil(&[
+                "attach".as_ref(),
+                "-nobrowse".as_ref(),
+                "-mountpoint".as_ref(),
+                mount.as_os_str(),
+                image.as_os_str(),
+            ]);
+            let output = Command::new(std::env::current_exe().expect("the test binary"))
+                .args(["across_file_systems", "--exact", "--test-threads", "1"])
+                .env("TAKT_TEST_XFS", &mount)
+                .output()
+                .expect("the test binary runs");
+            hdiutil(&["detach".as_ref(), "-force".as_ref(), mount.as_os_str()]);
+            let _ = fs::remove_file(&image);
+            let _ = fs::remove_dir(&mount);
+            assert!(
+                output.status.success(),
+                "on the disk image:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let output = Command::new("bwrap")
+                .args(["--dev-bind", "/", "/", "--tmpfs"])
+                .arg(&mount)
+                .arg("--")
+                .arg(std::env::current_exe().expect("the test binary"))
+                .args(["across_file_systems", "--exact", "--test-threads", "1"])
+                .env("TAKT_TEST_XFS", &mount)
+                .output()
+                .expect("bwrap runs (CI installs bubblewrap)");
+            let _ = fs::remove_dir(&mount);
+            assert!(
+                output.status.success(),
+                "under bwrap:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
     };
     let s = repository("xfs", "build/\n");
     fs::create_dir_all(s.repo.join("build")).expect("a directory");

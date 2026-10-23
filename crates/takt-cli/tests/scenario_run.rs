@@ -1066,7 +1066,8 @@ enum Started {
     /// One after another, each in this process's PID namespace.
     InTurn,
     /// All at once, each in a PID namespace of its own (`bwrap --unshare-pid`), as containers
-    /// or confined runners start them: every run has the same process id and host name.
+    /// or confined runners start them: every run has the same process id and host name. macOS
+    /// has no PID namespace, so there the five start at once in this one, with one host name.
     AtOnceInOwnPidNamespaces,
 }
 
@@ -1109,6 +1110,9 @@ fn five_clones_one_scorecard(name: &str, started: Started) {
     let command = |clone: &Path| {
         let mut command = match started {
             Started::InTurn => Command::new(env!("CARGO_BIN_EXE_takt")),
+            #[cfg(target_os = "macos")]
+            Started::AtOnceInOwnPidNamespaces => Command::new(env!("CARGO_BIN_EXE_takt")),
+            #[cfg(not(target_os = "macos"))]
             Started::AtOnceInOwnPidNamespaces => {
                 let mut bwrap = Command::new("bwrap");
                 bwrap.args([
@@ -1252,7 +1256,9 @@ fn five_runs_from_five_fresh_clones_get_five_trial_numbers_and_one_scorecard_tak
 /// --unshare-pid`), where every run has the same process id and host name: the nonce does not
 /// rest on either, so they still get five distinct trial numbers. Two runs in one second share
 /// a number with a chance of 1 in 10^8 per pair (about 1 in 10^7 for five). Bubblewrap is
-/// required, never skipped: without it the case fails, naming it.
+/// required on Linux, never skipped: without it the case fails, naming it. macOS has no PID
+/// namespace: there the five start at once in its one, with one host name and distinct process
+/// ids, and get five distinct trial numbers.
 #[test]
 fn five_runs_started_at_once_in_their_own_pid_namespaces_get_five_trial_numbers() {
     five_clones_one_scorecard("five-clones-pid-ns", Started::AtOnceInOwnPidNamespaces);

@@ -34,6 +34,15 @@ const GATE_EXEC: &str = "scripts/gate-exec";
 /// the gate does not run, because it outlasts the gate's 300 s.
 const TEST_COMMAND: &str = "cargo test --workspace --locked";
 
+/// The log the test command's `cargo` stub appends to, in the scratch world: beside the
+/// repository, and on macOS in the world's temporary directory, the one directory outside the
+/// tree and its home that Seatbelt lets the test command write.
+const TEST_LOG: &str = if cfg!(target_os = "macos") {
+    "tmp/test-log"
+} else {
+    "test-log"
+};
+
 fn root() -> PathBuf {
     Path::new(ROOT).canonicalize().expect("the repository root")
 }
@@ -320,7 +329,7 @@ fn world_editing(name: &str, clippy_fails: bool, edit: &str) -> World {
     );
     let bin = outer.join("stub-bin");
     doubles(&bin, &state, &outer.join("remote.git"), edit);
-    stub(&bin, "cargo", &outer.join("test-log"), 0);
+    stub(&bin, "cargo", &outer.join(TEST_LOG), 0);
     let tools = outer.join("cargo-home/bin");
     stub(&tools, "ess", &log, 0);
     stub(&tools, "python3", &outer.join("planted-log"), 0);
@@ -622,7 +631,7 @@ fn a_delivery_on_takts_gate_runs_it_after_the_implementation_and_opens_the_pull_
         .filter(|(action, _)| action == "tests.run")
         .count();
     assert_eq!(
-        world.log("test-log"),
+        world.log(TEST_LOG),
         vec![TEST_COMMAND.to_owned(); tests],
         "stdout {out}"
     );

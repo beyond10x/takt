@@ -106,10 +106,17 @@ impl Drop for Scratch {
 }
 
 /// A committed repository on `main` with a README and `files`, executable when their name ends
-/// in `.sh`, at `tree/` in a scratch directory named for this process and `name`.
+/// in `.sh`, at `tree/` in a scratch directory named for this process and `name`. On macOS the
+/// scratch directory lies under the user's temporary directory, not this crate's build
+/// directory: Seatbelt lets a test command write the tree, its home and that directory only, so
+/// what a test command writes at `../seen` or `../x` beside the tree is written there.
 fn repository(name: &str, files: &[(&str, &str)]) -> Scratch {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("cases-swap-{}-{name}", std::process::id()));
+    let base = if cfg!(target_os = "macos") {
+        std::env::temp_dir()
+    } else {
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+    };
+    let dir = base.join(format!("cases-swap-{}-{name}", std::process::id()));
     if dir.exists() {
         fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
     }

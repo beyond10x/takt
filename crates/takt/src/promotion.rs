@@ -111,6 +111,41 @@ pub const SANDBOX: &str = BWRAP;
 #[cfg(target_os = "macos")]
 pub const SANDBOX: &str = "sandbox-exec";
 
+/// The variable a confined build or `--version` run carries on macOS, its value unique to the
+/// run: a process that still carries it once the run ended was started by the candidate's code.
+#[cfg(target_os = "macos")]
+const BUILD_MARK: &str = "TAKT_PROMOTION";
+
+/// Runs `command` to its end in a process group of its own, its output read, then kills that
+/// group and every process of this user that carries the run's [`BUILD_MARK`], wherever it
+/// went: what the candidate's `build.rs` or binary started and left, which no subreaper adopts
+/// on macOS. Not killed: one that left the group and dropped the mark. An error too when one
+/// is still there after the sweep.
+#[cfg(target_os = "macos")]
+fn output_reaped(command: &mut Command) -> Result<std::process::Output> {
+    static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mark = format!(
+        "{}-{}",
+        std::process::id(),
+        RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    command
+        .env(BUILD_MARK, &mark)
+        .process_group(0)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = command.spawn()?;
+    let group = libc::pid_t::try_from(child.id()).context("a process id")?;
+    let output = child.wait_with_output();
+    // SAFETY: `killpg` takes two integers and touches no memory of this process.
+    unsafe {
+        libc::killpg(group, libc::SIGKILL);
+    }
+    crate::marked::sweep(BUILD_MARK, |carried| carried == mark.as_bytes())?;
+    Ok(output?)
+}
+
 /// Where the confined build sees the clone: writable, at a path no ancestor of which holds a
 /// `.cargo` directory, so cargo reads configuration from the commit and nowhere else.
 pub const INSIDE_WORK: &str = "/work";
@@ -1798,8 +1833,7 @@ impl Confinement {
         writeln!(out, "cargo {} (confined in {SANDBOX})", args.join(" "))?;
         let mut command = self.build_command(work, &self.toolchain.join("bin/cargo"))?;
         command.args(args);
-        let output = command
-            .output()
+        let output = output_reaped(&mut command)
             .with_context(|| format!("run {SANDBOX} for cargo {}", args.join(" ")))?;
         if !output.status.success() {
             return Err(BuildFailed(format!(
@@ -1889,8 +1923,7 @@ impl Confinement {
             scratch.path(),
         );
         command.arg("--version");
-        let output = command
-            .output()
+        let output = output_reaped(&mut command)
             .with_context(|| format!("run {} --version confined in {SANDBOX}", binary.display()))?;
         drop(scratch);
         let text = String::from_utf8_lossy(&output.stdout);

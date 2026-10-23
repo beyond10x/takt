@@ -833,7 +833,10 @@ fn a_toolchain_file_above_the_tree_is_put_back() {
 }
 
 /// A test command that writes above the tree: the observation is refused, nothing recorded,
-/// and what it wrote removed.
+/// and what it wrote removed. On macOS the write itself is refused: Seatbelt lets the test
+/// command write its tree, its home and the user's temporary directories only, so nothing is
+/// written above the tree, not even the directory, and the observation, which finds nothing
+/// above the tree changed, is recorded.
 #[test]
 fn a_validator_that_writes_above_the_tree_is_refused_and_put_back() {
     let tree = repository(
@@ -846,6 +849,15 @@ fn a_validator_that_writes_above_the_tree_is_refused_and_put_back() {
     );
     let ran = run(&tree, "./plant.sh", |_| {});
     let above = tree.root.join(".cargo/config.toml");
+    if cfg!(target_os = "macos") {
+        assert!(
+            fs::symlink_metadata(tree.root.join(".cargo")).is_err(),
+            "{}",
+            ran.text
+        );
+        assert!(!ran.records.is_empty(), "{}", ran.text);
+        return;
+    }
     assert!(
         ran.refusal().contains(&above.display().to_string()),
         "{}",

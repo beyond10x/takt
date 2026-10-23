@@ -472,7 +472,10 @@ fn one_step(tree: &Path, id: &str, harness: &dyn Harness) -> (anyhow::Result<Sto
 
 /// Run in a child test process given exactly `CREDENTIALS` (fake values), `PATH` and `HOME`:
 /// the test command, the harness and `aep` receive none of them; the forge's programs keep
-/// the GitHub ones the bot route reads and lose the rest.
+/// the GitHub ones the bot route reads and lose the rest. On macOS the child is given `TMPDIR`
+/// as well and the scripts lie under it: Seatbelt lets the test command write its tree, its
+/// home and the user's temporary directory only, and the script it runs records its
+/// environment beside itself.
 #[test]
 fn children_receive_no_credential_they_do_not_need() {
     if std::env::var_os("TAKT_CONFINEMENT_CHILD").is_none() {
@@ -486,7 +489,12 @@ fn children_receive_no_credential_they_do_not_need() {
             ])
             .env_clear()
             .env("TAKT_CONFINEMENT_CHILD", "1");
-        for name in ["PATH", "HOME"] {
+        let passed: &[&str] = if cfg!(target_os = "macos") {
+            &["PATH", "HOME", "TMPDIR"]
+        } else {
+            &["PATH", "HOME"]
+        };
+        for name in passed {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
             }
@@ -503,7 +511,17 @@ fn children_receive_no_credential_they_do_not_need() {
         );
         return;
     }
-    let scripts = directory("env-scripts");
+    let scripts = if cfg!(target_os = "macos") {
+        let dir =
+            std::env::temp_dir().join(format!("confinement-{}-env-scripts", std::process::id()));
+        if dir.exists() {
+            fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
+        }
+        fs::create_dir_all(&dir).expect("scratch dir");
+        Scratch(dir)
+    } else {
+        directory("env-scripts")
+    };
     let leaked = |what: &str, names: &[String], keep: &[&str]| {
         let leaked: Vec<&str> = CREDENTIALS
             .iter()

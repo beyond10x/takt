@@ -43,6 +43,134 @@ fn owner(pid: libc::pid_t) -> Option<libc::uid_t> {
     (wrote == size).then_some(info.pbi_uid)
 }
 
+/// A process's parent and process group; none for a process that has ended.
+fn parent_and_group(pid: libc::pid_t) -> Option<(libc::pid_t, libc::pid_t)> {
+    // SAFETY: `proc_bsdinfo` is plain integers and bytes, for which all zeroes is a value.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?;
+    // SAFETY: `proc_pidinfo` writes at most `size` bytes into `info` and answers how many.
+    let wrote =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
+    if wrote != size {
+        return None;
+    }
+    Some((
+        libc::pid_t::try_from(info.pbi_ppid).ok()?,
+        libc::pid_t::try_from(info.pbi_pgid).ok()?,
+    ))
+}
+
+/// Kills and reaps, round after round, the children of this process that left its process
+/// group for one no pid of `running` leads, or left its session: what a judgement step's
+/// harness, or a validator that ran a program by itself, started in the background and left
+/// once it returned, which carries no mark when it was not started through
+/// [`crate::forge::run_child`]. A child another thread started in this process's own group and
+/// session stays. An error when one is still there after the last round.
+pub fn sweep_children(running: &std::collections::BTreeSet<u32>) -> anyhow::Result<()> {
+    let me = libc::pid_t::try_from(std::process::id()).unwrap_or(0);
+    // SAFETY: `getsid` and `getpgrp` take integers and touch no memory of this process.
+    let (session, own) = unsafe { (libc::getsid(0), libc::getpgrp()) };
+    let left = || -> Vec<libc::pid_t> {
+        pids()
+            .into_iter()
+            .filter(|pid| {
+                parent_and_group(*pid).is_some_and(|(parent, group)| {
+                    // SAFETY: `getsid` takes an integer and touches no memory of this process.
+                    let sid = unsafe { libc::getsid(*pid) };
+                    parent == me
+                        && (sid != session
+                            || (group != own
+                                && !u32::try_from(group).is_ok_and(|g| running.contains(&g))))
+                })
+            })
+            .collect()
+    };
+    for _ in 0..64 {
+        let found = left();
+        if found.is_empty() {
+            return Ok(());
+        }
+        for pid in &found {
+            // SAFETY: `kill` takes two integers and touches no memory of this process.
+            unsafe {
+                libc::kill(*pid, libc::SIGKILL);
+            }
+        }
+        let until = Instant::now() + Duration::from_secs(2);
+        let mut waiting = found;
+        while !waiting.is_empty() && Instant::now() < until {
+            waiting.retain(|pid| {
+                let mut status = 0;
+                // SAFETY: `waitpid` writes the status into the integer it is given.
+                let reaped = unsafe { libc::waitpid(*pid, &raw mut status, libc::WNOHANG) };
+                reaped == 0
+            });
+            if !waiting.is_empty() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+    anyhow::bail!("children this process left were still running after 64 rounds of killing")
+}
+
+/// When a process started, to the microsecond since the epoch; none for one that has ended.
+fn started_at(pid: libc::pid_t) -> Option<std::time::SystemTime> {
+    // SAFETY: `proc_bsdinfo` is plain integers and bytes, for which all zeroes is a value.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?;
+    // SAFETY: `proc_pidinfo` writes at most `size` bytes into `info` and answers how many.
+    let wrote =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
+    (wrote == size).then(|| {
+        std::time::UNIX_EPOCH
+            + Duration::from_secs(info.pbi_start_tvsec)
+            + Duration::from_micros(info.pbi_start_tvusec)
+    })
+}
+
+/// Kills, round after round, the orphans in this process's own process group and session that
+/// started at `since` or later: what a child started there, in that group, left running when
+/// it ended, which `launchd` adopted (its parent is 1). A harness session runs its program in
+/// this group on macOS, where its executor finds no `setsid`, so this finds what the program
+/// left once the session ended. An error when one is still there after the last round.
+pub fn sweep_orphans_since(since: std::time::SystemTime) -> anyhow::Result<()> {
+    // SAFETY: `getsid` and `getpgrp` take integers and touch no memory of this process.
+    let (session, own) = unsafe { (libc::getsid(0), libc::getpgrp()) };
+    let left = || -> Vec<libc::pid_t> {
+        pids()
+            .into_iter()
+            .filter(|pid| {
+                // SAFETY: `getsid` takes an integer and touches no memory of this process.
+                let sid = unsafe { libc::getsid(*pid) };
+                sid == session
+                    && parent_and_group(*pid) == Some((1, own))
+                    && started_at(*pid).is_some_and(|started| started >= since)
+            })
+            .collect()
+    };
+    for _ in 0..64 {
+        let found = left();
+        if found.is_empty() {
+            return Ok(());
+        }
+        for pid in &found {
+            // SAFETY: `kill` takes two integers and touches no memory of this process.
+            unsafe {
+                libc::kill(*pid, libc::SIGKILL);
+            }
+        }
+        let until = Instant::now() + Duration::from_secs(2);
+        let mut waiting = found;
+        while !waiting.is_empty() && Instant::now() < until {
+            waiting.retain(|pid| parent_and_group(*pid).is_some());
+            if !waiting.is_empty() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+    anyhow::bail!("processes a harness session left were still running after 64 rounds of killing")
+}
+
 /// The environment a process was started with, each entry `NAME=value`; none for a process
 /// that has ended (a zombie included) or that is not this user's.
 fn environment(pid: libc::pid_t) -> Option<Vec<Vec<u8>>> {

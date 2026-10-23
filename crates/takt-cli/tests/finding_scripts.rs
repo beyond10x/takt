@@ -11,7 +11,10 @@
 //! command ended with the exit the predicate names as the healthy one) or `error`, the results
 //! of the `scenario_result` evidence kind (`protocols/self-improvement/1.yaml`). The scratch
 //! takt is a workspace with no dependencies, so each build takes seconds; nothing reaches a
-//! network.
+//! network. On macOS the confiner is Seatbelt (`sandbox-exec`) in place of bubblewrap: the
+//! caller's home is hidden, every write but to the build's or the run's own directories is
+//! refused, the network is denied, and the command's process group is killed when it ends in
+//! place of a PID namespace; a test whose guarantee differs there says so.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,6 +32,58 @@ const SOURCE: &str = "docs/runs/trial-1.md";
 /// The URL a repository-form predicate names; a `.invalid` host, so a check that clones it
 /// instead of the `--checkout` standing in for it fails without a network.
 const REPOSITORY_URL: &str = "https://example.invalid/scenarios";
+
+/// The confiner `check-finding` builds and runs under: bubblewrap, and on macOS Seatbelt's
+/// `sandbox-exec`.
+const CONFINER: &str = if cfg!(target_os = "macos") {
+    "sandbox-exec"
+} else {
+    "bwrap"
+};
+
+/// The pattern, in a wrapper's `case " $* " in`, of the confiner's call that runs the predicate
+/// (not the build's): the one with a status descriptor under bubblewrap, the one with the
+/// `STEP=run` parameter under `sandbox-exec`.
+const RUN_CALL: &str = if cfg!(target_os = "macos") {
+    "*' STEP=run '*"
+} else {
+    "*' --json-status-fd '*"
+};
+
+/// A call of the real confiner `real` that never runs the command: under bubblewrap, a bind
+/// whose source is absent, so its mount setup fails after it forked; under `sandbox-exec`, a
+/// program that is not there in place of the command.
+fn never_runs(real: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("{real} -p '(version 1)(allow default)' /nonexistent-check-finding")
+    } else {
+        format!("{real} --ro-bind /nonexistent-check-finding /srv/absent \"$@\"")
+    }
+}
+
+/// Whether the check's error names the confiner's own failure to run what [`never_runs`] calls.
+fn names_the_confiners_error(stderr: &str) -> bool {
+    if cfg!(target_os = "macos") {
+        stderr.lines().any(|line| {
+            line.contains("sandbox-exec did not run the command")
+                && line.contains("sandbox-exec: ")
+                && line.contains("/nonexistent-check-finding")
+        })
+    } else {
+        stderr.contains("bwrap: Can't find source path /nonexistent-check-finding")
+    }
+}
+
+/// The path of the real confiner, which must be on `PATH`.
+fn real_confiner() -> String {
+    let real = Command::new("sh")
+        .args(["-c", &format!("command -v {CONFINER}")])
+        .output()
+        .expect("sh runs");
+    let real = String::from_utf8_lossy(&real.stdout).trim().to_owned();
+    assert!(!real.is_empty(), "{CONFINER} is on PATH");
+    real
+}
 
 /// A scratch directory under this crate's build directory, removed on drop.
 struct Scratch(PathBuf);
@@ -1003,8 +1058,13 @@ fn probe_build(home: &Path, other: &Path) -> String {
 /// The variables a confined build's script may see: those the check sets (`HOME`, `TMPDIR`,
 /// `PATH`, `LANG`, `TERM`, `CARGO_HOME`, `RUSTC`), the working directory bubblewrap sets, and
 /// those cargo sets for a build script (`CARGO`, `CARGO_*`, `DEP_*` and the names below; the
-/// two `SSL_CERT_*` cargo sets in its own environment, naming the system's certificates).
+/// two `SSL_CERT_*` cargo sets in its own environment, naming the system's certificates). The
+/// search path cargo sets for the dynamic libraries it built is `LD_LIBRARY_PATH`, and on macOS
+/// `DYLD_FALLBACK_LIBRARY_PATH`.
 fn allowed_in_a_build(name: &str) -> bool {
+    if cfg!(target_os = "macos") && name == "DYLD_FALLBACK_LIBRARY_PATH" {
+        return true;
+    }
     const SET: [&str; 22] = [
         "CARGO",
         "SSL_CERT_DIR",
@@ -1179,14 +1239,14 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
         "the caller's environment or home reached the build: {leaked:?}"
     );
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("confined in bwrap"),
+        String::from_utf8_lossy(&output.stderr).contains(&format!("confined in {CONFINER}")),
         "the check says the build is confined: {}",
         shown(&output)
     );
 }
 
-/// Without bubblewrap on `PATH` a revision is never built unconfined: the check gives no
-/// result, says why, and keeps no binary.
+/// Without the confiner (bubblewrap; on macOS `sandbox-exec`) on `PATH` a revision is never
+/// built unconfined: the check gives no result, says why, and keeps no binary.
 #[test]
 fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
     use std::os::unix::fs::symlink;
@@ -1199,7 +1259,7 @@ fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
         &[],
     );
     assert!(filed.status.success(), "{}", shown(&filed));
-    // A PATH holding every program of the caller's but bubblewrap.
+    // A PATH holding every program of the caller's but the confiner.
     let bin = world.outer.0.join("bin-without-bwrap");
     fs::create_dir_all(&bin).expect("a directory");
     let path = std::env::var_os("PATH").expect("a PATH");
@@ -1209,7 +1269,7 @@ fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
         };
         for entry in entries.flatten() {
             let name = entry.file_name();
-            if name == "bwrap" || bin.join(&name).symlink_metadata().is_ok() {
+            if name == CONFINER || bin.join(&name).symlink_metadata().is_ok() {
                 continue;
             }
             symlink(entry.path(), bin.join(&name)).expect("a link");
@@ -1223,7 +1283,11 @@ fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
     assert_eq!(output.status.code(), Some(1), "{}", shown(&output));
     assert!(output.stdout.is_empty(), "{}", shown(&output));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("bubblewrap"),
+        String::from_utf8_lossy(&output.stderr).contains(if cfg!(target_os = "macos") {
+            "sandbox-exec"
+        } else {
+            "bubblewrap"
+        }),
         "{}",
         shown(&output)
     );
@@ -1234,7 +1298,7 @@ fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
             .join(&world.defect)
             .join("takt")
             .exists(),
-        "a binary was built without bubblewrap"
+        "a binary was built without {CONFINER}"
     );
 }
 
@@ -1242,28 +1306,26 @@ fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
 /// command, and its own exit 1 is not the command's: a predicate naming 1 as the defect's exit,
 /// or as the healthy one, gets no result, and the check names bubblewrap's error. Bubblewrap's
 /// status names the command's pid in both cases; only an `exit-code` line, its last, says that
-/// bubblewrap ran the command to its end.
+/// bubblewrap ran the command to its end. On macOS the same holds of a `sandbox-exec` that
+/// fails to start the program it is given: its exit is not the command's, and only the
+/// `exit-code` line the check's own wrapper writes once the command ended says it ran.
 #[test]
 fn a_bubblewrap_that_fails_before_the_command_runs_gives_no_result() {
     use std::os::unix::fs::PermissionsExt;
 
     let world = world("bwrap-setup-fails");
-    let real = Command::new("sh")
-        .args(["-c", "command -v bwrap"])
-        .output()
-        .expect("sh runs");
-    let real = String::from_utf8_lossy(&real.stdout).trim().to_owned();
-    assert!(!real.is_empty(), "bubblewrap is on PATH");
-    // The predicate's call alone (the one with a status fd) gets a bind whose source is absent,
-    // so bubblewrap's mount setup fails after it forked; the build's call runs as it is.
+    let real = real_confiner();
+    // The predicate's call alone gets a confiner call that never runs the command; the build's
+    // call runs as it is.
     let bin = world.outer.0.join("bin-failing-bwrap");
     write(
-        &bin.join("bwrap"),
+        &bin.join(CONFINER),
         &format!(
-            "#!/bin/sh\ncase \" $* \" in *' --json-status-fd '*) exec {real} --ro-bind /nonexistent-check-finding /srv/absent \"$@\";; esac\nexec {real} \"$@\"\n"
+            "#!/bin/sh\ncase \" $* \" in {RUN_CALL}) exec {};; esac\nexec {real} \"$@\"\n",
+            never_runs(&real)
         ),
     );
-    fs::set_permissions(bin.join("bwrap"), fs::Permissions::from_mode(0o755)).expect("executable");
+    fs::set_permissions(bin.join(CONFINER), fs::Permissions::from_mode(0o755)).expect("executable");
     let path = std::env::var("PATH").expect("a PATH");
     let path = format!("{}:{path}", bin.display());
     let cases = [
@@ -1285,9 +1347,8 @@ fn a_bubblewrap_that_fails_before_the_command_runs_gives_no_result() {
         assert_eq!(output.status.code(), Some(1), "{key}: {}", shown(&output));
         assert!(output.stdout.is_empty(), "{key}: {}", shown(&output));
         assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("bwrap: Can't find source path /nonexistent-check-finding"),
-            "{key}: the check names bubblewrap's error: {}",
+            names_the_confiners_error(&String::from_utf8_lossy(&output.stderr)),
+            "{key}: the check names {CONFINER}'s error: {}",
             shown(&output)
         );
         assert!(
@@ -1324,7 +1385,11 @@ done
 /// own), and bubblewrap's status reaches the check through a pipe, never a file another check's
 /// process can append to. The next check, whose bubblewrap fails its mount setup after a
 /// second's delay and so never runs its command, gives no result, though its predicate names
-/// the 1 bubblewrap exits with. The command waits until the process it leaves has started.
+/// the 1 bubblewrap exits with. The command waits until the process it leaves has started. On
+/// macOS there is no PID namespace: the process left in the command's process group dies with
+/// the check because the check kills that group when the command ends (a process that leaves
+/// the group outlives it, a breaking change the changelog names), and the status reaches the
+/// check on a pipe the command's descriptors do not hold.
 #[test]
 fn a_process_left_running_by_one_check_cannot_change_the_next_checks_result() {
     use std::os::unix::fs::PermissionsExt;
@@ -1361,20 +1426,16 @@ fn a_process_left_running_by_one_check_cannot_change_the_next_checks_result() {
         "{}",
         shown(&first)
     );
-    let real = Command::new("sh")
-        .args(["-c", "command -v bwrap"])
-        .output()
-        .expect("sh runs");
-    let real = String::from_utf8_lossy(&real.stdout).trim().to_owned();
-    assert!(!real.is_empty(), "bubblewrap is on PATH");
+    let real = real_confiner();
     let bin = world.outer.0.join("bin-slow-failing-bwrap");
     write(
-        &bin.join("bwrap"),
+        &bin.join(CONFINER),
         &format!(
-            "#!/bin/sh\ncase \" $* \" in *' --json-status-fd '*) {real} --ro-bind /nonexistent-check-finding /srv/absent \"$@\"; s=$?; sleep 1; exit $s;; esac\nexec {real} \"$@\"\n"
+            "#!/bin/sh\ncase \" $* \" in {RUN_CALL}) {}; s=$?; sleep 1; exit $s;; esac\nexec {real} \"$@\"\n",
+            never_runs(&real)
         ),
     );
-    fs::set_permissions(bin.join("bwrap"), fs::Permissions::from_mode(0o755)).expect("executable");
+    fs::set_permissions(bin.join(CONFINER), fs::Permissions::from_mode(0o755)).expect("executable");
     let path = format!(
         "{}:{}",
         bin.display(),
@@ -1386,9 +1447,8 @@ fn a_process_left_running_by_one_check_cannot_change_the_next_checks_result() {
     assert_eq!(second.status.code(), Some(1), "{}", shown(&second));
     assert!(second.stdout.is_empty(), "{}", shown(&second));
     assert!(
-        String::from_utf8_lossy(&second.stderr)
-            .contains("bwrap: Can't find source path /nonexistent-check-finding"),
-        "the check names bubblewrap's error: {}",
+        names_the_confiners_error(&String::from_utf8_lossy(&second.stderr)),
+        "the check names {CONFINER}'s error: {}",
         shown(&second)
     );
     assert!(
@@ -1406,18 +1466,14 @@ fn a_process_left_running_by_one_check_cannot_change_the_next_checks_result() {
 /// exits 1 after its command ended 0 gives no result for a predicate naming 1 (the review's
 /// mutant M8b, the line read but not compared, takes the 1 as the command's); an `exit-code`
 /// line written ahead of bubblewrap's own is not the one read (M8d, the first line for the
-/// last, reads it).
+/// last, reads it). On macOS the line is the one the check's own wrapper writes under
+/// `sandbox-exec` once the command ended, and the same two mutants are caught there.
 #[test]
 fn only_the_last_line_bubblewrap_writes_gives_the_commands_exit() {
     use std::os::unix::fs::PermissionsExt;
 
     let world = world("bwrap-last-word");
-    let real = Command::new("sh")
-        .args(["-c", "command -v bwrap"])
-        .output()
-        .expect("sh runs");
-    let real = String::from_utf8_lossy(&real.stdout).trim().to_owned();
-    assert!(!real.is_empty(), "bubblewrap is on PATH");
+    let real = real_confiner();
     let filed = file(
         &world.takt,
         "exit-one",
@@ -1430,12 +1486,12 @@ fn only_the_last_line_bubblewrap_writes_gives_the_commands_exit() {
     let wrapper = |name: &str, predicate_call: &str| {
         let bin = world.outer.0.join(name);
         write(
-            &bin.join("bwrap"),
+            &bin.join(CONFINER),
             &format!(
-                "#!/bin/sh\ncase \" $* \" in *' --json-status-fd '*) {predicate_call};; esac\nexec {real} \"$@\"\n"
+                "#!/bin/sh\ncase \" $* \" in {RUN_CALL}) {predicate_call};; esac\nexec {real} \"$@\"\n"
             ),
         );
-        fs::set_permissions(bin.join("bwrap"), fs::Permissions::from_mode(0o755))
+        fs::set_permissions(bin.join(CONFINER), fs::Permissions::from_mode(0o755))
             .expect("executable");
         format!(
             "{}:{}",
@@ -1536,7 +1592,9 @@ fn the_binary_kept_is_the_one_cargo_built_not_one_the_revision_commits() {
 
 /// The protocol sources `aep` reads are bound read-only into the predicate's home under
 /// bubblewrap, neither linked nor copied: a command that writes through them changes nothing in
-/// the caller's cache, and the home on disk holds no copy.
+/// the caller's cache, and the home on disk holds no copy. On macOS, where there is no bind,
+/// the home holds a link to the sources' real path, which Seatbelt lets the command read and
+/// not write: the same writes change nothing, and the home still holds no copy.
 #[test]
 fn the_predicate_cannot_write_the_callers_protocol_sources() {
     let world = world("protocol-sources");
@@ -1559,13 +1617,23 @@ fn the_predicate_cannot_write_the_callers_protocol_sources() {
     let output = world.check("story:sources", &world.defect, &[]);
     let ran = fs::read_to_string(record(&output).join("output")).unwrap_or_default();
     let mount_point = record(&output).join("home/.cache/aep/protocol-sources");
-    let held: Vec<_> = fs::read_dir(&mount_point)
-        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
-        .unwrap_or_default();
-    assert!(
-        held.is_empty() && !fs::symlink_metadata(&mount_point).is_ok_and(|meta| meta.is_symlink()),
-        "the predicate's home holds a copy or a link of the sources: {held:?}"
-    );
+    if cfg!(target_os = "macos") {
+        let linked = fs::read_link(&mount_point).ok();
+        let real = fs::canonicalize(&sources).ok();
+        assert!(
+            linked.is_some() && linked == real,
+            "the predicate's home holds no link to the sources' real path: {linked:?}, {real:?}"
+        );
+    } else {
+        let held: Vec<_> = fs::read_dir(&mount_point)
+            .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+            .unwrap_or_default();
+        assert!(
+            held.is_empty()
+                && !fs::symlink_metadata(&mount_point).is_ok_and(|meta| meta.is_symlink()),
+            "the predicate's home holds a copy or a link of the sources: {held:?}"
+        );
+    }
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "reproduced\n",
@@ -1640,7 +1708,8 @@ echo probe-ran
 /// repository is refused too, with a read-only error, or with no such file where the
 /// repository lies under a home the check hides (the user's own, here, when the scratch lies
 /// under it); one that reads a secret planted in the caller's home does not see it; and the
-/// check still gives its result.
+/// check still gives its result. On macOS, Seatbelt refuses a write by path, and the error the
+/// shell prints is "Operation not permitted" in place of the read-only one.
 #[test]
 fn the_predicate_writes_no_host_path_and_reads_nothing_of_the_callers_home() {
     let world = world("run-confined");
@@ -1727,9 +1796,14 @@ fn the_predicate_writes_no_host_path_and_reads_nothing_of_the_callers_home() {
         // the system's "No such file or directory", dash "Directory nonexistent".
         let none_such =
             line.contains("No such file or directory") || line.contains("Directory nonexistent");
+        let refused = if cfg!(target_os = "macos") {
+            "Operation not permitted"
+        } else {
+            "Read-only file system"
+        };
         assert!(
             line.starts_with(&format!("{attempt}: refused: "))
-                && (line.contains("Read-only file system") || hidden && none_such),
+                && (line.contains(refused) || hidden && none_such),
             "{attempt} gets a read-only error{}:\n{ran}",
             if hidden { ", or none such" } else { "" }
         );
@@ -1775,7 +1849,10 @@ echo probe-ran
 /// with the host, so it reaches no network, no abstract unix socket (X11's among them) and no
 /// System V or POSIX IPC of the host, and it sees nothing of `/run` (the user's session bus,
 /// ssh and gpg agents, keyring and podman under `/run/user/<uid>`, the docker socket, the
-/// system bus), nor `/var/run/docker.sock`, nor the host's `/tmp`.
+/// system bus), nor `/var/run/docker.sock`, nor the host's `/tmp`. On macOS, where Seatbelt
+/// has no namespaces, the network is denied and `/private/var/run` and `/private/tmp` are out
+/// of sight, so the loopback and the sockets are asserted; the host's IPC stays in reach there,
+/// a breaking change the changelog names.
 #[test]
 fn the_predicate_reaches_no_network_ipc_or_socket_of_the_host() {
     let world = world("sockets");

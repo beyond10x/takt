@@ -599,8 +599,9 @@ impl Drop for ScratchHome {
 /// spawn fails when the host refuses the namespaces: the command is never run with the user's
 /// session in reach. Not hidden: an abstract socket a bus address names, and the user's home
 /// read by its path. On macOS the command is started by `sandbox-exec` under the profile
-/// [`crate::seatbelt::test_command`] writes: it writes only to the command's directory, `home`,
-/// the temporary directories and the cargo caches, and reads no registry login, nothing under
+/// [`crate::seatbelt::test_command`] writes: it writes only to the command's directory, the git
+/// directories of a linked worktree there ([`linked_git_dirs`]), `home`, the temporary
+/// directories and the cargo caches, and reads no registry login, nothing under
 /// the user's `Library/Keychains`, the runtime directory or a bus socket; with no `sandbox-exec`
 /// the spawn fails ([`refused_namespaces`] names it). Call it before anything is set on
 /// `command` that is not to be carried over by `Command::wrap`: the standard streams and the
@@ -707,6 +708,7 @@ pub fn without_login(command: &mut Command, home: &Path) {
         let tree = command.get_current_dir().map(Path::to_path_buf);
         let mut writable: Vec<PathBuf> = vec![home.to_path_buf(), std::env::temp_dir()];
         writable.extend(tree.clone());
+        writable.extend(tree.as_deref().map(linked_git_dirs).unwrap_or_default());
         writable.extend(crate::seatbelt::user_dirs());
         let kept: Vec<PathBuf> = [Some(home), tree.as_deref()]
             .into_iter()
@@ -750,6 +752,37 @@ pub fn without_login(command: &mut Command, home: &Path) {
         );
         command.wrap(crate::seatbelt::SANDBOX_EXEC, &profile.args(), &resolved);
     }
+}
+
+/// The git directories of the linked worktree at `tree`, which lie outside it: the one its
+/// `.git` file names (`gitdir: <path>`, a relative one from `tree`) and the common directory
+/// that one's `commondir` names (a relative one from it), each when it is a directory; none for
+/// a tree whose `.git` is no such file. A test command in a linked worktree reads and writes
+/// them as one in the main worktree does its `.git`, which lies inside its tree.
+#[cfg(target_os = "macos")]
+fn linked_git_dirs(tree: &Path) -> Vec<PathBuf> {
+    let Ok(text) = std::fs::read_to_string(tree.join(".git")) else {
+        return Vec::new();
+    };
+    let Some(named) = text
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("gitdir: "))
+    else {
+        return Vec::new();
+    };
+    let git_dir = tree.join(named.trim_end());
+    if !git_dir.is_dir() {
+        return Vec::new();
+    }
+    let mut found = vec![git_dir.clone()];
+    if let Ok(common) = std::fs::read_to_string(git_dir.join("commondir")) {
+        let common = git_dir.join(common.trim_end());
+        if common.is_dir() {
+            found.push(common);
+        }
+    }
+    found
 }
 
 /// The namespaces [`without_login`] starts a child in.
@@ -1121,10 +1154,10 @@ mod leftovers {
 /// no running child of [`run_child`] leads, or in a session of its own: what a judgement step's
 /// harness, or a validator that ran a program by itself, left running once it returned (a writer
 /// in the background). On Linux this process is made the subreaper of what it starts first, so
-/// an orphan is found too. On macOS, where there is no subreaper, what is killed is every
-/// process of this user that carries the mark of one of this process's [`run_child`] calls
-/// (`TAKT_CHILD`) whose child is no longer running, wherever it went; elsewhere nothing is
-/// done. The run calls it after each judgement step
+/// an orphan is found too. On macOS, where there is no subreaper, what is killed is such a
+/// child of this process, and every process of this user that carries the mark of one of this
+/// process's [`run_child`] calls (`TAKT_CHILD`) whose child is no longer running, wherever it
+/// went; elsewhere nothing is done. The run calls it after each judgement step
 /// and each observation. It waits while a [`SweepsHeld`] lives: a child another thread started
 /// outside [`run_child`] and waits on itself (a gate's command, a harness's session) is not a
 /// leftover, and is swept, if at all, only once it has ended and its caller has reaped it.
@@ -1143,9 +1176,10 @@ pub fn sweep_left() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let _sweeping = sweeping();
-        let _running = RUNNING
+        let running = RUNNING
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::marked::sweep_children(&running)?;
         let live = LIVE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);

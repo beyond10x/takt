@@ -242,21 +242,35 @@ fn id(flag: &str) -> String {
 /// One `takt run --harness none` whose test command reports what it sees of the registry login
 /// (`${CARGO_HOME:-$HOME/.cargo}/credentials.toml`), with `HOME` as `home` gives it (unset
 /// when none), run under bubblewrap with `passwd` as `/etc/passwd`, so the home this user's
-/// passwd entry names is the scratch one and the operator's own is never looked at.
+/// passwd entry names is the scratch one and the operator's own is never looked at. On macOS a
+/// user's home comes from its directory service, which no file replaces: takt runs as it is,
+/// `passwd` unused, and the probe writes what it sees under `TMPDIR`, which a test command
+/// there may write (`seatbelt::test_command`).
 fn registry_probe(
     outer: &Path,
     passwd: &Path,
     case: &str,
     home: Option<&std::ffi::OsStr>,
 ) -> String {
-    let seen = outer.join(format!("seen-{case}"));
-    let mut takt = Command::new("bwrap");
-    takt.args(["--dev-bind", "/", "/", "--ro-bind"])
-        .arg(passwd)
-        .arg("/etc/passwd")
-        .arg("--")
-        .arg(env!("CARGO_BIN_EXE_takt"))
-        .args(["run", "--repo"])
+    #[cfg(target_os = "macos")]
+    let (seen, mut takt) = {
+        let _ = passwd;
+        (
+            outer.join(format!("tmp/seen-{case}")),
+            Command::new(env!("CARGO_BIN_EXE_takt")),
+        )
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (seen, mut takt) = {
+        let mut takt = Command::new("bwrap");
+        takt.args(["--dev-bind", "/", "/", "--ro-bind"])
+            .arg(passwd)
+            .arg("/etc/passwd")
+            .arg("--")
+            .arg(env!("CARGO_BIN_EXE_takt"));
+        (outer.join(format!("seen-{case}")), takt)
+    };
+    takt.args(["run", "--repo"])
         .arg(outer.join("repo"))
         .args([
             "--intent",
@@ -278,7 +292,9 @@ fn registry_probe(
     if let Some(home) = home {
         takt.env("HOME", home);
     }
-    let output = takt.output().expect("bwrap runs (CI installs bubblewrap)");
+    let output = takt
+        .output()
+        .expect("takt runs (on Linux under bwrap, which CI installs)");
     let printed = format!(
         "exit {:?}\nstdout {}\nstderr {}",
         output.status.code(),
@@ -290,10 +306,24 @@ fn registry_probe(
     format!("{seen}\n{printed}")
 }
 
+/// The home this user's directory service entry names, as the shell expands `~user`.
+#[cfg(target_os = "macos")]
+fn directory_service_home() -> PathBuf {
+    let output = Command::new("sh")
+        .args(["-c", "eval \"printf %s ~$(id -un)\""])
+        .env_remove("HOME")
+        .output()
+        .expect("sh runs");
+    PathBuf::from(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// Whatever `HOME` takt starts with (unset, relative or set), the test command finds no registry
 /// login as a file it can read: the registry login under whichever `CARGO_HOME` the command
 /// sees is covered. With no absolute `HOME` the command's `CARGO_HOME` is the passwd home's
-/// `.cargo`, here a scratch one holding a stand-in token.
+/// `.cargo`, here a scratch one holding a stand-in token. On macOS, where no file replaces the
+/// directory service's home, that home is the user's own, and a covered login is one the
+/// command cannot even see: it asserts every case's `CARGO_HOME` and that the login there,
+/// the stand-in when `HOME` is set, looks absent.
 #[test]
 fn a_test_command_finds_no_registry_login_whatever_home_takt_has() {
     let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
@@ -328,7 +358,7 @@ fn a_test_command_finds_no_registry_login_whatever_home_takt_has() {
         "#!/bin/sh\nexec > \"$1\" 2>&1\n\
          echo \"-- home $HOME\"\necho \"-- cargo $CARGO_HOME\"\n\
          f=\"${CARGO_HOME:-$HOME/.cargo}/credentials.toml\"\n\
-         if [ -e \"$f\" ]; then echo \"-- kind $(stat -L -c %F \"$f\")\"; else echo '-- kind absent'; fi\n\
+         if [ -e \"$f\" ]; then echo \"-- kind $(stat -L -c %F \"$f\" 2>/dev/null || stat -L -f %HT \"$f\" | tr A-Z a-z)\"; else echo '-- kind absent'; fi\n\
          echo '-- end'\nexit 0\n",
     );
     git(&repo, &["init", "-q", "-b", "main"]);
@@ -359,8 +389,31 @@ fn a_test_command_finds_no_registry_login_whatever_home_takt_has() {
                 "HOME {case}: the registry login is a regular file the test command can read, or the probe did not end:\n{seen}"
             ));
         }
+        // On macOS the login is covered by the profile refusing to read it, its metadata
+        // included, so it looks absent whether a file is there or not: the stand-in when HOME
+        // is set, the user's own when it is not, whose home is the directory service's.
+        #[cfg(target_os = "macos")]
+        {
+            let expected = if case == "set" {
+                outer.join("home/.cargo")
+            } else {
+                directory_service_home().join(".cargo")
+            };
+            if cargo != expected.display().to_string() {
+                failed.push(format!(
+                    "HOME {case}: the command's CARGO_HOME is not {}:\n{seen}",
+                    expected.display()
+                ));
+            }
+            if kind != "absent" {
+                failed.push(format!(
+                    "HOME {case}: the registry login is not refused ({kind}):\n{seen}"
+                ));
+            }
+        }
         // With no absolute HOME, the command's toolchain home is the passwd home's `.cargo`, the
         // stand-in here, never one resolved inside the tree, and its login is covered.
+        #[cfg(not(target_os = "macos"))]
         if case != "set" {
             if !seen.contains(&format!("-- cargo {}", outer.join("home/.cargo").display())) {
                 failed.push(format!(
