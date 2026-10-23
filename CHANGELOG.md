@@ -6,8 +6,15 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-23
+
+The minor version moves because harness sessions run through Loom's session executor and takt no longer runs Canon's
+evaluation itself, which changes the error a refused or unreadable case ends with.
+
 ### Changed
 
+- **Breaking:** No macOS binary in 0.9.0 either: loom-sdk 0.35.0 builds on macOS, but takt's tests do not yet pass there.
+- ESS moves from 0.67 to 0.68: `ess/ess-inputs.yaml` requires ess 0.68.
 - `b10x-loom-sdk` moves from loom 0.34.0 to 0.35.0, which builds on macOS.
 - Harness sessions run through Loom's session executor at 0.35.0 with metaharness 0.13.0; takt's own crate `b10x-session-executor` is gone.
 - After each harness step, the case's `observations.json` holds the session's `AgentSession` record: kind, action, vendor session id and each file's path and sha256.
@@ -372,7 +379,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.8.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.9.0...HEAD
+[0.9.0]: https://github.com/beyond10x/takt/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/beyond10x/takt/compare/0.7.0...0.8.0
 [0.7.0]: https://github.com/beyond10x/takt/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/beyond10x/takt/compare/0.5.0...0.6.0
