@@ -13,10 +13,11 @@ evaluation itself, which changes the error a refused or unreadable case ends wit
 
 ### Changed
 
-- **Breaking:** No macOS binary in 0.9.0 either: loom-sdk 0.35.0 builds on macOS, but takt's tests do not yet pass there.
+- **Breaking:** No macOS binary in 0.9.0 either: loom-sdk 0.36.0 builds on macOS, but takt's tests do not yet pass there.
 - ESS moves from 0.67 to 0.68: `ess/ess-inputs.yaml` requires ess 0.68.
-- `b10x-loom-sdk` moves from loom 0.34.0 to 0.35.0, which builds on macOS.
-- Harness sessions run through Loom's session executor at 0.35.0 with metaharness 0.13.0; takt's own crate `b10x-session-executor` is gone.
+- `b10x-loom-sdk` moves from loom 0.34.0 to 0.36.0, which builds on macOS.
+- Harness sessions run through Loom's session executor at 0.36.0 with metaharness 0.13.0; takt's own crate `b10x-session-executor` is gone.
+- Under `--confinement substrate` the test command runs on Substrate 0.10.0, which loom-sdk 0.36.0 links; 0.8.0 linked Substrate 0.7.18.
 - After each harness step, the case's `observations.json` holds the session's `AgentSession` record: kind, action, vendor session id and each file's path and sha256.
 - `--harness claude` proposes only on Claude Code 2.1.304 or 2.1.305: on any other version metaharness 0.13.0's memory-canary floor (H11) holds the proposal back.
 - A session that writes a file the tree already holds outside its copy, such as an ignored one, now ends the run with an error ("the workspace changed under the session"), not a `StepRefused` stop.
