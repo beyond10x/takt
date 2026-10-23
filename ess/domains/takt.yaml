@@ -1134,7 +1134,7 @@ types:
   # Where a `workflow/1` document is: the `--workflow <file>` argument, or the repository default
   # `.engineering/workflow.yaml`. Not built: the kernel reads neither yet (milestone M3).
   # read from: docs/design/takt.md:41
-  # read from: docs/design/takt.md:115
+  # read from: docs/design/takt.md:117
   - name: takt.work.WorkflowPath
     kind: newtype
     of: String
@@ -3377,7 +3377,7 @@ entities:
   # offered. The `loop`, `gate` and `approval` blocks of the design are declared by the stories
   # that build them (story:declared-loops, story:gate-validator, story:merge-under-authority).
   # read from: docs/design/takt.md:73-82
-  # read from: docs/design/takt.md:115
+  # read from: docs/design/takt.md:117
   - name: takt.work.Workflow
     naming:
       summary: >-

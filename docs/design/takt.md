@@ -102,9 +102,11 @@ The endpoint b10x-harness's loop is pointed at under `--harness harness` is conf
 `crates/takt/src/harness.rs`): its base URL, wire, model and credential come from the `--endpoint-*` flags or from
 `--endpoint-file`, a TOML file, a flag winning over the file; with neither, it is the Anthropic Messages API on the
 user's claude.ai login. A credential is named, never given: a token file with an optional JSON pointer, or a
-secret's name (`--endpoint-secret <namespace>/<name>`). Not built: a secret's name is refused before the case opens
-until the pinned session executor (loom 0.39.0) can hand it to the harness, and the case does not yet record the
-endpoint's reference (story:harness-endpoint-is-configured).
+secret's name (`--endpoint-secret <namespace>/<name>`). The case records the endpoint by reference on its `opened`
+event (base URL, wire, model and the credential's `kind`, `subscription_file` with `path` and `pointer` or `secret`
+with `namespace` and `name`, never a secret), and only a `--harness harness` run writes that `endpoint` key. Not
+built: a secret's name is refused before the case opens until the pinned session executor (loom 0.39.0) can hand it
+to the harness (story:harness-endpoint-is-configured).
 
 ## 4. Milestones
 
