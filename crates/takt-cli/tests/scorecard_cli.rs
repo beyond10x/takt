@@ -104,6 +104,7 @@ fn run_made_with(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Optio
                 binary: binary.map(str::to_owned),
                 layers: None,
                 confinement: None,
+                endpoint: None,
             },
         ),
         (
@@ -873,6 +874,7 @@ fn run_with_layers(repo: &Path, case: &str, layers: &[(&str, &str)], model: Opti
                 binary: layers.get("takt").cloned(),
                 layers: Some(layers),
                 confinement: None,
+                endpoint: None,
             },
         ),
         (

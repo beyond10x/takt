@@ -130,6 +130,12 @@ pub trait Harness {
     fn take_session(&self) -> Option<AgentSession> {
         None
     }
+    /// The model endpoint the harness's sessions are pointed at, by reference only (its base
+    /// URL, wire and model, and where its credential is, never a token), which the run records
+    /// on its `opened` line; none by default, for a harness pointed at none.
+    fn endpoint_reference(&self) -> Option<EndpointConfig> {
+        None
+    }
 }
 
 pub use loom_sdk::session::{Endpoint, Proposal, ProposedFile};
@@ -440,6 +446,18 @@ impl Harness for SessionHarness {
 
     fn take_session(&self) -> Option<AgentSession> {
         self.session.borrow_mut().take()
+    }
+
+    /// b10x-harness's endpoint as its sessions are pointed at it, `--model` over the
+    /// endpoint's model as the session executor takes it; Claude Code and Codex are pointed at
+    /// none.
+    fn endpoint_reference(&self) -> Option<EndpointConfig> {
+        let endpoint = self.endpoint.as_ref().filter(|_| self.kind == Kind::B10x)?;
+        let mut reference = EndpointConfig::of_session(endpoint);
+        if let Some(model) = &self.model {
+            reference.model.clone_from(model);
+        }
+        Some(reference)
     }
 
     /// Codex's shell reads where its sandbox grants reading, the whole file system;
@@ -1981,18 +1999,31 @@ pub const ENDPOINT_WIRES: [&str; 2] = ["anthropic-messages", "openai-responses"]
 
 /// Where the credential of a `--harness harness` endpoint is, by reference only: takt reads a
 /// subscription token file only to check, before the first step, that a token is where its
-/// pointer points, and never reads a secret.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// pointer points, and never reads a secret. Recorded as `kind` `subscription_file` with the
+/// `path` and, when given, the `pointer`, or `kind` `secret` with the `namespace` and `name`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Credential {
     /// A subscription token in a file, at a JSON pointer inside it, or the whole file without
     /// one; b10x-harness's loop reads the file itself.
     SubscriptionFile {
+        #[serde(serialize_with = "path_as_written")]
         path: std::path::PathBuf,
+        #[serde(skip_serializing_if = "Option::is_none")]
         pointer: Option<String>,
     },
     /// An API key held in the owner's secrets store under a namespace and a name, written
     /// `<namespace>/<name>`; the harness resolves it, and takt opens no store.
     Secret { namespace: String, name: String },
+}
+
+/// A token file's path as the record writes it: as it displays, so a path that is not UTF-8
+/// is still recorded, its undecodable bytes replaced, instead of failing the line.
+fn path_as_written<S: serde::Serializer>(
+    path: &std::path::Path,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    serializer.serialize_str(&path.display().to_string())
 }
 
 impl Credential {
@@ -2127,8 +2158,9 @@ impl EndpointFields {
 }
 
 /// The model endpoint `--harness harness` points b10x-harness at: its base URL, its wire, its
-/// model and its credential by reference ([`Credential`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// model and its credential by reference ([`Credential`]); the run records it so on its
+/// `opened` line ([`crate::events::Event::Opened`]), holding no token to record.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct EndpointConfig {
     pub base_url: String,
     pub wire: String,
@@ -2147,6 +2179,21 @@ impl EndpointConfig {
     pub const TOKEN_FILE: &str = ".claude/.credentials.json";
     /// The default token file's pointer.
     pub const TOKEN_POINTER: &str = "/claudeAiOauth/accessToken";
+
+    /// The endpoint a session is built with, read back by reference: the session executor's
+    /// endpoint carries a subscription token file and its pointer, the one kind it knows.
+    #[must_use]
+    pub fn of_session(endpoint: &Endpoint) -> Self {
+        Self {
+            base_url: endpoint.base_url.clone(),
+            wire: endpoint.wire.clone(),
+            model: endpoint.model.clone(),
+            credential: Credential::SubscriptionFile {
+                path: endpoint.token_file.clone(),
+                pointer: endpoint.token_pointer.clone(),
+            },
+        }
+    }
 
     /// The endpoint `flags` and `file` give, each field the flag's, else the file's, else the
     /// default: b10x-harness's own `claude` provider on the user's claude.ai subscription token
@@ -3897,5 +3944,132 @@ mod endpoint_tests {
                 assert!(message.contains(part), "{part}: {message}");
             }
         }
+    }
+
+    /// The `opened` line a run would write with `endpoint`, as JSON.
+    fn opened_with(endpoint: Option<EndpointConfig>) -> serde_json::Value {
+        serde_json::to_value(crate::events::Event::Opened {
+            case: "c".to_owned(),
+            protocol: "software.change/1".to_owned(),
+            story: None,
+            inputs: Vec::new(),
+            base: None,
+            binary: None,
+            layers: None,
+            confinement: None,
+            endpoint,
+        })
+        .expect("the opened line serializes")
+    }
+
+    /// Acceptance 5: only `--harness harness` names an endpoint for the run to record, as its
+    /// session is pointed at it, `--model` over the endpoint's model; Claude Code, Codex and a
+    /// b10x-harness pointed at nothing name none.
+    #[test]
+    fn endpoint_reference_is_named_by_the_harness_harness_only() {
+        let endpoint = Endpoint {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "openai-responses".to_owned(),
+            model: "endpoint-model".to_owned(),
+            token_file: PathBuf::from("/t/token.json"),
+            token_pointer: Some("/x/y".to_owned()),
+        };
+        let mut harness = SessionHarness::of(Kind::B10x);
+        assert_eq!(harness.endpoint_reference(), None, "pointed at nothing");
+        harness.endpoint = Some(endpoint.clone());
+        let named = EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "openai-responses".to_owned(),
+            model: "endpoint-model".to_owned(),
+            credential: Credential::SubscriptionFile {
+                path: PathBuf::from("/t/token.json"),
+                pointer: Some("/x/y".to_owned()),
+            },
+        };
+        assert_eq!(harness.endpoint_reference(), Some(named.clone()));
+        harness.model = Some("flag-model".to_owned());
+        assert_eq!(
+            harness.endpoint_reference(),
+            Some(EndpointConfig {
+                model: "flag-model".to_owned(),
+                ..named
+            })
+        );
+        for kind in [Kind::Claude, Kind::Codex] {
+            let mut other = SessionHarness::of(kind);
+            other.endpoint = Some(endpoint.clone());
+            assert_eq!(other.endpoint_reference(), None, "{kind:?}");
+        }
+    }
+
+    /// Acceptance 5 over the record's shape, for both kinds: the `opened` line carries the
+    /// endpoint's base URL, wire and model and the credential's reference, the token file's path
+    /// and pointer or the secret's namespace and name, and never the token; a run with no
+    /// endpoint writes no `endpoint` field.
+    #[test]
+    fn endpoint_is_recorded_by_reference_never_by_its_token() {
+        let dir = scratch("recorded");
+        let marker = "MARKER-51d0e2-not-a-real-token";
+        let token = dir.0.join("token.json");
+        std::fs::write(&token, format!("{{\"a\":{{\"b\":\"{marker}\"}}}}")).expect("token");
+        let subscription = EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "m".to_owned(),
+            credential: Credential::SubscriptionFile {
+                path: token.clone(),
+                pointer: Some("/a/b".to_owned()),
+            },
+        };
+        subscription.check_token().expect("the pointer resolves");
+        let line = opened_with(Some(subscription));
+        assert_eq!(
+            line["endpoint"],
+            serde_json::json!({
+                "base_url": "https://b.example/v1",
+                "wire": "anthropic-messages",
+                "model": "m",
+                "credential": {
+                    "kind": "subscription_file",
+                    "path": token.display().to_string(),
+                    "pointer": "/a/b",
+                },
+            })
+        );
+        assert!(!line.to_string().contains(marker), "{line}");
+        let whole = opened_with(Some(EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "m".to_owned(),
+            credential: Credential::SubscriptionFile {
+                path: token.clone(),
+                pointer: None,
+            },
+        }));
+        assert_eq!(
+            whole["endpoint"]["credential"],
+            serde_json::json!({"kind": "subscription_file", "path": token.display().to_string()})
+        );
+        let secret = opened_with(Some(EndpointConfig {
+            base_url: "https://opencode.ai/inference/go/openai/v1".to_owned(),
+            wire: "openai-responses".to_owned(),
+            model: "gpt-6-luna".to_owned(),
+            credential: Credential::secret("llm/opencode-go-api-key").expect("a secret's name"),
+        }));
+        assert_eq!(
+            secret["endpoint"],
+            serde_json::json!({
+                "base_url": "https://opencode.ai/inference/go/openai/v1",
+                "wire": "openai-responses",
+                "model": "gpt-6-luna",
+                "credential": {
+                    "kind": "secret",
+                    "namespace": "llm",
+                    "name": "opencode-go-api-key",
+                },
+            })
+        );
+        let none = opened_with(None);
+        assert!(none.get("endpoint").is_none(), "{none}");
     }
 }

@@ -285,9 +285,26 @@ fn a_secret_name_is_refused_naming_the_session_executor_and_the_secret() {
     );
 }
 
+/// The `opened` lines of the one case under `cases`, each as JSON.
+fn opened_lines(cases: &Path) -> Vec<serde_json::Value> {
+    let events: Vec<PathBuf> = files_under(cases)
+        .into_iter()
+        .filter(|path| path.file_name().is_some_and(|name| name == "events.jsonl"))
+        .collect();
+    assert_eq!(events.len(), 1, "one case record: {events:?}");
+    fs::read_to_string(&events[0])
+        .expect("the run record")
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("a JSON line"))
+        .filter(|line| line["event"] == "opened")
+        .collect()
+}
+
 /// Acceptance 5: a marker token in a scratch token file named by an endpoint file reaches no
-/// case file, no output and no argument: the case opens on `--iterations 0` and stops before its
-/// first step, b10x-harness never started.
+/// case file, no output and no argument, while the case records the endpoint by reference: its
+/// `opened` line names the base URL, the wire, the model, and the token file's path and
+/// pointer. The case opens on `--iterations 0` and stops before its first step, b10x-harness
+/// never started.
 #[test]
 fn a_marker_token_reaches_no_case_file() {
     let world = World::new("marker");
@@ -320,16 +337,53 @@ fn a_marker_token_reaches_no_case_file() {
     assert!(!world.started().exists(), "b10x-harness was not started");
     let files = files_under(&world.cases());
     assert!(!files.is_empty(), "the case holds files");
+    let mut naming = Vec::new();
     for path in files {
         let bytes = fs::read(&path).expect("a case file");
+        let text = String::from_utf8_lossy(&bytes);
         assert!(
-            !String::from_utf8_lossy(&bytes).contains(marker),
+            !text.contains(marker),
             "the token reached {}",
             path.display()
         );
+        if text.contains(&token.display().to_string()) && text.contains("/oauth/access") {
+            naming.push(path);
+        }
     }
+    assert!(
+        !naming.is_empty(),
+        "a case file names the token file and its pointer"
+    );
     assert!(
         !stdout.contains(marker) && !stderr.contains(marker),
         "{stdout}\n{stderr}"
     );
+    let opened = opened_lines(&world.cases());
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    assert_eq!(
+        opened[0]["endpoint"],
+        serde_json::json!({
+            "base_url": "https://endpoint.invalid/v1",
+            "wire": "openai-responses",
+            "model": "m",
+            "credential": {
+                "kind": "subscription_file",
+                "path": token.display().to_string(),
+                "pointer": "/oauth/access",
+            },
+        })
+    );
+}
+
+/// A run whose harness is pointed at no endpoint records none: `--harness none` opens a case
+/// whose `opened` line has no `endpoint` field.
+#[test]
+fn a_run_without_an_endpoint_records_none() {
+    let world = World::new("no-endpoint");
+    let output = world.run(&["--harness", "none", "--iterations", "0"]);
+    let (stdout, stderr) = text(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}\n{stderr}");
+    let opened = opened_lines(&world.cases());
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    assert!(opened[0].get("endpoint").is_none(), "{}", opened[0]);
 }

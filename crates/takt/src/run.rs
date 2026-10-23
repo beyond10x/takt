@@ -10199,6 +10199,8 @@ impl<'a> Run<'a> {
                 binary: self.binary.clone(),
                 layers: Some(layers),
                 confinement: Some(confinement.clone()),
+                // The endpoint the harness is pointed at, by reference: never a token.
+                endpoint: self.harness.endpoint_reference(),
             },
         )?;
         writeln!(

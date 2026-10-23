@@ -61,6 +61,7 @@ fn opened(case: &str) -> Event {
         binary: None,
         layers: None,
         confinement: None,
+        endpoint: None,
     }
 }
 

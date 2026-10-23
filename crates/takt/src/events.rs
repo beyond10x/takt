@@ -77,6 +77,11 @@ pub enum Event {
     /// The confinement: the name of the adapter every child of the run starts through
     /// (`crate::confinement::Confinement::name`), `none` or `substrate`; absent on a line
     /// written before it, which a reader reads as "confinement not recorded".
+    /// The endpoint: the model endpoint the harness is pointed at
+    /// ([`crate::harness::Harness::endpoint_reference`]), by reference only: its base URL, wire
+    /// and model, and the credential's reference, the token file's path and pointer or the
+    /// secret's namespace and name, never a token. Absent for a harness pointed at none
+    /// (`claude`, `codex`, `none`) and on a line written before it.
     Opened {
         case: String,
         protocol: String,
@@ -91,6 +96,8 @@ pub enum Event {
         layers: Option<BTreeMap<String, String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         confinement: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        endpoint: Option<crate::harness::EndpointConfig>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.

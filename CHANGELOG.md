@@ -14,6 +14,7 @@ takt's releases.
 - An endpoint's credential is a subscription token file with an optional JSON pointer, or a secret's name (`--endpoint-secret <namespace>/<name>`); takt reads no secret.
 - A missing token file, or a pointer that resolves to no token, exits 1 before the case opens, naming the path and the pointer.
 - A secret's name is refused before the case opens: loom 0.39.0's session executor hands b10x-harness no secret's name, and handing it down waits on the loom release that does.
+- A run of `--harness harness` records its endpoint on the `opened` line by reference: base URL, wire, model, and the token file's path and pointer or the secret's name; never a token.
 - `--forge gitlab` delivers through `glab` on a GitLab host: it pushes over HTTPS under `glab auth git-credential`, and opens, reads and merges the merge request through `glab api`.
 - `--forge gitlab` without `glab` on the program path, or without `glab auth status --hostname <host>` exiting 0, is refused before the case opens, naming `glab` and the host.
 - `.gitlab-ci.yml` at the repository's root is on the judge surface, as `.github/**` is.
