@@ -17,6 +17,8 @@ takt's releases.
 - `--forge gitlab` delivers through `glab` on a GitLab host: it pushes over HTTPS under `glab auth git-credential`, and opens, reads and merges the merge request through `glab api`.
 - `--forge gitlab` without `glab` on the program path, or without `glab auth status --hostname <host>` exiting 0, is refused before the case opens, naming `glab` and the host.
 - `.gitlab-ci.yml` at the repository's root is on the judge surface, as `.github/**` is.
+- Through `--forge gitlab`, `ci.read` waits on the merge request's head pipeline as on GitHub's checks, under the same poll and `--hours`.
+- A head pipeline that is not the pushed head's is pending; one that ends writes `ci_result` `pass` (`success`, `skipped`) or `fail` (`failed`, `canceled`).
 
 ### Changed
 

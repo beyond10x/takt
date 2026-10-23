@@ -1352,6 +1352,16 @@ types:
   # `canceled` fail, `created`, `waiting_for_resource`, `preparing`, `pending`, `running`,
   # `manual` and `scheduled` are pending, and any other status is an error naming it.
   # read from: crates/takt/src/forge/gitlab.rs:398-426
+  # Both forges' checks are waited on alike, nothing in the wait a forge's own: `ci.read` reads
+  # them through the forge's `checks` (on `gitlab`, the merge request read through `glab api`
+  # and its head pipeline mapped as above); a pending read waits the run's poll, 30 s by
+  # default, cut to what is left of the hour budget, and a run with neither a step nor an hour
+  # budget does not wait; a `pass` or `fail` read writes one `ci_result` record about the
+  # implementation revision.
+  # read from: crates/takt/src/forge/gitlab.rs:528-531
+  # read from: crates/takt/src/validator.rs:2668-2687
+  # read from: crates/takt/src/run.rs:8435-8436
+  # read from: crates/takt/src/run.rs:9205-9218
   - name: takt.work.ChecksState
     kind: enum
     variants: [pass, fail, pending]
