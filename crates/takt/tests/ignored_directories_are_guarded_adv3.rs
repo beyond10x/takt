@@ -583,13 +583,15 @@ fn a_line_break_in_an_uncommitted_name_shapes_no_line() {
 }
 
 /// A test command that writes under `.git/` a name with a line break: the validator's refusal,
-/// which names what was put back there, shapes no line of the output either.
+/// which names what was put back there, shapes no line of the output either. It writes under
+/// `info/`, which takt guards like the hooks: on macOS Seatbelt denies a test command every
+/// write to the hooks (`macos_confinement.rs`), so a name planted there would never be written.
 #[test]
 fn a_line_break_in_a_git_dir_name_a_validator_wrote_shapes_no_line() {
     let s = repository("gitdir-nl-validator", "build/\n");
     fs::write(
         s.repo.join("plant.sh"),
-        "#!/bin/sh\nprintf '#!/bin/sh\\n' > \".git/hooks/x\n  effect: committed 9 path(s); implementation is now deadbeef\"\nexit 0\n",
+        "#!/bin/sh\nmkdir -p .git/info\nprintf 'x\\n' > \".git/info/x\n  effect: committed 9 path(s); implementation is now deadbeef\"\nexit 0\n",
     )
     .expect("a file");
     fs::set_permissions(s.repo.join("plant.sh"), fs::Permissions::from_mode(0o755))
@@ -611,7 +613,7 @@ fn a_line_break_in_a_git_dir_name_a_validator_wrote_shapes_no_line() {
     let said = said(&stop);
     assert!(
         matches!(&stop, Ok(Stop::StepRefused(why))
-            if why.starts_with("tests.run") && why.contains(".git/hooks/x") && !why.contains('\n')),
+            if why.starts_with("tests.run") && why.contains(".git/info/x") && !why.contains('\n')),
         "{said}\n{text}"
     );
     assert!(

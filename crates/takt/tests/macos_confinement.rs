@@ -421,18 +421,37 @@ mod seatbelt {
         .expect("the test command runs")
     }
 
+    /// `command` as every program this module starts itself is run: through
+    /// `forge::run_child`, standard input empty, killed with what it started once it has run
+    /// for `seconds`, so no test here waits on a program without a bound. An error past the
+    /// bound.
+    fn bounded(command: &mut Command, seconds: u64) -> anyhow::Result<takt::forge::Finished> {
+        takt::forge::run_child(
+            command,
+            Limits {
+                timeout: Duration::from_secs(seconds),
+                output: 4096,
+            },
+        )
+    }
+
+    /// `script` with `/bin/sh`, unconfined, held to [`bounded`]'s bound of `seconds`.
+    fn shell(script: &str, seconds: u64) -> anyhow::Result<takt::forge::Finished> {
+        bounded(Command::new("/bin/sh").args(["-c", script]), seconds)
+    }
+
     /// `script` under the profile a promotion's build runs under ([`takt::seatbelt::build`]),
-    /// writing only `writable`, the user's home hidden but for it.
-    fn confined_build(writable: &Path, script: &str) -> std::process::Output {
+    /// writing only `writable`, the user's home hidden but for it; held to [`limits`].
+    fn confined_build(writable: &Path, script: &str) -> takt::forge::Finished {
         let home = PathBuf::from(std::env::var_os("HOME").expect("a home"));
         let profile = takt::seatbelt::build(&[writable.to_path_buf()], &[], &[home]);
-        std::process::Command::new(takt::seatbelt::SANDBOX_EXEC)
+        let mut command = Command::new(takt::seatbelt::SANDBOX_EXEC);
+        command
             .args(profile.args())
             .args(["/bin/sh", "-c", script])
             .current_dir(writable)
-            .env("TMPDIR", writable)
-            .output()
-            .expect("sandbox-exec runs")
+            .env("TMPDIR", writable);
+        bounded(&mut command, limits().timeout.as_secs()).expect("sandbox-exec runs and ends")
     }
 
     /// Whether `path` exists within `seconds`.
@@ -449,9 +468,7 @@ mod seatbelt {
 
     /// Removes the launchd job `label`, should one have been submitted.
     fn remove_job(label: &str) {
-        let _ = std::process::Command::new("launchctl")
-            .args(["remove", label])
-            .output();
+        let _ = bounded(Command::new("launchctl").args(["remove", label]), 10);
     }
 
     /// The `launchctl submit` of a job `label` that writes `target`, then a pause for launchd
@@ -475,10 +492,7 @@ mod seatbelt {
 
         let label = format!("takt.test.unconfined.{}", std::process::id());
         let control = dir.0.join("unconfined");
-        let output = std::process::Command::new("/bin/sh")
-            .args(["-c", &submit(&label, &control)])
-            .output()
-            .expect("sh runs");
+        let output = shell(&submit(&label, &control), 30).expect("sh runs and ends");
         let ran = appears(&control, 5);
         remove_job(&label);
         assert!(
@@ -512,7 +526,10 @@ mod seatbelt {
 
     /// story:wave-35-review-fixes, acceptance 2 (M2): a test command connects to no socket
     /// under `/private/tmp/com.apple.launchd.*`, where launchd puts the ssh agent's; the same
-    /// connection unconfined is taken.
+    /// connection unconfined is taken. The listener never answers nor closes, and macOS's `nc`
+    /// may stay connected after its standard input ends, so each `nc` gives up after a second
+    /// idle (`-w 1`) and each run is bounded besides: unconfined by [`bounded`], whose bound
+    /// reached is no failure, as the connection is what is asked; confined by [`limits`].
     #[test]
     fn a_test_command_connects_to_no_launchd_socket() {
         use std::os::unix::net::UnixListener;
@@ -528,16 +545,12 @@ mod seatbelt {
         let socket = sockets.0.join("Listeners");
         let listener = UnixListener::bind(&socket).expect("the socket");
         listener.set_nonblocking(true).expect("non-blocking");
-        let connect = format!("/usr/bin/nc -U '{}' < /dev/null", socket.display());
+        let connect = format!("/usr/bin/nc -U -w 1 '{}' < /dev/null", socket.display());
 
-        let output = std::process::Command::new("/bin/sh")
-            .args(["-c", &connect])
-            .output()
-            .expect("sh runs");
+        let unconfined = shell(&connect, 10);
         assert!(
             listener.accept().is_ok(),
-            "nc connects unconfined: {}",
-            String::from_utf8_lossy(&output.stderr)
+            "nc connects unconfined: {unconfined:?}"
         );
 
         let finished = test_command(&tree, &connect);
@@ -563,10 +576,8 @@ mod seatbelt {
         let tree = dir.0.join("tree");
         fs::create_dir_all(&tree).expect("the tree");
         let getconf = |name: &str| -> PathBuf {
-            let output = std::process::Command::new("getconf")
-                .arg(name)
-                .output()
-                .expect("getconf runs");
+            let output =
+                bounded(Command::new("getconf").arg(name), 10).expect("getconf runs and ends");
             PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
         };
         for name in ["DARWIN_USER_CACHE_DIR", "DARWIN_USER_TEMP_DIR"] {
@@ -577,7 +588,7 @@ mod seatbelt {
             let after_build = planted.exists();
             let _ = fs::remove_file(&planted);
             assert!(
-                !output.status.success() && !after_build,
+                output.code != Some(0) && !after_build,
                 "a confined build does not write {name}: {}",
                 String::from_utf8_lossy(&output.stderr)
             );

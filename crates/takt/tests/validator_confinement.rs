@@ -851,11 +851,18 @@ fn tested_by(name: &str, script: &str) -> (Scratch, anyhow::Result<Stop>, String
 }
 
 /// A test command that plants a hook under `.git` is refused, the hook named and gone, and it
-/// never runs: no later git call of takt's sees it.
+/// never runs: no later git call of takt's sees it. On macOS Seatbelt denies the test command
+/// the write (`macos_confinement.rs`): the hook is never there and never runs.
 #[test]
 fn a_test_command_that_plants_a_hook_is_refused_and_the_hook_removed() {
     let script = "#!/bin/sh\nprintf '#!/bin/sh\\ntouch planted-hook-ran\\n' > .git/hooks/post-commit\nchmod +x .git/hooks/post-commit\nexit 0\n";
     let (tree, stop, text, _) = tested_by("hook", script);
+    if cfg!(target_os = "macos") {
+        assert!(text.contains("Operation not permitted"), "{stop:?}\n{text}");
+        assert!(!tree.join(".git/hooks/post-commit").exists(), "{text}");
+        assert!(!tree.join("planted-hook-ran").exists(), "{text}");
+        return;
+    }
     let Ok(Stop::StepRefused(why)) = &stop else {
         panic!("the observation is refused, not {stop:?}\n{text}");
     };
