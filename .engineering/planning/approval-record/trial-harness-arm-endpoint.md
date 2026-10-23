@@ -6,7 +6,7 @@ status: approved
 title: The trial agent's harness arm runs on OpenCode Go, its key in the OS keychain
 relations:
 - decides: story:harness-endpoint-is-configured
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "approved", at: "2026-10-21T23:18:16Z", actor: "human:timo", revision: 2}
 ---
@@ -35,3 +35,19 @@ should go to os keychain".
   `crates/takt-cli/src/main.rs`, so the trial arm waits on that story and on the harness
   resolving a secret's name.
 - Recorded by the dispatcher: the trial agent writes to no planning store (`AGENTS.md` § Roles).
+
+## Scheduling
+
+The orchestrator, on the owner's behalf, 2026-10-23: "Accept story:harness-endpoint-is-configured
+now (approval-record:trial-harness-arm-endpoint, approved 2026-10-21). Deliver it in your next
+wave, then release. Its depends_on epic:takt-on-loom-sdk is a scheduling note, not a code
+dependency. If AEP refuses the move, replace that edge with depends_on
+story:takt-uses-loom-session-executor (implemented) and record why. The credential is in the OS
+keychain, service b10x-secrets, label keyring:default/llm/default/opencode-go-api-key@b10x-secrets.
+Reference it by name only and never print it. harness resolves a secret name since
+story:api-key-from-the-secrets-store, and metaharness since story:b10x-api-key-from-keychain."
+Then: "story:harness-endpoint-is-configured goes first, because it is on the goal path (ADR 0101).
+The GitLab stories follow it."
+
+The dispatcher takes it into wave 36 as unit U3 beside the GitLab units already in flight; the
+wave's merge carries all three, and a release follows the merge.

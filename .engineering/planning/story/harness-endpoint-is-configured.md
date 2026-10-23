@@ -2,12 +2,29 @@
 format: aep.planning-md/3
 id: story:harness-endpoint-is-configured
 kind: story
-status: draft
+status: active
 title: takt --harness harness takes its endpoint and credential reference from flags or a file
 relations:
 - depends_on: epic:takt-on-loom-sdk
 - informed_by: approval-record:trial-harness-arm-endpoint
-revision: 2
+- serves: vision:safe-agentic-coding
+scope:
+- confidence: inferred
+  path: CHANGELOG.md
+- confidence: inferred
+  path: README.md
+- confidence: inferred
+  path: crates/takt-cli/src/main.rs
+- confidence: inferred
+  path: crates/takt-cli/tests/harness_endpoint_cli.rs
+- confidence: inferred
+  path: crates/takt/src/harness.rs
+- confidence: inferred
+  path: ess/domains/takt.yaml
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-23T21:57:01Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-23T21:57:01Z", actor: "human:timo", revision: 5}
 ---
 ## Outcome
 

@@ -2,12 +2,30 @@
 format: aep.planning-md/3
 id: story:gitlab-forge
 kind: story
-status: draft
+status: active
 title: takt delivers a story on a GitLab repository through glab
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: inferred
+  path: CHANGELOG.md
+- confidence: inferred
+  path: README.md
+- confidence: inferred
+  path: crates/takt-cli/tests/gitlab_forge_cli.rs
+- confidence: inferred
+  path: crates/takt/src/forge/gitlab.rs
+- confidence: inferred
+  path: crates/takt/src/run.rs
+- confidence: inferred
+  path: crates/takt/tests/forge.rs
+- confidence: inferred
+  path: ess/domains/takt.yaml
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-23T21:51:35Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-23T21:51:35Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 

@@ -2,14 +2,24 @@
 format: aep.planning-md/3
 id: story:gitlab-ci-wait
 kind: story
-status: draft
+status: active
 title: ci.wait and its progress events work on GitLab
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - depends_on: story:gitlab-forge
 - depends_on: story:ci-progress-events
-revision: 1
+scope:
+- confidence: inferred
+  path: crates/takt-cli/tests/gitlab_ci_cli.rs
+- confidence: inferred
+  path: crates/takt/src/forge/gitlab.rs
+- confidence: inferred
+  path: ess/domains/takt.yaml
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-23T21:51:35Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-23T21:51:35Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 
