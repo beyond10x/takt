@@ -2,11 +2,13 @@
 format: aep.planning-md/3
 id: decision-blocker:main-commit-with-personal-committer
 kind: decision-blocker
-status: open
+status: cleared
 title: A commit on main has a personal committer, so the shared security gate fails from 4aecf9b on
 relations:
 - blocks: approval-record:release-0-9-0
-revision: 2
+revision: 3
+transitions:
+- {from: "open", to: "cleared", at: "2026-10-23T09:19:11Z", actor: "human:timo", revision: 3}
 ---
 # Blocker: a commit on main with a personal committer
 

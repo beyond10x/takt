@@ -113,6 +113,31 @@
 # a lock that cannot be taken) prints nothing on standard output and exits 1; a usage error, a
 # CHECK_FINDING_TIMEOUT that is no whole number of seconds or a CHECK_FINDING_MIN_FREE_GIB that
 # is no whole number of GiB among them, exits 64.
+#
+# On macOS (`uname -s` is Darwin) Seatbelt stands where bubblewrap does: `sandbox-exec`, on
+# PATH, applies a profile the script writes, every path in it a parameter (`-D`), and without it
+# nothing is built and no predicate runs. Each path is given by its real path, as Seatbelt
+# matches it (`/tmp` is `/private/tmp`). The build runs at its host paths in the build
+# directory, its environment as above but for HOME and TMPDIR, directories of the build's own
+# there; with no network; writing only to the checkout, the target directory, the scratch
+# CARGO_HOME (the caller's caches linked into it, read through the links and never written),
+# and that home and temporary directory, never this user's temporary and cache directories
+# under /var/folders (`getconf` DARWIN_USER_TEMP_DIR and DARWIN_USER_CACHE_DIR); and under the
+# hidden homes below reading only those, the toolchain and the caches. The predicate's command
+# runs with no network (no TCP and no unix socket); writing only to the clone and its home,
+# which holds its TMPDIR; with the hidden homes, `/tmp` and `/var/run`
+# unreadable but for the clone, its home, the kept binary and the caller's protocol sources,
+# which `.cache/aep/protocol-sources` of its home links to by their real path and which it
+# cannot write through the link. The build and the command each run in a session and process
+# group of their own (`perl`'s `POSIX::setsid`), killed whole when they end; that `perl` keeps
+# CHECK_FINDING_TIMEOUT. An `sh` inside the profile runs the command with the status pipe
+# closed and writes `{ "exit-code": N }` on it after the command ended, the line read as
+# bubblewrap's is. Neither the build nor the command starts a program outside its profile: no
+# launchd job, no LaunchServices open, no Apple event, and no lookup of the Mach services that
+# start one. What Seatbelt does not give: a process that leaves the command's process group
+# outlives the check; the host's System V and POSIX IPC and its other Mach services stay in
+# reach; the command has no `/tmp` of its own; and a refused write fails with "Operation not
+# permitted", not "Read-only file system".
 set -euo pipefail
 
 # The repositories this script reads and writes are the ones it names by path, as they hold
@@ -143,10 +168,12 @@ fail() {
 # Closes every descriptor above 2 of the shell it runs in, to be called in the subshell that
 # then starts bubblewrap: a descriptor the caller left open passes to every process bubblewrap
 # runs, and through `/proc/self/fd/N` or `/dev/fd/N` it reads the file it names, whatever the
-# sandbox hides of that file's path.
+# sandbox hides of that file's path. The descriptors are listed from `/proc/self/fd`, or from
+# `/dev/fd` where there is no `/proc` (macOS), which lists the shell's own there.
 close_inherited() {
-    local fd
-    for fd in /proc/self/fd/*; do
+    local fd dir=/proc/self/fd
+    [[ -d $dir ]] || dir=/dev/fd
+    for fd in "$dir"/*; do
         fd=${fd##*/}
         [[ $fd =~ ^[0-9]+$ ]] && ((fd > 2)) || continue
         { eval "exec $fd<&-"; } 2>/dev/null || true
@@ -379,9 +406,147 @@ toolchain_dir() {
 # checkout alone; and it is a checkout rather than an export, so the build script reads the
 # revision into the binary. A kept binary without the `revision` file beside it was built from an
 # export, and is replaced.
-# Never unconfined: without bubblewrap nothing is built and no predicate runs.
-bwrap=$(command -v bwrap) ||
-    fail "bubblewrap (\`bwrap\`) is not on PATH; check-finding builds the revision confined in it and runs the predicate under it, never without, so install bubblewrap first"
+# Never unconfined: without bubblewrap nothing is built and no predicate runs; on macOS, without
+# sandbox-exec.
+darwin=
+[[ $(uname -s) != Darwin ]] || darwin=1
+if [[ -n $darwin ]]; then
+    confiner=$(command -v sandbox-exec) ||
+        fail "sandbox-exec (Seatbelt) is not on PATH; on macOS check-finding builds the revision confined in it and runs the predicate under it, never without"
+    [[ -x /usr/bin/perl ]] ||
+        fail "/usr/bin/perl is not there; on macOS check-finding runs the build and the predicate in a process group of their own under it, killed when they end, never without"
+else
+    bwrap=$(command -v bwrap) ||
+        fail "bubblewrap (\`bwrap\`) is not on PATH; check-finding builds the revision confined in it and runs the predicate under it, never without, so install bubblewrap first"
+fi
+
+# The homes hidden from the build (macOS) and the command. The caller's home: the directory HOME
+# names, by its real path. A HOME that names no directory, or names the root, is no home to
+# hide, and nothing runs. And the home of the user the check runs as, its passwd entry's,
+# whatever HOME names: under a HOME of another directory it would be in sight (`~/.ssh`, a git
+# configuration). One home that holds the other is hidden alone; a user with no passwd entry, or
+# whose passwd home is no directory or the root, has none to hide. Where there is no `getent`
+# (macOS) the entry is read from the directory service, `dscl`.
+hidden=() hidden_found=
+hide_homes() {
+    [[ -z $hidden_found ]] || return 0
+    hidden_found=1
+    callers_home=$(cd "${HOME:-}" 2>/dev/null && pwd -P) && [[ -n ${HOME:-} && $callers_home != / ]] ||
+        fail "HOME=${HOME:-} names no directory other than the root; the command runs with the caller's home hidden, never without"
+    hidden=("$callers_home")
+    if command -v getent >/dev/null; then
+        user_home=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6) || user_home=
+    else
+        user_home=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null |
+            sed -n 's/^NFSHomeDirectory: //p') || user_home=
+    fi
+    if [[ -n $user_home ]] && user_home=$(cd "$user_home" 2>/dev/null && pwd -P) && [[ $user_home != / ]]; then
+        if [[ $callers_home/ == "$user_home"/* ]]; then
+            hidden=("$user_home")
+        elif [[ $user_home/ != "$callers_home"/* ]]; then
+            hidden+=("$user_home")
+        fi
+    fi
+}
+
+if [[ -n $darwin ]]; then
+    # The real path of the existing path $1, as Seatbelt matches it.
+    real_path() {
+        if [[ -d $1 ]]; then
+            (cd "$1" && pwd -P)
+        else
+            printf '%s/%s\n' "$(cd "$(dirname "$1")" && pwd -P)" "$(basename "$1")"
+        fi
+    }
+    # The profile being written: its text, one rule a line, a later rule over an earlier one for
+    # what both match, and the `-D P<n>=<path>` arguments its rules read (sb_count of them).
+    sb_reset() {
+        sb_text='(version 1)
+(allow default)'
+        sb_args=()
+        sb_count=0
+    }
+    sb_rule() { sb_text+=$'\n'"$1"; }
+    # One rule that $1s (`allow`, `deny`) the operation $2 on each path after the filter $3
+    # (`subpath`, `literal`); none for no path, as a rule with no filter matches everything.
+    sb_paths() {
+        local action=$1 operation=$2 filter=$3 rule path
+        shift 3
+        (($#)) || return 0
+        rule="($action $operation"
+        for path; do
+            sb_args+=(-D "P$sb_count=$path")
+            rule+=" ($filter (param \"P$sb_count\"))"
+            sb_count=$((sb_count + 1))
+        done
+        sb_rule "$rule)"
+    }
+    # Allows looking up (`file-read-metadata`) each directory above the paths given that lies
+    # under a directory whose reads are denied (`sb_denied`), that directory included, so a path
+    # allowed under it is reached.
+    sb_ancestors() {
+        local path dir home known seen found=()
+        for path; do
+            dir=$path
+            while [[ $dir == /*/* ]]; do
+                dir=${dir%/*}
+                for home in "${sb_denied[@]}"; do
+                    [[ $dir == "$home" || $dir == "$home"/* ]] || continue
+                    seen=
+                    for known in ${found[@]+"${found[@]}"}; do
+                        [[ $known != "$dir" ]] || seen=1
+                    done
+                    [[ -n $seen ]] || found+=("$dir")
+                    break
+                done
+            done
+        done
+        sb_paths allow file-read-metadata literal ${found[@]+"${found[@]}"}
+    }
+    # The devices every confined process writes to.
+    sb_devices='(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))'
+    # No program started outside the profile (crates/takt/src/seatbelt.rs, NO_LAUNCH): no
+    # launchd job, nothing opened through LaunchServices, no Apple event, and no lookup of the
+    # services that start a program on the caller's behalf.
+    sb_no_launch() {
+        sb_rule '(deny job-creation)'
+        sb_rule '(deny lsopen)'
+        sb_rule '(deny appleevent-send)'
+        sb_rule '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.coreservices.appleevents") (global-name-regex #"^com\.apple\.lsd\.") (global-name "com.apple.xpc.smd") (global-name-regex #"^com\.apple\.backgroundtaskmanagement"))'
+    }
+    # Runs the program after the limit ($1, seconds; 0 for none) in a session and process group
+    # of its own and kills that whole group when the program ends, or when the limit passes,
+    # then exits 124; else with the program's status (128 + N for signal N).
+    reaper='use strict; use POSIX ();
+my $limit = shift @ARGV;
+my $pid = fork;
+defined $pid or die "check-finding: fork: $!\n";
+if ($pid == 0) {
+    POSIX::setsid() or POSIX::_exit(126);
+    exec { $ARGV[0] } @ARGV;
+    print STDERR "check-finding: run $ARGV[0]: $!\n";
+    POSIX::_exit(127);
+}
+my $late = 0;
+$SIG{ALRM} = sub { $late = 1; kill 9, -$pid; kill 9, $pid; };
+alarm $limit;
+my $status = -1;
+while ($status < 0) {
+    my $ended = waitpid $pid, 0;
+    if ($ended == $pid) { $status = $?; }
+    elsif ($ended == -1 && !$!{EINTR}) { $status = 255 << 8; }
+}
+alarm 0;
+kill 9, -$pid;
+for (1 .. 400) { last unless kill 0, -$pid; select undef, undef, undef, 0.005; }
+exit 124 if $late;
+exit(($status & 127) ? 128 + ($status & 127) : $status >> 8);'
+    hide_homes
+    sb_homes=()
+    for dir in "${hidden[@]}"; do
+        sb_homes+=("$(real_path "$dir")")
+    done
+fi
 
 # One check at a time per cache directory, and none on a file system short of space. Builds of
 # several checks in flight add up (each a full takt build in a directory of its own); the lock
@@ -435,59 +600,109 @@ if [[ ! -x $takt || ! -f $root/builds/$sha/revision ]]; then
         fail "fetch $sha from $repo for the build, every object hashed and checked"
     build_git -C "$work/src" checkout --quiet --detach "$sha" >&2 ||
         fail "check out $sha from $repo"
-    # The sandbox of `takt promote`'s build (crates/takt/src/promotion.rs, `Confinement`): the
-    # system directories and /etc read-only, its own /proc, /dev, /tmp and HOME, the toolchain
-    # read-only at /toolchain, and the checkout, the target directory and a scratch CARGO_HOME,
-    # the caller's caches read-only under it, the only paths bound writable.
-    sandbox=("$bwrap" --unshare-pid --unshare-net --die-with-parent --clearenv
-        --setenv HOME /build-home --setenv TMPDIR /tmp
-        --setenv PATH /toolchain/bin:/usr/bin:/bin --setenv LANG "${LANG:-C.UTF-8}"
-        --setenv CARGO_HOME /cargo-home --setenv RUSTC /toolchain/bin/rustc)
-    [[ -z ${TERM:-} ]] || sandbox+=(--setenv TERM "$TERM")
-    sandbox+=(--ro-bind /usr /usr)
-    for dir in /lib /lib64 /bin /sbin; do
-        if [[ -L $dir ]]; then
-            sandbox+=(--symlink "$(readlink -- "$dir")" "$dir")
-        elif [[ -d $dir ]]; then
-            sandbox+=(--ro-bind "$dir" "$dir")
-        fi
-    done
-    sandbox+=(--ro-bind /etc /etc --proc /proc --dev /dev --tmpfs /tmp --tmpfs /build-home
-        --ro-bind "$toolchain" /toolchain
-        --bind "$work/src" /work --bind "$work/target" /target
-        --bind "$work/cargo-home" /cargo-home)
-    for dir in registry/cache registry/index git/db git/checkouts; do
-        if [[ -d $cached/$dir ]]; then
-            sandbox+=(--ro-bind "$cached/$dir" "/cargo-home/$dir")
-        fi
-    done
     # The target is the host's whatever the revision's `.cargo/config.toml` says (`--config` on
     # the command line wins over every configuration file; the environment, CARGO_BUILD_TARGET
     # among it, is cleared), and the binary kept is the one cargo reports building: the
     # `executable` of the `compiler-artifact` message for the `takt` bin of b10x-takt-cli,
-    # under /target, never a file the revision commits where a build would put it.
+    # under the target directory as the build sees it (`inside`), never a file the revision
+    # commits where a build would put it.
     host=$(env -i "$toolchain/bin/rustc" -vV 2>/dev/null | sed -n 's/^host: //p') && [[ -n $host ]] ||
         fail "$toolchain/bin/rustc -vV names no host"
     [[ $host =~ ^[A-Za-z0-9_.-]+$ ]] || fail "$toolchain/bin/rustc names the host \`$host\`, no target triple"
-    say "building takt at ${sha:0:12} in $work for $host, confined in bwrap"
-    (close_inherited && exec "${sandbox[@]}" --chdir /work -- /toolchain/bin/cargo build \
-        --locked --offline --config "build.target=\"$host\"" --message-format=json \
-        -p b10x-takt-cli --bin takt --target-dir /target </dev/null >"$work/messages") ||
-        fail "takt does not build at ${sha:0:12}, confined in bwrap"
+    if [[ -n $darwin ]]; then
+        # The profile of `takt promote`'s build on macOS (crates/takt/src/seatbelt.rs, `build`):
+        # no network; no program started outside it; writes only to the devices, the checkout,
+        # the target directory, the scratch CARGO_HOME and the build's home and temporary
+        # directory; under the hidden homes reads only those, the toolchain and the
+        # caller's caches, linked into the scratch CARGO_HOME, and looks up the directories above
+        # them. The build sees every path at its host path.
+        rwork=$(real_path "$work")
+        mkdir -p "$rwork/build-home" "$rwork/tmp"
+        readable=("$(real_path "$toolchain")")
+        for dir in registry/cache registry/index git/db git/checkouts; do
+            if [[ -d $cached/$dir ]]; then
+                mkdir -p "$(dirname "$rwork/cargo-home/$dir")"
+                ln -s "$(real_path "$cached/$dir")" "$rwork/cargo-home/$dir"
+                readable+=("$(real_path "$cached/$dir")")
+            fi
+        done
+        writable=("$rwork/src" "$rwork/target" "$rwork/cargo-home" "$rwork/build-home" "$rwork/tmp")
+        sb_reset
+        sb_no_launch
+        sb_rule '(deny network*)'
+        sb_rule '(deny file-write*)'
+        sb_rule "$sb_devices"
+        sb_paths allow 'file-write*' subpath "${writable[@]}"
+        sb_denied=("${sb_homes[@]}")
+        sb_paths deny 'file-read*' subpath "${sb_denied[@]}"
+        sb_paths allow 'file-read*' subpath "${writable[@]}" "${readable[@]}"
+        sb_ancestors "${writable[@]}" "${readable[@]}"
+        bin=$(real_path "$toolchain")/bin
+        build_env=(HOME="$rwork/build-home" TMPDIR="$rwork/tmp" PATH="$bin:/usr/bin:/bin"
+            LANG="${LANG:-C.UTF-8}" CARGO_HOME="$rwork/cargo-home" RUSTC="$bin/rustc")
+        [[ -z ${TERM:-} ]] || build_env+=(TERM="$TERM")
+        inside=$rwork/target
+        say "building takt at ${sha:0:12} in $work for $host, confined in sandbox-exec"
+        (close_inherited && cd "$rwork/src" && exec env -i "${build_env[@]}" /usr/bin/perl -e "$reaper" 0 \
+            "$confiner" "${sb_args[@]}" -p "$sb_text" "$bin/cargo" build \
+            --locked --offline --config "build.target=\"$host\"" --message-format=json \
+            -p b10x-takt-cli --bin takt --target-dir "$inside" </dev/null >"$work/messages") ||
+            fail "takt does not build at ${sha:0:12}, confined in sandbox-exec"
+    else
+        inside=/target
+        # The sandbox of `takt promote`'s build (crates/takt/src/promotion.rs, `Confinement`): the
+        # system directories and /etc read-only, its own /proc, /dev, /tmp and HOME, the toolchain
+        # read-only at /toolchain, and the checkout, the target directory and a scratch CARGO_HOME,
+        # the caller's caches read-only under it, the only paths bound writable.
+        sandbox=("$bwrap" --unshare-pid --unshare-net --die-with-parent --clearenv
+            --setenv HOME /build-home --setenv TMPDIR /tmp
+            --setenv PATH /toolchain/bin:/usr/bin:/bin --setenv LANG "${LANG:-C.UTF-8}"
+            --setenv CARGO_HOME /cargo-home --setenv RUSTC /toolchain/bin/rustc)
+        [[ -z ${TERM:-} ]] || sandbox+=(--setenv TERM "$TERM")
+        sandbox+=(--ro-bind /usr /usr)
+        for dir in /lib /lib64 /bin /sbin; do
+            if [[ -L $dir ]]; then
+                sandbox+=(--symlink "$(readlink -- "$dir")" "$dir")
+            elif [[ -d $dir ]]; then
+                sandbox+=(--ro-bind "$dir" "$dir")
+            fi
+        done
+        sandbox+=(--ro-bind /etc /etc --proc /proc --dev /dev --tmpfs /tmp --tmpfs /build-home
+            --ro-bind "$toolchain" /toolchain
+            --bind "$work/src" /work --bind "$work/target" /target
+            --bind "$work/cargo-home" /cargo-home)
+        for dir in registry/cache registry/index git/db git/checkouts; do
+            if [[ -d $cached/$dir ]]; then
+                sandbox+=(--ro-bind "$cached/$dir" "/cargo-home/$dir")
+            fi
+        done
+        say "building takt at ${sha:0:12} in $work for $host, confined in bwrap"
+        (close_inherited && exec "${sandbox[@]}" --chdir /work -- /toolchain/bin/cargo build \
+            --locked --offline --config "build.target=\"$host\"" --message-format=json \
+            -p b10x-takt-cli --bin takt --target-dir /target </dev/null >"$work/messages") ||
+            fail "takt does not build at ${sha:0:12}, confined in bwrap"
+    fi
     built=()
     while IFS= read -r line; do
         [[ $line == '{"reason":"compiler-artifact",'* ]] || continue
         [[ $line == *'"target":{"kind":["bin"],'*'"name":"takt",'* ]] || continue
         [[ $line =~ \"package_id\":\"[^\"]*b10x-takt-cli[@#\ ] ]] || continue
-        [[ $line =~ \"executable\":\"(/target/[A-Za-z0-9_./-]+/takt)\" ]] || continue
-        [[ /${BASH_REMATCH[1]}/ != */../* ]] && built+=("${BASH_REMATCH[1]}")
+        if [[ -n $darwin ]]; then
+            [[ $line =~ \"executable\":\"([^\"]+)\" ]] || continue
+            exe=${BASH_REMATCH[1]}
+            [[ $exe == "$inside"/* && ${exe#"$inside"/} =~ ^[A-Za-z0-9_./-]+/takt$ ]] || continue
+            [[ /${exe#"$inside"/}/ != */../* ]] && built+=("$exe")
+        else
+            [[ $line =~ \"executable\":\"(/target/[A-Za-z0-9_./-]+/takt)\" ]] || continue
+            [[ /${BASH_REMATCH[1]}/ != */../* ]] && built+=("${BASH_REMATCH[1]}")
+        fi
     done <"$work/messages"
     ((${#built[@]} == 1)) ||
-        fail "cargo reported ${#built[@]} takt binaries under /target at ${sha:0:12}, not one"
-    [[ -f $work/target/${built[0]#/target/} && ! -L $work/target/${built[0]#/target/} ]] ||
+        fail "cargo reported ${#built[@]} takt binaries under $inside at ${sha:0:12}, not one"
+    [[ -f $work/target/${built[0]#"$inside"/} && ! -L $work/target/${built[0]#"$inside"/} ]] ||
         fail "cargo reported ${built[0]}, which the build directory does not hold as a file"
     mkdir -p "$root/builds/$sha"
-    cp "$work/target/${built[0]#/target/}" "$takt.$$"
+    cp "$work/target/${built[0]#"$inside"/}" "$takt.$$"
     mv -f "$takt.$$" "$takt"
     printf '%s\n' "$sha" >"$root/builds/$sha/revision.$$"
     mv -f "$root/builds/$sha/revision.$$" "$root/builds/$sha/revision"
@@ -505,9 +720,13 @@ sources=$sources/aep/protocol-sources
 # sources bound read-only at `.cache/aep/protocol-sources` of this home, so a write through
 # them fails and the caller's cache stays as it was. The directory is the mount point; on the
 # host it stays empty.
+# On macOS, where nothing is bound, `.cache/aep/protocol-sources` of this home is a link to
+# their real path, which the profile lets the command read and not write.
 bound=$home/.cache/aep/protocol-sources
 binds=()
-if [[ -d $sources ]]; then
+if [[ -d $sources && -n $darwin ]]; then
+    ln -s "$(real_path "$sources")" "$bound"
+elif [[ -d $sources ]]; then
     mkdir -p "$bound"
     binds=(--ro-bind "$sources" "$bound")
 fi
@@ -545,72 +764,106 @@ clone_git -C "$clone" config user.email check-finding@example.invalid
 say "$finding: $where, takt at ${sha:0:12}: $command"
 environment=(PATH="$PATH" HOME="$home" LANG="${LANG:-C.UTF-8}" TAKT="$takt" SCENARIO="$clone")
 [[ -z $test_command ]] || environment+=(TEST="$test_command")
-# The caller's home, hidden from the command: the directory HOME names, by its real path. A
-# HOME that names no directory, or names the root, is no home to hide, and nothing runs.
-callers_home=$(cd "${HOME:-}" 2>/dev/null && pwd -P) && [[ -n ${HOME:-} && $callers_home != / ]] ||
-    fail "HOME=${HOME:-} names no directory other than the root; the command runs with the caller's home hidden, never without"
-# And the home of the user the check runs as, its passwd entry's, whatever HOME names: under a
-# HOME of another directory it would be in sight (`~/.ssh`, a git configuration). One home
-# that holds the other is hidden alone; a user with no passwd entry, or whose passwd home is
-# no directory or the root, has none to hide.
-hidden=("$callers_home")
-user_home=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6) || user_home=
-if [[ -n $user_home ]] && user_home=$(cd "$user_home" 2>/dev/null && pwd -P) && [[ $user_home != / ]]; then
-    if [[ $callers_home/ == "$user_home"/* ]]; then
-        hidden=("$user_home")
-    elif [[ $user_home/ != "$callers_home"/* ]]; then
-        hidden+=("$user_home")
+# The caller's home and the user's passwd home, hidden from the command (`hide_homes`).
+hide_homes
+if [[ -n $darwin ]]; then
+    # The run step's profile on macOS. No network: no TCP, and no unix socket of the user's
+    # session, its agents, the container engines or the system bus. No program started outside
+    # the profile. Writes only to the devices, the clone and the predicate's home, which holds
+    # its temporary directory (TMPDIR); the run directory around them, where the check keeps the predicate, the
+    # command's output and the result, is not written, so the command plants no link the check
+    # would write through. Nothing read under the hidden homes, `/tmp` or `/var/run` (whose
+    # sockets, X11's and docker's among them, are not even in sight) but the clone, the home,
+    # the kept binary and the caller's protocol sources, and the directories above them looked
+    # up. `-D STEP=run` names the step to a stand-in for sandbox-exec; no rule reads it.
+    r_clone=$(real_path "$clone")
+    r_home=$(real_path "$home")
+    r_takt=$(real_path "$takt")
+    seen=("$r_clone" "$r_home")
+    [[ ! -d $sources ]] || seen+=("$(real_path "$sources")")
+    # The command reaches the binary, the clone and its home by their real paths: a link on the
+    # way to the cache (an operator's `<cache>/takt` to another directory) lies under no path the
+    # profile lets it read, so `$TAKT` named through it could not be run.
+    mkdir -p "$r_home/tmp"
+    environment=(PATH="$PATH" HOME="$r_home" TMPDIR="$r_home/tmp" LANG="${LANG:-C.UTF-8}" TAKT="$r_takt" SCENARIO="$r_clone")
+    [[ -z $test_command ]] || environment+=(TEST="$test_command")
+    sb_reset
+    sb_no_launch
+    sb_rule '(deny network*)'
+    sb_rule '(deny file-write*)'
+    sb_rule "$sb_devices"
+    sb_paths allow 'file-write*' subpath "$r_clone" "$r_home"
+    sb_denied=("${sb_homes[@]}" /private/tmp /private/var/run)
+    sb_paths deny 'file-read*' subpath "${sb_denied[@]}"
+    sb_paths allow 'file-read*' subpath "${seen[@]}"
+    sb_paths allow 'file-read*' literal "$r_takt"
+    sb_ancestors "${seen[@]}" "$r_takt"
+    # The status pipe (fd 3) is the inner `sh`'s alone: the command runs with it closed, so
+    # neither it nor a process it leaves writes the line read below.
+    wrapper='sh -c "$1" 3>&-; s=$?; printf "{ \"exit-code\": %d }\n" "$s" >&3; exit "$s"'
+    set +e
+    reported=$(close_inherited && cd "$clone" && env -i "${environment[@]}" /usr/bin/perl -e "$reaper" "$limit" \
+        "$confiner" -D STEP=run "${sb_args[@]}" -p "$sb_text" /bin/sh -c "$wrapper" sh "$command" \
+        3>&1 >"$run/output" 2>&1 </dev/null)
+    status=$?
+    set -e
+    ((status != 124)) || fail "the command ran past $limit seconds"
+    ended=$(printf '%s\n' "$reported" | tail -n 1 | sed -n 's/^{ *"exit-code": *\([0-9][0-9]*\) *}$/\1/p')
+    if [[ -z $ended ]] || ((10#$ended != status)); then
+        error=$({ grep '^sandbox-exec: ' "$run/output" || true; } | tail -n 1)
+        fail "sandbox-exec did not run the command to its end (exit $status${ended:+, the command ended $ended}): ${error:-sandbox-exec printed no error}"
     fi
-fi
-# The run step's sandbox. Every host path read-only (`--ro-bind / /`) but two, bound writable
-# at their paths: the clone and the predicate's home. The run directory around them, where the
-# check keeps the predicate, the command's output and the result, is not, so the command
-# plants no link the check would write through. Devices, /proc, /tmp and /run of its own
-# (`/var/run` too where it is a directory and no link to /run): no socket of the user's
-# session, its agents, the container engines or the system bus under them is in sight. The
-# homes above, each an empty read-only directory (a tmpfs, remounted read-only once the paths
-# below are bound into it), so nothing under them is read and a write there fails, or finds no
-# such path. The kept binary and the caller's protocol sources bound read-only at the paths
-# they have on the host, which may lie under a hidden home, and the sources once more at the
-# predicate's home (`binds`). Its own network namespace (`--unshare-net`): no network, and no
-# abstract unix socket of the host (X11's among them); its own IPC namespace
-# (`--unshare-ipc`); its own PID namespace (`--unshare-pid`): when the command ends, bwrap's
-# init, pid 1 there, ends, and the kernel kills every process the command left, so none
-# outlives the check. The caller's user stays as it is. `--die-with-parent`, so the command
-# dies with bwrap when `timeout` kills it. bwrap clears nothing of the environment `env -i`
-# gives it.
-sandbox=("$bwrap" --die-with-parent --unshare-pid --unshare-net --unshare-ipc --json-status-fd 3
-    --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --tmpfs /run)
-[[ -L /var/run || ! -d /var/run ]] || sandbox+=(--tmpfs /var/run)
-for dir in "${hidden[@]}"; do
-    sandbox+=(--tmpfs "$dir")
-done
-sandbox+=(--bind "$clone" "$clone" --bind "$home" "$home" --ro-bind "$takt" "$takt")
-[[ ! -d $sources ]] || sandbox+=(--ro-bind "$sources" "$sources")
-sandbox+=(${binds[@]+"${binds[@]}"})
-for dir in "${hidden[@]}"; do
-    sandbox+=(--remount-ro "$dir")
-done
-sandbox+=(--chdir "$clone")
-# bwrap's status reaches the check on a pipe (fd 3, standard output of the substitution),
-# never a file on disk another process could write; bwrap keeps that descriptor to its own
-# process outside the namespace (bubblewrap 0.12.0: neither the command nor pid 1 holds it).
-# It writes `{ "child-pid": … }` once it has forked, before its mount setup, and its last line,
-# `{ "exit-code": N }`, only once the setup held, `sh` started and then ended with N: a mount
-# that fails, or an exec that fails, leaves no such line and exits 1, a status a predicate may
-# name. So the command's exit is bwrap's status only when the last line is `exit-code` and N
-# is that status; else bwrap did not run the command to its end, and there is no result. N
-# says how `sh -c` ended, nothing of what the command did on the way.
-set +e
-reported=$(close_inherited && cd "$clone" && env -i "${environment[@]}" timeout --kill-after=10 "$limit" \
-    "${sandbox[@]}" -- sh -c "$command" 3>&1 >"$run/output" 2>&1 </dev/null)
-status=$?
-set -e
-((status != 124 && status != 137)) || fail "the command ran past $limit seconds"
-ended=$(printf '%s\n' "$reported" | tail -n 1 | sed -n 's/^{ *"exit-code": *\([0-9][0-9]*\) *}$/\1/p')
-if [[ -z $ended ]] || ((10#$ended != status)); then
-    error=$({ grep '^bwrap: ' "$run/output" || true; } | tail -n 1)
-    fail "bubblewrap did not run the command to its end (exit $status${ended:+, the command ended $ended}): ${error:-bubblewrap printed no error}"
+else
+    # The run step's sandbox. Every host path read-only (`--ro-bind / /`) but two, bound writable
+    # at their paths: the clone and the predicate's home. The run directory around them, where the
+    # check keeps the predicate, the command's output and the result, is not, so the command
+    # plants no link the check would write through. Devices, /proc, /tmp and /run of its own
+    # (`/var/run` too where it is a directory and no link to /run): no socket of the user's
+    # session, its agents, the container engines or the system bus under them is in sight. The
+    # homes above, each an empty read-only directory (a tmpfs, remounted read-only once the paths
+    # below are bound into it), so nothing under them is read and a write there fails, or finds no
+    # such path. The kept binary and the caller's protocol sources bound read-only at the paths
+    # they have on the host, which may lie under a hidden home, and the sources once more at the
+    # predicate's home (`binds`). Its own network namespace (`--unshare-net`): no network, and no
+    # abstract unix socket of the host (X11's among them); its own IPC namespace
+    # (`--unshare-ipc`); its own PID namespace (`--unshare-pid`): when the command ends, bwrap's
+    # init, pid 1 there, ends, and the kernel kills every process the command left, so none
+    # outlives the check. The caller's user stays as it is. `--die-with-parent`, so the command
+    # dies with bwrap when `timeout` kills it. bwrap clears nothing of the environment `env -i`
+    # gives it.
+    sandbox=("$bwrap" --die-with-parent --unshare-pid --unshare-net --unshare-ipc --json-status-fd 3
+        --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --tmpfs /run)
+    [[ -L /var/run || ! -d /var/run ]] || sandbox+=(--tmpfs /var/run)
+    for dir in "${hidden[@]}"; do
+        sandbox+=(--tmpfs "$dir")
+    done
+    sandbox+=(--bind "$clone" "$clone" --bind "$home" "$home" --ro-bind "$takt" "$takt")
+    [[ ! -d $sources ]] || sandbox+=(--ro-bind "$sources" "$sources")
+    sandbox+=(${binds[@]+"${binds[@]}"})
+    for dir in "${hidden[@]}"; do
+        sandbox+=(--remount-ro "$dir")
+    done
+    sandbox+=(--chdir "$clone")
+    # bwrap's status reaches the check on a pipe (fd 3, standard output of the substitution),
+    # never a file on disk another process could write; bwrap keeps that descriptor to its own
+    # process outside the namespace (bubblewrap 0.12.0: neither the command nor pid 1 holds it).
+    # It writes `{ "child-pid": … }` once it has forked, before its mount setup, and its last line,
+    # `{ "exit-code": N }`, only once the setup held, `sh` started and then ended with N: a mount
+    # that fails, or an exec that fails, leaves no such line and exits 1, a status a predicate may
+    # name. So the command's exit is bwrap's status only when the last line is `exit-code` and N
+    # is that status; else bwrap did not run the command to its end, and there is no result. N
+    # says how `sh -c` ended, nothing of what the command did on the way.
+    set +e
+    reported=$(close_inherited && cd "$clone" && env -i "${environment[@]}" timeout --kill-after=10 "$limit" \
+        "${sandbox[@]}" -- sh -c "$command" 3>&1 >"$run/output" 2>&1 </dev/null)
+    status=$?
+    set -e
+    ((status != 124 && status != 137)) || fail "the command ran past $limit seconds"
+    ended=$(printf '%s\n' "$reported" | tail -n 1 | sed -n 's/^{ *"exit-code": *\([0-9][0-9]*\) *}$/\1/p')
+    if [[ -z $ended ]] || ((10#$ended != status)); then
+        error=$({ grep '^bwrap: ' "$run/output" || true; } | tail -n 1)
+        fail "bubblewrap did not run the command to its end (exit $status${ended:+, the command ended $ended}): ${error:-bubblewrap printed no error}"
+    fi
 fi
 
 # The result. `reproduced` needs every expectation the predicate gives and an exit it names:

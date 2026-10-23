@@ -93,15 +93,16 @@ fn options(id: &str) -> RunOptions {
     }
 }
 
-/// Whether process `pid` is still running: listed, and not a zombie.
+/// Whether process `pid` is still running: listed by `ps`, and not a zombie.
 fn alive(pid: &str) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|stat| {
-            stat.rsplit_once(") ")
-                .map(|(_, rest)| !rest.starts_with('Z'))
+    Command::new("ps")
+        .args(["-o", "stat=", "-p", pid])
+        .output()
+        .is_ok_and(|output| {
+            let state = String::from_utf8_lossy(&output.stdout);
+            let state = state.trim();
+            output.status.success() && !state.is_empty() && !state.starts_with('Z')
         })
-        .unwrap_or(false)
 }
 
 /// A `claude` that writes a file into the tree it runs in, starts a `sleep 20` and waits for

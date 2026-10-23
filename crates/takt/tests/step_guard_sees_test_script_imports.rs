@@ -616,6 +616,7 @@ fn the_user_site_run_under_a_scratch_home() {
     };
     assert_eq!(std::env::var_os("HOME"), Some(home.clone()));
     let site = Command::new("python3")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .args(["-c", "import site; print(site.getusersitepackages())"])
         .output()
         .expect("python3 runs");
@@ -844,10 +845,17 @@ fn the_dot_path_run() {
 }
 
 /// A script that exits 0 only in a home made for the run: `HOME` set, an empty directory, not
-/// the caller's `caller`; Python's user site off; `CARGO_HOME` and `RUSTUP_HOME` set.
+/// the caller's `caller`; Python's user site off; `CARGO_HOME` and `RUSTUP_HOME` set. On macOS
+/// the home may hold one entry, the command's own temporary directory: `TMPDIR` is that entry
+/// and a directory (`forge::without_login` makes it there); on Linux it holds none.
 fn fresh_home_check(caller: &str) -> String {
+    let empty = if cfg!(target_os = "macos") {
+        "entries=\"$(ls -A \"$HOME\")\"\n[ -z \"$entries\" ] || { [ \"$TMPDIR\" = \"$HOME/$entries\" ] && [ -d \"$TMPDIR\" ]; } || exit 5\n"
+    } else {
+        "[ -z \"$(ls -A \"$HOME\")\" ] || exit 5\n"
+    };
     format!(
-        "#!/bin/sh\n[ -n \"$HOME\" ] || exit 2\n[ \"$HOME\" != '{caller}' ] || exit 3\n[ -d \"$HOME\" ] || exit 4\n[ -z \"$(ls -A \"$HOME\")\" ] || exit 5\n[ \"$PYTHONNOUSERSITE\" = 1 ] || exit 6\n[ -n \"$CARGO_HOME\" ] || exit 7\n[ -n \"$RUSTUP_HOME\" ] || exit 8\n"
+        "#!/bin/sh\n[ -n \"$HOME\" ] || exit 2\n[ \"$HOME\" != '{caller}' ] || exit 3\n[ -d \"$HOME\" ] || exit 4\n{empty}[ \"$PYTHONNOUSERSITE\" = 1 ] || exit 6\n[ -n \"$CARGO_HOME\" ] || exit 7\n[ -n \"$RUSTUP_HOME\" ] || exit 8\n"
     )
 }
 
@@ -987,7 +995,11 @@ impl Venv {
         let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
             .join(format!("script-imports-venv-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
+        // Every Python a fixture of this file runs writes no byte code: where the user can
+        // write Python's own library (Homebrew's on macOS), the `venv` package's would land
+        // there while another case's step is watched, and refuse that step.
         let made = Command::new("python3")
+            .env("PYTHONDONTWRITEBYTECODE", "1")
             .args(["-m", "venv", "--without-pip"])
             .arg(&root)
             .output()
@@ -998,6 +1010,7 @@ impl Venv {
             String::from_utf8_lossy(&made.stderr)
         );
         let site = Command::new(root.join("bin/python"))
+            .env("PYTHONDONTWRITEBYTECODE", "1")
             .args([
                 "-I",
                 "-c",
@@ -1194,6 +1207,7 @@ fn a_site_directory_of_the_inherited_interpreter_is_snapshotted() {
 /// What `python3` prints for `code`, trimmed.
 fn python_says(code: &str) -> String {
     let output = Command::new("python3")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .args(["-c", code])
         .output()
         .expect("python3 runs");
@@ -1205,6 +1219,7 @@ fn python_says(code: &str) -> String {
 fn inherited_venv_site(home: &Path) -> PathBuf {
     let venv = home.join("venv");
     let made = Command::new("/usr/bin/env")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .args(["python3", "-m", "venv", "--without-pip"])
         .arg(&venv)
         .output()
@@ -1215,6 +1230,7 @@ fn inherited_venv_site(home: &Path) -> PathBuf {
         String::from_utf8_lossy(&made.stderr)
     );
     let site = Command::new(venv.join("bin/python"))
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .args([
             "-I",
             "-c",
@@ -1668,6 +1684,7 @@ fn an_interpreter_inside_the_tree_is_named_as_not_run() {
         ],
     );
     let made = Command::new("python3")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .args(["-m", "venv", "--copies", "--without-pip"])
         .arg(tree.join(".venv"))
         .output()

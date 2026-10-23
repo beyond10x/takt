@@ -6,6 +6,36 @@ takt's releases.
 
 ## [Unreleased]
 
+### Added
+
+- The release builds `takt` for `aarch64-apple-darwin` again, on `macos-15`, beside the two Linux targets.
+- On macOS the test command and a promotion's build run under `/usr/bin/sandbox-exec`; with no `sandbox-exec` both are refused by name, never run unconfined.
+- On macOS a process a child of takt left running is killed by its `TAKT_CHILD` mark.
+- On macOS what a harness session's program left running in takt's process group is killed when the session ends.
+- On macOS what a promotion's build or `--version` run left running is killed by its `TAKT_PROMOTION` mark.
+- On macOS `scripts/check-finding` builds and runs the predicate under `sandbox-exec`: no network, the homes hidden, writes only to its own directories.
+- On macOS with no `sandbox-exec`, `scripts/check-finding` builds nothing and gives no result.
+- On macOS no confined step starts a program outside its sandbox: no launchd job, no LaunchServices open, no Apple event.
+- On macOS the test command connects to no launchd socket under `/private/tmp`, the ssh agent's among them.
+- On macOS the test command writes no hook nor configuration of its git directories, nor the files that name them.
+- The release publishes only after the macOS tests pass on the tagged commit.
+
+### Changed
+
+- **Breaking:** On macOS a promotion's build sees the clone, its target and the fresh root at their host paths, not at fixed paths inside a sandbox as under bubblewrap.
+- **Breaking:** On macOS a promotion's build reads every file outside the user's home, not only the clone, toolchain, registry cache and system directories.
+- **Breaking:** On macOS the test command's `TMPDIR` is a directory in its fresh home, and neither it nor a promotion's build may write the user's temporary and cache directories under `/var/folders`.
+- **Breaking:** On macOS the test command is denied a registry login, `Library/Keychains`, the runtime directory and a bus socket by path only.
+- **Breaking:** On macOS a hard link to such a file elsewhere, and the keychain daemons reached over Mach, are not denied.
+- **Breaking:** On macOS a process that clears `TAKT_CHILD` from its environment and leaves the process group outlives the run; on Linux takt adopts and kills it.
+- **Breaking:** On macOS a harness session's program runs in takt's process group, not a session of its own: a process it leaves running that leaves that group or session outlives the run.
+- **Breaking:** On macOS `scripts/check-finding` runs the predicate in a process group, not a PID namespace: a process that leaves the group outlives the check.
+- **Breaking:** On macOS the predicate of `scripts/check-finding` reaches the host's System V and POSIX IPC and its Mach services but those that start a program; there is no IPC namespace.
+- **Breaking:** On macOS the predicate of `scripts/check-finding` has no `/tmp` of its own: the host's `/tmp` is out of its sight, and its `TMPDIR` is a directory in its home.
+- **Breaking:** On macOS the protocol sources in the predicate's home are a link to the caller's, which Seatbelt keeps read-only, not a read-only bind.
+- **Breaking:** On macOS a write the predicate of `scripts/check-finding` is refused fails with "Operation not permitted", not "Read-only file system".
+- `b10x-loom-sdk` moves from loom 0.36.0 to 0.37.0; takt uses none of the confinement types its CHANGELOG marks breaking.
+
 ## [0.9.0] - 2026-10-23
 
 The minor version moves because harness sessions run through Loom's session executor and takt no longer runs Canon's

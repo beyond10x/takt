@@ -16,12 +16,15 @@ pub mod git;
 pub mod harness;
 pub mod improvement;
 pub mod loop_scorecard;
+#[cfg(target_os = "macos")]
+mod marked;
 pub mod promotion;
 pub mod protocol;
 pub mod replay;
 pub mod report;
 pub mod run;
 pub mod scorecard;
+pub mod seatbelt;
 pub mod trace;
 pub mod validator;
 pub mod view;

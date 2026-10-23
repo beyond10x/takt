@@ -55,20 +55,17 @@ pub const SCORECARDS: &str = "takt/scorecards";
 /// whose script hashes to one of them, since the baseline's script is the one the turn runs; the
 /// confinement lives in that script alone, so no commit's ancestry stands in for it. A change to
 /// the script adds its digest here once it is reviewed (`tests/self_improvement.rs` holds this
-/// tree's script to the list).
-pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 3] = [
-    // The script of story:check-finding-run-step-confined (its last commit f2a20e9), its build's
-    // checkout a repository made with no template, by a git under a cleared environment, that
-    // fetches the revision through git's transport, every object hashed and checked
-    // (story:self-improvement-protocol, part 1), and no replace ref of a repository it reads
-    // honoured (part 2).
-    "7878f0f27ad4618280967d4674de65a3ae86fe4b54a5a2b28fde02b7ef36a2cf",
-    // The same script that also builds one check at a time under a lock on its cache directory
-    // and refuses to build under its free-space threshold (story:check-finding-runs-one-at-a-time).
-    "a6b5f6f8c13ee7252a26df32f0dc1131a529cb2932ada012fb324ee555320eec",
-    // The same script with no bash 4 construct (associative array, `${x,,}`, `exec {fd}`, an
-    // empty array expanded under `set -u`), so it runs under bash 3.2, macOS's.
-    "948e20f4f24c9a77acf5e911f30eb771c924bfdabe1f9f808e8b37fcdae6efbd",
+/// tree's script to the list). A digest no review passed is not kept (story:wave-35-review-fixes,
+/// L8).
+pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 2] = [
+    // The script of story:check-finding-run-step-confined and the stories after it, up to the
+    // one that builds and runs under Seatbelt (`sandbox-exec`) on macOS, whose predicate there
+    // has the binary, clone and home by their real paths.
+    "6c39e63b3b41c63774093511b1cbd7b1b1ff9ef0277ae4091b9222d1f4ef0e7f",
+    // The same script whose build and predicate on macOS start no program outside their
+    // profile and write neither of the user's directories under `/var/folders`, the predicate's
+    // TMPDIR a directory in its home (story:wave-35-review-fixes).
+    "59080409aa503149e36af07bffad3e5ff0c8781adf5fce602614ae05bd198e3e",
 ];
 
 /// The file under a turn's `artifacts/` holding the sha256 of the takt `scripts/check-finding`

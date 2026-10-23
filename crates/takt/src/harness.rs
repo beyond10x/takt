@@ -574,8 +574,14 @@ impl Harness for SessionHarness {
         // The session's process is started in a session of its own and waited on by the
         // executor: no sweep on another thread may take it meanwhile.
         let held = crate::forge::hold_sweeps();
+        #[cfg(target_os = "macos")]
+        let session_started = std::time::SystemTime::now();
         let ran = executor.run_with_usage(&commission, &frontier);
         drop(held);
+        // On macOS the executor finds no `setsid`, so the program runs in takt's own process
+        // group and what it left running there, orphaned, is killed once the session ended.
+        #[cfg(target_os = "macos")]
+        crate::marked::sweep_orphans_since(session_started)?;
         let outcome = ran.outcome;
         *self.session.borrow_mut() = executor.sessions().pop();
         let report = executor.last_report().unwrap_or_default();

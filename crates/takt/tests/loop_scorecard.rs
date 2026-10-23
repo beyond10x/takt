@@ -2179,7 +2179,8 @@ fn definitions_holding_yaml_aliases_are_refused_naming_the_line() {
 /// the plain scalar `a 'b`, whose `'` is no quote. A lexical scan took it for one and read on;
 /// the aliases expanded to an out-of-memory abort. Read from the parser's events, the first
 /// anchored node is refused, naming its line, within a second and before anything expands.
-/// Run in a child test process under a 1 GiB address-space cap, so a red run aborts the child
+/// Run in a child test process under a 1 GiB address-space cap (on macOS 1 GiB above what the
+/// child has mapped when it starts), so a red run aborts the child
 /// and never exhausts the machine.
 #[test]
 fn the_hidden_alias_bomb_after_a_plain_scalar_quote_is_refused_within_a_second() {
@@ -2194,11 +2195,18 @@ fn the_hidden_alias_bomb_after_a_plain_scalar_quote_is_refused_within_a_second()
                 "1",
             ])
             .env("TAKT_YAML_HIDDEN_CHILD", "1");
+        // macOS refuses an address-space cap below what the process has mapped already, which
+        // the forked child is, so there the child caps itself before it reads (`cap_self`).
+        let caps: &'static [_] = if cfg!(target_os = "macos") {
+            &[(libc::RLIMIT_CORE, 0)]
+        } else {
+            &[(libc::RLIMIT_AS, 1 << 30), (libc::RLIMIT_CORE, 0)]
+        };
         // SAFETY: setrlimit is async-signal-safe, and the closure touches nothing else. An
         // abort under the cap leaves no core file in the tree.
         unsafe {
-            command.pre_exec(|| {
-                for (resource, limit) in [(libc::RLIMIT_AS, 1 << 30), (libc::RLIMIT_CORE, 0)] {
+            command.pre_exec(move || {
+                for &(resource, limit) in caps {
                     let cap = libc::rlimit {
                         rlim_cur: limit,
                         rlim_max: limit,
@@ -2220,6 +2228,8 @@ fn the_hidden_alias_bomb_after_a_plain_scalar_quote_is_refused_within_a_second()
         );
         return;
     }
+    #[cfg(target_os = "macos")]
+    cap_self();
     let big = "a".repeat(128 * 1024);
     let aliases = vec!["*p"; 32_000].join(", ");
     let bomb = format!(
@@ -2232,6 +2242,39 @@ fn the_hidden_alias_bomb_after_a_plain_scalar_quote_is_refused_within_a_second()
     let shown = format!("{error:#}");
     assert!(shown.contains("line 3"), "{shown}");
     assert!(took < std::time::Duration::from_secs(1), "{took:?}");
+}
+
+/// Caps this process's address space at what it has mapped now and 1 GiB more, as the hidden
+/// bomb's child test reads under on macOS, where the kernel refuses a cap below the mapped size;
+/// a cap the kernel refuses fails the test, naming the error, and is never left out.
+#[cfg(target_os = "macos")]
+fn cap_self() {
+    // SAFETY: `proc_taskinfo` is plain integers, for which all zeroes is a value.
+    let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
+    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_taskinfo>()).expect("a size");
+    let me = libc::pid_t::try_from(std::process::id()).expect("a pid");
+    // SAFETY: `proc_pidinfo` writes at most `size` bytes into `info` and answers how many.
+    let wrote =
+        unsafe { libc::proc_pidinfo(me, libc::PROC_PIDTASKINFO, 0, (&raw mut info).cast(), size) };
+    assert_eq!(
+        wrote,
+        size,
+        "proc_pidinfo: {}",
+        std::io::Error::last_os_error()
+    );
+    let limit = info.pti_virtual_size + (1 << 30);
+    let cap = libc::rlimit {
+        rlim_cur: limit,
+        rlim_max: limit,
+    };
+    // SAFETY: `setrlimit` reads the limit it is given.
+    let set = unsafe { libc::setrlimit(libc::RLIMIT_AS, &raw const cap) };
+    assert_eq!(
+        set,
+        0,
+        "the address-space cap of {limit} bytes: {}",
+        std::io::Error::last_os_error()
+    );
 }
 
 /// Every anchored node and every alias is refused as the parser reads it, naming its line,

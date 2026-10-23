@@ -184,6 +184,18 @@ fn a_gate_command_ends_as_itself_while_another_threads_child_ends() {
     passed(&observed_beside("run-child", Some(run_a_child)));
 }
 
+/// Expected before: on macOS a sweep took a child in this process's own group and session
+/// that had ended and was not waited on yet, whose session `getsid` no longer answers, for one
+/// that left the session, and reaped it: its caller's wait was "No child processes".
+#[test]
+fn a_sweep_reaps_no_ended_child_its_caller_has_not_waited_on() {
+    let mut child = Command::new("true").spawn().expect("true starts");
+    std::thread::sleep(Duration::from_millis(300));
+    sweep();
+    let status = child.wait().expect("the caller waits on its own child");
+    assert!(status.success(), "{status}");
+}
+
 #[test]
 fn a_gate_command_ends_as_itself_alone() {
     passed(&observed_beside("alone", None));

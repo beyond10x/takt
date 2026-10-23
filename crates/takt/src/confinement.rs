@@ -34,6 +34,12 @@ pub const DELEGATED: &str = "TAKT_CONFINEMENT_DELEGATED";
 #[derive(Debug)]
 pub struct Command {
     inner: std::process::Command,
+    /// Whether nothing is inherited ([`Command::env_clear`]), for [`Command::wrap`] to keep.
+    #[cfg(target_os = "macos")]
+    cleared: bool,
+    /// The program as given, once [`Command::wrap`] made another one start it.
+    #[cfg(target_os = "macos")]
+    wrapped: Option<std::ffi::OsString>,
 }
 
 impl Command {
@@ -41,7 +47,42 @@ impl Command {
     pub fn new<S: AsRef<OsStr>>(program: S) -> Self {
         Self {
             inner: std::process::Command::new(program),
+            #[cfg(target_os = "macos")]
+            cleared: false,
+            #[cfg(target_os = "macos")]
+            wrapped: None,
         }
+    }
+
+    /// Makes `program` start this command: it is run with `prefix`, then this command's program
+    /// as `resolved` names it and its arguments, with the same variables and working
+    /// directory; [`Command::get_program`] and the adapter's admission still see the program
+    /// as given. Only what was set so far is carried over: call it before anything else is set.
+    #[cfg(target_os = "macos")]
+    pub fn wrap(
+        &mut self,
+        program: impl AsRef<OsStr>,
+        prefix: &[std::ffi::OsString],
+        resolved: &OsStr,
+    ) -> &mut Self {
+        let mut inner = std::process::Command::new(program);
+        inner.args(prefix).arg(resolved).args(self.inner.get_args());
+        if self.cleared {
+            inner.env_clear();
+        }
+        for (key, value) in self.inner.get_envs() {
+            match value {
+                Some(value) => inner.env(key, value),
+                None => inner.env_remove(key),
+            };
+        }
+        if let Some(dir) = self.inner.get_current_dir() {
+            inner.current_dir(dir);
+        }
+        let given = self.get_program().to_os_string();
+        self.inner = inner;
+        self.wrapped = Some(given);
+        self
     }
 
     /// One more argument.
@@ -86,6 +127,10 @@ impl Command {
     /// Nothing inherited.
     pub fn env_clear(&mut self) -> &mut Self {
         self.inner.env_clear();
+        #[cfg(target_os = "macos")]
+        {
+            self.cleared = true;
+        }
         self
     }
 
@@ -142,6 +187,10 @@ impl Command {
     /// The program, as given.
     #[must_use]
     pub fn get_program(&self) -> &OsStr {
+        #[cfg(target_os = "macos")]
+        if let Some(given) = &self.wrapped {
+            return given;
+        }
         self.inner.get_program()
     }
 
@@ -167,7 +216,7 @@ impl Command {
     ///
     /// The adapter's refusal ([`refused`]), and nothing started; else what the start returned.
     pub fn spawn(&mut self) -> io::Result<Child> {
-        current().admit(self.inner.get_program())?;
+        current().admit(self.get_program())?;
         self.inner.spawn()
     }
 
@@ -178,7 +227,7 @@ impl Command {
     ///
     /// The adapter's refusal ([`refused`]), and nothing started; else what the run returned.
     pub fn output(&mut self) -> io::Result<Output> {
-        current().admit(self.inner.get_program())?;
+        current().admit(self.get_program())?;
         self.inner.output()
     }
 
@@ -189,7 +238,7 @@ impl Command {
     ///
     /// The adapter's refusal ([`refused`]), and nothing started; else what the run returned.
     pub fn status(&mut self) -> io::Result<ExitStatus> {
-        current().admit(self.inner.get_program())?;
+        current().admit(self.get_program())?;
         self.inner.status()
     }
 }

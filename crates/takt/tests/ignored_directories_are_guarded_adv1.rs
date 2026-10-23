@@ -460,7 +460,8 @@ fn a_step_that_writes_a_nested_gitignore_and_plants_is_refused() {
 }
 
 /// A name that is not UTF-8, planted inside an ignored directory: refused, named byte for
-/// byte, and removed; two such names stay two.
+/// byte, and removed; two such names stay two. On macOS no such name can be planted: the file
+/// system refuses each with `EILSEQ` and nothing is created.
 #[test]
 fn a_non_utf8_name_planted_is_refused_and_removed() {
     let s = repository("nonutf8", "build/\n");
@@ -468,24 +469,40 @@ fn a_non_utf8_name_planted_is_refused_and_removed() {
     fs::write(s.repo.join("build/old.o"), "x").expect("a file");
     let one = std::ffi::OsStr::from_bytes(b"\xffplanted.o");
     let two = std::ffi::OsStr::from_bytes(b"\xfeplanted.o");
-    let (stop, text) = go(&s, |tree| {
-        fs::write(tree.join("build").join(one), "x").expect("a write");
-        fs::write(tree.join("build").join(two), "x").expect("a write");
-    });
-    assert!(
-        refused_naming(&stop, "build/\\xffplanted.o")
-            && refused_naming(&stop, "build/\\xfeplanted.o"),
-        "{stop:?}\n{text}"
-    );
-    assert!(
-        !s.repo.join("build").join(one).exists(),
-        "planted file left"
-    );
-    assert!(
-        !s.repo.join("build").join(two).exists(),
-        "planted file left"
-    );
-    assert!(s.repo.join("build/old.o").exists(), "{text}");
+    #[cfg(target_os = "macos")]
+    {
+        for name in [one, two] {
+            let refused = fs::write(s.repo.join("build").join(name), "x")
+                .expect_err("macOS refuses a name that is not UTF-8");
+            assert_eq!(refused.raw_os_error(), Some(libc::EILSEQ), "{refused}");
+        }
+        let names: Vec<std::ffi::OsString> = fs::read_dir(s.repo.join("build"))
+            .expect("the build directory")
+            .map(|entry| entry.expect("an entry").file_name())
+            .collect();
+        assert_eq!(names, ["old.o"], "nothing created");
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let (stop, text) = go(&s, |tree| {
+            fs::write(tree.join("build").join(one), "x").expect("a write");
+            fs::write(tree.join("build").join(two), "x").expect("a write");
+        });
+        assert!(
+            refused_naming(&stop, "build/\\xffplanted.o")
+                && refused_naming(&stop, "build/\\xfeplanted.o"),
+            "{stop:?}\n{text}"
+        );
+        assert!(
+            !s.repo.join("build").join(one).exists(),
+            "planted file left"
+        );
+        assert!(
+            !s.repo.join("build").join(two).exists(),
+            "planted file left"
+        );
+        assert!(s.repo.join("build/old.o").exists(), "{text}");
+    }
 }
 
 #[test]

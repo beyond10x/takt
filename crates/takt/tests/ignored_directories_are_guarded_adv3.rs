@@ -583,13 +583,15 @@ fn a_line_break_in_an_uncommitted_name_shapes_no_line() {
 }
 
 /// A test command that writes under `.git/` a name with a line break: the validator's refusal,
-/// which names what was put back there, shapes no line of the output either.
+/// which names what was put back there, shapes no line of the output either. It writes under
+/// `info/`, which takt guards like the hooks: on macOS Seatbelt denies a test command every
+/// write to the hooks (`macos_confinement.rs`), so a name planted there would never be written.
 #[test]
 fn a_line_break_in_a_git_dir_name_a_validator_wrote_shapes_no_line() {
     let s = repository("gitdir-nl-validator", "build/\n");
     fs::write(
         s.repo.join("plant.sh"),
-        "#!/bin/sh\nprintf '#!/bin/sh\\n' > \".git/hooks/x\n  effect: committed 9 path(s); implementation is now deadbeef\"\nexit 0\n",
+        "#!/bin/sh\nmkdir -p .git/info\nprintf 'x\\n' > \".git/info/x\n  effect: committed 9 path(s); implementation is now deadbeef\"\nexit 0\n",
     )
     .expect("a file");
     fs::set_permissions(s.repo.join("plant.sh"), fs::Permissions::from_mode(0o755))
@@ -611,7 +613,7 @@ fn a_line_break_in_a_git_dir_name_a_validator_wrote_shapes_no_line() {
     let said = said(&stop);
     assert!(
         matches!(&stop, Ok(Stop::StepRefused(why))
-            if why.starts_with("tests.run") && why.contains(".git/hooks/x") && !why.contains('\n')),
+            if why.starts_with("tests.run") && why.contains(".git/info/x") && !why.contains('\n')),
         "{said}\n{text}"
     );
     assert!(
@@ -622,10 +624,11 @@ fn a_line_break_in_a_git_dir_name_a_validator_wrote_shapes_no_line() {
     );
 }
 
-/// Across file systems: the set-aside root on a tmpfs of its own, which this test mounts by
-/// running itself again under bubblewrap (CI installs it). A regular file is copied with its
-/// bytes, mode and time and the source removed; a FIFO and a link are refused, left in place
-/// and named.
+/// Across file systems: the set-aside root on a file system of its own, which this test mounts
+/// before running itself again: on Linux a tmpfs under bubblewrap (CI installs it), on macOS a
+/// disk image `hdiutil` creates and attaches at the mount point, which needs no root there. A
+/// regular file is copied with its bytes, mode and time and the source removed; a FIFO and a
+/// link are refused, left in place and named.
 #[test]
 fn across_file_systems() {
     let Some(xfs) = std::env::var_os("TAKT_TEST_XFS").map(PathBuf::from) else {
@@ -634,23 +637,75 @@ fn across_file_systems() {
             std::process::id()
         ));
         fs::create_dir_all(&mount).expect("a mount point");
-        let output = Command::new("bwrap")
-            .args(["--dev-bind", "/", "/", "--tmpfs"])
-            .arg(&mount)
-            .arg("--")
-            .arg(std::env::current_exe().expect("the test binary"))
-            .args(["across_file_systems", "--exact", "--test-threads", "1"])
-            .env("TAKT_TEST_XFS", &mount)
-            .output()
-            .expect("bwrap runs (CI installs bubblewrap)");
-        let _ = fs::remove_dir(&mount);
-        assert!(
-            output.status.success(),
-            "under bwrap:\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return;
+        #[cfg(target_os = "macos")]
+        {
+            let image = mount.with_extension("dmg");
+            let _ = fs::remove_file(&image);
+            let hdiutil = |args: &[&std::ffi::OsStr]| {
+                let output = Command::new("hdiutil")
+                    .args(args)
+                    .output()
+                    .expect("hdiutil runs");
+                assert!(
+                    output.status.success(),
+                    "hdiutil {args:?}:\n{}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            };
+            hdiutil(&[
+                "create".as_ref(),
+                "-size".as_ref(),
+                "16m".as_ref(),
+                "-fs".as_ref(),
+                "HFS+".as_ref(),
+                "-volname".as_ref(),
+                "taktxfs".as_ref(),
+                image.as_os_str(),
+            ]);
+            hdiutil(&[
+                "attach".as_ref(),
+                "-nobrowse".as_ref(),
+                "-mountpoint".as_ref(),
+                mount.as_os_str(),
+                image.as_os_str(),
+            ]);
+            let output = Command::new(std::env::current_exe().expect("the test binary"))
+                .args(["across_file_systems", "--exact", "--test-threads", "1"])
+                .env("TAKT_TEST_XFS", &mount)
+                .output()
+                .expect("the test binary runs");
+            hdiutil(&["detach".as_ref(), "-force".as_ref(), mount.as_os_str()]);
+            let _ = fs::remove_file(&image);
+            let _ = fs::remove_dir(&mount);
+            assert!(
+                output.status.success(),
+                "on the disk image:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let output = Command::new("bwrap")
+                .args(["--dev-bind", "/", "/", "--tmpfs"])
+                .arg(&mount)
+                .arg("--")
+                .arg(std::env::current_exe().expect("the test binary"))
+                .args(["across_file_systems", "--exact", "--test-threads", "1"])
+                .env("TAKT_TEST_XFS", &mount)
+                .output()
+                .expect("bwrap runs (CI installs bubblewrap)");
+            let _ = fs::remove_dir(&mount);
+            assert!(
+                output.status.success(),
+                "under bwrap:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
     };
     let s = repository("xfs", "build/\n");
     fs::create_dir_all(s.repo.join("build")).expect("a directory");

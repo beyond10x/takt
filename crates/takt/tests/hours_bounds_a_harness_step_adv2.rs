@@ -121,15 +121,16 @@ fn options(id: &str) -> RunOptions {
     }
 }
 
-/// Whether process `pid` is still running: listed, and not a zombie.
+/// Whether process `pid` is still running: listed by `ps`, and not a zombie.
 fn alive(pid: &str) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|stat| {
-            stat.rsplit_once(") ")
-                .map(|(_, rest)| !rest.starts_with('Z'))
+    Command::new("ps")
+        .args(["-o", "stat=", "-p", pid])
+        .output()
+        .is_ok_and(|output| {
+            let state = String::from_utf8_lossy(&output.stdout);
+            let state = state.trim();
+            output.status.success() && !state.is_empty() && !state.starts_with('Z')
         })
-        .unwrap_or(false)
 }
 
 /// Kills every pid listed in `file`, if it exists; the pids that were still alive.
@@ -386,22 +387,26 @@ fn a_test_command_the_budget_killed_after_writing_into_the_tree_does_not_stop_on
 }
 
 /// Probe: a test command that starts a daemon of its own session holding its output, then
-/// exits; the run is still bounded, and the daemon is gone once the run returns.
+/// exits; the run is still bounded, and the daemon is gone once the run returns. macOS has no
+/// `setsid` program, so there the daemon is a `perl` that calls `setsid` itself. Its pids are
+/// written into the tree's git directory, which a test command writes on macOS too and which
+/// leaves the work tree clean.
 #[test]
 fn a_test_command_that_leaves_a_daemon_is_bounded_and_the_daemon_killed() {
     let _serial = serial();
-    let scripts = directory("daemon-scripts");
-    let pids = scripts.join("pids");
+    let daemon = if cfg!(target_os = "macos") {
+        "/usr/bin/perl -e 'use POSIX (); POSIX::setsid() or die; $SIG{TERM} = \"IGNORE\"; exec \"sleep\", 30'"
+    } else {
+        "setsid sh -c 'trap \"\" TERM; exec sleep 30'"
+    };
     let tree = repository(
         "daemon",
         &[(
             "check.sh",
-            &format!(
-                "#!/bin/sh\nsetsid sh -c 'trap \"\" TERM; exec sleep 30' &\necho $$ $! >> '{p}'\nexit 0\n",
-                p = pids.display()
-            ),
+            &format!("#!/bin/sh\n{daemon} &\necho $$ $! >> .git/pids\nexit 0\n"),
         )],
     );
+    let pids = tree.join(".git/pids");
     let validators: Vec<Box<dyn Validator>> =
         vec![Box::new(TestsRun::new("./check.sh").expect("a command"))];
     let started = Instant::now();

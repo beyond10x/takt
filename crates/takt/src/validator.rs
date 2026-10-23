@@ -565,7 +565,7 @@ fn judged(
 /// The home directory this user's passwd entry names (`getpwuid_r`), when it is an absolute path:
 /// where a command's toolchain lives when takt itself has no absolute `HOME`.
 #[cfg(unix)]
-fn passwd_home() -> Option<PathBuf> {
+pub(crate) fn passwd_home() -> Option<PathBuf> {
     use std::os::unix::ffi::OsStrExt as _;
     let mut buffer = vec![0_u8; 16 * 1024];
     loop {
@@ -599,7 +599,7 @@ fn passwd_home() -> Option<PathBuf> {
 
 /// No passwd entry to read where there is no unix.
 #[cfg(not(unix))]
-fn passwd_home() -> Option<PathBuf> {
+pub(crate) fn passwd_home() -> Option<PathBuf> {
     None
 }
 

@@ -549,9 +549,6 @@ pub const LOGIN_LOCATIONS: [&str; 16] = [
     "KUBECONFIG",
 ];
 
-/// The files under the toolchain's `CARGO_HOME` that hold a registry login.
-const CARGO_LOGINS: [&str; 2] = ["credentials.toml", "credentials"];
-
 /// A home directory of its own for a child, empty and readable by this user only, under the
 /// system's temporary directory; removed with what is in it when dropped.
 #[derive(Debug)]
@@ -601,7 +598,16 @@ impl Drop for ScratchHome {
 /// `/dev/null`; with no capability left once it executes, nothing it runs can unmount them. The
 /// spawn fails when the host refuses the namespaces: the command is never run with the user's
 /// session in reach. Not hidden: an abstract socket a bus address names, and the user's home
-/// read by its path.
+/// read by its path. On macOS the command is started by `sandbox-exec` under the profile
+/// [`crate::seatbelt::test_command`] writes: it writes only to the command's directory, the git
+/// directories of a linked worktree there but their hooks and configuration
+/// ([`crate::seatbelt::git_dirs`]), `home`, which holds its temporary directory `TMPDIR`
+/// (`home/tmp`), and the cargo caches; it starts no program outside the profile, connects to
+/// no launchd socket, and reads no registry login, nothing under
+/// the user's `Library/Keychains`, the runtime directory or a bus socket; with no `sandbox-exec`
+/// the spawn fails ([`refused_namespaces`] names it). Call it before anything is set on
+/// `command` that is not to be carried over by `Command::wrap`: the standard streams and the
+/// process group are set after it.
 pub fn without_login(command: &mut Command, home: &Path) {
     // What the command will see of `name`: its own setting when it has one (a caller such as
     // the test command's fresh home sets `CARGO_HOME`, or removes a variable), else this
@@ -625,6 +631,16 @@ pub fn without_login(command: &mut Command, home: &Path) {
     let user_home = seen("HOME").filter(|dir| dir.is_absolute());
     let mut cargo_home = seen("CARGO_HOME");
     let rustup_home = seen("RUSTUP_HOME");
+    // The `PATH` the program is looked up on, as `std` looks it up: the command's own, else
+    // this process's.
+    #[cfg(target_os = "macos")]
+    let path: Option<std::ffi::OsString> = command
+        .get_envs()
+        .find(|(key, _)| *key == OsStr::new("PATH"))
+        .map_or_else(
+            || std::env::var_os("PATH"),
+            |(_, value)| value.map(OsStr::to_os_string),
+        );
     for name in LOGIN_LOCATIONS {
         command.env_remove(name);
     }
@@ -675,7 +691,11 @@ pub fn without_login(command: &mut Command, home: &Path) {
             .map(PathBuf::from)
             .collect();
         if let Some(cargo_home) = cargo_home {
-            files.extend(CARGO_LOGINS.iter().map(|name| cargo_home.join(name)));
+            files.extend(
+                crate::seatbelt::CARGO_LOGINS
+                    .iter()
+                    .map(|name| cargo_home.join(name)),
+            );
         }
         let files: Vec<PathBuf> = files
             .into_iter()
@@ -684,6 +704,65 @@ pub fn without_login(command: &mut Command, home: &Path) {
             .filter(|file| !dirs.iter().any(|dir| file.starts_with(dir)))
             .collect();
         session::hide(command, &dirs, &files);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let tree = command.get_current_dir().map(Path::to_path_buf);
+        // Its own temporary directory, in its fresh home: never the user's, which the system's
+        // tools read for every program of the user.
+        let temp = home.join("tmp");
+        let _ = std::fs::create_dir_all(&temp);
+        command.env("TMPDIR", &temp);
+        let git = tree
+            .as_deref()
+            .map(crate::seatbelt::git_dirs)
+            .unwrap_or_default();
+        let mut writable: Vec<PathBuf> = vec![home.to_path_buf()];
+        writable.extend(tree.clone());
+        writable.extend(git.writable);
+        let kept: Vec<PathBuf> = [Some(home), tree.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(crate::seatbelt::real)
+            .collect();
+        let hidden_dirs: Vec<PathBuf> = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|dir| dir.is_absolute())
+            .map(|dir| crate::seatbelt::real(&dir))
+            .filter(|dir| !kept.iter().any(|inner| inner.starts_with(dir)))
+            .into_iter()
+            .collect();
+        let hidden_files: Vec<PathBuf> = std::env::var("DBUS_SESSION_BUS_ADDRESS")
+            .unwrap_or_default()
+            .split(';')
+            .filter_map(|address| address.split_once(':').map(|(_, keys)| keys))
+            .flat_map(|keys| keys.split(','))
+            .filter_map(|key| key.strip_prefix("path="))
+            .map(PathBuf::from)
+            .filter(|file| file.is_absolute())
+            .collect();
+        let user_homes: Vec<PathBuf> = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|dir| dir.is_absolute())
+            .into_iter()
+            .chain(crate::validator::passwd_home())
+            .chain(user_home)
+            .collect();
+        let profile = crate::seatbelt::test_command(&crate::seatbelt::TestCommand {
+            writable,
+            cargo_home,
+            user_homes,
+            hidden_dirs,
+            hidden_files,
+            sealed_dirs: git.sealed_dirs,
+            sealed_files: git.sealed_files,
+        });
+        let resolved = crate::seatbelt::resolve(
+            command.get_program(),
+            path.as_deref(),
+            command.get_current_dir(),
+        );
+        command.wrap(crate::seatbelt::SANDBOX_EXEC, &profile.args(), &resolved);
     }
 }
 
@@ -792,13 +871,29 @@ mod session {
 #[cfg(target_os = "linux")]
 pub const NAMESPACES_REFUSED: &str = "the test command runs in a user and a mount namespace of its own, where no login of the user's is in reach, and this host refuses unprivileged user namespaces (as with `kernel.apparmor_restrict_unprivileged_userns = 1` or `kernel.unprivileged_userns_clone = 0`); allow them, or run takt where they are allowed";
 
+/// What a test command [`without_login`] would confine on macOS is told when there is no
+/// `sandbox-exec` to confine it with.
+#[cfg(target_os = "macos")]
+pub const SANDBOX_MISSING: &str = "the test command runs in the macOS sandbox, started by `/usr/bin/sandbox-exec`, where no login of the user's is in reach, and this host has no `/usr/bin/sandbox-exec`; the test command is not run unconfined";
+
 /// `error`, from starting a command [`without_login`] confined, with the cause named when it
 /// is the refusal of its namespaces: on Linux an `EPERM` (`PermissionDenied`), which every
 /// refused namespace step fails with, gets [`NAMESPACES_REFUSED`] as its context. Any other
 /// error, and an `EACCES` (`PermissionDenied` too: a program that is not executable), is
-/// returned as it was.
+/// returned as it was. On macOS a `NotFound` at the start while [`crate::seatbelt::SANDBOX_EXEC`]
+/// does not exist gets `SANDBOX_MISSING` as its context.
 #[must_use]
 pub fn refused_namespaces(error: anyhow::Error) -> anyhow::Error {
+    #[cfg(target_os = "macos")]
+    if !Path::new(crate::seatbelt::SANDBOX_EXEC).exists()
+        && error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|cause| cause.kind() == std::io::ErrorKind::NotFound)
+        })
+    {
+        return error.context(SANDBOX_MISSING);
+    }
     #[cfg(target_os = "linux")]
     if error.chain().any(|cause| {
         cause.downcast_ref::<std::io::Error>().is_some_and(|cause| {
@@ -920,12 +1015,18 @@ pub fn hold_sweeps() -> SweepsHeld {
 }
 
 /// Takes this process's sweeps for one sweep: it waits until no [`SweepsHeld`] lives.
-#[cfg(target_os = "linux")]
-fn sweeping() -> std::sync::RwLockWriteGuard<'static, ()> {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn sweeping() -> std::sync::RwLockWriteGuard<'static, ()> {
     SWEEPS
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+
+/// The marks of the children [`run_child`] has running, on macOS: [`sweep_left`] kills what
+/// carries a mark of this process's calls but none of these. Changed only while [`RUNNING`]
+/// is held.
+#[cfg(target_os = "macos")]
+static LIVE: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet::new());
 
 /// The variable every child of [`run_child`] carries, its value unique to the call: a process
 /// that still carries it after the child ended was started by the child.
@@ -1034,7 +1135,10 @@ mod leftovers {
 /// no running child of [`run_child`] leads, or in a session of its own: what a judgement step's
 /// harness, or a validator that ran a program by itself, left running once it returned (a writer
 /// in the background). On Linux this process is made the subreaper of what it starts first, so
-/// an orphan is found too; elsewhere nothing is done. The run calls it after each judgement step
+/// an orphan is found too. On macOS, where there is no subreaper, what is killed is such a
+/// child of this process, and every process of this user that carries the mark of one of this
+/// process's [`run_child`] calls (`TAKT_CHILD`) whose child is no longer running, wherever it
+/// went; elsewhere nothing is done. The run calls it after each judgement step
 /// and each observation. It waits while a [`SweepsHeld`] lives: a child another thread started
 /// outside [`run_child`] and waits on itself (a gate's command, a harness's session) is not a
 /// leftover, and is swept, if at all, only once it has ended and its caller has reaped it.
@@ -1050,7 +1154,23 @@ pub fn sweep_left() -> Result<()> {
         // left the run's own group or session.
         leftovers::sweep(0, "", &running)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        let _sweeping = sweeping();
+        let running = RUNNING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::marked::sweep_children(&running)?;
+        let live = LIVE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let ours = format!("{}-", std::process::id());
+        crate::marked::sweep(MARK, |mark| {
+            mark.starts_with(ours.as_bytes())
+                && !live.iter().any(|running| running.as_bytes() == mark)
+        })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     Ok(())
 }
 
@@ -1061,8 +1181,10 @@ pub fn sweep_left() -> Result<()> {
 /// it started is killed with it before this returns: its process group, and on Linux every
 /// process it started and orphaned that takt adopted as their subreaper, however it left the
 /// group (a session of its own included). Not killed: one that left the group into takt's own
-/// group and dropped the call's mark from its environment; on other systems, one that left the
-/// group at all. An error too when its output stays held open after that.
+/// group and dropped the call's mark from its environment. On macOS every process of this user
+/// that carries the call's mark is killed too, wherever it went; not killed there: one that left
+/// the group and dropped the mark. On other systems, one that left the group at all. An error
+/// too when its output stays held open after that.
 pub fn run_child(command: &mut Command, limits: Limits) -> Result<Finished> {
     run_child_keeping_head(command, limits, 0)
 }
@@ -1104,6 +1226,10 @@ pub fn run_child_keeping_head(
         match command.spawn() {
             Ok(child) => {
                 running.insert(child.id());
+                #[cfg(target_os = "macos")]
+                LIVE.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(mark.clone());
                 break child;
             }
             // An executable written a moment ago is busy while a child another thread forked
@@ -1142,7 +1268,7 @@ pub fn run_child_keeping_head(
     let swept = {
         // A child another thread waits on outside this call is not this child's leftover:
         // the sweep waits until none is running ([`hold_sweeps`]).
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let _sweeping = sweeping();
         let mut running = RUNNING
             .lock()
@@ -1150,7 +1276,14 @@ pub fn run_child_keeping_head(
         running.remove(&child.id());
         #[cfg(target_os = "linux")]
         let swept = leftovers::sweep(child.id(), &mark, &running);
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        let swept = {
+            LIVE.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&mark);
+            crate::marked::sweep(MARK, |carried| carried == mark.as_bytes())
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let swept: Result<()> = Ok(());
         swept
     };

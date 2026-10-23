@@ -424,7 +424,8 @@ fn the_gates_and_the_project_file_written_by_a_step_are_refused() {
 }
 
 /// The guarded prefixes match whatever the case of the path: on a file system that folds case,
-/// `.Engineering/` is the store.
+/// `.Engineering/` is the store. There (APFS as macOS formats it) the write lands in the
+/// `.engineering/` the case already holds, and git names it by that directory's name.
 #[test]
 fn a_judge_path_in_another_case_is_refused() {
     let tree = repository("case", &[("check.sh", FAILING_CHECK, true)]);
@@ -435,7 +436,14 @@ fn a_judge_path_in_another_case_is_refused() {
             "forged\n",
         );
     });
-    assert_refused_and_put_back(&tree, &ran, ".Engineering/planning/story/blocked-one.md");
+    let folds_case =
+        tree.join(".engineering/cases").is_dir() && tree.join(".ENGINEERING/cases").is_dir();
+    let written = if folds_case {
+        ".engineering/planning/story/blocked-one.md"
+    } else {
+        ".Engineering/planning/story/blocked-one.md"
+    };
+    assert_refused_and_put_back(&tree, &ran, written);
 }
 
 /// A store directory the base holds as a link: a link is never followed, so no judgement step
@@ -825,7 +833,10 @@ fn a_toolchain_file_above_the_tree_is_put_back() {
 }
 
 /// A test command that writes above the tree: the observation is refused, nothing recorded,
-/// and what it wrote removed.
+/// and what it wrote removed. On macOS the write itself is refused: Seatbelt lets the test
+/// command write its tree, its git directories and its home only, so nothing is
+/// written above the tree, not even the directory, and the observation, which finds nothing
+/// above the tree changed, is recorded.
 #[test]
 fn a_validator_that_writes_above_the_tree_is_refused_and_put_back() {
     let tree = repository(
@@ -838,6 +849,15 @@ fn a_validator_that_writes_above_the_tree_is_refused_and_put_back() {
     );
     let ran = run(&tree, "./plant.sh", |_| {});
     let above = tree.root.join(".cargo/config.toml");
+    if cfg!(target_os = "macos") {
+        assert!(
+            fs::symlink_metadata(tree.root.join(".cargo")).is_err(),
+            "{}",
+            ran.text
+        );
+        assert!(!ran.records.is_empty(), "{}", ran.text);
+        return;
+    }
     assert!(
         ran.refusal().contains(&above.display().to_string()),
         "{}",
@@ -1353,15 +1373,16 @@ fn a_pyproject_refusal_does_not_speak_of_cargo() {
 /// step leaves running.
 static LATE_WRITER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-/// Whether process `pid` is still running: listed, and not a zombie.
+/// Whether process `pid` is still running: listed by `ps`, and not a zombie.
 fn alive(pid: u32) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|stat| {
-            stat.rsplit_once(") ")
-                .map(|(_, rest)| !rest.starts_with('Z'))
+    Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .is_ok_and(|output| {
+            let state = String::from_utf8_lossy(&output.stdout);
+            let state = state.trim();
+            output.status.success() && !state.is_empty() && !state.starts_with('Z')
         })
-        .unwrap_or(false)
 }
 
 /// Whether this process is the child [`alone`] starts, which runs one case by itself.

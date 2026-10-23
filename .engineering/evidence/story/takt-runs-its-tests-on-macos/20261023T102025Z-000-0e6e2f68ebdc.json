@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-23T10:20:25Z",
+  "actor": "human:timo",
+  "artifact": "story:takt-runs-its-tests-on-macos",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check on CI at 3e9aa15 (run 39936941949): 157 results, 1672 passed, 0 failed, 5 ignored; darwin run 39936935309 at 3e9aa15: test-library and test-cli success",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/39936941949"
+  }
+}

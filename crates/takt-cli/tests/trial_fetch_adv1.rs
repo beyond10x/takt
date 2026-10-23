@@ -379,8 +379,19 @@ fn a_timed_out_trial_fetch_leaves_no_process_behind() {
         .expect("the double started its orphan")
         .trim()
         .to_owned();
-    let alive = fs::read_to_string(format!("/proc/{pid}/cmdline"))
-        .is_ok_and(|cmdline| cmdline.starts_with("sleep"));
+    // Listed by `ps`, not a zombie, and still the double's `sleep`.
+    let alive = Command::new("ps")
+        .args(["-o", "stat=,args=", "-p", &pid])
+        .output()
+        .is_ok_and(|output| {
+            let listed = String::from_utf8_lossy(&output.stdout);
+            let listed = listed.trim();
+            output.status.success()
+                && !listed.starts_with('Z')
+                && listed
+                    .split_once(char::is_whitespace)
+                    .is_some_and(|(_, args)| args.trim_start().starts_with("sleep"))
+        });
     if alive {
         let _ = Command::new("kill").args(["-9", &pid]).status();
     }

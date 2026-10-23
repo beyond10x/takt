@@ -29,12 +29,32 @@ const PROTOCOL: &str = concat!(
 /// copy itself, beside the tree.
 const LINKS: [&str; 2] = ["../x", "../../x"];
 
+/// Where a test command's swap copies the cases directory, from the tree, and the link it makes
+/// in the directory's place: [`LINKS`] with the copy beside the tree, and a link to a copy in
+/// the tree's git directory, which takt does not put back. On macOS Seatbelt lets a test command
+/// write nothing beside its tree, so there the copy lies in the git directory, the link to it
+/// or dangling (`../x` from `.engineering/`, `x` in the tree).
+const COMMAND_SWAPS: &[(&str, &str)] = if cfg!(target_os = "macos") {
+    &[(".git/x", "../x"), (".git/x", "../.git/x")]
+} else {
+    &[
+        ("../x", "../x"),
+        ("../x", "../../x"),
+        (".git/x", "../.git/x"),
+    ]
+};
+
 /// What the step and the test command run: the cases directory copied beside the tree, removed,
 /// and a link to `link` made in its place; then a commit and a branch, so `HEAD` and the refs
 /// move with it.
 fn swap(link: &str) -> String {
+    swap_to("../x", link)
+}
+
+/// [`swap`] with the copy at `copy`, from the tree.
+fn swap_to(copy: &str, link: &str) -> String {
     format!(
-        "cp -r .engineering/cases ../x && rm -rf .engineering/cases && ln -s {link} .engineering/cases && git -c user.name=t -c user.email=t@localhost commit -q --allow-empty -m swapped && git branch planted"
+        "cp -r .engineering/cases {copy} && rm -rf .engineering/cases && ln -s {link} .engineering/cases && git -c user.name=t -c user.email=t@localhost commit -q --allow-empty -m swapped && git branch planted"
     )
 }
 
@@ -106,9 +126,11 @@ impl Drop for Scratch {
 }
 
 /// A committed repository on `main` with a README and `files`, executable when their name ends
-/// in `.sh`, at `tree/` in a scratch directory named for this process and `name`.
+/// in `.sh`, at `tree/` in a scratch directory under this crate's build directory named for this
+/// process and `name`. What a test command writes for the test to read lies in the tree's git
+/// directory: on macOS Seatbelt lets it write nothing beside the tree.
 fn repository(name: &str, files: &[(&str, &str)]) -> Scratch {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("cases-swap-{}-{name}", std::process::id()));
     if dir.exists() {
         fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
@@ -234,10 +256,11 @@ fn observations(bytes: &[u8]) -> Vec<serde_json::Value> {
 }
 
 /// What every refused swap leaves: a stop naming the cases directory as a link, the directory a
-/// directory again as it was in `before`, `HEAD` and the refs as `refs_before`, the copy beside
-/// the tree as the swap made it, and nothing at the link's dangling target in the tree.
+/// directory again as it was in `before`, `HEAD` and the refs as `refs_before`, the copy at
+/// `copy` as the swap made it, and nothing at the link's dangling target in the tree.
 fn assert_undone(
     scratch: &Scratch,
+    copy: &Path,
     stop: &anyhow::Result<Stop>,
     before: &BTreeMap<PathBuf, Vec<u8>>,
     refs_before: &str,
@@ -257,7 +280,7 @@ fn assert_undone(
     assert_put_back(before, &files(&cases), text);
     assert_eq!(refs(&tree), refs_before, "HEAD and refs\n{text}");
     assert_eq!(
-        files(&scratch.copy()),
+        files(copy),
         *before,
         "nothing was written through the link\n{text}"
     );
@@ -333,6 +356,7 @@ fn a_step_that_replaces_the_cases_directory_with_a_link_is_undone() {
         assert_eq!(harness.calls.get(), 1, "{stop:?}\n{text}");
         assert_undone(
             &scratch,
+            &scratch.copy(),
             &stop,
             &harness.cases.borrow(),
             &harness.refs.borrow(),
@@ -366,23 +390,33 @@ impl Harness for NoStep {
 /// it, `HEAD` and the refs as before it, and nothing was recorded or written through the link.
 #[test]
 fn a_test_command_that_replaces_the_cases_directory_with_a_link_is_undone() {
-    for (n, link) in LINKS.into_iter().enumerate() {
+    for (n, (copy, link)) in COMMAND_SWAPS.iter().enumerate() {
         let id = format!("validator-{n}");
-        let scratch = repository_with_test(&id, &swap(link), &[]);
+        let scratch = repository_with_test(&id, &swap_to(copy, link), &[]);
         let (stop, text) = observe(&scratch, &id);
-        let text = format!("{link}\n{text}");
-        let seen = files(&scratch.0.join("seen"));
-        assert_undone(&scratch, &stop, &seen, &refs_seen(&scratch, &text), &text);
+        let text = format!("{copy} {link}\n{text}");
+        let seen = files(&seen(&scratch));
+        let copy = scratch.tree().join(copy);
+        assert_undone(
+            &scratch,
+            &copy,
+            &stop,
+            &seen,
+            &refs_seen(&scratch, &text),
+            &text,
+        );
     }
 }
 
 /// A committed repository with `files` whose test command, `sh tests/run.sh`, runs
-/// `tests/case.sh`: it copies the cases directory to `../seen` and the refs to `../refs` as it
-/// finds them, then runs `body`. Both scripts are committed before the case opens: the scripts
-/// the test command runs are on the judge surface, so no step may write them.
+/// `tests/case.sh`: it copies the cases directory to `.git/seen` and the refs to
+/// `.git/seen-refs` as it finds them, then runs `body`. Both lie in the tree's git directory,
+/// which a test command writes on every platform and takt does not put back. Both scripts are
+/// committed before the case opens: the scripts the test command runs are on the judge surface,
+/// so no step may write them.
 fn repository_with_test(name: &str, body: &str, files: &[(&str, &str)]) -> Scratch {
     let case = format!(
-        "#!/bin/sh\nset -e\ncp -r .engineering/cases ../seen\ngit rev-parse HEAD > ../refs\ngit for-each-ref --format='%(refname) %(objectname)' >> ../refs\n{body}\n"
+        "#!/bin/sh\nset -e\ncp -r .engineering/cases .git/seen\ngit rev-parse HEAD > .git/seen-refs\ngit for-each-ref --format='%(refname) %(objectname)' >> .git/seen-refs\n{body}\n"
     );
     let mut all = vec![
         (
@@ -416,9 +450,14 @@ fn observe(scratch: &Scratch, id: &str) -> (anyhow::Result<Stop>, String) {
     (stop, text)
 }
 
-/// `HEAD` and the refs as the test command found them, from `../refs`.
+/// The cases directory as the test command found it, copied to `.git/seen`.
+fn seen(scratch: &Scratch) -> PathBuf {
+    scratch.tree().join(".git/seen")
+}
+
+/// `HEAD` and the refs as the test command found them, from `.git/seen-refs`.
 fn refs_seen(scratch: &Scratch, text: &str) -> String {
-    fs::read_to_string(scratch.0.join("refs"))
+    fs::read_to_string(scratch.tree().join(".git/seen-refs"))
         .unwrap_or_else(|_| panic!("the test command ran\n{text}"))
         .trim_end()
         .to_owned()
@@ -888,12 +927,25 @@ fn a_case_file_is_put_back_when_the_reset_fails() {
     );
 }
 
+/// The script line that writes a cargo configuration beside the tree, which cargo reads for it.
+const CARGO_BESIDE: &str = "mkdir -p ../.cargo && echo '[build]' > ../.cargo/config.toml";
+
+/// [`CARGO_BESIDE`] as a test command runs it. On macOS Seatbelt denies a test command every
+/// write beside its tree (`macos_confinement.rs`), so there the write is tried and its denial
+/// let pass: what cargo reads beside the tree is never written, and the test still finds nothing
+/// there afterwards.
+const COMMAND_CARGO_BESIDE: &str = if cfg!(target_os = "macos") {
+    "{ { mkdir -p ../.cargo && echo '[build]' > ../.cargo/config.toml; } 2>/dev/null || true; }"
+} else {
+    CARGO_BESIDE
+};
+
 /// What the step or the observation below does besides making the reset fail: a file on the
-/// judge surface, a file in its case and a cargo configuration beside the tree, which cargo reads
-/// for it.
-fn writes_everywhere(id: &str) -> String {
+/// judge surface, a file in its case and, with `cargo_beside`, a cargo configuration beside the
+/// tree, which cargo reads for it.
+fn writes_everywhere(id: &str, cargo_beside: &str) -> String {
     format!(
-        "mkdir -p .github && echo x > .github/planted.yml && echo forged > .engineering/cases/{id}/authority.yaml && mkdir -p ../.cargo && echo '[build]' > ../.cargo/config.toml && {RESET_FAILS}"
+        "mkdir -p .github && echo x > .github/planted.yml && echo forged > .engineering/cases/{id}/authority.yaml && {cargo_beside} && {RESET_FAILS}"
     )
 }
 
@@ -925,7 +977,7 @@ fn assert_every_part_put_back(scratch: &Scratch, id: &str, text: &str) {
 fn every_part_of_a_discarded_step_is_put_back_when_the_reset_fails() {
     let id = "every-part-step";
     let scratch = repository(id, &[("src/a", "a\n")]);
-    let (_, text, _) = step(&scratch, id, writes_everywhere(id));
+    let (_, text, _) = step(&scratch, id, writes_everywhere(id, CARGO_BESIDE));
     assert_every_part_put_back(&scratch, id, &text);
 }
 
@@ -934,7 +986,11 @@ fn every_part_of_a_discarded_step_is_put_back_when_the_reset_fails() {
 #[test]
 fn every_part_of_a_discarded_observation_is_put_back_when_the_reset_fails() {
     let id = "every-part-observation";
-    let scratch = repository_with_test(id, &writes_everywhere(id), &[("src/a", "a\n")]);
+    let scratch = repository_with_test(
+        id,
+        &writes_everywhere(id, COMMAND_CARGO_BESIDE),
+        &[("src/a", "a\n")],
+    );
     let (_, text) = observe(&scratch, id);
     refs_seen(&scratch, &text);
     assert_every_part_put_back(&scratch, id, &text);
@@ -949,7 +1005,7 @@ fn an_observation_whose_judge_surface_cannot_be_read_is_undone_whole() {
     let scratch = repository_with_test(
         id,
         &format!(
-            "{COMMITS}\necho forged > .engineering/cases/{id}/authority.yaml\nmkdir -p ../.cargo && echo '[build]' > ../.cargo/config.toml\nmkdir -p .github && echo z > .github/secret && chmod 000 .github/secret"
+            "{COMMITS}\necho forged > .engineering/cases/{id}/authority.yaml\n{COMMAND_CARGO_BESIDE}\nmkdir -p .github && echo z > .github/secret && chmod 000 .github/secret"
         ),
         &[],
     );
@@ -1132,8 +1188,11 @@ fn a_failed_undo_names_the_surface_and_the_outside_errors() {
         error.contains(&surface),
         "the surface's error, {surface}, is named: {error}"
     );
-    // The step made `.cargo` beside the tree, so putting it back removes that directory whole.
-    let outside = format!("remove {}:", scratch.0.join(".cargo").display());
+    // The step made `.cargo` beside the tree, so putting it back removes that directory whole,
+    // named by its real path as the surface is (on macOS the temporary directory is a link,
+    // `/var` to `/private/var`).
+    let beside = fs::canonicalize(&scratch.0).expect("the scratch directory's real path");
+    let outside = format!("remove {}:", beside.join(".cargo").display());
     assert!(
         error.contains(&outside),
         "the outside error, {outside}, is named: {error}"
