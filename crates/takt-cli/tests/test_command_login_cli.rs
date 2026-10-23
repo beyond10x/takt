@@ -116,8 +116,9 @@ fn the_test_command_reaches_no_login_of_the_operator() {
     let _named_bus = UnixListener::bind(outer.join("b/bus")).expect("the named bus socket");
     script(&outer.join("bin/gh"), GH);
 
-    // In the temporary directory takt runs with, which the test command may write on macOS too.
-    let seen = outer.join("tmp/seen");
+    // In the repository's git directory, which the test command may write on macOS too, and
+    // out of the work tree takt reads.
+    let seen = outer.join("repo/.git/seen");
     let runtime = outer.join("r");
     let named = outer.join("b/bus");
     let repo = outer.join("repo");
@@ -244,8 +245,8 @@ fn id(flag: &str) -> String {
 /// when none), run under bubblewrap with `passwd` as `/etc/passwd`, so the home this user's
 /// passwd entry names is the scratch one and the operator's own is never looked at. On macOS a
 /// user's home comes from its directory service, which no file replaces: takt runs as it is,
-/// `passwd` unused, and the probe writes what it sees under `TMPDIR`, which a test command
-/// there may write (`seatbelt::test_command`).
+/// `passwd` unused, and the probe writes what it sees into the repository's git directory,
+/// which a test command there may write (`seatbelt::test_command`); takt's `TMPDIR` it may not.
 fn registry_probe(
     outer: &Path,
     passwd: &Path,
@@ -256,7 +257,7 @@ fn registry_probe(
     let (seen, mut takt) = {
         let _ = passwd;
         (
-            outer.join(format!("tmp/seen-{case}")),
+            outer.join(format!("repo/.git/seen-{case}")),
             Command::new(env!("CARGO_BIN_EXE_takt")),
         )
     };

@@ -834,7 +834,7 @@ fn a_toolchain_file_above_the_tree_is_put_back() {
 
 /// A test command that writes above the tree: the observation is refused, nothing recorded,
 /// and what it wrote removed. On macOS the write itself is refused: Seatbelt lets the test
-/// command write its tree, its home and the user's temporary directories only, so nothing is
+/// command write its tree, its git directories and its home only, so nothing is
 /// written above the tree, not even the directory, and the observation, which finds nothing
 /// above the tree changed, is recorded.
 #[test]

@@ -1,5 +1,5 @@
 # Cuts a GitHub Release for every version tag: the tag's provenance is checked, `task check`
-# runs on the tagged commit, `takt` is built natively per target, and the archives are published
+# and the macOS tests (darwin.yml) run on the tagged commit, `takt` is built natively per target, and the archives are published
 # with a SHA256SUMS file and the notes `scripts/release-notes` prints for the tag, read from the
 # tagged CHANGELOG.md, or on a backfill from the dispatching branch's. Manual dispatch
 # exists only to backfill an annotated tag that is already cut; a release is driven by the tag push.
@@ -67,6 +67,13 @@ jobs:
     with:
       ref: ${{ needs.provenance.outputs.commit }}
 
+  darwin:
+    name: Test the tagged commit on macOS
+    needs: provenance
+    uses: ./.github/workflows/darwin.yml
+    with:
+      ref: ${{ needs.provenance.outputs.commit }}
+
   build:
     name: Build ${{ matrix.target }}
     needs: provenance
@@ -124,7 +131,7 @@ jobs:
     name: Publish binaries and release notes
     # Every path, the manual backfill included, runs the gate; nothing publishes past a failed
     # or skipped job.
-    needs: [provenance, gate, build]
+    needs: [provenance, gate, darwin, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

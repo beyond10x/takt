@@ -1824,9 +1824,9 @@ impl Confinement {
     /// Runs the toolchain's `cargo <args>` confined, in the clone, which it sees at its own
     /// path: no network; writes only to the clone, the target directory, the scratch
     /// `CARGO_HOME` (the host's [`CACHED`] directories linked into it, read-only), the fresh
-    /// install root, a home and a temporary directory of the build's own and this user's
-    /// temporary and cache directories ([`crate::seatbelt::user_dirs`]); under the user's home
-    /// it reads only those, the toolchain and the cached directories ([`crate::seatbelt::build`]).
+    /// install root, and a home and a temporary directory of the build's own, never this user's
+    /// temporary and cache directories under `/var/folders`; it starts no program outside its
+    /// profile; under the user's home it reads only those, the toolchain and the cached directories ([`crate::seatbelt::build`]).
     /// The command is shown on `out`; a failure is a [`BuildFailed`].
     #[cfg(target_os = "macos")]
     fn cargo(&self, work: &Work, args: &[&str], out: &mut dyn Write) -> Result<()> {
@@ -1871,7 +1871,7 @@ impl Confinement {
                 }
             }
         }
-        let mut writable = vec![
+        let writable = vec![
             work.source.clone(),
             work.target.clone(),
             work.cargo_home.clone(),
@@ -1879,7 +1879,6 @@ impl Confinement {
             home.clone(),
             tmp.clone(),
         ];
-        writable.extend(crate::seatbelt::user_dirs());
         let profile = crate::seatbelt::build(&writable, &readable, &Self::homes());
         let bin = self.toolchain.join("bin");
         let mut path = bin.clone().into_os_string();
@@ -1900,17 +1899,16 @@ impl Confinement {
     }
 
     /// The revision the binary at `binary` prints for `--version`, run confined at its own path
-    /// (`at`, where Linux shows it, is not used): no network, writes only to a scratch home and
-    /// this user's temporary and cache directories, and under the user's home it reads only the
-    /// binary's directory.
+    /// (`at`, where Linux shows it, is not used): no network, no program started outside its
+    /// profile, writes only to a scratch home, which is its temporary directory too, and under
+    /// the user's home it reads only the binary's directory.
     #[cfg(target_os = "macos")]
     fn printed_revision(&self, binary: &Path, at: &str) -> Result<String> {
         let dir = binary
             .parent()
             .ok_or_else(|| anyhow!("{} has no directory", binary.display()))?;
         let scratch = crate::forge::ScratchHome::new()?;
-        let mut writable = vec![scratch.path().to_path_buf()];
-        writable.extend(crate::seatbelt::user_dirs());
+        let writable = vec![scratch.path().to_path_buf()];
         let profile = crate::seatbelt::build(&writable, &[dir.to_path_buf()], &Self::homes());
         let mut command = self.sandbox(
             &profile,

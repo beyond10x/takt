@@ -1060,7 +1060,8 @@ fn probe_build(home: &Path, other: &Path) -> String {
 /// those cargo sets for a build script (`CARGO`, `CARGO_*`, `DEP_*` and the names below; the
 /// two `SSL_CERT_*` cargo sets in its own environment, naming the system's certificates). The
 /// search path cargo sets for the dynamic libraries it built is `LD_LIBRARY_PATH`, and on macOS
-/// `DYLD_FALLBACK_LIBRARY_PATH`.
+/// `DYLD_FALLBACK_LIBRARY_PATH`, which cargo extends with the value it found: the caller sets
+/// one ([`PLANTED_DYLD_FALLBACK_LIBRARY_PATH`]), which must not arrive.
 ///
 /// On macOS also `__CF_USER_TEXT_ENCODING`, with the value CoreFoundation writes
 /// ([`cf_user_text_encoding`]): CoreFoundation sets it in the environment of a process it is
@@ -1071,7 +1072,7 @@ fn probe_build(home: &Path, other: &Path) -> String {
 /// arrive.
 fn allowed_in_a_build(name: &str, value: &str) -> bool {
     if cfg!(target_os = "macos") && name == "DYLD_FALLBACK_LIBRARY_PATH" {
-        return true;
+        return !value.contains(PLANTED_DYLD_FALLBACK_LIBRARY_PATH);
     }
     if cfg!(target_os = "macos") && name == "__CF_USER_TEXT_ENCODING" {
         return cf_user_text_encoding(value);
@@ -1108,6 +1109,11 @@ fn allowed_in_a_build(name: &str, value: &str) -> bool {
 /// process's.
 const PLANTED_CF_USER_TEXT_ENCODING: &str = "0xFFFFE:0x0:0x0";
 
+/// The caller's `DYLD_FALLBACK_LIBRARY_PATH` in [`a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes_only_its_own`]:
+/// a directory no build makes, which no value cargo sets holds unless it found it in the
+/// environment the check started the build from.
+const PLANTED_DYLD_FALLBACK_LIBRARY_PATH: &str = "/PLANTED-DYLD-FALLBACK-LIBRARY-PATH";
+
 /// A value as the probe's build script records it (`{value:?}`), its quotes taken off; a value
 /// with an escape in it stays as recorded.
 fn unquoted(value: &str) -> String {
@@ -1120,7 +1126,8 @@ fn unquoted(value: &str) -> String {
 }
 
 /// Whether `value` is the `__CF_USER_TEXT_ENCODING` CoreFoundation writes for this process's
-/// user: `0x<uid>:<encoding>:<region>`, the user id in hexadecimal, the other two numbers.
+/// user: `0x<uid>:<encoding>:<region>`, the user id in hexadecimal, the other two numbers of
+/// 32 bits, each of one to eight hexadecimal digits after an optional `0x`.
 fn cf_user_text_encoding(value: &str) -> bool {
     let uid = Command::new("id").arg("-u").output().expect("id runs");
     let uid: u32 = String::from_utf8_lossy(&uid.stdout)
@@ -1128,14 +1135,15 @@ fn cf_user_text_encoding(value: &str) -> bool {
         .parse()
         .expect("id -u prints a user id");
     let fields: Vec<&str> = value.split(':').collect();
-    let number = |field: &str| {
-        let digits = field.strip_prefix("0x").unwrap_or(field);
-        !digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit())
+    let hex = |digits: &str| {
+        (1..=8).contains(&digits.len()) && digits.chars().all(|c| c.is_ascii_hexdigit())
     };
+    let number = |field: &str| hex(field.strip_prefix("0x").unwrap_or(field));
     fields.len() == 3
         && fields[0]
             .strip_prefix("0x")
-            .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+            .filter(|digits| hex(digits))
+            .and_then(|digits| u32::from_str_radix(digits, 16).ok())
             == Some(uid)
         && number(fields[1])
         && number(fields[2])
@@ -1199,6 +1207,10 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
             ("CHECK_FINDING_PLANTED", "PLANTED-CREDENTIAL"),
             ("GITHUB_TOKEN", "PLANTED-CREDENTIAL"),
             ("__CF_USER_TEXT_ENCODING", PLANTED_CF_USER_TEXT_ENCODING),
+            (
+                "DYLD_FALLBACK_LIBRARY_PATH",
+                PLANTED_DYLD_FALLBACK_LIBRARY_PATH,
+            ),
             ("CARGO_TARGET_DIR", shared.to_str().expect("UTF-8")),
         ],
         &home.join(".secret"),
@@ -2016,6 +2028,43 @@ fn the_predicate_cannot_plant_a_link_where_the_check_writes() {
             "the command removed {kept}"
         );
     }
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "reproduced\n",
+        "{}",
+        shown(&output)
+    );
+}
+
+/// story:wave-35-review-fixes, H1: on macOS the predicate's command starts no program outside
+/// its profile. A job it submits to launchd (`launchctl submit`), which launchd would run
+/// unconfined, never runs: the file the job would write outside the run is not there, and the
+/// command goes on to its end.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_predicate_starts_no_launchd_job() {
+    let world = world("launchd-job");
+    let escaped = world.outer.0.join("escaped-by-launchd");
+    let label = format!("dev.takt.check-finding-test.{}", std::process::id());
+    let filed = file(
+        &world.takt,
+        "launchd-job",
+        &body(Some(&format!(
+            "scenario: 1\ncommand: \"$TAKT\" --version; /bin/launchctl submit -l {label} -- /usr/bin/touch {} 2>/dev/null; sleep 2; true\nexit: 0\noutput: takt 0.1.0\nsource: {SOURCE}\n",
+            escaped.display()
+        ))),
+        &[],
+    );
+    assert!(filed.status.success(), "{}", shown(&filed));
+    let output = world.check("story:launchd-job", &world.defect, &[]);
+    let _ = Command::new("/bin/launchctl")
+        .args(["remove", &label])
+        .output();
+    assert!(
+        !escaped.exists(),
+        "a launchd job the command submitted ran outside its profile: {}",
+        shown(&output)
+    );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "reproduced\n",

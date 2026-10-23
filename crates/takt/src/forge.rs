@@ -600,8 +600,10 @@ impl Drop for ScratchHome {
 /// session in reach. Not hidden: an abstract socket a bus address names, and the user's home
 /// read by its path. On macOS the command is started by `sandbox-exec` under the profile
 /// [`crate::seatbelt::test_command`] writes: it writes only to the command's directory, the git
-/// directories of a linked worktree there ([`linked_git_dirs`]), `home`, the temporary
-/// directories and the cargo caches, and reads no registry login, nothing under
+/// directories of a linked worktree there but their hooks and configuration
+/// ([`crate::seatbelt::git_dirs`]), `home`, which holds its temporary directory `TMPDIR`
+/// (`home/tmp`), and the cargo caches; it starts no program outside the profile, connects to
+/// no launchd socket, and reads no registry login, nothing under
 /// the user's `Library/Keychains`, the runtime directory or a bus socket; with no `sandbox-exec`
 /// the spawn fails ([`refused_namespaces`] names it). Call it before anything is set on
 /// `command` that is not to be carried over by `Command::wrap`: the standard streams and the
@@ -706,10 +708,18 @@ pub fn without_login(command: &mut Command, home: &Path) {
     #[cfg(target_os = "macos")]
     {
         let tree = command.get_current_dir().map(Path::to_path_buf);
-        let mut writable: Vec<PathBuf> = vec![home.to_path_buf(), std::env::temp_dir()];
+        // Its own temporary directory, in its fresh home: never the user's, which the system's
+        // tools read for every program of the user.
+        let temp = home.join("tmp");
+        let _ = std::fs::create_dir_all(&temp);
+        command.env("TMPDIR", &temp);
+        let git = tree
+            .as_deref()
+            .map(crate::seatbelt::git_dirs)
+            .unwrap_or_default();
+        let mut writable: Vec<PathBuf> = vec![home.to_path_buf()];
         writable.extend(tree.clone());
-        writable.extend(tree.as_deref().map(linked_git_dirs).unwrap_or_default());
-        writable.extend(crate::seatbelt::user_dirs());
+        writable.extend(git.writable);
         let kept: Vec<PathBuf> = [Some(home), tree.as_deref()]
             .into_iter()
             .flatten()
@@ -744,6 +754,8 @@ pub fn without_login(command: &mut Command, home: &Path) {
             user_homes,
             hidden_dirs,
             hidden_files,
+            sealed_dirs: git.sealed_dirs,
+            sealed_files: git.sealed_files,
         });
         let resolved = crate::seatbelt::resolve(
             command.get_program(),
@@ -752,37 +764,6 @@ pub fn without_login(command: &mut Command, home: &Path) {
         );
         command.wrap(crate::seatbelt::SANDBOX_EXEC, &profile.args(), &resolved);
     }
-}
-
-/// The git directories of the linked worktree at `tree`, which lie outside it: the one its
-/// `.git` file names (`gitdir: <path>`, a relative one from `tree`) and the common directory
-/// that one's `commondir` names (a relative one from it), each when it is a directory; none for
-/// a tree whose `.git` is no such file. A test command in a linked worktree reads and writes
-/// them as one in the main worktree does its `.git`, which lies inside its tree.
-#[cfg(target_os = "macos")]
-fn linked_git_dirs(tree: &Path) -> Vec<PathBuf> {
-    let Ok(text) = std::fs::read_to_string(tree.join(".git")) else {
-        return Vec::new();
-    };
-    let Some(named) = text
-        .lines()
-        .next()
-        .and_then(|line| line.strip_prefix("gitdir: "))
-    else {
-        return Vec::new();
-    };
-    let git_dir = tree.join(named.trim_end());
-    if !git_dir.is_dir() {
-        return Vec::new();
-    }
-    let mut found = vec![git_dir.clone()];
-    if let Ok(common) = std::fs::read_to_string(git_dir.join("commondir")) {
-        let common = git_dir.join(common.trim_end());
-        if common.is_dir() {
-            found.push(common);
-        }
-    }
-    found
 }
 
 /// The namespaces [`without_login`] starts a child in.
@@ -1035,7 +1016,7 @@ pub fn hold_sweeps() -> SweepsHeld {
 
 /// Takes this process's sweeps for one sweep: it waits until no [`SweepsHeld`] lives.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn sweeping() -> std::sync::RwLockWriteGuard<'static, ()> {
+pub(crate) fn sweeping() -> std::sync::RwLockWriteGuard<'static, ()> {
     SWEEPS
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

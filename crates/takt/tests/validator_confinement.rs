@@ -474,8 +474,8 @@ fn one_step(tree: &Path, id: &str, harness: &dyn Harness) -> (anyhow::Result<Sto
 /// the test command, the harness and `aep` receive none of them; the forge's programs keep
 /// the GitHub ones the bot route reads and lose the rest. On macOS the child is given `TMPDIR`
 /// as well and the scripts lie under it: Seatbelt lets the test command write its tree, its
-/// home and the user's temporary directory only, and the script it runs records its
-/// environment beside itself.
+/// git directory and its home only, so the script it runs records its environment in the
+/// tree's `.git`, and the others beside themselves.
 #[test]
 fn children_receive_no_credential_they_do_not_need() {
     if std::env::var_os("TAKT_CONFINEMENT_CHILD").is_none() {
@@ -535,11 +535,13 @@ fn children_receive_no_credential_they_do_not_need() {
     };
 
     let tree = repository("env-tests", r#"fs.file.exists("README.md")"#, &[]);
-    let tests_names = scripts.join("tests.names");
+    // The test command records into its tree's git directory, which it writes on macOS as
+    // well, never the temporary directory, which it does not.
+    let tests_names = tree.join(".git/tests.names");
     dumper(
         &scripts.join("tests.sh"),
         &tests_names,
-        &scripts.join("tests.argv"),
+        &tree.join(".git/tests.argv"),
         "",
     );
     let command = format!("sh {}", scripts.join("tests.sh").display());

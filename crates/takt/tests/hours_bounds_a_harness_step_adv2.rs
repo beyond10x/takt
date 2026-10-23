@@ -79,21 +79,6 @@ fn directory(name: &str) -> Scratch {
     Scratch(dir)
 }
 
-/// An empty scratch directory a test command may write: [`directory`], and on macOS one under
-/// the user's temporary directory, the one directory outside its tree and its home that
-/// Seatbelt lets a test command write.
-fn written_by_a_test_command(name: &str) -> Scratch {
-    if !cfg!(target_os = "macos") {
-        return directory(name);
-    }
-    let dir = std::env::temp_dir().join(format!("hours-adv2-{}-{name}", std::process::id()));
-    if dir.exists() {
-        fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
-    }
-    fs::create_dir_all(&dir).expect("scratch dir");
-    Scratch(dir)
-}
-
 fn executable(path: &Path, text: &str) {
     fs::write(path, text).expect("a script");
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("exec bit");
@@ -403,13 +388,12 @@ fn a_test_command_the_budget_killed_after_writing_into_the_tree_does_not_stop_on
 
 /// Probe: a test command that starts a daemon of its own session holding its output, then
 /// exits; the run is still bounded, and the daemon is gone once the run returns. macOS has no
-/// `setsid` program, so there the daemon is a `perl` that calls `setsid` itself, and its pids
-/// are written under the user's temporary directory ([`written_by_a_test_command`]).
+/// `setsid` program, so there the daemon is a `perl` that calls `setsid` itself. Its pids are
+/// written into the tree's git directory, which a test command writes on macOS too and which
+/// leaves the work tree clean.
 #[test]
 fn a_test_command_that_leaves_a_daemon_is_bounded_and_the_daemon_killed() {
     let _serial = serial();
-    let scripts = written_by_a_test_command("daemon-scripts");
-    let pids = scripts.join("pids");
     let daemon = if cfg!(target_os = "macos") {
         "/usr/bin/perl -e 'use POSIX (); POSIX::setsid() or die; $SIG{TERM} = \"IGNORE\"; exec \"sleep\", 30'"
     } else {
@@ -419,12 +403,10 @@ fn a_test_command_that_leaves_a_daemon_is_bounded_and_the_daemon_killed() {
         "daemon",
         &[(
             "check.sh",
-            &format!(
-                "#!/bin/sh\n{daemon} &\necho $$ $! >> '{p}'\nexit 0\n",
-                p = pids.display()
-            ),
+            &format!("#!/bin/sh\n{daemon} &\necho $$ $! >> .git/pids\nexit 0\n"),
         )],
     );
+    let pids = tree.join(".git/pids");
     let validators: Vec<Box<dyn Validator>> =
         vec![Box::new(TestsRun::new("./check.sh").expect("a command"))];
     let started = Instant::now();

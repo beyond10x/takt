@@ -121,19 +121,21 @@
 # directory, its environment as above but for HOME and TMPDIR, directories of the build's own
 # there; with no network; writing only to the checkout, the target directory, the scratch
 # CARGO_HOME (the caller's caches linked into it, read through the links and never written),
-# that home and temporary directory, and this user's temporary and cache directories (`getconf`
-# DARWIN_USER_TEMP_DIR and DARWIN_USER_CACHE_DIR), which the compiler and the linker use; and
-# under the hidden homes below reading only those, the toolchain and the caches. The predicate's
-# command runs with no network (no TCP and no unix socket); writing only to the clone, its home
-# and this user's temporary and cache directories; with the hidden homes, `/tmp` and `/var/run`
+# and that home and temporary directory, never this user's temporary and cache directories
+# under /var/folders (`getconf` DARWIN_USER_TEMP_DIR and DARWIN_USER_CACHE_DIR); and under the
+# hidden homes below reading only those, the toolchain and the caches. The predicate's command
+# runs with no network (no TCP and no unix socket); writing only to the clone and its home,
+# which holds its TMPDIR; with the hidden homes, `/tmp` and `/var/run`
 # unreadable but for the clone, its home, the kept binary and the caller's protocol sources,
 # which `.cache/aep/protocol-sources` of its home links to by their real path and which it
 # cannot write through the link. The build and the command each run in a session and process
 # group of their own (`perl`'s `POSIX::setsid`), killed whole when they end; that `perl` keeps
 # CHECK_FINDING_TIMEOUT. An `sh` inside the profile runs the command with the status pipe
 # closed and writes `{ "exit-code": N }` on it after the command ended, the line read as
-# bubblewrap's is. What Seatbelt does not give: a process that leaves the command's process
-# group outlives the check; the host's System V and POSIX IPC and its Mach services stay in
+# bubblewrap's is. Neither the build nor the command starts a program outside its profile: no
+# launchd job, no LaunchServices open, no Apple event, and no lookup of the Mach services that
+# start one. What Seatbelt does not give: a process that leaves the command's process group
+# outlives the check; the host's System V and POSIX IPC and its other Mach services stay in
 # reach; the command has no `/tmp` of its own; and a refused write fails with "Operation not
 # permitted", not "Read-only file system".
 set -euo pipefail
@@ -503,14 +505,15 @@ if [[ -n $darwin ]]; then
     }
     # The devices every confined process writes to.
     sb_devices='(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))'
-    # This user's temporary and cache directories, which the compiler, the linker and the
-    # system's tools write whatever TMPDIR says.
-    darwin_dirs=()
-    for name in DARWIN_USER_TEMP_DIR DARWIN_USER_CACHE_DIR; do
-        dir=$(getconf "$name" 2>/dev/null) || continue
-        [[ -n $dir && -d $dir ]] || continue
-        darwin_dirs+=("$(real_path "$dir")")
-    done
+    # No program started outside the profile (crates/takt/src/seatbelt.rs, NO_LAUNCH): no
+    # launchd job, nothing opened through LaunchServices, no Apple event, and no lookup of the
+    # services that start a program on the caller's behalf.
+    sb_no_launch() {
+        sb_rule '(deny job-creation)'
+        sb_rule '(deny lsopen)'
+        sb_rule '(deny appleevent-send)'
+        sb_rule '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.coreservices.appleevents") (global-name-regex #"^com\.apple\.lsd\.") (global-name "com.apple.xpc.smd") (global-name-regex #"^com\.apple\.backgroundtaskmanagement"))'
+    }
     # Runs the program after the limit ($1, seconds; 0 for none) in a session and process group
     # of its own and kills that whole group when the program ends, or when the limit passes,
     # then exits 124; else with the program's status (128 + N for signal N).
@@ -608,9 +611,9 @@ if [[ ! -x $takt || ! -f $root/builds/$sha/revision ]]; then
     [[ $host =~ ^[A-Za-z0-9_.-]+$ ]] || fail "$toolchain/bin/rustc names the host \`$host\`, no target triple"
     if [[ -n $darwin ]]; then
         # The profile of `takt promote`'s build on macOS (crates/takt/src/seatbelt.rs, `build`):
-        # no network; writes only to the devices, the checkout, the target directory, the
-        # scratch CARGO_HOME, the build's home and temporary directory and this user's temporary
-        # and cache directories; under the hidden homes reads only those, the toolchain and the
+        # no network; no program started outside it; writes only to the devices, the checkout,
+        # the target directory, the scratch CARGO_HOME and the build's home and temporary
+        # directory; under the hidden homes reads only those, the toolchain and the
         # caller's caches, linked into the scratch CARGO_HOME, and looks up the directories above
         # them. The build sees every path at its host path.
         rwork=$(real_path "$work")
@@ -623,9 +626,9 @@ if [[ ! -x $takt || ! -f $root/builds/$sha/revision ]]; then
                 readable+=("$(real_path "$cached/$dir")")
             fi
         done
-        writable=("$rwork/src" "$rwork/target" "$rwork/cargo-home" "$rwork/build-home" "$rwork/tmp"
-            ${darwin_dirs[@]+"${darwin_dirs[@]}"})
+        writable=("$rwork/src" "$rwork/target" "$rwork/cargo-home" "$rwork/build-home" "$rwork/tmp")
         sb_reset
+        sb_no_launch
         sb_rule '(deny network*)'
         sb_rule '(deny file-write*)'
         sb_rule "$sb_devices"
@@ -765,9 +768,9 @@ environment=(PATH="$PATH" HOME="$home" LANG="${LANG:-C.UTF-8}" TAKT="$takt" SCEN
 hide_homes
 if [[ -n $darwin ]]; then
     # The run step's profile on macOS. No network: no TCP, and no unix socket of the user's
-    # session, its agents, the container engines or the system bus. Writes only to the
-    # devices, the clone, the predicate's home and this user's temporary and cache
-    # directories; the run directory around them, where the check keeps the predicate, the
+    # session, its agents, the container engines or the system bus. No program started outside
+    # the profile. Writes only to the devices, the clone and the predicate's home, which holds
+    # its temporary directory (TMPDIR); the run directory around them, where the check keeps the predicate, the
     # command's output and the result, is not written, so the command plants no link the check
     # would write through. Nothing read under the hidden homes, `/tmp` or `/var/run` (whose
     # sockets, X11's and docker's among them, are not even in sight) but the clone, the home,
@@ -781,13 +784,15 @@ if [[ -n $darwin ]]; then
     # The command reaches the binary, the clone and its home by their real paths: a link on the
     # way to the cache (an operator's `<cache>/takt` to another directory) lies under no path the
     # profile lets it read, so `$TAKT` named through it could not be run.
-    environment=(PATH="$PATH" HOME="$r_home" LANG="${LANG:-C.UTF-8}" TAKT="$r_takt" SCENARIO="$r_clone")
+    mkdir -p "$r_home/tmp"
+    environment=(PATH="$PATH" HOME="$r_home" TMPDIR="$r_home/tmp" LANG="${LANG:-C.UTF-8}" TAKT="$r_takt" SCENARIO="$r_clone")
     [[ -z $test_command ]] || environment+=(TEST="$test_command")
     sb_reset
+    sb_no_launch
     sb_rule '(deny network*)'
     sb_rule '(deny file-write*)'
     sb_rule "$sb_devices"
-    sb_paths allow 'file-write*' subpath "$r_clone" "$r_home" ${darwin_dirs[@]+"${darwin_dirs[@]}"}
+    sb_paths allow 'file-write*' subpath "$r_clone" "$r_home"
     sb_denied=("${sb_homes[@]}" /private/tmp /private/var/run)
     sb_paths deny 'file-read*' subpath "${sb_denied[@]}"
     sb_paths allow 'file-read*' subpath "${seen[@]}"

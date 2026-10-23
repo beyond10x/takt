@@ -514,6 +514,24 @@ fn this_trees_check_finding_is_a_reviewed_confined_script() {
     );
 }
 
+/// story:wave-35-review-fixes, L8: the reviewed list names no digest of a script the review of
+/// wave 35 found unreviewed, nor one older than the last reviewed script; the reviewed script
+/// `6c39e63b…` stays on it.
+#[test]
+fn the_reviewed_list_holds_no_unreviewed_check_finding() {
+    let list = takt::improvement::CONFINED_CHECK_FINDING_SHA256S;
+    for unreviewed in ["cd0efbd5", "0c2b3048", "7878f0f2", "a6b5f6f8", "948e20f4"] {
+        assert!(
+            !list.iter().any(|digest| digest.starts_with(unreviewed)),
+            "{unreviewed}… is not a reviewed script: {list:?}"
+        );
+    }
+    assert!(
+        list.contains(&"6c39e63b3b41c63774093511b1cbd7b1b1ff9ef0277ae4091b9222d1f4ef0e7f"),
+        "{list:?}"
+    );
+}
+
 /// A scratch repository for the judge surface: `M` holds the allow-list (`fix.txt`, `docs/**`),
 /// `tools/judge.sh` and `fix.txt`; `B`, the baseline, tightens `tools/judge.sh` on top of it.
 /// Answers the scratch directory, the repository, `M` and `B`.

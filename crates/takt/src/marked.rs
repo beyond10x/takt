@@ -132,8 +132,11 @@ fn started_at(pid: libc::pid_t) -> Option<std::time::SystemTime> {
 /// started at `since` or later: what a child started there, in that group, left running when
 /// it ended, which `launchd` adopted (its parent is 1). A harness session runs its program in
 /// this group on macOS, where its executor finds no `setsid`, so this finds what the program
-/// left once the session ended. An error when one is still there after the last round.
+/// left once the session ended. It takes this process's sweeps first (`forge::sweeping`), so
+/// it waits for every child another thread holds them for. An error when one is still there
+/// after the last round.
 pub fn sweep_orphans_since(since: std::time::SystemTime) -> anyhow::Result<()> {
+    let _sweeping = crate::forge::sweeping();
     // SAFETY: `getsid` and `getpgrp` take integers and touch no memory of this process.
     let (session, own) = unsafe { (libc::getsid(0), libc::getpgrp()) };
     let left = || -> Vec<libc::pid_t> {
@@ -303,5 +306,22 @@ mod tests {
             found.iter().any(|entry| entry.starts_with(b"PATH=")),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn a_sweep_of_orphans_waits_for_the_sweeps_held() {
+        let held = crate::forge::hold_sweeps();
+        let (sent, swept) = std::sync::mpsc::channel();
+        let since = std::time::SystemTime::now();
+        let sweeper = std::thread::spawn(move || {
+            let _ = sent.send(sweep_orphans_since(since).is_ok());
+        });
+        assert!(
+            swept.recv_timeout(Duration::from_millis(300)).is_err(),
+            "the sweep ran while the sweeps were held"
+        );
+        drop(held);
+        assert_eq!(swept.recv_timeout(Duration::from_secs(30)), Ok(true));
+        sweeper.join().expect("the sweeper");
     }
 }

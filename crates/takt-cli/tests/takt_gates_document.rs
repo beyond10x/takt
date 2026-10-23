@@ -35,10 +35,10 @@ const GATE_EXEC: &str = "scripts/gate-exec";
 const TEST_COMMAND: &str = "cargo test --workspace --locked";
 
 /// The log the test command's `cargo` stub appends to, in the scratch world: beside the
-/// repository, and on macOS in the world's temporary directory, the one directory outside the
-/// tree and its home that Seatbelt lets the test command write.
+/// repository, and on macOS in its git directory, which Seatbelt lets the test command write
+/// besides its tree and its home, and which leaves the work tree clean.
 const TEST_LOG: &str = if cfg!(target_os = "macos") {
-    "tmp/test-log"
+    "repo/.git/test-log"
 } else {
     "test-log"
 };
