@@ -80,6 +80,8 @@ jobs:
             os: ubuntu-24.04
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            os: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -143,7 +145,7 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          ls takt-*-x86_64-unknown-linux-gnu.tar.gz takt-*-aarch64-unknown-linux-gnu.tar.gz
+          ls takt-*-x86_64-unknown-linux-gnu.tar.gz takt-*-aarch64-unknown-linux-gnu.tar.gz takt-*-aarch64-apple-darwin.tar.gz
           sha256sum *.tar.gz > SHA256SUMS
           sha256sum --check --strict SHA256SUMS
 

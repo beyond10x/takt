@@ -8,6 +8,7 @@ takt's releases.
 
 ### Added
 
+- The release builds `takt` for `aarch64-apple-darwin` again, on `macos-15`, beside the two Linux targets.
 - On macOS the test command and a promotion's build run under `/usr/bin/sandbox-exec`; with no `sandbox-exec` both are refused by name, never run unconfined.
 - On macOS a process a child of takt left running is killed by its `TAKT_CHILD` mark.
 - On macOS what a harness session's program left running in takt's process group is killed when the session ends.
