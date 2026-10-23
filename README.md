@@ -135,11 +135,23 @@ approval commits, replayed on the base branch's tip under that identity and name
 bubblewrap is Linux only, so on macOS a promotion refuses with exit 1 before it judges;
 `--dry-run` and `--baseline-only`, which build nothing, still run. On macOS a run kills what a
 child process started in the child's process group only; on Linux takt also adopts and kills
-what the child orphaned outside it. No command sandboxes the harness or the test command on
-either system yet (`story:confinement-seam`).
+what the child orphaned outside it. `--confinement substrate` holds the test command only;
+nothing sandboxes the harness session yet (`story:harness-child-confined`).
 
-Built on [Canon](https://github.com/beyond10x/canon),
-[Engineering protocols](https://github.com/beyond10x/engineering-protocols) and
-[Loom](https://github.com/beyond10x/loom): `b10x-loom-sdk` is pinned in `Cargo.toml`, its
-governor decides takt's recorded cases as takt does (`crates/takt/tests/loom_parity.rs`), and
-ADR 0099 makes it the runtime takt runs on (`epic:takt-on-loom-sdk`). Licence: Apache-2.0.
+## Built on
+
+takt is an application on [Loom](https://github.com/beyond10x/loom)'s `b10x-loom-sdk`, pinned
+in `Cargo.toml` at the Loom tag 0.35.0 (ADR 0099, `epic:takt-on-loom-sdk`):
+
+- Commission's runtime drives each step of a case (`run_until_blocked`).
+- Loom's governor decides the case with [Canon](https://github.com/beyond10x/canon) over the
+  case's files, and takt's `CaseAuthority` answers it from `authority.yaml` when a step needs a
+  grant.
+- Each harness step runs in a metaharness 0.13.0 session started by Loom's session executor, the
+  crate `b10x-loom-session-executor` 0.35.0 (`loom_sdk::session`). The harness proposes a change
+  from a scratch copy, and takt's edit effect applies it under the step guard.
+
+takt keeps its validators and their evidence, git and the forge, the planning-store seam,
+scenarios, the scorecard, promotion, trace, report and view. The protocols come from
+[Engineering protocols](https://github.com/beyond10x/engineering-protocols). What runs where
+in the loop: [`docs/design/takt.md`](docs/design/takt.md) § 3. Licence: Apache-2.0.
