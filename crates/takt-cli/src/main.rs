@@ -3141,7 +3141,8 @@ mod tests {
         assert!(!repo.join(".engineering/cases").exists());
     }
 
-    /// Without `--forge`, an origin on another host gets no forge, and the run says so.
+    /// Without `--forge`, an origin on another host that glab is not logged in to gets no
+    /// forge, and the run says so.
     #[test]
     fn with_a_non_github_origin_the_default_forge_is_none_and_the_run_says_so() {
         let repo = gated_repository("forge-default-elsewhere", None);
@@ -3161,7 +3162,7 @@ mod tests {
         ));
         assert_eq!(code, 7, "{out}");
         assert!(
-            out.contains("forge: none (origin gitlab.example.com is not github.com)"),
+            out.contains("forge: none (origin gitlab.example.com is not github.com"),
             "{out}"
         );
         assert!(!out.contains("forge: bot"), "{out}");
@@ -3175,7 +3176,7 @@ mod tests {
             "unknown",
             &["--forge", "hub"],
         ));
-        assert_eq!(error, "no forge `hub`: bot or none");
+        assert_eq!(error, "no forge `hub`: bot, gitlab or none");
         assert!(!repo.join(".engineering/cases").exists());
     }
 
