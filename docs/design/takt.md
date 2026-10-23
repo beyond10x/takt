@@ -95,8 +95,8 @@ still takt's own; story:takt-harness-trait-retired makes each harness a Loom `Ag
 one line. Through `gitlab`, git pushes the case's branch over HTTPS with `glab auth git-credential` as its one
 credential helper, `glab api` opens the merge request, reads its state and head pipeline and merges it under a
 grant, and takt holds no token. The merge request's files keep the bot route's `pull-request.*` names. A GitLab
-repository's CI definition, `.gitlab-ci.yml` at the root, is on the judge surface beside `.github/**`
-(`GITLAB_CI`, `crates/takt/src/run.rs`): a step that edits what the checks run is refused.
+repository's CI definition, `.gitlab-ci.yml` and `.gitlab/**` at the root, is on the judge surface beside `.github/**`
+(`GITLAB_CI`, `GITLAB_DIR`, `crates/takt/src/run.rs`), so a step that edits it is refused; a file outside both that an `include: local:` names is not.
 
 The endpoint b10x-harness's loop is pointed at under `--harness harness` is configured (`EndpointConfig`,
 `crates/takt/src/harness.rs`): its base URL, wire, model and credential come from the `--endpoint-*` flags or from

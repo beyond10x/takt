@@ -532,7 +532,7 @@ pub fn without_credentials(command: &mut Command, keep: fn(&str) -> bool) {
 /// session bus and the runtime directory it is found in (the keyring is reached through it), the
 /// XDG base directories, and the configuration a forge client, git, GnuPG, a cloud or container
 /// client reads its login from. [`without_login`] removes every one.
-pub const LOGIN_LOCATIONS: [&str; 16] = [
+pub const LOGIN_LOCATIONS: [&str; 17] = [
     "XDG_RUNTIME_DIR",
     "DBUS_SESSION_BUS_ADDRESS",
     "GNOME_KEYRING_CONTROL",
@@ -541,6 +541,7 @@ pub const LOGIN_LOCATIONS: [&str; 16] = [
     "XDG_STATE_HOME",
     "XDG_CACHE_HOME",
     "GH_CONFIG_DIR",
+    "GLAB_CONFIG_DIR",
     "GIT_CONFIG_GLOBAL",
     "GNUPGHOME",
     "NETRC",

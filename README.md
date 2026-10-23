@@ -127,7 +127,10 @@ A harness, `aep` for story runs, `b10x-gates` and `gh` for pull requests (`glab`
 or `--endpoint-file`, a TOML file of `base_url`, `wire`, `model` and a `[credential]` table; a
 flag wins over the file. A credential is named, never given: a token file's path, or a secret's
 name in your secrets store (`--endpoint-secret <namespace>/<name>`), which takt refuses before
-the case opens until its session executor can hand a secret's name to the harness.
+the case opens until its session executor can hand a secret's name to the harness. Your
+claude.ai token goes to the default base URL only, so another base URL needs a credential of
+its own; a base URL is `https://`, or `http://` to a loopback host, with no userinfo, query or
+fragment.
 
 takt commits as the identity the repository names in `.engineering/commit-identity.conf`
 (`[identity]` with `name` and `email`), or as `--commit-identity '<name> <email>'`, never as
@@ -138,7 +141,9 @@ The forge follows `origin`: `--forge bot` on github.com, `--forge gitlab` on any
 while `glab auth status --hostname <host>` exits 0, else `--forge none`, with the reason in
 one line. Through `gitlab`, git pushes over HTTPS with `glab auth git-credential` as its one
 credential helper, and the merge request is opened, read and merged through `glab api`;
-`--forge gitlab` without `glab` or its login is refused before the case opens.
+`--forge gitlab` without `glab` or its login is refused before the case opens. A scenario run
+creates its trial base only through the bot route: it refuses `--forge gitlab`, and on another
+host it runs with `--forge none`.
 
 A `--forge none` delivery whose change reads ahead stops `Unperformable` at `pr.opened`, exit 7,
 and prints `candidate: <full commit id>`: its code commits, without takt's take, record and

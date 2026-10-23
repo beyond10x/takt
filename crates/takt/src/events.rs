@@ -78,10 +78,10 @@ pub enum Event {
     /// (`crate::confinement::Confinement::name`), `none` or `substrate`; absent on a line
     /// written before it, which a reader reads as "confinement not recorded".
     /// The endpoint: the model endpoint the harness is pointed at
-    /// ([`crate::harness::Harness::endpoint_reference`]), by reference only: its base URL, wire
-    /// and model, and the credential's reference, the token file's path and pointer or the
-    /// secret's namespace and name, never a token. Absent for a harness pointed at none
-    /// (`claude`, `codex`, `none`) and on a line written before it.
+    /// ([`crate::harness::Harness::endpoint_reference`]), by reference only: its base URL (no
+    /// userinfo, query or fragment), wire and model, the token file's path (`~/…` under HOME)
+    /// and pointer or the secret's namespace and name, never a token. Absent for a harness
+    /// pointed at none (`claude`, `codex`, `none`) and on a line written before it.
     Opened {
         case: String,
         protocol: String,

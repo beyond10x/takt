@@ -412,3 +412,124 @@ fn a_gitlab_origin_delivers_through_glab_up_to_the_merge_grant() {
         "nothing merged before the grant"
     );
 }
+
+/// [`repository`] with scenario `1` declared on `main`: the story `story:ready-one` at the
+/// commit before the declaration.
+fn scenario_repository(name: &str) -> (Scratch, PathBuf) {
+    let (outer, repo) = repository(name);
+    let seed = git_out(&repo, &["rev-parse", "HEAD"]);
+    fs::write(
+        repo.join(".engineering/scenarios.conf"),
+        format!("[scenario \"1\"]\n\tstory = story:ready-one\n\tseed = {seed}\n"),
+    )
+    .expect("the declaration is written");
+    git(&repo, &["add", ".engineering/scenarios.conf"]);
+    git(&repo, &["commit", "-q", "-m", "declare the scenarios"]);
+    (outer, repo)
+}
+
+/// `takt scenario run --repo <repo> 1 --test-cmd true --harness none --iterations 1` and
+/// `extra`, through [`takt_through`]'s program path, its state under `<dir>/xdg-state`.
+fn scenario_through(bin: &Path, dir: &Path, repo: &Path, extra: &[&str]) -> (i32, String, String) {
+    let mut path = vec![bin.to_path_buf()];
+    path.extend(path_without_glab());
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args([
+            "scenario",
+            "run",
+            "--repo",
+            repo.to_str().expect("utf-8"),
+            "1",
+            "--test-cmd",
+            "true",
+            "--harness",
+            "none",
+            "--iterations",
+            "1",
+        ])
+        .args(extra)
+        .env("XDG_STATE_HOME", dir.join("xdg-state"))
+        .env_remove("B10X_GATES_POLICY")
+        .env("PATH", std::env::join_paths(path).expect("a program path"))
+        .output()
+        .expect("takt runs");
+    (
+        output.status.code().expect("an exit code"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// The `trial/*` branches of `repo`.
+fn trial_branches(repo: &Path) -> String {
+    git_out(
+        repo,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/trial/",
+        ],
+    )
+}
+
+/// A scenario's trial base `trial/<n>` is created on the remote only through the bot route, so
+/// `takt scenario run --forge gitlab` is refused before anything is cut or opened, exit 1,
+/// naming why; `glab`, logged in, is never asked.
+#[test]
+fn a_scenario_run_refuses_the_gitlab_forge_before_anything_opens() {
+    let (outer, repo) = scenario_repository("scenario-gitlab");
+    let (bin, state) = doubles(&outer.0.join("forge"), true);
+    let head = git_out(&repo, &["rev-parse", "HEAD"]);
+    let (code, out, err) = scenario_through(&bin, &outer.0, &repo, &["--forge", "gitlab"]);
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(
+        err.contains("--forge gitlab is not for a scenario run")
+            && err.contains("only through the bot route")
+            && err.contains("nothing was changed"),
+        "stdout {out} stderr {err}"
+    );
+    assert_eq!(trial_branches(&repo), "", "stdout {out} stderr {err}");
+    assert_eq!(git_out(&repo, &["rev-parse", "HEAD"]), head);
+    assert_eq!(git_out(&repo, &["symbolic-ref", "--short", "HEAD"]), "main");
+    assert!(
+        !repo.join(".engineering/cases").exists(),
+        "no case opened: stdout {out} stderr {err}"
+    );
+    assert!(
+        !state.join("glab.lines").exists(),
+        "glab was asked: stdout {out} stderr {err}"
+    );
+}
+
+/// Without `--forge`, a scenario run on an origin that is not on github.com gets no forge,
+/// even with `glab` logged in to the host, and says so in one line: the trial branch is cut
+/// locally and not pushed, and `glab` is never asked.
+#[test]
+fn a_scenario_run_on_a_gitlab_origin_defaults_to_no_forge() {
+    let (outer, repo) = scenario_repository("scenario-default");
+    let (bin, state) = doubles(&outer.0.join("forge"), true);
+    let (_, out, err) = scenario_through(&bin, &outer.0, &repo, &[]);
+    assert!(
+        out.contains(
+            "forge: none (origin gitlab.example is not github.com, and a scenario run creates its trial base only through the bot route)"
+        ),
+        "stdout {out} stderr {err}"
+    );
+    assert!(
+        out.contains("not pushed: no forge"),
+        "stdout {out} stderr {err}"
+    );
+    assert!(!out.contains("forge: gitlab"), "stdout {out} stderr {err}");
+    assert!(
+        trial_branches(&repo).starts_with("trial/"),
+        "stdout {out} stderr {err}"
+    );
+    assert!(
+        !state.join("glab.lines").exists(),
+        "glab was asked: stdout {out} stderr {err}"
+    );
+    assert!(
+        !state.join("https.lines").exists(),
+        "nothing was pushed: stdout {out} stderr {err}"
+    );
+}

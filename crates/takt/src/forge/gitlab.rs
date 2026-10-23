@@ -18,20 +18,33 @@ use super::{
 
 /// The host and the full project path (`group/sub/repo`) an `origin` URL names, in the forms git
 /// writes them: `git@host:a/b/c.git`, `ssh://git@host[:port]/a/b/c.git`, `https://host/a/b/c`
-/// (with or without `.git`). A local path, a URL with no host (`file://`), a path of one segment
-/// or a segment that is empty, `.` or `..` names none.
+/// (with or without `.git`). An `https://` URL's port stays with the host (`host:8443`), since
+/// the push and `glab api` go to that same HTTPS server; an SSH port says nothing of the HTTPS
+/// one and is dropped. A local path, a URL with no host (`file://`), a path of one segment or a
+/// segment that is empty, `.` or `..` names none.
 #[must_use]
 pub fn project_of(url: &str) -> Option<(String, String)> {
     let url = url.trim().trim_end_matches('/');
-    let (authority, path) = if let Some((_, rest)) = url.split_once("://") {
-        rest.split_once('/')?
+    let (scheme, (authority, path)) = if let Some((scheme, rest)) = url.split_once("://") {
+        (Some(scheme), rest.split_once('/')?)
     } else {
-        url.split_once(':')?
+        (None, url.split_once(':')?)
     };
     let host = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
-    let host = host.split_once(':').map_or(host, |(host, _)| host);
+    let host = match host.split_once(':') {
+        Some((name, port))
+            if scheme.is_some_and(|scheme| scheme.eq_ignore_ascii_case("https"))
+                && !name.is_empty()
+                && !port.is_empty()
+                && port.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            host
+        }
+        Some((name, _)) => name,
+        None => host,
+    };
     let path = path.trim_start_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
     let segments: Vec<&str> = path.split('/').collect();
@@ -70,6 +83,52 @@ fn one_line(exit: &Exit) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" | ")
+}
+
+/// What `glab api` answered on the line `argv`, as JSON, once it exited 0. On an HTTP error
+/// glab exits non-zero with the error's JSON body (`{"message": …}`) on standard output and the
+/// status on standard error (`… (HTTP 401)`): that is an error naming the line, the body's
+/// message and what glab said ([`failure_of`]), never a reading, so a request the host refused
+/// or failed is never read as a pending pipeline or as no branch.
+fn answer_of(argv: &[String], exit: &Exit) -> Result<serde_json::Value> {
+    if !exit.success() {
+        bail!("`{}` failed: {}", argv.join(" "), failure_of(exit));
+    }
+    reading_of(argv, exit)
+}
+
+/// What a `glab api` that did not exit 0 said, on one line: how it exited, the `message` (else
+/// the `error`) of the JSON body on standard output, and standard error, which carries the HTTP
+/// status; standard output itself when it is no such body and standard error is empty.
+fn failure_of(exit: &Exit) -> String {
+    let code = exit.code.map_or_else(
+        || "it ended on a signal".to_owned(),
+        |code| format!("exit {code}"),
+    );
+    let body = serde_json::from_str::<serde_json::Value>(exit.stdout.trim()).ok();
+    let message = body.as_ref().and_then(|body| {
+        ["message", "error"]
+            .iter()
+            .find_map(|key| match &body[*key] {
+                serde_json::Value::Null => None,
+                serde_json::Value::String(text) => Some(text.clone()),
+                other => Some(other.to_string()),
+            })
+    });
+    let stderr = exit
+        .stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    match (message, stderr.is_empty()) {
+        (Some(message), true) => format!("{code}, {message}"),
+        (Some(message), false) => format!("{code}, {message} ({stderr})"),
+        (None, false) => format!("{code}, {stderr}"),
+        (None, true) if exit.stdout.trim().is_empty() => format!("{code}, nothing said"),
+        (None, true) => format!("{code}, {}", one_line(exit)),
+    }
 }
 
 /// The adapter over `glab` for a repository on a GitLab host. The push goes to the project's
@@ -113,8 +172,9 @@ impl Glab {
     /// The file under the directory `open_pull_request` is given that holds the title and the
     /// description as they are published, decoded: the text `scan-text` reads line by line.
     pub const PUBLISHED: &str = BotRoute::PUBLISHED;
-    /// The file under the directory `merge` is given that holds what was sent.
-    pub const MERGE_REQUEST: &str = BotRoute::MERGE_REQUEST;
+    /// The file under the directory `merge` is given that holds the body of the merge's `PUT`,
+    /// the head to match: the bot route's file name, the one `repository.merge` may write.
+    pub const MERGE_BODY: &str = BotRoute::MERGE_REQUEST;
     /// The file under the directory `merge` is given that holds what came back.
     pub const MERGE_RESPONSE: &str = BotRoute::MERGE_RESPONSE;
     /// The credential helper of every push and fetch, after an empty one that clears whatever
@@ -143,6 +203,11 @@ impl Glab {
     /// [`BotRoute::HOST`], the policy from the environment, every line run as a process; then
     /// [`Self::logged_in`]. A refusal names the URL without its userinfo.
     pub fn for_tree(tree: &Path) -> Result<Self> {
+        Self::for_tree_through(tree, Box::new(Process::default()))
+    }
+
+    /// [`Self::for_tree`], every line, the login check first, run through `runner`.
+    pub fn for_tree_through(tree: &Path, runner: Box<dyn Runner>) -> Result<Self> {
         let url = crate::git::remote_url(tree, "origin")
             .context("the forge `gitlab` needs an origin remote")?;
         let shown = without_userinfo(&url);
@@ -151,13 +216,13 @@ impl Glab {
                 "the origin remote {shown} names no <namespace>/<project> on a host; give --forge none"
             )
         })?;
-        if BotRoute::serves(&host) {
+        if BotRoute::serves(host.split_once(':').map_or(host.as_str(), |(name, _)| name)) {
             bail!(
                 "the origin remote {shown} is on {host}, which the bot route serves: give --forge bot, not gitlab"
             );
         }
         let policy = std::env::var_os(POLICY_VAR).map(PathBuf::from);
-        let glab = Self::new(host, project, policy, Box::new(Process::default()));
+        let glab = Self::new(host, project, policy, runner);
         glab.logged_in(tree)?;
         Ok(glab)
     }
@@ -343,7 +408,7 @@ impl Glab {
         if !exit.success() && exit.stderr.contains("HTTP 404") {
             return Ok(None);
         }
-        let document = reading_of(&argv, &exit)?;
+        let document = answer_of(&argv, &exit)?;
         document["commit"]["id"]
             .as_str()
             .map(|id| Some(id.to_owned()))
@@ -354,7 +419,7 @@ impl Glab {
     fn read(&self, tree: &Path, iid: u64) -> Result<(Vec<String>, serde_json::Value)> {
         let argv = self.view_argv(iid);
         let exit = self.runner.run(tree, &argv)?;
-        let document = reading_of(&argv, &exit)?;
+        let document = answer_of(&argv, &exit)?;
         Ok((argv, document))
     }
 
@@ -391,10 +456,11 @@ fn state_of(argv: &[String], document: &serde_json::Value) -> Result<PullRequest
     })
 }
 
-/// The checks on a merge request's head, from its `head_pipeline`: none yet, or one of an older
-/// push (its `sha` not the merge request's), is pending; `success` and `skipped` pass, `failed`
-/// and `canceled` fail, `created`, `waiting_for_resource`, `preparing`, `pending`, `running`,
-/// `manual` and `scheduled` are pending; any other status is an error naming it.
+/// The checks on a merge request's head, from its `head_pipeline`: none yet, one of an older
+/// push (its `sha` not the merge request's) or one with no `sha`, is pending; `success` and
+/// `skipped` pass, `failed` and `canceled` fail, `created`, `waiting_for_resource`,
+/// `preparing`, `pending`, `running`, `manual` and `scheduled` are pending; any other status is
+/// an error naming it.
 fn checks_of(argv: &[String], document: &serde_json::Value) -> Result<Checks> {
     let pipeline = &document["head_pipeline"];
     if pipeline.is_null() {
@@ -403,8 +469,11 @@ fn checks_of(argv: &[String], document: &serde_json::Value) -> Result<Checks> {
     let head = document["sha"]
         .as_str()
         .ok_or_else(|| anyhow!("{} reported no sha", argv.join(" ")))?;
-    if pipeline["sha"].as_str() != Some(head) {
-        return Ok(Checks::Pending);
+    // Only a pipeline that names the head as its commit says anything of the head: one of an
+    // older push, or one that names no commit, is pending.
+    match pipeline["sha"].as_str() {
+        Some(sha) if sha == head => {}
+        Some(_) | None => return Ok(Checks::Pending),
     }
     Ok(match pipeline["status"].as_str() {
         Some("success" | "skipped") => Checks::Pass,
@@ -494,10 +563,10 @@ impl Forge for Glab {
             )
         })?;
         let argv = self.open_argv(&input);
-        let exit = succeed(&*self.runner, tree, &argv)?;
+        let exit = self.runner.run(tree, &argv)?;
         std::fs::write(&output, &exit.stdout)
             .with_context(|| format!("write the response {}", output.display()))?;
-        let response = reading_of(&argv, &exit)?;
+        let response = answer_of(&argv, &exit)?;
         response["iid"].as_u64().ok_or_else(|| {
             anyhow!(
                 "the response {} has no iid: no merge request number",
@@ -532,7 +601,7 @@ impl Forge for Glab {
 
     fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()> {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let input = dir.join(Self::MERGE_REQUEST);
+        let input = dir.join(Self::MERGE_BODY);
         let output = fresh(dir.join(Self::MERGE_RESPONSE))?;
         // The head to match: GitLab refuses the merge when the merge request's head is no longer
         // this commit, so what is merged is what was read and recorded, never a later push.
@@ -540,10 +609,10 @@ impl Forge for Glab {
         let bytes = serde_json::to_vec_pretty(&document).context("serialize the merge request")?;
         std::fs::write(&input, bytes).with_context(|| format!("write {}", input.display()))?;
         let argv = self.merge_argv(number, &input);
-        let exit = succeed(&*self.runner, tree, &argv)?;
+        let exit = self.runner.run(tree, &argv)?;
         std::fs::write(&output, &exit.stdout)
             .with_context(|| format!("write the response {}", output.display()))?;
-        let response = reading_of(&argv, &exit)?;
+        let response = answer_of(&argv, &exit)?;
         if response["state"] != "merged" {
             bail!(
                 "{} did not merge merge request !{number}: {}",

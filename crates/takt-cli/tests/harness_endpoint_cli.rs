@@ -89,7 +89,16 @@ impl World {
     /// `takt run` on the repository with `args` after the intent, HOME the scratch one and the
     /// double first on the program path.
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_takt"))
+        self.run_in(None, args)
+    }
+
+    /// [`Self::run`] from the working directory `cwd`, else the test's own.
+    fn run_in(&self, cwd: Option<&Path>, args: &[&str]) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
+        command
             .args([
                 "run",
                 "--repo",
@@ -386,4 +395,175 @@ fn a_run_without_an_endpoint_records_none() {
     let opened = opened_lines(&world.cases());
     assert_eq!(opened.len(), 1, "{opened:?}");
     assert!(opened[0].get("endpoint").is_none(), "{}", opened[0]);
+}
+
+/// Asserts `output` is a refusal before any case: exit 1, no case opened, b10x-harness not
+/// started, and every one of `parts` in what it said.
+fn refused_before_any_case(world: &World, output: &Output, parts: &[&str]) -> String {
+    let (stdout, stderr) = text(output);
+    assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
+    for part in parts {
+        assert!(stderr.contains(part), "{part}: {stderr}");
+    }
+    assert!(!world.cases().exists(), "no case was opened");
+    assert!(!world.started().exists(), "b10x-harness was not started");
+    format!("{stdout}\n{stderr}")
+}
+
+/// F2: a base URL other than the default with no credential given is refused before any case:
+/// the default credential, the user's claude.ai token, is not sent to another host.
+#[test]
+fn another_base_url_with_the_default_credential_is_refused_before_any_case() {
+    let world = World::new("default-credential");
+    let output = world.run(&[
+        "--harness",
+        "harness",
+        "--endpoint-base-url",
+        "https://endpoint.invalid/v1",
+    ]);
+    refused_before_any_case(
+        &world,
+        &output,
+        &["https://endpoint.invalid/v1", "not sent to another host"],
+    );
+}
+
+/// F2: `http://` to a host that is not loopback is refused before any case, a credential
+/// given or not.
+#[test]
+fn an_http_base_url_to_another_host_is_refused_before_any_case() {
+    let world = World::new("http");
+    let token = world.outer().join("token.json");
+    fs::write(&token, "{\"oauth\":{\"access\":\"t\"}}").expect("a token file");
+    let output = world.run(&[
+        "--harness",
+        "harness",
+        "--endpoint-base-url",
+        "http://endpoint.invalid/v1",
+        "--endpoint-token-file",
+        token.to_str().expect("utf-8"),
+    ]);
+    refused_before_any_case(
+        &world,
+        &output,
+        &["http://endpoint.invalid/v1", "no loopback host"],
+    );
+}
+
+/// F3: a base URL with a userinfo and a query is refused before any case, naming both parts
+/// and repeating nothing written in either.
+#[test]
+fn a_base_url_with_userinfo_and_a_query_is_refused_holding_neither() {
+    let world = World::new("userinfo");
+    let marker = "MARKER-a61f03-not-a-real-key";
+    let token = world.outer().join("token.json");
+    fs::write(&token, "{\"oauth\":{\"access\":\"t\"}}").expect("a token file");
+    let base_url = format!("https://u:{marker}@endpoint.invalid/v1?key={marker}");
+    let output = world.run(&[
+        "--harness",
+        "harness",
+        "--endpoint-base-url",
+        &base_url,
+        "--endpoint-token-file",
+        token.to_str().expect("utf-8"),
+    ]);
+    let said = refused_before_any_case(
+        &world,
+        &output,
+        &["https://endpoint.invalid/v1", "userinfo", "query"],
+    );
+    assert!(!said.contains(marker), "the key leaked: {said}");
+}
+
+/// F7: a relative token file, by flag or in an endpoint file named by a relative path, is
+/// read against the current directory and recorded absolute, the path the harness is given
+/// though it runs in a scratch copy of the tree.
+#[test]
+fn a_relative_token_file_is_read_against_the_current_directory_and_recorded_absolute() {
+    for (name, by_file) in [("relative-flag", false), ("relative-file", true)] {
+        let world = World::new(name);
+        let token = world.outer().join("token.json");
+        fs::write(&token, "{\"oauth\":{\"access\":\"t\"}}").expect("a token file");
+        fs::write(
+            world.outer().join("endpoint.toml"),
+            "base_url = \"https://endpoint.invalid/v1\"\n\n[credential]\ntoken_file = \"token.json\"\ntoken_pointer = \"/oauth/access\"\n",
+        )
+        .expect("an endpoint file");
+        let mut args = vec!["--harness", "harness", "--iterations", "0"];
+        if by_file {
+            args.extend(["--endpoint-file", "endpoint.toml"]);
+        } else {
+            args.extend([
+                "--endpoint-base-url",
+                "https://endpoint.invalid/v1",
+                "--endpoint-token-file",
+                "token.json",
+                "--endpoint-token-pointer",
+                "/oauth/access",
+            ]);
+        }
+        let output = world.run_in(Some(world.outer()), &args);
+        let (stdout, stderr) = text(&output);
+        assert_eq!(output.status.code(), Some(3), "{name}: {stdout}\n{stderr}");
+        let opened = opened_lines(&world.cases());
+        assert_eq!(opened.len(), 1, "{opened:?}");
+        assert_eq!(
+            opened[0]["endpoint"]["credential"],
+            serde_json::json!({
+                "kind": "subscription_file",
+                "path": token.display().to_string(),
+                "pointer": "/oauth/access",
+            }),
+            "{name}"
+        );
+    }
+}
+
+/// F10: with nothing but `--harness harness`, the default endpoint on the default token file
+/// under HOME (a scratch one holding a marker token): the case opens, its `opened` line names
+/// the token file from `~`, and no case file holds the marker or HOME's own path.
+#[test]
+fn the_default_token_file_is_recorded_from_tilde() {
+    let world = World::new("tilde");
+    let marker = "MARKER-e83d50-not-a-real-token";
+    let dir = world.home().join(".claude");
+    fs::create_dir_all(&dir).expect("a .claude directory");
+    fs::write(
+        dir.join(".credentials.json"),
+        format!("{{\"claudeAiOauth\":{{\"accessToken\":\"{marker}\"}}}}"),
+    )
+    .expect("a token file");
+    let output = world.run(&["--harness", "harness", "--iterations", "0"]);
+    let (stdout, stderr) = text(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}\n{stderr}");
+    assert!(!world.started().exists(), "b10x-harness was not started");
+    let opened = opened_lines(&world.cases());
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    assert_eq!(
+        opened[0]["endpoint"],
+        serde_json::json!({
+            "base_url": "https://api.anthropic.com/v1",
+            "wire": "anthropic-messages",
+            "model": "claude-opus-5",
+            "credential": {
+                "kind": "subscription_file",
+                "path": "~/.claude/.credentials.json",
+                "pointer": "/claudeAiOauth/accessToken",
+            },
+        })
+    );
+    let home = world.home().display().to_string();
+    for path in files_under(&world.cases()) {
+        let text = String::from_utf8_lossy(&fs::read(&path).expect("a case file")).into_owned();
+        assert!(
+            !text.contains(marker),
+            "the token reached {}",
+            path.display()
+        );
+        assert!(!text.contains(&home), "HOME reached {}", path.display());
+    }
+    assert!(
+        !stdout.contains(marker) && !stderr.contains(marker),
+        "{stdout}\n{stderr}"
+    );
 }

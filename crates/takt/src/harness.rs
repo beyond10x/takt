@@ -197,6 +197,9 @@ pub struct SessionHarness {
     /// For `Kind::B10x`, the endpoint its loop is pointed at and the subscription token it
     /// reads.
     pub endpoint: Option<loom_sdk::session::Endpoint>,
+    /// The user's HOME, under which the endpoint's token file is recorded as `~/…`
+    /// ([`EndpointConfig::recorded`]); the session is given the path whole. None records it whole.
+    pub home: Option<std::path::PathBuf>,
     /// What starts each step's session in place of the real `claude`; none for the real one.
     pub runner: Option<Box<RunnerFactory>>,
     /// The tokens by component the last step reported, set by each step.
@@ -260,6 +263,7 @@ impl SessionHarness {
             }
             .to_owned(),
             endpoint: None,
+            home: None,
             runner: None,
             reported: std::cell::Cell::new(None),
             call: std::cell::RefCell::new(None),
@@ -449,15 +453,15 @@ impl Harness for SessionHarness {
     }
 
     /// b10x-harness's endpoint as its sessions are pointed at it, `--model` over the
-    /// endpoint's model as the session executor takes it; Claude Code and Codex are pointed at
-    /// none.
+    /// endpoint's model as the session executor takes it, its token file under HOME as `~/…`;
+    /// Claude Code and Codex are pointed at none.
     fn endpoint_reference(&self) -> Option<EndpointConfig> {
         let endpoint = self.endpoint.as_ref().filter(|_| self.kind == Kind::B10x)?;
         let mut reference = EndpointConfig::of_session(endpoint);
         if let Some(model) = &self.model {
             reference.model.clone_from(model);
         }
-        Some(reference)
+        Some(reference.recorded(self.home.as_deref()))
     }
 
     /// Codex's shell reads where its sandbox grants reading, the whole file system;
@@ -2195,12 +2199,29 @@ impl EndpointConfig {
         }
     }
 
+    /// The endpoint as a record writes it: a token file under `home` as `~/<the rest>`, so the
+    /// record names no user's directory; the session is given the path whole. A `home` that is
+    /// relative or the root changes nothing.
+    #[must_use]
+    pub fn recorded(mut self, home: Option<&Path>) -> Self {
+        if let Credential::SubscriptionFile { path, .. } = &mut self.credential
+            && let Some(home) = home.filter(|home| home.is_absolute() && home.parent().is_some())
+            && let Ok(rest) = path.strip_prefix(home)
+        {
+            *path = Path::new("~").join(rest);
+        }
+        self
+    }
+
     /// The endpoint `flags` and `file` give, each field the flag's, else the file's, else the
     /// default: b10x-harness's own `claude` provider on the user's claude.ai subscription token
     /// under `home`. The credential is taken whole from one source: a token file with its
-    /// pointer, or a secret's name. Refused: a token file and a secret both given by flag, a
-    /// pointer flag without a token file flag, a wire b10x-harness does not speak, a base URL
-    /// that is no http(s) URL, an empty model, the default credential with no HOME.
+    /// pointer, or a secret's name; a relative token file is made absolute against the current
+    /// directory, since the harness runs in a scratch copy of the tree. Refused: a token file
+    /// and a secret both given by flag, a pointer flag without a token file flag, a wire
+    /// b10x-harness does not speak, a base URL [`check_base_url`] refuses, an empty model, the
+    /// default credential with no HOME or with a base URL other than the default, which would
+    /// send the user's claude.ai token to another host.
     pub fn of(
         flags: &EndpointFields,
         file: Option<&EndpointFields>,
@@ -2232,17 +2253,20 @@ impl EndpointConfig {
                 ENDPOINT_WIRES.join(" or ")
             );
         }
-        if !(base_url.starts_with("https://") || base_url.starts_with("http://"))
-            || base_url.chars().any(char::is_whitespace)
-        {
-            bail!("the endpoint's base URL `{base_url}` is no http(s) URL");
-        }
+        check_base_url(&base_url)?;
         if model.is_empty() || model.chars().any(char::is_whitespace) {
             bail!("the endpoint's model `{model}` is no model id");
         }
         let credential = match flags.credential().or_else(|| file.credential()) {
             Some(credential) => credential?,
             None => {
+                if base_url != Self::BASE_URL {
+                    bail!(
+                        "the endpoint's base URL {base_url} is not the default {}, and no credential is given: the default credential, the claude.ai subscription token in ~/{}, is not sent to another host; give --endpoint-token-file or --endpoint-secret, or the endpoint file's `[credential]`",
+                        Self::BASE_URL,
+                        Self::TOKEN_FILE
+                    );
+                }
                 let home = home.ok_or_else(|| {
                     anyhow!(
                         "the endpoint's credential is by default the subscription token file $HOME/{}, and HOME is not set; give --endpoint-token-file or --endpoint-secret",
@@ -2254,6 +2278,21 @@ impl EndpointConfig {
                     pointer: Some(Self::TOKEN_POINTER.to_owned()),
                 }
             }
+        };
+        // The token file as the harness, in its scratch copy of the tree, reads it.
+        let credential = match credential {
+            Credential::SubscriptionFile { path, pointer } if path.is_relative() => {
+                Credential::SubscriptionFile {
+                    path: std::path::absolute(&path).with_context(|| {
+                        format!(
+                            "the endpoint's subscription token file {} is relative, and the current directory it is read against cannot be read",
+                            path.display()
+                        )
+                    })?,
+                    pointer,
+                }
+            }
+            credential => credential,
         };
         Ok(Self {
             base_url,
@@ -2323,6 +2362,106 @@ impl EndpointConfig {
             )),
         }
     }
+}
+
+/// Checks a `--harness harness` base URL before any case opens. It is `https://`, or
+/// `http://` to a loopback host alone (`localhost`, `127.0.0.0/8`, `::1`), since the credential
+/// goes with every request; its host is a name, an IPv4 address or a bracketed IPv6 address,
+/// with an optional port; and it holds no userinfo, query or fragment, each of which can carry
+/// a key that the case's `opened` line and every error would repeat. A refusal names the part
+/// found and shows the URL without its userinfo, query and fragment, or, for a URL that is no
+/// http(s) URL or has no such host, nothing of it.
+fn check_base_url(url: &str) -> Result<()> {
+    let Some((scheme, rest)) = url
+        .split_once("://")
+        .filter(|(scheme, _)| matches!(*scheme, "https" | "http"))
+        .filter(|_| !url.chars().any(|c| c.is_whitespace() || c.is_control()))
+    else {
+        bail!(
+            "the endpoint's base URL is no http(s) URL: one is `https://<host>/<prefix>`, or `http://` to a loopback host, with no white space"
+        );
+    };
+    let (authority, tail) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
+    let (userinfo, host_port) = authority
+        .rsplit_once('@')
+        .map_or((false, authority), |(_, host_port)| (true, host_port));
+    let (before_fragment, fragment) = tail
+        .split_once('#')
+        .map_or((tail, false), |(before, _)| (before, true));
+    let (path, query) = before_fragment
+        .split_once('?')
+        .map_or((before_fragment, false), |(path, _)| (path, true));
+    let Some(host) = host_of(host_port) else {
+        bail!(
+            "the endpoint's base URL has no host takt reads: one is a name, an IPv4 address or a bracketed IPv6 address, with an optional `:<port>`"
+        );
+    };
+    let shown = format!("{scheme}://{host_port}{path}");
+    let found: Vec<&str> = [
+        (
+            userinfo,
+            "a userinfo (`<user>:<password>@` before the host)",
+        ),
+        (query, "a query (`?…`)"),
+        (fragment, "a fragment (`#…`)"),
+    ]
+    .into_iter()
+    .filter_map(|(found, part)| found.then_some(part))
+    .collect();
+    if !found.is_empty() {
+        bail!(
+            "the endpoint's base URL {shown} carries {}, refused before the case opens: each can carry a key, which the case's `opened` line and every error would repeat; give the credential by --endpoint-token-file or --endpoint-secret, or the endpoint file's `[credential]`",
+            found.join(" and ")
+        );
+    }
+    if scheme == "http" && !loopback(host) {
+        bail!(
+            "the endpoint's base URL {shown} is `http://` to {host}, no loopback host (`localhost`, `127.0.0.0/8`, `::1`): the credential would cross the network in the clear; give `https://`"
+        );
+    }
+    Ok(())
+}
+
+/// The host of a URL's `host[:port]`: a name of letters, digits, `-`, `.` and `_`, an IPv4
+/// address, or an IPv6 address in brackets, its brackets kept; the port, when given, digits.
+fn host_of(host_port: &str) -> Option<&str> {
+    let (host, port) = if host_port.starts_with('[') {
+        let (host, after) = host_port.split_at(host_port.find(']')? + 1);
+        host.strip_prefix('[')?
+            .strip_suffix(']')?
+            .parse::<std::net::Ipv6Addr>()
+            .ok()?;
+        (host, after)
+    } else {
+        let end = host_port.find(':').unwrap_or(host_port.len());
+        let (host, after) = host_port.split_at(end);
+        let name = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_');
+        if host.is_empty() || !host.chars().all(name) {
+            return None;
+        }
+        (host, after)
+    };
+    match port.strip_prefix(':') {
+        None if port.is_empty() => Some(host),
+        Some(digits) if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) => {
+            Some(host)
+        }
+        _ => None,
+    }
+}
+
+/// Whether `host` ([`host_of`]) is a loopback host: `localhost`, an address in `127.0.0.0/8`,
+/// or `[::1]`.
+fn loopback(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
+        || host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .and_then(|host| host.parse::<std::net::Ipv6Addr>().ok())
+            .is_some_and(|ip| ip.is_loopback())
 }
 
 #[cfg(test)]
@@ -3528,13 +3667,18 @@ mod endpoint_tests {
         assert!(message.contains("HOME"), "{message}");
     }
 
-    /// Acceptance 2: the base URL by flag, by file, the flag winning.
+    /// Acceptance 2: the base URL by flag, by file, the flag winning; each names a credential,
+    /// since the default one goes to the default base URL alone.
     #[test]
     fn endpoint_base_url_is_set_by_flag_and_by_file_the_flag_winning() {
         let dir = scratch("base-url");
-        let file = from_file(&dir.0, "base_url = \"https://file.example/v1\"\n");
+        let file = from_file(
+            &dir.0,
+            "base_url = \"https://file.example/v1\"\n\n[credential]\ntoken_file = \"/file/token.json\"\n",
+        );
         let flags = EndpointFields {
             base_url: Some("https://flag.example/v1".to_owned()),
+            token_file: Some(PathBuf::from("/flag/token.json")),
             ..EndpointFields::default()
         };
         assert_eq!(
@@ -4071,5 +4215,313 @@ mod endpoint_tests {
         );
         let none = opened_with(None);
         assert!(none.get("endpoint").is_none(), "{none}");
+    }
+
+    /// A token file by flag, so a refusal is the base URL's own.
+    fn with_token(base_url: &str) -> EndpointFields {
+        EndpointFields {
+            base_url: Some(base_url.to_owned()),
+            token_file: Some(PathBuf::from("/t/token.json")),
+            ..EndpointFields::default()
+        }
+    }
+
+    /// F2: the default credential, the user's claude.ai token, goes to the default base URL
+    /// alone. Another base URL by flag or by file with no credential is refused naming the base
+    /// URL, with HOME or without; the default base URL, given or not, still builds the endpoint
+    /// built before, and another base URL with a credential of its own is taken.
+    #[test]
+    fn endpoint_default_credential_is_sent_to_the_default_base_url_alone() {
+        let dir = scratch("default-credential");
+        let by_flag = EndpointFields {
+            base_url: Some("https://other.example/v1".to_owned()),
+            ..EndpointFields::default()
+        };
+        let by_file = from_file(&dir.0, "base_url = \"https://other.example/v1\"\n");
+        for (flags, file, home) in [
+            (&by_flag, None, Some(home())),
+            (&by_flag, None, None),
+            (&EndpointFields::default(), Some(&by_file), Some(home())),
+        ] {
+            let message = format!(
+                "{:#}",
+                EndpointConfig::of(flags, file, home.as_deref())
+                    .expect_err("the default credential to another host")
+            );
+            assert!(
+                message.contains("https://other.example/v1")
+                    && message.contains("not sent to another host")
+                    && message.contains("--endpoint-token-file"),
+                "{message}"
+            );
+        }
+        let before = resolved(&EndpointFields::default(), None);
+        assert_eq!(
+            before,
+            EndpointConfig {
+                base_url: EndpointConfig::BASE_URL.to_owned(),
+                wire: EndpointConfig::WIRE.to_owned(),
+                model: EndpointConfig::MODEL.to_owned(),
+                credential: Credential::SubscriptionFile {
+                    path: home().join(".claude/.credentials.json"),
+                    pointer: Some("/claudeAiOauth/accessToken".to_owned()),
+                },
+            }
+        );
+        let default_given = EndpointFields {
+            base_url: Some("https://api.anthropic.com/v1".to_owned()),
+            ..EndpointFields::default()
+        };
+        assert_eq!(resolved(&default_given, None), before);
+        assert_eq!(
+            resolved(&with_token("https://other.example/v1"), None).credential,
+            Credential::SubscriptionFile {
+                path: PathBuf::from("/t/token.json"),
+                pointer: None,
+            }
+        );
+    }
+
+    /// F2: `http://` carries the credential in the clear, so it is taken only to a loopback
+    /// host: `localhost`, `127.0.0.0/8` or `[::1]`, with a port or without.
+    #[test]
+    fn endpoint_http_base_url_is_refused_unless_its_host_is_loopback() {
+        for taken in [
+            "http://localhost/v1",
+            "http://LOCALHOST:8080/v1",
+            "http://127.0.0.1/v1",
+            "http://127.1.2.3:9/v1",
+            "http://[::1]:8080/v1",
+            "http://[::1]",
+            "https://[2001:db8::1]:8443/v1",
+            "https://b.example:443",
+        ] {
+            assert_eq!(
+                resolved(&with_token(taken), None).base_url,
+                taken,
+                "{taken} is taken"
+            );
+        }
+        for refused in [
+            "http://b.example/v1",
+            "http://10.0.0.1:8080/v1",
+            "http://128.0.0.1/v1",
+            "http://[::2]/v1",
+            "http://[::ffff:127.0.0.1]/v1",
+            "http://localhost.example/v1",
+            "http://127.0.0.1.example/v1",
+        ] {
+            let message = format!(
+                "{:#}",
+                EndpointConfig::of(&with_token(refused), None, Some(&home()))
+                    .expect_err("http to a host that is not loopback")
+            );
+            assert!(
+                message.contains(refused) && message.contains("no loopback host"),
+                "{refused}: {message}"
+            );
+        }
+    }
+
+    /// F3: a base URL with a userinfo, a query or a fragment, each of which can carry a key, is
+    /// refused naming each part found and holding nothing of what was written in it; so is a
+    /// base URL whose host takt cannot read, or that is no http(s) URL, holding nothing of it.
+    #[test]
+    fn endpoint_base_url_with_userinfo_query_or_fragment_is_refused_without_echoing_it() {
+        let marker = "MARKER-2b7e44-not-a-real-key";
+        let refusal = |base_url: &str| {
+            format!(
+                "{:#}",
+                EndpointConfig::of(&with_token(base_url), None, Some(&home()))
+                    .expect_err("refused")
+            )
+        };
+        for (base_url, parts, shown) in [
+            (
+                format!("https://user:{marker}@b.example/v1"),
+                &["userinfo"][..],
+                "https://b.example/v1",
+            ),
+            (
+                format!("https://{marker}@b.example:8443/v1"),
+                &["userinfo"][..],
+                "https://b.example:8443/v1",
+            ),
+            (
+                format!("https://b.example/v1?key={marker}"),
+                &["query"][..],
+                "https://b.example/v1",
+            ),
+            (
+                format!("https://b.example?key={marker}"),
+                &["query"][..],
+                "https://b.example",
+            ),
+            (
+                format!("https://b.example/v1#{marker}"),
+                &["fragment"][..],
+                "https://b.example/v1",
+            ),
+            (
+                format!("http://u:{marker}@localhost/v1?key={marker}#{marker}"),
+                &["userinfo", "query", "fragment"][..],
+                "http://localhost/v1",
+            ),
+            (
+                format!("https://b.example\\{marker}@c.example/v1"),
+                &["userinfo"][..],
+                "https://c.example/v1",
+            ),
+        ] {
+            let message = refusal(&base_url);
+            assert!(!message.contains(marker), "the key leaked: {message}");
+            assert!(message.contains(shown), "{shown}: {message}");
+            for part in parts {
+                assert!(message.contains(part), "{part}: {message}");
+            }
+        }
+        for unread in [
+            format!("https://u:{marker}/x@b.example/v1"),
+            format!("https://u:{marker}@/v1"),
+            format!("https://b.exa{marker}mple:{marker}/v1"),
+            format!("https://[{marker}]/v1"),
+        ] {
+            let message = refusal(&unread);
+            assert!(!message.contains(marker), "the key leaked: {message}");
+            assert!(
+                message.contains("no host takt reads"),
+                "{unread}: {message}"
+            );
+        }
+        for unlike in [
+            format!("ftp://u:{marker}@b.example/v1"),
+            format!("b.example/v1?key={marker}"),
+            format!("https://b.example/v1 {marker}"),
+            format!("https://b.example/v1\n{marker}"),
+        ] {
+            let message = refusal(&unlike);
+            assert!(!message.contains(marker), "the key leaked: {message}");
+            assert!(message.contains("no http(s) URL"), "{unlike:?}: {message}");
+        }
+        let dir = scratch("userinfo-file");
+        let file = from_file(
+            &dir.0,
+            &format!(
+                "base_url = \"https://u:{marker}@b.example/v1\"\n\n[credential]\ntoken_file = \"/t.json\"\n"
+            ),
+        );
+        let message = format!(
+            "{:#}",
+            EndpointConfig::of(&EndpointFields::default(), Some(&file), None)
+                .expect_err("a userinfo by file")
+        );
+        assert!(
+            message.contains("userinfo") && !message.contains(marker),
+            "{message}"
+        );
+    }
+
+    /// F7: a relative token file, by flag or by an endpoint file read by a relative path, is made
+    /// absolute against the current directory before it is checked, handed to the session or
+    /// recorded, since b10x-harness runs in a scratch copy of the tree.
+    #[test]
+    fn endpoint_relative_token_file_is_made_absolute_against_the_current_directory() {
+        let here = std::env::current_dir().expect("a current directory");
+        let by_flag = EndpointFields {
+            token_file: Some(PathBuf::from("relative/token.json")),
+            token_pointer: Some("/a".to_owned()),
+            ..EndpointFields::default()
+        };
+        let by_file = EndpointFields {
+            token_file: Some(PathBuf::from("token.json")),
+            ..EndpointFields::default()
+        };
+        for (flags, file, path) in [
+            (&by_flag, None, here.join("relative/token.json")),
+            (
+                &EndpointFields::default(),
+                Some(&by_file),
+                here.join("token.json"),
+            ),
+        ] {
+            let config = resolved(flags, file);
+            let Credential::SubscriptionFile { path: taken, .. } = &config.credential else {
+                panic!("a token file: {config:?}");
+            };
+            assert_eq!(taken, &path);
+            let message = format!("{:#}", config.check_token().expect_err("no such file"));
+            assert!(message.contains(&path.display().to_string()), "{message}");
+            assert_eq!(config.session_endpoint().expect("maps").token_file, path);
+            assert_eq!(
+                opened_with(Some(config.recorded(None)))["endpoint"]["credential"]["path"],
+                path.display().to_string()
+            );
+        }
+    }
+
+    /// F10: the record names a token file under HOME from `~`, so a case record carries no
+    /// user's directory, while the session is given the path whole; a file elsewhere, or a HOME
+    /// that is relative or the root, is recorded as given.
+    #[test]
+    fn endpoint_token_file_under_home_is_recorded_from_tilde() {
+        let config = resolved(&EndpointFields::default(), None);
+        let absolute = home().join(".claude/.credentials.json");
+        assert_eq!(
+            config.session_endpoint().expect("maps").token_file,
+            absolute
+        );
+        let line = opened_with(Some(config.clone().recorded(Some(&home()))));
+        assert_eq!(
+            line["endpoint"]["credential"],
+            serde_json::json!({
+                "kind": "subscription_file",
+                "path": "~/.claude/.credentials.json",
+                "pointer": "/claudeAiOauth/accessToken",
+            })
+        );
+        assert!(
+            !line.to_string().contains(&home().display().to_string()),
+            "{line}"
+        );
+        for other in [
+            Some(PathBuf::from("/nonexistent-home-2")),
+            Some(PathBuf::from("/nonexistent")),
+            Some(PathBuf::from("/")),
+            Some(PathBuf::from("nonexistent-home")),
+            None,
+        ] {
+            assert_eq!(
+                opened_with(Some(config.clone().recorded(other.as_deref())))["endpoint"]["credential"]
+                    ["path"],
+                absolute.display().to_string(),
+                "{other:?}"
+            );
+        }
+        let secret = EndpointConfig {
+            credential: Credential::secret("llm/key").expect("a secret's name"),
+            ..config.clone()
+        };
+        assert_eq!(secret.clone().recorded(Some(&home())), secret);
+        let mut harness = SessionHarness::of(Kind::B10x);
+        harness.endpoint = Some(config.session_endpoint().expect("maps"));
+        harness.home = Some(home());
+        let reference = harness
+            .endpoint_reference()
+            .expect("pointed at an endpoint");
+        assert_eq!(
+            reference.credential,
+            Credential::SubscriptionFile {
+                path: PathBuf::from("~/.claude/.credentials.json"),
+                pointer: Some("/claudeAiOauth/accessToken".to_owned()),
+            }
+        );
+        assert_eq!(
+            harness
+                .endpoint
+                .as_ref()
+                .map(|endpoint| &endpoint.token_file),
+            Some(&absolute),
+            "the session keeps the path whole"
+        );
     }
 }

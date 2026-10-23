@@ -815,6 +815,7 @@ fn every_credential_shape_takt_lists_matches_its_fake() {
             "github-token",
             format!("github_pat_{}", filler(76, 40, ALNUM)),
         ),
+        ("gitlab-token", format!("glpat-{}", filler(79, 20, URLSAFE))),
         ("openai-key", format!("sk-proj-{}", filler(77, 40, ALNUM))),
         (
             "token-field",
