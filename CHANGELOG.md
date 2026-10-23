@@ -34,6 +34,7 @@ takt's releases.
 - **Breaking:** On macOS the predicate of `scripts/check-finding` has no `/tmp` of its own: the host's `/tmp` is out of its sight, and its `TMPDIR` is a directory in its home.
 - **Breaking:** On macOS the protocol sources in the predicate's home are a link to the caller's, which Seatbelt keeps read-only, not a read-only bind.
 - **Breaking:** On macOS a write the predicate of `scripts/check-finding` is refused fails with "Operation not permitted", not "Read-only file system".
+- `b10x-loom-sdk` moves from loom 0.36.0 to 0.37.0; takt uses none of the confinement types its CHANGELOG marks breaking.
 
 ## [0.9.0] - 2026-10-23
 
