@@ -43,8 +43,14 @@ fn owner(pid: libc::pid_t) -> Option<libc::uid_t> {
     (wrote == size).then_some(info.pbi_uid)
 }
 
-/// A process's parent and process group; none for a process that has ended.
+/// A process's parent and process group; none for a process that is gone.
 fn parent_and_group(pid: libc::pid_t) -> Option<(libc::pid_t, libc::pid_t)> {
+    bsd_info(pid).map(|(parent, group, _)| (parent, group))
+}
+
+/// A process's parent, process group and whether it has ended and waits to be reaped (a
+/// zombie, `SZOMB`): the kernel answers for a zombie too. None for a process that is gone.
+fn bsd_info(pid: libc::pid_t) -> Option<(libc::pid_t, libc::pid_t, bool)> {
     // SAFETY: `proc_bsdinfo` is plain integers and bytes, for which all zeroes is a value.
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?;
@@ -57,6 +63,7 @@ fn parent_and_group(pid: libc::pid_t) -> Option<(libc::pid_t, libc::pid_t)> {
     Some((
         libc::pid_t::try_from(info.pbi_ppid).ok()?,
         libc::pid_t::try_from(info.pbi_pgid).ok()?,
+        info.pbi_status == libc::SZOMB,
     ))
 }
 
@@ -65,7 +72,11 @@ fn parent_and_group(pid: libc::pid_t) -> Option<(libc::pid_t, libc::pid_t)> {
 /// harness, or a validator that ran a program by itself, started in the background and left
 /// once it returned, which carries no mark when it was not started through
 /// [`crate::forge::run_child`]. A child another thread started in this process's own group and
-/// session stays. An error when one is still there after the last round.
+/// session stays. Never taken, so never reaped: a child of `running`, which its
+/// [`crate::forge::run_child`] call waits on, and a child that has already ended (a zombie),
+/// whose exit status belongs to whoever waits on it, and whose session `getsid` no longer
+/// answers. A child whose session is not answered is judged by its group alone. An error when
+/// one is still there after the last round.
 pub fn sweep_children(running: &std::collections::BTreeSet<u32>) -> anyhow::Result<()> {
     let me = libc::pid_t::try_from(std::process::id()).unwrap_or(0);
     // SAFETY: `getsid` and `getpgrp` take integers and touch no memory of this process.
@@ -73,14 +84,17 @@ pub fn sweep_children(running: &std::collections::BTreeSet<u32>) -> anyhow::Resu
     let left = || -> Vec<libc::pid_t> {
         pids()
             .into_iter()
+            .filter(|pid| !u32::try_from(*pid).is_ok_and(|pid| running.contains(&pid)))
             .filter(|pid| {
-                parent_and_group(*pid).is_some_and(|(parent, group)| {
+                bsd_info(*pid).is_some_and(|(parent, group, ended)| {
+                    if parent != me || ended {
+                        return false;
+                    }
                     // SAFETY: `getsid` takes an integer and touches no memory of this process.
                     let sid = unsafe { libc::getsid(*pid) };
-                    parent == me
-                        && (sid != session
-                            || (group != own
-                                && !u32::try_from(group).is_ok_and(|g| running.contains(&g))))
+                    (sid != -1 && sid != session)
+                        || (group != own
+                            && !u32::try_from(group).is_ok_and(|g| running.contains(&g)))
                 })
             })
             .collect()

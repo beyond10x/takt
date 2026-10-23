@@ -845,10 +845,17 @@ fn the_dot_path_run() {
 }
 
 /// A script that exits 0 only in a home made for the run: `HOME` set, an empty directory, not
-/// the caller's `caller`; Python's user site off; `CARGO_HOME` and `RUSTUP_HOME` set.
+/// the caller's `caller`; Python's user site off; `CARGO_HOME` and `RUSTUP_HOME` set. On macOS
+/// the home may hold one entry, the command's own temporary directory: `TMPDIR` is that entry
+/// and a directory (`forge::without_login` makes it there); on Linux it holds none.
 fn fresh_home_check(caller: &str) -> String {
+    let empty = if cfg!(target_os = "macos") {
+        "entries=\"$(ls -A \"$HOME\")\"\n[ -z \"$entries\" ] || { [ \"$TMPDIR\" = \"$HOME/$entries\" ] && [ -d \"$TMPDIR\" ]; } || exit 5\n"
+    } else {
+        "[ -z \"$(ls -A \"$HOME\")\" ] || exit 5\n"
+    };
     format!(
-        "#!/bin/sh\n[ -n \"$HOME\" ] || exit 2\n[ \"$HOME\" != '{caller}' ] || exit 3\n[ -d \"$HOME\" ] || exit 4\n[ -z \"$(ls -A \"$HOME\")\" ] || exit 5\n[ \"$PYTHONNOUSERSITE\" = 1 ] || exit 6\n[ -n \"$CARGO_HOME\" ] || exit 7\n[ -n \"$RUSTUP_HOME\" ] || exit 8\n"
+        "#!/bin/sh\n[ -n \"$HOME\" ] || exit 2\n[ \"$HOME\" != '{caller}' ] || exit 3\n[ -d \"$HOME\" ] || exit 4\n{empty}[ \"$PYTHONNOUSERSITE\" = 1 ] || exit 6\n[ -n \"$CARGO_HOME\" ] || exit 7\n[ -n \"$RUSTUP_HOME\" ] || exit 8\n"
     )
 }
 

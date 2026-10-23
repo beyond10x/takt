@@ -6,7 +6,7 @@ status: draft
 title: The macOS confinement holds what wave 35 says
 relations:
 - depends_on: story:takt-confines-on-macos
-revision: 2
+revision: 3
 ---
 ## Outcome
 
@@ -43,3 +43,11 @@ test-cli passed; test-library hit the 60-minute timeout. Failures: 4 in
 `ignored_directories_are_guarded_adv3.rs:612` (plants `.git/hooks/x`, denied by M5),
 and `a_test_command_connects_to_no_launchd_socket` hung. Decision: the tests change, the
 profiles keep M4 and M5; every subprocess in the macOS module gets a bound.
+
+## Darwin at bf8d4f9 (run 39931195654, 2026-10-23)
+
+test-cli passed; test-library failed 2 of its tests, both new since U4:
+`step_guard_sees_test_script_imports.rs:884` (the fresh home is not empty: exit 5, the
+test command's `TMPDIR` now lives in it) and `sweep_spares_other_children.rs:174` (another
+thread's `wait` gets ECHILD: a sweep reaped a child that was not its own). Decision: the first
+is the test's; the second is a defect in takt's sweep and is fixed there, as U4c.
