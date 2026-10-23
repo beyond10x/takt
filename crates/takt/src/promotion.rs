@@ -100,6 +100,17 @@ pub const MAINLINE_REMOTE: &str = "origin";
 /// The sandbox the candidate is built in and its binary run under: bubblewrap, found on `PATH`.
 pub const BWRAP: &str = "bwrap";
 
+/// The sandbox a promotion names in what it prints: [`BWRAP`], and on macOS `sandbox-exec`,
+/// which confines the build there under the profile [`crate::seatbelt::build`] writes.
+#[cfg(not(target_os = "macos"))]
+pub const SANDBOX: &str = BWRAP;
+
+/// The sandbox a promotion names in what it prints: on macOS `sandbox-exec`
+/// ([`crate::seatbelt::SANDBOX_EXEC`]), which confines the build under the profile
+/// [`crate::seatbelt::build`] writes.
+#[cfg(target_os = "macos")]
+pub const SANDBOX: &str = "sandbox-exec";
+
 /// Where the confined build sees the clone: writable, at a path no ancestor of which holds a
 /// `.cargo` directory, so cargo reads configuration from the commit and nowhere else.
 pub const INSIDE_WORK: &str = "/work";
@@ -1454,12 +1465,14 @@ fn lock(store: &Path) -> Result<StoreLock> {
     Ok(StoreLock(file))
 }
 
-/// Where the candidate is built and its binary run: bubblewrap, the toolchain and the host's
-/// cargo caches, resolved by takt before the candidate is judged, never from the commit.
+/// Where the candidate is built and its binary run: bubblewrap (on macOS `sandbox-exec`), the
+/// toolchain and the host's cargo caches, resolved by takt before the candidate is judged,
+/// never from the commit.
 #[derive(Debug, Clone)]
 pub struct Confinement {
-    /// The `bwrap` binary, found on `PATH`.
-    pub bwrap: PathBuf,
+    /// The sandbox's binary: `bwrap`, found on `PATH`; on macOS
+    /// [`crate::seatbelt::SANDBOX_EXEC`].
+    pub sandbox: PathBuf,
     /// The toolchain's directory: rustup's default toolchain, read from its settings file
     /// ([`Confinement::toolchain`]), whose `bin/cargo` and sibling `bin/rustc` are the ones
     /// called; never one found on `PATH`, a `rust-toolchain.toml` or `RUSTUP_TOOLCHAIN` picks.
@@ -1470,8 +1483,27 @@ pub struct Confinement {
 }
 
 impl Confinement {
+    /// Finds `bwrap` on `PATH` (on macOS [`crate::seatbelt::SANDBOX_EXEC`]) and the toolchain;
+    /// either missing is an error naming it, and a candidate is never built unconfined.
+    #[cfg(target_os = "macos")]
+    pub fn resolve() -> Result<Self> {
+        let sandbox = PathBuf::from(crate::seatbelt::SANDBOX_EXEC);
+        if !is_executable(&sandbox) {
+            bail!(
+                "the macOS sandbox (`{}`) is missing; a promotion builds the candidate confined in it and never unconfined",
+                sandbox.display()
+            );
+        }
+        Ok(Self {
+            sandbox,
+            toolchain: Self::toolchain()?,
+            cargo_home: cargo_home(),
+        })
+    }
+
     /// Finds `bwrap` on `PATH` and the toolchain; either missing is an error naming it, and a
     /// candidate is never built unconfined.
+    #[cfg(not(target_os = "macos"))]
     pub fn resolve() -> Result<Self> {
         let bwrap = std::env::var_os("PATH").and_then(|path| {
             std::env::split_paths(&path)
@@ -1484,7 +1516,7 @@ impl Confinement {
             );
         };
         Ok(Self {
-            bwrap,
+            sandbox: bwrap,
             toolchain: Self::toolchain()?,
             cargo_home: cargo_home(),
         })
@@ -1575,8 +1607,9 @@ impl Confinement {
     /// A bwrap command with the system directories read-only, its own process and network
     /// namespaces, dying with takt, the environment cleared but for `HOME` and `TMPDIR`, and an
     /// empty `/tmp` and home directory; the caller binds what else is seen and sets `PATH`.
+    #[cfg(not(target_os = "macos"))]
     fn sandbox(&self) -> Command {
-        let mut command = Command::new(&self.bwrap);
+        let mut command = Command::new(&self.sandbox);
         command.env_clear();
         command.args([
             "--unshare-pid",
@@ -1624,6 +1657,7 @@ impl Confinement {
     /// target directory, the scratch `CARGO_HOME` (the host's [`CACHED`] directories read-only
     /// under it) and the fresh install root bound, the command shown on `out`; a failure is a
     /// [`BuildFailed`].
+    #[cfg(not(target_os = "macos"))]
     fn cargo(&self, work: &Work, args: &[&str], out: &mut dyn Write) -> Result<()> {
         writeln!(out, "cargo {} (confined in {BWRAP})", args.join(" "))?;
         let mut command = self.sandbox();
@@ -1685,6 +1719,7 @@ impl Confinement {
     /// The revision the binary at `binary` prints for `--version`, run confined with its
     /// directory bound read-only at `at` and nothing of the host visible but the system
     /// directories.
+    #[cfg(not(target_os = "macos"))]
     fn printed_revision(&self, binary: &Path, at: &str) -> Result<String> {
         let dir = binary
             .parent()
@@ -1720,6 +1755,170 @@ impl Confinement {
                 }
             )
         })
+    }
+
+    /// The homes under which the confined build and the binary read only what they are given:
+    /// `HOME` and the home this user's passwd entry names.
+    #[cfg(target_os = "macos")]
+    fn homes() -> Vec<PathBuf> {
+        home()
+            .ok()
+            .filter(|dir| dir.is_absolute())
+            .into_iter()
+            .chain(crate::validator::passwd_home())
+            .collect()
+    }
+
+    /// A `sandbox-exec` command under `profile` for `program`, the environment cleared but for
+    /// `vars`, in `dir`.
+    #[cfg(target_os = "macos")]
+    fn sandbox(
+        &self,
+        profile: &crate::seatbelt::Profile,
+        program: &Path,
+        vars: &[(&str, &std::ffi::OsStr)],
+        dir: &Path,
+    ) -> Command {
+        let mut command = Command::new(&self.sandbox);
+        command.env_clear();
+        command.envs(vars.iter().copied());
+        command.args(profile.args()).arg(program).current_dir(dir);
+        command
+    }
+
+    /// Runs the toolchain's `cargo <args>` confined, in the clone, which it sees at its own
+    /// path: no network; writes only to the clone, the target directory, the scratch
+    /// `CARGO_HOME` (the host's [`CACHED`] directories linked into it, read-only), the fresh
+    /// install root, a home and a temporary directory of the build's own and this user's
+    /// temporary and cache directories ([`crate::seatbelt::user_dirs`]); under the user's home
+    /// it reads only those, the toolchain and the cached directories ([`crate::seatbelt::build`]).
+    /// The command is shown on `out`; a failure is a [`BuildFailed`].
+    #[cfg(target_os = "macos")]
+    fn cargo(&self, work: &Work, args: &[&str], out: &mut dyn Write) -> Result<()> {
+        writeln!(out, "cargo {} (confined in {SANDBOX})", args.join(" "))?;
+        let mut command = self.build_command(work, &self.toolchain.join("bin/cargo"))?;
+        command.args(args);
+        let output = command
+            .output()
+            .with_context(|| format!("run {SANDBOX} for cargo {}", args.join(" ")))?;
+        if !output.status.success() {
+            return Err(BuildFailed(format!(
+                "cargo {} confined in {SANDBOX} exited {}: {}",
+                args.join(" "),
+                output.status,
+                last_lines(&output.stderr)
+            ))
+            .into());
+        }
+        Ok(())
+    }
+
+    /// `program` as the confined build runs it, as [`Confinement::cargo`] describes, before its arguments.
+    #[cfg(target_os = "macos")]
+    fn build_command(&self, work: &Work, program: &Path) -> Result<Command> {
+        let home = work.dir.join("home");
+        let tmp = work.dir.join("tmp");
+        for made in [&home, &tmp] {
+            std::fs::create_dir_all(made).with_context(|| format!("create {}", made.display()))?;
+        }
+        let mut readable = vec![self.toolchain.clone()];
+        if let Some(host) = &self.cargo_home {
+            for sub in CACHED {
+                let dir = host.join(sub);
+                let link = work.cargo_home.join(sub);
+                if dir.is_dir() && std::fs::symlink_metadata(&link).is_err() {
+                    if let Some(parent) = link.parent() {
+                        std::fs::create_dir_all(parent)
+                            .with_context(|| format!("create {}", parent.display()))?;
+                    }
+                    std::os::unix::fs::symlink(&dir, &link)
+                        .with_context(|| format!("link {} to {}", link.display(), dir.display()))?;
+                    readable.push(dir);
+                }
+            }
+        }
+        let mut writable = vec![
+            work.source.clone(),
+            work.target.clone(),
+            work.cargo_home.clone(),
+            work.install.clone(),
+            home.clone(),
+            tmp.clone(),
+        ];
+        writable.extend(crate::seatbelt::user_dirs());
+        let profile = crate::seatbelt::build(&writable, &readable, &Self::homes());
+        let bin = self.toolchain.join("bin");
+        let mut path = bin.clone().into_os_string();
+        path.push(":/usr/bin:/bin");
+        let rustc = bin.join("rustc");
+        Ok(self.sandbox(
+            &profile,
+            program,
+            &[
+                ("HOME", home.as_os_str()),
+                ("TMPDIR", tmp.as_os_str()),
+                ("PATH", &path),
+                ("CARGO_HOME", work.cargo_home.as_os_str()),
+                ("RUSTC", rustc.as_os_str()),
+            ],
+            &work.source,
+        ))
+    }
+
+    /// The revision the binary at `binary` prints for `--version`, run confined at its own path
+    /// (`at`, where Linux shows it, is not used): no network, writes only to a scratch home and
+    /// this user's temporary and cache directories, and under the user's home it reads only the
+    /// binary's directory.
+    #[cfg(target_os = "macos")]
+    fn printed_revision(&self, binary: &Path, at: &str) -> Result<String> {
+        let dir = binary
+            .parent()
+            .ok_or_else(|| anyhow!("{} has no directory", binary.display()))?;
+        let scratch = crate::forge::ScratchHome::new()?;
+        let mut writable = vec![scratch.path().to_path_buf()];
+        writable.extend(crate::seatbelt::user_dirs());
+        let profile = crate::seatbelt::build(&writable, &[dir.to_path_buf()], &Self::homes());
+        let mut command = self.sandbox(
+            &profile,
+            binary,
+            &[
+                ("HOME", scratch.path().as_os_str()),
+                ("TMPDIR", scratch.path().as_os_str()),
+                ("PATH", std::ffi::OsStr::new("/usr/bin:/bin")),
+            ],
+            scratch.path(),
+        );
+        command.arg("--version");
+        let output = command
+            .output()
+            .with_context(|| format!("run {} --version confined in {SANDBOX}", binary.display()))?;
+        drop(scratch);
+        let text = String::from_utf8_lossy(&output.stdout);
+        let line = text.lines().next().unwrap_or("");
+        parse_version(line).ok_or_else(|| {
+            let stderr = last_lines(&output.stderr);
+            anyhow!(
+                "{} --version, confined in {SANDBOX} (for {at}), printed {line:?}, not `takt <version> (<revision>)`{}",
+                binary.display(),
+                if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!("; stderr: {stderr}")
+                }
+            )
+        })
+    }
+}
+
+/// Where the confined build sees `host`, as an argument it is given: on Linux at `inside`,
+/// where bubblewrap binds it; on macOS at its own path, Seatbelt binding nothing.
+fn seen(host: &Path, inside: &str) -> Result<String> {
+    if cfg!(target_os = "macos") {
+        host.to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow!("{} is not UTF-8", host.display()))
+    } else {
+        Ok(inside.to_owned())
     }
 }
 
@@ -2305,6 +2504,12 @@ fn stage(
     }
     git(&work.source, &["checkout", "--quiet", "--detach", revision])
         .map_err(|error| BuildFailed(format!("check out {revision}: {error:#}")))?;
+    let target = seen(&work.target, INSIDE_TARGET)?;
+    let install = seen(&work.install, INSIDE_INSTALL)?;
+    let crate_dir = seen(
+        &work.source.join("crates/takt-cli"),
+        &format!("{INSIDE_WORK}/crates/takt-cli"),
+    )?;
     confinement.cargo(
         &work,
         &[
@@ -2317,7 +2522,7 @@ fn stage(
             "--bin",
             "takt",
             "--target-dir",
-            INSIDE_TARGET,
+            &target,
         ],
         out,
     )?;
@@ -2339,11 +2544,11 @@ fn stage(
             "--offline",
             "--force",
             "--path",
-            &format!("{INSIDE_WORK}/crates/takt-cli"),
+            &crate_dir,
             "--root",
-            INSIDE_INSTALL,
+            &install,
             "--target-dir",
-            INSIDE_TARGET,
+            &target,
         ],
         out,
     )?;
@@ -2826,7 +3031,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     if request.dry_run {
         writeln!(
             out,
-            "dry run: would clone {} at {revision} under {}, build it there confined in {BWRAP}, install under {} and write {} and {}",
+            "dry run: would clone {} at {revision} under {}, build it there confined in {SANDBOX}, install under {} and write {} and {}",
             request.repo.display(),
             request.build_dir.display(),
             request.install_root.display(),
@@ -3310,5 +3515,71 @@ mod tests {
             ),
             "{refused}"
         );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod seatbelt_tests {
+    use super::*;
+
+    /// The confined build, as `sandbox-exec` starts cargo for a promotion, run with a shell in
+    /// cargo's place: it writes to its target directory, a write beside its build directory is
+    /// denied and leaves no file, and a connection to a listener on the loopback is refused.
+    #[test]
+    fn the_confined_build_writes_only_its_directories_and_reaches_no_network() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target")
+            .join(format!("seatbelt-build-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let work = Work {
+            dir: root.join("build"),
+            source: root.join("build/source"),
+            target: root.join("build/target"),
+            cargo_home: root.join("build/cargo-home"),
+            install: root.join("install"),
+        };
+        for made in [&work.source, &work.target, &work.cargo_home, &work.install] {
+            std::fs::create_dir_all(made).expect("the build's directories");
+        }
+        let outside = root.join("outside");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener");
+        listener
+            .set_nonblocking(true)
+            .expect("a listener that does not block");
+        let port = listener.local_addr().expect("its address").port();
+        let confinement = Confinement {
+            sandbox: PathBuf::from(crate::seatbelt::SANDBOX_EXEC),
+            toolchain: PathBuf::from("/nonexistent-toolchain"),
+            cargo_home: None,
+        };
+        let mut command = confinement
+            .build_command(&work, Path::new("/bin/bash"))
+            .expect("the confined command");
+        command.args([
+            "-c",
+            "echo in > \"$1\" || exit 10; if echo out > \"$2\"; then exit 11; fi; if : < \"/dev/tcp/127.0.0.1/$3\"; then exit 12; fi; exit 0",
+            "bash",
+        ]);
+        command
+            .arg(work.target.join("inside"))
+            .arg(&outside)
+            .arg(port.to_string());
+        let output = command.output().expect("sandbox-exec runs");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(work.target.join("inside").is_file(), "the write inside");
+        assert!(!outside.exists(), "no file outside the build's directories");
+        assert!(
+            listener
+                .accept()
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock),
+            "no connection reached the listener"
+        );
+        drop(work);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

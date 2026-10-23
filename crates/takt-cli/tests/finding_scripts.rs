@@ -944,9 +944,11 @@ fn attempt(what: &str, result: std::io::Result<()>, out: &mut String) {
     }
 }
 
-/// Done when a descriptor this process holds is a regular file naming the planted secret.
+/// Done when a descriptor this process holds is a regular file naming the planted secret. The
+/// descriptors are listed from `/proc/self/fd`, or from `/dev/fd` where there is no `/proc`.
 fn held_secret() -> std::io::Result<()> {
-    for entry in std::fs::read_dir("/proc/self/fd")? {
+    let listed = if std::path::Path::new("/proc/self/fd").is_dir() { "/proc/self/fd" } else { "/dev/fd" };
+    for entry in std::fs::read_dir(listed)? {
         let path = entry?.path();
         let regular = std::fs::metadata(&path).is_ok_and(|meta| meta.is_file());
         if regular
@@ -1748,11 +1750,20 @@ fn the_predicate_writes_no_host_path_and_reads_nothing_of_the_callers_home() {
 /// What a predicate reaches of the host beyond its files: its network and IPC namespaces, the
 /// network interfaces and abstract unix sockets it sees, and the host's well-known sockets
 /// (the user's session bus, agents and runtime directory under `/run/user`, the container
-/// engines', the system bus, X11's); each one in sight is printed as `reachable <path>`.
-const SOCKET_PROBE: &str = r#"echo "net $(readlink /proc/self/ns/net)"
+/// engines', the system bus, X11's); each one in sight is printed as `reachable <path>`. The
+/// namespaces, interfaces and abstract sockets are read from `/proc` where there is one; on every
+/// host it tries the TCP listener the test holds on the host's loopback at port `@PORT@`.
+const SOCKET_PROBE: &str = r#"if [ -d /proc/self/ns ]; then
+echo "net $(readlink /proc/self/ns/net)"
 echo "ipc $(readlink /proc/self/ns/ipc)"
 echo "interfaces $(tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' ' | tr '\n' ' ')"
 echo "abstract $(grep -c ' @' /proc/net/unix)"
+fi
+if bash -c 'exec 3<>/dev/tcp/127.0.0.1/@PORT@' 2>/dev/null; then
+    echo "loopback reached"
+else
+    echo "loopback refused"
+fi
 for p in "/run/user/$(id -u)" /run/docker.sock /var/run/docker.sock /run/podman/podman.sock \
     /run/dbus/system_bus_socket /tmp/.X11-unix; do
     [ -e "$p" ] && echo "reachable $p"
@@ -1768,12 +1779,15 @@ echo probe-ran
 #[test]
 fn the_predicate_reaches_no_network_ipc_or_socket_of_the_host() {
     let world = world("sockets");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+    let port = listener.local_addr().expect("its address").port();
+    let probe = SOCKET_PROBE.replace("@PORT@", &port.to_string());
     let filed = file(
         &world.takt,
         "socket-probe",
         &body(Some(&format!(
             "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; {} && sh \"$HOME/socket-probe.sh\"\nexit: 0\noutput: probe-ran\nsource: {SOURCE}\n",
-            carried("socket-probe.sh", SOCKET_PROBE)
+            carried("socket-probe.sh", &probe)
         ))),
         &[],
     );
@@ -1786,6 +1800,27 @@ fn the_predicate_reaches_no_network_ipc_or_socket_of_the_host() {
         shown(&output)
     );
     let ran = fs::read_to_string(record(&output).join("output")).expect("the command's output");
+    drop(listener);
+    assert!(
+        ran.lines().any(|line| line == "loopback refused"),
+        "the command reaches the host's loopback:\n{ran}"
+    );
+    #[cfg(target_os = "linux")]
+    host_namespaces(&ran);
+    let reachable: Vec<_> = ran
+        .lines()
+        .filter(|line| line.starts_with("reachable "))
+        .collect();
+    assert!(
+        reachable.is_empty(),
+        "the command reaches host sockets: {reachable:?}"
+    );
+}
+
+/// What the socket probe printed (`ran`) names namespaces other than this process's, the
+/// loopback interface alone and no abstract unix socket.
+#[cfg(target_os = "linux")]
+fn host_namespaces(ran: &str) {
     let host = |kind: &str| {
         fs::read_link(format!("/proc/self/ns/{kind}"))
             .expect("this process's namespace")
@@ -1809,14 +1844,6 @@ fn the_predicate_reaches_no_network_ipc_or_socket_of_the_host() {
     assert!(
         ran.lines().any(|line| line == "abstract 0"),
         "the command sees abstract unix sockets:\n{ran}"
-    );
-    let reachable: Vec<_> = ran
-        .lines()
-        .filter(|line| line.starts_with("reachable "))
-        .collect();
-    assert!(
-        reachable.is_empty(),
-        "the command reaches host sockets: {reachable:?}"
     );
 }
 
@@ -1873,7 +1900,8 @@ fn the_predicate_cannot_plant_a_link_where_the_check_writes() {
 /// The review's correction 1, finding 3: the check hides the home of the user it runs as
 /// (the passwd entry of `id -u`), not only the directory HOME names. Under a HOME of the
 /// scratch's, no file directly in the user's passwd home (a shell profile, a git
-/// configuration) is in the command's sight.
+/// configuration) is in the command's sight. The probe reads the entry with `getent`, or from
+/// `dscl` where there is none (macOS), as the check does.
 #[test]
 fn the_predicate_sees_no_file_of_the_users_passwd_home() {
     let world = world("passwd-home");
@@ -1886,7 +1914,7 @@ fn the_predicate_sees_no_file_of_the_users_passwd_home() {
         &world.takt,
         "passwd-home",
         &body(Some(&format!(
-            "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; pw=$(getent passwd \"$(id -u)\" | cut -d: -f6); echo \"passwd-home $pw\"; for f in \"$pw\"/.* \"$pw\"/*; do [ -f \"$f\" ] && echo \"visible $f\"; done; echo probe-ran\nexit: 0\noutput: probe-ran\nsource: {SOURCE}\n"
+            "scenario: 1\ncommand: \"$TAKT\" --version >/dev/null; if command -v getent >/dev/null; then pw=$(getent passwd \"$(id -u)\" | cut -d: -f6); else pw=$(dscl . -read \"/Users/$(id -un)\" NFSHomeDirectory | cut -d' ' -f2); fi; echo \"passwd-home $pw\"; for f in \"$pw\"/.* \"$pw\"/*; do [ -f \"$f\" ] && echo \"visible $f\"; done; echo probe-ran\nexit: 0\noutput: probe-ran\nsource: {SOURCE}\n"
         ))),
         &[],
     );
@@ -1917,7 +1945,8 @@ fn the_predicate_sees_no_file_of_the_users_passwd_home() {
 /// The passwd home is hidden beside HOME, not only when it holds HOME: the user's passwd entry
 /// is read from a `getent` first on PATH that names a home of the scratch's, beside the
 /// HOME the check is given, so the case reaches that branch whether or not the scratch lies
-/// under the user's real passwd home. A file planted there is not in the command's sight.
+/// under the user's real passwd home. A file planted there is not in the command's sight. The
+/// check reads `getent` wherever one is on PATH, on macOS too, so the stand-in decides there.
 #[test]
 fn a_passwd_home_beside_home_is_hidden_as_well() {
     use std::os::unix::fs::PermissionsExt;

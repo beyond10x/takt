@@ -40,15 +40,16 @@ fn executable(path: &Path, text: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("exec bit");
 }
 
-/// Whether process `pid` is still running: listed, and not a zombie.
+/// Whether process `pid` is still running: listed by `ps`, and not a zombie.
 fn alive(pid: &str) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|stat| {
-            stat.rsplit_once(") ")
-                .map(|(_, rest)| !rest.starts_with('Z'))
+    Command::new("ps")
+        .args(["-o", "stat=", "-p", pid])
+        .output()
+        .is_ok_and(|output| {
+            let state = String::from_utf8_lossy(&output.stdout);
+            let state = state.trim();
+            output.status.success() && !state.is_empty() && !state.starts_with('Z')
         })
-        .unwrap_or(false)
 }
 
 #[test]

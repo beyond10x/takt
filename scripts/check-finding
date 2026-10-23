@@ -554,9 +554,15 @@ callers_home=$(cd "${HOME:-}" 2>/dev/null && pwd -P) && [[ -n ${HOME:-} && $call
 # And the home of the user the check runs as, its passwd entry's, whatever HOME names: under a
 # HOME of another directory it would be in sight (`~/.ssh`, a git configuration). One home
 # that holds the other is hidden alone; a user with no passwd entry, or whose passwd home is
-# no directory or the root, has none to hide.
+# no directory or the root, has none to hide. Where there is no `getent` (macOS) the entry is
+# read from the directory service, `dscl`.
 hidden=("$callers_home")
-user_home=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6) || user_home=
+if command -v getent >/dev/null; then
+    user_home=$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6) || user_home=
+else
+    user_home=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null |
+        sed -n 's/^NFSHomeDirectory: //p') || user_home=
+fi
 if [[ -n $user_home ]] && user_home=$(cd "$user_home" 2>/dev/null && pwd -P) && [[ $user_home != / ]]; then
     if [[ $callers_home/ == "$user_home"/* ]]; then
         hidden=("$user_home")

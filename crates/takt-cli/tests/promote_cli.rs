@@ -151,7 +151,7 @@ const FLIPPING_MAIN: &str = r#"fn main() {
         let exe = std::env::current_exe()
             .map(|path| path.display().to_string())
             .unwrap_or_default();
-        if exe.starts_with("__TARGET__/") || exe.starts_with("__INSTALL__/") {
+        if exe.starts_with("__TARGET__") || exe.starts_with("__INSTALL__") {
             println!("takt 0.1.0 ({})", env!("TAKT_REVISION"));
         } else {
             println!("takt 0.1.0 (something-else)");
@@ -1284,7 +1284,10 @@ fn a_candidate_within_the_rule_is_installed_and_recorded() {
         out.contains("verdict: no scenario worse than the baseline"),
         "{out}"
     );
-    assert!(out.contains("confined in bwrap"), "{out}");
+    assert!(
+        out.contains(&format!("confined in {}", takt::promotion::SANDBOX)),
+        "{out}"
+    );
     assert_eq!(
         world.version(),
         format!("takt 0.1.0 ({})", world.revision),
@@ -2726,11 +2729,22 @@ fn a_record_that_cannot_be_written_leaves_the_binary_untouched() {
 fn a_binary_that_changes_once_installed_is_rolled_back() {
     let world = World::new("flip", BASELINE_TOKENS, FIVE_APPROVALS);
     world.record_baseline();
+    // Where the build and the fresh root are as the candidate sees them: inside the sandbox on
+    // Linux, at their host paths on macOS (the build under the cache, the fresh root beside the
+    // install root).
+    let (target, install) = if cfg!(target_os = "macos") {
+        (
+            format!("{}/", world.outer.join("cache/takt/promote").display()),
+            format!("{}/.takt-promote-", world.root.display()),
+        )
+    } else {
+        (format!("{INSIDE_TARGET}/"), format!("{INSIDE_INSTALL}/"))
+    };
     write(
         &world.repo.join("crates/takt-cli/src/main.rs"),
         &FLIPPING_MAIN
-            .replace("__TARGET__", INSIDE_TARGET)
-            .replace("__INSTALL__", INSIDE_INSTALL),
+            .replace("__TARGET__", &target)
+            .replace("__INSTALL__", &install),
     );
     let revision = world.commit("flip");
     let card = world.passing_card("flip", &revision);

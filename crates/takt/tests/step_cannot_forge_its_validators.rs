@@ -1361,15 +1361,16 @@ fn a_pyproject_refusal_does_not_speak_of_cargo() {
 /// step leaves running.
 static LATE_WRITER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-/// Whether process `pid` is still running: listed, and not a zombie.
+/// Whether process `pid` is still running: listed by `ps`, and not a zombie.
 fn alive(pid: u32) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|stat| {
-            stat.rsplit_once(") ")
-                .map(|(_, rest)| !rest.starts_with('Z'))
+    Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .is_ok_and(|output| {
+            let state = String::from_utf8_lossy(&output.stdout);
+            let state = state.trim();
+            output.status.success() && !state.is_empty() && !state.starts_with('Z')
         })
-        .unwrap_or(false)
 }
 
 /// Whether this process is the child [`alone`] starts, which runs one case by itself.

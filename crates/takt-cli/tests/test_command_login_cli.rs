@@ -89,7 +89,8 @@ fn operator_env(command: &mut Command, outer: &Path) {
 
 /// The test command run by `takt run --harness none` finds no login, no bus address and no bus
 /// socket, cannot unmount what hides them, and its scratch home is gone after the run; the
-/// stand-in `gh` in the operator's environment finds the login.
+/// stand-in `gh` in the operator's environment finds the login. On macOS the sandbox denies the
+/// reads of the runtime directory, the named socket and the registry login.
 #[test]
 fn the_test_command_reaches_no_login_of_the_operator() {
     let outer =
@@ -115,7 +116,8 @@ fn the_test_command_reaches_no_login_of_the_operator() {
     let _named_bus = UnixListener::bind(outer.join("b/bus")).expect("the named bus socket");
     script(&outer.join("bin/gh"), GH);
 
-    let seen = outer.join("seen");
+    // In the temporary directory takt runs with, which the test command may write on macOS too.
+    let seen = outer.join("tmp/seen");
     let runtime = outer.join("r");
     let named = outer.join("b/bus");
     let repo = outer.join("repo");

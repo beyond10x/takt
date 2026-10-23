@@ -6,7 +6,19 @@ takt's releases.
 
 ## [Unreleased]
 
+### Added
+
+- On macOS the test command and a promotion's build run under `/usr/bin/sandbox-exec`; with no `sandbox-exec` both are refused by name, never run unconfined.
+- On macOS a process a child of takt left running is killed by its `TAKT_CHILD` mark.
+
 ### Changed
+
+- **Breaking:** On macOS a promotion's build sees the clone, its target and the fresh root at their host paths, not at fixed paths inside a sandbox as under bubblewrap.
+- **Breaking:** On macOS a promotion's build reads every file outside the user's home, not only the clone, toolchain, registry cache and system directories.
+- **Breaking:** On macOS the test command and a promotion's build may write the user's temporary and cache directories, which the compiler and linker use.
+- **Breaking:** On macOS the test command is denied a registry login, `Library/Keychains`, the runtime directory and a bus socket by path only.
+- **Breaking:** On macOS a hard link to such a file elsewhere, and the keychain daemons reached over Mach, are not denied.
+- **Breaking:** On macOS a process that clears `TAKT_CHILD` from its environment and leaves the process group outlives the run; on Linux takt adopts and kills it.
 
 - `b10x-loom-sdk` moves from loom 0.34.0 to 0.35.0, which builds on macOS.
 - Harness sessions run through Loom's session executor at 0.35.0 with metaharness 0.13.0; takt's own crate `b10x-session-executor` is gone.
