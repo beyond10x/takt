@@ -6,7 +6,7 @@ status: draft
 title: The macOS confinement holds what wave 35 says
 relations:
 - depends_on: story:takt-confines-on-macos
-revision: 1
+revision: 2
 ---
 ## Outcome
 
@@ -35,3 +35,11 @@ so the macOS confinement holds what story:takt-confines-on-macos and the CHANGEL
 4. `release.yml`'s publish job needs a macOS test job (M3).
 5. `CONFINED_CHECK_FINDING_SHA256S` holds no `cd0efbd5` and no `0c2b3048` (L8).
 6. `task check` and darwin.yml are green.
+
+## Darwin at a5d6878 (run 39921796824, 2026-10-23)
+
+test-cli passed; test-library hit the 60-minute timeout. Failures: 4 in
+`cases_root_link.rs:418` (writes beside the tree, denied by M4), 1 in
+`ignored_directories_are_guarded_adv3.rs:612` (plants `.git/hooks/x`, denied by M5),
+and `a_test_command_connects_to_no_launchd_socket` hung. Decision: the tests change, the
+profiles keep M4 and M5; every subprocess in the macOS module gets a bound.
