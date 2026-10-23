@@ -60,7 +60,7 @@ One open-source binary, Apache-2.0. Site: <https://beyond10x.github.io/takt/>.
 
 ## Status
 
-0.8.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+0.9.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
 `scorecard`, `trace`, `report`, `view`, `promote` and `replay`, with `story.delivery/1` and `self.improvement/1`
 embedded, and prebuilt binaries for Linux (x86_64, aarch64); it has no macOS binary. A harness step
 runs through a metaharness session with Claude Code, Codex or b10x-harness (`--harness`). Since 0.1.0 it
@@ -108,7 +108,7 @@ What each command does:
 ## Install
 
 Prebuilt binaries for Linux (x86_64, aarch64) and, up to 0.6.0, macOS (aarch64), with checksums
-(0.7.0 and 0.8.0 have no macOS binary: on macOS use 0.6.0):
+(0.7.0 to 0.9.0 have no macOS binary: on macOS use 0.6.0):
 [Install a release](https://beyond10x.github.io/takt/docs/getting-started#install-a-release). From source:
 
 ```
@@ -141,14 +141,14 @@ nothing sandboxes the harness session yet (`story:harness-child-confined`).
 ## Built on
 
 takt is an application on [Loom](https://github.com/beyond10x/loom)'s `b10x-loom-sdk`, pinned
-in `Cargo.toml` at the Loom tag 0.35.0 (ADR 0099, `epic:takt-on-loom-sdk`):
+in `Cargo.toml` at the Loom tag 0.36.0 (ADR 0099, `epic:takt-on-loom-sdk`):
 
 - Commission's runtime drives each step of a case (`run_until_blocked`).
 - Loom's governor decides the case with [Canon](https://github.com/beyond10x/canon) over the
   case's files, and takt's `CaseAuthority` answers it from `authority.yaml` when a step needs a
   grant.
 - Each harness step runs in a metaharness 0.13.0 session started by Loom's session executor, the
-  crate `b10x-loom-session-executor` 0.35.0 (`loom_sdk::session`). The harness proposes a change
+  crate `b10x-loom-session-executor` 0.36.0 (`loom_sdk::session`). The harness proposes a change
   from a scratch copy, and takt's edit effect applies it under the step guard.
 
 takt keeps its validators and their evidence, git and the forge, the planning-store seam,
