@@ -84,7 +84,12 @@ Read, in this order, before acting:
    5. `b10x-gates bot -- merge --no-ff <final sha>` into `main`, with `main` checked out in the
       same tree: exactly the granted sha. A new commit on the wave branch voids the grant and
       starts the close again at step 3.
-   6. A release tag or a push, when the wave cuts one, goes through the bot route too.
+   6. A release tag or a push, when the wave cuts one, goes through the bot route too. A branch
+      is brought up to date with `b10x-gates bot -- merge <base>`, never a rebase or a
+      cherry-pick, which re-commit under the local identity; before any push,
+      `git log --format=%an%x7c%cn main..HEAD` prints only `b10x-bot[bot]|b10x-bot[bot]`
+      (2026-10-23: a plain `git rebase` put a personal committer on `main` and failed the
+      shared security gate).
    7. One line to the owner.
 9. **Repeat.** Open the next wave at once.
 
