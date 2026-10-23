@@ -1139,8 +1139,11 @@ fn a_failed_undo_names_the_surface_and_the_outside_errors() {
         error.contains(&surface),
         "the surface's error, {surface}, is named: {error}"
     );
-    // The step made `.cargo` beside the tree, so putting it back removes that directory whole.
-    let outside = format!("remove {}:", scratch.0.join(".cargo").display());
+    // The step made `.cargo` beside the tree, so putting it back removes that directory whole,
+    // named by its real path as the surface is (on macOS the temporary directory is a link,
+    // `/var` to `/private/var`).
+    let beside = fs::canonicalize(&scratch.0).expect("the scratch directory's real path");
+    let outside = format!("remove {}:", beside.join(".cargo").display());
     assert!(
         error.contains(&outside),
         "the outside error, {outside}, is named: {error}"

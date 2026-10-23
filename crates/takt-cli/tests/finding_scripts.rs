@@ -1061,9 +1061,20 @@ fn probe_build(home: &Path, other: &Path) -> String {
 /// two `SSL_CERT_*` cargo sets in its own environment, naming the system's certificates). The
 /// search path cargo sets for the dynamic libraries it built is `LD_LIBRARY_PATH`, and on macOS
 /// `DYLD_FALLBACK_LIBRARY_PATH`.
-fn allowed_in_a_build(name: &str) -> bool {
+///
+/// On macOS also `__CF_USER_TEXT_ENCODING`, with the value CoreFoundation writes
+/// ([`cf_user_text_encoding`]): CoreFoundation sets it in the environment of a process it is
+/// loaded in when it is not set there, and the build's chain (the system's `perl`,
+/// `sandbox-exec`, cargo) loads it after the check started that chain from an environment it
+/// cleared (`env -i`). So the variable is the platform's, set after exec, and never the
+/// caller's: the caller sets another value ([`PLANTED_CF_USER_TEXT_ENCODING`]), which must not
+/// arrive.
+fn allowed_in_a_build(name: &str, value: &str) -> bool {
     if cfg!(target_os = "macos") && name == "DYLD_FALLBACK_LIBRARY_PATH" {
         return true;
+    }
+    if cfg!(target_os = "macos") && name == "__CF_USER_TEXT_ENCODING" {
+        return cf_user_text_encoding(value);
     }
     const SET: [&str; 22] = [
         "CARGO",
@@ -1090,6 +1101,44 @@ fn allowed_in_a_build(name: &str) -> bool {
         "LD_LIBRARY_PATH",
     ];
     SET.contains(&name) || name.starts_with("CARGO_") || name.starts_with("DEP_")
+}
+
+/// The caller's `__CF_USER_TEXT_ENCODING` in [`a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes_only_its_own`]:
+/// well formed, so no tool of the caller's misreads it, and naming a user id that is not this
+/// process's.
+const PLANTED_CF_USER_TEXT_ENCODING: &str = "0xFFFFE:0x0:0x0";
+
+/// A value as the probe's build script records it (`{value:?}`), its quotes taken off; a value
+/// with an escape in it stays as recorded.
+fn unquoted(value: &str) -> String {
+    value
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+        .filter(|inner| !inner.contains('\\'))
+        .unwrap_or(value)
+        .to_owned()
+}
+
+/// Whether `value` is the `__CF_USER_TEXT_ENCODING` CoreFoundation writes for this process's
+/// user: `0x<uid>:<encoding>:<region>`, the user id in hexadecimal, the other two numbers.
+fn cf_user_text_encoding(value: &str) -> bool {
+    let uid = Command::new("id").arg("-u").output().expect("id runs");
+    let uid: u32 = String::from_utf8_lossy(&uid.stdout)
+        .trim()
+        .parse()
+        .expect("id -u prints a user id");
+    let fields: Vec<&str> = value.split(':').collect();
+    let number = |field: &str| {
+        let digits = field.strip_prefix("0x").unwrap_or(field);
+        !digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit())
+    };
+    fields.len() == 3
+        && fields[0]
+            .strip_prefix("0x")
+            .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+            == Some(uid)
+        && number(fields[1])
+        && number(fields[2])
 }
 
 /// story:check-finding-builds-confined: the build of the revision under check runs confined.
@@ -1149,6 +1198,7 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
             ("HOME", home.to_str().expect("UTF-8")),
             ("CHECK_FINDING_PLANTED", "PLANTED-CREDENTIAL"),
             ("GITHUB_TOKEN", "PLANTED-CREDENTIAL"),
+            ("__CF_USER_TEXT_ENCODING", PLANTED_CF_USER_TEXT_ENCODING),
             ("CARGO_TARGET_DIR", shared.to_str().expect("UTF-8")),
         ],
         &home.join(".secret"),
@@ -1221,7 +1271,7 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
     );
     let outside: Vec<_> = environment
         .iter()
-        .filter(|(name, _)| !allowed_in_a_build(name))
+        .filter(|(name, value)| !allowed_in_a_build(name, &unquoted(value)))
         .map(|(name, _)| *name)
         .collect();
     assert!(

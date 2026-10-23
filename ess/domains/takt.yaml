@@ -508,9 +508,9 @@ types:
   # read from: crates/takt/src/run.rs:9136-9142
   # read from: crates/takt/src/run.rs:10487-10497
   # read from: crates/takt/src/validator.rs:88-96
-  # read from: crates/takt/src/improvement.rs:1115-1119
-  # read from: crates/takt/src/improvement.rs:1651-1655
-  # read from: crates/takt/src/improvement.rs:1863-1867
+  # read from: crates/takt/src/improvement.rs:1117-1121
+  # read from: crates/takt/src/improvement.rs:1653-1657
+  # read from: crates/takt/src/improvement.rs:1865-1869
   # read from: crates/takt/src/run.rs:130-144
   # read from: crates/takt/src/run.rs:160
   # read from: crates/takt/src/run.rs:9144-9152
@@ -1947,7 +1947,7 @@ types:
   # read from: crates/takt/src/promotion.rs:3364-3371
   # read from: crates/takt/src/scorecard.rs:925-948
   # read from: crates/takt/src/scorecard.rs:1482-1483
-  # read from: crates/takt/src/improvement.rs:966-971
+  # read from: crates/takt/src/improvement.rs:968-973
   - name: takt.work.Comparison
     kind: enum
     variants: [no_regression, regression]
@@ -2029,7 +2029,7 @@ types:
   # crash, a flag rejected, a command not found) or the predicate's `exit` without its `output`,
   # which makes no claim true.
   # read from: protocols/self-improvement/1.yaml:45-50
-  # read from: scripts/check-finding:865-883
+  # read from: scripts/check-finding:870-888
   - name: takt.work.ScenarioResult
     kind: enum
     variants: [reproduced, not_reproduced, error]
@@ -2155,7 +2155,7 @@ types:
   # file; `takt approve` takes the grant, and `candidate.merge_judge_surface` records nothing
   # on any other (story:self-improvement-protocol, part 2, correction 2).
   # read from: crates/takt/src/validator.rs:3241-3248
-  # read from: crates/takt/src/improvement.rs:1305-1311
+  # read from: crates/takt/src/improvement.rs:1307-1313
   # A turn's judge-surface grant authorises only a merge made after it: `takt approve` records
   # the mainline's tip with the grant, read once the grant's instant is taken through the forge
   # the turn recorded when it opened (`Case.forge`), and `candidate.merge_judge_surface`
@@ -2168,9 +2168,9 @@ types:
   # ancestor of it), records nothing either. `candidate.merge` shares the validator and
   # is not held to it. Decided by the planner
   # (story:a-judge-surface-candidate-merges-after-its-grant, 2026-10-19).
-  # read from: crates/takt/src/improvement.rs:1352-1364
-  # read from: crates/takt/src/improvement.rs:1422-1431
-  # read from: crates/takt/src/improvement.rs:1555-1556
+  # read from: crates/takt/src/improvement.rs:1354-1366
+  # read from: crates/takt/src/improvement.rs:1424-1433
+  # read from: crates/takt/src/improvement.rs:1557-1558
   # read from: crates/takt/src/case.rs:1136-1141
   - name: takt.work.Approver
     kind: union
@@ -2800,7 +2800,7 @@ entities:
       # read from: protocols/self-improvement/1.yaml:28-32
       # read from: .engineering/planning/story/self-improvement-protocol.md:64
       # read from: crates/takt/src/case.rs:3509-3532
-      # read from: crates/takt/src/improvement.rs:1135-1144
+      # read from: crates/takt/src/improvement.rs:1137-1146
       # read from: crates/takt/src/case.rs:3452-3473
       - name: finding
         type: Optional<takt.work.FindingKey>
@@ -2811,7 +2811,7 @@ entities:
       # other protocol (story:self-improvement-protocol).
       # read from: protocols/self-improvement/1.yaml:24-26
       # read from: crates/takt/src/case.rs:2954-3045
-      # read from: crates/takt/src/improvement.rs:86-99
+      # read from: crates/takt/src/improvement.rs:88-101
       - name: independence
         type: Map<takt.work.ProducerName, List<String>>
       # The sha256 of the binary that judges an improvement turn, the promoted one that opened it,
@@ -2846,7 +2846,7 @@ entities:
       # its canonical path is the recorded root, and refused naming both roots when it is not; a
       # turn that recorded none, or a case under another protocol, refuses any.
       # read from: crates/takt/src/case.rs:3244-3250
-      # read from: crates/takt/src/improvement.rs:1788-1796
+      # read from: crates/takt/src/improvement.rs:1790-1798
       # read from: crates/takt-cli/src/main.rs:2332-2335
       - name: install_root
         type: Optional<String>
@@ -2861,7 +2861,7 @@ entities:
       # read from: crates/takt/src/case.rs:3269-3274
       # read from: crates/takt/src/case.rs:3040-3041
       # read from: crates/takt/src/case.rs:3613
-      # read from: crates/takt/src/improvement.rs:1154-1160
+      # read from: crates/takt/src/improvement.rs:1156-1162
       # read from: crates/takt/src/case.rs:3299-3308
       - name: forge
         type: Optional<String>
@@ -3913,12 +3913,12 @@ entities:
   # read from: crates/takt/src/validator.rs:3675-3687
   # read from: crates/takt/src/forge.rs:588-601
   # read from: crates/takt/src/confinement.rs:325-327
-  # read from: crates/takt/src/improvement.rs:519-527
-  # read from: crates/takt/src/improvement.rs:670-676
-  # read from: crates/takt/src/improvement.rs:849-859
+  # read from: crates/takt/src/improvement.rs:521-529
+  # read from: crates/takt/src/improvement.rs:672-678
+  # read from: crates/takt/src/improvement.rs:851-861
   # read from: crates/takt/src/validator.rs:3690-3708
-  # read from: crates/takt/src/improvement.rs:332-406
-  # read from: crates/takt/src/improvement.rs:410-479
+  # read from: crates/takt/src/improvement.rs:334-408
+  # read from: crates/takt/src/improvement.rs:412-481
   # read from: crates/takt/src/forge.rs:613-631
   # read from: crates/takt/src/validator.rs:565-568
   # read from: crates/takt/src/validator.rs:633-644
@@ -3929,7 +3929,7 @@ entities:
   # read from: crates/takt/src/validator.rs:536-548
   # read from: crates/takt/src/validator.rs:1089-1092
   # read from: crates/takt/src/validator.rs:487-518
-  # read from: crates/takt/src/improvement.rs:1555-1556
+  # read from: crates/takt/src/improvement.rs:1557-1558
   # read from: crates/takt/src/validator.rs:1079-1087
   # read from: crates/takt/src/validator.rs:1214-1243
   # read from: crates/takt/src/validator.rs:1527-1531
@@ -4607,11 +4607,11 @@ entities:
   # read from: scripts/file-finding:175
   # read from: scripts/file-finding:322
   # read from: scripts/check-finding:300-752
-  # read from: scripts/check-finding:824-853
+  # read from: scripts/check-finding:829-858
   # read from: scripts/check-finding:548-574
   # read from: scripts/check-finding:246-248
   # read from: scripts/check-finding:410-412
-  # read from: scripts/check-finding:782-802
+  # read from: scripts/check-finding:787-807
   # One predicate on one scenario or one repository: a body with a second `expected_before`
   # block, a block that gives a key twice, or one that gives both `scenario` and `repository`, or
   # neither, is malformed and nothing is filed. `seed` and `test` go with `repository` only: a
@@ -4820,7 +4820,7 @@ entities:
   # changed, else `non_judge`; a given `surface` that disagrees is refused, naming the first
   # such path (story:self-improvement-protocol S5, 2026-10-19).
   # read from: protocols/self-improvement/1.yaml:18-22
-  # read from: crates/takt/src/improvement.rs:1241-1251
+  # read from: crates/takt/src/improvement.rs:1243-1253
   # read from: .engineering/planning/design/recursive-self-improvement.md:112-113
   # read from: .engineering/planning/story/judge-guard.md:87
   # read from: .engineering/planning/story/judge-guard.md:122

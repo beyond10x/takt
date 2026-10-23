@@ -778,6 +778,11 @@ if [[ -n $darwin ]]; then
     r_takt=$(real_path "$takt")
     seen=("$r_clone" "$r_home")
     [[ ! -d $sources ]] || seen+=("$(real_path "$sources")")
+    # The command reaches the binary, the clone and its home by their real paths: a link on the
+    # way to the cache (an operator's `<cache>/takt` to another directory) lies under no path the
+    # profile lets it read, so `$TAKT` named through it could not be run.
+    environment=(PATH="$PATH" HOME="$r_home" LANG="${LANG:-C.UTF-8}" TAKT="$r_takt" SCENARIO="$r_clone")
+    [[ -z $test_command ]] || environment+=(TEST="$test_command")
     sb_reset
     sb_rule '(deny network*)'
     sb_rule '(deny file-write*)'

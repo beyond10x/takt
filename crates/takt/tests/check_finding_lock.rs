@@ -2,9 +2,10 @@
 //! time per cache directory, under an advisory `flock` on `takt/check-finding/lock` there, and
 //! says so when it waits; it refuses before building when the file system of that directory has
 //! less free space than `CHECK_FINDING_MIN_FREE_GIB` (20 GiB by default), naming both; and a run
-//! killed while it holds the lock leaves none behind. Nothing is built: `bwrap` on `PATH` is a
-//! stand-in that records the start and the end of the build it was asked for and fails it, and
-//! rustup's home is a stand-in toolchain, so every check ends `takt does not build`, exit 1.
+//! killed while it holds the lock leaves none behind. Nothing is built: the confiner on `PATH`
+//! (`bwrap`, on macOS `sandbox-exec`) is a stand-in that records the start and the end of the
+//! build it was asked for and fails it, and rustup's home is a stand-in toolchain, so every check
+//! ends `takt does not build`, exit 1.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -14,13 +15,28 @@ use std::time::{Duration, Instant};
 
 const CHECK_FINDING: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/check-finding");
 
-/// The stand-in for bubblewrap: records `start <name> <pid>`, sleeps `STANDIN_SLEEP` seconds,
-/// records `end <name>` and fails the build.
-const STANDIN_BWRAP: &str = "#!/bin/sh\n\
-printf 'start %s %s\\n' \"$STANDIN_NAME\" \"$$\" >> \"$STANDIN_LOG\"\n\
-sleep \"${STANDIN_SLEEP:-0}\"\n\
-printf 'end %s\\n' \"$STANDIN_NAME\" >> \"$STANDIN_LOG\"\n\
-exit 1\n";
+/// The confiner `check-finding` builds under: bubblewrap, and on macOS Seatbelt's `sandbox-exec`.
+const CONFINER: &str = if cfg!(target_os = "macos") {
+    "sandbox-exec"
+} else {
+    "bwrap"
+};
+
+/// The stand-in for the confiner of the build named `name`: records `start <name> <pid>` in
+/// `log`, sleeps `sleep` seconds, records `end <name>` and fails the build. What it records is
+/// written into the script, not read from the environment: on macOS the check clears the
+/// environment before it starts the confiner (`env -i`), as bubblewrap's `--clearenv` does only
+/// after it started.
+fn standin(name: &str, sleep: u32, log: &Path) -> String {
+    let log = log.to_str().expect("UTF-8").replace('\'', "'\\''");
+    format!(
+        "#!/bin/sh\n\
+         printf 'start %s %s\\n' '{name}' \"$$\" >> '{log}'\n\
+         sleep {sleep}\n\
+         printf 'end %s\\n' '{name}' >> '{log}'\n\
+         exit 1\n"
+    )
+}
 
 /// The finding the checks run: its predicate in the repository form, never reached.
 const FINDING: &str = "# A finding\n\nText.\n\n```expected_before\n\
@@ -73,8 +89,8 @@ fn shown(output: &Output) -> String {
     )
 }
 
-/// A repository holding the finding `story:lock-probe`, its revision, a stand-in `bwrap` on a
-/// directory put first on `PATH`, a stand-in rustup home and the cache the checks share.
+/// A repository holding the finding `story:lock-probe`, its revision, a stand-in rustup home and
+/// the cache the checks share; each check puts its own stand-in confiner first on `PATH`.
 struct World {
     dir: Scratch,
     repo: PathBuf,
@@ -98,7 +114,6 @@ fn world(name: &str) -> World {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "seed"]);
     let sha = git(&repo, &["rev-parse", "HEAD"]);
-    executable(&dir.0.join("bin/bwrap"), STANDIN_BWRAP);
     let toolchain = dir
         .0
         .join("rustup/toolchains/stable-x86_64-unknown-linux-gnu");
@@ -136,9 +151,11 @@ impl World {
     /// `check-finding` on the finding at the revision, its build the stand-in named `name`
     /// sleeping `sleep` seconds, `env` added.
     fn check(&self, name: &str, sleep: u32, env: &[(&str, &str)]) -> Command {
+        let bin = self.dir.0.join(format!("bin-{name}"));
+        executable(&bin.join(CONFINER), &standin(name, sleep, &self.log()));
         let path = format!(
             "{}:{}",
-            self.dir.0.join("bin").display(),
+            bin.display(),
             std::env::var("PATH").expect("a PATH")
         );
         let mut command = Command::new(CHECK_FINDING);
@@ -149,9 +166,6 @@ impl World {
             .env("PATH", path)
             .env("XDG_CACHE_HOME", self.cache())
             .env("RUSTUP_HOME", self.dir.0.join("rustup"))
-            .env("STANDIN_LOG", self.log())
-            .env("STANDIN_NAME", name)
-            .env("STANDIN_SLEEP", sleep.to_string())
             .env("CHECK_FINDING_MIN_FREE_GIB", "0")
             .envs(env.iter().copied())
             .stdin(Stdio::null())
