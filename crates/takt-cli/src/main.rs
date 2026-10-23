@@ -635,6 +635,8 @@ struct LoopArgs {
     /// The harness's model, when it takes one.
     #[arg(long)]
     model: Option<String>,
+    #[command(flatten)]
+    endpoint: EndpointArgs,
     /// The approval gate the harness may request to end the run. Not given, the case's
     /// protocol's first action that requires a capability and that the case's inputs do not
     /// block for good: `repository.merge` for a delivery or a software change,
@@ -1385,36 +1387,120 @@ impl LoopArgs {
 /// The harness `--harness` names, each through the metaharness session executor, proposing from
 /// a scratch copy what takt's edit effect applies, with `--model`: `claude`, Claude Code on the
 /// user's claude.ai login; `codex`, Codex on the user's ChatGPT login (`~/.codex/auth.json`);
-/// `harness`, b10x-harness pointed at the Anthropic Messages API on the user's claude.ai
-/// subscription token (`~/.claude/.credentials.json`), the endpoint b10x-harness's own `claude`
-/// provider names; or `none`.
+/// `harness`, b10x-harness pointed at the endpoint the `--endpoint-*` flags and
+/// `--endpoint-file` give ([`EndpointArgs`]), by default the Anthropic Messages API on the
+/// user's claude.ai subscription token (`~/.claude/.credentials.json`), the endpoint
+/// b10x-harness's own `claude` provider names; or `none`. An `--endpoint-*` flag given with
+/// another harness is refused.
 fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
     let session = |kind| {
         let mut session = SessionHarness::of(kind);
         session.model.clone_from(&looping.model);
         session
     };
+    if looping.harness != "harness"
+        && let Some(flag) = looping.endpoint.given()
+    {
+        return Err(anyhow!(
+            "{flag} points --harness harness at its endpoint; --harness {} takes none",
+            looping.harness
+        ));
+    }
     match looping.harness.as_str() {
         "claude" => Ok(Box::new(session(Kind::Claude))),
         "codex" => Ok(Box::new(session(Kind::Codex))),
         "harness" => {
-            let home = std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .ok_or_else(|| anyhow!("--harness harness reads its token under HOME; none set"))?;
             let mut session = session(Kind::B10x);
-            session.endpoint = Some(takt::harness::Endpoint {
-                base_url: "https://api.anthropic.com/v1".to_owned(),
-                wire: "anthropic-messages".to_owned(),
-                model: "claude-opus-5".to_owned(),
-                token_file: home.join(".claude/.credentials.json"),
-                token_pointer: Some("/claudeAiOauth/accessToken".to_owned()),
-            });
+            session.endpoint = Some(looping.endpoint.session_endpoint()?);
             Ok(Box::new(session))
         }
         "none" => Ok(Box::new(NoHarness)),
         other => Err(anyhow!(
             "no harness `{other}`: claude, codex, harness or none"
         )),
+    }
+}
+
+/// Where `--harness harness` points b10x-harness, read only under it: each field a flag's,
+/// else `--endpoint-file`'s, else the default. A credential is named, never given: a token
+/// file's path or a secret's name.
+#[derive(clap::Args)]
+struct EndpointArgs {
+    /// `--harness harness`: the endpoint's base URL, its origin and API prefix. Not given,
+    /// `--endpoint-file`'s `base_url`, else `https://api.anthropic.com/v1`.
+    #[arg(long, value_name = "URL")]
+    endpoint_base_url: Option<String>,
+    /// `--harness harness`: the model API the endpoint speaks, `anthropic-messages` or
+    /// `openai-responses`. Not given, `--endpoint-file`'s `wire`, else `anthropic-messages`.
+    #[arg(long, value_name = "WIRE")]
+    endpoint_wire: Option<String>,
+    /// `--harness harness`: the model the endpoint serves; `--model` wins over it. Not given,
+    /// `--endpoint-file`'s `model`, else `claude-opus-5`.
+    #[arg(long, value_name = "MODEL")]
+    endpoint_model: Option<String>,
+    /// `--harness harness`: the file holding a subscription token, which b10x-harness reads;
+    /// not with --endpoint-secret. Not given, `--endpoint-file`'s credential, else
+    /// `~/.claude/.credentials.json` at `/claudeAiOauth/accessToken`. A file that is missing,
+    /// or whose pointer resolves to no token, is refused before the case opens, exit 1.
+    #[arg(long, value_name = "PATH")]
+    endpoint_token_file: Option<PathBuf>,
+    /// `--harness harness`: the JSON pointer to the token inside --endpoint-token-file, given
+    /// only with it; not given, the whole file is the token.
+    #[arg(long, value_name = "JSON POINTER")]
+    endpoint_token_pointer: Option<String>,
+    /// `--harness harness`: the API key as a secret's name in the owner's secrets store,
+    /// `<namespace>/<name>`, which the harness resolves and takt never reads; not with
+    /// --endpoint-token-file. Refused before the case opens while the session executor takt is
+    /// built with (loom 0.39.0) carries no secret's name.
+    #[arg(long, value_name = "NAMESPACE/NAME")]
+    endpoint_secret: Option<String>,
+    /// `--harness harness`: a TOML file of the same fields, each under a flag: `base_url`,
+    /// `wire`, `model`, and a `[credential]` table of `token_file` with an optional
+    /// `token_pointer` (a relative path read beside the file), or of `secret`.
+    #[arg(long, value_name = "PATH")]
+    endpoint_file: Option<PathBuf>,
+}
+
+impl EndpointArgs {
+    /// The first `--endpoint-*` flag given, by its name.
+    fn given(&self) -> Option<&'static str> {
+        [
+            ("--endpoint-base-url", self.endpoint_base_url.is_some()),
+            ("--endpoint-wire", self.endpoint_wire.is_some()),
+            ("--endpoint-model", self.endpoint_model.is_some()),
+            ("--endpoint-token-file", self.endpoint_token_file.is_some()),
+            (
+                "--endpoint-token-pointer",
+                self.endpoint_token_pointer.is_some(),
+            ),
+            ("--endpoint-secret", self.endpoint_secret.is_some()),
+            ("--endpoint-file", self.endpoint_file.is_some()),
+        ]
+        .into_iter()
+        .find_map(|(flag, given)| given.then_some(flag))
+    }
+
+    /// The endpoint the session is built with: the flags over the file over the default, a
+    /// token file checked to hold a token where its pointer points, before any case opens.
+    fn session_endpoint(&self) -> Result<takt::harness::Endpoint> {
+        use takt::harness::{EndpointConfig, EndpointFields};
+        let flags = EndpointFields {
+            base_url: self.endpoint_base_url.clone(),
+            wire: self.endpoint_wire.clone(),
+            model: self.endpoint_model.clone(),
+            token_file: self.endpoint_token_file.clone(),
+            token_pointer: self.endpoint_token_pointer.clone(),
+            secret: self.endpoint_secret.clone(),
+        };
+        let file = self
+            .endpoint_file
+            .as_deref()
+            .map(EndpointFields::read)
+            .transpose()?;
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let config = EndpointConfig::of(&flags, file.as_ref(), home.as_deref())?;
+        config.check_token()?;
+        config.session_endpoint()
     }
 }
 

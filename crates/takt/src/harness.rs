@@ -1972,6 +1972,312 @@ pub fn is_test_path(path: &str) -> bool {
         || stem.ends_with(".spec")
 }
 
+/// The session executor takt is built with, as a refusal of a secret's name names it: it hands
+/// b10x-harness a subscription token file and no secret's name.
+pub const SESSION_EXECUTOR: &str = "b10x-loom-session-executor 0.39.0 (loom 0.39.0)";
+
+/// The wires a `--harness harness` endpoint may speak, as b10x-harness names them.
+pub const ENDPOINT_WIRES: [&str; 2] = ["anthropic-messages", "openai-responses"];
+
+/// Where the credential of a `--harness harness` endpoint is, by reference only: takt reads a
+/// subscription token file only to check, before the first step, that a token is where its
+/// pointer points, and never reads a secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Credential {
+    /// A subscription token in a file, at a JSON pointer inside it, or the whole file without
+    /// one; b10x-harness's loop reads the file itself.
+    SubscriptionFile {
+        path: std::path::PathBuf,
+        pointer: Option<String>,
+    },
+    /// An API key held in the owner's secrets store under a namespace and a name, written
+    /// `<namespace>/<name>`; the harness resolves it, and takt opens no store.
+    Secret { namespace: String, name: String },
+}
+
+impl Credential {
+    /// The secret `<namespace>/<name>`: each part non-empty, with no `/`, no white space and no
+    /// control character. A refusal does not repeat what was given, which may be a key typed in
+    /// the wrong place.
+    pub fn secret(given: &str) -> Result<Self> {
+        let plain = |part: &str| {
+            !part.is_empty()
+                && !part
+                    .chars()
+                    .any(|c| c == '/' || c.is_whitespace() || c.is_control())
+        };
+        match given.split_once('/') {
+            Some((namespace, name)) if plain(namespace) && plain(name) => Ok(Self::Secret {
+                namespace: namespace.to_owned(),
+                name: name.to_owned(),
+            }),
+            _ => bail!(
+                "the endpoint's secret is no secret's name: one is `<namespace>/<name>`, each part non-empty, with no `/`, no white space and no control character"
+            ),
+        }
+    }
+
+    /// The credential by reference: the token file and its pointer, or the secret's name; never
+    /// a token.
+    #[must_use]
+    pub fn reference(&self) -> String {
+        match self {
+            Self::SubscriptionFile {
+                path,
+                pointer: Some(pointer),
+            } => format!("subscription token file {} at {pointer}", path.display()),
+            Self::SubscriptionFile {
+                path,
+                pointer: None,
+            } => format!("subscription token file {}", path.display()),
+            Self::Secret { namespace, name } => format!("secret {namespace}/{name}"),
+        }
+    }
+}
+
+/// What the `--endpoint-*` flags or an endpoint file give a `--harness harness` endpoint, each
+/// field absent when not given.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EndpointFields {
+    pub base_url: Option<String>,
+    pub wire: Option<String>,
+    pub model: Option<String>,
+    pub token_file: Option<std::path::PathBuf>,
+    pub token_pointer: Option<String>,
+    pub secret: Option<String>,
+}
+
+impl EndpointFields {
+    /// The endpoint file at `path`: TOML holding `base_url`, `wire` and `model`, each a string,
+    /// and a `[credential]` table of `token_file` with an optional `token_pointer`, or of
+    /// `secret` (`<namespace>/<name>`); a relative `token_file` is read beside the file. Any
+    /// other key, or a table naming both kinds or neither, is refused naming the path and, for
+    /// a parse, the line, never a value written there.
+    pub fn read(path: &Path) -> Result<Self> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct File {
+            base_url: Option<String>,
+            wire: Option<String>,
+            model: Option<String>,
+            credential: Option<Table>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Table {
+            token_file: Option<std::path::PathBuf>,
+            token_pointer: Option<String>,
+            secret: Option<String>,
+        }
+        const SHAPE: &str = "an endpoint file holds `base_url`, `wire` and `model`, each a string, and a `[credential]` table of `token_file` with an optional `token_pointer`, or of `secret`";
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("the endpoint file {}", path.display()))?;
+        let file: File = toml::from_str(&text).map_err(|error| {
+            match error
+                .span()
+                .and_then(|span| text.get(..span.start))
+                .map(|before| before.matches('\n').count() + 1)
+            {
+                Some(line) => anyhow!(
+                    "the endpoint file {} is refused at line {line}: {SHAPE}",
+                    path.display()
+                ),
+                None => anyhow!("the endpoint file {} is refused: {SHAPE}", path.display()),
+            }
+        })?;
+        let given = file.credential.is_some();
+        let table = file.credential.unwrap_or(Table {
+            token_file: None,
+            token_pointer: None,
+            secret: None,
+        });
+        match (&table.token_file, &table.token_pointer, &table.secret) {
+            (Some(_), _, None) | (None, None, Some(_)) => {}
+            (None, None, None) if !given => {}
+            _ => bail!(
+                "the endpoint file {} is refused: its `[credential]` names `token_file` with an optional `token_pointer`, or `secret`: one of them, not both and not a `token_pointer` alone",
+                path.display()
+            ),
+        }
+        let beside = |token: std::path::PathBuf| match path.parent() {
+            Some(dir) if token.is_relative() => dir.join(token),
+            _ => token,
+        };
+        Ok(Self {
+            base_url: file.base_url,
+            wire: file.wire,
+            model: file.model,
+            token_file: table.token_file.map(beside),
+            token_pointer: table.token_pointer,
+            secret: table.secret,
+        })
+    }
+
+    /// The credential these fields name, when they name one.
+    fn credential(&self) -> Option<Result<Credential>> {
+        match (&self.token_file, &self.secret) {
+            (Some(path), _) => Some(Ok(Credential::SubscriptionFile {
+                path: path.clone(),
+                pointer: self.token_pointer.clone(),
+            })),
+            (None, Some(secret)) => Some(Credential::secret(secret)),
+            (None, None) => None,
+        }
+    }
+}
+
+/// The model endpoint `--harness harness` points b10x-harness at: its base URL, its wire, its
+/// model and its credential by reference ([`Credential`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndpointConfig {
+    pub base_url: String,
+    pub wire: String,
+    pub model: String,
+    pub credential: Credential,
+}
+
+impl EndpointConfig {
+    /// The default base URL: the Anthropic Messages API.
+    pub const BASE_URL: &str = "https://api.anthropic.com/v1";
+    /// The default wire.
+    pub const WIRE: &str = "anthropic-messages";
+    /// The default model.
+    pub const MODEL: &str = "claude-opus-5";
+    /// The default token file, under HOME: the user's claude.ai login.
+    pub const TOKEN_FILE: &str = ".claude/.credentials.json";
+    /// The default token file's pointer.
+    pub const TOKEN_POINTER: &str = "/claudeAiOauth/accessToken";
+
+    /// The endpoint `flags` and `file` give, each field the flag's, else the file's, else the
+    /// default: b10x-harness's own `claude` provider on the user's claude.ai subscription token
+    /// under `home`. The credential is taken whole from one source: a token file with its
+    /// pointer, or a secret's name. Refused: a token file and a secret both given by flag, a
+    /// pointer flag without a token file flag, a wire b10x-harness does not speak, a base URL
+    /// that is no http(s) URL, an empty model, the default credential with no HOME.
+    pub fn of(
+        flags: &EndpointFields,
+        file: Option<&EndpointFields>,
+        home: Option<&Path>,
+    ) -> Result<Self> {
+        if flags.token_file.is_some() && flags.secret.is_some() {
+            bail!(
+                "--endpoint-token-file and --endpoint-secret each name the endpoint's credential; give one"
+            );
+        }
+        if flags.token_pointer.is_some() && flags.token_file.is_none() {
+            bail!(
+                "--endpoint-token-pointer points into the token file --endpoint-token-file names, and none is given; give both"
+            );
+        }
+        let none = EndpointFields::default();
+        let file = file.unwrap_or(&none);
+        let pick = |flag: &Option<String>, given: &Option<String>, default: &str| {
+            flag.clone()
+                .or_else(|| given.clone())
+                .unwrap_or_else(|| default.to_owned())
+        };
+        let base_url = pick(&flags.base_url, &file.base_url, Self::BASE_URL);
+        let wire = pick(&flags.wire, &file.wire, Self::WIRE);
+        let model = pick(&flags.model, &file.model, Self::MODEL);
+        if !ENDPOINT_WIRES.contains(&wire.as_str()) {
+            bail!(
+                "the endpoint's wire `{wire}` is none b10x-harness speaks: {}",
+                ENDPOINT_WIRES.join(" or ")
+            );
+        }
+        if !(base_url.starts_with("https://") || base_url.starts_with("http://"))
+            || base_url.chars().any(char::is_whitespace)
+        {
+            bail!("the endpoint's base URL `{base_url}` is no http(s) URL");
+        }
+        if model.is_empty() || model.chars().any(char::is_whitespace) {
+            bail!("the endpoint's model `{model}` is no model id");
+        }
+        let credential = match flags.credential().or_else(|| file.credential()) {
+            Some(credential) => credential?,
+            None => {
+                let home = home.ok_or_else(|| {
+                    anyhow!(
+                        "the endpoint's credential is by default the subscription token file $HOME/{}, and HOME is not set; give --endpoint-token-file or --endpoint-secret",
+                        Self::TOKEN_FILE
+                    )
+                })?;
+                Credential::SubscriptionFile {
+                    path: home.join(Self::TOKEN_FILE),
+                    pointer: Some(Self::TOKEN_POINTER.to_owned()),
+                }
+            }
+        };
+        Ok(Self {
+            base_url,
+            wire,
+            model,
+            credential,
+        })
+    }
+
+    /// Checks, before the first step, that a subscription token file holds a token where its
+    /// pointer points: the file is read, as JSON when a pointer is given, and the pointer
+    /// resolves to a non-empty string; without a pointer the file is not empty. A refusal
+    /// names the path and the pointer and nothing of the file's content. A secret's name is
+    /// checked by no read: takt opens no secrets store.
+    pub fn check_token(&self) -> Result<()> {
+        let Credential::SubscriptionFile { path, pointer } = &self.credential else {
+            return Ok(());
+        };
+        let at = pointer.as_deref().map_or_else(
+            || "no pointer: the whole file is the token".to_owned(),
+            |pointer| format!("pointer {pointer}"),
+        );
+        let bytes = std::fs::read(path).map_err(|error| {
+            anyhow!(
+                "the endpoint's subscription token file {} ({at}) cannot be read: {error}; nothing was started",
+                path.display()
+            )
+        })?;
+        let found = match pointer {
+            Some(pointer) => serde_json::from_slice::<serde_json::Value>(&bytes)
+                .ok()
+                .and_then(|json| {
+                    json.pointer(pointer)
+                        .and_then(serde_json::Value::as_str)
+                        .map(|token| !token.trim().is_empty())
+                })
+                .unwrap_or(false),
+            None => !String::from_utf8_lossy(&bytes).trim().is_empty(),
+        };
+        if !found {
+            bail!(
+                "the endpoint's subscription token file {} ({at}) holds no token there: no non-empty string at the pointer, the file not JSON, or the file empty; nothing was started",
+                path.display()
+            );
+        }
+        Ok(())
+    }
+
+    /// The endpoint the session is built with ([`SessionHarness::endpoint`]): a subscription
+    /// token file maps onto the session executor's token file and pointer. A secret's name is
+    /// refused by name before the first step, in its one arm: the session executor takt is
+    /// built with ([`SESSION_EXECUTOR`]) hands b10x-harness no secret's name.
+    pub fn session_endpoint(&self) -> Result<Endpoint> {
+        match &self.credential {
+            Credential::SubscriptionFile { path, pointer } => Ok(Endpoint {
+                base_url: self.base_url.clone(),
+                wire: self.wire.clone(),
+                model: self.model.clone(),
+                token_file: path.clone(),
+                token_pointer: pointer.clone(),
+            }),
+            Credential::Secret { namespace, name } => Err(anyhow!(
+                "the endpoint {} ({}, {}) names its credential as the secret {namespace}/{name} (namespace {namespace}, name {name}) for the harness to resolve; the session executor takt is built with, {SESSION_EXECUTOR}, hands b10x-harness a subscription token file and no secret's name, so the run is refused before its first step; takt read no secret and opened no store",
+                self.base_url,
+                self.wire,
+                self.model
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3106,5 +3412,490 @@ mod tests {
             prompt.contains("Files in scope, attached: @todo.py\n"),
             "{prompt}"
         );
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// A scratch directory under the temporary directory, removed when dropped.
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
+        let dir = std::env::temp_dir().join(format!("takt-endpoint-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        Scratch(dir)
+    }
+
+    /// The endpoint file `text` written in `dir`, read back as the fields it gives.
+    fn from_file(dir: &Path, text: &str) -> EndpointFields {
+        let path = dir.join("endpoint.toml");
+        std::fs::write(&path, text).expect("an endpoint file");
+        EndpointFields::read(&path).expect("the endpoint file reads")
+    }
+
+    fn home() -> PathBuf {
+        PathBuf::from("/nonexistent-home")
+    }
+
+    fn resolved(flags: &EndpointFields, file: Option<&EndpointFields>) -> EndpointConfig {
+        EndpointConfig::of(flags, file, Some(&home())).expect("the endpoint resolves")
+    }
+
+    /// Acceptance 1: no flag and no file build the endpoint the `harness` arm built before.
+    #[test]
+    fn endpoint_with_nothing_given_is_the_one_built_before() {
+        let built = resolved(&EndpointFields::default(), None)
+            .session_endpoint()
+            .expect("a subscription endpoint maps");
+        let before = Endpoint {
+            base_url: "https://api.anthropic.com/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "claude-opus-5".to_owned(),
+            token_file: home().join(".claude/.credentials.json"),
+            token_pointer: Some("/claudeAiOauth/accessToken".to_owned()),
+        };
+        assert_eq!(built.base_url, before.base_url);
+        assert_eq!(built.wire, before.wire);
+        assert_eq!(built.model, before.model);
+        assert_eq!(built.token_file, before.token_file);
+        assert_eq!(built.token_pointer, before.token_pointer);
+        assert_eq!(built, before);
+    }
+
+    /// Acceptance 1: the default credential lives under HOME; without one it is refused.
+    #[test]
+    fn endpoint_default_credential_without_home_is_refused() {
+        let error = EndpointConfig::of(&EndpointFields::default(), None, None)
+            .expect_err("no HOME, no default token file");
+        let message = format!("{error:#}");
+        assert!(message.contains("HOME"), "{message}");
+    }
+
+    /// Acceptance 2: the base URL by flag, by file, the flag winning.
+    #[test]
+    fn endpoint_base_url_is_set_by_flag_and_by_file_the_flag_winning() {
+        let dir = scratch("base-url");
+        let file = from_file(&dir.0, "base_url = \"https://file.example/v1\"\n");
+        let flags = EndpointFields {
+            base_url: Some("https://flag.example/v1".to_owned()),
+            ..EndpointFields::default()
+        };
+        assert_eq!(
+            resolved(&EndpointFields::default(), Some(&file)).base_url,
+            "https://file.example/v1"
+        );
+        assert_eq!(resolved(&flags, None).base_url, "https://flag.example/v1");
+        assert_eq!(
+            resolved(&flags, Some(&file)).base_url,
+            "https://flag.example/v1"
+        );
+    }
+
+    /// Acceptance 2: the wire by flag, by file, the flag winning; an unknown wire is refused.
+    #[test]
+    fn endpoint_wire_is_set_by_flag_and_by_file_the_flag_winning() {
+        let dir = scratch("wire");
+        let file = from_file(&dir.0, "wire = \"openai-responses\"\n");
+        let flags = EndpointFields {
+            wire: Some("anthropic-messages".to_owned()),
+            ..EndpointFields::default()
+        };
+        assert_eq!(
+            resolved(&EndpointFields::default(), Some(&file)).wire,
+            "openai-responses"
+        );
+        assert_eq!(resolved(&flags, None).wire, "anthropic-messages");
+        assert_eq!(resolved(&flags, Some(&file)).wire, "anthropic-messages");
+        let unknown = EndpointFields {
+            wire: Some("smoke-signals".to_owned()),
+            ..EndpointFields::default()
+        };
+        let message = format!(
+            "{:#}",
+            EndpointConfig::of(&unknown, None, Some(&home())).expect_err("an unknown wire")
+        );
+        assert!(
+            message.contains("smoke-signals")
+                && message.contains("anthropic-messages")
+                && message.contains("openai-responses"),
+            "{message}"
+        );
+    }
+
+    /// Acceptance 2: the model by flag, by file, the flag winning.
+    #[test]
+    fn endpoint_model_is_set_by_flag_and_by_file_the_flag_winning() {
+        let dir = scratch("model");
+        let file = from_file(&dir.0, "model = \"file-model\"\n");
+        let flags = EndpointFields {
+            model: Some("flag-model".to_owned()),
+            ..EndpointFields::default()
+        };
+        assert_eq!(
+            resolved(&EndpointFields::default(), Some(&file)).model,
+            "file-model"
+        );
+        assert_eq!(resolved(&flags, None).model, "flag-model");
+        assert_eq!(resolved(&flags, Some(&file)).model, "flag-model");
+    }
+
+    /// Acceptance 2: the credential by flag, by file, the flag winning, whichever kind each
+    /// names; a relative token file in the file is read beside it.
+    #[test]
+    fn endpoint_credential_is_set_by_flag_and_by_file_the_flag_winning() {
+        let dir = scratch("credential");
+        let file = from_file(
+            &dir.0,
+            "[credential]\ntoken_file = \"token.json\"\ntoken_pointer = \"/a\"\n",
+        );
+        assert_eq!(
+            resolved(&EndpointFields::default(), Some(&file)).credential,
+            Credential::SubscriptionFile {
+                path: dir.0.join("token.json"),
+                pointer: Some("/a".to_owned()),
+            }
+        );
+        let by_flag = EndpointFields {
+            token_file: Some(PathBuf::from("/flag/token.json")),
+            ..EndpointFields::default()
+        };
+        assert_eq!(
+            resolved(&by_flag, None).credential,
+            Credential::SubscriptionFile {
+                path: PathBuf::from("/flag/token.json"),
+                pointer: None,
+            }
+        );
+        assert_eq!(
+            resolved(&by_flag, Some(&file)).credential,
+            Credential::SubscriptionFile {
+                path: PathBuf::from("/flag/token.json"),
+                pointer: None,
+            },
+            "the flag's token file is taken whole, its pointer with it"
+        );
+        let secret_file = from_file(&dir.0, "[credential]\nsecret = \"llm/from-file\"\n");
+        assert_eq!(
+            resolved(&EndpointFields::default(), Some(&secret_file)).credential,
+            Credential::Secret {
+                namespace: "llm".to_owned(),
+                name: "from-file".to_owned(),
+            }
+        );
+        assert_eq!(
+            resolved(&by_flag, Some(&secret_file)).credential,
+            Credential::SubscriptionFile {
+                path: PathBuf::from("/flag/token.json"),
+                pointer: None,
+            }
+        );
+        let secret_flag = EndpointFields {
+            secret: Some("llm/from-flag".to_owned()),
+            ..EndpointFields::default()
+        };
+        assert_eq!(
+            resolved(&secret_flag, Some(&file)).credential,
+            Credential::Secret {
+                namespace: "llm".to_owned(),
+                name: "from-flag".to_owned(),
+            }
+        );
+    }
+
+    /// Two credentials at once, a pointer with no token file, a file naming no credential or
+    /// a key it does not know: each refused.
+    #[test]
+    fn endpoint_credential_given_twice_or_half_is_refused() {
+        let both = EndpointFields {
+            token_file: Some(PathBuf::from("/t.json")),
+            secret: Some("llm/key".to_owned()),
+            ..EndpointFields::default()
+        };
+        let message = format!(
+            "{:#}",
+            EndpointConfig::of(&both, None, Some(&home())).expect_err("two credentials")
+        );
+        assert!(
+            message.contains("--endpoint-token-file") && message.contains("--endpoint-secret"),
+            "{message}"
+        );
+        let lone = EndpointFields {
+            token_pointer: Some("/a".to_owned()),
+            ..EndpointFields::default()
+        };
+        let message = format!(
+            "{:#}",
+            EndpointConfig::of(&lone, None, Some(&home())).expect_err("a lone pointer")
+        );
+        assert!(message.contains("--endpoint-token-pointer"), "{message}");
+        let dir = scratch("half");
+        let path = dir.0.join("endpoint.toml");
+        for text in [
+            "[credential]\ntoken_file = \"t.json\"\nsecret = \"llm/key\"\n",
+            "[credential]\ntoken_pointer = \"/a\"\n",
+            "[credential]\n",
+            "api_key = \"x\"\n",
+            "base_url = 5\n",
+        ] {
+            std::fs::write(&path, text).expect("an endpoint file");
+            let message = format!(
+                "{:#}",
+                EndpointFields::read(&path).expect_err("refused: {text}")
+            );
+            assert!(message.contains(&path.display().to_string()), "{message}");
+        }
+    }
+
+    /// Acceptance 3: the subscription kind maps onto the session's token file and pointer.
+    #[test]
+    fn endpoint_subscription_file_maps_onto_the_session_token_file() {
+        let config = EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "openai-responses".to_owned(),
+            model: "m".to_owned(),
+            credential: Credential::SubscriptionFile {
+                path: PathBuf::from("/t/token.json"),
+                pointer: Some("/x/y".to_owned()),
+            },
+        };
+        assert_eq!(
+            config.session_endpoint().expect("maps"),
+            Endpoint {
+                base_url: "https://b.example/v1".to_owned(),
+                wire: "openai-responses".to_owned(),
+                model: "m".to_owned(),
+                token_file: PathBuf::from("/t/token.json"),
+                token_pointer: Some("/x/y".to_owned()),
+            }
+        );
+    }
+
+    /// Acceptance 3: the secret kind is refused by name: the pinned session executor carries no
+    /// secret's name; the refusal names it, the namespace and the name.
+    #[test]
+    fn endpoint_secret_is_refused_naming_the_session_executor_namespace_and_name() {
+        let config = EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "m".to_owned(),
+            credential: Credential::Secret {
+                namespace: "llm".to_owned(),
+                name: "some-key".to_owned(),
+            },
+        };
+        let message = format!("{:#}", config.session_endpoint().expect_err("refused"));
+        assert!(
+            message.contains(SESSION_EXECUTOR)
+                && message.contains("loom 0.39.0")
+                && message.contains("namespace llm")
+                && message.contains("name some-key"),
+            "{message}"
+        );
+    }
+
+    /// A secret's name is `<namespace>/<name>`, each part non-empty, with no `/` and no white
+    /// space; any other shape is refused naming what was given.
+    #[test]
+    fn endpoint_secret_shape_is_checked() {
+        assert_eq!(
+            Credential::secret("llm/opencode-go-api-key").expect("a secret's name"),
+            Credential::Secret {
+                namespace: "llm".to_owned(),
+                name: "opencode-go-api-key".to_owned(),
+            }
+        );
+        for bad in [
+            "",
+            "llm",
+            "/key",
+            "llm/",
+            "llm/a/b",
+            "l m/key",
+            "llm/ke y",
+            "llm/key\n",
+        ] {
+            assert!(
+                Credential::secret(bad).is_err(),
+                "{bad:?} is no secret's name"
+            );
+        }
+    }
+
+    /// Acceptance 4: with a secret's name the endpoint resolves with no HOME, and the token
+    /// check reads nothing: takt has no secrets store to open.
+    #[test]
+    fn endpoint_secret_needs_no_home_and_reads_nothing() {
+        let flags = EndpointFields {
+            secret: Some("llm/opencode-go-api-key".to_owned()),
+            ..EndpointFields::default()
+        };
+        let config = EndpointConfig::of(&flags, None, None).expect("no HOME needed");
+        config
+            .check_token()
+            .expect("a secret's name is checked by no read");
+        assert_eq!(
+            config.credential.reference(),
+            "secret llm/opencode-go-api-key"
+        );
+    }
+
+    /// Acceptance 5: a token in its file reaches no value takt builds from the endpoint: not
+    /// the configuration, its reference, the session's endpoint, nor a refusal.
+    #[test]
+    fn endpoint_token_never_leaves_its_file() {
+        let dir = scratch("marker");
+        let marker = "MARKER-7f3a1c-not-a-real-token";
+        let token = dir.0.join("token.json");
+        std::fs::write(&token, format!("{{\"a\":{{\"b\":\"{marker}\"}}}}")).expect("token");
+        let flags = EndpointFields {
+            token_file: Some(token.clone()),
+            token_pointer: Some("/a/b".to_owned()),
+            ..EndpointFields::default()
+        };
+        let config = resolved(&flags, None);
+        config.check_token().expect("the pointer resolves");
+        let endpoint = config.session_endpoint().expect("maps");
+        let dangling = EndpointConfig {
+            credential: Credential::SubscriptionFile {
+                path: token.clone(),
+                pointer: Some("/a/c".to_owned()),
+            },
+            ..config.clone()
+        };
+        let refusal = format!("{:#}", dangling.check_token().expect_err("dangling"));
+        for seen in [
+            format!("{config:?}"),
+            config.credential.reference(),
+            format!("{endpoint:?}"),
+            refusal,
+        ] {
+            assert!(!seen.contains(marker), "the token leaked: {seen}");
+        }
+        assert!(
+            config
+                .credential
+                .reference()
+                .contains(&token.display().to_string())
+        );
+    }
+
+    /// Acceptance 6: a missing token file fails naming its path and its pointer.
+    #[test]
+    fn endpoint_token_file_missing_is_refused_naming_path_and_pointer() {
+        let dir = scratch("missing");
+        let path = dir.0.join("absent.json");
+        let config = EndpointConfig {
+            credential: Credential::SubscriptionFile {
+                path: path.clone(),
+                pointer: Some("/claudeAiOauth/accessToken".to_owned()),
+            },
+            ..resolved(&EndpointFields::default(), None)
+        };
+        let message = format!("{:#}", config.check_token().expect_err("missing"));
+        assert!(
+            message.contains(&path.display().to_string())
+                && message.contains("/claudeAiOauth/accessToken"),
+            "{message}"
+        );
+    }
+
+    /// Acceptance 6: a pointer that resolves to nothing, or to no non-empty string, fails
+    /// naming the path and the pointer; so does a pointer into a file that is not JSON.
+    #[test]
+    fn endpoint_token_pointer_resolving_to_nothing_is_refused_naming_path_and_pointer() {
+        let dir = scratch("dangling");
+        let path = dir.0.join("token.json");
+        for (text, pointer) in [
+            ("{\"a\":{}}", "/a/b"),
+            ("{\"a\":{\"b\":\"\"}}", "/a/b"),
+            ("{\"a\":{\"b\":7}}", "/a/b"),
+            ("not json", "/a/b"),
+        ] {
+            std::fs::write(&path, text).expect("a token file");
+            let config = EndpointConfig {
+                credential: Credential::SubscriptionFile {
+                    path: path.clone(),
+                    pointer: Some(pointer.to_owned()),
+                },
+                ..resolved(&EndpointFields::default(), None)
+            };
+            let message = format!("{:#}", config.check_token().expect_err("dangling"));
+            assert!(
+                message.contains(&path.display().to_string()) && message.contains(pointer),
+                "{text}: {message}"
+            );
+        }
+        std::fs::write(&path, "").expect("an empty token file");
+        let whole = EndpointConfig {
+            credential: Credential::SubscriptionFile {
+                path: path.clone(),
+                pointer: None,
+            },
+            ..resolved(&EndpointFields::default(), None)
+        };
+        let message = format!("{:#}", whole.check_token().expect_err("empty"));
+        assert!(message.contains(&path.display().to_string()), "{message}");
+    }
+
+    /// Acceptance 7: the trial arm's two endpoints, each with the secret `llm` /
+    /// `opencode-go-api-key`, read from a file into what takt would hand the harness; the
+    /// hand-down waits on the session executor, so the refusal names each part.
+    #[test]
+    fn endpoint_opencode_go_endpoints_read_from_a_file() {
+        let dir = scratch("opencode-go");
+        for (wire, base_url, model) in [
+            (
+                "anthropic-messages",
+                "https://opencode.ai/inference/go/anthropic/v1",
+                "claude-haiku-5-5",
+            ),
+            (
+                "openai-responses",
+                "https://opencode.ai/inference/go/openai/v1",
+                "gpt-6-luna",
+            ),
+        ] {
+            let file = from_file(
+                &dir.0,
+                &format!(
+                    "base_url = \"{base_url}\"\nwire = \"{wire}\"\nmodel = \"{model}\"\n\n[credential]\nsecret = \"llm/opencode-go-api-key\"\n"
+                ),
+            );
+            let config = EndpointConfig::of(&EndpointFields::default(), Some(&file), None)
+                .expect("the file resolves with no HOME");
+            assert_eq!(
+                config,
+                EndpointConfig {
+                    base_url: base_url.to_owned(),
+                    wire: wire.to_owned(),
+                    model: model.to_owned(),
+                    credential: Credential::Secret {
+                        namespace: "llm".to_owned(),
+                        name: "opencode-go-api-key".to_owned(),
+                    },
+                }
+            );
+            let message = format!("{:#}", config.session_endpoint().expect_err("the loom gap"));
+            for part in [
+                base_url,
+                wire,
+                model,
+                "namespace llm",
+                "name opencode-go-api-key",
+                "loom 0.39.0",
+            ] {
+                assert!(message.contains(part), "{part}: {message}");
+            }
+        }
     }
 }

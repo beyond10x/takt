@@ -121,6 +121,14 @@ takt --version
 A harness, `aep` for story runs, `b10x-gates` and `gh` for pull requests (`glab` instead of
 `gh` on a GitLab host), bubblewrap for `takt promote`: [What it needs](https://beyond10x.github.io/takt/docs/getting-started#what-it-needs).
 
+`--harness harness` points b10x-harness at the Anthropic Messages API on your claude.ai login
+(`~/.claude/.credentials.json`) unless `--endpoint-base-url`, `--endpoint-wire`,
+`--endpoint-model` and `--endpoint-token-file` with `--endpoint-token-pointer` say otherwise,
+or `--endpoint-file`, a TOML file of `base_url`, `wire`, `model` and a `[credential]` table; a
+flag wins over the file. A credential is named, never given: a token file's path, or a secret's
+name in your secrets store (`--endpoint-secret <namespace>/<name>`), which takt refuses before
+the case opens until its session executor can hand a secret's name to the harness.
+
 takt commits as the identity the repository names in `.engineering/commit-identity.conf`
 (`[identity]` with `name` and `email`), or as `--commit-identity '<name> <email>'`, never as
 your git configuration. With neither it commits as `takt <takt@localhost>`, and a run through
