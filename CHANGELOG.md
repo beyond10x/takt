@@ -6,6 +6,11 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-23
+
+The minor version moves because takt runs on macOS again: 0.10.0 ships `aarch64-apple-darwin`, which 0.7.0 to 0.9.0
+did not, and on macOS each step takt confines runs under Seatbelt, with the differences from Linux listed as Breaking.
+
 ### Added
 
 - The release builds `takt` for `aarch64-apple-darwin` again, on `macos-15`, beside the two Linux targets.
@@ -410,7 +415,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.9.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.10.0...HEAD
+[0.10.0]: https://github.com/beyond10x/takt/compare/0.9.0...0.10.0
 [0.9.0]: https://github.com/beyond10x/takt/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/beyond10x/takt/compare/0.7.0...0.8.0
 [0.7.0]: https://github.com/beyond10x/takt/compare/0.6.0...0.7.0

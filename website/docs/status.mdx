@@ -8,10 +8,10 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-0.9.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+0.10.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
 `scorecard`, `trace`, `report`, `view`, `promote` and `replay`, with `story.delivery/1` and
-`self.improvement/1` embedded, and prebuilt binaries for Linux (x86_64, aarch64); it has no
-macOS binary (on macOS use 0.6.0). Its harnesses are Claude Code (`--harness claude`), Codex (`codex`) and b10x-harness
+`self.improvement/1` embedded, and prebuilt binaries for Linux (x86_64, aarch64) and macOS
+(aarch64). Its harnesses are Claude Code (`--harness claude`), Codex (`codex`) and b10x-harness
 (`harness`), each through a metaharness session, or `none` to run validators only.
 
 How it got there ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md)):
@@ -29,6 +29,7 @@ How it got there ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGE
 | 0.7.0 | every harness runs through one metaharness session, and `--harness` takes `codex` and `harness` beside `claude`; the harness's change comes back as a proposal, which takt writes to the case's tree only after the step guard admits it |
 | 0.8.0 | Loom's governor decides every case and the loop runs on loom-sdk's `run_until_blocked`; `--confinement substrate` confines the test command; a Codex step is given its scope files as context |
 | 0.9.0 | harness sessions run through Loom's session executor (`loom_sdk::session`, metaharness 0.13.0), and takt runs no evaluation of its own: Loom's governor decides every case |
+| 0.10.0 | takt on macOS again: the test command, a promotion's build and `scripts/check-finding` run under Seatbelt, what a step leaves running is killed by its mark, and a release publishes only after the macOS tests pass; loom-sdk 0.37.0 |
 
 | milestone | state |
 |---|---|
