@@ -177,7 +177,7 @@ fn adv1_a_run_resumed_before_another_moved_the_case_is_not_admitted_the_merge_at
 
 /// `has_evidence` says of itself: "a record that does not read is an error naming its file,
 /// never an answer either way". A record cut short to nothing (a write that created the file
-/// and died) does not read as a record, and Canon refuses it; `has_evidence` answers `false`.
+/// and died) does not read as a record; `has_evidence` is an error naming its file, not `false`.
 #[test]
 fn adv1_an_empty_evidence_record_is_an_error_from_has_evidence() {
     let tree = scratch("empty");

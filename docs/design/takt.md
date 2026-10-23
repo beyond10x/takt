@@ -1,6 +1,6 @@
 # Takt: composable agentic work
 
-Status: design of 2026-10-18, built through wave 06 (`docs/waves/`). M1 is done (`docs/runs/2026-10-18-m1-scratch.md`); M2 is built but not yet proven; M3 to M5 are not built. § 4 says what each milestone has; a feature marked *not built* below is design only.
+Status: design of 2026-10-18, revised for ADR 0099, which makes takt an application on loom-sdk (`epic:takt-on-loom-sdk`); the waves that built it are under `docs/waves/`. M1 is done (`docs/runs/2026-10-18-m1-scratch.md`); M2 is built but not yet proven; M3 to M5 are not built. § 4 says what each milestone has; a feature marked *not built* below is design only.
 
 ## 1. The target
 
@@ -20,10 +20,16 @@ The name: takt time is the pace at which units of work are finished. One run is 
 
 | foundation | what it gives | release |
 |---|---|---|
-| Canon | `protocol/1`; `evaluate` is a pure function from protocol, case snapshot, evidence records, authority and instant to claims (TRUE, FALSE, UNKNOWN), obligations, admissible actions and legitimate outcomes, with an explanation; evidence is bound to the revision it was observed on | `b10x-canon` 0.6.0 |
+| Loom | the runtime takt runs on: Commission's runtime (`run_until_blocked`) drives a case step by step; the governor (`CanonGovernor`) decides it with Canon over the case's files; an `AgentExecutor` proposes and an `EffectPort` performs; the session executor runs a harness session over metaharness (`loom_sdk::session`, crate `b10x-loom-session-executor`); the `SubstrateRunner` confines a test command | `b10x-loom-sdk` 0.35.0 (`Cargo.toml`) |
+| Canon | `protocol/1`; `evaluate` is a pure function from protocol, case snapshot, evidence records, authority and instant to claims (TRUE, FALSE, UNKNOWN), obligations, admissible actions and legitimate outcomes, with an explanation; evidence is bound to the revision it was observed on. takt reaches it through Loom's governor and calls no `b10x_canon::eval` itself (`crates/takt/tests/no_own_evaluation.rs`) | `b10x-canon` 0.6.0 |
 | Engineering protocols | `software.change/1` and the other engineering protocols as Canon documents, validated by Canon; assertion providers and the gates command line | `b10x-canon-engineering` 0.9.0 |
 | AEP | the planning store: stories, scope, waves derived from scope, evidence on a story | `aep` 0.74.0 |
-| a harness | the judgement actor: Claude Code first (`claude -p`), another behind the same trait later | |
+| metaharness | the harness sessions Loom's session executor starts: Claude Code, Codex or b10x-harness (`--harness claude\|codex\|harness`), each working in a scratch copy of the case tree and proposing its change | `metaharness` 0.13.0 (`Cargo.lock`) |
+
+ADR 0090 (Loom) and ADR 0099 put the runtime in Loom, and the owner's decision of 2026-10-20 has
+Loom reach agent harnesses only through metaharness. takt keeps what is its own: validators and
+evidence, git and the forge, the planning-store seam, scenarios, scorecard, promotion and
+improvement, trace, report and view.
 
 Two rules carried over from the thesis these foundations serve: "Agents choose how to do the work.
 The organization defines what must be true before the work counts", and a run completing or a pull
@@ -36,13 +42,29 @@ takt run --repo <path> [--intent "<text>" | --case <id>] [--workflow <file>]   -
          [--iterations N | --hours H | --tokens T | --until <outcome>]   --until: not built
 
   unit     := intent | frontier(repo)              AEP: ready stories and waves; no model
-  case     := open(protocol, unit, worktree)       Canon case files under .engineering/cases/<id>/
-  loop     := evaluate → frontier → step → effect → observation → validator → evidence → evaluate
-                judgement step: the harness performs ONE admissible action in the worktree and reports
-                deterministic step: a command (a gate, a pull request, a CI read, a merge on approval)
+  case     := open(protocol, unit, worktree)       case files under .engineering/cases/<id>/, Loom's case store
+  loop     := pre-check → evaluate → frontier → propose → admit → perform → observation → validator → evidence → evaluate
+                one call of run_until_blocked per step, with a budget of one step
+                judgement step: the harness proposes ONE admissible action from a scratch copy; takt's effect applies it
+                deterministic step: a validator's action (tests, a gate, a pull request, a CI read, a merge on a grant)
              until an outcome is legitimate | an approval is needed | the stop criteria | nothing admissible
-  record   := every Canon decision; AEP evidence on the unit (built: the approval only); run events (JSONL): not built
+  record   := decisions/NNNN.json per evaluation, observations.json, evidence/, events.jsonl; AEP evidence on the story
 ```
+
+Each part of the loop and what performs it now:
+
+| part | performed by | held in |
+|---|---|---|
+| the step | Commission's runtime of loom-sdk: `run_until_blocked`, one call per step | `crates/takt/src/run.rs` (`Run`), crate `b10x-loom-commission` 0.35.0 |
+| evaluate, frontier, admit | the governor of Loom (`CanonGovernor`) over the case's files (`CaseFiles`), deciding with Canon; each decision is written as `decisions/NNNN.json` | `crates/takt/src/case.rs`, crate `b10x-loom-governor` 0.35.0 |
+| a grant | the case's authority provider (`CaseAuthority`, Loom's `AuthorityProvider`) over `authority.yaml` | `crates/takt/src/case.rs` |
+| pre-check | takt itself, ahead of each Loom step: `Shape::only_behind` stops `ApprovalRequired` (exit 4), `Shape::unperformable` stops `Unperformable` (exit 7) | `crates/takt/src/run.rs` |
+| propose | the composite executor (`TurnExecutor`, Loom's `AgentExecutor`): the due validator's action, else a judgement step of a session executor (`SessionHarness` over Loom's `SessionExecutor` and metaharness) | `crates/takt/src/run.rs`, `crates/takt/src/harness.rs`, crate `b10x-loom-session-executor` 0.35.0 |
+| perform | the composite effect (`TurnEffect`, Loom's `EffectPort`): the edit effect applies a proposal under the step guard; `ValidatorEffect` performs a validator's action, `ChoiceEffect` records a choice | `crates/takt/src/run.rs`, `crates/takt/src/validator.rs` |
+| observation | the session's `AgentSession` record, observed into `observations.json` through the governor | `crates/takt/src/run.rs`, `crates/takt/src/case.rs` |
+| validator | a validator (`TestsRun`, `GateRun`, `PrOpen`, `CiRead`, `PrMerged`, `ChangeRead`) turns an observation into a `canon-evidence/1` record, which reaches the case through the evidence port | `crates/takt/src/validator.rs` |
+| forge | the pull request, CI read and merge through the repository's bot route (`BotRoute`) | `crates/takt/src/forge.rs` |
+| child process | a confinement adapter: `Unconfined`, or `Substrate`, which runs the test command in loom-sdk's `SubstrateRunner` | `crates/takt/src/confinement.rs` |
 
 The hard rule: the model never produces evidence. A validator, a program, turns an observation
 (a test run's exit status, a commit, a merged pull request) into a `canon-evidence/1` record bound
@@ -61,9 +83,12 @@ to the revision it observed. What the harness says is a trace.
 
 ### Seams
 
-Traits in the library, one adapter each at first: `Harness` (the judgement actor; built: Claude Code), `Frontier` (the
-planning store; built: AEP), `Validator` (an evidence producer; five built), `Forge` (pull request, merge, release through
-the repository's bot route; built: all but release), `Confinement` (not built; none first, Substrate later).
+Traits in the library: `Harness` (the judgement actor; built: `SessionHarness` for Claude Code, Codex and
+b10x-harness, each through Loom's session executor), `Frontier` (the planning store; built: AEP), `Validator` (an
+evidence producer, each performing as a Commission effect), `Forge` (pull request, merge, release through the
+repository's bot route; built: all but release), `Confinement` (built: `none` and `substrate`, which holds the test
+command only). The `Harness` trait is still takt's own; story:takt-harness-trait-retired makes each harness a Loom
+`AgentExecutor`.
 
 ## 4. Milestones
 
@@ -72,13 +97,29 @@ the repository's bot route; built: all but release), `Confinement` (not built; n
 | M1 one step validated | the kernel (case files, Canon evaluation), `takt run --repo R --intent "…" --iterations 1` on `software.change/1`, the Claude Code adapter (one action per step in a worktree), a `tests.run` validator, the decision document printed | a scratch crate with one failing test: `tests.pass` TRUE, `repository.merge` approval-required, 0 evidence from the model | done 2026-10-18 (`docs/runs/2026-10-18-m1-scratch.md`) |
 | M2 a story end to end | the AEP frontier (ready rule as code, `artifact waves`); a protocol for a story with claims `tests.pass`, `gate.green`, `pr.opened`, `ci.green`, `pr.merged` and outcome `accepted`; `approval` for the merge; `--hours`, `--tokens`; AEP evidence written | one ready story of a small repository done with no manual step but the merge approval | built: the frontier (the ready rule over `artifact list`; `artifact waves` is not used), `story.delivery/1` (embedded, the default for a store story), the merge under a grant `takt approve` gives, `--hours`, `--tokens`, the approval recorded on the story, the run recorded on the story (story:run-record-and-story-evidence, wave 09: `events.jsonl` per case, a `test_result` record on the story and its move to `implemented` when the case is accepted, written on the case branch), and those records reaching the base with the merge (story:records-reach-base, wave 11); proof: scenario 1 reached `accepted` (pull request merged) on 2026-10-18, but on more than the one grant M2 allows: 4 invocations where 2 were required, `B10X_GATES_POLICY` set by hand; the unattended proof is `product-requirements:takt` § 5, first row |
 | M3 workflows | the `workflow/1` schema and loader; inner, validation and outer loops as declared blocks; a repository default in `.engineering/workflow.yaml` | the same story from a YAML file, and a three-iteration outer loop | not built (story:workflow-schema-and-loader, story:declared-loops) |
-| M4 pluggable | the five traits; a second harness adapter proves the seam; validators from the engineering assertion providers; Substrate optional | the M2 story runs under both adapters with the same decision documents | four traits built, one adapter each (five validators), the gate validator through the assertions library; not built: `Confinement`, a second harness (story:confinement-seam, story:second-harness-adapter) |
+| M4 pluggable | the five traits; a second harness adapter proves the seam; validators from the engineering assertion providers; Substrate optional | the M2 story runs under both adapters with the same decision documents | built: the five traits; three harnesses through Loom's session executor (`--harness claude\|codex\|harness`, story:second-harness-adapter); the gate validator through the assertions library; `--confinement none\|substrate` (story:confinement-seam). Not built: confining the harness session, git, the forge and aep (story:harness-child-confined) |
 | M5 prove | three repositories, each a daily `run --hours 2` for a week; units accepted, tokens, human interventions, defects escaped | the numbers | not started (story:week-of-daily-runs) |
 
 ## 5. Not in this design
 
-A hosted service, a console, a database, cross-repository scheduling, and any runtime of its own
-for model turns: the harness is an adapter, the loop is in this binary, the truth is Canon's.
+A hosted service, a console, a database and cross-repository scheduling. Loom's own model executor
+as takt's judgement actor, and Loom's CLI, intake router and connectors (`epic:takt-on-loom-sdk`
+§ Out of scope). A takt-side substitute for a gap in loom-sdk: a story such a gap blocks stays
+blocked.
+
+Still takt's own, besides what § 2 lists:
+
+- the evaluation the loop reads before each Loom step (`CaseDir::evaluate`), for two uses. The two
+  pre-checks of § 3 (`Shape::only_behind`, `Shape::unperformable`) are kept by
+  approval-record:loop-pre-checks-ahead-of-loom until a change to Loom's documented contract.
+  The loop's other reads of it (the frontier line it prints, the claims, `legitimate()`,
+  `admissible()` and `approval_required()`, `crates/takt/src/run.rs`) stay until
+  story:takt-harness-trait-retired;
+- the `Harness` trait and the `harness` module (`crates/takt/src/harness.rs`), until
+  story:takt-harness-trait-retired.
+
+Not built yet: confining the harness session, git, the forge and aep; `--confinement substrate`
+holds the test command only (story:harness-child-confined).
 
 Continuous work and orchestration inside one repository, planning as a unit, every loop a case in
 one tree, one deterministic dispatcher, and cross-repository scheduling as its last step, are

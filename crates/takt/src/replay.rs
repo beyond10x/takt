@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
-use crate::decision::Decision;
+use crate::case::Decision;
 use crate::harness::{ChangeSoFar, ClaudeCode, Harness, StepContext};
 use crate::protocol::LoadedProtocol;
 use crate::run::ChangeScan;

@@ -9,6 +9,12 @@ takt's releases.
 ### Changed
 
 - `b10x-loom-sdk` moves from loom 0.34.0 to 0.35.0, which builds on macOS.
+- Harness sessions run through Loom's session executor at 0.35.0 with metaharness 0.13.0; takt's own crate `b10x-session-executor` is gone.
+- After each harness step, the case's `observations.json` holds the session's `AgentSession` record: kind, action, vendor session id and each file's path and sha256.
+- `--harness claude` proposes only on Claude Code 2.1.304 or 2.1.305: on any other version metaharness 0.13.0's memory-canary floor (H11) holds the proposal back.
+- A session that writes a file the tree already holds outside its copy, such as an ignored one, now ends the run with an error ("the workspace changed under the session"), not a `StepRefused` stop.
+- takt no longer runs Canon's evaluation itself: a case Loom's governor refuses to decide ends the run with its refusal ("the governor of Loom does not decide the case <id>: …"), not Canon's.
+- An evidence record under a case that does not read ends the run with "evidence is not a canon-evidence/1 document", naming the record's file.
 
 ## [0.8.0] - 2026-10-22
 

@@ -527,20 +527,10 @@ source = "git+https://github.com/beyond10x/loom?tag=0.35.0#39c7b53a59f9482fb0eb5
 dependencies = [
  "b10x-loom-commission",
  "loom",
- "metaharness 0.13.0",
- "metaharness-b10x 0.13.0",
+ "metaharness",
+ "metaharness-b10x",
  "serde_json",
  "sha2 0.11.1",
-]
-
-[[package]]
-name = "b10x-session-executor"
-version = "0.8.0"
-dependencies = [
- "b10x-loom-sdk",
- "metaharness 0.11.0",
- "metaharness-b10x 0.11.0",
- "serde_json",
 ]
 
 [[package]]
@@ -596,7 +586,6 @@ dependencies = [
  "b10x-canon-engineering-assertions",
  "b10x-canon-expr",
  "b10x-loom-sdk",
- "b10x-session-executor",
  "libc",
  "proptest",
  "serde",
@@ -2924,33 +2913,15 @@ dependencies = [
 
 [[package]]
 name = "metaharness"
-version = "0.11.0"
-source = "git+https://github.com/beyond10x/metaharness?tag=0.11.0#16340162d0d83a03faea0c3039cf695bd1f8286e"
-dependencies = [
- "getrandom 0.4.3",
- "metaharness-b10x 0.11.0",
- "metaharness-claude 0.11.0",
- "metaharness-codex 0.11.0",
- "metaharness-protocol 0.11.0",
- "metaharness-tools 0.11.0",
- "rustix",
- "rustls",
- "serde_json",
- "tempfile",
- "webpki-roots",
-]
-
-[[package]]
-name = "metaharness"
 version = "0.13.0"
 source = "git+https://github.com/beyond10x/metaharness?tag=0.13.0#a34551ee5bf4cb7a0d689aae076b1e0ca1ffd54a"
 dependencies = [
  "getrandom 0.4.3",
- "metaharness-b10x 0.13.0",
- "metaharness-claude 0.13.0",
- "metaharness-codex 0.13.0",
- "metaharness-protocol 0.13.0",
- "metaharness-tools 0.13.0",
+ "metaharness-b10x",
+ "metaharness-claude",
+ "metaharness-codex",
+ "metaharness-protocol",
+ "metaharness-tools",
  "rustix",
  "rustls",
  "serde_json",
@@ -2960,25 +2931,12 @@ dependencies = [
 
 [[package]]
 name = "metaharness-b10x"
-version = "0.11.0"
-source = "git+https://github.com/beyond10x/metaharness?tag=0.11.0#16340162d0d83a03faea0c3039cf695bd1f8286e"
-dependencies = [
- "b10x-harness-catalogue",
- "b10x-harness-loop",
- "metaharness-protocol 0.11.0",
- "serde",
- "serde_json",
- "sha2 0.11.1",
-]
-
-[[package]]
-name = "metaharness-b10x"
 version = "0.13.0"
 source = "git+https://github.com/beyond10x/metaharness?tag=0.13.0#a34551ee5bf4cb7a0d689aae076b1e0ca1ffd54a"
 dependencies = [
  "b10x-harness-catalogue",
  "b10x-harness-loop",
- "metaharness-protocol 0.13.0",
+ "metaharness-protocol",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -2986,30 +2944,11 @@ dependencies = [
 
 [[package]]
 name = "metaharness-claude"
-version = "0.11.0"
-source = "git+https://github.com/beyond10x/metaharness?tag=0.11.0#16340162d0d83a03faea0c3039cf695bd1f8286e"
-dependencies = [
- "metaharness-protocol 0.11.0",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "metaharness-claude"
 version = "0.13.0"
 source = "git+https://github.com/beyond10x/metaharness?tag=0.13.0#a34551ee5bf4cb7a0d689aae076b1e0ca1ffd54a"
 dependencies = [
- "metaharness-protocol 0.13.0",
+ "metaharness-protocol",
  "serde",
- "serde_json",
-]
-
-[[package]]
-name = "metaharness-codex"
-version = "0.11.0"
-source = "git+https://github.com/beyond10x/metaharness?tag=0.11.0#16340162d0d83a03faea0c3039cf695bd1f8286e"
-dependencies = [
- "metaharness-protocol 0.11.0",
  "serde_json",
 ]
 
@@ -3018,18 +2957,8 @@ name = "metaharness-codex"
 version = "0.13.0"
 source = "git+https://github.com/beyond10x/metaharness?tag=0.13.0#a34551ee5bf4cb7a0d689aae076b1e0ca1ffd54a"
 dependencies = [
- "metaharness-protocol 0.13.0",
+ "metaharness-protocol",
  "serde_json",
-]
-
-[[package]]
-name = "metaharness-protocol"
-version = "0.11.0"
-source = "git+https://github.com/beyond10x/metaharness?tag=0.11.0#16340162d0d83a03faea0c3039cf695bd1f8286e"
-dependencies = [
- "serde",
- "serde_json",
- "sha2 0.11.1",
 ]
 
 [[package]]
@@ -3040,16 +2969,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
-]
-
-[[package]]
-name = "metaharness-tools"
-version = "0.11.0"
-source = "git+https://github.com/beyond10x/metaharness?tag=0.11.0#16340162d0d83a03faea0c3039cf695bd1f8286e"
-dependencies = [
- "b10x-harness-catalogue",
- "b10x-harness-wire",
- "serde_json",
 ]
 
 [[package]]

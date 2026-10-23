@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 
-use session_executor::metaharness::{
+use loom_sdk::session::metaharness::{
     HarnessProcess, LaunchPlanView, ProcessRunner, ScriptedLog, ScriptedRunner,
 };
-use session_executor::{CredentialSource, Endpoint, Kind};
+use loom_sdk::session::{CredentialSource, Endpoint, Kind};
 use takt::harness::{Harness, SessionHarness};
 use takt::run::{CREDENTIAL_SHAPES, ChangeScan, PROPOSAL_NOT_RECORDED, credential_shape};
 use takt::validator::{TestsRun, Validator};
@@ -149,7 +149,7 @@ fn record(
     let lines = match kind {
         Kind::Claude => {
             let mut lines = vec![serde_json::json!({
-                "type": "system", "subtype": "init", "claude_code_version": "2.1.259",
+                "type": "system", "subtype": "init", "claude_code_version": "2.1.304",
                 "cwd": cwd, "tools": ["Read", "Edit", "Write", "Glob", "Grep"],
                 "mcp_servers": [], "plugins": [], "output_style": "default",
                 "apiKeySource": "none", "model": "scripted", "permissionMode": "default",
@@ -1163,17 +1163,23 @@ fn codex_is_the_one_on_the_childs_path() {
     assert!(said.contains("1 passed"), "the child ran the case: {said}");
 }
 
-/// Acceptance 5: the session executor's dependency tree holds no crate of this repository but
-/// itself, so it can move into Loom unchanged.
+/// story:takt-uses-loom-session-executor, acceptance 1: takt keeps no session executor of its
+/// own; the one its sessions run through is Loom's crate, at the tag takt pins loom-sdk at.
 #[test]
-fn the_session_executor_depends_on_no_crate_of_this_repository() {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+fn the_session_executor_is_looms() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    assert!(
+        !root.join("crates/session-executor").exists(),
+        "takt keeps no executor of its own"
+    );
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)
         .args([
             "tree",
             "-p",
-            "b10x-session-executor",
+            "b10x-takt",
+            "-i",
+            "b10x-loom-session-executor",
             "--offline",
             "--locked",
             "--prefix",
@@ -1190,15 +1196,18 @@ fn the_session_executor_depends_on_no_crate_of_this_repository() {
         "{listed}{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let crates = fs::canonicalize(root.join("crates")).expect("the crates directory");
-    let ours: Vec<&str> = listed
+    let manifest =
+        fs::read_to_string(root.join("Cargo.toml")).expect("the workspace manifest reads");
+    let tag = manifest
         .lines()
-        .filter(|line| line.contains(&format!("({}/", crates.display())))
-        .collect();
+        .find(|line| line.starts_with("b10x-loom-sdk "))
+        .and_then(|line| line.split("tag = \"").nth(1))
+        .and_then(|rest| rest.split('"').next())
+        .expect("loom-sdk is pinned by tag");
+    let first = listed.lines().next().unwrap_or_default();
     assert!(
-        ours.iter()
-            .all(|line| line.starts_with("b10x-session-executor ")),
-        "{ours:?}"
+        first.starts_with("b10x-loom-session-executor ")
+            && first.contains(&format!("github.com/beyond10x/loom?tag={tag}")),
+        "{listed}"
     );
-    assert!(!ours.is_empty(), "the executor itself is listed: {listed}");
 }

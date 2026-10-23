@@ -21,8 +21,7 @@ use std::path::Path;
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::case::{CASES_DIR, CaseDir};
-use crate::decision::Decision;
+use crate::case::{CASES_DIR, CaseDir, Decision};
 use crate::evidence::Record;
 use crate::validator::{Artifact, Observation, Validator};
 

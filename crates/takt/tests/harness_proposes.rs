@@ -11,10 +11,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 
-use session_executor::metaharness::{
+use loom_sdk::session::metaharness::{
     HarnessProcess, LaunchPlanView, ProcessPoll, ProcessRunner, ScriptedLog, ScriptedRunner,
 };
-use session_executor::{CredentialSource, Proposal, ProposedFile, SessionExecutor};
+use loom_sdk::session::{CredentialSource, Proposal, ProposedFile, SessionExecutor};
 use takt::harness::{ClaudeSession, Harness, StepContext, StepReport};
 use takt::validator::{TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
@@ -260,7 +260,7 @@ impl ProcessRunner for Session {
             fs::write(at, text)?;
         }
         let init = serde_json::json!({
-            "type": "system", "subtype": "init", "claude_code_version": "2.1.259",
+            "type": "system", "subtype": "init", "claude_code_version": "2.1.304",
             "cwd": plan.cwd.display().to_string(), "tools": ["Read", "Edit", "Write", "Glob", "Grep"],
             "mcp_servers": [], "plugins": self.plugins, "output_style": "default", "apiKeySource": "none",
             "model": "scripted", "permissionMode": "default", "session_id": "s-1",
@@ -476,6 +476,60 @@ fn the_session_works_in_a_copy_and_only_the_edit_effect_changes_the_tree() {
         git(&tree, &["show", "HEAD:src/lib.rs"]),
         FIXED.trim_end(),
         "and the step committed it\n{text}"
+    );
+}
+
+/// story:takt-uses-loom-session-executor, acceptance 3: after one `--harness claude` step, the
+/// case's `observations.json` holds the `AgentSession` Loom's session executor recorded for it:
+/// its kind, the vendor's session id, the action and the paths it proposed, and no file's bytes.
+#[test]
+fn a_session_step_leaves_the_executors_agent_session_in_the_case() {
+    let scratch = repository("agent-session");
+    let tree = scratch.tree();
+    let (harness, _) = harness(&tree, &[("src/lib.rs", FIXED)], "implementation.edit");
+    let validators = validators();
+    let mut run = Run::open(
+        &tree,
+        options("proposes-agent-session"),
+        &harness,
+        &validators,
+    )
+    .expect("opens");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(
+        !matches!(stop, Ok(Stop::StepRefused(_)) | Err(_)),
+        "the step is accepted: {stop:?}\n{text}"
+    );
+    let path = tree
+        .join(takt::case::CASES_DIR)
+        .join("proposes-agent-session")
+        .join("observations.json");
+    let held = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}\n{text}", path.display()));
+    let observations: Vec<serde_json::Value> = serde_json::from_str(&held).expect("json");
+    let sessions: Vec<&serde_json::Value> = observations
+        .iter()
+        .filter(|observation| observation["payload"]["record"] == "loom.session.AgentSession")
+        .collect();
+    assert_eq!(sessions.len(), 1, "one AgentSession: {held}\n{text}");
+    let payload = &sessions[0]["payload"];
+    assert_eq!(payload["kind"], "ClaudeCode", "{payload}");
+    assert_eq!(payload["vendor_session_id"], "s-1", "{payload}");
+    assert_eq!(payload["action"], "implementation.edit", "{payload}");
+    assert_eq!(payload["state"], "Ended", "{payload}");
+    assert_eq!(payload["files"][0]["path"], "src/lib.rs", "{payload}");
+    assert!(
+        !payload["session_id"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty(),
+        "{payload}"
+    );
+    assert!(
+        !held.contains("a + b"),
+        "no proposed file's bytes reach the case: {held}"
     );
 }
 
@@ -728,6 +782,22 @@ impl Kept {
     /// byte for byte, the operator's ignored files among it, `HEAD`, every watched file never
     /// written, and nothing set aside.
     fn refused(&self, tree: &Path, id: &str, harness: &dyn Harness, aside: &Path, paths: &[&str]) {
+        self.refused_by(tree, id, harness, aside, paths, false);
+    }
+
+    /// [`Kept::refused`], the refusal Loom's session executor's own when `by_executor`: a
+    /// session that adds a file the tree already holds (one git ignores, which the copy did not
+    /// hold) proposes nothing, the step failing with the path named, so no proposal reaches the
+    /// edit effect at all (loom 0.35.0 `crates/loom-session-executor/src/lib.rs:751-758`).
+    fn refused_by(
+        &self,
+        tree: &Path,
+        id: &str,
+        harness: &dyn Harness,
+        aside: &Path,
+        paths: &[&str],
+        by_executor: bool,
+    ) {
         let validators = validators();
         let mut run = Run::open(tree, options(id), harness, &validators).expect("opens");
         run.set_aside_in(aside.to_path_buf())
@@ -735,13 +805,22 @@ impl Kept {
         let mut out = Vec::new();
         let stop = run.run(&mut out);
         let text = String::from_utf8_lossy(&out).into_owned();
-        let Ok(Stop::StepRefused(why)) = &stop else {
-            panic!("{id}: refused, not {stop:?}\n{text}");
+        let why = match &stop {
+            Ok(Stop::StepRefused(why)) if !by_executor => {
+                assert!(
+                    text.contains("refused before the edit effect"),
+                    "{id}: before the edit effect: {why}\n{text}"
+                );
+                why.clone()
+            }
+            Err(error)
+                if by_executor
+                    && format!("{error:#}").contains("the workspace changed under the session") =>
+            {
+                format!("{error:#}")
+            }
+            _ => panic!("{id}: refused, not {stop:?}\n{text}"),
         };
-        assert!(
-            text.contains("refused before the edit effect"),
-            "{id}: before the edit effect: {why}\n{text}"
-        );
         for path in paths {
             assert!(why.contains(path), "{id}: the refusal names {path}: {why}");
         }
@@ -768,9 +847,10 @@ impl Kept {
 }
 
 /// Acceptance 3, by what git ignores: the scratch copy holds no ignored file, so a session that
-/// writes one inside an ignored directory proposes it as new; that proposal, and one that removes
-/// the operator's file there, is refused before the edit effect, and the operator's file keeps its
-/// bytes, was never written, and is not set aside.
+/// writes one the tree holds inside an ignored directory is held back by Loom's session executor,
+/// which proposes nothing for it, and a proposal that removes the operator's file there is refused
+/// before the edit effect; the operator's file keeps its bytes, was never written, and is not set
+/// aside.
 #[test]
 fn a_proposal_into_an_ignored_directory_is_refused_before_it_is_written() {
     const OPERATOR: &str = "the operator's build output\n";
@@ -790,7 +870,7 @@ fn a_proposal_into_an_ignored_directory_is_refused_before_it_is_written() {
                 &[("target/kept.txt", "planted\n")],
                 "implementation.edit",
             );
-            kept.refused(&tree, &id, &session, &aside, &["target/kept.txt"]);
+            kept.refused_by(&tree, &id, &session, &aside, &["target/kept.txt"], true);
         }
         assert_eq!(
             fs::read_to_string(tree.join("target/kept.txt")).expect("the operator's file"),
@@ -801,8 +881,9 @@ fn a_proposal_into_an_ignored_directory_is_refused_before_it_is_written() {
 }
 
 /// Acceptance 3, by what git ignores at the root: a session that writes `.env`, which the tree's
-/// `.gitignore` names and the scratch copy did not hold, is refused before the edit effect, and
-/// the operator's `.env` is never written, not even to be put back.
+/// `.gitignore` names and the scratch copy did not hold, is held back by Loom's session executor,
+/// which proposes nothing for it, and the operator's `.env` is never written, not even to be put
+/// back.
 #[test]
 fn a_proposal_of_an_ignored_root_file_is_refused_before_it_is_written() {
     const OPERATOR: &str = "OPERATOR_SETTING=kept\n";
@@ -816,7 +897,14 @@ fn a_proposal_of_an_ignored_root_file_is_refused_before_it_is_written() {
         "implementation.edit",
     );
     let aside = scratch.0.join("set-aside");
-    kept.refused(&tree, "proposes-ignored-root", &session, &aside, &[".env"]);
+    kept.refused_by(
+        &tree,
+        "proposes-ignored-root",
+        &session,
+        &aside,
+        &[".env"],
+        true,
+    );
     assert_eq!(
         fs::read_to_string(tree.join(".env")).expect("the operator's file"),
         OPERATOR

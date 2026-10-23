@@ -9,8 +9,8 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
+use crate::case::Decision;
 use crate::confinement::Command;
-use crate::decision::Decision;
 use crate::protocol::LoadedProtocol;
 
 /// What a step is given.
@@ -124,11 +124,41 @@ pub trait Harness {
     fn reads_outside_its_copy(&self) -> bool {
         true
     }
+    /// The session the last step's executor recorded, taken once: the `AgentSession` Loom's
+    /// session executor wrote for a session that proposed a change, which the run observes into
+    /// the case. None for a harness that runs no such session, by default.
+    fn take_session(&self) -> Option<AgentSession> {
+        None
+    }
 }
 
-pub use session_executor::{Endpoint, Proposal, ProposedFile};
+pub use loom_sdk::session::{Endpoint, Proposal, ProposedFile};
 
-/// A harness through the metaharness session executor, its [`Kind`] a parameter: `--harness
+/// One session Loom's session executor recorded: a row of its `loom.session.AgentSessions` view.
+pub use loom_sdk::session::model::session::AgentSessions as AgentSession;
+
+/// The argument a Codex session's child is given its prompt in, were `brief` its brief and
+/// `files` its context files: the execution context metaharness states ahead of everything for
+/// the run Loom's executor asks for (Codex, `HermeticMode::On`, every call asked, the copy its
+/// declared scratch working directory), then the files' block and the brief, as metaharness's
+/// Codex adapter composes it (`with_agent_execution_context` over `with_context_files`) and
+/// compares with `ARGUMENT_BYTES_MAX` before the child starts.
+#[must_use]
+pub fn codex_prompt_argument(brief: &str, files: &[DeclaredContextFile]) -> String {
+    use loom_sdk::session::metaharness::protocol::{
+        DecisionMode, HermeticMode, RunSpec, with_context_files,
+    };
+    let mut spec = RunSpec::new(Kind::Codex);
+    // Only whether a working directory is declared, and as the embedder's scratch, is read.
+    spec.cwd = Some(std::path::PathBuf::from("."));
+    spec.scratch_cwd = true;
+    spec.hermetic = HermeticMode::On;
+    spec.decisions = DecisionMode::Ask;
+    spec.with_agent_execution_context(&with_context_files(brief, files))
+}
+
+/// A harness through Loom's session executor (`b10x-loom-session-executor`, reached as
+/// `loom_sdk::session`) over metaharness, its [`Kind`] a parameter: `--harness
 /// claude` (Claude Code, `HermeticMode::Strict`, on the user's claude.ai login), `--harness
 /// codex` (Codex, `HermeticMode::On` with H9 gating, on the user's ChatGPT login,
 /// `~/.codex/auth.json`) and `--harness harness` (b10x-harness, observed, pointed at
@@ -137,9 +167,11 @@ pub use session_executor::{Endpoint, Proposal, ProposedFile};
 /// the tree itself; its change comes back as a [`Proposal`] ([`Harness::take_proposal`]), which
 /// takt's edit effect applies under the step guard whichever kind proposed it. The prompt is
 /// [`ClaudeCode`]'s for every kind, the change so far with it; a Codex session is given
-/// `AGENTS.md` and the scope files as metaharness's context files besides ([`context_files`]),
-/// the other kinds none. Metaharness constructs the child's environment from its own
-/// allowlist, so no variable the run withholds from a harness reaches it.
+/// `AGENTS.md` and the scope files as context files ahead of its prompt besides
+/// ([`context_files`]), the other kinds none. Metaharness constructs the child's environment
+/// from its own allowlist, so no variable the run withholds from a harness reaches it. The
+/// session the executor records for a step that proposes is kept for the run to observe into
+/// the case ([`Harness::take_session`]).
 pub struct SessionHarness {
     /// The harness the sessions run.
     pub kind: Kind,
@@ -150,7 +182,7 @@ pub struct SessionHarness {
     /// The longest one step may take, cut to what is left of the run's hour budget.
     pub timeout: std::time::Duration,
     /// Where the session's credential comes from: the user's login.
-    pub credentials: session_executor::CredentialSource,
+    pub credentials: loom_sdk::session::CredentialSource,
     /// The harness program: `claude` found on takt's own `PATH` as [`ClaudeCode`] finds it, or by
     /// path; `codex` by path, or by name found on the `PATH` metaharness gives its child
     /// (`$HOME/.local/bin` first), the file whose version H9 reads; b10x-harness the one
@@ -158,7 +190,7 @@ pub struct SessionHarness {
     pub program: String,
     /// For `Kind::B10x`, the endpoint its loop is pointed at and the subscription token it
     /// reads.
-    pub endpoint: Option<session_executor::Endpoint>,
+    pub endpoint: Option<loom_sdk::session::Endpoint>,
     /// What starts each step's session in place of the real `claude`; none for the real one.
     pub runner: Option<Box<RunnerFactory>>,
     /// The tokens by component the last step reported, set by each step.
@@ -169,20 +201,23 @@ pub struct SessionHarness {
     pub transcript: std::cell::RefCell<Option<Vec<u8>>>,
     /// The last step's proposal until the run takes it ([`Harness::take_proposal`]).
     pub proposal: std::cell::RefCell<Option<Proposal>>,
+    /// The session the last step's executor recorded, until the run takes it
+    /// ([`Harness::take_session`]).
+    pub session: std::cell::RefCell<Option<AgentSession>>,
 }
 
 /// The harness kinds of [`SessionHarness`].
-pub use session_executor::Kind;
+pub use loom_sdk::session::Kind;
 
 /// A context file as metaharness reads and renders it: its path and its bytes, UTF-8 text with
 /// no NUL ([`context_files`]).
-pub use session_executor::metaharness::protocol::DeclaredContextFile;
+pub use loom_sdk::session::metaharness::protocol::DeclaredContextFile;
 
 /// `--harness claude`: Claude Code through the session executor.
 pub type ClaudeSession = SessionHarness;
 
 /// What starts each step's session in place of the real `claude`.
-pub type RunnerFactory = dyn Fn() -> Box<dyn session_executor::ProcessRunner>;
+pub type RunnerFactory = dyn Fn() -> Box<dyn loom_sdk::session::ProcessRunner>;
 
 impl std::fmt::Debug for SessionHarness {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -211,7 +246,7 @@ impl SessionHarness {
             model: None,
             max_turns: 40,
             timeout: std::time::Duration::from_secs(1800),
-            credentials: session_executor::CredentialSource::OperatorLogin,
+            credentials: loom_sdk::session::CredentialSource::OperatorLogin,
             program: match kind {
                 Kind::Claude => "claude",
                 Kind::Codex => "codex",
@@ -224,6 +259,7 @@ impl SessionHarness {
             call: std::cell::RefCell::new(None),
             transcript: std::cell::RefCell::new(None),
             proposal: std::cell::RefCell::new(None),
+            session: std::cell::RefCell::new(None),
         }
     }
     /// The same harness, each step's session started by what `runner` makes (metaharness's
@@ -231,7 +267,7 @@ impl SessionHarness {
     #[must_use]
     pub fn with_runner(
         mut self,
-        runner: impl Fn() -> Box<dyn session_executor::ProcessRunner> + 'static,
+        runner: impl Fn() -> Box<dyn loom_sdk::session::ProcessRunner> + 'static,
     ) -> Self {
         self.runner = Some(Box::new(runner));
         self
@@ -402,6 +438,10 @@ impl Harness for SessionHarness {
         self.proposal.borrow_mut().take()
     }
 
+    fn take_session(&self) -> Option<AgentSession> {
+        self.session.borrow_mut().take()
+    }
+
     /// Codex's shell reads where its sandbox grants reading, the whole file system;
     /// b10x-harness's calls are observed and decided by none: both may have read outside the
     /// copy. Claude Code's every call is decided inside it.
@@ -424,14 +464,10 @@ impl Harness for SessionHarness {
             let paths: Vec<String> = files.iter().map(|file| file.path().to_owned()).collect();
             ClaudeCode::prompt_with(context, rule, scan.as_ref(), &paths)
         };
+        *self.session.borrow_mut() = None;
         let mut executor =
-            session_executor::SessionExecutor::new(context.tree, Vec::new(), String::new())
-                .of_kind(self.kind)
-                // Every program the session's runners start goes through the run's confinement
-                // adapter first, as a child takt starts itself does.
-                .with_admission(|program: &str| {
-                    crate::confinement::current().admit(std::ffi::OsStr::new(program))
-                });
+            loom_sdk::session::SessionExecutor::new(context.tree, Vec::new(), String::new())
+                .of_kind(self.kind);
         // Codex reads no `@<path>` as a file, so its session is given `AGENTS.md` and the scope
         // files as context files instead ([`context_files`]), as many as fit beside its prompt
         // in the one argument metaharness starts its child with, the prompt composed afresh
@@ -442,26 +478,28 @@ impl Harness for SessionHarness {
                 context.intent,
                 context.change,
                 scan.as_ref(),
-                &|files| {
-                    executor
-                        .codex_prompt_argument(&prompt_for(files), files)
-                        .unwrap_or_default()
-                },
+                &|files| codex_prompt_argument(&prompt_for(files), files),
             )
         } else {
             Vec::new()
         };
-        executor.brief = prompt_for(&given);
+        let prompt = prompt_for(&given);
+        // Loom's executor declares no context file to metaharness, so the files' block is put
+        // ahead of the prompt here, as metaharness's Codex adapter would put it: the argument
+        // its child is started with is the one [`codex_prompt_argument`] measured. With no file
+        // the brief is the prompt as it is.
+        executor.brief =
+            loom_sdk::session::metaharness::protocol::with_context_files(&prompt, &given);
         // The step's opening record: its prompt and, for a Codex step, each context file it is
         // given, as metaharness records one (path, bytes, sha256, channel); the other kinds are
         // given none and their record names none.
         let mut opening = serde_json::json!({
             "type": "takt.prompt",
             "step": context.step,
-            "prompt": &executor.brief,
+            "prompt": &prompt,
         });
         if self.kind == Kind::Codex {
-            use session_executor::metaharness::protocol::ContextChannel;
+            use loom_sdk::session::metaharness::protocol::ContextChannel;
             opening["context"] = serde_json::to_value(
                 given
                     .iter()
@@ -473,7 +511,6 @@ impl Harness for SessionHarness {
         opening.push(b'\n');
         *self.transcript.borrow_mut() = Some(opening.clone());
         executor.files = Self::copied(context.tree)?;
-        executor.context = given.iter().map(|file| file.path().to_owned()).collect();
         executor.model.clone_from(&self.model);
         executor.max_turns = (self.kind != Kind::Codex).then_some(self.max_turns);
         executor.endpoint.clone_from(&self.endpoint);
@@ -487,8 +524,8 @@ impl Harness for SessionHarness {
         let login = std::env::var_os("HOME")
             .is_some_and(|home| Path::new(&home).join(login_file).is_file());
         executor.credentials =
-            if self.credentials == session_executor::CredentialSource::OperatorLogin && !login {
-                session_executor::CredentialSource::None
+            if self.credentials == loom_sdk::session::CredentialSource::OperatorLogin && !login {
+                loom_sdk::session::CredentialSource::None
             } else {
                 self.credentials
             };
@@ -500,22 +537,47 @@ impl Harness for SessionHarness {
         // Claude Code's program is the `claude` on takt's own `PATH`; Codex's, unless named by
         // path, and b10x-harness's are found on the `PATH` metaharness gives its child
         // (`$HOME/.local/bin` first), the file whose version H9 reads.
-        match &self.runner {
-            Some(runner) => executor = executor.with_runner(runner()),
+        // Every program the session's own start runs is asked of the run's confinement adapter
+        // first, as a child takt starts itself is: the vendor program as the executor is given
+        // it (Codex's and b10x-harness's by name when not by path) and the `setsid` it is
+        // started under. Loom's executor takes no admission of its own, so takt asks before the
+        // session, and a refusal starts nothing. A supplied runner starts no program.
+        let admitted = match &self.runner {
+            Some(runner) => {
+                executor = executor.with_runner(runner());
+                Vec::new()
+            }
             None if self.kind == Kind::Claude => {
-                executor.program = Some(Self::resolved(&self.program)?);
+                let program = Self::resolved(&self.program)?;
+                executor.program = Some(program.clone());
+                vec![program]
             }
             None if self.kind == Kind::Codex && self.program.contains('/') => {
-                executor.program = Some(std::path::PathBuf::from(&self.program));
+                let program = std::path::PathBuf::from(&self.program);
+                executor.program = Some(program.clone());
+                vec![program]
             }
-            None => {}
+            None if self.kind == Kind::Codex => vec![std::path::PathBuf::from("codex")],
+            None => vec![std::path::PathBuf::from("b10x-harness")],
+        };
+        if !admitted.is_empty() {
+            let setsid = ["/usr/bin/setsid", "/bin/setsid"]
+                .into_iter()
+                .map(std::path::PathBuf::from)
+                .find(|path| path.is_file());
+            let confinement = crate::confinement::current();
+            for program in admitted.iter().chain(setsid.iter()) {
+                confinement.admit(program.as_os_str())?;
+            }
         }
         let (commission, frontier) = Self::frontier(context);
         // The session's process is started in a session of its own and waited on by the
         // executor: no sweep on another thread may take it meanwhile.
         let held = crate::forge::hold_sweeps();
-        let outcome = executor.run(&commission, &frontier);
+        let ran = executor.run_with_usage(&commission, &frontier);
         drop(held);
+        let outcome = ran.outcome;
+        *self.session.borrow_mut() = executor.sessions().pop();
         let report = executor.last_report().unwrap_or_default();
         *self.transcript.borrow_mut() =
             Some(bounded(opening, 0, &report.transcript, TRANSCRIPT_CAP));
@@ -538,7 +600,7 @@ impl Harness for SessionHarness {
             turns: report.turns,
             started_at: Some(started_at),
         });
-        let proposal = match session_executor::Proposal::from_outcome(&outcome) {
+        let proposal = match loom_sdk::session::Proposal::from_outcome(&outcome) {
             Some(Ok(proposal)) => proposal,
             Some(Err(why)) => bail!("the session's proposal does not read: {why}"),
             None => bail!(
@@ -553,6 +615,9 @@ impl Harness for SessionHarness {
         // verdict only: their details name the scratch paths, which no record carries. Codex's
         // and b10x-harness's, under `HermeticMode::On`: the verdict whole, every row with its
         // state.
+        // The summary travels on the executor's step, never in the proposal's arguments.
+        let mut proposal = proposal;
+        proposal.summary = ran.summary.unwrap_or_default();
         let mut summary = proposal.summary.clone();
         if self.kind != Kind::Claude {
             summary.push_str(&format!(
@@ -710,8 +775,9 @@ pub fn scope_files(
     )
 }
 
-/// The files of `tree` a Codex step's session is given as metaharness's context files
-/// (`SessionExecutor::context`), since Codex reads no `@<path>` as a file: `AGENTS.md`, then
+/// The files of `tree` a Codex step's session is given as context files, rendered ahead of its
+/// brief as metaharness renders them (`with_context_files`), since Codex reads no `@<path>` as
+/// a file: `AGENTS.md`, then
 /// the files the intent's `## Scope` section names, in that order and each once, each kept by
 /// the rules [`scope_files`] keeps a file by, read as the tree holds them now (at `HEAD` and on
 /// disk, as the session's copy is made from them), with `AGENTS.md` counted against
@@ -723,9 +789,9 @@ pub fn scope_files(
 ///
 /// Metaharness puts the files ahead of the prompt in the one argument the Codex child is
 /// started with, and refuses the session when that argument is `ARGUMENT_BYTES_MAX` bytes or
-/// more (metaharness-codex 0.11.0 `src/launch.rs:733-739`); `argument` composes that argument
+/// more (metaharness-codex 0.13.0 `src/launch.rs:766-770`); `argument` composes that argument
 /// for a list of files, the prompt as it would be with that list and every byte metaharness
-/// adds included ([`session_executor::SessionExecutor::codex_prompt_argument`]), and is called
+/// adds included ([`codex_prompt_argument`]), and is called
 /// afresh for each list tried, so the list returned is one whose argument was measured whole.
 /// So a file is also left out,
 /// as one past [`SCOPE_BYTES`] is, when the argument with it and the files kept before it would
@@ -756,7 +822,7 @@ pub fn context_files(
                 return false;
             };
             given.push(file);
-            let fits = session_executor::metaharness::protocol::argument_fits(&argument(&given));
+            let fits = loom_sdk::session::metaharness::protocol::argument_fits(&argument(&given));
             if !fits {
                 given.pop();
             }
@@ -856,21 +922,22 @@ fn kept_files(
 
 /// What a kept file costs against [`SCOPE_BYTES`] besides its bytes: nothing as a mention; as
 /// a context file, what metaharness charges for its path, which is the path as a JSON string
-/// with its quotes (`context_cost`, metaharness-protocol 0.11.0 `src/spec.rs:751`), since
-/// metaharness refuses a session whose context files cost more than its cap in all
-/// (metaharness 0.11.0 `src/context.rs:114-115`).
+/// with its quotes (`context_cost`, metaharness-protocol 0.13.0 `src/spec.rs:773`), since
+/// metaharness refuses a session whose declared context files cost more than its cap in all
+/// (metaharness 0.13.0 `src/context.rs:114-115`), and takt holds the files it puts ahead of
+/// the prompt itself to that cap.
 fn path_cost(path: &str, given: Given) -> u64 {
     match given {
         Given::Mention => 0,
-        Given::Context => session_executor::metaharness::protocol::context_cost(path, 0) as u64,
+        Given::Context => loom_sdk::session::metaharness::protocol::context_cost(path, 0) as u64,
     }
 }
 
 // takt's bounds on context files are inside metaharness's, so a list takt keeps is one
 // metaharness reads.
 const _: () = assert!(
-    SCOPE_BYTES <= session_executor::metaharness::protocol::CONTEXT_BYTES_MAX as u64
-        && SCOPE_FILES <= session_executor::metaharness::protocol::CONTEXT_FILES_MAX
+    SCOPE_BYTES <= loom_sdk::session::metaharness::protocol::CONTEXT_BYTES_MAX as u64
+        && SCOPE_FILES <= loom_sdk::session::metaharness::protocol::CONTEXT_FILES_MAX
 );
 
 /// The spans the intent's `## Scope` section holds in backticks, in order: the lines after a
@@ -2463,10 +2530,10 @@ mod tests {
         tree: &Path,
         intent: &str,
     ) -> (serde_json::Value, Vec<Vec<String>>) {
-        use session_executor::metaharness::{ScriptedLog, ScriptedRunner};
+        use loom_sdk::session::metaharness::{ScriptedLog, ScriptedRunner};
         let log = ScriptedLog::new();
         let mut harness = SessionHarness::of(kind);
-        harness.credentials = session_executor::CredentialSource::None;
+        harness.credentials = loom_sdk::session::CredentialSource::None;
         let kept = log.clone();
         let harness = harness.with_runner(move || {
             Box::new(ScriptedRunner::of_lines(Vec::<String>::new(), kept.clone()))
@@ -2743,7 +2810,7 @@ mod tests {
     /// more, takt leaves the last file out, and the session still starts.
     #[test]
     fn context_files_at_metaharness_byte_cap_start_the_session() {
-        use session_executor::metaharness::protocol::CONTEXT_BYTES_MAX;
+        use loom_sdk::session::metaharness::protocol::CONTEXT_BYTES_MAX;
         let paths = r#""AGENTS.md""#.len() + r#""fits.py""#.len();
         let left = CONTEXT_BYTES_MAX - AGENTS.1.len() - paths;
         let intent = scoped(&["fits.py"]);
@@ -2785,7 +2852,7 @@ mod tests {
     /// beside the prompt, in their order; with a short intent the same files are all given.
     #[test]
     fn a_long_intent_leaves_out_context_files_and_the_session_starts() {
-        use session_executor::metaharness::protocol::ARGUMENT_BYTES_MAX;
+        use loom_sdk::session::metaharness::protocol::ARGUMENT_BYTES_MAX;
         let dir = scratch("context-long-intent");
         let notes = notes();
         let mut files: Vec<(&str, &[u8])> = notes
@@ -2839,7 +2906,7 @@ mod tests {
     /// and leaves it out at exactly the limit, the line then naming `AGENTS.md` alone.
     #[test]
     fn a_codex_steps_context_fits_its_argument_to_the_byte() {
-        use session_executor::metaharness::protocol::ARGUMENT_BYTES_MAX;
+        use loom_sdk::session::metaharness::protocol::ARGUMENT_BYTES_MAX;
         let dir = scratch("context-boundary");
         committed(&dir.0, &[AGENTS, ("a.txt", b"alpha\n")]);
         let base = format!("{}\n## Notes\n\n", scoped(&["a.txt"]));
