@@ -788,7 +788,7 @@ impl Kept {
     /// [`Kept::refused`], the refusal Loom's session executor's own when `by_executor`: a
     /// session that adds a file the tree already holds (one git ignores, which the copy did not
     /// hold) proposes nothing, the step failing with the path named, so no proposal reaches the
-    /// edit effect at all (loom 0.34.0 `crates/loom-session-executor/src/lib.rs:751-758`).
+    /// edit effect at all (loom 0.35.0 `crates/loom-session-executor/src/lib.rs:751-758`).
     fn refused_by(
         &self,
         tree: &Path,

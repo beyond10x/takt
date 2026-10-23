@@ -12,7 +12,7 @@ relations:
 - serves: vision:safe-agentic-coding
 - depends_on: story:second-harness-adapter
 - depends_on: story:confinement-seam
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-21T23:29:26Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-21T23:29:26Z", actor: "human:timo", revision: 4}
@@ -55,3 +55,7 @@ Every child a run starts besides the test command — the harness session, git, 
 ## Out of Scope
 
 Toolchains other than Rust for the test command; `workflow/1`.
+
+## Finding (2026-10-23, the wave-34 review at 79ec8c0)
+
+- `finding:codex-and-harness-admission-untested` (low). Codex and b10x-harness are admitted by bare program name (`crates/takt/src/harness.rs:560-561`, `:570`), not by the path metaharness resolves; under `Substrate`, which checks the file name, that is the same, but only Claude's refusal has a test (`crates/takt/tests/confinement.rs:1390`). `expected_before`: `grep -cE 'Kind::Codex|Kind::B10x' crates/takt/tests/confinement.rs` prints 0.

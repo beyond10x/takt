@@ -11,7 +11,7 @@ relations:
 - decomposes: epic:takt-on-loom-sdk
 - serves: vision:safe-agentic-coding
 - depends_on: story:the-loop-is-run-until-blocked
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-22T16:10:52Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-22T16:10:52Z", actor: "human:timo", revision: 4}
@@ -43,7 +43,7 @@ The implementor's scoping at a4a2e3e counted 128 `impl … Harness for` in 74 fi
 
 ## Acceptance
 
-1. `cargo test -p b10x-takt --test no_own_evaluation` passes: it reads `crates/takt/src` and fails on a `b10x_canon::eval` path or a `decision.rs`, and on an `evaluate` method of `CaseDir` unless `run.rs` reads it only for `Shape::only_behind` and `Shape::unperformable`.
+1. `cargo test -p b10x-takt --test no_own_evaluation` passes: it reads `crates/takt/src` and fails on a `b10x_canon::eval` path or a `decision.rs`, and on an `evaluate` method of `CaseDir` unless `run.rs` runs `Shape::only_behind` and `Shape::unperformable` over the loop's one evaluate call. The loop's other reads of that decision are finding:loop-reads-its-own-decision, held by story:takt-harness-trait-retired (amended 2026-10-23 on the wave-34 review).
 2. `cargo check` in `fuzz/` passes.
 3. `ess specify validate --path ess` and `python3 -I scripts/check-citations --require-digests` pass, with no citation into a removed line.
 4. `AGENTS.md` § Layout names no `decision` module and names the session-executor crate.

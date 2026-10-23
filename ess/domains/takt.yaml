@@ -105,7 +105,7 @@ types:
       file: String
 
   # A planning-store story's artifact id, `story:<slug>`, as the `aep plan artifact` verbs take it.
-  # read from: docs/design/takt.md:38
+  # read from: docs/design/takt.md:44
   # read from: crates/takt/src/frontier.rs:52-53
   # read from: .engineering/planning/story/takt-domain-model.md:43
   - name: takt.work.StoryId
@@ -131,7 +131,7 @@ types:
   # `takt: take <story>`. A story whose minted case id the case id rule refuses is skipped with
   # a line naming it, and the next ready story tried. The `story` variant is the design's
   # `frontier(repo)`.
-  # read from: docs/design/takt.md:38
+  # read from: docs/design/takt.md:44
   # read from: crates/takt/src/frontier.rs:173-181
   # read from: crates/takt/src/frontier.rs:189
   # read from: crates/takt/src/run.rs:8833-8845
@@ -410,7 +410,7 @@ types:
   # whose assertion cannot be evaluated yet) yields to the harness at that revision, and a commit
   # makes it due again.
   # read from: crates/takt/src/run.rs:816-829
-  # read from: docs/design/takt.md:41-42
+  # read from: docs/design/takt.md:48-49
   # read from: crates/takt/src/run.rs:10289
   # read from: crates/takt/src/run.rs:10385-10386
   - name: takt.work.StepKind
@@ -1035,8 +1035,8 @@ types:
 
   # Where a `workflow/1` document is: the `--workflow <file>` argument, or the repository default
   # `.engineering/workflow.yaml`. Not built: the kernel reads neither yet (milestone M3).
-  # read from: docs/design/takt.md:35
-  # read from: docs/design/takt.md:74
+  # read from: docs/design/takt.md:41
+  # read from: docs/design/takt.md:99
   - name: takt.work.WorkflowPath
     kind: newtype
     of: String
@@ -1045,7 +1045,7 @@ types:
   # revision (the design's example writes the two together, `software.change/1`), and the case
   # inputs given to it. Not built; today the same things reach the kernel as `--protocol` and
   # `--input`, and the loaded protocol keeps name and major apart.
-  # read from: docs/design/takt.md:55
+  # read from: docs/design/takt.md:77
   # read from: crates/takt/src/run.rs:51-57
   # read from: crates/takt/src/protocol.rs:14-17
   - name: takt.work.ProtocolBlock
@@ -1068,7 +1068,7 @@ types:
   # read from: crates/takt/src/validator.rs:2174
   # read from: crates/takt/src/validator.rs:2530
   # read from: crates/takt/src/validator.rs:1094
-  # read from: docs/design/takt.md:56
+  # read from: docs/design/takt.md:78
   # read from: crates/takt/src/validator.rs:799-801
   # read from: crates/takt-cli/src/main.rs:627-629
   - name: takt.work.DeterministicStep
@@ -1082,7 +1082,7 @@ types:
   # A judgement `step` block: the protocol actions the harness may choose among, and the brief it
   # is given. Not built as a block; today the actions offered are computed each iteration (the
   # admissible actions no validator owns) and the brief is the intent.
-  # read from: docs/design/takt.md:57
+  # read from: docs/design/takt.md:79
   # read from: crates/takt/src/run.rs:10278-10288
   # read from: crates/takt/src/harness.rs:21-22
   - name: takt.work.JudgementStep
@@ -1161,7 +1161,7 @@ types:
     variants: [shown, none_yet, not_known, not_shown]
 
   # A `step` block of a workflow, one of the two kinds. Not built.
-  # read from: docs/design/takt.md:56-57
+  # read from: docs/design/takt.md:78-79
   - name: takt.work.StepBlock
     kind: union
     tag: kind
@@ -2555,8 +2555,8 @@ types:
   # removes it. An absolute path, a `..` or `.` part, or a part named `.git` is no path of the
   # tree, and the proposal that names one is refused.
   # read from: Loom 0.28.0, crates/loom-commission/src/ports/executor.rs:1-5
-  # read from: Loom 0.34.0, crates/loom-session-executor/src/lib.rs:121-127
-  # read from: Loom 0.34.0, crates/loom-session-executor/src/lib.rs:1629-1637
+  # read from: Loom 0.35.0, crates/loom-session-executor/src/lib.rs:121-127
+  # read from: Loom 0.35.0, crates/loom-session-executor/src/lib.rs:1629-1637
   - name: takt.work.ProposedFile
     kind: struct
     fields:
@@ -2705,7 +2705,7 @@ entities:
       # resumes it rather than opening a second; the frontier resumes the open case of a story
       # being worked before it takes a new one, and never takes a story a case already records.
       # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
-      # read from: docs/design/takt.md:38-39
+      # read from: docs/design/takt.md:44-45
       # read from: crates/takt/src/case.rs:1191-1200
       # read from: crates/takt/src/run.rs:8858-8871
       # read from: crates/takt/src/run.rs:8927
@@ -3024,7 +3024,7 @@ entities:
         type: String
         summary: The worktree the case is opened in and every action is performed in.
       # read from: crates/takt/src/run.rs:8364-8365
-      # read from: docs/design/takt.md:38
+      # read from: docs/design/takt.md:44
       - name: unit
         type: takt.work.Unit
       # Not given, a story the planning store gives opens on `story.delivery/1`, embedded in the
@@ -3078,7 +3078,7 @@ entities:
       - name: inputs
         type: Map<takt.work.InputId, String>
       # The workflow the run follows, when one is given; not built, the kernel takes none yet.
-      # read from: docs/design/takt.md:35
+      # read from: docs/design/takt.md:41
       - name: workflow
         type: Optional<takt.work.WorkflowPath>
       # read from: crates/takt/src/run.rs:58-59
@@ -3200,7 +3200,7 @@ entities:
         cardinality: one
         via: case_id
       # Not built: the kernel takes no workflow yet.
-      # read from: docs/design/takt.md:35
+      # read from: docs/design/takt.md:41
       - name: workflow
         kind: references
         target: takt.work.Workflow
@@ -3232,8 +3232,8 @@ entities:
   # steps of the validators the binary registers and the judgement step among the actions
   # offered. The `loop`, `gate` and `approval` blocks of the design are declared by the stories
   # that build them (story:declared-loops, story:gate-validator, story:merge-under-authority).
-  # read from: docs/design/takt.md:51-60
-  # read from: docs/design/takt.md:74
+  # read from: docs/design/takt.md:73-82
+  # read from: docs/design/takt.md:99
   - name: takt.work.Workflow
     naming:
       summary: >-
@@ -3243,14 +3243,14 @@ entities:
       name: path
       type: takt.work.WorkflowPath
     fields:
-      # read from: docs/design/takt.md:51
+      # read from: docs/design/takt.md:73
       - name: format
         type: String
         summary: The only accepted value is `workflow/1`.
-      # read from: docs/design/takt.md:55
+      # read from: docs/design/takt.md:77
       - name: protocol
         type: takt.work.ProtocolBlock
-      # read from: docs/design/takt.md:56-57
+      # read from: docs/design/takt.md:78-79
       - name: steps
         type: List<takt.work.StepBlock>
     # A workflow is declared and stays declared; the loop reads it and never moves it.
@@ -3430,7 +3430,7 @@ entities:
   # is committed, exactly the paths it changed, under a one-line message (`<action>:
   # <summary>`, the summary's line breaks as spaces), and `implementation` moved to the new head.
   # read from: crates/takt/src/run.rs:1541-1588
-  # read from: docs/design/takt.md:40-42
+  # read from: docs/design/takt.md:46-49
   # read from: crates/takt/src/run.rs:9917-9925
   # read from: crates/takt/src/run.rs:10056
   # read from: crates/takt/src/run.rs:10646-10657
@@ -3592,7 +3592,7 @@ entities:
       # step writes none, because the model never produces evidence.
       # read from: crates/takt/src/validator.rs:36-37
       # read from: crates/takt/src/run.rs:10129-10130
-      # read from: docs/design/takt.md:47-49
+      # read from: docs/design/takt.md:69-71
       - name: records
         type: List<takt.work.EvidenceId>
       # What a deterministic step retained beside its records, when the validator keeps something:
@@ -3893,8 +3893,8 @@ entities:
   # read from: crates/takt/src/forge.rs:1066-1094
   # read from: crates/takt/src/validator.rs:2397
   # read from: crates/takt/src/validator.rs:3399
-  # read from: docs/design/takt.md:47-49
-  # read from: docs/design/takt.md:64-65
+  # read from: docs/design/takt.md:69-71
+  # read from: docs/design/takt.md:86-88
   # read from: crates/takt/src/forge.rs:1244-1268
   # read from: crates/takt/src/validator.rs:458-478
   # read from: crates/takt/src/validator.rs:3739-3753
@@ -5302,12 +5302,12 @@ entities:
   # read from: crates/takt/src/harness.rs:110-115
   # read from: crates/takt/src/run.rs:10849-10857
   # read from: crates/takt/src/run.rs:9724-9734
-  # read from: Loom 0.34.0, crates/loom-session-executor/src/lib.rs:129-138
+  # read from: Loom 0.35.0, crates/loom-session-executor/src/lib.rs:129-138
   # read from: crates/takt-cli/src/main.rs:1379-1392
   # read from: crates/takt/src/harness.rs:117-123
   # read from: crates/takt/src/run.rs:10859-10862
   # read from: crates/takt/src/run.rs:8115-8123
-  # read from: Loom 0.34.0, crates/loom-session-executor/src/lib.rs:1232-1239
+  # read from: Loom 0.35.0, crates/loom-session-executor/src/lib.rs:1232-1239
   - name: takt.work.Proposal
     naming:
       summary: >-

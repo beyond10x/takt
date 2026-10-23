@@ -109,9 +109,12 @@ blocked.
 
 Still takt's own, besides what § 2 lists:
 
-- the two pre-checks of § 3 (`Shape::only_behind`, `Shape::unperformable`) and the evaluation they
-  read (`CaseDir::evaluate`), kept by approval-record:loop-pre-checks-ahead-of-loom until a change
-  to Loom's documented contract;
+- the evaluation the loop reads before each Loom step (`CaseDir::evaluate`), for two uses. The two
+  pre-checks of § 3 (`Shape::only_behind`, `Shape::unperformable`) are kept by
+  approval-record:loop-pre-checks-ahead-of-loom until a change to Loom's documented contract.
+  The loop's other reads of it (the frontier line it prints, the claims, `legitimate()`,
+  `admissible()` and `approval_required()`, `crates/takt/src/run.rs`) stay until
+  story:takt-harness-trait-retired;
 - the `Harness` trait and the `harness` module (`crates/takt/src/harness.rs`), until
   story:takt-harness-trait-retired.
 
