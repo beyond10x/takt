@@ -60,9 +60,9 @@ One open-source binary, Apache-2.0. Site: <https://beyond10x.github.io/takt/>.
 
 ## Status
 
-0.9.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+0.10.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
 `scorecard`, `trace`, `report`, `view`, `promote` and `replay`, with `story.delivery/1` and `self.improvement/1`
-embedded, and prebuilt binaries for Linux (x86_64, aarch64); it has no macOS binary. A harness step
+embedded, and prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64). A harness step
 runs through a metaharness session with Claude Code, Codex or b10x-harness (`--harness`). Since 0.1.0 it
 has gained the judge guard and the self-improvement protocol. A scorecard is now bound to the
 binary that made its runs, and the promotion chain is anchored. A finding's check runs confined.
@@ -107,8 +107,8 @@ What each command does:
 
 ## Install
 
-Prebuilt binaries for Linux (x86_64, aarch64) and, up to 0.6.0, macOS (aarch64), with checksums
-(0.7.0 to 0.9.0 have no macOS binary: on macOS use 0.6.0):
+Prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64), with checksums
+(0.7.0 to 0.9.0 have no macOS binary):
 [Install a release](https://beyond10x.github.io/takt/docs/getting-started#install-a-release). From source:
 
 ```
