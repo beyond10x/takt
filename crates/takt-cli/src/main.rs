@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
 use takt::Frontier as _;
+use takt::forge::gitlab::Glab;
 use takt::forge::{BotRoute, Forge, Process, Runner, repository_of};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness, Kind, SessionHarness};
@@ -650,11 +651,16 @@ struct LoopArgs {
     #[arg(long)]
     project: Option<PathBuf>,
     /// The forge: `bot` (the repository's bot route: `b10x-gates` pushes the case's branch,
-    /// opens its pull request and merges it, `gh` reads the pull request's state and checks) or
-    /// `none` (no pull request is opened; when `pr.open`, `ci.read` or `repository.merge` is the
-    /// only action that decides what is left, nothing performs it: the run stops
-    /// `Unperformable`, exit 7, and the case stays open). Not given, `bot` when the repository's `origin` is a repository on
-    /// github.com, the host the bot route serves, else `none`.
+    /// opens its pull request and merges it, `gh` reads the pull request's state and checks),
+    /// `gitlab` (a repository on a GitLab host: git pushes the case's branch over HTTPS under
+    /// `glab`'s credential helper, `glab api` opens the merge request, reads its state and head
+    /// pipeline and merges it; refused before any case opens unless `glab auth status
+    /// --hostname <host>` exits 0) or `none` (no pull request is opened; when `pr.open`,
+    /// `ci.read` or `repository.merge` is the only action that decides what is left, nothing
+    /// performs it: the run stops `Unperformable`, exit 7, and the case stays open). Not given,
+    /// `bot` when the repository's `origin` is a repository on github.com, the host the bot
+    /// route serves; `gitlab` when it is on another host and `glab` is logged in to it; else
+    /// `none`, said in one line naming what `glab` said.
     #[arg(long)]
     forge: Option<String>,
     /// The least free space, in GiB, a step needs on the file system of the repository's tree
@@ -1623,9 +1629,10 @@ impl Forged {
 }
 
 /// The forge: the bot route when asked for, or by default when `origin` is a repository on
-/// github.com, the host the bot route serves. `--forge bot` elsewhere is refused in one line
-/// before any case is opened; by default another host gets no forge, said in one line once the
-/// case is open.
+/// github.com, the host the bot route serves; `glab` when asked for, or by default when `origin`
+/// is on another host and `glab` is logged in to it. `--forge bot` elsewhere, `--forge gitlab` on
+/// github.com or without a login are refused in one line before any case is opened; by default
+/// another host without a login gets no forge, said in one line once the case is open.
 fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
     let bot = |repo: &Path| -> Result<Forged> {
         let bot = BotRoute::for_tree(repo)?;
@@ -1640,6 +1647,17 @@ fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
             trials: Some(trials),
         })
     };
+    let gitlab = |glab: Glab| -> Forged {
+        let line = format!(
+            "forge: gitlab ({} {}); pr.open, ci.read and repository.merge go through glab",
+            glab.host, glab.project
+        );
+        Forged {
+            forge: Some(Rc::new(glab)),
+            line: Some(line),
+            trials: None,
+        }
+    };
     let none = |line: Option<String>| Forged {
         forge: None,
         line,
@@ -1648,6 +1666,7 @@ fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
     Ok(match forge {
         Some("none") => none(None),
         Some("bot") => bot(repo)?,
+        Some("gitlab") => gitlab(Glab::for_tree(repo)?),
         None => match takt::git::remote_url(repo, "origin")
             .ok()
             .as_deref()
@@ -1655,16 +1674,20 @@ fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
         {
             None => none(None),
             Some(Some(origin)) if BotRoute::serves(&origin.host) => bot(repo)?,
-            Some(Some(origin)) => none(Some(format!(
-                "forge: none (origin {} is not {})",
-                origin.host,
-                BotRoute::HOST
-            ))),
+            Some(Some(origin)) => match Glab::for_tree(repo) {
+                Ok(glab) => gitlab(glab),
+                Err(error) => none(Some(format!(
+                    "forge: none (origin {} is not {}, and glab is not logged in to it: {})",
+                    origin.host,
+                    BotRoute::HOST,
+                    one_line(&format!("{error:#}"))
+                ))),
+            },
             Some(None) => none(Some(
                 "forge: none (origin names no <owner>/<repo> on a host)".to_owned(),
             )),
         },
-        Some(other) => return Err(anyhow!("no forge `{other}`: bot or none")),
+        Some(other) => return Err(anyhow!("no forge `{other}`: bot, gitlab or none")),
     })
 }
 

@@ -103,22 +103,74 @@ fn run_args<'a>(repo: &'a str, case: &'a str) -> Vec<&'a str> {
     ]
 }
 
+/// Runs the built `takt` binary with `args` on a program path whose one `glab` is a double in
+/// `<outer>/stub-bin` that is logged in to no host (`glab auth status` exits 1): the real
+/// `glab` is never run, and nothing reaches a host. The exit code, stdout and stderr.
+fn takt_without_glab_login(outer: &Path, args: &[&str]) -> (i32, String, String) {
+    let bin = outer.join("stub-bin");
+    fs::create_dir_all(&bin).expect("a stub directory");
+    let glab = bin.join("glab");
+    fs::write(
+        &glab,
+        "#!/bin/sh\necho \"x $4 has not been authenticated with glab\" >&2\nexit 1\n",
+    )
+    .expect("the double is written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&glab, fs::Permissions::from_mode(0o755)).expect("executable");
+    }
+    let mut path = vec![bin];
+    path.extend(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .filter(|dir| !dir.join("glab").exists()),
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args(args)
+        .env("PATH", std::env::join_paths(path).expect("a program path"))
+        .output()
+        .expect("takt runs");
+    (
+        output.status.code().expect("an exit code"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
 /// The bot route pushes under a GitHub App and reads through `gh`: it is a GitHub forge. An
 /// `origin` on another host, or a `file://` URL, must not make it the default; `--forge none`
 /// by default or a refusal in one line are both acceptable, a run that would push and open
-/// there is not.
+/// there is not. Another host is the forge `gitlab`'s only while `glab` is logged in to it:
+/// without a login the run has no forge, and says why in one line.
 #[test]
 fn a_non_github_origin_does_not_make_the_bot_route_the_default() {
-    for (name, url) in [
-        ("gitlab-ssh", "git@gitlab.example.com:owner/repo.git"),
-        ("gitlab-https", "https://gitlab.example.com/owner/repo.git"),
-        ("file", "file:///srv/git/owner/repo.git"),
+    for (name, url, line) in [
+        (
+            "gitlab-ssh",
+            "git@gitlab.example.com:owner/repo.git",
+            "forge: none (origin gitlab.example.com is not github.com, and glab is not logged in to it: ",
+        ),
+        (
+            "gitlab-https",
+            "https://gitlab.example.com/owner/repo.git",
+            "forge: none (origin gitlab.example.com is not github.com, and glab is not logged in to it: ",
+        ),
+        (
+            "file",
+            "file:///srv/git/owner/repo.git",
+            "forge: none (origin names no <owner>/<repo> on a host)",
+        ),
     ] {
-        let (_outer, repo) = repository(name, url);
-        let (code, out, err) = takt(&run_args(repo.to_str().expect("utf-8"), name));
+        let (outer, repo) = repository(name, url);
+        let (code, out, err) =
+            takt_without_glab_login(&outer, &run_args(repo.to_str().expect("utf-8"), name));
         assert!(
             !out.contains("forge: bot"),
             "origin {url}: the bot route is the default forge: exit {code} stdout {out} stderr {err}"
+        );
+        assert!(
+            out.contains(line),
+            "origin {url}: {line}: exit {code} stdout {out} stderr {err}"
         );
     }
 }

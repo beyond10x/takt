@@ -6,6 +6,16 @@ takt's releases.
 
 ## [Unreleased]
 
+### Added
+
+- `--forge gitlab` delivers through `glab` on a GitLab host: it pushes over HTTPS under `glab auth git-credential`, and opens, reads and merges the merge request through `glab api`.
+- `--forge gitlab` without `glab` on the program path, or without `glab auth status --hostname <host>` exiting 0, is refused before the case opens, naming `glab` and the host.
+- `.gitlab-ci.yml` at the repository's root is on the judge surface, as `.github/**` is.
+
+### Changed
+
+- Without `--forge`, an `origin` on a host other than github.com gets the forge `gitlab` when `glab` is logged in to it, and otherwise `forge: none` with what `glab` said in one line.
+
 ## [0.10.1] - 2026-10-23
 
 `--harness claude` proposes on Claude Code 2.1.309 and `--harness codex` runs on Codex 0.160.0, through loom 0.39.0

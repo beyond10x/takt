@@ -118,13 +118,19 @@ takt --version
 
 ## Requirements
 
-A harness, `aep` for story runs, `b10x-gates` and `gh` for pull requests, bubblewrap for
-`takt promote`: [What it needs](https://beyond10x.github.io/takt/docs/getting-started#what-it-needs).
+A harness, `aep` for story runs, `b10x-gates` and `gh` for pull requests (`glab` instead of
+`gh` on a GitLab host), bubblewrap for `takt promote`: [What it needs](https://beyond10x.github.io/takt/docs/getting-started#what-it-needs).
 
 takt commits as the identity the repository names in `.engineering/commit-identity.conf`
 (`[identity]` with `name` and `email`), or as `--commit-identity '<name> <email>'`, never as
 your git configuration. With neither it commits as `takt <takt@localhost>`, and a run through
 the bot route, which pushes those commits, is refused before its case opens.
+
+The forge follows `origin`: `--forge bot` on github.com, `--forge gitlab` on any other host
+while `glab auth status --hostname <host>` exits 0, else `--forge none`, with the reason in
+one line. Through `gitlab`, git pushes over HTTPS with `glab auth git-credential` as its one
+credential helper, and the merge request is opened, read and merged through `glab api`;
+`--forge gitlab` without `glab` or its login is refused before the case opens.
 
 A `--forge none` delivery whose change reads ahead stops `Unperformable` at `pr.opened`, exit 7,
 and prints `candidate: <full commit id>`: its code commits, without takt's take, record and

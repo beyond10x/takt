@@ -1728,8 +1728,12 @@ const PYTHON_FILES: &[&str] = &[
     "usercustomize.py",
 ];
 
+/// The CI definition of a repository on a GitLab host, at the tree's root: on the judge surface
+/// as `.github/**` is, so a step that edits what the checks run leaves `ci.read` nothing to read.
+pub const GITLAB_CI: &str = ".gitlab-ci.yml";
+
 /// The judge surface every run guards, as a refusal names it.
-pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini`, `setup.cfg`, `sitecustomize.py` and `usercustomize.py` at any depth, `*.pth` at the root and directly in a `site-packages` or `dist-packages` directory, `[tool.pytest*]` in `pyproject.toml`, the module and package `python -m` runs and the `*.pth` files in every directory it imports from (where it runs and what `PYTHONPATH` names), a module, compiled module or package named like one the test command's Python imports from outside the tree (asked when the case opens; the standard library's and the test runners' `unittest`, `pytest`, `_pytest`, `pluggy`, `nose2` when no Python answers) in every directory Python imports from under any program (where it runs, each `PYTHONPATH` entry, a `unittest discover` or `nose2` start and top-level directory, a test file's directory when pytest runs, a Python script's own directory), every executable entry (at the base, before or after the step) directly in a tree directory on `PATH`, the script's or the one takt runs with, the test command's own script, the scripts it runs, read one level deep (every file beside a script deeper than that), and its build tool's file, every Python file, shell file and program of the tree while a line of such a script cannot be read or a build tool's recipe runs, and the repository's own `.engineering/judge-surface.yaml` list";
+pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.gitlab-ci.yml` at the root, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini`, `setup.cfg`, `sitecustomize.py` and `usercustomize.py` at any depth, `*.pth` at the root and directly in a `site-packages` or `dist-packages` directory, `[tool.pytest*]` in `pyproject.toml`, the module and package `python -m` runs and the `*.pth` files in every directory it imports from (where it runs and what `PYTHONPATH` names), a module, compiled module or package named like one the test command's Python imports from outside the tree (asked when the case opens; the standard library's and the test runners' `unittest`, `pytest`, `_pytest`, `pluggy`, `nose2` when no Python answers) in every directory Python imports from under any program (where it runs, each `PYTHONPATH` entry, a `unittest discover` or `nose2` start and top-level directory, a test file's directory when pytest runs, a Python script's own directory), every executable entry (at the base, before or after the step) directly in a tree directory on `PATH`, the script's or the one takt runs with, the test command's own script, the scripts it runs, read one level deep (every file beside a script deeper than that), and its build tool's file, every Python file, shell file and program of the tree while a line of such a script cannot be read or a build tool's recipe runs, and the repository's own `.engineering/judge-surface.yaml` list";
 
 /// How many scripts deep the guard reads: the test command's own script, and the scripts it
 /// runs. A script deeper than that is not read; everything in its directory, and every Python
@@ -6243,6 +6247,7 @@ impl JudgeSurface {
         let name = parts.last().copied().unwrap_or_default();
         (self.store && Self::is_store(path))
             || folded == fold(JUDGE_LIST)
+            || folded == GITLAB_CI
             || folded == ".github"
             || folded.starts_with(".github/")
             || parts.contains(&".cargo")
@@ -6267,7 +6272,7 @@ impl JudgeSurface {
 
     /// Whether a validator or the guarded command would read through a link at `link`: the link
     /// is, or is on the way to, the cargo configuration (`.cargo/` at any depth), the CI
-    /// workflows (`.github/workflows/`), the store's directories and project file (while the
+    /// workflows (`.github/workflows/`, `.gitlab-ci.yml` at the root), the store's directories and project file (while the
     /// store is on the surface), a manifest, a build script, a toolchain file, a Python start-up
     /// file (`sitecustomize.py`, `usercustomize.py`, a `*.pth` at the root or in a
     /// `site-packages` or `dist-packages` directory), or the test
@@ -6289,6 +6294,7 @@ impl JudgeSurface {
         };
         parts.contains(&".cargo")
             || is_or_holds(".github/workflows")
+            || is_or_holds(GITLAB_CI)
             || (self.store
                 && [
                     ".engineering/planning",
@@ -6330,7 +6336,7 @@ impl JudgeSurface {
                 continue;
             };
             let folded = fold(name);
-            if [ENGINEERING, ".cargo", ".github", "build.rs"].contains(&folded.as_str())
+            if [ENGINEERING, ".cargo", ".github", GITLAB_CI, "build.rs"].contains(&folded.as_str())
                 || folded.starts_with("rust-toolchain")
                 || PYTHON_FILES.contains(&folded.as_str())
                 || folded.ends_with(".pth")
