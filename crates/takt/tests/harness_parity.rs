@@ -696,7 +696,7 @@ fn a_codex_session_on_another_version_proposes_nothing() {
     let tree = scratch.tree();
     let before = work(&tree);
     let script = Script {
-        version: "0.160.0",
+        version: "0.143.0",
         ..Script::fixing()
     };
     let (other, _) = harness(Kind::Codex, &script);
@@ -1069,7 +1069,7 @@ fn a_codex_session_held_back_by_h9_charges_its_tokens() {
     let tree = scratch.tree();
     let before = work(&tree);
     let script = Script {
-        version: "0.160.0",
+        version: "0.143.0",
         ..Script::fixing()
     };
     let (harness, _) = harness(Kind::Codex, &script);
@@ -1086,7 +1086,7 @@ fn a_codex_session_held_back_by_h9_charges_its_tokens() {
     assert_eq!(steps[0]["tokens"].as_u64(), Some(120), "{:?}", steps[0]);
     assert_eq!(steps[0]["usage"]["input"], 60, "{:?}", steps[0]);
     assert_eq!(steps[0]["usage"]["cache_read"], 40, "{:?}", steps[0]);
-    assert_eq!(steps[0]["version"], "0.160.0", "{:?}", steps[0]);
+    assert_eq!(steps[0]["version"], "0.143.0", "{:?}", steps[0]);
 }
 
 const RESOLVE_CHILD: &str = "TAKT_HARNESS_PARITY_RESOLVE";

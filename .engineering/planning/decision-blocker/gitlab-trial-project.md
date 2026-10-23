@@ -7,7 +7,7 @@ title: 'Owner: which GitLab project takt''s GitLab trials run against'
 relations:
 - blocks: story:gitlab-forge
 - blocks: story:gitlab-ci-wait
-revision: 1
+revision: 2
 ---
 ## Question
 
@@ -16,3 +16,5 @@ Which GitLab host and project do takt's GitLab trials run against? story:gitlab-
 ## Who answers
 
 The owner. Cleared by naming the project; its name stays out of this public repository's committed text if it is private.
+
+Decider: operator

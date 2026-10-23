@@ -6,6 +6,20 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-23
+
+`--harness claude` proposes on Claude Code 2.1.309 and `--harness codex` runs on Codex 0.160.0, through loom 0.39.0
+and metaharness 0.15.0.
+
+### Changed
+
+- `b10x-loom-sdk` moves from loom 0.37.0 to 0.39.0, which runs harness sessions on metaharness 0.15.0; takt names none of the types either release marks breaking.
+
+### Fixed
+
+- `--harness claude` proposes on Claude Code 2.1.309 as well as 2.1.304 and 2.1.305; 0.10.0 held back every proposal on 2.1.309.
+- `--harness codex` runs on Codex 0.160.0 as well as 0.153.4.
+
 ## [0.10.0] - 2026-10-23
 
 The minor version moves because takt runs on macOS again: 0.10.0 ships `aarch64-apple-darwin`, which 0.7.0 to 0.9.0
@@ -415,7 +429,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.10.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.10.1...HEAD
+[0.10.1]: https://github.com/beyond10x/takt/compare/0.10.0...0.10.1
 [0.10.0]: https://github.com/beyond10x/takt/compare/0.9.0...0.10.0
 [0.9.0]: https://github.com/beyond10x/takt/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/beyond10x/takt/compare/0.7.0...0.8.0
