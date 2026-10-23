@@ -20,11 +20,11 @@ The name: takt time is the pace at which units of work are finished. One run is 
 
 | foundation | what it gives | release |
 |---|---|---|
-| Loom | the runtime takt runs on: Commission's runtime (`run_until_blocked`) drives a case step by step; the governor (`CanonGovernor`) decides it with Canon over the case's files; an `AgentExecutor` proposes and an `EffectPort` performs; the session executor runs a harness session over metaharness (`loom_sdk::session`, crate `b10x-loom-session-executor`); the `SubstrateRunner` confines a test command | `b10x-loom-sdk` 0.35.0 (`Cargo.toml`) |
+| Loom | the runtime takt runs on: Commission's runtime (`run_until_blocked`) drives a case step by step; the governor (`CanonGovernor`) decides it with Canon over the case's files; an `AgentExecutor` proposes and an `EffectPort` performs; the session executor runs a harness session over metaharness (`loom_sdk::session`, crate `b10x-loom-session-executor`); the `SubstrateRunner` confines a test command | `b10x-loom-sdk` 0.39.0 (`Cargo.toml`) |
 | Canon | `protocol/1`; `evaluate` is a pure function from protocol, case snapshot, evidence records, authority and instant to claims (TRUE, FALSE, UNKNOWN), obligations, admissible actions and legitimate outcomes, with an explanation; evidence is bound to the revision it was observed on. takt reaches it through Loom's governor and calls no `b10x_canon::eval` itself (`crates/takt/tests/no_own_evaluation.rs`) | `b10x-canon` 0.6.0 |
 | Engineering protocols | `software.change/1` and the other engineering protocols as Canon documents, validated by Canon; assertion providers and the gates command line | `b10x-canon-engineering` 0.9.0 |
 | AEP | the planning store: stories, scope, waves derived from scope, evidence on a story | `aep` 0.74.0 |
-| metaharness | the harness sessions Loom's session executor starts: Claude Code, Codex or b10x-harness (`--harness claude\|codex\|harness`), each working in a scratch copy of the case tree and proposing its change | `metaharness` 0.13.0 (`Cargo.lock`) |
+| metaharness | the harness sessions Loom's session executor starts: Claude Code, Codex or b10x-harness (`--harness claude\|codex\|harness`), each working in a scratch copy of the case tree and proposing its change | `metaharness` 0.15.0 (`Cargo.lock`) |
 
 ADR 0090 (Loom) and ADR 0099 put the runtime in Loom, and the owner's decision of 2026-10-20 has
 Loom reach agent harnesses only through metaharness. takt keeps what is its own: validators and
@@ -55,15 +55,15 @@ Each part of the loop and what performs it now:
 
 | part | performed by | held in |
 |---|---|---|
-| the step | Commission's runtime of loom-sdk: `run_until_blocked`, one call per step | `crates/takt/src/run.rs` (`Run`), crate `b10x-loom-commission` 0.35.0 |
-| evaluate, frontier, admit | the governor of Loom (`CanonGovernor`) over the case's files (`CaseFiles`), deciding with Canon; each decision is written as `decisions/NNNN.json` | `crates/takt/src/case.rs`, crate `b10x-loom-governor` 0.35.0 |
+| the step | Commission's runtime of loom-sdk: `run_until_blocked`, one call per step | `crates/takt/src/run.rs` (`Run`), crate `b10x-loom-commission` 0.39.0 |
+| evaluate, frontier, admit | the governor of Loom (`CanonGovernor`) over the case's files (`CaseFiles`), deciding with Canon; each decision is written as `decisions/NNNN.json` | `crates/takt/src/case.rs`, crate `b10x-loom-governor` 0.39.0 |
 | a grant | the case's authority provider (`CaseAuthority`, Loom's `AuthorityProvider`) over `authority.yaml` | `crates/takt/src/case.rs` |
 | pre-check | takt itself, ahead of each Loom step: `Shape::only_behind` stops `ApprovalRequired` (exit 4), `Shape::unperformable` stops `Unperformable` (exit 7) | `crates/takt/src/run.rs` |
-| propose | the composite executor (`TurnExecutor`, Loom's `AgentExecutor`): the due validator's action, else a judgement step of a session executor (`SessionHarness` over Loom's `SessionExecutor` and metaharness) | `crates/takt/src/run.rs`, `crates/takt/src/harness.rs`, crate `b10x-loom-session-executor` 0.35.0 |
+| propose | the composite executor (`TurnExecutor`, Loom's `AgentExecutor`): the due validator's action, else a judgement step of a session executor (`SessionHarness` over Loom's `SessionExecutor` and metaharness) | `crates/takt/src/run.rs`, `crates/takt/src/harness.rs`, crate `b10x-loom-session-executor` 0.39.0 |
 | perform | the composite effect (`TurnEffect`, Loom's `EffectPort`): the edit effect applies a proposal under the step guard; `ValidatorEffect` performs a validator's action, `ChoiceEffect` records a choice | `crates/takt/src/run.rs`, `crates/takt/src/validator.rs` |
 | observation | the session's `AgentSession` record, observed into `observations.json` through the governor | `crates/takt/src/run.rs`, `crates/takt/src/case.rs` |
 | validator | a validator (`TestsRun`, `GateRun`, `PrOpen`, `CiRead`, `PrMerged`, `ChangeRead`) turns an observation into a `canon-evidence/1` record, which reaches the case through the evidence port | `crates/takt/src/validator.rs` |
-| forge | the pull request, CI read and merge through the repository's bot route (`BotRoute`) | `crates/takt/src/forge.rs` |
+| forge | the pull request, CI read and merge: through the repository's bot route (`BotRoute`) for an `origin` on github.com, or through `glab` (`Glab`) for one on a GitLab host, where the pull request is a merge request and its head pipeline is what `ci.read` reads | `crates/takt/src/forge.rs`, `crates/takt/src/forge/gitlab.rs` |
 | child process | a confinement adapter: `Unconfined`, or `Substrate`, which runs the test command in loom-sdk's `SubstrateRunner` | `crates/takt/src/confinement.rs` |
 
 The hard rule: the model never produces evidence. A validator, a program, turns an observation
@@ -85,10 +85,26 @@ to the revision it observed. What the harness says is a trace.
 
 Traits in the library: `Harness` (the judgement actor; built: `SessionHarness` for Claude Code, Codex and
 b10x-harness, each through Loom's session executor), `Frontier` (the planning store; built: AEP), `Validator` (an
-evidence producer, each performing as a Commission effect), `Forge` (pull request, merge, release through the
-repository's bot route; built: all but release), `Confinement` (built: `none` and `substrate`, which holds the test
-command only). The `Harness` trait is still takt's own; story:takt-harness-trait-retired makes each harness a Loom
-`AgentExecutor`.
+evidence producer, each performing as a Commission effect), `Forge` (pull request, merge, release; built: all but
+release, through the repository's bot route, through `glab` on a GitLab host, and the in-memory double `Memory` the
+tests use), `Confinement` (built: `none` and `substrate`, which holds the test command only). The `Harness` trait is
+still takt's own; story:takt-harness-trait-retired makes each harness a Loom `AgentExecutor`.
+
+`--forge` names the adapter: `bot`, `gitlab` or `none`. Not given, it follows `origin`: `bot` on github.com,
+`gitlab` on another host while `glab auth status --hostname <host>` exits 0, else `none`, with what glab said in
+one line. Through `gitlab`, git pushes the case's branch over HTTPS with `glab auth git-credential` as its one
+credential helper, `glab api` opens the merge request, reads its state and head pipeline and merges it under a
+grant, and takt holds no token. The merge request's files keep the bot route's `pull-request.*` names. A GitLab
+repository's CI definition, `.gitlab-ci.yml` at the root, is on the judge surface beside `.github/**`
+(`GITLAB_CI`, `crates/takt/src/run.rs`): a step that edits what the checks run is refused.
+
+The endpoint b10x-harness's loop is pointed at under `--harness harness` is configured (`EndpointConfig`,
+`crates/takt/src/harness.rs`): its base URL, wire, model and credential come from the `--endpoint-*` flags or from
+`--endpoint-file`, a TOML file, a flag winning over the file; with neither, it is the Anthropic Messages API on the
+user's claude.ai login. A credential is named, never given: a token file with an optional JSON pointer, or a
+secret's name (`--endpoint-secret <namespace>/<name>`). Not built: a secret's name is refused before the case opens
+until the pinned session executor (loom 0.39.0) can hand it to the harness, and the case does not yet record the
+endpoint's reference (story:harness-endpoint-is-configured).
 
 ## 4. Milestones
 

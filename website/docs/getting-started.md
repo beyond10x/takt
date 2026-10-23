@@ -43,8 +43,10 @@ cargo install --locked --path crates/takt-cli
 - A harness: Claude Code (`claude` on the `PATH`), or `--harness none` to run validators only.
 - For story runs: `aep` on the `PATH` and its planning store in the repository
   (`.engineering/project.yaml`) with ready stories.
-- For pull requests: an `origin` on github.com, and `b10x-gates` and `gh` on the `PATH`. Another
-  host gets no forge, and `--forge none` runs without one. The forge's gates policy comes from
+- For pull requests: an `origin` on github.com, and `b10x-gates` and `gh` on the `PATH`. On a
+  GitLab host such as `gitlab.example`, `glab` takes the place of `gh` and opens a merge request,
+  once `glab auth status --hostname gitlab.example` exits 0. A host `glab` is not logged in to
+  gets no forge, and `--forge none` runs without one. The forge's gates policy comes from
   `B10X_GATES_POLICY`.
 - For `takt promote`: bubblewrap (`bwrap`) on the `PATH` and rustup's default toolchain. The
   candidate is built and run inside bubblewrap.
