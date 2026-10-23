@@ -2,15 +2,16 @@
 format: aep.planning-md/3
 id: story:takt-runs-its-tests-on-macos
 kind: story
-status: active
+status: implemented
 title: takt's scripts and binary run on macOS where only a Linux assumption stopped them
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-21T13:22:17Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-21T13:22:17Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-23T10:31:55Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":3}}}
 ---
 ## Outcome
 

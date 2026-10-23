@@ -2,11 +2,16 @@
 format: aep.planning-md/3
 id: story:wave-35-review-fixes
 kind: story
-status: draft
+status: implemented
 title: The macOS confinement holds what wave 35 says
 relations:
 - depends_on: story:takt-confines-on-macos
-revision: 3
+- serves: vision:safe-agentic-coding
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-23T10:32:01Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
+- {from: "proposed", to: "active", at: "2026-10-23T10:32:01Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
+- {from: "active", to: "implemented", at: "2026-10-23T10:32:01Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 
