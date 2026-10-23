@@ -2029,7 +2029,7 @@ types:
   # crash, a flag rejected, a command not found) or the predicate's `exit` without its `output`,
   # which makes no claim true.
   # read from: protocols/self-improvement/1.yaml:45-50
-  # read from: scripts/check-finding:622-640
+  # read from: scripts/check-finding:624-642
   - name: takt.work.ScenarioResult
     kind: enum
     variants: [reproduced, not_reproduced, error]
@@ -4306,7 +4306,7 @@ entities:
   # judged the promotion to finish under (Case `judge`); a binary not kept undoes nothing.
   # read from: .engineering/planning/story/promotion.md:39-44
   # read from: .engineering/planning/story/promotion.md:52-54
-  # read from: crates/takt-cli/tests/promote_cli.rs:1329-1334
+  # read from: crates/takt-cli/tests/promote_cli.rs:1332-1337
   # read from: crates/takt/src/promotion.rs:1215-1221
   # read from: crates/takt/src/promotion.rs:1755-1866
   # read from: crates/takt/src/promotion.rs:2249-2488
@@ -4601,10 +4601,10 @@ entities:
   # read from: scripts/file-finding:11-56
   # read from: scripts/file-finding:175
   # read from: scripts/file-finding:322
-  # read from: scripts/check-finding:275-536
-  # read from: scripts/check-finding:582-611
-  # read from: scripts/check-finding:386-412
-  # read from: scripts/check-finding:221-223
+  # read from: scripts/check-finding:277-538
+  # read from: scripts/check-finding:584-613
+  # read from: scripts/check-finding:388-414
+  # read from: scripts/check-finding:223-225
   # One predicate on one scenario or one repository: a body with a second `expected_before`
   # block, a block that gives a key twice, or one that gives both `scenario` and `repository`, or
   # neither, is malformed and nothing is filed. `seed` and `test` go with `repository` only: a

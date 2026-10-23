@@ -218,7 +218,8 @@ case "$1" in
           printf 'GIT_TERMINAL_PROMPT=%s\n' "${{GIT_TERMINAL_PROMPT-unset}}"
           printf 'GIT_SSH_COMMAND=%s\n' "${{GIT_SSH_COMMAND-unset}}"
           printf 'SSH_AUTH_SOCK=%s\n' "${{SSH_AUTH_SOCK-unset}}"
-          printf 'stdin=%s\n' "$(readlink /proc/self/fd/0)"
+          if [ /dev/stdin -ef /dev/null ]; then stdin=/dev/null; else stdin=$(readlink /proc/self/fd/0 2>/dev/null || echo 'not /dev/null'); fi
+          printf 'stdin=%s\n' "$stdin"
           printf 'GIT_ASKPASS=%s\n' "${{GIT_ASKPASS-unset}}"
           printf 'GIT_ALLOW_PROTOCOL=%s\n' "${{GIT_ALLOW_PROTOCOL-unset}}"
         }} > "$state/fetch-env"

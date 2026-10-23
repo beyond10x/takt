@@ -143,10 +143,12 @@ fail() {
 # Closes every descriptor above 2 of the shell it runs in, to be called in the subshell that
 # then starts bubblewrap: a descriptor the caller left open passes to every process bubblewrap
 # runs, and through `/proc/self/fd/N` or `/dev/fd/N` it reads the file it names, whatever the
-# sandbox hides of that file's path.
+# sandbox hides of that file's path. The descriptors are listed from `/proc/self/fd`, or from
+# `/dev/fd` where there is no `/proc` (macOS), which lists the shell's own there.
 close_inherited() {
-    local fd
-    for fd in /proc/self/fd/*; do
+    local fd dir=/proc/self/fd
+    [[ -d $dir ]] || dir=/dev/fd
+    for fd in "$dir"/*; do
         fd=${fd##*/}
         [[ $fd =~ ^[0-9]+$ ]] && ((fd > 2)) || continue
         { eval "exec $fd<&-"; } 2>/dev/null || true

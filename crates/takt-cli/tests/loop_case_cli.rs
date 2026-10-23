@@ -704,13 +704,27 @@ fn a_blob_missing_from_a_partial_clone_is_refused_without_fetching() {
         "no loop case was written"
     );
     let marker = format!("127.0.0.1:{port}");
-    for entry in fs::read_dir("/proc").expect("/proc") {
-        let Ok(entry) = entry else { continue };
-        if let Ok(cmdline) = fs::read(entry.path().join("cmdline")) {
-            let cmdline = String::from_utf8_lossy(&cmdline).replace('\0', " ");
-            assert!(!cmdline.contains(&marker), "left running: {cmdline}");
-        }
+    for cmdline in command_lines() {
+        assert!(!cmdline.contains(&marker), "left running: {cmdline}");
     }
+}
+
+/// The command line of every process on the host, one per line, from `ps`, which Linux and
+/// macOS both have; macOS has no `/proc` to read them from.
+fn command_lines() -> Vec<String> {
+    let output = Command::new("ps")
+        .args(["-A", "-ww", "-o", "args="])
+        .output()
+        .expect("ps runs");
+    assert!(
+        output.status.success(),
+        "ps -A: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect()
 }
 
 /// High 2 of the planner's review: the same lazy fetch would run the repository's own

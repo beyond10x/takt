@@ -424,7 +424,8 @@ fn the_gates_and_the_project_file_written_by_a_step_are_refused() {
 }
 
 /// The guarded prefixes match whatever the case of the path: on a file system that folds case,
-/// `.Engineering/` is the store.
+/// `.Engineering/` is the store. There (APFS as macOS formats it) the write lands in the
+/// `.engineering/` the case already holds, and git names it by that directory's name.
 #[test]
 fn a_judge_path_in_another_case_is_refused() {
     let tree = repository("case", &[("check.sh", FAILING_CHECK, true)]);
@@ -435,7 +436,14 @@ fn a_judge_path_in_another_case_is_refused() {
             "forged\n",
         );
     });
-    assert_refused_and_put_back(&tree, &ran, ".Engineering/planning/story/blocked-one.md");
+    let folds_case =
+        tree.join(".engineering/cases").is_dir() && tree.join(".ENGINEERING/cases").is_dir();
+    let written = if folds_case {
+        ".engineering/planning/story/blocked-one.md"
+    } else {
+        ".Engineering/planning/story/blocked-one.md"
+    };
+    assert_refused_and_put_back(&tree, &ran, written);
 }
 
 /// A store directory the base holds as a link: a link is never followed, so no judgement step

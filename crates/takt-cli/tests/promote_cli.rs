@@ -354,21 +354,24 @@ fn field(record: &str, field: &str) -> String {
         .to_owned()
 }
 
-/// The process ids whose command line holds `marker`.
+/// The process ids whose command line holds `marker`, from `ps`, which Linux and macOS both
+/// have; macOS has no `/proc` to read them from.
 fn processes_holding(marker: &str) -> Vec<String> {
-    let mut found = Vec::new();
-    for entry in fs::read_dir("/proc").expect("/proc").flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.bytes().all(|b| b.is_ascii_digit()) {
-            continue;
-        }
-        if let Ok(bytes) = fs::read(entry.path().join("cmdline"))
-            && String::from_utf8_lossy(&bytes).contains(marker)
-        {
-            found.push(name);
-        }
-    }
-    found
+    let output = Command::new("ps")
+        .args(["-A", "-ww", "-o", "pid=,args="])
+        .output()
+        .expect("ps runs");
+    assert!(
+        output.status.success(),
+        "ps -A: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim_start().split_once(' '))
+        .filter(|(_, args)| args.contains(marker))
+        .map(|(pid, _)| pid.to_owned())
+        .collect()
 }
 
 impl World {
