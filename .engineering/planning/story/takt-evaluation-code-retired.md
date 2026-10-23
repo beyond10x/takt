@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:takt-evaluation-code-retired
 kind: story
-status: active
+status: implemented
 title: 'Canon''s evaluation path loom-sdk replaced is gone: no b10x_canon::eval, no decision.rs'
 summary: Removal held by a test; fuzz target, ESS citations and AGENTS.md Layout follow
 tags:
@@ -11,10 +11,11 @@ relations:
 - decomposes: epic:takt-on-loom-sdk
 - serves: vision:safe-agentic-coding
 - depends_on: story:the-loop-is-run-until-blocked
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-22T16:10:52Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-22T16:10:52Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-23T02:11:33Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: takt-evaluation-code-retired
 

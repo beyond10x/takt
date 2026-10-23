@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:takt-uses-loom-session-executor
 kind: story
-status: active
+status: implemented
 title: takt drives harness sessions through Loom's session executor and carries no copy of its own
 summary: crates/session-executor removed; b10x-loom-session-executor from Loom's tag (ADR 0098 § 3)
 tags:
@@ -11,10 +11,11 @@ relations:
 - decomposes: epic:takt-on-loom-sdk
 - serves: vision:safe-agentic-coding
 - depends_on: story:takt-evaluation-code-retired
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-22T16:10:51Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-22T16:10:51Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-23T02:11:33Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: takt-uses-loom-session-executor
 

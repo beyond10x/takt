@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-23T02:08:37Z",
+  "actor": "human:timo",
+  "artifact": "story:design-names-loom-as-the-runtime",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check-static at 44f62b4: ess validate, check-citations 1054 resolved 0 unresolved, release-notes --check, fmt, clippy; exit 0"
+  }
+}
