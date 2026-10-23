@@ -27,7 +27,7 @@ every step validated by Canon over evidence. This file is for agents working on 
 
 | path | what |
 |---|---|
-| `crates/takt` | the library `b10x-takt` (`use takt::…`): protocol loading (`protocol`), case files and evaluation (`case`, `decision`, `evidence`), the loop (`run`), the seams and their first adapters (`harness`, `frontier`, `validator`, `forge`), the git reads and writes (`git`), the run record read back (`scorecard`, `trace`, `report`) |
+| `crates/takt` | the library `b10x-takt` (`use takt::…`): protocol loading (`protocol`), case files, the decision the governor of Loom renders and the evidence records (`case`, `evidence`), the loop (`run`, on Commission's runtime of `loom-sdk`, each harness session through its session executor `b10x-loom-session-executor`), the seams and their first adapters (`harness`, `frontier`, `validator`, `forge`), the git reads and writes (`git`), the run record read back (`scorecard`, `trace`, `report`) |
 | `crates/takt/tests`, `crates/takt-cli/tests` | integration tests and their fixtures |
 | `crates/takt-cli` | the binary `takt` |
 | `protocols/` | this repository's `protocol/1` documents: story delivery (embedded in the binary as `story.delivery/1`), self-improvement, loop improvement |

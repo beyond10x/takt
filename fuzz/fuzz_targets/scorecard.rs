@@ -57,7 +57,7 @@ fn card(cases: &[(&str, u64, Option<bool>)], margin: u32) -> Scorecard {
                 scenario: Some("s".to_owned()),
                 outcome: (*outcome).to_owned(),
                 steps: 0,
-                tokens: *tokens,
+                tokens: Some(*tokens),
                 refusals: 0,
                 no_progress: 0,
                 errors: 0,
@@ -68,6 +68,8 @@ fn card(cases: &[(&str, u64, Option<bool>)], margin: u32) -> Scorecard {
                 held_out: None,
                 opened_binary: None,
                 completed: *completed,
+                step_tokens: BTreeMap::new(),
+                layers: None,
             })
             .collect(),
         no_record: Vec::new(),
@@ -184,7 +186,7 @@ fuzz_target!(|data: &[u8]| {
                 .iter()
                 .find(|outcome| **outcome == row.outcome)
                 .expect("an outcome of the list");
-            (*outcome, row.tokens, row.completed)
+            (*outcome, row.tokens.expect("each card row has tokens"), row.completed)
         })
         .collect();
     if let Some(lowest) = cases.iter().map(|(outcome, _, _)| rank(outcome)).min() {

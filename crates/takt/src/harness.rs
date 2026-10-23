@@ -9,8 +9,8 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
+use crate::case::Decision;
 use crate::confinement::Command;
-use crate::decision::Decision;
 use crate::protocol::LoadedProtocol;
 
 /// What a step is given.

@@ -8,7 +8,6 @@
 
 pub mod case;
 pub mod confinement;
-pub mod decision;
 pub mod events;
 pub mod evidence;
 pub mod forge;
@@ -27,8 +26,7 @@ pub mod trace;
 pub mod validator;
 pub mod view;
 
-pub use case::CaseDir;
-pub use decision::Decision;
+pub use case::{CaseDir, Decision};
 pub use forge::Forge;
 pub use frontier::{Frontier, Story, Unit};
 pub use harness::{Harness, StepContext, StepReport};

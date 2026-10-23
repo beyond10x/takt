@@ -15,7 +15,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use b10x_canon::eval;
 use loom_sdk::commission::model::json as cjson;
 use loom_sdk::commission::model::primitives::{Timestamp, Uuid};
 use loom_sdk::commission::model::responsibility::{
@@ -31,7 +30,6 @@ use loom_sdk::governor::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::decision::Decision;
 use crate::evidence::Record;
 use crate::protocol::LoadedProtocol;
 
@@ -2384,6 +2382,107 @@ pub(crate) fn refuse_link_on_the_way(tree: &Path, id: &str, what: &str) -> Resul
     Ok(())
 }
 
+/// The parts of the `canon-decision/1` document the governor of Loom rendered for a case that
+/// the loop acts on: claim values, obligation, action and outcome statuses
+/// ([`CaseDir::evaluate`]).
+#[derive(Debug, Clone)]
+pub struct Decision {
+    /// Each claim's value: `true`, `false` or `unknown`.
+    pub claims: BTreeMap<String, String>,
+    /// Each obligation's status: `open`, `discharged` or `not_applicable`.
+    pub obligations: BTreeMap<String, String>,
+    /// Each action's status: `admissible`, `approval-required` or `blocked`.
+    pub actions: BTreeMap<String, String>,
+    /// Each outcome's status: `legitimate` or `blocked`.
+    pub outcomes: BTreeMap<String, String>,
+    /// The whole document, canonical JSON.
+    pub json: String,
+}
+
+impl Decision {
+    /// Reads the rendered decision document.
+    pub fn from_json(json: &str) -> Result<Self> {
+        let doc: serde_json::Value =
+            serde_json::from_str(json).context("read the decision document")?;
+        // A section is a map from id to entry, or a list of entries carrying their `id`.
+        let statuses = |section: &str, key: &str| -> BTreeMap<String, String> {
+            let value = |entry: &serde_json::Value| {
+                entry[key]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| entry.to_string())
+            };
+            match &doc[section] {
+                serde_json::Value::Object(map) => map
+                    .iter()
+                    .map(|(id, entry)| (id.clone(), value(entry)))
+                    .collect(),
+                serde_json::Value::Array(list) => list
+                    .iter()
+                    .filter_map(|entry| {
+                        entry["id"].as_str().map(|id| (id.to_owned(), value(entry)))
+                    })
+                    .collect(),
+                _ => BTreeMap::new(),
+            }
+        };
+        Ok(Self {
+            claims: statuses("claims", "value"),
+            obligations: statuses("obligations", "status"),
+            actions: statuses("actions", "status"),
+            outcomes: statuses("outcomes", "status"),
+            json: json.to_owned(),
+        })
+    }
+
+    /// The admissible actions, in id order.
+    #[must_use]
+    pub fn admissible(&self) -> Vec<String> {
+        self.actions
+            .iter()
+            .filter(|(_, status)| status.as_str() == "admissible")
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// The actions that need an approval, in id order.
+    #[must_use]
+    pub fn approval_required(&self) -> Vec<String> {
+        self.actions
+            .iter()
+            .filter(|(_, status)| status.as_str() == "approval-required")
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// The legitimate outcomes, in id order.
+    #[must_use]
+    pub fn legitimate(&self) -> Vec<String> {
+        self.outcomes
+            .iter()
+            .filter(|(_, status)| status.as_str() == "legitimate")
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// Whether `claim` is `true`.
+    #[must_use]
+    pub fn holds(&self, claim: &str) -> bool {
+        self.claims.get(claim).is_some_and(|value| value == "true")
+    }
+
+    /// One line: each action with its status.
+    #[must_use]
+    pub fn frontier_line(&self) -> String {
+        let parts: Vec<String> = self
+            .actions
+            .iter()
+            .map(|(id, status)| format!("{id} ({status})"))
+            .collect();
+        format!("frontier: {}", parts.join(", "))
+    }
+}
+
 /// One case's files.
 #[derive(Debug, Clone)]
 pub struct CaseDir {
@@ -2992,9 +3091,9 @@ impl CaseDir {
     }
 
     /// Whether a record of `kind` exists about `subject` at its current revision. Each record
-    /// is read by Canon's reader, as [`CaseDir::evaluate`] reads it (YAML, of which a JSON
-    /// record is one); a record that does not read is an error naming its file, never an
-    /// answer either way: every record is read before the answer is given.
+    /// is read as a `canon-evidence/1` document, as [`CaseDir::evaluate`] reads it (YAML, of
+    /// which a JSON record is one); a record that does not read is an error naming its file,
+    /// never an answer either way: every record is read before the answer is given.
     pub fn has_evidence(&self, kind: &str, subject: &str) -> Result<bool> {
         let records = self.evidence_records()?;
         let Some(revision) = self.revision(subject) else {
@@ -3007,16 +3106,17 @@ impl CaseDir {
         }))
     }
 
-    /// Every evidence record under the case, read by Canon's own reader, in name order; the
-    /// first that does not read (an empty file, a bare scalar, a missing field) is an error
-    /// naming its file, and nothing is answered. What [`CaseDir::evaluate`] hands Canon and
-    /// what [`CaseDir::has_evidence`] answers from: one reader, all records or none.
+    /// Every evidence record under the case, each read as Canon's `EvidenceRecord` from YAML,
+    /// in name order; the first that does not read (an empty file, a bare scalar, a missing
+    /// field) is an error naming its file, and nothing is answered. What [`CaseDir::evaluate`]
+    /// checks before it asks the governor, which would drop such a record, and what
+    /// [`CaseDir::has_evidence`] answers from: one reader, all records or none.
     fn evidence_records(&self) -> Result<Vec<b10x_canon::model::EvidenceRecord>> {
         self.evidence_texts()?
             .iter()
             .map(|(path, text)| {
-                eval::read_evidence(text)
-                    .map_err(|r| anyhow!("{r}"))
+                serde_yaml_ng::from_str::<b10x_canon::model::EvidenceRecord>(text)
+                    .context("evidence is not a canon-evidence/1 document")
                     .with_context(|| format!("read the evidence record {}", path.display()))
             })
             .collect()
@@ -3035,23 +3135,32 @@ impl CaseDir {
     /// `authority.yaml` now, so a grant written since the last evaluation is seen, and only at
     /// the revision of its subject it was given at): `admissible` where it allows the
     /// capability, `blocked` where it denies it. The governor supplies no authority, so the
-    /// document on file finds such an action approval-required, granted or not. Canon reads
-    /// every evidence record first, so one that does not read is an error naming its file; the
-    /// governor would drop it.
+    /// document on file finds such an action approval-required, granted or not. Every
+    /// evidence record is read first, as [`CaseDir::has_evidence`] reads it, so one that does
+    /// not read is an error naming its file; the governor would drop it. A case the governor
+    /// refuses to decide is an error carrying the governor's refusal.
+    ///
+    /// The loop's one call is held by approval-record:loop-pre-checks-ahead-of-loom: the two
+    /// checks takt runs ahead of each Loom step (`Shape::only_behind`, `Shape::unperformable`)
+    /// read the decision it answers.
     pub fn evaluate(&self, seq: usize) -> Result<Decision> {
-        let records = self.evidence_records()?;
+        self.evidence_records()?;
         let files = CaseFiles::new(&self.dir, &self.id, &self.protocol.id);
         let case = CaseId(self.id.clone());
         if files.get(&case)?.is_none() {
             bail!("no case {} at {}", self.id, self.dir.display());
         }
-        let now = crate::now();
-        let at = now.clone();
+        let at = crate::now();
         let governor = CanonGovernor::new(files)
             .with_protocol_yaml(&self.protocol.id, &self.protocol.yaml)
             .map_err(|error| anyhow!("register the protocol {}: {error}", self.protocol.id))?
             .with_evaluation_time(move |_: &CaseId| Ok(Some(at.clone())));
-        let refused = |error: GovernorError| self.refusal(&records, &now, error);
+        let refused = |error: GovernorError| {
+            anyhow!(
+                "the governor of Loom does not decide the case {}: {error:?}",
+                self.id
+            )
+        };
         let frontier = governor.frontier(&case).map_err(refused)?;
         let frontier = frontier.data();
         let document = governor
@@ -3085,35 +3194,6 @@ impl CaseDir {
                 .insert(action.action.clone(), status.to_owned());
         }
         Ok(decision)
-    }
-
-    /// Why the governor refused to decide the case: Canon's own refusal of it, read over the
-    /// same files without authority, when Canon refuses it too; otherwise the governor's.
-    fn refusal(
-        &self,
-        records: &[b10x_canon::model::EvidenceRecord],
-        now: &str,
-        error: GovernorError,
-    ) -> anyhow::Error {
-        let canon = || -> Result<()> {
-            let ir = eval::read_ir(&self.protocol.ir_json).map_err(|r| anyhow!("{r}"))?;
-            let case_yaml = std::fs::read_to_string(self.dir.join("case.yaml"))?;
-            let case = eval::read_case(&case_yaml).map_err(|r| anyhow!("{r}"))?;
-            let supplied = eval::Supplied {
-                authority: None,
-                at: Some(now),
-                decisions: None,
-            };
-            eval::evaluate_with(&ir, &case, records, supplied).map_err(|r| anyhow!("{r}"))?;
-            Ok(())
-        };
-        match canon() {
-            Err(refusal) => refusal,
-            Ok(()) => anyhow!(
-                "the governor of Loom does not decide the case {}: {error:?}",
-                self.id
-            ),
-        }
     }
 }
 
@@ -3595,4 +3675,36 @@ pub fn turn_judge_refusal(case_dir: &Path, binary: &Path) -> Result<Option<Strin
     Ok(Some(format!(
         "{TURN_PROTOCOL}: this binary hashes to sha256 {digest}, not to {recorded}, the binary that judges the turn since it opened; a turn is judged by one binary only, so run it with that one{kept}; nothing was run"
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn statuses_are_read_from_each_section() {
+        let json = r#"{"claims":{"tests.pass":{"value":"true"}},
+            "obligations":[{"id":"tests.required","status":"discharged"}],
+            "actions":{"tests.run":{"status":"admissible"},"repository.merge":{"status":"approval-required"}},
+            "outcomes":{"accepted":{"status":"blocked"}}}"#;
+        let decision = Decision::from_json(json).expect("reads");
+        assert!(decision.holds("tests.pass"));
+        assert_eq!(
+            decision
+                .obligations
+                .get("tests.required")
+                .map(String::as_str),
+            Some("discharged")
+        );
+        assert_eq!(decision.admissible(), vec!["tests.run".to_owned()]);
+        assert_eq!(
+            decision.approval_required(),
+            vec!["repository.merge".to_owned()]
+        );
+        assert!(decision.legitimate().is_empty());
+        assert_eq!(
+            decision.frontier_line(),
+            "frontier: repository.merge (approval-required), tests.run (admissible)"
+        );
+    }
 }
