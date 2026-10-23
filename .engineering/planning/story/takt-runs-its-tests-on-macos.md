@@ -7,7 +7,7 @@ title: takt's scripts and binary run on macOS where only a Linux assumption stop
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-21T13:22:17Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-21T13:22:17Z", actor: "human:timo", revision: 3}
@@ -46,3 +46,20 @@ ignored. Causes counted from the job log:
 ## Out of scope
 
 Any test skip, relaxed refusal or longer timeout; macOS confinement; the release.
+
+## Decisions (2026-10-23, the dispatcher)
+
+The unit's implementor left three failures it could not settle inside this story's scope. Each is
+decided here before U2 starts.
+
+| test | macOS cause | decision |
+|---|---|---|
+| `a_non_utf8_name_planted_is_refused_and_removed` | APFS refuses the name itself (EILSEQ), so the test cannot plant it | U2 asserts the platform's refusal on macOS: planting fails with EILSEQ and nothing is created; the guard's own refusal stays asserted on Linux. No skip |
+| `the_hidden_alias_bomb_…` | `setrlimit(RLIMIT_AS)` returns EINVAL on macOS | U2: the memory bound on macOS comes from a limit the kernel enforces there, or the step refuses by name; the bound is never dropped silently |
+| `the_test_command_reaches_no_login_of_the_operator` | no namespace hides the logins on macOS | U2: Seatbelt denies the reads (story:takt-confines-on-macos, row `without_login`) |
+
+U1's commit 3e1f9e0 left these for U2 as well, each passing vacuously or reading a Linux path on
+macOS: `getent` in `scripts/check-finding` and the `finding_scripts` tests; `SOCKET_PROBE`'s reads
+of `/proc/self/ns` and `/proc/net`; `finding_scripts`' read of `/proc/self/fd`; the `/proc`-based
+`alive()` checks in the `hours_bounds_*` tests, `step_cannot_forge_its_validators.rs` and
+`trial_fetch_adv1.rs`.
