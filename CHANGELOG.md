@@ -6,6 +6,14 @@ takt's releases.
 
 ## [Unreleased]
 
+### Added
+
+- A macOS binary (`aarch64-apple-darwin`) again, the first since 0.6.0.
+
+### Changed
+
+- `b10x-loom-sdk` moves from loom 0.34.0 to 0.35.0, which builds on macOS.
+
 ## [0.8.0] - 2026-10-22
 
 The minor version moves because takt's cases are decided by Loom's governor, the loop runs on loom-sdk's
