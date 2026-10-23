@@ -4,7 +4,7 @@ id: approval-record:metaharness-0-15-0
 kind: approval-record
 status: approved
 title: metaharness 0.15.0 through loom 0.39.0, then release takt
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "approved", at: "2026-10-23T15:23:06Z", actor: "human:timo", revision: 2}
 ---
@@ -50,3 +50,13 @@ carries the body line `Decider: operator`; the public repository names no person
 | CHANGELOG | `[0.10.1]` carries a summary line, one Changed and two Fixed bullets | the release notes render the summary and Changed only |
 | ESS | stays 0.68 | the newest ESS release is 0.68.0 |
 | gate | `task check` exit 0 (1672 tests passed, 0 failed), `release-notes --check`, `check-citations --require-digests` (1056 resolved), the pull request's checks, then `release.yml` with `darwin.yml` on the tag | |
+
+## Released
+
+| item | value |
+|---|---|
+| loom | tag `0.39.0`, annotated, tag object fa37ef05, on loom `main` at 380e6315, author and committer `b10x-bot[bot]`; `release` run 39984749588 success; https://github.com/beyond10x/loom/releases/tag/0.39.0 by the bot |
+| takt tag | `0.10.1`, annotated, tag object 3e14766, on `main` at 54b8dd8 (merge of `release/0.10.1` at 8090901), author and committer `b10x-bot[bot]` |
+| release run | 39988441680 success: tag provenance, three builds, `darwin.yml` (test-cli, test-library) and `task check` on the tagged commit, publish |
+| GitHub Release | https://github.com/beyond10x/takt/releases/tag/0.10.1, not a draft: `takt-0.10.1-x86_64-unknown-linux-gnu.tar.gz`, `takt-0.10.1-aarch64-unknown-linux-gnu.tar.gz`, `takt-0.10.1-aarch64-apple-darwin.tar.gz`, `SHA256SUMS` |
+| trial | started by the orchestrator on the released binary on a stock install; the dispatcher sent no `[TRIAL takt]` |
