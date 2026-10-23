@@ -7,7 +7,7 @@ every step validated by Canon over evidence. This file is for agents working on 
 ## Serves
 
 - **O2 — decisions as data, with evidence.** `takt run` executes a Canon protocol (`story.delivery/1`, `self.improvement/1`, crate `b10x-takt`) as data, and every step's claim is admitted only on validator evidence recorded in the case.
-- **O3 — any harness, observed and compared.** `--harness claude|codex|harness` drives each harness through one metaharness session (`b10x-session-executor`), and `takt scenario run` with `takt scorecard --against` scores two of them on the same scenarios.
+- **O3 — any harness, observed and compared.** `--harness claude|codex|harness` drives each harness through one metaharness session of Loom's session executor (`b10x-loom-session-executor`, reached as `loom_sdk::session`), each session's `AgentSession` record observed into the case, and `takt scenario run` with `takt scorecard --against` scores two of them on the same scenarios.
 - **O6 — self-improvement, built into all of it.** `self.improvement/1` turns a run's record into a candidate change, and `takt scorecard --against` with `takt promote` re-measures it against the promoted baseline before it lands.
 
 ## Start here

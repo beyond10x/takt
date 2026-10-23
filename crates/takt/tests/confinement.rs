@@ -4,7 +4,7 @@
 //!
 //! - No source under any crate's `src/` but the seam starts a process, or imports or reaches a
 //!   way to (`std::process::Command`, `CommandExt`, `libc` and `nix` spawns, process crates);
-//!   the session executor's and the CLI's one test module each excepted, the rest of both read.
+//!   the CLI's one test module excepted, the rest of it read.
 //! - An adapter that refuses every program: the run starts no process, writes no evidence
 //!   record and stops with the refusal named; the harness's program is refused at its own spawn.
 //! - Under Substrate the test command of a scratch crate writes the record it writes under
@@ -920,13 +920,11 @@ fn scanned(text: &str, excepted: bool) -> Result<Vec<usize>, String> {
     Ok(flagged(&flat, &lines))
 }
 
-/// Whether `file` is one whose test module the scan does not read. The session executor's
-/// fixtures start `git` and the test binary itself, and the crate depends on no crate of this
-/// repository, its tests included (`harness_parity.rs`), so they cannot take takt's seam. The
-/// CLI's fixtures start `git` and `aep` to set up and read the repositories a test runs on;
-/// neither is a run's process. Everything else in both files is read.
+/// Whether `file` is one whose test module the scan does not read. The CLI's fixtures start
+/// `git` and `aep` to set up and read the repositories a test runs on; neither is a run's
+/// process. Everything else in the file is read.
 fn excepted(file: &Path) -> bool {
-    file.ends_with("session-executor/src/lib.rs") || file.ends_with("takt-cli/src/main.rs")
+    file.ends_with("takt-cli/src/main.rs")
 }
 
 /// Every source file the scan reads: each crate's `src/` under `crates`, the workspace's
@@ -1198,10 +1196,8 @@ fn no_module_but_the_seam_names_the_process_command() {
     let files = scanned_sources(crates);
     assert!(
         files.iter().any(|f| f.ends_with("takt/src/run.rs"))
-            && files
-                .iter()
-                .any(|f| f.ends_with("session-executor/src/lib.rs")),
-        "the scan reads takt's and the session executor's sources: {files:?}"
+            && files.iter().any(|f| f.ends_with("takt/src/harness.rs")),
+        "the scan reads takt's sources: {files:?}"
     );
     let mut named = Vec::new();
     for file in files.iter().filter(|f| **f != seam) {

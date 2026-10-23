@@ -457,7 +457,7 @@ impl AgentExecutor for TurnExecutor<'_, '_, '_> {
     fn run_with_usage(
         &self,
         _: &Commission<commission_state::Assigned>,
-        _: &LoomFrontier<frontier_state::Issued>,
+        frontier: &LoomFrontier<frontier_state::Issued>,
     ) -> ExecutorStep {
         let mut guard = self.0.borrow_mut();
         let turn = &mut *guard;
@@ -487,6 +487,14 @@ impl AgentExecutor for TurnExecutor<'_, '_, '_> {
                     turn.shape,
                     turn.run_number,
                 );
+                // The session Loom's executor recorded for the step, whatever became of its
+                // proposal, is observed into the case before the step's own outcome.
+                let judged = match turn.run.harness.take_session() {
+                    Some(session) => {
+                        observe_session(&turn.run.case, frontier, &session).and(judged)
+                    }
+                    None => judged,
+                };
                 let suspended = |detail: String| {
                     step(ExecutorOutcome::Suspended(ExecutorOutcomeSuspended {
                         reason: SuspensionReason::HostStop(LoomHostStop {
@@ -537,6 +545,83 @@ impl AgentExecutor for TurnExecutor<'_, '_, '_> {
             }
         }
     }
+}
+
+/// The source of the observation that holds the `AgentSession` Loom's session executor recorded
+/// for a judgement step ([`observe_session`]).
+pub const SESSION_SOURCE: &str = "loom.session";
+
+/// Observes `session`, the `AgentSession` Loom's session executor recorded for a judgement step
+/// at `frontier`, into `case` (`observations.json`), as source [`SESSION_SOURCE`]: its session
+/// id, kind, commission and frontier ids, the vendor's session id, its action, each file it
+/// proposed by path with the SHA-256 of its proposed bytes (null for a removal), and its state.
+/// No file's bytes enter the case.
+///
+/// # Errors
+/// The case's refusal of the observation.
+fn observe_session(
+    case: &CaseDir,
+    frontier: &LoomFrontier<frontier_state::Issued>,
+    session: &crate::harness::AgentSession,
+) -> Result<()> {
+    use loom_sdk::commission::model::responsibility::{Observation, ObservationData};
+    use loom_sdk::commission::ports::evidence::ObservationPort as _;
+    use sha2::{Digest as _, Sha256};
+    let text = |value: &str| cjson::Value::Text(value.to_owned());
+    let id = &session.session_id.0.0;
+    let files = session
+        .files
+        .iter()
+        .map(|file| {
+            cjson::Value::Object(vec![
+                ("path".to_owned(), text(&file.path)),
+                (
+                    "sha256".to_owned(),
+                    file.content.as_ref().map_or(cjson::Value::Null, |content| {
+                        let digest = Sha256::digest(content.as_bytes());
+                        cjson::Value::Text(
+                            digest.iter().map(|byte| format!("{byte:02x}")).collect(),
+                        )
+                    }),
+                ),
+            ])
+        })
+        .collect();
+    let observed_at = crate::now();
+    let observation = ObservationData {
+        observation_id: ObservationId(Uuid(uuid_from(&format!(
+            "{}/observation/session/{id}/{observed_at}",
+            case.id
+        )))),
+        source: SESSION_SOURCE.to_owned(),
+        subject: format!("{}@{}", case.id, frontier.data().case_revision),
+        observed_at: Timestamp(observed_at),
+        payload: cjson::Value::Object(vec![
+            ("record".to_owned(), text("loom.session.AgentSession")),
+            ("session_id".to_owned(), text(id)),
+            ("kind".to_owned(), text(&format!("{:?}", session.kind))),
+            ("commission_id".to_owned(), text(&session.commission_id.0.0)),
+            ("frontier_id".to_owned(), text(&session.frontier_id.0.0)),
+            (
+                "vendor_session_id".to_owned(),
+                session
+                    .vendor_session_id
+                    .as_deref()
+                    .map_or(cjson::Value::Null, text),
+            ),
+            ("action".to_owned(), text(&session.action)),
+            ("files".to_owned(), cjson::Value::Array(files)),
+            ("state".to_owned(), text(&format!("{:?}", session.state))),
+        ]),
+    };
+    CanonGovernor::new(CaseFiles::new(&case.dir, &case.id, &case.protocol.id))
+        .observe(Observation::new(observation))
+        .map_err(|error| {
+            anyhow!(
+                "the case {} did not receive the session {id}: {error:?}",
+                case.id
+            )
+        })
 }
 
 /// The composite effect of a call: it hands a validator's request to that validator's
@@ -9682,7 +9767,7 @@ impl<'a> Run<'a> {
         let cases = format!("{CASES_DIR}/");
         for file in &proposal.files {
             let path = file.path.as_str();
-            if !session_executor::plain_relative(path) {
+            if !loom_sdk::session::plain_relative(path) {
                 return Some(format!(
                     "{action} proposes {path:?}, which is no plain path of the tree"
                 ));
