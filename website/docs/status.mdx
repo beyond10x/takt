@@ -8,7 +8,7 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-0.10.1 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+0.11.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
 `scorecard`, `trace`, `report`, `view`, `promote` and `replay`, with `story.delivery/1` and
 `self.improvement/1` embedded, and prebuilt binaries for Linux (x86_64, aarch64) and macOS
 (aarch64). Its harnesses are Claude Code (`--harness claude`), Codex (`codex`) and b10x-harness
@@ -31,6 +31,7 @@ How it got there ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGE
 | 0.9.0 | harness sessions run through Loom's session executor (`loom_sdk::session`, metaharness 0.13.0), and takt runs no evaluation of its own: Loom's governor decides every case |
 | 0.10.0 | takt on macOS again: the test command, a promotion's build and `scripts/check-finding` run under Seatbelt, what a step leaves running is killed by its mark, and a release publishes only after the macOS tests pass; loom-sdk 0.37.0 |
 | 0.10.1 | `--harness claude` proposes on Claude Code 2.1.309 and `--harness codex` runs on Codex 0.160.0: loom-sdk 0.39.0 with metaharness 0.15.0 |
+| 0.11.0 | `--forge gitlab` delivers through `glab` on a GitLab host, the merge request's head pipeline read as `ci.read`'s checks, and `.gitlab-ci.yml` with `.gitlab/**` on the judge surface; `--harness harness` takes its endpoint from the `--endpoint-*` flags or `--endpoint-file`, a token file or a secret's name handed to b10x-harness, and the case records it by reference: loom-sdk 0.39.1 with metaharness 0.15.0 |
 
 | milestone | state |
 |---|---|

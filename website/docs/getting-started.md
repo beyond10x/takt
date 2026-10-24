@@ -1,6 +1,6 @@
 ---
 title: Getting started
-description: Install takt 0.10.1, check what it needs, and run one validated step.
+description: Install takt 0.11.0, check what it needs, and run one validated step.
 ---
 
 # Getting started
@@ -11,11 +11,11 @@ Each version tag publishes `takt-<version>-<target>.tar.gz` for `x86_64-unknown-
 `aarch64-unknown-linux-gnu` and `aarch64-apple-darwin` (0.7.0 to 0.9.0 have no macOS binary), with
 a `SHA256SUMS` file, at
 [github.com/beyond10x/takt/releases](https://github.com/beyond10x/takt/releases). No Rust
-toolchain is needed. The latest release is 0.10.1; what `main` holds beyond it is listed under
+toolchain is needed. The latest release is 0.11.0; what `main` holds beyond it is listed under
 Unreleased in the [changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md#unreleased).
 
 ```sh
-version=0.10.1 target=x86_64-unknown-linux-gnu
+version=0.11.0 target=x86_64-unknown-linux-gnu
 release=https://github.com/beyond10x/takt/releases/download/$version
 curl -fsSLO "$release/takt-$version-$target.tar.gz"
 curl -fsSLO "$release/SHA256SUMS"
