@@ -6,6 +6,20 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-24
+
+`--harness harness` reads an action line that b10x-harness streams in several text-delta events as one line,
+through loom 0.40.0; the `ess` the checks run moves to 0.69.0.
+
+### Changed
+
+- `b10x-loom-sdk` moves from loom 0.39.1 to 0.40.0; metaharness stays at 0.15.0. loom 0.40.0 marks `model::run::SelectActionOutcome` breaking, and takt names it nowhere, so no source changes.
+- The `ess` that `task check` runs in CI (`check.yml`, `darwin.yml`) moves from 0.68.0 to 0.69.0, the release loom 0.40.0 requires.
+
+### Fixed
+
+- `--harness harness`: an action line streamed in several `text-delta` events is read as one line; on 0.11.0 the step ended with "the session ended without the JSON line naming its action".
+
 ## [0.11.0] - 2026-10-24
 
 `--forge gitlab` delivers through `glab` on a GitLab host, and `--harness harness` takes its endpoint from flags or
@@ -464,7 +478,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.11.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.11.1...HEAD
+[0.11.1]: https://github.com/beyond10x/takt/compare/0.11.0...0.11.1
 [0.11.0]: https://github.com/beyond10x/takt/compare/0.10.1...0.11.0
 [0.10.1]: https://github.com/beyond10x/takt/compare/0.10.0...0.10.1
 [0.10.0]: https://github.com/beyond10x/takt/compare/0.9.0...0.10.0
